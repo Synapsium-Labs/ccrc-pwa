@@ -44,6 +44,7 @@ import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { nestedWouldRescueCount, nestedWouldRescuePaths } from '../../../shared/nestedRescue.js';
 import { SHADOW_RUNG } from '../../../shared/shadowJournal.js';
 import { childReclaimSweepVerdict } from '../childReclaimSweep.js';
+import { retireAct, type RetireActPort } from '../retireLane.js';
 import {
   RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
   capabilityJudge, presenceJudge, type RetireNoRead, type RetireReason,
@@ -846,7 +847,7 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
     // only on a document that mints no token. On a token-bearing document, a null, or a value that is not
     // exactly one generation (`REG_GENERATION_SHAPE`, 36 characters, nothing trimmed), makes the WHOLE
     // document unreadable, so its token is never spent. The executor compares a value with the
-    // request's licence (`childReclaimOutcome`'s step 5a). A refused document's key gates nothing.
+    // request's licence (`CHILD_SPENT_RETIRE`'s step 5a). A refused document's key gates nothing.
     if (!Object.prototype.hasOwnProperty.call(v, 'generation')) {
       return { kind: 'token', token: v.token, childOf: v.childOf, generation: { kind: 'unprinted' } };
     }
@@ -1044,19 +1045,20 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
  * earlier attempt's box half finished without its cancel — it cancels every
  * outstanding delivery addressed to the child.
  * Every outcome but `gone` writes one feed row, unless it repeats the deferral
- * episode or the listed failure the request names (`childReclaimFeedSkips`),
- * HERE — this function is the single exit every outcome takes, so a new
- * condition added to `childReclaimOutcome` inherits its row rather than
- * having to remember one.
+ * episode or the listed failure the request names (`childReclaimFeedSkips`):
+ * the port's notice, which the one executor loop calls on every outcome it
+ * answers, so a new condition added to the row inherits its row rather than
+ * having to remember one. The steps are child-spent's row of the one retire
+ * gate (`CHILD_SPENT_RETIRE`), driven by the one executor loop
+ * (`retireLane.ts#retireAct`) over this file's port (`childReclaimRetirePort`,
+ * D-7170).
  *
  * NEVER THROWS for a condition it can name: a failed read is a deferral or a
  * failure with a detail. What it cannot name (a bug) rejects, and the close
  * route's port logs it; the sweep reaches the child either way.
  */
 export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
-  const outcome = await childReclaimOutcome(deps, req);
-  if (outcome.kind !== 'gone' && !childReclaimFeedSkips(outcome, req)) recordChildReclaimFeed(deps, outcome, req);
-  return outcome;
+  return retireAct(childReclaimRetirePort(deps, req), CHILD_SPENT_RETIRE, req);
 }
 
 /** The server's read of the reclaim kill-switch (child-reclamation spec §5.8,
@@ -1109,213 +1111,6 @@ async function childReclaimDisabledDetail(deps: ChildReclaimDeps, when: string):
   }
   if (state === 'set') return childReclaimDisabledSentence(when);
   return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
-}
-
-async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
-  const { sessionId, runId } = req;
-  const deferred = (why: ChildReclaimDeferWhy, detail: string): ChildReclaimOutcome =>
-    ({ kind: 'deferred', sessionId, runId, why, detail });
-
-  // 1 — the box's authority, re-read: the marker must name THIS request's run.
-  const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
-  switch (read.kind) {
-    case 'found': break;
-    case 'absent': case 'unmeasurable': {
-      // `absent` is read the way wave 2's `childBindGate` reads it: re-listed ONCE.
-      // Absent twice is `gone`; a second listing that still names this id's
-      // `.child` (or `.uuid`) — a row that exists and could not be built — is
-      // `marker-unreadable`, and so is a second listing that fails. See
-      // `childReclaimRowListing`.
-      const again = await childReclaimRowListing(deps, sessionId);
-      if (again.kind === 'unlistable') return deferred('marker-unreadable', 'the registry could not be listed');
-      // The executor's OWN gone-check: `.uuid`-OR-`.child` (fix round 1, review
-      // Important #1) — `childReclaimRowListing` no longer folds this for us.
-      if (again.uuid || again.child) {
-        return deferred('marker-unreadable', 'the registry lists this workspace but its row could not be built');
-      }
-      // GONE, AND THE MAIL GOES WITH IT. The box half of a reclaim can finish
-      // without step 7 ever running: the server restarted between `ws-reclaim`
-      // and the cancel, or the verb answered `purge-incomplete` (the row WAS
-      // purged, and it reads as `failed`). The next attempt lands HERE, and
-      // without this its outstanding mail would wait for `sweepMail`'s
-      // abandonment park — listed as a human's to act on — through exactly the
-      // slug-recycling window spec §5.6 moved the cancel into this wave to close.
-      // Safe: a listing that names neither `<id>.uuid` nor `<id>.child` means no
-      // session holds this id now.
-      childReclaimCancelMail(deps, sessionId, 'gone');
-      return { kind: 'gone', sessionId };
-    }
-    case 'unlistable': return deferred('marker-unreadable', 'the registry could not be listed');
-    // Path identity (spec §2.3): UNMEASURED, never gone. Read as `absent`, an
-    // id nothing lists would come out of the re-listing above as `gone`, and
-    // the mail addressed to it would be cancelled. A non-registry id was never
-    // listed for at all. No listing, no mail cancel, no argv.
-    case 'bad-id': return deferred('marker-unreadable', 'the session id is not a registry id');
-    default: {
-      const _x: never = read;
-      return _x;
-    }
-  }
-  const mark = read.record.child;
-  if (mark.kind === 'unreadable') return deferred('marker-unreadable', 'the child marker could not be read');
-  if (mark.kind === 'none') return deferred('marker-mismatch', 'the workspace carries no child marker');
-  if (mark.runId !== runId) {
-    return deferred('marker-mismatch', `the child marker names run ${mark.runId}, not run ${runId}`);
-  }
-  // 2 — no open run names it. Unreadable is INELIGIBLE, never "none".
-  // A stale sibling (`coord/staleSibling.ts`) is ignored here as in the sweep's verdict, so the two cannot disagree.
-  const sib = await readChildSiblings(deps, sessionId, (deps.now ?? Date.now)());
-  if (!sib.ok) return deferred('siblings-unreadable', sib.detail);
-  if (sib.open > 0) {
-    return deferred('siblings-open', `open run(s) ${(sib.blocking ?? []).map((s) => `#${s.id}`).join(', ')} still name this workspace`);
-  }
-  // 2a — COORDINATING, ANY STATE (spec §1, rule 4: manual cleanup is
-  // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
-  // may act on). A child that has coordinated in its own generation
-  // (`childReclaimHasCoordinated`) — named `claimedBy` of a run, the session a
-  // reclaim made an heir, the session the SAME reclaim displaced, or any
-  // nested coordinator, at or after this workspace's birth less the skew
-  // (spec §5.6: slugs recycle) — is never reclaimed automatically, whatever
-  // state that run reaches later (`CoordStore.childReclaimCoordinatorClaims`'s
-  // own docstring states what a claim covers and its one residual). Read
-  // after the sibling re-read (which answers a narrower, LIVE question) and
-  // before the pause: an unreadable coordination table or mirror is
-  // `siblings-unreadable`, the same word this function already uses for an
-  // unreadable `openRunsForSession` — never silently treated as "never
-  // coordinated".
-  try {
-    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)(), childReclaimRowUuid(read.record))) {
-      return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
-    }
-  } catch (err) {
-    return deferred('siblings-unreadable', `whether ${sessionId} has coordinated a run could not be read `
-      + `(${err instanceof Error ? err.message : String(err)})`);
-  }
-  // 2b — THE SWITCH, READ BY THE SERVER (spec §5.8: "the close path skips").
-  // After the marker and sibling re-reads and BEFORE presence, the capability
-  // and any argv: a raised switch — or a registry that did not list, which
-  // cannot rule one out — defers, on EITHER trigger and WHATEVER
-  // `deferExpired` says (the ceiling bounds presence; the pause is not
-  // presence). Through this function's own `deferred(...)`, so `reclaimChild`
-  // writes its one feed row for it like every other deferral. ccd's rung 3,
-  // read on the box inside the lock at the instant of deletion, is still the
-  // read that matters. Try-wrapped like 2a above: both shipped `FleetIO`
-  // adapters fold every failure to `null` (the `unmeasurable` arm), so there
-  // is no live throw path today, but a REJECTING `readdir` must still land on
-  // this function's own `deferred(...)` — never an uncaught rejection that
-  // skips the executor's one feed row.
-  let pause: MarkerState;
-  try {
-    pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
-  } catch (err) {
-    return deferred('paused-at-server', `whether ${RECLAIM_PAUSE_MARKER} is raised could not be read `
-      + `(${err instanceof Error ? err.message : String(err)})`);
-  }
-  if (pause !== 'clear') {
-    return deferred('paused-at-server', pause === 'set'
-      ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
-      : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
-  }
-  // 2b' — ARCH-77 (#812): child reclaim's OWN off switch, read here (decide) and again at the act (step 6). It defers
-  // through the same word as the pause, so the row, the sweep's backoff and the PWA's chip need no new vocabulary.
-  // A listing that did not measure, or a throw, cannot rule the switch out and defers too — `reclaim-paused`'s rule.
-  const disabledAtDecide = await childReclaimDisabledDetail(deps, '');
-  if (disabledAtDecide !== null) return deferred('paused-at-server', disabledAtDecide);
-  // 2c — THE GENERATION, RE-READ (spec §5.5). A sweep request was judged over ONE workspace
-  // generation (`licenceGeneration`, the sweep's own byte-exact read of `<id>.generation`), and it may
-  // have waited on the session's queue since. The same run can remove the slug and mint it again
-  // meanwhile, and every check above passes for the new workspace. So EVERY sweep request, licensed
-  // or not, re-reads it here: after the switch, and BEFORE presence, so that a licence never reaches a
-  // re-minted workspace. It does not promise more: a re-mint that lands between this read and step 3 can
-  // still credit that one presence answer to the old entry, and the next pass reads the new generation
-  // and replaces that entry. A different value, or `absent` against a value, is `generation-changed`.
-  // A read that failed is `marker-unreadable`, never "changed": it says the box could not be read, not
-  // that the workspace moved. Close's requests carry `none`, and skip this step and step 5a's
-  // comparison. Close queues only when the minting run names this session and no other open run does,
-  // so that run is the one being closed or is already terminal, and no re-mint by it can follow.
-  const licence = req.licenceGeneration;
-  if (licence.kind !== 'none') {
-    let current: ChildReclaimGeneration;
-    try {
-      current = await childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId);
-    } catch (err) {
-      return deferred('marker-unreadable', `${sessionId}.generation could not be read `
-        + `(${err instanceof Error ? err.message : String(err)}), so which workspace stands under this name cannot be said`);
-    }
-    if (current.kind === 'unreadable') {
-      return deferred('marker-unreadable',
-        `${sessionId}.generation could not be read, so which workspace stands under this name cannot be said`);
-    }
-    if (!childReclaimSameGenerationKey(licence, current)) {
-      return deferred('generation-changed', `the workspace now carries ${childReclaimGenerationWords(current)}, `
-        + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
-    }
-  }
-  // 3 — a human looking at it, unless the defer's ceiling was reached.
-  if (!req.deferExpired && deps.viewers?.isVisible(sessionId) === true) {
-    return deferred('presence', 'someone is viewing this session');
-  }
-  // 4 — the box must PROVE it has the verb: `ccdCan(state, 'wsReclaim')` refuses on no
-  // evidence, which is the only safe default for a verb that never existed.
-  if (!ccdCan(deps.fleetState, 'wsReclaim')) {
-    return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
-  }
-  // 4a — the stale arm's flags are sent only to a box that proves it takes them (D-6639).
-  if (req.stale !== undefined && !capSupported(deps.fleetState, RECLAIM_STALE_CAP)) {
-    return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_STALE_CAP}`);
-  }
-  // 5 — the token, minted by the ladder on the box.
-  const audit = await childReclaimAudit(deps, req);
-  if (audit.kind === 'unreadable') {
-    return { kind: 'failed', sessionId, runId, resume: 'not-resumable', detail: audit.detail, token: null };
-  }
-  // The audit's own `unmeasured` answer at exit 1 carries the word ccd journaled
-  // for it, so the feed's quiet and the sweep's failure count see the same word
-  // the mirror holds (spec §5.9).
-  if (audit.kind === 'unmeasured') {
-    return { kind: 'failed', sessionId, runId, resume: audit.resume, detail: audit.detail,
-      token: CHILD_RECLAIM_PROBE_UNMEASURED };
-  }
-  if (audit.kind === 'refused') {
-    recordNestedRescueShadow(deps, { sessionId, runId, key: String(runId), who: `${sessionId}, child of run #${runId}`,
-      count: audit.wouldRescue ?? 0, paths: audit.wouldRescuePaths ?? [], rung: SHADOW_RUNG.reclaimRescue });
-    return childReclaimRefusal(req, audit.token, audit.detail);
-  }
-  if (audit.childOf !== runId) {
-    return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
-  }
-  // 5a — THE AUDIT'S GENERATION (spec §5.5): the generation ccd bound into the token it just minted,
-  // against the one this request was judged under. A different value, `absent` against a value
-  // included, is `generation-changed`: the slug was minted again between step 2c and the audit, and the
-  // token is over the new workspace. An older ccd prints no generation (`unprinted`). A LICENSED request
-  // is never spent on such a token: it skips presence on the strength of a judgement over one
-  // generation, and nothing on the box would hold it to that generation. So it defers `unsupported`
-  // until the fleet host's ccd is updated. An unlicensed request relies on step 2c. Its stated
-  // residual, on an older ccd only, is the gap from step 2c's read to the act (spec §5.5). Close's
-  // `none` is never compared.
-  if (licence.kind !== 'none') {
-    if (audit.generation.kind === 'unprinted') {
-      if (req.deferExpired) return deferred('unsupported', CHILD_RECLAIM_AUDIT_UNBOUND);
-    } else if (!childReclaimSameGenerationKey(licence, audit.generation)) {
-      return deferred('generation-changed', `ws-audit minted its token over ${childReclaimGenerationWords(audit.generation)}, `
-        + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
-    }
-  }
-  // 6 — the act, after the switch is read once more: one set between decide (2b') and here still stops the act.
-  const disabledAtAct = await childReclaimDisabledDetail(deps, ' at the act');
-  if (disabledAtAct !== null) return deferred('paused-at-server', disabledAtAct);
-  // ccd re-proves the token inside the reap lock.
-  const act = await childReclaimAct(deps, req, audit.token);
-  if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
-  if (act.kind === 'failed') {
-    return { kind: 'failed', sessionId, runId, resume: act.resume, detail: act.detail, token: act.token };
-  }
-  if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail);
-  // 7 — the child is gone: nothing may still be waiting to be typed into it,
-  // or into a stranger that inherits its recycled slug.
-  childReclaimCancelMail(deps, sessionId, 'reclaimed');
-  await childReclaimStaleTold(deps, req);
-  return { kind: 'reclaimed', sessionId, runId, wip: act.wip, secretsDropped: act.secretsDropped };
 }
 
 /** What a second registry listing found, or that it could not be taken.
@@ -2335,18 +2130,18 @@ export function withChildReclaim(runs: readonly RunSummary[], src: ChildReclaimS
 
 // ── the gate's row (D-7166; ARCH-44, consolidation spec K1) ──────────────────
 
-/** `readSessionRecord`'s answer, and the re-listing `childReclaimOutcome` takes on an `absent` or `unmeasurable` one. */
+/** `readSessionRecord`'s answer, and the re-listing the `record` reader takes on an `absent` or `unmeasurable` one. */
 type ChildSpentRecordRead = Awaited<ReturnType<typeof readSessionRecord>>;
 export type ChildSpentRecordFact =
   | { readonly read: Exclude<ChildSpentRecordRead, { kind: 'absent' | 'unmeasurable' }> }
   | { readonly read: Extract<ChildSpentRecordRead, { kind: 'absent' | 'unmeasurable' }>; readonly again: ChildReclaimRowListing };
 
 /**
- * CHILD-SPENT'S ROW OF THE ONE RETIRE GATE (`retire.ts#decideRetire`): `childReclaimOutcome`'s steps 1 to 6, one row step
- * per point at which it answers, in its order, each judged by its own statements over its readers' facts. The readers
- * are its reads, unchanged (`childReclaimPauseRead` and `childReclaimDisabledDetail` included, D-7224); the mail cancels,
- * the nested-rescue shadow and the stale told stay with the port (D-7199, D-7230). It is the executor's description, not
- * yet its body: `childReclaimOutcome` still runs its own ladder until its reason moves (D-7170).
+ * CHILD-SPENT'S ROW OF THE ONE RETIRE GATE (`retire.ts#decideRetire`): the executor's steps 1 to 6, one row step per
+ * point at which it answers, in its order, each judged by its own statements over its readers' facts. The readers are
+ * its reads, unchanged (`childReclaimPauseRead` and `childReclaimDisabledDetail` included, D-7224), held by
+ * `childReclaimRetirePort`; the mail cancels, the nested-rescue shadow and the stale told are the port's hooks (D-7199,
+ * D-7230). `reclaimChild` runs this row through `retireAct` (D-7170).
  */
 export interface ChildSpentFacts {
   readonly [RETIRE_STEPS.record]?: ChildSpentRecordFact;
@@ -2537,3 +2332,93 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
   },
   evidence: [childReclaimSweepVerdict, childReclaimDecision],
 };
+
+/**
+ * CHILD-SPENT'S PORT (D-7170): `CHILD_SPENT_RETIRE`'s readers, each the statement the executor's ladder ran for that
+ * step and nothing else, the act with its verb mapping, the two hooks and the notice. Every reader is an arrow property
+ * of the literal returned here, with no nested `function` declaration.
+ *
+ * - `record`: the box's authority, re-read. An `absent` (or `unmeasurable`) row is re-listed ONCE
+ *   (`childReclaimRowListing`), the way wave 2's `childBindGate` reads it, and only then; a non-registry id was never
+ *   listed for at all (path identity, spec §2.3: unmeasured, never gone).
+ * - `store` and `coordinated`: the sibling re-read (`readChildSiblings`), then COORDINATING, ANY STATE (spec §1 rule 4),
+ *   each at the clock's own read, as before.
+ * - `switches`: `childReclaimPauseRead`, not edited (D-7224), so a rejecting `readdir` lands on step 2b's own sentence
+ *   (its mode is `judged`). `off-switch` and `off-switch-last`: `childReclaimDisabledDetail`, at decide and at the act
+ *   (ARCH-77), two plain listings of their own.
+ * - `generation`: re-read only for a request that carries a licence (spec §5.5); close's `none` reads nothing.
+ * - `presence`: `viewers.isVisible`, asked only until the request's defer ceiling.
+ * - `capability`: `reclaim-v1`, then, for a stale request only, `reclaim-stale-v1` (D-6639).
+ * - `audit`: `childReclaimAudit`; its judges classify a refusal before the marker and the audit's generation are read.
+ *
+ * The record re-listing, the audit and the act have no try, as before: a rejection rejects `reclaimChild` before its
+ * feed row, into its caller's catch (D-7226). The outcome hook cancels the mail on a `gone` the `record` step answered
+ * (a box half that finished without its cancel) and on no other `gone` (D-7230), and records the nested-rescue shadow
+ * on an audit refusal; the after-act hook cancels the mail, then tells the stale arm's coordinator, after a `reclaimed`
+ * act only. The executor writes the feed row (notice home `executor`).
+ */
+export function childReclaimRetirePort(
+  deps: ChildReclaimDeps, req: ChildReclaimRequest,
+): RetireActPort<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome> {
+  const { sessionId, runId } = req;
+  return {
+    read: {
+      [RETIRE_STEPS.record]: async () => {
+        const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+        return read.kind === 'absent' || read.kind === 'unmeasurable'
+          ? { read, again: await childReclaimRowListing(deps, sessionId) } : { read };
+      },
+      [RETIRE_STEPS.store]: () => readChildSiblings(deps, sessionId, (deps.now ?? Date.now)()),
+      [RETIRE_STEPS.coordinated]: (facts) => {
+        const read = facts[RETIRE_STEPS.record]?.read;
+        if (read?.kind !== 'found') throw new Error('child-spent: coordination was read without a found record');
+        return childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)(), childReclaimRowUuid(read.record));
+      },
+      [RETIRE_STEPS.switches]: () => childReclaimPauseRead(deps.io, deps.cfg.registryDir),
+      [RETIRE_STEPS.offSwitch]: () => childReclaimDisabledDetail(deps, ''),
+      [RETIRE_STEPS.generation]: () => (req.licenceGeneration.kind === 'none' ? null
+        : childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId)),
+      [RETIRE_STEPS.presence]: () => !req.deferExpired && deps.viewers?.isVisible(sessionId) === true,
+      [RETIRE_STEPS.capability]: () => (!ccdCan(deps.fleetState, 'wsReclaim') ? [false]
+        : [true, req.stale === undefined || capSupported(deps.fleetState, RECLAIM_STALE_CAP)]),
+      [RETIRE_STEPS.audit]: () => childReclaimAudit(deps, req),
+      [RETIRE_STEPS.auditVerdict]: () => true,
+      [RETIRE_STEPS.markerMatch]: () => true,
+      [RETIRE_STEPS.auditGeneration]: () => true,
+      [RETIRE_STEPS.offSwitchLast]: () => childReclaimDisabledDetail(deps, ' at the act'),
+    },
+    // ccd re-proves the token inside the reap lock.
+    act: async (facts) => {
+      const act = await childReclaimAct(deps, req, childSpentTokenOf(facts).token);
+      if (act === 'unsupported') return childSpentDeferredOf(req, 'unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
+      if (act.kind === 'failed') {
+        return { kind: 'failed', sessionId, runId, resume: act.resume, detail: act.detail, token: act.token };
+      }
+      if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail);
+      return { kind: 'reclaimed', sessionId, runId, wip: act.wip, secretsDropped: act.secretsDropped };
+    },
+    answered: (step, outcome, facts) => {
+      // GONE, AND THE MAIL GOES WITH IT: a box half that finished without its cancel lands here (spec §5.6). A listing
+      // that names neither `<id>.uuid` nor `<id>.child` means no session holds this id now.
+      if (step === RETIRE_STEPS.record) {
+        if (outcome.kind === 'gone') childReclaimCancelMail(deps, sessionId, 'gone');
+        return;
+      }
+      if (step !== RETIRE_STEPS.auditVerdict) return;
+      const audit = facts[RETIRE_STEPS.audit];
+      if (audit?.kind !== 'refused') return;
+      recordNestedRescueShadow(deps, { sessionId, runId, key: String(runId), who: `${sessionId}, child of run #${runId}`,
+        count: audit.wouldRescue ?? 0, paths: audit.wouldRescuePaths ?? [], rung: SHADOW_RUNG.reclaimRescue });
+    },
+    // Step 7: the child is gone, so nothing may still wait to be typed into it, or into a stranger that inherits its
+    // recycled slug; then the stale arm's coordinator is told.
+    afterAct: (outcome) => {
+      if (outcome.kind !== 'reclaimed') return;
+      childReclaimCancelMail(deps, sessionId, 'reclaimed');
+      return childReclaimStaleTold(deps, req);
+    },
+    notice: (outcome) => {
+      if (outcome.kind !== 'gone' && !childReclaimFeedSkips(outcome, req)) recordChildReclaimFeed(deps, outcome, req);
+    },
+  };
+}
