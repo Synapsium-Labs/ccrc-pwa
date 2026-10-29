@@ -1745,19 +1745,16 @@ cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinat
   _ws_shed_locked; rc=$?
   # THE ONE WAY OUT takes back ONLY this shed's own marker: its body still `<this pid> <the lock's dev:ino>`. Any other
   # body (another shed of the id wrote its own once this one's lock file was purged, or a hand edit) is left standing for
-  # the gate, which fails closed on it, and the mismatch is journaled (`marker-not-own`); stdout keeps the act's answer.
+  # the gate, which fails closed on it, and the mismatch is journaled (`marker-not-own`) through the shed's own failure
+  # helper, like its other words, with that helper's document sent to /dev/null: stdout keeps the act's answer.
   local mnow=''
   if [[ -f "$REG/$id.shedding" && ! -L "$REG/$id.shedding" ]] && _file_read_to mnow "$REG/$id.shedding" \
      && [[ $mnow == "$BASHPID $sdi" ]]; then
     rm -f -- "$REG/$id.shedding"
   elif [[ -e "$REG/$id.shedding" || -L "$REG/$id.shedding" ]]; then
-    _lc_fail shed-deps "$id" "" marker-not-own "$REG/$id.shedding no longer reads as this shed's own ($BASHPID $sdi), so it was left standing for the operator" \
-      verb ws-shed-deps meas.mode "$cls" ${childrun:+meas.childRun "$childrun"} \
-      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    _ws_shed_failed marker-not-own "$REG/$id.shedding no longer reads as this shed's own ($BASHPID $sdi), so it was left standing for the operator" >/dev/null
   else
-    _lc_fail shed-deps "$id" "" marker-not-own "$REG/$id.shedding went before this shed took it back" \
-      verb ws-shed-deps meas.mode "$cls" ${childrun:+meas.childRun "$childrun"} \
-      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    _ws_shed_failed marker-not-own "$REG/$id.shedding went before this shed took it back" >/dev/null
   fi
   exec {sfd}>&- {lfd}>&-
   return "$rc"
