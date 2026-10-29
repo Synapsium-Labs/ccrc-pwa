@@ -1431,7 +1431,7 @@ describe('a screen change this client did not send fences the card at the desk; 
     [...document.querySelectorAll<HTMLButtonElement>('.tool-ask .ask-state button')].find((b) => b.textContent === 'Go to question')!;
 
   /** The new screen took no focus, its highlighted row (`row`), focused as Tab would, sends nothing on a digit, Enter or
-   *  Space, and a pointer press on it then lets a digit answer once. `answer` is the spied `api.answerDialog`. */
+   *  Space, and a pointer press on it then lets a digit answer once. `answer` is the spied option row (`spyApiAnswer('answerDialog')`). */
   function expectFencedThenPress(w: { seen: () => string[] }, answer: ReturnType<typeof vi.spyOn>, row: HTMLElement): void {
     expect(w.seen(), 'nothing moved focus into the new screen').toEqual([]);
     expect(document.activeElement, 'focus stays on the page body, where the engaged row\'s removal left it').toBe(document.body);

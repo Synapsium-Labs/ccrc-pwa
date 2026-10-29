@@ -1,9 +1,9 @@
 // The sheet's sentences for an own-words answer that did not go through, and the sheet's own rule for which text it
 // sends (D-5090, plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 3). D-5091 (Task 4) adds the same for a
 // multiSelect question's boxes: a sentence per `DialogMultiRefuseCode`, and why the commit is held back. Task 5 adds a
-// tapped row's (`api.answerDialog`): a sentence per `DialogRefuseCode`, where every 409 once read alike.
+// tapped row's (`api.answerQuestion`): a sentence per `DialogRefuseCode`, where every 409 once read alike.
 //
-// Own words answer an AskUserQuestion through its free-text row (`api.answerDialogText`, D-5047). That route refuses
+// Own words answer an AskUserQuestion through its free-text row (`api.answerQuestion`'s own words, D-5047). That route refuses
 // by code (`DialogTextRefuseCode`, `shared/api.ts`), and a code is not something to show the operator: each one gets a
 // sentence here that says what happened and what is left to do. The table is TOTAL over the union, so a code the
 // server adds is a compile error here until it has its sentence. Task 5 reconciles these with the other dialog
@@ -169,7 +169,7 @@ export function multiHeld(multi: DialogMulti, wanted: readonly number[]): 'free-
   return isDialogMultiIndexes(wanted) ? null : 'empty';
 }
 
-/** What the sheet says when a tapped row's answer (`api.answerDialog`) is refused, by its code (plan, Task 5). Total
+/** What the sheet says when a tapped row's answer (`api.answerQuestion`) is refused, by its code (plan, Task 5). Total
  *  over the union, as the other two tables are. Nothing was pressed in any of these: the route refuses before Enter.
  *  `stale-dialog` here is the sentence of a surface that renders straight from the pane's menu (a menu that is no ask),
  *  which redraws from the store right after, so "showing the latest" is true there; under a structured question it is

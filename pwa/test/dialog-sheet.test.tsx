@@ -1,5 +1,5 @@
 // Task 9 — DialogSheet: parsed dialogs render as big tappable option rows
-// (preselected marked with the ❯ accent) answering via api.answerDialog;
+// (preselected marked with the ❯ accent) answering via api.answerQuestion;
 // unparsed dialogs render raw + a terminal CTA; a stale 409 toasts and keeps
 // the sheet open on the store's dialog; scrim cancel only hides (the store
 // keeps signalling) and is refused while an answer is in flight.
@@ -1524,7 +1524,7 @@ describe('the envelope follows the pane (D-5089)', () => {
 // — own words, through the free-text row (D-5090) —
 //
 // AskUserQuestion paints a free-text row under a question's n options: `n+1. Type something.` while it is empty, the
-// typed text once typed. Own words answer the question THROUGH that row (`api.answerDialogText`, D-5047), which types
+// typed text once typed. Own words answer the question THROUGH that row (`api.answerQuestion`'s own words, D-5047), which types
 // only once the pane proves focus and presses Enter only once it proves the echo. They are never sent by pressing
 // `Chat about this`, which declines the WHOLE ask, and never as a new prompt (the deleted `respond()`, diagnosis root
 // cause 5). The in-flight state belongs to the CALL: typing changes the dialog's id (it hashes the labels, and the
