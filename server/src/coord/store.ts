@@ -4934,14 +4934,16 @@ export class CoordStore {
   /** The ACT rule, written once: `driftOpenRuns` and `runLastMoves` (D-7334) both read a run's newest act through it.
    *  The answer for one run is the `at` of its newest `run_events` row that is neither caused by `'operator'` nor a stall
    *  observation (`parseStallDetail` reads it), or null when there is none. Prepared once per read; it throws as the
-   *  statement does, and its callers turn that into their failure arm. */
+   *  statement does, and its callers turn that into their failure arm. The rows are walked newest first and the walk
+   *  stops at the first act (`iterate`, fix round 1, F5): the runs frame asks this for every open run on every tick, so
+   *  its cost follows the stall rows above the newest act, not the run's whole history. */
   private lastActReader(): (runId: number) => number | null {
     const events = this.db.prepare(
       "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
       'ORDER BY at DESC, id DESC',
     );
     return (runId) => {
-      for (const e of events.all(runId) as { at: unknown; causedBy: string; detail: string | null }[]) {
+      for (const e of events.iterate(runId) as Iterable<{ at: unknown; causedBy: string; detail: string | null }>) {
         if (parseStallDetail(e.detail) !== null) continue;
         return driftInt(e.at, 'run_events at');
       }
