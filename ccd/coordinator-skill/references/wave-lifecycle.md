@@ -431,7 +431,10 @@ run naming the session) un-freezes it, and the next sweep may rename it then.
 
 **A brief for an opted-in project says so.** A brief for a project whose `$REG/landing/<project>/enabled` exists names
 the opt-in and the radar's base. The worker's clause 9 exception and the reviewer's clause 3 exception apply only
-where the brief says so, and a brief for any other project says nothing of them.
+where the brief says so, and a brief for any other project says nothing of them. Name the base in that brief as a
+ref name, `origin/<base>`, where `<base>` is the PR's base branch (`gh pr view <n> --json baseRefName`), and never as
+a sha. The radar walks against its conf's `base=`, which defaults to `main`; where the two differ, a merge the radar
+cannot place on its base gets today's answer (`stale-tip` or `stale-review`).
 
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
@@ -596,7 +599,10 @@ same, and shows as `absent`.
   (from `awaiting-review` ONLY — see above) — re-measured. Send it when a
   `status`/`wave-done` mail carries a claimed fingerprint (`{branchTip,
   prNumber, prPhase, handoffCommit}`). Submit that fingerprint **exactly as
-  the worker reported it** — never rebuild it by pairing a freshly re-measured
+  the worker reported it** (the one exception is the recorded head in §5:
+  while the same wave-done is still being answered after an advance answered
+  `verifiedHead`, the later advances and the close submit that `verifiedHead`
+  as both tips) — never rebuild it by pairing a freshly re-measured
   `branchTip` with the mail's ORIGINAL `handoffCommit`; see the
   `no-handoff-commit` row below for what that specific mix produces. Re-
   measuring locally first (read-only ccd is fine here: `ccd pr-state
@@ -755,9 +761,11 @@ present, otherwise the head the server's dequeue or merged brief prints. An adva
 the claim you submitted was itself the verified head. On a project the operator opted in to the radar's lineage the
 recorded head can be the live tip rather than the tip the worker claimed, and it is the head every spelling below
 binds: the native-queue enqueue, the spent-producer arm and the MERGED proof. When an advance answered `verifiedHead`,
-every later advance of that run and its close submit the worker's fingerprint with `branchTip` and `handoffCommit` both
-set to that `verifiedHead` (the server's own answer, not a fresh measurement), so the ordinary path verifies the head
-that is landing.
+every later advance of that run and its close that answer the same wave-done submit the worker's fingerprint with
+`branchTip` and `handoffCommit` both set to that `verifiedHead` (the server's own answer, not a fresh measurement), so
+the ordinary path verifies the head that is landing. That rule ends with the wave-done it answered: once the run goes
+back to `working` (a send-back, or a lost merge race recorded from `merging`) or a fresh `wave-done` arrives, submit
+the worker's fingerprint exactly as the worker reports it.
 
 1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the

@@ -353,6 +353,7 @@ not after.
    so close nothing, open nothing and send no `rejected:` mail until it does. In a project the brief names as opted in
    to the radar's lineage, `stale-review` means a push the lineage could not prove clean; everywhere else it means
    what it means today. A report whose first line is `TIP MOVED` is never ruled on, even when its close was accepted.
+   Open a fresh review run against the live tip instead, and the review run that was closed counts as a round.
    Once the close answers `ok`, read the
    report — findings are the reviewer's, rulings are yours (clause 10 for any
    deviation the report surfaces). Then ONE of two moves:

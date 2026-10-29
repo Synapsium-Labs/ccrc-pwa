@@ -3601,7 +3601,8 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
       'who re-sends its unchanged `review-done` after the radar\'s next tick, so close nothing, open nothing and send no `rejected:` mail until it does.');
     expect(six).toContain('In a project the brief names as opted in to the radar\'s lineage, `stale-review` means a push the lineage could not prove clean; ' +
       'everywhere else it means what it means today.');
-    expect(six).toContain('A report whose first line is `TIP MOVED` is never ruled on, even when its close was accepted.');
+    expect(six).toContain('A report whose first line is `TIP MOVED` is never ruled on, even when its close was accepted. ' +
+      'Open a fresh review run against the live tip instead, and the review run that was closed counts as a round.');
   });
 
   it('the recorded head is defined ONCE, before §5\'s first <handoffCommit> spelling', () => {
@@ -3615,9 +3616,18 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
     expect(wl.indexOf(rule), 'the rule comes before the first <handoffCommit> spelling of §5').toBeLessThan(wl.indexOf('<handoffCommit>', five));
     expect(wl).toContain('An advance answer with no `verifiedHead` means the claim you submitted was itself the verified head.');
     // Final review F-A: once an advance answered `verifiedHead`, the later advances and the close submit it as both tips.
-    expect(wl).toContain('When an advance answered `verifiedHead`, every later advance of that run and its close submit the worker\'s fingerprint ' +
-      'with `branchTip` and `handoffCommit` both set to that `verifiedHead` (the server\'s own answer, not a fresh measurement), ' +
-      'so the ordinary path verifies the head that is landing.');
+    expect(wl).toContain('When an advance answered `verifiedHead`, every later advance of that run and its close that answer the same wave-done ' +
+      'submit the worker\'s fingerprint with `branchTip` and `handoffCommit` both set to that `verifiedHead` (the server\'s own answer, not a fresh measurement), ' +
+      'so the ordinary path verifies the head that is landing. ' +
+      'That rule ends with the wave-done it answered: once the run goes back to `working` (a send-back, or a lost merge race recorded from `merging`) ' +
+      'or a fresh `wave-done` arrives, submit the worker\'s fingerprint exactly as the worker reports it.');
+  });
+
+  // Fix round 1, F3: section 4's exactly-as-reported rule and the recorded-head rule read as one rule.
+  it('section 4\'s exactly-as-reported sentence points at the one exception, the recorded head', () => {
+    expect(wl).toContain('Submit that fingerprint **exactly as the worker reported it** (the one exception is the recorded head in §5: ' +
+      'while the same wave-done is still being answered after an advance answered `verifiedHead`, ' +
+      'the later advances and the close submit that `verifiedHead` as both tips)');
   });
 
   it('the verdict block itself is untouched by the rule: it still takes PR=<pr> HC=<handoffCommit> and holds no verifiedHead', () => {
@@ -3633,11 +3643,20 @@ describe('landing order wave 4: the lineage-unmeasured text, the recorded head a
       'The worker\'s clause 9 exception and the reviewer\'s clause 3 exception apply only where the brief says so, and a brief for any other project says nothing of them.');
   });
 
+  // Fix round 1, F4: the base is a ref name read from the PR, never a sha.
+  it('the opt-in paragraph says the base is a ref name read from the PR, and what a mismatch with the radar costs', () => {
+    expect(wl).toContain('says nothing of them. ' +
+      'Name the base in that brief as a ref name, `origin/<base>`, where `<base>` is the PR\'s base branch (`gh pr view <n> --json baseRefName`), and never as a sha. ' +
+      'The radar walks against its conf\'s `base=`, which defaults to `main`; where the two differ, a merge the radar cannot place on its base gets today\'s answer (`stale-tip` or `stale-review`).');
+  });
+
   it('no new sentence carries a double quote, and the word is in the corpus the census reads', () => {
     for (const code of ['lineage-unmeasured']) expect(allSkillText).toContain(code);
     for (const s of [
       'It is a wait, not a refusal', 'Except `lineage-unmeasured`', 'is never a failed review run', 'is never ruled on, even when its close was accepted',
       'is the recorded head', 'names the opt-in and the radar\'s base', 'When an advance answered `verifiedHead`',
+      'That rule ends with the wave-done it answered', 'Open a fresh review run against the live tip', 'Name the base in that brief as a ref name',
+      'The radar walks against its conf', 'the one exception is the recorded head in §5',
     ]) {
       // Whitespace-flattened: the new paragraphs wrap at about 120 columns (final review F-H).
       const flatAll = flat(allSkillText);
