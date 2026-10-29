@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../../shared/api.js';
+import { sourceOfSymbol } from '../scan/symbols.js';
 import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources, stallCodeText } from './helpers.js';
 
 
@@ -416,6 +417,14 @@ describe('Build 7 nouns', () => {
 
     it('radar.ts and lineage.ts each call freshWithin(, so the scan above is never vacuous', () => {
       for (const f of ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts']) expect(codeOf(f), f).toMatch(/\bfreshWithin\(/);
+    });
+
+    // Task 2: the two places that age a landing on the server go through the same rule. `assembleFleet` drops an entry past
+    // its window, and `sweepRadar` re-ages the kept map; neither writes its own comparison.
+    it('fleet.ts (assembleFleet) and watch.ts (the lane\'s re-age) call freshWithin( too', () => {
+      const code = (file: string, symbol: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, file), symbol));
+      expect(code('server/src/fleet.ts', 'assembleFleet'), 'fleet.ts').toMatch(/\bfreshWithin\(\s*landing\.at,\s*RADAR_PROBE_FRESH_S,/);
+      expect(code('server/src/watch.ts', 'FleetWatcher.sweepRadar'), 'watch.ts').toMatch(/\bfreshWithin\(\s*l\.at,\s*RADAR_PROBE_FRESH_S,/);
     });
   });
 

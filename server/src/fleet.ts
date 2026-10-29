@@ -8,11 +8,11 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, liveStatusCoversDelegation, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionLanding, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
 import { readSession } from './sessionReading.js';
-import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
+import { RADAR_PROBE_FRESH_S, freshWithin, sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
@@ -412,6 +412,25 @@ function persistedPr(r: SessionRecord): PrState | null {
   };
 }
 
+/** A session's CURRENT branch, the one derivation (D-7484): `assembleFleet` puts it on the wire and the landing radar
+ *  lane (wave 4b) matches a probe head against it. A statusline branch read THIS tick wins: it is a live pane capture
+ *  and knows about a manual checkout. When the pane gave no fresh full branch (no capture yet, a dead pane, a narrow
+ *  one that cut the `⎇` segment, or a tick that measured nothing and kept the last reading, `retained`) the
+ *  worktree's own HEAD, as the divergence sweep last measured it, knows the same thing. A retained pane branch comes
+ *  next, and the registry's `.branch` last: ccd writes it only at ws-add/ws-rename, so a manual checkout leaves it
+ *  naming a branch the worktree is no longer on (measured 2026-09-23 on three of the four narrow rows that surfaced
+ *  this). */
+export function sessionBranchOf(
+  r: SessionRecord, statusline: Statusline | undefined, headBranch: string | null | undefined,
+): string | null {
+  return (statusline?.retained ? undefined : statusline?.branch) ?? headBranch ?? statusline?.branch ?? r.branch ?? null;
+}
+
+/** A session's PR state, the one derivation (D-7484): the watcher's last sweep, else what the registry last held. */
+export function sessionPrOf(r: SessionRecord, prStates: ReadonlyMap<string, PrState> | undefined): PrState | null {
+  return prStates?.get(r.id) ?? persistedPr(r);
+}
+
 /**
  * A registry stamp in the units every clock in this server actually compares
  * against. `ccd` writes them with `date +%s` — epoch SECONDS, as
@@ -532,6 +551,10 @@ export async function assembleFleet(
    *  hands it to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second time (worker stall
    *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
   panePids?: Map<string, number | null>,
+  /** The landing radar lane's map (landing order wave 4b, `FleetWatcher.currentLandings()`), keyed by session id. Absent
+   *  on every caller that builds no fleet frame and in older tests. An entry past its window is dropped here, so no
+   *  frame carries an old prediction however long the lane has been blind (D-7481). */
+  landings?: ReadonlyMap<string, SessionLanding>,
 ): Promise<FleetSession[]> {
   // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
   // registry-refused-census.test.ts pins all six `assembleFleet(` calls, so this fallback decides nothing a user
@@ -659,6 +682,7 @@ export async function assembleFleet(
     const acct = limits[r.wrapper];
     const sl = statuslines?.get(r.id);
     const head = headBranches?.get(r.id) ?? null;
+    const landing = landings?.get(r.id);
     // The pane's Workflow row speaks only where Claude Code's own file did not:
     // no readable file (`no-state` leaves the `alive` default `idle`), no
     // configDir, or a build older than 2.1.277 or naming no version. From
@@ -749,17 +773,9 @@ export async function assembleFleet(
       // hook event, so without this arm they reached the wire as `working`.
       dialogPending: (pendingDialogs?.has(r.id) ?? false) || hs?.state === 'waiting' || liveWaiting, version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,
-      // A statusline branch read THIS tick wins: it is a live pane capture and
-      // knows about a manual checkout. When the pane gave no fresh full branch
-      // — no capture yet, a dead pane, a narrow one that cut the `⎇` segment,
-      // or a tick that measured nothing and kept the last reading (`retained`)
-      // — the worktree's own HEAD, as the divergence sweep last measured it,
-      // knows the same thing. A retained pane branch comes next, and the
-      // registry's `.branch` last: ccd writes it only at ws-add/ws-rename, so a
-      // manual checkout leaves it naming a branch the worktree is no longer on
-      // (measured 2026-09-23 on three of the four narrow rows that surfaced this).
       ultracode: sl?.ultracode ?? false,
-      branch: (sl?.retained ? undefined : sl?.branch) ?? head ?? sl?.branch ?? r.branch ?? null,
+      // The branch derivation is `sessionBranchOf`'s (D-7484), documented there.
+      branch: sessionBranchOf(r, sl, head),
       // D-2011: the pane's own `▓ ctx` reading, no registry fallback (nothing
       // else on the record ever measured this). `?? null`, not `?? 0` —
       // `Statusline.ctxPct` is `undefined` on a session with no fresh
@@ -772,7 +788,7 @@ export async function assembleFleet(
       paneCols: sl?.boxCols ?? null,
       usage: usageReadings?.get(r.id) ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
-      pr: prStates?.get(r.id) ?? persistedPr(r),
+      pr: sessionPrOf(r, prStates),
       archivedAt: r.archivedAt,
       archivedBytes: r.archivedBytes,
       held: r.held,
@@ -907,6 +923,8 @@ export async function assembleFleet(
       // ARCH-61 (#796): the two named queries over the row's binding, decided once, here.
       run: sessionRun.ok ? sessionRun.run : null,
       openRun: sessionRun.ok ? sessionRun.openRun : null,
+      // Wave 4b: absent means unknown, so an entry the radar no longer speaks for leaves the key out, never `null` (D-7481).
+      ...(landing !== undefined && freshWithin(landing.at, RADAR_PROBE_FRESH_S, Date.now()) ? { landing } : {}),
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

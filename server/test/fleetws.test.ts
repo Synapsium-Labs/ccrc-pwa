@@ -22,6 +22,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { watcherTeardown } from './watcherTeardown.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { okRuns } from './coordReadHelpers.js';
+import { readRegistry } from '../src/registry.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -1616,6 +1617,48 @@ describe('fleet REST + WS', () => {
       const row = snapshot.sessions.find((session: { id: string }) => session.id === CHILD);
       expect(row, 'the seeded session must reach the cold-start snapshot').toBeDefined();
       expect(row.ask).toEqual(CHIP);
+      ws.close();
+    });
+  });
+
+  // Landing order wave 4b: the cold frame (assembled from the lane's map at connect) and the tick's broadcast (the same map,
+  // handed to the same assembly) are two builders of one field, and a client must not see it change between them.
+  describe('the radar landing on the cold frame and the broadcast', () => {
+    const CHILD = 'claude-a-project-f';
+
+    it('the cold snapshot and the tick\'s fleet broadcast carry the same landing', async () => {
+      const reg = path.join(home, '.cc-sessions');
+      writeFileSync(path.join(reg, `${CHILD}.branch`), 'ws/alpha');
+      mkdirSync(path.join(reg, 'landing', CHILD), { recursive: true });
+      const sha = (n: number): string => n.toString(16).padStart(40, '0');
+      writeFileSync(path.join(reg, 'landing', CHILD, 'probe'), JSON.stringify({
+        v: 1, project: CHILD, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), state: 'measured',
+        base: { ref: 'main', sha: sha(9) },
+        heads: [{ pr: 12, head: sha(12), branch: 'ws/alpha', id: CHILD, base: { state: 'clean' } }],
+        headsCut: false, pairs: [], pairHeads: [12], pairsCut: false,
+      }));
+      const deps = testDeps(home);
+      const bus = new Bus();
+      const watcher = mkWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.sweepRadar(await readRegistry(deps.io, deps.cfg));   // the lane has run; nothing has broadcast yet
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      const cold = await next();
+      expect(cold.type).toBe('fleet');
+      const coldLanding = cold.sessions.find((s: { id: string }) => s.id === CHILD)?.landing;
+      expect(coldLanding, 'the cold snapshot carried no landing').toMatchObject({ pr: 12, head: sha(12), paired: true });
+
+      await watcher.tick();   // the first broadcast
+      let pushed = await next();
+      while (pushed.type !== 'fleet') pushed = await next();
+      expect(pushed.sessions.find((s: { id: string }) => s.id === CHILD)?.landing).toEqual(coldLanding);
       ws.close();
     });
   });

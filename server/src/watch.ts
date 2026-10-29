@@ -1,7 +1,9 @@
 import { createHistogram, performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
-import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
+import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
+import { readRadarPass } from './coord/lineageRead.js';
+import { sessionLandingsOf, type RadarRow } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
@@ -41,14 +43,14 @@ import type { SessionRecord } from './registry.js';
 import type {
   ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
-  SessionStatus, SessionUsage, TaskProgress,
+  SessionLanding, SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 import { APPROVAL_HOOK_WAIT_S } from '../../shared/api.js';
 import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../shared/switches.js';
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
@@ -210,7 +212,7 @@ import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './up
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { LaneRunner } from './laneRunner.js';
 import { decideParked, decideRecipientAbsent, decideReplayCeiling, decideSendFailure, decideSessionDead, decideTmuxUnknown, MAIL_ARMED_HOLD_MS, MAIL_PARK_PROBE_MS, MAIL_PARK_RETRY_MS, type SettleAction } from './coord/delivery.js';
-import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, type LaneName } from './laneSchedule.js';
+import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, LANDING_RADAR_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
@@ -743,6 +745,10 @@ export class FleetWatcher {
   private taskProgress = new Map<string, TaskProgress>();
   /** Last-swept PR state per SESSION id. */
   private prStates = new Map<string, PrState>();
+  /** The landing radar lane's map (wave 4b), keyed by session id: `sweepRadar` is its one writer. */
+  private landings = new Map<string, SessionLanding>();
+  /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. */
+  private radarSaid = new Map<string, string>();
   /** Last-measured repo cell per PROJECT — retained, not derived, from what
    *  `sweepPr` already reads off `CcdPrLine.repo` / `CcdPrFailure.reason` for
    *  `GET /api/projects`. See `repoCellFor` (prstate.ts) for the fold. */
@@ -1841,6 +1847,42 @@ export class FleetWatcher {
     return new Map([...this.headBranches].map(([id, h]) => [id, h.branch]));
   }
 
+  /** The radar lane's map, for the two one-shot assemblies of `server.ts` (the REST fleet and the cold frame): a copy. */
+  currentLandings(): Map<string, SessionLanding> { return new Map(this.landings); }
+
+  /** The landing radar lane, one pass (landing order wave 4b; `coord/radar.ts`, `coord/lineageRead.ts`). `records` is the
+   *  tick's registry listing, null when it cannot be listed. An unlistable registry or `landing` directory only RE-AGES
+   *  the kept map, and a proven absence of that directory empties it. A listed one builds a NEW map from the projects
+   *  that answered in time; a project that failed, or missed the deadline, contributes nothing (D-7481, D-7484). PUBLIC
+   *  for the reason `sweepNames` is: `tick()` dispatches it with `void`. */
+  async sweepRadar(records: readonly SessionRecord[] | null, nowMs = Date.now()): Promise<void> {
+    const reaged = () => new Map([...this.landings].filter(([, l]) => freshWithin(l.at, RADAR_PROBE_FRESH_S, nowMs)));
+    const said = (key: string, reason: string, warn: boolean): void => {
+      if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${key}`} is ${reason}`);
+      this.radarSaid.set(key, reason);
+    };
+    if (records === null) { this.landings = reaged(); return; }
+    const pass = await readRadarPass(
+      this.deps.io, this.deps.cfg.registryDir, new Set(records.map((r) => r.project)), nowMs, LANDING_RADAR_SWEEP_MS / 2);
+    said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
+    if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); return; }
+    const heads = this.currentHeadBranches();
+    const next = new Map<string, SessionLanding>();
+    for (const [project, read] of pass.reads) {
+      said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
+      if (!read.ok) continue;
+      const rows: RadarRow[] = records.filter((r) => r.project === project).map((r) => {
+        const pr = sessionPrOf(r, this.prStates);
+        return {
+          id: r.id, branch: sessionBranchOf(r, this.statuslines.get(r.id), heads.get(r.id)),
+          pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' },
+        };
+      });
+      for (const [id, l] of sessionLandingsOf(read.doc, rows, nowMs)) next.set(id, l);
+    }
+    this.landings = next;
+  }
+
   /** The delegation lane's input from the last census pass (see `delegationCensus`). */
   currentDelegationCensus(): DelegationCensusPass | null {
     return this.delegationCensus;
@@ -2304,6 +2346,9 @@ export class FleetWatcher {
       void this.runLane('landingChecks', () => this.sweepLandingChecks(
         registryRead.listed ? registryRead.names : null, registryRead.listed ? registryRead.records : []))
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
+      // Landing order wave 4b: the radar lane, on the same terms (an unlistable registry only ages the kept map).
+      void this.runLane('landingRadar', () => this.sweepRadar(registryRead.listed ? registryRead.records : null))
+        ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
@@ -2473,7 +2518,7 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids);
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings);
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
