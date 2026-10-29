@@ -19,6 +19,8 @@
 //   4. after the commit, and only then: the reason journaled on the run (`DISPATCH_ABANDON_EVENT`), and the coordinator
 //      mailed through the server's own mail path (`queueSystemMail`). Mail queued BEFORE the commit would be cancelled
 //      by it: the close parks every outstanding delivery of the run's mail.
+// AT MOST `DISPATCH_ABANDON_PER_PASS` CANDIDATES A PASS (D-7502), the oldest stamps first (the store's order); the rest
+// wait for the next pass, which reads the candidates afresh. The loop holds the coordination serialiser throughout.
 // It never retries inside itself; the next pass reads again. A run it abandoned is terminal, so it is never a candidate
 // again, and no second mail is sent.
 //
@@ -41,6 +43,15 @@ import {
   DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT, dispatchAbandonMailBody,
 } from '../../../shared/dispatch-abandon.js';
 import { deadDispatchVerdict, dispatchAbandonViewOf, type DeadDispatchRegistry, type DeadDispatchVerdict } from './deadDispatch.js';
+
+/** D-7502: at most this many candidates are handled in one pass. The loop runs inside the coordination serialiser,
+ *  which every dispatch waits on from before its `ws-add` to after its bind, and each candidate costs up to two measured
+ *  registry reads (the verdict and the arm's re-measure) and one close transaction. Twenty bounds that hold to forty
+ *  registry reads. At the lane's one-minute cadence it still drains 1 200 an hour, far above any backlog a failing
+ *  dispatch path leaves (one stalled run per dispatch that never came back). It is wider than the other lanes'
+ *  caps of two to eight because a candidate that is kept (a child marker, a box that mints without one) stays a
+ *  candidate and takes a slot every pass, oldest first: twenty such runs together are needed to starve a newer one. */
+export const DISPATCH_ABANDON_PER_PASS = 20;
 
 /** The executor's ports (L2, declared by this consumer). `serial` is the coordination serialiser's sweep handle, and
  *  the abandon it hands in is the ONLY way this file ends a run. */
@@ -105,8 +116,10 @@ export async function abandonDeadDispatches(deps: AbandonDeadDispatchDeps): Prom
   if (!dispatchAbandonViewOf(deps.coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs).armed) {
     return { abandoned, kept: ids.map((runId) => ({ runId, why: 'switch-off' })) };
   }
+  // D-7502: the oldest stamps first (`stalledDispatchRunIds` orders by stamp, then id); the rest wait for the next pass.
+  const thisPass = ids.slice(0, DISPATCH_ABANDON_PER_PASS);
   await deps.serial(deps.coord, async (abandon) => {
-    for (const id of ids) {
+    for (const id of thisPass) {
       const first = await deadDispatchOf(deps, id);
       if (first.verdict.kind !== 'dead') { kept.push({ runId: id, why: whyOf(first.verdict) }); continue; }
       const { claimedBy, startedAt } = first.verdict;
@@ -144,5 +157,6 @@ export async function abandonDeadDispatches(deps: AbandonDeadDispatchDeps): Prom
       abandoned.push({ runId: id, claimedBy, mailed });
     }
   });
+  for (const runId of ids.slice(DISPATCH_ABANDON_PER_PASS)) kept.push({ runId, why: `pass-cap: next pass (${DISPATCH_ABANDON_PER_PASS} a pass)` });
   return { abandoned, kept };
 }
