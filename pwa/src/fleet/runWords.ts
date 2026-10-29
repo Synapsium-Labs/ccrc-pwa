@@ -80,7 +80,7 @@ export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
 
 /** What `runLastMove` reads: `RunSummary`'s two times, and the server's `lastMoveAt` (D-7334). It was declared here,
  *  structurally, before `RunSummary` carried the field; `RunSummary.lastMoveAt` is on the wire type now, and every
- *  `RunSummary` satisfies this alias. The alias goes in Task G1b, with the card wiring (D-7380), when the reader takes
+ *  `RunSummary` satisfies this alias. The alias goes in Task G1b, with the card wiring (Task G1b), when the reader takes
  *  `RunSummary` and no caller changes. */
 type LastMoveCarrier = Pick<RunSummary, 'openedAt' | 'dispatchedAt'> & { readonly lastMoveAt?: number | null };
 
