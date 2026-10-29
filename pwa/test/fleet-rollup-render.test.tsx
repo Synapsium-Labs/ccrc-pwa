@@ -88,7 +88,7 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     expect(busy.querySelectorAll('.sess-line')).toHaveLength(1);
   });
 
-  // Task G2 (D-7331): the coordinator's workers fold into its programme box, and the box's footer is the one toggle
+  // Task G2: the coordinator's workers fold into its programme box, and the box's footer is the one toggle
   // that was the separate summary line.
   it('folds the workers into the programme box and keeps the one with the operator\'s question in its tray', () => {
     mount(skin);

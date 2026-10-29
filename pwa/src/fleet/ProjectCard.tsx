@@ -229,7 +229,7 @@ function ProjectCardView({
    *  a STALE array would read as gone (D-1138). Default false = unknown. */
   frameSeen?: boolean;
   /** D-6088: this card's rollup (`rollup.ts`), the one answer both skins' lists draw. When given, it decides the
-   *  fold and the body's rows (a coordinator's folded workers, drawn as its programme box's tray and footer, D-7331);
+   *  fold and the body's rows (a coordinator's folded workers, drawn as its programme box's tray and footer, Task G2);
    *  without it the card draws its tree's rows and the `collapsed` it was handed, as before. */
   rollup?: CardRollup;
   /** Open or close a coordinator's worker line, by the coordinator's id. */
@@ -345,7 +345,7 @@ function ProjectCardView({
     />
   );
 
-  // D-7331: a coordinator's folded workers are its programme box's footer now (`ProgrammeBox`), so a body row is a
+  // Task G2: a coordinator's folded workers are its programme box's footer now (`ProgrammeBox`), so a body row is a
   // session or a spawn; the rollup's summary row is read only as that footer's state (`trayOf`).
   const rowBody = (row: FleetRow): ReactNode =>
     row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />;
