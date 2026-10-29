@@ -17,6 +17,9 @@ export interface PollOptions {
   /** Called with the outcome of a request that is still the newest issued and whose hook is still mounted. `issue` is
    *  that request's number (the one `reload()` returned for it). */
   onOutcome: (outcome: PollOutcome, issue: number) => void;
+  /** Re-poll each time the page becomes visible (the page clock's `onPageVisible`). Default `true`; `false` keeps a
+   *  view whose request schedule never re-polled on return (`HotFilesStrip`, `useFleetHealth`) on that schedule. */
+  refetchOnVisible?: boolean;
 }
 
 export interface PollControl {
@@ -36,7 +39,7 @@ export function useWhenVisible(handler: () => void): void {
 }
 
 export function usePoll(options: PollOptions): PollControl {
-  const { pollMs } = options;
+  const { pollMs, refetchOnVisible = true } = options;
   // The latest request and reader, read at call time, so a caller's inline closures never re-arm the timer.
   const latest = useRef(options);
   latest.current = options;
@@ -61,14 +64,14 @@ export function usePoll(options: PollOptions): PollControl {
     loadRef.current = load;
     load();
     const timer = pollMs === null ? null : setInterval(load, pollMs);
-    const stopVisible = onPageVisible(load);
+    const stopVisible = refetchOnVisible ? onPageVisible(load) : null;
     return () => {
       live = false;
       loadRef.current = () => 0;
       if (timer !== null) clearInterval(timer);
-      stopVisible();
+      stopVisible?.();
     };
-  }, [pollMs]);
+  }, [pollMs, refetchOnVisible]);
 
   const reload = useCallback((): number => loadRef.current(), []);
   const supersede = useCallback((): void => { issued.current += 1; }, []);
