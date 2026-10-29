@@ -27,6 +27,7 @@ import {
   RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, capabilityJudge,
   presenceJudge, type RetireNoRead, type RetireReason,
 } from '../retire.js';
+import { retireAct, type RetireActPort } from '../retireLane.js';
 
 /**
  * THE TEMP-ROOT COLLECTOR'S ONE EXECUTOR, AND ITS READS (child reclamation spec 2026-09-22 §5.10).
@@ -520,108 +521,132 @@ export async function learnCollect(
 const collectLaneStopped = (lane: CollectLaneEffective): lane is Extract<CollectLaneEffective, { kind: 'stopped' }> =>
   lane.kind === 'stopped';
 
+/** THE JOB (D-7168; ARCH-44, consolidation spec §5.7): temp-orphan's row (`TEMP_ORPHAN_RETIRE`, below), driven by the one
+ *  retire loop (`retireLane.ts#retireAct`) over this file's port. The steps, their order and their words are the row's;
+ *  the reads are the port's; the act is `collectTempRootAct`'s. */
 export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob): Promise<CollectJobOutcome> {
-  // 1 — BOTH capabilities, proven: each refuses on no evidence, where `verbSupported` would permit (D-5866: the
-  // collector's own row through `ccdCan`, the pause precondition through `capSupported`). A box the
-  // phone cannot pause never runs an automatic destructive lane. Then the id predicate AGAIN, on the job's own id,
-  // before any argv. The population gated it; this is the second check, pinned on its own (spec §5.10).
-  if (!ccdCan(deps.fleetState, 'wsCollect') || !capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) {
-    deps.lane.cleared('caps');
-    return { kind: 'not-asked', step: 1, why: 'caps',
-      detail: `the fleet host does not advertise both ${COLLECT_CAP} and ${RECLAIM_PAUSE_CAP}` };
-  }
-  // D-6627: a loose entry rides its own pair of capabilities and its own id grammar (`loose:<hex>`, a string the temp-root
-  // predicate refuses). Both are asked here and again at the audit site; the verb's is asked nearest its argv.
-  const looseHex = collectLooseHexOf(job.id);
-  if (looseHex !== null && !(ccdCan(deps.fleetState, 'wsCollectLoose') && ccdCan(deps.fleetState, 'wsCollectLooseAudit'))) {
-    deps.lane.cleared('caps');
-    return { kind: 'not-asked', step: 1, why: 'caps', detail: `the fleet host does not advertise ${COLLECT_LOOSE_CAP}` };
-  }
-  if (looseHex === null && !isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused', detail: COLLECT_ID_REFUSED };
-  // THE EPOCH THIS JOB WAS QUEUED UNDER (path-identity spec 2026-10-12 §5.5). The lane read it outside the queue
-  // callback, so the pair the switch is resolved under starts here. A reconnect anywhere between the queueing and the
-  // job's last listing, observation 2 included, composes nothing.
-  const queuedUnder = job.epoch;
-  // 2 — THE SWITCH, from one listing. A registry that did not list cannot rule a raised pause out, so it is a pause.
-  const first = await collectSwitches(deps.io, deps.cfg.registryDir);
-  if (first.paused) {
-    deps.lane.cleared('paused');
-    return { kind: 'not-asked', step: 2, why: 'paused', detail: COLLECT_PAUSED[first.why] };
-  }
-  // 3 — a person at the session. No ceiling, and no licence past it.
-  if (deps.viewers?.isVisible(job.id) === true) return { kind: 'not-asked', step: 3, why: 'presence', detail: COLLECT_SEEN };
-  // 4 — OBSERVATION 2, through the one audit site. It is stale if a clear landed while it was in flight. Then the
-  // licence against observation 1, read from the lane's memory and never carried. Then the open-run hold, judged on
-  // THIS document, licensed or not.
-  const asked = await collectAudit(deps, job.id);
-  if ('notAsked' in asked) {
-    deps.lane.cleared('caps');
-    return { kind: 'not-asked', step: 4, why: 'caps', detail: COLLECT_AUDIT_REFUSED[asked.notAsked] };
-  }
-  const audit: CollectAnswer<CollectAudit> = asked;
-  const answered = (step: 4 | 5 | 6, why: CollectAnsweredWhy, detail: string): CollectJobOutcome =>
-    ({ kind: 'answered', step, why, detail, audit });
-  if (!sameGenerations(audit.composed, deps.lane.generations(job.id))) return answered(4, 'stale', COLLECT_STALE);
-  const obs2 = audit.value;
-  if (obs2.kind !== 'collectable') return answered(4, 'not-collectable', `ws-audit answered ${obs2.kind}`);
-  const observed: CollectAnswer<CollectAuditCollectable> = { ...audit, value: obs2 };
-  // The licence is the ONE L1 rule, `collectLicence`, against observation 1 read from the lane's memory. `observes`
-  // is true: the stale check above has already asked whether this answer is an observation.
-  const licence = collectLicence(deps.lane.observation(job.id), obs2, audit.arrived.mono, deps.observeIntervalMs, true);
-  const hold = collectOpenRunHold(deps.coord, job.id, obs2);
-  if (hold.kind === 'held') return { kind: 'held', step: 4, hold, audit: observed };
-  if (licence.kind !== 'licensed') return answered(4, 'not-licensed', `${COLLECT_NOT_LICENSED} (${licence.kind})`);
-  const obs1 = licence.first;
-  // 5 — THE SWITCHES ONCE MORE: the job's LAST await. The connection epoch is read before it (path-identity spec
-  // 2026-10-12 §5.2). Epochs only rise, so the pair below, from the job's epoch to the one after the listing, already
-  // covers a move across the listing; this read words WHEN the connection moved.
-  const listedUnder = deps.link.epochNow();
-  const last = await collectSwitches(deps.io, deps.cfg.registryDir);
-  // ── 6 — SYNCHRONOUS from here to the argv: no await may stand between these reads and the act (spec §5.10;
-  // path-identity spec 2026-10-12 §5.5). ──
-  const epoch: CollectEpochPair = { before: queuedUnder, after: deps.link.epochNow() };
-  // The marker's latch, through its ONE helper, decided apart from the arm (§5.4). Whatever it answers, the row and the
-  // journal are read again below, so a refused, failed or thrown (`store-threw`) retire is resolved from what now stands.
-  collectRetireLatch(deps.control, last, epoch);
-  const caps: CollectLaneCaps = {
-    collect: ccdCan(deps.fleetState, 'wsCollect'), reclaimPause: capSupported(deps.fleetState, RECLAIM_PAUSE_CAP),
+  return retireAct(collectRetirePort(deps, job), TEMP_ORPHAN_RETIRE, job);
+}
+
+/** An outcome's word, on the two arms that carry one. */
+type CollectJobOutcomeWhy = Extract<CollectJobOutcome, { kind: 'not-asked' | 'answered' }>['why'];
+/** The lane-wide clear each outcome word makes, by the outcome's `why` (D-7199: the eight clear points of the job, in
+ *  the outcome hook). Every other outcome clears nothing. */
+const COLLECT_CLEARS: Readonly<Partial<Record<CollectJobOutcomeWhy, 'paused' | 'caps' | 'epoch' | 'node'>>> = {
+  caps: 'caps', paused: 'paused', 'epoch-changed': 'epoch', 'unknown-fleet': 'node',
+};
+
+/** TEMP-ORPHAN'S PORT (D-7168): one reader per step of `TEMP_ORPHAN_RETIRE`, each the statement the job ran for that
+ *  step, as an arrow of this literal (D-7204: no nested function declaration). Every reader from `latch` on is a plain
+ *  arrow with no await, so the loop runs them, and the act's prefix up to its `runCcd(`, in the final listing's
+ *  continuation (spec §5.10, step 6). The lane clears are the outcome hook's (`answered`), keyed on the outcome's word;
+ *  the latch's write is its reader's own effect. */
+export function collectRetirePort(
+  deps: CollectTempRootDeps, job: CollectJob,
+): RetireActPort<CollectJob, TempOrphanFacts, CollectJobOutcome> {
+  return {
+    read: {
+      // 1 — BOTH capabilities, proven: each refuses on no evidence, where `verbSupported` would permit (D-5866: the
+      // collector's own row through `ccdCan`, the pause precondition through `capSupported`). A box the phone cannot
+      // pause never runs an automatic destructive lane. D-6627: a loose entry rides its own pair of capabilities, asked
+      // here and again at the audit site; the verb's is asked nearest its argv.
+      [RETIRE_STEPS.capability]: () => (!ccdCan(deps.fleetState, 'wsCollect') || !capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)
+        ? [false]
+        : [true, collectLooseHexOf(job.id) === null
+          || (ccdCan(deps.fleetState, 'wsCollectLoose') && ccdCan(deps.fleetState, 'wsCollectLooseAudit'))]),
+      // Then the id predicate AGAIN, on the job's own id, before any argv (`collectIdJudge`): its input is the loose hex.
+      [RETIRE_STEPS.id]: () => collectLooseHexOf(job.id),
+      // 2 — THE SWITCH, from one listing. A registry that did not list cannot rule a raised pause out, so it is a pause.
+      [RETIRE_STEPS.switches]: () => collectSwitches(deps.io, deps.cfg.registryDir),
+      // 3 — a person at the session. No ceiling, and no licence past it.
+      [RETIRE_STEPS.presence]: () => deps.viewers?.isVisible(job.id) === true,
+      // 4 — OBSERVATION 2, through the one audit site. It is stale if a clear landed while it was in flight. Then the
+      // licence against observation 1, read from the lane's memory and never carried. Then the open-run hold, judged on
+      // THIS document, licensed or not.
+      [RETIRE_STEPS.audit]: () => collectAudit(deps, job.id),
+      [RETIRE_STEPS.staleGeneration]: () => deps.lane.generations(job.id),
+      [RETIRE_STEPS.auditVerdict]: () => true,
+      // The licence is the ONE L1 rule, `collectLicence`, against observation 1 read from the lane's memory. `observes`
+      // is true: the stale check has already asked whether this answer is an observation.
+      [RETIRE_STEPS.licence]: (f) => {
+        const observed = collectObservedOf(f);
+        return collectLicence(deps.lane.observation(job.id), observed.value, observed.arrived.mono, deps.observeIntervalMs, true);
+      },
+      [RETIRE_STEPS.hold]: (f) => collectOpenRunHold(deps.coord, job.id, collectObservedOf(f).value),
+      // 5 — THE SWITCHES ONCE MORE: the job's LAST await. The connection epoch is read before it (path-identity spec
+      // 2026-10-12 §5.2). Epochs only rise, so the pair from the job's epoch to the one after the listing already covers
+      // a move across the listing; this read words WHEN the connection moved.
+      [RETIRE_STEPS.switchesLast]: async () => {
+        const listedUnder = deps.link.epochNow();
+        return { listedUnder, last: await collectSwitches(deps.io, deps.cfg.registryDir) };
+      },
+      // ── 6 — SYNCHRONOUS from here to the argv: no await may stand between these reads and the act (spec §5.10;
+      // path-identity spec 2026-10-12 §5.5). ──
+      // THE EPOCH THIS JOB WAS QUEUED UNDER (§5.5) is the pair's `before`: the lane read it outside the queue callback.
+      // The marker's latch, through its ONE helper, decided apart from the arm (§5.4). Whatever it answers, the row and
+      // the journal are read again by the `lane` reader, so a refused, failed or thrown (`store-threw`) retire is
+      // resolved from what now stands.
+      [RETIRE_STEPS.latch]: (f) => {
+        const epoch: CollectEpochPair = { before: job.epoch, after: deps.link.epochNow() };
+        collectRetireLatch(deps.control, collectLastOf(f).last, epoch);
+        return epoch;
+      },
+      [RETIRE_STEPS.lane]: (f) => {
+        const epoch = f[RETIRE_STEPS.latch];
+        if (epoch === undefined) throw new Error('temp-orphan: the switch was resolved without its epoch pair');
+        const caps: CollectLaneCaps = {
+          collect: ccdCan(deps.fleetState, 'wsCollect'), reclaimPause: capSupported(deps.fleetState, RECLAIM_PAUSE_CAP),
+        };
+        return collectLaneEffective({
+          switches: collectLastOf(f).last, epoch, caps, control: collectControlNow(deps.control).control, node: deps.link.current(),
+        });
+      },
+      // The flip is on the effective BOOLEAN, never on its source (§5.5).
+      [RETIRE_STEPS.flip]: (f) => {
+        const lane = f[RETIRE_STEPS.lane];
+        if (lane === undefined || collectLaneStopped(lane) || lane.kind === 'not-running') {
+          throw new Error('temp-orphan: the flip was asked of a switch that had stopped');
+        }
+        return deps.lane.flipped(lane);
+      },
+      [RETIRE_STEPS.safety]: () => true,
+      [RETIRE_STEPS.licenceStands]: () => ({ generations: deps.lane.generations(job.id), observation: deps.lane.observation(job.id) }),
+      [RETIRE_STEPS.presenceLast]: () => deps.viewers?.isVisible(job.id) === true,
+      [RETIRE_STEPS.holdLast]: (f) => collectOpenRunHold(deps.coord, job.id, collectObservedOf(f).value),
+      [RETIRE_STEPS.live]: () => true,
+      // D-6627: the loose arm's own marker, from the SAME final listing the lane was resolved under, and its capability,
+      // asked again only when the id is loose and the marker stands. Absent, or withdrawn since step 1: shadow.
+      [RETIRE_STEPS.looseMarker]: (f) => (f[RETIRE_STEPS.id] !== null && collectLastOf(f).last.looseMarker === true
+        ? ccdCan(deps.fleetState, 'wsCollectLoose') : true),
+    },
+    act: (f) => collectTempRootAct(deps, job, f),
+    answered: (_step, outcome) => {
+      const why = outcome.kind === 'not-asked' || outcome.kind === 'answered' ? COLLECT_CLEARS[outcome.why] : undefined;
+      if (why !== undefined) deps.lane.cleared(why);
+    },
   };
-  const lane = collectLaneEffective({
-    switches: last, epoch, caps, control: collectControlNow(deps.control).control, node: deps.link.current(),
-  });
-  // A STOP: no flip, no row, a lane-wide clear (§5.5).
-  if (collectLaneStopped(lane)) {
-    if (lane.why === 'raised' || lane.why === 'unlistable') {
-      deps.lane.cleared('paused');
-      return answered(5, 'paused', COLLECT_PAUSED[lane.why]);
-    }
-    if (lane.why === 'epoch-changed') {
-      deps.lane.cleared('epoch');
-      return answered(5, 'epoch-changed', COLLECT_EPOCH_MOVED[listedUnder === epoch.after ? 'queued' : 'listing']);
-    }
-    const unknownFleet: 'unknown-fleet' = lane.why;       // the last stop: a new one is a compile error here
-    deps.lane.cleared('node');
-    return answered(5, unknownFleet, COLLECT_UNKNOWN_FLEET);
-  }
-  if (lane.kind === 'not-running') {
+}
+
+/** THE ACT (D-7200), as the job's tail ran it: every gate passed, so the verb is composed on observation 2's token and the
+ *  job's id, under the lane's `sweepDec` actor. It asks the capability again in its own scope before composing
+ *  (`verb-gate.test.ts`): a pure read of the same fleet state in the same synchronous segment as the `lane` reader's,
+ *  so it answers as that read did; were it to answer false, the act answers what step 6's `not-running` arm answers, and
+ *  clears the lane as that arm's outcome does (the outcome hook never runs after an act). A loose entry asks its own
+ *  verb's capability too, and answers the loose arm's shadow without it. */
+async function collectTempRootAct(
+  deps: CollectTempRootDeps, job: CollectJob, facts: TempOrphanFacts,
+): Promise<CollectJobOutcome> {
+  const audit = facts.audit;
+  if (audit === undefined || 'notAsked' in audit) throw new Error('temp-orphan: the act ran without its audit');
+  const obs2 = audit.value;
+  if (obs2.kind !== 'collectable') throw new Error('temp-orphan: the act ran on an uncollectable audit');
+  const observed: CollectAnswer<CollectAuditCollectable> = { ...audit, value: obs2 };
+  const looseHex = facts.id ?? null;
+  if (!ccdCan(deps.fleetState, 'wsCollect')) {
     deps.lane.cleared('caps');
-    return answered(6, 'caps', COLLECT_NOT_RUNNING);
+    return { kind: 'answered', step: 6, why: 'caps', detail: COLLECT_NOT_RUNNING, audit };
   }
-  // The flip is on the effective BOOLEAN, never on its source (§5.5).
-  if (deps.lane.flipped(lane)) return answered(5, 'switch-flip', COLLECT_FLIPPED);
-  if (lane.kind === 'safety-stopped') return answered(5, 'safety-stopped', `${COLLECT_SAFETY_STOPPED} (${lane.why})`);
-  if (!collectLicenceStands(obs1, audit.composed, deps.lane.generations(job.id), deps.lane.observation(job.id))) {
-    return answered(6, 'pair-cleared', COLLECT_PAIR_CLEARED);
-  }
-  if (deps.viewers?.isVisible(job.id) === true) return answered(6, 'presence', COLLECT_SEEN);
-  const holdAtAct = collectOpenRunHold(deps.coord, job.id, obs2);
-  if (holdAtAct.kind === 'held') return { kind: 'held', step: 6, hold: holdAtAct, audit: observed };
-  if (!collectLaneLive(lane)) return { kind: 'would-collect', audit: observed };
-  // D-6627: the loose arm's own marker, from the SAME final listing the lane was resolved under. Absent, or the capability
-  // withdrawn since step 1: shadow. Both arms must stand; the lane's switch above is never bypassed.
-  if (looseHex !== null && (last.looseMarker !== true || !ccdCan(deps.fleetState, 'wsCollectLoose'))) {
-    return { kind: 'would-collect', audit: observed };
-  }
+  if (looseHex !== null && !ccdCan(deps.fleetState, 'wsCollectLoose')) return { kind: 'would-collect', audit: observed };
   const now = deps.lane.clock();
   let act: CcdResult;
   try {
@@ -716,8 +741,8 @@ export function collectOpenRunHold(
  * TEMP-ORPHAN'S ROW OF THE ONE RETIRE GATE (`retire.ts#decideRetire`): `collectTempRoot`'s steps 1 to 6, one row step per
  * point at which the job answers, in the job's order, each judged by the job's own statements over its readers' facts.
  * The readers are the job's reads, unchanged (`collectSwitches` included, D-7224); the lane clears and every other
- * effect stay with the port (D-7199). It is the job's description, not yet its body: `collectTempRoot` still runs its
- * own ladder until its reason moves (D-7168).
+ * effect stay with the port (D-7199). Since its reason moved (D-7168), it is the job's body: `collectTempRoot` drives it
+ * through `retireAct` over `collectRetirePort`, and `collectTempRootAct` is its act.
  */
 export interface TempOrphanFacts {
   /** Both capabilities, then the loose pair (true when the id is not loose). */
@@ -757,6 +782,12 @@ const collectAskedOf = (f: TempOrphanFacts): CollectAnswer<CollectAudit> => {
   const asked = f[RETIRE_STEPS.audit];
   if (asked === undefined || 'notAsked' in asked) throw new Error('temp-orphan: a step after the audit was judged without it');
   return asked;
+};
+/** The final listing, and the epoch read before it, for a step after `switches-last`. */
+const collectLastOf = (f: TempOrphanFacts): { readonly listedUnder: number; readonly last: CollectSwitches } => {
+  const last = f[RETIRE_STEPS.switchesLast];
+  if (last === undefined) throw new Error('temp-orphan: a step after the last listing was read without it');
+  return last;
 };
 /** The collectable audit, for a step after `audit-verdict`. */
 const collectObservedOf = (f: TempOrphanFacts): CollectAnswer<CollectAuditCollectable> => {

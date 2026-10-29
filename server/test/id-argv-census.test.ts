@@ -350,7 +350,7 @@ const GATES = {
   'learn-expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'learnExpiry', re: EXPIRY_STEP_0 },
   /** The collector executor's step 1. */
   'collector-step-1': {
-    file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot',
+    file: 'coord/collectTempRoot.ts', scope: 'collectIdJudge',
     re: /if \(looseHex === null && !isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
   },
   /** The learning audit's own id gate (path-identity W2), first in `learnCollect`: the twin of the step-1 check. */
@@ -420,7 +420,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   // coord/collectTempRoot.ts: the learning audit is reached from the population and from the executor's step 1.
   { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-learn-gate', 'collector-population', 'collector-record-name'] },
-  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
+  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRootAct', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
   // coord/dispatch.ts: refuseSpentChild's only caller is dispatchRun, below its gate; the fresh winner is a listed, valid row.
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsRelease', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
@@ -612,7 +612,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       expireAct: ['coord/expireArchived.ts | expireArchived'],
       childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
       childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
-      collectAudit: ['coord/collectTempRoot.ts | collectTempRoot', 'coord/collectTempRoot.ts | learnCollect'],
+      collectAudit: ['coord/collectTempRoot.ts | collectRetirePort', 'coord/collectTempRoot.ts | learnCollect'],
       childSpent: ['coord/childBind.ts | childBindGate', 'coord/close.ts | childGateAtClose'],
       childSpentLive: ['coord/childSpent.ts | childSpent', 'coord/close.ts | childGateAtClose'],
       holdAndBindSession: ['coord/routes.ts | POST /api/runs'],

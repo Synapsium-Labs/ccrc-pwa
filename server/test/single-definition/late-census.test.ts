@@ -3,9 +3,11 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { parsedFile, sourceOfSymbol } from '../scan/symbols.js';
+import { parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
 import { identifierReferences, parseSource, stringExpressions } from '../scan/parse.js';
 import { hibernateActSites, sleepVerdictLadders } from '../census-w4/sleep.js';
+import { retirePortReaders, retireRowSteps } from '../census-w4/retire.js';
+import { RETIRE_STEPS } from '../../src/retire.js';
 import { SLEEP_POLICY_NAMES } from '../../src/sleep.js';
 import { SWITCHES } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
@@ -460,14 +462,23 @@ describe('fleet disk retention DR-15: the collector’s loose-arm marker has no 
   });
 
   it('it is read in ONE place, nearest the argv: the job consults it after the lane’s own switch and before the loose verb', () => {
-    // D-6114: keyed on the job's symbol (scan/symbols.ts), never a literal slice of the file.
-    const job = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/collectTempRoot.ts'), 'collectTempRoot'));
-    expect(job.match(/\blooseMarker\b/g)?.length, 'the job reads the final listing’s marker once').toBe(1);
-    const at = (needle: string): number => job.split('\n').findIndex((l) => l.includes(needle));
-    const [live, marker, verb] = [at('collectLaneLive(lane)'), at('looseMarker'), at('wsCollectLoose(')];
-    expect([live, marker, verb].every((i) => i > -1), 'an anchor is gone').toBe(true);
+    // D-6114: keyed on the job's symbols (scan/symbols.ts), never a literal slice of the file. D-7168 (ARCH-44 C4k): the
+    // job is its row, `TEMP_ORPHAN_RETIRE`, its port's readers and its act, so the order is the row's declaration.
+    const EXEC = path.join(ccrcRoot, 'server/src/coord/collectTempRoot.ts');
+    const reads = (text: string): number => stallCodeText(text).match(/(?<!RETIRE_STEPS)\.looseMarker\b/g)?.length ?? 0;
+    expect(reads(sourceOfSymbol(EXEC, 'collectRetirePort')), 'the port reads the final listing’s marker once').toBe(1);
+    expect(retirePortReaders(EXEC, 'collectRetirePort').filter((r) => reads(r.text) > 0).map((r) => r.step),
+      'the marker is read in the loose-marker reader alone').toEqual([RETIRE_STEPS.looseMarker]);
+    expect(reads(sourceOfSymbol(EXEC, 'collectTempRootAct')), 'the act reads the marker').toBe(0);
+    const steps = retireRowSteps(EXEC, 'TEMP_ORPHAN_RETIRE').map((x) => x.step);
+    const [live, marker] = [steps.indexOf(RETIRE_STEPS.live), steps.indexOf(RETIRE_STEPS.looseMarker)];
+    expect([live, marker].every((i) => i > -1), 'an anchor is gone').toBe(true);
     expect(live).toBeLessThan(marker);
-    expect(marker).toBeLessThan(verb);
+    expect(marker, 'the marker is the row’s last step, so it is read before the act').toBe(steps.length - 1);
+    const act = symbolOf(EXEC, 'collectTempRootAct');
+    const verbs = parsedFile(EXEC).calls.filter((c) => c.name === 'wsCollectLoose');
+    expect(verbs.length, 'the loose verb is composed').toBeGreaterThan(0);
+    expect(verbs.every((c) => act.start <= c.start && c.end <= act.end), 'the loose verb is composed outside the act').toBe(true);
   });
 });
 
@@ -740,5 +751,20 @@ describe('the usage-sidecar deleters are two, named, and may only shrink: _usage
     const { usageSidecarDeleters } = await import('../census-w5/singleWriters.js');
     const r = usageSidecarDeleters();
     expect(r.deleters.map((s) => s.name)).toEqual(['ccd/ccd#_usage_purge', 'ccd/ccd-usage-sweep.py#reap_orphans']);
+  });
+});
+
+// D-7168 (ARCH-44, consolidation plan 2026-10-27 Task C4k; spec §5.7 "reasons migrate one PR each"). APPENDED. The
+// temp-orphan executor runs through the one retire loop (`retireLane.ts#retireAct`) over its row and port, so its
+// hand-written gate ladder is gone. `retireGateLadders()` (`census-w4/retire.ts`) read 3 at C4k's base and is pinned at
+// most 2 here; it may only shrink (C4l and C4m take it to 1, then 0), and no site outside the two remaining ladders
+// may stand in it.
+describe('the temp-orphan executor has no gate ladder of its own (D-7168; ARCH-44 C4k)', () => {
+  it('retireGateLadders() is at most 2 (3 -> 2 at C4k; may only shrink), and only the two reasons not yet moved', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites.length).toBeLessThanOrEqual(2);
+    const LEFT = ['server/src/coord/childReclaim.ts#childReclaimOutcome', 'server/src/coord/expireArchived.ts#expireArchived'];
+    expect(sites.filter((s) => !LEFT.includes(s)), 'a gate ladder outside the two reasons not yet moved').toEqual([]);
   });
 });

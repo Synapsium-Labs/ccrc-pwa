@@ -19,8 +19,11 @@
 // function calling `decideRetire(`, and hold `retire.ts` and `retireLane.ts` at L1 (C4n adds `retireExecutor.ts`, L4).
 import path from 'node:path';
 import { parsedFile } from '../scan/symbols.js';
-import { identifierReferences, retireFacts, type CallSite, type ParsedFile, type SymbolSpan } from '../scan/parse.js';
+import {
+  identifierReferences, retireFacts, type CallSite, type ParsedFile, type RetireLiteral, type RetireLiteralProperty, type SymbolSpan,
+} from '../scan/parse.js';
 import { REPO, sourceFiles, type CensusSite } from '../consolidationCensus.js';
+import { RETIRE_STEPS } from '../../src/retire.js';
 
 /** One site of a parsed-symbol census: the unit it was found in (`file#name`, a method by its own name), anchored on
  *  that unit's first line. */
@@ -47,18 +50,26 @@ export const RETIRE_ACT_KEYS: readonly string[] = ['wsReclaim', 'wsExpire', 'wsC
  * or arrow nested inside it) calls `ccdCan(` with a literal retire act key AND calls `.isVisible(`, one site per
  * function. 3 at the base: `coord/childReclaim.ts#childReclaimOutcome`, `coord/expireArchived.ts#expireArchived`,
  * `coord/collectTempRoot.ts#collectTempRoot`. `staleArchive.ts#act` reads both with `wsArchive` and is not counted.
- * A port builder that puts the two calls in SEPARATE nested readers (arrows or methods of the literal it returns, or
- * named functions nested in it) orders nothing itself, and is not counted (the shape C4k, C4l and C4m leave behind).
+ * A port builder that puts the two calls in SEPARATE nested readers (arrows or methods of the literal it returns, or of
+ * an object literal nested in it, as `RetireActPort`'s `read` member is, or named functions nested in it) orders nothing
+ * itself, and is not counted (the shape C4k, C4l and C4m leave behind). A call written as a member's VALUE, not inside
+ * an arrow or a method, runs in the builder's own body and is still its own.
  * KNOWN WIDTH: "nested" is a named unit (`scan/parse.ts`'s symbols) or a member of the function's returned or a
  * top-level const's object literal (`retireFacts`); an anonymous callback passed to a call is read as the body's own.
  */
+/** Every member of a literal, and of each object literal one of its members holds, at any depth
+ *  (D-7301): a port's readers stand in its `read` member's literal, one level below the
+ *  literal it returns. */
+const literalMembers = (l: RetireLiteral): RetireLiteralProperty[] =>
+  l.properties.flatMap((m) => [m, ...(m.literal === null ? [] : literalMembers(m.literal))]);
+
 export function retireGateLadders(root: string = REPO): RetireSite[] {
   const out: RetireSite[] = [];
   for (const f of sourceFiles(root, 'server/src')) {
     const file = relOf(root, f);
     const p = parsedFile(f);
     const facts = retireFacts(p);
-    const nestedLiteralMembers = Object.values(facts.literals).flatMap((l) => l.properties)
+    const nestedLiteralMembers = Object.values(facts.literals).flatMap(literalMembers)
       .filter((m) => m.kind === 'arrow' || m.kind === 'method');
     for (const fn of topLevel(p)) {
       const nested = [
@@ -264,4 +275,74 @@ export function retireDeciders(root: string = REPO): RetireSite[] {
     }
   }
   return out;
+}
+
+// C4k (D-7168, D-7200; ARCH-44): the two readers the re-pointed source checks share, once a reason's ladder has become a
+// row (`<NAME>_RETIRE`) and a port (`<builder>`'s returned literal). Both read through `scan/symbols.ts` and
+// `retireFacts` (D-7227): the spans are the walk's, and the text read is the parsed file's own text inside them.
+
+/** One reader of a port: the member of the returned literal's `read` literal that answers `step`. */
+export interface RetirePortReader {
+  readonly step: string;
+  readonly kind: RetireLiteralProperty['kind'];
+  readonly async: boolean;
+  readonly start: number;
+  readonly end: number;
+  /** The member's own text, its name included. */
+  readonly text: string;
+}
+
+/** A member's step: a computed `[RETIRE_STEPS.<key>]` name is that key's step; a plain name is itself. */
+const stepOfMember = (text: string, name: string | null): string | null => {
+  const key = /^\[\s*RETIRE_STEPS\.(\w+)\s*\]/.exec(text)?.[1];
+  if (key === undefined) return name;
+  return (RETIRE_STEPS as Readonly<Record<string, string>>)[key] ?? null;
+};
+
+/** The readers of `builder`'s port in `file`, in source order: each member of the `read` literal of the object literal
+ *  `builder` returns. Throws when the builder returns no literal or the literal has no `read` literal. */
+export function retirePortReaders(file: string, builder: string): RetirePortReader[] {
+  const p = parsedFile(file);
+  const lit = retireFacts(p).literals[`${builder}#return`];
+  if (lit === undefined) throw new Error(`retirePortReaders: ${builder} returns no object literal in ${file}`);
+  const read = lit.properties.find((m) => m.name === 'read')?.literal ?? null;
+  if (read === null) throw new Error(`retirePortReaders: ${builder}'s literal has no read literal`);
+  return read.properties.map((m) => {
+    const text = p.text.slice(m.start, m.end);
+    const step = stepOfMember(text, m.name);
+    if (step === null) throw new Error(`retirePortReaders: a member of ${builder}'s read literal names no step: ${text.slice(0, 60)}`);
+    return { step, kind: m.kind, async: m.async, start: m.start, end: m.end, text };
+  });
+}
+
+/** One step of a reason's row, as its declaration spells it. */
+export interface RetireRowStep {
+  readonly step: string;
+  readonly sync: boolean;
+  readonly phase: 'decide' | 'audit' | 'act';
+}
+
+/** The steps the row `row` of `file` declares, in the row's order (`decide`, then `audit`, then `act`), each with its
+ *  `sync` flag as written. Throws when a step's `step` or `sync` is not written as `RETIRE_STEPS.<key>` and a boolean. */
+export function retireRowSteps(file: string, row: string): RetireRowStep[] {
+  const p = parsedFile(file);
+  const lit = retireFacts(p).literals[row];
+  if (lit === undefined) throw new Error(`retireRowSteps: no top-level const literal ${row} in ${file}`);
+  const member = (name: string) => lit.properties.find((m) => m.name === name);
+  const stepOf = (spec: RetireLiteral | null, phase: RetireRowStep['phase']): RetireRowStep => {
+    const field = (name: string): string => {
+      const m = spec?.properties.find((x) => x.name === name);
+      if (m === undefined) throw new Error(`retireRowSteps: a step of ${row} has no ${name}`);
+      return p.text.slice(m.start, m.end).replace(/^\w+\s*:\s*/, '');
+    };
+    const step = stepOfMember(`[${field('step')}]`, null);
+    const sync = field('sync');
+    if (step === null || (sync !== 'true' && sync !== 'false')) throw new Error(`retireRowSteps: a step of ${row} is not written as a row step`);
+    return { step, sync: sync === 'true', phase };
+  };
+  const listOf = (name: 'decide' | 'act'): RetireRowStep[] =>
+    (member(name)?.elements ?? []).map((el) => stepOf(el.literal, name));
+  const audit = member('audit')?.literal ?? null;
+  if (audit === null) throw new Error(`retireRowSteps: ${row} has no audit step`);
+  return [...listOf('decide'), stepOf(audit, 'audit'), ...listOf('act')];
 }

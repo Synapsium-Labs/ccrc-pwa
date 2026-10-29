@@ -2,7 +2,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { sourceOfSymbol } from '../scan/symbols.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
+import { retirePortReaders } from '../census-w4/retire.js';
+import { RETIRE_STEPS } from '../../src/retire.js';
 import { ALL, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, isBashComment, rel, sources, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -295,7 +297,7 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(code(ADAPTER)).toMatch(/^export const COLLECT_LANE_JOURNAL_BASENAME = 'collect-lane-generation\.log';$/m);
   });
 
-  it('collectLaneEffective is defined in collectLane.ts and called only in collectTempRoot and collectLaneView', () => {
+  it('collectLaneEffective is defined in collectLane.ts and called only in collectRetirePort’s lane reader and collectLaneView', () => {
     expect(definers(DEF_FN('collectLaneEffective')), 'a second definition').toEqual([LANE]);
     expect(definers(DEF_VAL('collectLaneEffective')), 'a definition as a value').toEqual([]);
     const calls = CALL('collectLaneEffective');
@@ -305,18 +307,39 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     const view = bodyAfter(lane, /^export function collectLaneView\(/m);
     expect(count(view, calls), 'collectLaneView does not resolve the switch').toBeGreaterThan(0);
     expect(count(lane, calls), 'collectLane.ts calls the resolver outside collectLaneView').toBe(count(view, calls));
-    const exec = code(EXECUTOR);
-    const job = bodyAfter(exec, /^export async function collectTempRoot\(/m);
-    expect(count(job, calls), 'the executor does not resolve the switch').toBeGreaterThan(0);
-    expect(count(exec, calls), 'collectTempRoot.ts calls the resolver outside the executor').toBe(count(job, calls));
+    // D-7168 (ARCH-44 C4k): the job's reads are its port's readers, so the one call stands in the `lane` reader of
+    // collectRetirePort's literal (scan/symbols.ts, retireFacts), and in neither the job's body nor its act.
+    const exec = path.join(ccrcRoot, EXECUTOR);
+    const resolves = parsedFile(exec).calls.filter((c) => c.name === 'collectLaneEffective');
+    expect(resolves.length, 'collectTempRoot.ts does not resolve the switch exactly once').toBe(1);
+    const reader = retirePortReaders(exec, 'collectRetirePort').find((r) => r.step === RETIRE_STEPS.lane);
+    expect(reader, 'collectRetirePort has no lane reader').toBeDefined();
+    expect(callsIn(symbolOf(exec, 'collectRetirePort')).filter((c) => c.name === 'collectLaneEffective')
+      .every((c) => reader!.start <= c.start && c.end <= reader!.end), 'the resolver is called outside the lane reader').toBe(true);
+    expect(callsIn(symbolOf(exec, 'collectRetirePort')).filter((c) => c.name === 'collectLaneEffective'), 'the port does not resolve the switch')
+      .toHaveLength(1);
+    for (const fn of ['collectTempRoot', 'collectTempRootAct']) {
+      expect(callsIn(symbolOf(exec, fn)).filter((c) => c.name === 'collectLaneEffective'), `${fn} resolves the switch`).toEqual([]);
+    }
   });
 
   it('collectRetireLatch is called only by the executor and the pass', () => {
     expect(definers(DEF_FN('collectRetireLatch')), 'a second definition').toEqual([EXECUTOR]);
     const calls = CALL('collectRetireLatch');
     expect(sitesOf(calls), 'a third caller, or a second call').toEqual([`${EXECUTOR}:1`, `${WATCH}:1`]);
-    expect(count(bodyAfter(code(EXECUTOR), /^export async function collectTempRoot\(/m), calls),
-      'the executor file’s call is not in collectTempRoot').toBe(1);
+    // D-7168 (ARCH-44 C4k): the executor file's one call stands in the `latch` reader of collectRetirePort's literal
+    // (scan/symbols.ts, retireFacts), and in neither the job's body nor its act.
+    const exec = path.join(ccrcRoot, EXECUTOR);
+    const latches = parsedFile(exec).calls.filter((c) => c.name === 'collectRetireLatch');
+    expect(latches.length, 'the executor file does not call the latch exactly once').toBe(1);
+    const reader = retirePortReaders(exec, 'collectRetirePort').find((r) => r.step === RETIRE_STEPS.latch);
+    expect(reader, 'collectRetirePort has no latch reader').toBeDefined();
+    const inPort = callsIn(symbolOf(exec, 'collectRetirePort')).filter((c) => c.name === 'collectRetireLatch');
+    expect(inPort.length === 1 && reader!.start <= inPort[0]!.start && inPort[0]!.end <= reader!.end,
+      'the executor file’s call is not in the port’s latch reader').toBe(true);
+    for (const fn of ['collectTempRoot', 'collectTempRootAct']) {
+      expect(callsIn(symbolOf(exec, fn)).filter((c) => c.name === 'collectRetireLatch'), `${fn} writes the latch`).toEqual([]);
+    }
     // D-6114: keyed on the method's symbol (scan/symbols.ts), so C1h's rewrite of the pass moves the slice with it.
     expect(count(stallCodeText(sourceOfSymbol(path.join(ccrcRoot, WATCH), 'FleetWatcher.collectPass')), calls),
       'watch.ts’s call is not in the pass').toBe(1);
