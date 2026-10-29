@@ -64,8 +64,9 @@
 .pg-sep,
 .pg-also { flex: none; }
 /* The title before the progress: in a narrow column the progress wraps below it, and only a title longer than the
-   whole line is cut. */
-.pg-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+   whole line is cut. The Status view's project name (Task G3) is cut the same way. */
+.pg-title,
+.pg-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pg-prog { margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .pg-count { white-space: nowrap; }
 /* The bar is a picture of the count beside it, never the only cue: a non-text rule in the hue. */

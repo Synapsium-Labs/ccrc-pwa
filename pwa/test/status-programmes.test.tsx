@@ -35,10 +35,19 @@
 //   the kicker without the project .............................. "a box's kicker names its project as well as its programme"
 //   the far-worker line drawn in the status box ................. "a far worker that asks is drawn in its coordinator's box…"
 //   a tray handed a summary row (a footer) ...................... status-groups' tray case (`ProgrammeBox`'s mode draws no footer either way)
-//   `.ins-tab` back to equal parts (`flex: 1 1 0`) .............. browser: the 360 case and both 390 cases (`its words fit its tab`)
+//   `.ins-tab` back to main's equal parts (`flex: 1 1 0; min-width: 0`, no `width: auto`)
+//                                                                  browser: both 360 cases and both 390 cases (`its words fit its tab`)
 //   `.ins-tabs` without `overflow-x: auto` ...................... browser: the 360 case (`the tablist scrolls inside itself`)
 //   `.ins-tab` without `width: auto` (the button's full width) .. browser: both 390 cases (`<tab>: in view`)
-//   the chosen tab not scrolled into view ....................... browser: the 360 case (`the chosen tab is scrolled into view`)
+//   the chosen tab not scrolled into view ....................... browser: both 360 cases (`the chosen tab is scrolled into view`)
+// Fix round 1 (review 1175) added four rows, each RUN red on its new case and green restored:
+//   Needs you held only while it draws a lone row (`rows.length > 0`)
+//                                                                  "Needs you holding only a box stays open over a stored fold…"
+//   the scroll into view on first paint only (the effect's deps `[]`)
+//                                                                  browser: the 360 case that chooses Needs you off screen
+//   the orphan marker dropped in status mode (`coordinator={null}`)
+//                                                                  "a lone worker keeps its orphan marker in status mode…"
+//   `.pg-project` without `.pg-title`'s cut (programmeBox.css) .. browser: both 390 cases (`the long project name is cut…`)
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -298,6 +307,29 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
     mount(sessions, [...RUNS, run(8, 'gone-coord', 'orphan', { program: 'prog-c', project: 'project-a' })]);
     expect(looseRows(groupOf('working'))).toEqual(expect.arrayContaining(['orphan']));
     expect(headCount(groupOf('working'))).toBe(2);
+  });
+
+  it('Needs you holding only a box stays open over a stored fold: a box that needs you is never folded away', () => {
+    localStorage.setItem('ccrc.fleet-folded.v1', JSON.stringify(['status::attention']));
+    mount(SESSIONS.filter((s) => s.id !== 'lone-ask'));
+    const needs = groupOf('attention');
+    expect(looseRows(needs)).toEqual([]);
+    expect(head(needs).getAttribute('aria-expanded')).toBe('true');
+    expect(boxes(needs).map((b) => b.getAttribute('data-state'))).toEqual(['needs']);
+    expect(rowIds(boxOf(needs, 'coord-a').querySelector('.pg-tray')!)).toEqual(['a1']);
+  });
+
+  it('a lone worker keeps its orphan marker in status mode: its coordinator measured gone says so on the row (G3\'s Step 0 ruling)', () => {
+    // The claimant is in the fleet but archived, in its card's Archived fold, so it heads no box; measured dead, the
+    // row says "coordinator gone", as a project card's does.
+    const gone = sess('gone-coord', 'project-a', { status: 'dead', bucket: 'archived', lifecycle: 'orphan', archivedAt: Math.floor(Date.now() / 1000) });
+    const sessions = [...SESSIONS, gone, sess('orphan', 'project-a', { bucket: 'working', status: 'busy' })];
+    mount(sessions, [...RUNS, run(8, 'gone-coord', 'orphan', { program: 'prog-c', project: 'project-a' })]);
+    const row = groupOf('working').querySelector<HTMLElement>('[data-row="orphan"]')!;
+    expect(row.closest('section.pg-box')).toBeNull();
+    const marker = row.querySelector<HTMLElement>('[data-marker^="coordinator-"]');
+    expect(marker?.getAttribute('data-marker')).toBe('coordinator-gone');
+    expect(marker?.textContent).toBe('coordinator gone');
   });
 
   it('a box whose coordinator itself asks is in Needs you', () => {

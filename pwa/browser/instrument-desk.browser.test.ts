@@ -60,10 +60,17 @@
 //
 // Desktop polish G3 (D-7333; RUN, this file alone with -t "programmes", each mutant restored from a saved copy with its
 // sha256 checked): the Status view's programme boxes at 390 and 1280 in both palettes, and the five phone tabs at 360.
-//   `.ins-tab` back to equal parts (`flex: 1 1 0`) ..... the 360 case and both 390 cases (`its words fit its tab`)
+//   `.ins-tab` back to main's equal parts (`flex: 1 1 0; min-width: 0`, no `width: auto`)
+//                                                       both 360 cases and both 390 cases (`its words fit its tab`)
 //   `.ins-tabs` without `overflow-x: auto` ............. the 360 case (`the tablist scrolls inside itself`)
 //   `.ins-tab` without `width: auto` ................... both 390 cases (`<tab>: in view`)
-//   the chosen tab not scrolled into view .............. the 360 case (`the chosen tab is scrolled into view`)
+//   the chosen tab not scrolled into view .............. both 360 cases (`the chosen tab is scrolled into view`)
+//   the scroll on first paint only (the effect's deps `[]`)
+//                                                       the 360 case that chooses Needs you off screen (fix round 1)
+//   `.pg-project` without `.pg-title`'s cut (programmeBox.css)
+//                                                       both 390 cases (`the long project name is cut…`, fix round 1)
+// `flex: 1 1 0` alone with `width: auto` kept is NOT red: `min-width: auto` keeps each tab whole and the row scrolls, so
+// the five only share the row out equally, which nothing forbids.
 // The task's jsdom rows are test/status-programmes.test.tsx's header.
 // `CCRC_SHOTS=<a directory outside the work tree>` writes one screenshot per palette and width there.
 //
@@ -677,6 +684,18 @@ describe('the Status view shows programmes, not children (G3)', () => {
             expect(b.rule, `${b.coord[0]}: the left rule is the computed --prog hue`).toBe(b.hueColour);
             expect(b.ratio, `${b.coord[0]}: the kicker's text on its band`).toBeGreaterThanOrEqual(4.5);
           }
+          if (width === 390) {
+            // A long project name is cut with an ellipsis on the kicker's line, as the title is (fix round 1), never
+            // wrapped out of the box or clipped bare.
+            const cut = await page.evaluate(() => {
+              const name = document.querySelector<HTMLElement>('.ins-table section.pg-box .pg-project')!;
+              name.textContent = 'project-with-a-name-longer-than-any-phone-column-can-hold';
+              const k = name.closest('.pg-kicker')!.getBoundingClientRect();
+              const r = name.getBoundingClientRect();
+              return { overflow: getComputedStyle(name).textOverflow, cut: name.scrollWidth > name.clientWidth, inside: r.right <= k.right + 0.5 };
+            });
+            expect(cut, 'the long project name is cut with an ellipsis inside its kicker').toEqual({ overflow: 'ellipsis', cut: true, inside: true });
+          }
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();
@@ -706,6 +725,33 @@ describe('the Status view shows programmes, not children (G3)', () => {
       expect(m.scrolls, 'the tablist scrolls inside itself').toBe(true);
       expect(m.whole).toEqual([true, true, true, true, true]);
       expect(m.chosenInView, 'the chosen tab is scrolled into view').toBe(true);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it('at 360 a tab chosen off screen is scrolled into view: Needs you, chosen with the row scrolled to its end', async () => {
+    const { ctx, page, errors } = await openStatus(PHOSPHOR, 360);
+    try {
+      const inView = (sel: string) => page.evaluate((q) => {
+        const list = document.querySelector<HTMLElement>('.ins-table [role="tablist"]')!;
+        const t = list.querySelector<HTMLElement>(q)!.getBoundingClientRect();
+        const row = list.getBoundingClientRect();
+        return t.left >= row.left - 0.5 && t.right <= row.right + 0.5;
+      }, sel);
+      const NEEDS = '[role="tab"][id$="-tab-attention"]';
+      // The row scrolled to its end (All in view), so Needs you is off screen to the left.
+      await page.evaluate(() => {
+        const list = document.querySelector<HTMLElement>('.ins-table [role="tablist"]')!;
+        list.scrollLeft = list.scrollWidth;
+      });
+      expect(await inView(NEEDS), 'Needs you starts off screen').toBe(false);
+      // A DOM click, which scrolls nothing itself (a pointer click would bring the tab into view on its own).
+      await page.evaluate((q) => { document.querySelector<HTMLElement>(`.ins-table ${q}`)!.click(); }, NEEDS);
+      await page.waitForFunction((q) => document.querySelector(`.ins-table ${q}`)?.getAttribute('aria-selected') === 'true', NEEDS);
+      await page.waitForTimeout(200);
+      expect(await inView(NEEDS), 'the chosen tab is scrolled into view').toBe(true);
       expect(errors).toEqual([]);
     } finally {
       await ctx.close();

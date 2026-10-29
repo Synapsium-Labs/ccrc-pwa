@@ -279,9 +279,9 @@
   background: var(--bg-raised);
   color: var(--ink-primary);
 }
-/* Five tabs (Task G3, D-7333: Programmes after Needs you) do not fit the row at 360 or 390, so each takes its words'
-   width (`width: auto` over the button's full width) and the tablist scrolls sideways inside itself, never the page,
-   on one line. Its pad is the focus ring's room
+/* Five tabs (Task G3, D-7333: Programmes after Needs you): each takes its words' width (`width: auto` over the
+   button's full width), and when the five do not fit the row (at 360, say) the tablist scrolls sideways inside itself,
+   never the page, on one line. Its pad is the focus ring's room
    (2px at a 2px offset), which a scroller would otherwise clip, and the margin gives the pad back, so nothing moves.
    Underline tabs: the ghost button's hairline goes and the chosen tab's accent edge is drawn by a positioned `::after`,
    which takes no room, so choosing moves no label. */
