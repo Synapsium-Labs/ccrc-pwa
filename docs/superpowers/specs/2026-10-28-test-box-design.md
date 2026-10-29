@@ -719,15 +719,31 @@ release's version and carrying the versions the agent measured. The service star
 static root unit whose fixed script reads only the spec the service wrote, checks each value against its format, and:
 
 1. fetches that release from the release host and verifies it **exactly as the fleet host's update lane does today**
-   (`_upd_resolve` and `_upd_fetch` in `ccd/ccrc`, covered by `ccrc-update-fetch.test.ts`): `SHA256SUMS` first, which
-   must name `ccrc-<version>.tar.gz` for the requested version; the tarball's sha256 against it; the tarball's Sigstore
-   provenance bundle (`<tarball>.sigstore.json`) through `deploy/verify-provenance.mjs` from the box's **installed**
-   tree, which checks the signature against the vendored Sigstore trusted root, the attested subject name, the OIDC
-   issuer and a certificate identity limited to this repository's release workflow for that tag; and after extraction
-   in a staging directory, the tree's `MANIFEST` and its `build.json` version. There is no release signing key to
-   install: the provenance is keyless, and the box holds no key of its own. A missing bundle refuses (the box has no
-   `--allow-unsigned`), and a release that fails any check is never installed. The verified tree stays staged until
-   step 6;
+   (`_upd_resolve` and `_upd_fetch` in `ccd/ccrc`, covered by `ccrc-update-fetch.test.ts` and
+   `verify-provenance.test.ts`), as a pinned fetch from `<release base>/download/<tag>`, where the release base is
+   `CCRC_RELEASE_BASE_URL` (default: this repository's GitHub releases). In order:
+   - `SHA256SUMS`: its first line must name a tarball `ccrc-*.tar.gz` (printable ASCII, at most 200 bytes, no `/`),
+     and the version in that name must equal the requested tag;
+   - the tarball, checked against `SHA256SUMS` (`sha256sum -c`) before anything is extracted;
+   - the bundle `<tarball>.sigstore.json` from beside it. A 404 refuses (the box has no `--allow-unsigned`); any other
+     fetch failure is a transient fault, not a verdict on the release. The bundle goes through
+     `deploy/verify-provenance.mjs` from the box's **installed** tree, never the tarball's own copy, with `--blob`,
+     `--tag <tag>` and the repository's owner and name. Its default `sigstore` backend checks, offline, the bundle's
+     signature over the tarball's digest against the vendored trusted root (`deploy/sigstore-trusted-root.jsonl`, or
+     the file `CCRC_SIGSTORE_TRUSTED_ROOT` names when that is set), with one certificate-transparency log entry, one
+     transparency log entry and a timestamp; the certificate's OIDC issuer,
+     `https://token.actions.githubusercontent.com`; its subject alternative name, which must be exactly one of two workflow identities,
+     `.github/workflows/release-main.yml@refs/heads/main` or `.github/workflows/release.yml@refs/tags/<tag>` in this
+     repository; and the in-toto subject, which must be named `ccrc-<tag>.tar.gz` with the tarball's sha256. The tag
+     is bound by that subject name, not by the identity: a `release-main.yml` identity is the same for every tag. The
+     verifier's exit 1 refuses the release; any other non-zero exit (exit 3 when its dependencies do not load) means
+     it could not run, which also stops the sync but is not a verdict on the release;
+   - after extraction in a staging directory, `MANIFEST` (`sha256sum -c` over the tree), and `build.json`'s version,
+     which must equal the tag.
+
+   The box needs nothing beyond that: no release signing key (the provenance is keyless), no `gh`, and no network
+   for the verifier itself, only a node and the server package's production dependencies beside the installed tree
+   (§9). A release that fails any check is never installed. The verified tree stays staged until step 6;
 2. downloads `node-v<version>-linux-x64.tar.xz` and `SHASUMS256.txt` from `nodejs.org` over HTTPS, checks the
    tarball's sha256 from that file, and unpacks it to `<tools>/node/<version>`, which keeps the release's
    `include/node` headers for `nodedir` (§2.2), then writes that install's root-owned `npmrc`;
