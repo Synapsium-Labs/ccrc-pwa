@@ -334,6 +334,14 @@ export function runBelongsTo(
  *
  * `cardOf` is built ONCE per render by the caller from `boardHome` over the
  * whole session list — never inside a card, which sees only its own rows.
+ *
+ * A BY-ID CARD LOOKUP, NAMED (D-7205). Its two `cardOf.get` calls are keyed on a
+ * run's `sessionId` and `claimedBy`, and they stay by id: the question is which
+ * CARD a run renders on (a session id to a card), not which session is the
+ * run's worker, and a run whose worker the wire does not bind still renders on
+ * its project's card. With `workerOf`'s closed-run arm and `coordinatorOf`
+ * (D-7207) they are the PWA's named by-id run lookups, counted and may only
+ * shrink (`server/test/rings/pwa-one-owner.test.ts`).
  */
 export function runCard(
   run: { sessionId: string | null; claimedBy: string | null; project: string },
