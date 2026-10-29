@@ -4,7 +4,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-28-graphify-shared-graphs-design.md` (revision 6, merged as #1787). **Rulings:** `docs/superpowers/plans/2026-10-28-graphify-r2-ruled.md`, D-7292: the operator ruled G1 to G9 each as recommended, and the four build-level findings of the spec's last review are closed by tests in this plan (§The four findings). Test containment, which this plan builds on, is #1785 (D-7298, merged as `a950dd05d`).
 
-**Status:** rev 0 (2026-10-29), written after measuring the graph build and read paths on `origin/main` `69d9d298a`.
+**Status:** rev 1 (2026-10-29): the review's three findings folded (§Review log). Written after measuring the graph build and read paths on `origin/main` `69d9d298a`; the files rev 1 cites are unchanged on `f73567587`.
 
 **Scope.**
 - One graph per repository, built from its main line in a ccrc-owned store outside every worktree, refreshed incrementally when main moves, with a daily full rebuild (spec §2, §3).
@@ -15,15 +15,15 @@
 
 **Base:** `origin/main` `69d9d298a`. Every line number below was read on it. Line numbers are snapshots; each task's Step 0 re-reads them, and the code a task writes cites symbols or anchor comments, never lines (CLAUDE.md, D-5893).
 
-**Deploy class.** Every code task is **agent lane** (`ccd/*`, `deploy/*`), plus tests and docs. `shared/lifecycle.ts` is imported by no runtime code (measured: no `server/src`, `agent/src` or `pwa/src` import), so GR8 needs no server roll. The wave rides ordinary releases, agent first, from a fresh `origin/main` worktree, as a detached unit; the sweep stays held (§Operator acts, OA-GR1) until the whole wave is on the fleet box.
+**Deploy class.** Every code task is **agent lane** (`ccd/*`, `deploy/*`), plus tests and docs. `shared/lifecycle.ts` is imported by no runtime code (measured: no `server/src`, `agent/src` or `pwa/src` import), so GR8 needs no server roll. The wave rides ordinary releases, agent first, from a fresh `origin/main` worktree, as a detached unit; the sweep stays held **by its pause file** (OA-GR0, D-7365) until the whole wave is on the fleet box (OA-GR1). The disabled timer that spec §1.2 describes is not a hold that survives a release: every agent-lane deploy runs `systemctl --user enable --now ccd-graph-sweep.timer` (`deploy/deploy.sh:1006`, in `AGENT_CMD`), and every `ccrc install`/`update` runs `_inst_enable_timer graphify ccd-graph-sweep.timer` (`ccd/ccrc:17883`), whatever the release carries. The pause file survives both: the sweep checks it right after taking its pass lock, before any other work (`ccd/ccd-graph-sweep:1045`, `_gs_finish paused 0`), and GR4 keeps that check.
 
-**Names.** Tasks are **GR0** to **GR8** ("graph revision"); operator acts are **OA-GR1** to **OA-GR3**. Measured on 2026-10-29: no `GR<n>` task id and no `OA-GR` id exists in `docs/`. (`Task G0` is taken by another plan, so this plan does not use `G<n>`.)
+**Names.** Tasks are **GR0** to **GR8** ("graph revision"); operator acts are **OA-GR0** to **OA-GR3**. Measured on 2026-10-29: no `GR<n>` task id and no `OA-GR` id exists in `docs/`. (`Task G0` is taken by another plan, so this plan does not use `G<n>`.)
 
 **Goal, PR by PR.**
 
 | After | The operator sees | Underneath |
 |---|---|---|
-| `main` | the sweep held; 9.4 GB of per-tree graphs (spec §1.2) | one full `graphify update .` per stale tree, inside each tree, in the sweep's own unit (`ccd/ccd-graph-sweep:945`) |
+| `main` | the sweep held by its disabled timer, which the next agent-lane deploy re-enables (OA-GR0 moves the hold to the pause file); 9.4 GB of per-tree graphs (spec §1.2) | one full `graphify update .` per stale tree, inside each tree, in the sweep's own unit (`ccd/ccd-graph-sweep:945`) |
 | GR0 | the measured baseline and the incremental-gap replay, as a PR comment and a plan revision | nothing |
 | GR1 | nothing | the consumer censuses and the read-side pins, green on today's code |
 | GR2 | `ccrc doctor`'s settings line names the graph keys | `_graph_knobs`: 22 graph settings read by `_ccrc_knob` and checked in one place |
@@ -43,7 +43,7 @@ Read on `69d9d298a`. Each item says which task acts on it.
 1. **The sweep builds in every tree, in full, in its own unit.** `ccd/ccd-graph-sweep` (1,113 lines) walks `_gs_trees` (`:183`, the projects and worktrees roots), decides per tree with `_gs_stale` (`:270`), skips a busy session with `_gs_busy` (`:290`, with the stale-escape hatch at `:322-326`), runs the corpus guard `_gs_guard` (`:424`, writing a generated `.graphifyignore` into the tree; 7 write or remove sites of that file), and builds with `_gs_build` (`:916`): `cd "$tree" && … nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" "$ENGINE" update .` (`:943-946`), the **only** engine invocation (1 site). `update` never passes `changed_paths` (spec §1.2), so every build is full. The guard's saved-results exemption is the in-tree spelling `^graphify-out/memory/` (`:422`). Restamping lives in `_gs_restamp` (`:821`). → GR4 retires all of it but `_gs_trees`, `_gs_realpath`, `_gs_session_on`, `_gs_busy` (without its hatch), `_gs_owns_ignore` (stray cleanup) and `_gs_finish`.
 2. **The sweep's settings are read by `: "${…:=…}"` lines,** not by ccrc's reader: `CCRC_GRAPH_BUILD_TIMEOUT`, `BUDGET`, `MAX_WORKERS`, `STALE_ESCAPE_COMMITS`, `STALE_ESCAPE_SECS` (`:17-21`) and `HOOKSTATE_FRESH_SECS` (`:288`). Its unit has no `EnvironmentFile=` (`deploy/systemd/ccd-graph-sweep.service`). → GR2, GR4.
 3. **Pass lock and census.** `exec 9>"$LOCK"; flock -n 9 || … _gs_finish pass-locked 0` (`:1043-1044`); a pause file short-circuits every pass (`:1045`, `~/.ccrc/graph-sweep-paused`); `_gs_finish` writes `{started, finished, pin, status, trees:[…]}` and keeps 10 passes (`:33-50`). **fd 9 is inherited by every child of the pass**, the build included. → GR4 closes it for the build (§Review focus 5).
-4. **The units.** The timer is `OnBootSec=5min`, `OnUnitActiveSec=15min` (`deploy/systemd/ccd-graph-sweep.timer`); the service is `Type=oneshot`, `TimeoutStartSec=5400`, `MemoryMax=6G`. Both are copied verbatim: by `_inst_units` (`ccd/ccrc:17410-17411`), enabled by `_inst_enable_timer graphify ccd-graph-sweep.timer` (`ccd/ccrc:17883`), and by `deploy.sh agent` (`deploy/deploy.sh:839-840`, `_unit_atomic`). The executable is copied by `_inst_bins` (`ccd/ccrc:16694`) and `deploy.sh` (`:680`) to `~/.local/bin/ccd-graph-sweep`. → GR8.
+4. **The units.** The timer is `OnBootSec=5min`, `OnUnitActiveSec=15min` (`deploy/systemd/ccd-graph-sweep.timer`); the service is `Type=oneshot`, `TimeoutStartSec=5400`, `MemoryMax=6G`. Both are copied verbatim: by `_inst_units` (`ccd/ccrc:17410-17411`), enabled by `_inst_enable_timer graphify ccd-graph-sweep.timer` (`ccd/ccrc:17883`), and by `deploy.sh agent` (`deploy/deploy.sh:839-840`, `_unit_atomic`). The executable is copied by `_inst_bins` (`ccd/ccrc:16694`) and `deploy.sh` (`:680`) to `~/.local/bin/ccd-graph-sweep`. **Both enables run on every deploy and update** (`deploy/deploy.sh:1006`, `ccd/ccrc:17883`), so a timer the operator disabled is enabled and started again by the next release, whatever it carries; only the pause file (item 3) survives a release. → GR8, OA-GR0 (D-7365).
 5. **The tests slice is `ccrctests.slice`, not `ccrc-tests.slice`** as the spec spells it (§4, §8, §11): `ccd/ccrc-test:97` (`SLICE=ccrctests.slice`), `deploy/systemd/ccrctests.slice` (`MemoryMax=6G`, `MemorySwapMax=1G`, `CPUWeight=20`, `CPUQuota=400%`, `IOWeight=20`, `:42-46`). Every task uses the shipped name (D-7355).
 6. **`ccrc test` degrades, it does not refuse.** With the slice not loaded, `ccrc test` runs the command **uncontained** with a WARN (`ccd/ccrc-test:698-705`, "DEGRADE, NEVER REFUSE"), because the session hook routes every bare heavy run there. The spec's "a missing slice is refused, never created" (§4) is therefore the **sweep's** check, not `ccrc test`'s: before each build the sweep runs `ccrc test --status`, whose rc is 2 when the slice is not loaded or holds no memory cap (`_tstatus`, `ccd/ccrc-test:625-655`), and records `failed` with `fail: setup` and the status line as the reason. `ccrc test` is not changed (D-7356).
 7. **What `ccrc test` gives a build.** A heavy run takes one of `CCRC_TEST_HEAVY_SLOTS` flock slots (`_tacquire`, `:551`) and **waits without bound** (`sleep "$POLL_S"` loop, `:590`); then `systemd-run --user --scope --quiet --collect --slice=ccrctests.slice --unit="ccrc-test-$$"` (`:732`), so the scope is named after the wrapper's pid and is collected at exit; a TERM before launch exits 143 having released the slot, after launch it stops the scope (`_tonsig`, `:716-721`); an OOM kill in the slice during the run prints `the test slice's memory cap killed a process during this run (…)` on stderr (`:745-749`), read from the slice's `memory.events` `oom_kill` through `systemctl --user show -p ControlGroup` (`_toom_kills`, `:615-620`); `ccrc test` exits with the command's code. A run already inside the slice execs directly (`_tinside`, `:470`); the sweep's unit is not inside it. `ccrc-test` sources `ccrc` from its own directory (`:93`), and `ccrc`'s dispatch is guarded for sourcing at `ccd/ccrc:27341` (the spec's `ccrc:27302` has moved; `_test_knobs` is there now). → GR3, GR4.
@@ -74,7 +74,8 @@ Read on `69d9d298a`. Each item says which task acts on it.
 | GR6 | GR4 |
 | GR7 | GR4, GR6 (it reads every row both write); after #1611 if it is still open |
 | GR8 | GR4; #1752 merged (its `_slice_limits_unit` is the rendering pattern), or closed |
-| OA-GR1 (unhold the sweep) | GR2 to GR8 on the fleet box |
+| OA-GR0 (hold the sweep by its pause file) | nothing; asked for as soon as this plan merges, since any agent-lane release re-enables the timer. No release carrying a task of this wave is deployed until OA-GR0 is done and checked |
+| OA-GR1 (unhold the sweep) | GR2 to GR8 on the fleet box, with OA-GR0's pause file in place throughout |
 | Done check (OA-GR3) | 7 days after OA-GR1 |
 
 ## In flight, and what it fences off
@@ -102,7 +103,7 @@ GR5 lands before GR4 so that every session reads a link the moment GR4 makes one
 ## Global constraints
 
 - **Public repository.** No tracker ids, hostnames, account, lane or login names, project names or absolute home paths in code, fixtures, commits, branch names or PR text (CLAUDE.md). Fixtures use `project-a`, `lane-a`. Cite D-numbers or GitHub `#n`.
-- **SAFETY.** Fixture HOMEs only. No task runs the sweep, `ccd`, `ws-*` verbs or `ccrc update` against a live `$HOME`. GR0 and the done check read the fleet box and write only into their own scratch directory; neither touches a tree's `graphify-out`, the store, the sweep's units or the pause file. Unholding the sweep is the operator's act (OA-GR1).
+- **SAFETY.** Fixture HOMEs only. No task runs the sweep, `ccd`, `ws-*` verbs or `ccrc update` against a live `$HOME`. GR0 and the done check read the fleet box and write only into their own scratch directory; neither touches a tree's `graphify-out`, the store, the sweep's units or the pause file. Holding the sweep (OA-GR0) and unholding it (OA-GR1) are the operator's acts; no task's code, test or deploy step removes `~/.ccrc/graph-sweep-paused` (D-7365).
 - **Every threshold is a deployment setting.** Every size, interval, count, percentage, path and limit in this wave is a `CCRC_GRAPH_*` key in `CCRC_SETTINGS`, read through `_graph_knobs` with a neutral default (spec §5.4). No literal threshold in code: GR2 adds a scanner row that fails on a numeric literal compared against a graph quantity in `ccd/ccd-graph-sweep`, `ccd/graph-build` or `ccd/graph-resolve` outside the defaults table. The hook reads its three keys from `settings.json` with defaults held equal to `_graph_knobs`'.
 - **Commands.** A fresh detached worktree under `~/projects/wt.noindex/` from `origin/main`. Prefix git with `env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY`. From `server/`: `npm ci`, then `ccrc test -- ./node_modules/.bin/vitest run test/<file> --maxWorkers=2` in the foreground, timeout at least 600000 ms; `ccrc test -- ./node_modules/.bin/tsc -p test/tsconfig.tests.json --noEmit` (on a machine with no `ccrc`, the same commands without the `ccrc test --` prefix). Never bare `npx vitest`.
 - **Red first.** Every behaviour change lands its rows in a first commit that is red on the base, and the PR body prints the red lines. A guard ships with a mutation that reds it (CLAUDE.md mutation-table discipline).
@@ -123,6 +124,7 @@ The wrapper writes `staging/.started` immediately before it calls the engine (af
 |---|---|---|---|---|---|
 | 0 | yes | — | stamp and publish checks (spec §3.5); then `refreshed` / `rebuilt`, or `refused-shrink`, or `failed` | `publish` on a refused check | the same kind, or full after `refused-shrink`/`fail: publish` |
 | 1 | yes | `engine: _rebuild_code returned False` | `failed` | `engine` | full |
+| 1 | yes | any other last line, or none (an uncaught exception) | `failed` (`exit 1`) | `unknown` | the same kind |
 | 1 | no | none (`ccrc test` could not load ccrc) | `failed` | `setup` | the same kind |
 | 2 | no | `setup: <the check that failed>`, or `ccrc test`'s usage line | `failed` | `setup` | the same kind |
 | 3 | no | `slot-wait: started <n>s after launch, above CCRC_GRAPH_SLOT_WAIT_SECS=<m>` | `skipped-slots` | — | the same kind |
@@ -130,10 +132,12 @@ The wrapper writes `staging/.started` immediately before it calls the engine (af
 | 124 | yes | — | `timed-out` | — | the same kind |
 | 137 | yes | `ccrc test`'s OOM sentence on stderr | `oom-killed` | — | the same kind; full attempts count toward backoff |
 | 137 | yes | no OOM sentence, elapsed ≥ `BUILD_TIMEOUT` | `timed-out` (the `--kill-after` KILL) | — | the same kind |
-| 137 | yes | no OOM sentence, elapsed < `BUILD_TIMEOUT` | `failed` (`killed by signal 9`) | `engine` | full |
-| any other | yes | — | `failed` (`exit <n>`) | `engine` | full |
+| 137 | yes | no OOM sentence, elapsed < `BUILD_TIMEOUT` | `failed` (`killed by signal 9`) | `unknown` | the same kind |
+| any other | yes | — | `failed` (`exit <n>`) | `unknown` | the same kind |
 | any other | no | — | `failed` (`exit <n> before the build started`) | `setup` | the same kind |
 | — (sweep check before the call) | — | `ccrc test --status` rc 2 | `failed` (the status line) | `setup` | the same kind |
+
+**Only the engine and publish rows force a full build (spec §3.3, D-7366).** Spec §3.3 forces a full rebuild after `failed` only for `fail: engine` (the wrapper's exit 1 with `_rebuild_code returned False`) and `fail: publish` (a refused publish check); every other non-published outcome retries the same kind. A build that ends with `.started` written but without the wrapper naming a class (an external SIGKILL, such as a box or user-tree OOM kill outside the slice, which this fleet has had; another signal; an uncaught exception) says nothing about the patch, and escalating it would replace an incremental of about 1.25 GB with a full build of about 4.2 GB exactly when memory is short (spec §1.4, §3.3). Spec §7 requires `failed` rows to carry a `fail` class and names only `setup`, `engine` and `publish`, none of which is true of these rows, so the census vocabulary gains `unknown`, which never escalates. A full attempt ending `unknown` still counts toward `full_failures` (its outcome is `failed`, spec §3.3.1).
 
 **Full-build backoff (finding 1).** `full_failures` counts consecutive **full** attempts whose outcome is `failed`, `timed-out`, `oom-killed`, `refused-shrink` or `refused-by-guard`; a refused full build counts. A published full build resets it to 0. The doctor's backoff WARN names the way a genuine shrink (a large deletion on main) is accepted: set `CCRC_GRAPH_MAX_SHRINK_PCT=100` in `~/.ccrc/ccrc.env` until the next `rebuilt` row, then remove the line.
 
@@ -149,10 +153,11 @@ The wrapper writes `staging/.started` immediately before it calls the engine (af
 4. **A graph that lies about its commit.** The untouched-outputs case keeps the previous `built_at_commit`; the stamper must run, and the publish check must compare against `tip`. N9.
 5. **fd 9.** The pass lock's descriptor is inherited by every child. GR4 runs the build with `9>&-`, so an orphaned build can never hold the pass lock; a row reds when a build child holds fd 9.
 6. **The OOM victim.** `oom_score_adj` 1000 must be written before the engine's workers fork. N26.
-7. **The degrade path.** `ccrc test` runs uncontained when the slice is not loaded. The sweep must check `--status` first and refuse (item 6); a build that ran uncontained on Linux is a defect.
+7. **The degrade path.** `ccrc test` runs uncontained when the slice is not loaded. The sweep must check `--status` first and refuse (item 6), and so must GR0's replay before each of its builds; a build that ran uncontained on Linux is a defect.
 8. **Two readers, one definition.** `repo-key`, the store root and the source ref are defined once, in `ccd/graph-resolve`; the hook never re-derives them (it reads `meta.json`). A second spelling is a single-definition red.
 9. **Migration deleting the wrong thing.** Only `<tree>/graphify-out`, only when every top-level entry is graphify's, only when the tree is idle and the directory is ignored. N15 plants each refusal.
 10. **A blind guard.** Rows that read `trees[]` and pass because `trees[]` is now absent are blind; GR1's census and GR7's re-point make each one read `repos[]`.
+11. **A hold that a release undoes.** Every agent-lane deploy and every `ccrc install`/`update` enables the sweep's timer. The hold is the pause file (OA-GR0, D-7365); a task that removes it, or a sweep that does work before checking it, unholds the old or a half-landed sweep.
 
 ## Tasks
 
@@ -162,10 +167,10 @@ The wrapper writes `staging/.started` immediately before it calls the engine (af
 
 - [ ] **Step 1: the disk baseline.** For every tree `_gs_trees` would enumerate (the same globs as `ccd/ccd-graph-sweep:183-200`, run by hand), `du -sxk <tree>/graphify-out` where it is a real directory; record the count of trees, of repositories (distinct `git rev-parse --path-format=absolute --git-common-dir`), and the total and per-repository KiB. Run under `nice -n 19 ionice -c3`.
 - [ ] **Step 2: the CPU baseline.** From the sweep unit's journal, the last 7 days it was enabled: `journalctl --user -u ccd-graph-sweep.service -o cat | grep -E 'Consumed .* CPU time'`, each pass's CPU, wall and peak memory; record per pass and per day (the spec's §1.2 figures were one day). If fewer than 7 enabled days exist in the journal, record what exists and say so.
-- [ ] **Step 3: the replay.** In a scratch directory (never the store path): a `git clone --shared --no-checkout` of this repository's main checkout; check out the commit at main 7 days ago; one full build with the pinned venv's python calling `graphify.watch._rebuild_code(Path("."), changed_paths=None, force=True, acquire_lock=False)` under `GRAPHIFY_OUT=<scratch>/graphify-out`, inside `ccrc test --heavy --`; then, for each 15-minute window in which main moved, `checkout --detach --force` the window's last commit and one incremental call with the window's `git diff -z --no-renames --name-only` as absolute `changed_paths`; at each day's last commit also a full build into a second scratch output. Record per day: nodes and edges of the incremental chain versus the full build, edges missing, edges extra, the share missing, and each call's wall time and the scope's `memory.peak` and `cpu.stat` `usage_usec`.
+- [ ] **Step 3: the replay.** **Every build of this step is preceded by `ccrc test --status`** (D-7356, item 6): `ccrc test` runs a command uncontained when `ccrctests.slice` is not loaded (`ccd/ccrc-test:698-705`), so a status rc of 2 (the slice not loaded, or holding no memory cap) or a status line saying runs are not contained **stops the replay at once**: no further build is launched, the status line is recorded in the report, and the coordinator asks the operator before resuming. The status line of every call goes into the replay's log. In a scratch directory (never the store path): a `git clone --shared --no-checkout` of this repository's main checkout; check out the commit at main 7 days ago; one full build with the pinned venv's python calling `graphify.watch._rebuild_code(Path("."), changed_paths=None, force=True, acquire_lock=False)` under `GRAPHIFY_OUT=<scratch>/graphify-out`, inside `ccrc test --heavy --`; then, for each 15-minute window in which main moved, `checkout --detach --force` the window's last commit and one incremental call with the window's `git diff -z --no-renames --name-only` as absolute `changed_paths`; at each day's last commit also a full build into a second scratch output. Record per day: nodes and edges of the incremental chain versus the full build, edges missing, edges extra, the share missing, and each call's wall time and the scope's `memory.peak` and `cpu.stat` `usage_usec`.
 - [ ] **Step 4: report.** The tables of Steps 1 to 3 as a PR comment; the coordinator writes them into §Measured baseline as rev 1. If the share of edges missing after one day is above 1%, the coordinator puts OA-GR2 to the operator before GR4 is dispatched.
 
-**Counted exits:** none (measurement). **Verify:** the scratch directory is removed; `git -C <main checkout> worktree list` and every tree's `graphify-out` mtime are unchanged (recorded before and after).
+**Counted exits:** none (measurement). **Verify:** the replay's log holds one `ccrc test --status` line with rc 0 before every build call, and no build ran after a non-zero status; the scratch directory is removed; `git -C <main checkout> worktree list` and every tree's `graphify-out` mtime are unchanged (recorded before and after).
 
 ### Task GR1: the consumer censuses and the read-side pins (`D-7347`) — GATED: none
 
@@ -267,8 +272,8 @@ The wrapper writes `staging/.started` immediately before it calls the engine (af
   - Retired with their rows (spec §3, §5.4 "Retired", §14): `_gs_stale`, `_gs_same_tree`, `_gs_stamp` (tree form), `_gs_restamp_refuse`, `_gs_build`, `_gs_open_filter`, `_gs_detect`/`_gs_breach` tree forms, `_gs_busy`'s escape hatch, `CCRC_GRAPH_STALE_ESCAPE_*`.
 - Modify `ccd/ccrc`: `_graph_exclude_common <common dir>` appends `graphify-out/`, `graphify-out` and `.graphifyignore` when absent; `_inst_graph_excludes` calls it (one writer in ccrc). About +8 code lines.
 - Modify `ccd/ccd` `cmd_ws_add`'s exclude block: the no-slash `graphify-out` line beside the slash line (+1 line; ccd does not source ccrc, so this second writer is today's, recorded as "another process" in spec §6.1's table).
-- Create `server/test/graph-repo-sweep.test.ts` (fixture HOMEs, the GR3 stub engine, a fixture `ccrc-test` that records its argv and runs the command, and the real `ccd/ccrc-test` on Linux where a user manager answers): N1 (sweep half), N2, N4, N5, N9, N10, N11, N12, N16, N21, N22, N23, N25, N27, N28 (sweep half), every line of §The outcome table, the fd-9 row, the stdout row line, `settings.json`, and the 08-27 §9 rows the spec carries over (1, 4, 5a, 6, 7, 8, 10, 12, 13, 15, 16, 17, 18), each retargeted to the store.
-- Create `server/test/graph-outcomes.test.ts`: the outcome table's word census against spec §7's vocabulary.
+- Create `server/test/graph-repo-sweep.test.ts` (fixture HOMEs, the GR3 stub engine, a fixture `ccrc-test` that records its argv and runs the command, and the real `ccd/ccrc-test` on Linux where a user manager answers): N1 (sweep half), N2, N4, N5, N9, N10, N11, N12, N16, N21, N22, N23, N25, N27, N28 (sweep half), every line of §The outcome table, the fd-9 row, the pause-file row (a present `~/.ccrc/graph-sweep-paused` ends the pass `paused` before any fetch, store write or build, since it is the wave's hold, D-7365), the `unknown` rows (an external SIGKILL or an unclassified exit after `.started` gives `fail: unknown` and an incremental next pass when a published build exists, D-7366), the stdout row line, `settings.json`, and the 08-27 §9 rows the spec carries over (1, 4, 5a, 6, 7, 8, 10, 12, 13, 15, 16, 17, 18), each retargeted to the store.
+- Create `server/test/graph-outcomes.test.ts`: the outcome table's word census against spec §7's vocabulary plus `unknown` (D-7366), the one word the table adds.
 - Delete `server/test/graph-sweep.test.ts` in the commit that retires the per-tree body, with a table in the PR body mapping each of its 87 rows to the row that carries it over or to the spec section that retires its behaviour. Its real-engine integration block moves to `graph-repo-sweep.test.ts` unchanged in gating.
 - Modify `server/test/ccrc-doctor-graphify.test.ts` and `ccrc-doctorFixture.ts:1387` fixtures **only** to add `repos[]` alongside `trees[]` (the doctor still reads `trees[]` until GR7).
 
@@ -302,7 +307,7 @@ The wrapper writes `staging/.started` immediately before it calls the engine (af
 - Modify `deploy/systemd/ccd-graph-sweep.timer` and `.service`: descriptions name the repository refresh; values unchanged (they are the unrendered defaults).
 - Modify `shared/lifecycle.ts`: spec §10's rows replace the four retired ones; `server/test/lifecycle.test.ts:1024-1027` names the new set.
 - Modify `README.md`: the timers table row (`:509`), the install excludes paragraph (`:5454`), the card paragraph (`:5504`), §"The sweep" (`:5899`), "Reclaiming space (O7)" (`:5981`), and "ccrc's own settings" naming every graph key; the text of GR3 to GR7's behaviour.
-- Modify tests: `ccrc-install-graphify.test.ts` (N14: changing `REFRESH_SECS` and running update renders the new period; unset renders today's bytes), `ccrc-install-*` order pins only where the unit lines moved, the deploy test that locates `_unit_atomic`/`_slice_limits_unit` lines, N20 (uninstall refuses a store root without the marker), N1 (install's exclude: both lines; `git worktree remove` of a tree holding the link succeeds without `--force`, leaving the target intact).
+- Modify tests: `ccrc-install-graphify.test.ts` (N14: changing `REFRESH_SECS` and running update renders the new period; unset renders today's bytes), `ccrc-install-*` order pins only where the unit lines moved, the deploy test that locates `_unit_atomic`/`_slice_limits_unit` lines, N20 (uninstall refuses a store root without the marker), N1 (install's exclude: both lines; `git worktree remove` of a tree holding the link succeeds without `--force`, leaving the target intact); install and update leave a present `~/.ccrc/graph-sweep-paused` in place while they enable the timer (D-7365; the two enable lines stay).
 
 **Steps:** Step 0: #1752 on `main`; Step 1 red; Step 2 implement; Step 3 growth check.
 
@@ -323,15 +328,17 @@ The wrapper writes `staging/.started` immediately before it calls the engine (af
 
 ## Operator acts
 
-- **OA-GR1 — unhold the sweep.** Today the sweep is held (spec §1.2). After GR2 to GR8 are on the fleet box (`ccrc doctor`'s graphify check names the store and the rendered timer), the operator removes the hold the way it was set (the pause file `~/.ccrc/graph-sweep-paused`, or `systemctl --user enable --now ccd-graph-sweep.timer`). Until then every release of this wave leaves the hold as it is; no task removes it.
+- **OA-GR0 — hold the sweep by its pause file, before any release of this wave.** Today's hold is the disabled timer (spec §1.2), which the next `deploy.sh agent` or `ccrc update` enables and starts again (item 4). The operator, on the fleet box: `mkdir -p ~/.ccrc && touch ~/.ccrc/graph-sweep-paused`, then checks it with `test -e ~/.ccrc/graph-sweep-paused && echo held`, and after the next deploy reads the newest pass in `~/.ccrc/graph-sweep.json` as `status` `paused`. The coordinator asks for it as soon as this plan merges and deploys nothing of this wave until it is confirmed (D-7365).
+- **OA-GR1 — unhold the sweep.** After GR2 to GR8 are on the fleet box (`ccrc doctor`'s graphify check names the store and the rendered timer), the operator removes the pause file, and only it: `rm ~/.ccrc/graph-sweep-paused`, then checks `systemctl --user is-enabled ccd-graph-sweep.timer` reads `enabled` (the wave's deploys enabled it) and that the next pass is not `paused`. Until then every release of this wave leaves the pause file in place; no task removes it.
 - **OA-GR2 — the safety-net interval, if GR0 says so.** If GR0's one-day missing-edge share is above 1%, the operator rules a shorter `CCRC_GRAPH_FULL_REBUILD_SECS` (a line in the box's `ccrc.env`, or a new default in GR2's table if GR2 has not landed).
 - **OA-GR3 — accept the done check** (§Done check).
 
 ## Deploy order
 
+0. OA-GR0 first: the pause file is in place and checked before any release that carries a task of this wave is deployed (every agent-lane deploy enables the sweep's timer, item 4).
 1. Each code task rides the next ordinary release, **agent lane first** (`deploy.sh agent`, or `ccrc update` on the fleet box), from a fresh `origin/main` worktree as a detached unit; the server lane follows in the same release with nothing of this wave in it.
 2. GR5 may reach the box before GR4: it changes nothing for real-directory trees (GR1's pins).
-3. GR4 and GR6 reach the box with the sweep held; nothing builds until OA-GR1.
+3. GR4 and GR6 reach the box with the sweep held by the pause file (the timer is enabled by then, and every pass ends `paused`); nothing builds until OA-GR1.
 4. After OA-GR1, the first passes build every repository in full, `BUDGET` a pass, repositories with no build first (spec §3.1); migration then drains `MIGRATE_BUDGET` trees a pass.
 
 ## Done check: the measured saving on the fleet box (OA-GR3)
@@ -351,7 +358,7 @@ The coordinator posts the table on this plan's PR thread or a follow-up issue, a
 
 - Each task is a revert of its PR, newest first, plus `ccrc rollback` to the previous release on the box.
 - **Before OA-GR1:** nothing built, nothing migrated; a revert is enough.
-- **After OA-GR1, rolling back GR4/GR6:** the old sweep would run `graphify update .` through a tree's link into a read-only build (`EACCES`, `failed` rows). So the operator first holds the sweep, then removes the links that point into the store (`find <roots> -maxdepth 4 -name graphify-out -type l -lname '<store>/*'`, listed, then deleted), then rolls back. Saved results stay under `<repo-key>/memory/migrated-<tree-key>/` and are copied back by hand if wanted; per-tree graphs are regenerable and the old sweep rebuilds them. The store is left in place until the operator removes it (marker-gated `ccrc uninstall` or `rm -rf`).
+- **After OA-GR1, rolling back GR4/GR6:** the old sweep would run `graphify update .` through a tree's link into a read-only build (`EACCES`, `failed` rows). So the operator first holds the sweep (`touch ~/.ccrc/graph-sweep-paused`, the hold that survives the rollback's deploy), then removes the links that point into the store (`find <roots> -maxdepth 4 -name graphify-out -type l -lname '<store>/*'`, listed, then deleted), then rolls back. Saved results stay under `<repo-key>/memory/migrated-<tree-key>/` and are copied back by hand if wanted; per-tree graphs are regenerable and the old sweep rebuilds them. The store is left in place until the operator removes it (marker-gated `ccrc uninstall` or `rm -rf`).
 - No coord.db migration, no wire field, no account state changes in this wave.
 
 ## Measured baseline
@@ -360,7 +367,7 @@ Filled by GR0 (rev 1). Until then the spec's §1.2 and §13 figures are the refe
 
 ## Deviations found
 
-Every number below was issued by the allocator on 2026-10-29, one contiguous block (§Issued numbers). Entries found after this plan lands are folded by the coordinator, never edited in from a task branch.
+Every number below was issued by the allocator on 2026-10-29, in two blocks (§Issued numbers). Entries found after this plan lands are folded by the coordinator, never edited in from a task branch.
 
 - **D-7346 (2026-10-29)** — `graph-r2-measure` (GR0): the baseline (disk and sweep CPU) and the one-week incremental-gap replay are measured on the fleet box, read-only, in a scratch directory through `ccrc test --heavy`, before GR4; the replay's one-day missing-edge share decides whether OA-GR2 is asked.
 - **D-7347 (2026-10-29)** — `graph-r2-pins` (GR1): the consumer censuses (`censusReaders`, `treeWriteSites`, `engineCalls`, `graphPathReaders`) and the read-side pins for a real-directory tree land first, green on the old code; later tasks only lower their counts.
@@ -376,11 +383,13 @@ Every number below was issued by the allocator on 2026-10-29, one contiguous blo
 - **D-7357 (2026-10-29)** — `build-cpu-measured`: for the done check, the wrapper also reads `cpu.stat` `usage_usec` of its own scope (`cpu_ms` in `meta.json` and the census row), and each row is printed to the unit's journal, because the census ring holds 10 passes and the builds' CPU is charged to the tests slice, not to the sweep's unit.
 - **D-7358 (2026-10-29)** — `sweep-settings-1578`: #1578's graph hunk (`CCRC_GRAPH_BUDGET` as tree rebuilds, a bad value stopping the pass) is superseded by spec §5 (repository builds; a bad value keeps its default and is reported). Its owner is asked to drop the hunk; if it lands first, GR4 removes it and re-points its graph rows.
 - **D-7359 (2026-10-29)** — `skill-clause-convergence`: `install-graphify-skill.sh` decides convergence against a staged copy of the package's skill plus the ccrc clause, since diffing the package alone against a destination carrying the clause would reinstall every run.
+- **D-7365 (2026-10-29)** — `sweep-hold-pause-file`: spec §1.2's hold is the disabled timer, but every `deploy.sh agent` (`deploy/deploy.sh:1006`) and every `ccrc install`/`update` (`ccd/ccrc:17883`) enables and starts `ccd-graph-sweep.timer`, so the wave's first release would restart the old per-tree sweep and GR4's release would start the new one before GR6, GR8 and GR7 are on the box. The wave's hold is therefore the pause file `~/.ccrc/graph-sweep-paused`, set by the operator before any release of the wave (OA-GR0) and removed, specifically, at OA-GR1; GR4 keeps the check before any work, and GR4 and GR8 pin that neither the sweep nor install removes the file.
+- **D-7366 (2026-10-29)** — `unclassified-failure-same-kind`: a build that ends after `.started` without the wrapper naming a class (an external SIGKILL, another signal, an uncaught exception) is `failed` with `fail: unknown`, and its next pass retries the same kind, as spec §3.3 requires of every failure but `fail: engine` and `fail: publish`. Spec §7's `fail` vocabulary (`setup`, `engine`, `publish`) gains `unknown`, because none of the three is true of these rows.
 - **D-7360 (2026-10-29)** — `store-init-by-install`: `_gr_store_init` (one function in `ccd/graph-resolve`) creates the store root and its marker; `ccrc install`/`update` call it as well as the sweep, so the doctor's "store missing or unmarked" FAIL holds on a box before its first pass.
 
 ### Issued numbers
 
-Issued by the allocator on 2026-10-29, one contiguous block:
+Issued by the allocator on 2026-10-29, in two blocks: D-7346 to D-7360 for rev 0, D-7365 and D-7366 for rev 1.
 
 | Slug | Number |
 |---|---|
@@ -399,6 +408,8 @@ Issued by the allocator on 2026-10-29, one contiguous block:
 | `sweep-settings-1578` | D-7358 |
 | `skill-clause-convergence` | D-7359 |
 | `store-init-by-install` | D-7360 |
+| `sweep-hold-pause-file` | D-7365 |
+| `unclassified-failure-same-kind` | D-7366 |
 
 ## Out of scope
 
@@ -411,3 +422,4 @@ Issued by the allocator on 2026-10-29, one contiguous block:
 ## Review log
 
 - rev 0 (2026-10-29): written from the merged spec (#1787) and its ruling (D-7292) after measuring `origin/main` `69d9d298a`; not yet reviewed.
+- rev 1 (2026-10-29): three review findings folded, re-measured on `origin/main` `f73567587` (the cited files are unchanged from `69d9d298a`). (1) The hold did not survive the wave's own deploys: both timer enables run on every release, so the hold is now the pause file, set by OA-GR0 before the wave and removed specifically by OA-GR1, with pins in GR4 and GR8 (D-7365). (2) The outcome table forced full builds after an external SIGKILL and any unclassified exit, which spec §3.3 forbids; those rows now give `fail: unknown` and retry the same kind (D-7366). (3) GR0's replay ran builds through `ccrc test --heavy` without the `--status` precheck, so a missing slice would have run them uncontained; it now checks before every build and stops on a non-zero status (D-7356).
