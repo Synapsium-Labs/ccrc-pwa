@@ -236,9 +236,10 @@ describe('phaseFor', () => {
 });
 
 describe('a PR closed as landed in a merge train', () => {
-  // ccd annotates `landedInTrain` (the deployment's label, read on the fleet
-  // box) the way it annotates `ours`; this side reads the annotation and never
-  // a label name of its own.
+  // ccd annotates `landedInTrain` — the deployment's label AND the train
+  // record's proof, both judged on the fleet box (D-7362) — the way it
+  // annotates `ours`; this side reads the annotation and never a label name or
+  // a train record of its own.
   const landed = (over: Partial<CcdPrRow> = {}): CcdPrRow => row({
     state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z', landedInTrain: true, ...over,
   });
@@ -276,6 +277,22 @@ describe('a PR closed as landed in a merge train', () => {
   ])('is not merged %s', (_name, over, phase) => {
     expect(isMergedRow(landed(over as Partial<CcdPrRow>), 'main', 'ws/quiet-basin')).toBe(false);
     expect(phaseFor(line({ rows: [landed(over as Partial<CcdPrRow>)] })).phase).toBe(phase);
+  });
+
+  it('a label the train record did not prove is closed, with reason train-unproven, never merged', () => {
+    const r = landed({ landedInTrain: false, trainUnproven: true });
+    expect(isMergedRow(r, 'main', 'ws/quiet-basin')).toBe(false);
+    const s = phaseFor(line({ rows: [r] }));
+    expect([s.phase, s.reason, s.mergedAt]).toEqual(['closed', 'train-unproven', null]);
+    const b = sessionBucket({
+      status: 'dead', statusUpdatedAt: 1000, dialogPending: false, hookState: null,
+      archivedAt: 1_800_000_000, pr: s, background: null,
+    }, null);
+    expect(b.bucket).not.toBe('cleanup');
+  });
+
+  it('a plain closed PR carries no reason', () => {
+    expect(phaseFor(line({ rows: [landed({ landedInTrain: false })] })).reason).toBeNull();
   });
 
   it('leaves a MERGED row exactly as it was', () => {

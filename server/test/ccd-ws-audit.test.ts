@@ -614,6 +614,50 @@ describe('a PR closed as landed in a merge train', () => {
     expect(refusal(wt).verdict).toBe('not-merged');
   });
 
+  // ROBUST REFERENCES (D-7362): every `train #<n>` a comment names is a
+  // candidate, and one that is an issue, a missing number or unreadable is
+  // only a failed candidate — the search goes on through every reference and
+  // then the search fallback.
+  it('a newer stray `train #77` that is no PR, after the real `Landed in train #50`, still proves', () => {
+    const { train } = trainLanded();
+    h.ghView(42, { comments: [{ body: 'Landed in train #50.' }, { body: 'see train #77 for the follow-up' }] });
+    h.ghViewFail(77);
+    const a = audit();
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(a.merge.proof).toBe('train');
+    expect(a.pr.mergeCommit).toBe(train);
+  });
+
+  it('a newer stray `train #78` gh answers with no pull request at all still proves the real one', () => {
+    const { train } = trainLanded();
+    h.ghView(42, { comments: [{ body: 'Landed in train #50.' }, { body: 'train #78' }] });
+    h.ghView(78, {});
+    const a = audit();
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(a.pr.mergeCommit).toBe(train);
+  });
+
+  it('two newer comments naming CLOSED trains still find the real one', () => {
+    const { tip, train } = trainLanded();
+    h.ghView(42, { comments: [{ body: 'Landed in train #50.' }, { body: 'train #60' }, { body: 'train #61' }] });
+    for (const n of [60, 61]) {
+      h.ghView(n, trainRow(n, 'd'.repeat(40), [[42, tip]], { state: 'CLOSED', mergedAt: null, mergeCommit: null }));
+    }
+    const a = audit();
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(a.pr.mergeCommit).toBe(train);
+  });
+
+  it('a reference that cannot be read is a failed candidate, not gh-unreadable, once the search answered', () => {
+    const { wt } = trainLanded();
+    h.ghView(42, { comments: [{ body: 'Landed in train #77.' }] });
+    h.ghViewFail(77);
+    h.ghSearch([]);
+    const a = refusal(wt);
+    expect(a.verdict).toBe('not-merged');
+    expect(a.detail).toContain('#77');
+  });
+
   it('REFUSES tree-differs when the branch carries a commit the train did not land', () => {
     const { wt } = trainLanded();
     fs.writeFileSync(path.join(wt, 'later.txt'), 'not in the train\n');

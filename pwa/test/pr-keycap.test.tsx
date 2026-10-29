@@ -123,6 +123,8 @@ describe('the accessible name carries the whole sentence', () => {
     [pr({ phase: 'draft' }), /: draft\./i],
     [pr({ phase: 'open' }), /: open\./i],
     [pr({ phase: 'closed' }), /commits are not on main/i],
+    // A train label the train record did not prove (D-7362): closed, and why.
+    [pr({ phase: 'closed', reason: 'train-unproven' }), /labelled as landed in a merge train, but no merged train PR lists it/i],
   ])('%#', (state, re) => {
     render(<PrKeycap pr={state} onOpen={() => {}} />);
     expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(re);

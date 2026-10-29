@@ -38,6 +38,7 @@ gh() {
       if [[ -f "$HOME/rules-\${2##*/}.json" ]]; then cat "$HOME/rules-\${2##*/}.json"; elif [[ -f "$HOME/rules.json" ]]; then cat "$HOME/rules.json"; fi; return "$rc" ;;
     'api repos/o/r/branches/'*) if [[ -f "$HOME/branch-\${2##*/}.json" ]]; then cat "$HOME/branch-\${2##*/}.json"; elif [[ -f "$HOME/branch.json" ]]; then cat "$HOME/branch.json"; fi; return 0 ;;
     'pr list') echo '[]'; return 0 ;;
+    'pr view') [[ -f "$HOME/view-$3.json" ]] && { cat "$HOME/view-$3.json"; return 0; }; return 1 ;;
   esac
   return 1
 };
@@ -410,11 +411,50 @@ describe('the required contexts', () => {
   });
 
   it.each([
-    ['CLOSED', 'wontfix', false], ['CLOSED', 'landed-in-train', true], ['MERGED', 'landed-in-train', false],
+    ['CLOSED', 'wontfix', false], ['CLOSED', 'landed-in-train', false], ['MERGED', 'landed-in-train', false],
     ['OPEN', 'landed-in-train', false],
-  ])("GitHub's state word passes through raw: %s carrying %s, landedInTrain %s", (state, label, landed) => {
+  ])("GitHub's state word passes through raw: %s carrying %s, with no train record, landedInTrain %s", (state, label, landed) => {
+    // A label with no train record behind it is never a landing (D-7362):
+    // this fixture's gh names no train, so the merged notice cannot fire.
     expect(one([], { state, labels: { nodes: [{ name: label }] } }))
       .toMatchObject({ bound: true, state, landedInTrain: landed });
+  });
+
+  // RED-FIRST ROWS (D-7362): `landedInTrain` is ccd's proof from the train
+  // record, the same one `pr-state` and the reap read, so the merged notice
+  // (`landingLineAct`) fires only for a proven landing.
+  const TRAIN_MERGE = 'e'.repeat(40);
+  const labelled = (train: (t0: string) => Ctx): Record<string, any> => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [], { state: 'CLOSED', labels: { nodes: [{ name: 'landed-in-train' }] } })]));
+    emptyRules();
+    put('view-41.json', { comments: [{ body: 'Landed in train #50.' }] });
+    put('view-50.json', train(t0));
+    return landing('demo', 'demo-quiet-basin:41').lines[0]!;
+  };
+  const trainPr = (members: Array<[number, string]>, over: Ctx = {}): Ctx => ({
+    number: 50, state: 'MERGED', mergedAt: '2026-07-21T08:59:00Z', mergeCommit: { oid: TRAIN_MERGE },
+    baseRefName: 'main', isCrossRepository: false,
+    body: `<!-- ccrc-train v1\n${members.map(([n, sha]) => `member #${n} ${sha}`).join('\n')}\n-->\n`, ...over,
+  });
+
+  it('a labelled PR the train record proves is landedInTrain', () => {
+    expect(labelled((t0) => trainPr([[41, t0]]))).toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: true });
+  });
+
+  it('a labelled PR whose train PR is CLOSED unmerged is not landedInTrain', () => {
+    expect(labelled((t0) => trainPr([[41, t0]], { state: 'CLOSED', mergedAt: null, mergeCommit: null })))
+      .toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false });
+  });
+
+  it('a labelled PR the train lists at a different sha is not landedInTrain', () => {
+    expect(labelled(() => trainPr([[41, 'c'.repeat(40)]])))
+      .toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false });
+  });
+
+  it('keeps no proof: the landing read writes nothing under $REG', () => {
+    labelled((t0) => trainPr([[41, t0]]));
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.train-proofs'))).toBe(false);
   });
 
   it('asks GitHub for the labels it reads', () => {

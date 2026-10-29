@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
+import { GH_STUB, makePrHarness, mergedRow, trainBlock, trainComment, trainRow, type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
 import { createHash } from 'node:crypto';
@@ -1540,19 +1540,75 @@ describe('a PR closed as landed in a merge train', () => {
   const landed = (label: string, over: Record<string, unknown> = {}): Record<string, unknown> =>
     ({ state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z',
        labels: [{ name: label }], ...over });
+  const TRAIN_MERGE = 'e'.repeat(40);
+  /** The train record that proves #42 at `tip`: the train's comment on #42 and train #50, MERGED, listing it. */
+  const proven = (tip: string, over: Record<string, unknown> = {}): void => {
+    h.ghView(42, trainComment(50));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, tip]], over));
+  };
 
-  it('is merged, and persists the phase and number the archive trigger reads', () => {
+  it('is merged when the train record proves it, and persists the phase and number the archive trigger reads', () => {
     // ws-archive files `merged:#N` off exactly these two registry fields
     // (ccd-archive.test.ts pins that half), and the server's merged notice and
     // cleanup bucket read the same phase off the line.
     const { tip } = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip);
     const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
     expect(o.phase).toBe('merged');
+    expect(o.reason).toBeNull();
     expect(o.number).toBe(42);
     expect(o.rows[0].landedInTrain).toBe(true);
+    expect(o.rows[0].trainUnproven).toBe(false);
     expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
     expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+    const s = phaseFor(o as never);
+    expect([s.phase, s.reason]).toEqual(['merged', null]);
+  });
+
+  // RED-FIRST ROWS (D-7362): the label is a claim, and a claim the train
+  // record does not back is closed — for the run close and the archive
+  // (`prphase`, `phaseFor`), and for the merged notice (`pr-landing`'s rows
+  // in ccd-pr-landing.test.ts).
+  it.each([
+    ['the train PR is CLOSED unmerged', { state: 'CLOSED', mergedAt: null, mergeCommit: null }],
+    ['the train PR lists the member at a different sha', { body: trainBlock([[42, 'c'.repeat(40)]]) }],
+  ])('a labelled PR is NOT merged when %s: closed, train-unproven, on both sides', (_n, over) => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip, over);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('closed');
+    expect(o.reason).toBe('train-unproven');
+    expect(o.rows[0].landedInTrain).toBe(false);
+    expect(o.rows[0].trainUnproven).toBe(true);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('closed');
+    const s = phaseFor(o as never);
+    expect([s.phase, s.reason]).toEqual(['closed', 'train-unproven']);
+  });
+
+  it('a label on a PR no train names is closed, train-unproven', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, { comments: [] });
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['closed', 'train-unproven']);
+  });
+
+  it('the --project sweep reads only kept proofs: closed before any proof, merged once a --session read proved it', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip);
+    const sweep = (): Record<string, any> =>
+      line(h.sh(`${GH_STUB} cmd_pr_state --project demo`).split('\n').find((l) => l.includes('"rows"'))!);
+    const before = sweep();
+    expect([before.phase, before.reason]).toEqual(['closed', 'train-unproven']);
+    expect(h.ghCalls().some((c) => c.startsWith('pr view')), 'the sweep spends no gh call on a train').toBe(false);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase).toBe('merged');
+    const calls = h.ghCalls().length;
+    expect(sweep().phase).toBe('merged');
+    expect(h.ghCalls().slice(calls).some((c) => c.startsWith('pr view'))).toBe(false);
   });
 
   it('stays closed without the label, and annotates no other state', () => {
@@ -1563,38 +1619,48 @@ describe('a PR closed as landed in a merge train', () => {
     ]);
     const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
     expect(o.phase).toBe('closed');
+    expect(o.reason).toBeNull();
     expect(o.rows.map((r: Record<string, unknown>) => r.landedInTrain)).toEqual([false, false]);
+    expect(o.rows.map((r: Record<string, unknown>) => r.trainUnproven)).toEqual([false, false]);
     expect(h.reg('demo-quiet-basin', 'prphase')).toBe('closed');
   });
 
   it('reads the label the deployment names, and only that one', () => {
     const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    proven(tip);
     h.ghRows([mergedRow({ headRefOid: tip, ...landed('shipped') })]);
     expect(line(h.sh(`export CCD_LANDED_LABEL=shipped; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase)
       .toBe('merged');
     h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
-    expect(line(h.sh(`export CCD_LANDED_LABEL=shipped; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase)
-      .toBe('closed');
+    const o = line(h.sh(`export CCD_LANDED_LABEL=shipped; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['closed', null]);
   });
 
   it('reads no label at all when the deployment sets it empty', () => {
     const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    proven(tip);
     h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
     const o = line(h.sh(`export CCD_LANDED_LABEL=; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
     expect(o.phase).toBe('closed');
     expect(o.rows[0].landedInTrain).toBe(false);
   });
 
-  it('hands the reap a landed PR as merged, with `landed` where a merge commit would be', () => {
+  it('hands the reap a proven PR as merged, with `landed` where a merge commit would be', () => {
     // A closed member has no `mergeCommit.oid`, so `pick` names the one fact
-    // that stands in for it: the reap proves the work against origin's
-    // default branch instead (`_ws_reap_eval`'s rung 2), never against an oid
-    // gh did not name. The cleanup offer would otherwise be a dead end.
+    // that stands in for it, and only for a member `_pr_train_proofs` proved:
+    // `_ws_reap_eval` takes the train PR's merge commit from the same proof.
     const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
     const rows = JSON.stringify([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
     fs.writeFileSync(path.join(h.home, 'rows.json'), rows);
-    expect(h.sh(`_pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
+    const proofs = `_PR_TRAIN_PROOFS="42 ${tip} 50 ${TRAIN_MERGE}"`;
+    expect(h.sh(`${proofs} _pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
       .toBe(`42\thttps://github.com/o/r/pull/42\tlanded\t${tip}`);
+    // The proof names the member AT ITS HEAD: a proof for another head is none.
+    const other = `_PR_TRAIN_PROOFS="42 ${'c'.repeat(40)} 50 ${TRAIN_MERGE}"`;
+    expect(h.sh(`${other} _pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
+      .toBe('!not-merged train 42');
+    expect(h.sh(`_pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
+      .toBe('!not-merged train 42');
   });
 
   it('still refuses the reap `not-merged` for a closed PR without the label', () => {
@@ -1665,10 +1731,12 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     ['closed, another label', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
       closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'wontfix' }] }, 'closed', null],
     // A merge train lands the PR's work through a train PR and then CLOSES
-    // the member with the train label: GitHub never says MERGED for it, and
-    // the archive trigger and the cleanup offer must still fire.
-    ['closed, landed in a train', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
-      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'merged', null],
+    // the member with the train label: GitHub never says MERGED for it. The
+    // label is only a claim, and with no train record behind it (this
+    // fixture's gh names no train) the PR is closed, and says why (D-7362);
+    // the proven half is in the describe above.
+    ['closed, labelled, no train record behind it', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'closed', 'train-unproven'],
     // The label never stands in for the binding: a fork's labelled PR binds
     // to nothing, and an OPEN PR carrying the label is still open.
     ['closed, landed in a train, a fork', { state: 'CLOSED', mergedAt: null, mergeCommit: null, isCrossRepository: true,
