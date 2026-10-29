@@ -104,7 +104,7 @@ describe('the auth-dead writers region (D-7049)', () => {
   const defOf = (src: string, name: string): string | null => ccdFunctionDefinition(src, name);
 
   it('is a row of the one engine, beside the hook\'s, and the module names both', () => {
-    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead']);
+    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead', 'apicap']);
     expect(AD.begin).toBe(AUTHDEAD_REGION_BEGIN);
     expect(AD.end).toBe(AUTHDEAD_REGION_END);
     expect(regionOf(hook)).toBe(REGIONS[0]);
