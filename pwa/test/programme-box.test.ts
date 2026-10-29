@@ -6,7 +6,8 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet } from '../src/fleet/nestFleet';
 import {
-  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, movementWords, programmeBoxes, type BoxState, type ProgrammeBoxView,
+  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, foldedCard, movementWords, programmeBoxes, rankBoxes,
+  type BoxState, type ProgrammeBoxView,
 } from '../src/fleet/programmeBox';
 import { HOUR, MIN, NOW, asking, run, sess } from './rollupFixture';
 
@@ -266,6 +267,24 @@ describe('boxOrder', () => {
       ranked('needs', NOW - MIN, 'n'),
     ];
     expect([...list].sort(boxOrder).map((b) => b.view.coordinatorId)).toEqual(['n', 's', 'p-old', 'm-older', 'm-recent']);
+  });
+
+  it('is the order rankBoxes gives the card: a box that needs the operator first, whatever the tree\'s order', () => {
+    const quiet = view({ coordinatorId: 'quiet' });
+    const asks = view({ coordinatorId: 'asks', children: [{ kind: 'session', depth: 1, session: kid('w1', asking()) }] });
+    expect(rankBoxes([quiet, asks], null, null, false).map((b) => [b.view.coordinatorId, b.state]))
+      .toEqual([['asks', 'needs'], ['quiet', 'moving']]);
+  });
+
+  it('keeps, on a folded card, the boxes that need the operator or have stalled, and counts the rest', () => {
+    const ranked = [
+      { state: 'needs' as const, view: view({ coordinatorId: 'a' }) },
+      { state: 'moving' as const, view: view({ coordinatorId: 'b' }) },
+    ];
+    const lone = nestFleet([sess('l1', 'project-c'), sess('l2', 'project-c')], []);
+    const f = foldedCard(ranked, [], lone);
+    expect(f.keep.map((b) => b.view.coordinatorId)).toEqual(['a']);
+    expect(f.more).toBe(3);
   });
 
   it('keeps the input order when no move is known', () => {
