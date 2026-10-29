@@ -6383,7 +6383,7 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     }
   });
 
-  // wave 29 (D-6981): the ccd-* sweeps read six settings through ccrc's reader too, so the check reports them like
+  // wave 29 (D-6981): the ccd-* sweeps read four settings through ccrc's reader too, so the check reports them like
   // ccrc's own; on a server-role box, where no sweep timer runs, a sweep setting the file sets says so (ruling 4).
   const roleBox = (prefix: string, role: string, lines: string[]): string => {
     const home = mkTmp(prefix);
@@ -6395,26 +6395,26 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
   };
 
   it('W29-D1: a sweep\'s setting is reported like ccrc\'s', () => {
-    const r = runBs(roleBox('ccrc-doctor-bs-sweep-', 'fleet', ['CCRC_GRAPH_BUDGET=4']));
-    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_GRAPH_BUDGET=4; not set there/);
+    const r = runBs(roleBox('ccrc-doctor-bs-sweep-', 'fleet', ['CCRC_USAGE_SWEEP_DAYS=4']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_USAGE_SWEEP_DAYS=4; not set there/);
     expect(verdict(r), 'a fleet box runs the sweeps').not.toMatch(/server-role/);
     expect(r.code).toBe(0);
-    const w = runBs(roleBox('ccrc-doctor-bs-sweep-export-', 'fleet', ['export CCRC_GRAPH_BUDGET=4']));
-    expect(w.stdout).toMatch(/^WARN box-settings: CCRC_GRAPH_BUDGET cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    const w = runBs(roleBox('ccrc-doctor-bs-sweep-export-', 'fleet', ['export CCRC_USAGE_SWEEP_DAYS=4']));
+    expect(w.stdout).toMatch(/^WARN box-settings: CCRC_USAGE_SWEEP_DAYS cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
     expect(w.code).toBe(2);
   });
 
   it('W29-D3: an empty sweep setting on a server-role box names its default and the inactive sweeps', () => {
-    const r = runBs(settingsBox('ccrc-doctor-bs-sweep-empty-', ['CCRC_GRAPH_BUDGET=']));
+    const r = runBs(settingsBox('ccrc-doctor-bs-sweep-empty-', ['CCRC_USAGE_SWEEP_DAYS=']));
     expect(verdict(r), r.stdout + r.stderr).toMatch(
-      /^PASS box-settings: the box's ccrc.env sets CCRC_GRAPH_BUDGET= \(empty: the default\) \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
+      /^PASS box-settings: the box's ccrc.env sets CCRC_USAGE_SWEEP_DAYS= \(empty: the default\) \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
     expect(r.code).toBe(0);
   });
 
   it('W29-D2: on a server-role box a sweep setting is still reported, and says the sweeps do not run there', () => {
-    const r = runBs(settingsBox('ccrc-doctor-bs-sweep-server-', ['CCRC_GRAPH_BUDGET=4', 'CCRC_BACKUP_KEEP=5']));
+    const r = runBs(settingsBox('ccrc-doctor-bs-sweep-server-', ['CCRC_USAGE_SWEEP_DAYS=4', 'CCRC_BACKUP_KEEP=5']));
     expect(verdict(r), r.stdout + r.stderr).toMatch(
-      /^PASS box-settings: the box's ccrc.env sets CCRC_BACKUP_KEEP=5, CCRC_GRAPH_BUDGET=4 \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
+      /^PASS box-settings: the box's ccrc.env sets CCRC_BACKUP_KEEP=5, CCRC_USAGE_SWEEP_DAYS=4 \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
     expect(r.code).toBe(0);
   });
 });

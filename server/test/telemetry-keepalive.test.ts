@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 
 /** The sweep settings `_ccrc_knob` reads (wave 29): a shell export of one must not move a row, so none is inherited. */
-const SWEEP_SETTINGS = ['CCRC_GRAPH_BUDGET', 'CCRC_GRAPH_MAX_WORKERS', 'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT',
+const SWEEP_SETTINGS = ['CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT',
   'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS'];
 const inherited = (): NodeJS.ProcessEnv => {
   const env = { ...process.env };

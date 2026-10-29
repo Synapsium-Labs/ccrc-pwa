@@ -1310,8 +1310,8 @@ reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more 
 containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
-way as the rest; a value that is not its shape keeps its default and warns. The fleet box's ccd-* sweeps read their settings the
-same way (wave 29, D-6981): `CCRC_GRAPH_BUDGET` and `CCRC_GRAPH_MAX_WORKERS` (`ccd-graph-sweep`), `CCRC_KEEPALIVE_MODEL`,
+way as the rest; a value that is not its shape keeps its default and warns.
+Two of the fleet box's ccd-* sweeps read their settings the same way (wave 29, D-6981): `CCRC_KEEPALIVE_MODEL`,
 `CCRC_KEEPALIVE_PROMPT` and `CCRC_KEEPALIVE_FRESH` (`ccd-telemetry-keepalive`) and `CCRC_USAGE_SWEEP_DAYS`
 (`ccd-usage-sweep`). Their units have no shell and no `EnvironmentFile=`, so each sweep sources
 `ccd/lib/ccrc-settings.sh`, ccrc's own reader generated from `ccd/ccrc` and placed at `~/.local/libexec/ccrc`, and a line
@@ -6062,8 +6062,7 @@ project-graph-store class's own ruling).
 
 **Bumping the pin.** Edit `GRAPHIFY_PIN` in `ccd/ccrc`, run `ccrc install` (or `update`) on the fleet
 box, and expect every tree to re-stamp stale on the next sweep pass — a full-fleet rebuild over
-roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass; a `~/.ccrc/ccrc.env` line, or the
-environment). Re-verify the
+roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). Re-verify the
 shrink-refusal literal the build discriminator greps for (the comment at its check in
 `ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
 the message has already moved once between minor versions.

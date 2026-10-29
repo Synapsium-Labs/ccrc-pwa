@@ -4,7 +4,7 @@
 // THE SCOPE, STATED. It reads `ccd/ccrc`, `ccd/ccrc-doctor-checks` (which
 // `cmd_doctor` sources) and `deploy/ccrc.env.example`, plus README's
 // `**ccrc's own settings.**` paragraph. Since wave 29 (D-6981) the ccd-* sweeps
-// read six of the settings through the same reader, sourced from
+// read four of the settings through the same reader, sourced from
 // ccd/lib/ccrc-settings.sh, so the defaults (C2) and the takers (C4) are read
 // from `SIBLING_FILES` too; the W29 describe below reads those files whole and
 // the node helpers ccrc runs. C6 alone also knows `CCRC_SIGSTORE_TRUSTED_ROOT`
@@ -528,8 +528,10 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
 
 // ── W29 (D-6982): the ccd-* sweeps and the node helpers ───────────────────────────────────────────────────────────
 // Wave 24 read ccd/ccrc and the doctor's checks; the sweeps sourced nothing of ccrc's, so a CCRC_ name they read was
-// environment-only by construction. Since wave 29 three of them read six settings through ccd/lib/ccrc-settings.sh,
-// and this describe holds the rest of what they and the node helpers read to a reason. Its scope: SIBLING_FILES (the
+// environment-only by construction. Since wave 29 two of them read four settings through ccd/lib/ccrc-settings.sh,
+// and this describe holds the rest of what they and the node helpers read to a reason. ccd-graph-sweep is not one of
+// them (D-7500): the graphify r2 wave gives the graph settings their own reader and meaning, so its two operator
+// numbers stay environment-only here until that wave moves them. Its scope: SIBLING_FILES (the
 // bash executables `_inst_bins` places, derived, plus ccd/ccrc-models-probe) and HELPER_FILES (the tracked `.mjs`
 // files ccd/ccrc names in its code). WHAT IT DOES NOT CATCH, as C5 and C6 do not: a bare `$NAME` read with no
 // default, a node read through destructuring or `process.env[k]` with `k` a variable, and a python helper's reads.
@@ -538,6 +540,8 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
  *  every other CCRC_ name a sibling reads from the environment outside the reader. Names wave 24's ENV_ONLY already
  *  classes (the health timeout, the cgroup and proc roots) are not repeated here. */
 const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
+  CCRC_GRAPH_BUDGET: { cls: 'tuning', why: 'ccd-graph-sweep stops a pass after this many tree rebuilds, environment-only until the graphify r2 wave reads it through ccrc\'s reader with its new meaning (D-7500).' },
+  CCRC_GRAPH_MAX_WORKERS: { cls: 'call-bound', why: 'ccd-graph-sweep hands one engine build this many workers, environment-only until the graphify r2 wave reads it through ccrc\'s reader (D-7500).' },
   CCRC_GRAPH_BUILD_TIMEOUT: { cls: 'call-bound', why: 'ccd-graph-sweep bounds one engine build with it (`timeout` around `graphify update`), overridable so a test need not wait out 600 s.' },
   CCRC_GRAPH_STALE_ESCAPE_COMMITS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a tree this many commits behind whatever its idle gate says, a policy number its header does not offer an operator.' },
   CCRC_GRAPH_STALE_ESCAPE_SECS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a graph this old whatever its idle gate says, a policy number its header does not offer an operator.' },
@@ -701,7 +705,7 @@ describe('W29: the ccd-* sweeps read their settings through the shared reader fi
       if (lines.filter((l) => l === LOADER[0]).length !== 1 || lines.filter((l) => l === LOADER[1]).length !== 1) faults.push(`${f}: the loader's two lines, byte for byte, once each`);
       else if (lines[at + 1] !== LOADER[1] || at + 1 >= first) faults.push(`${f}: the loader is not two adjacent lines above the first _ccrc_knob`);
     }
-    expect(readers, 'non-vacuity: three sweeps read settings').toBe(3);
+    expect(readers, 'non-vacuity: two sweeps read settings (D-7500: not the graph sweep)').toBe(2);
     expect(faults).toEqual([]);
   });
 
@@ -724,14 +728,6 @@ describe('W29: the ccd-* sweeps read their settings through the shared reader fi
     const hits: string[] = [];
     for (const f of SIBLING_FILES) for (const l of SIBLING_CODE[f]!.split('\n')) if (ASSIGN.test(l)) hits.push(`${f}: ${l.trim()}`);
     expect(hits).toEqual([]);
-  });
-
-  it('W29-S8: the example\'s CCRC_GRAPH_BUDGET block names its unit\'s TimeoutStartSec', () => {
-    const t = /^TimeoutStartSec=([0-9]+)$/m.exec(read('deploy/systemd/ccd-graph-sweep.service'))?.[1];
-    expect(t, 'the unit states a TimeoutStartSec').toBeDefined();
-    const blocks = exampleBlocks('CCRC_GRAPH_BUDGET');
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toContain(`${t} s`);
   });
 
   it('W29-S9: the doctor\'s list of the sweeps\' settings is the set the sweeps take', () => {

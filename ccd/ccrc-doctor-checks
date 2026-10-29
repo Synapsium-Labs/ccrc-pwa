@@ -10759,13 +10759,13 @@ _check_snapshot-posture() {
 # the whole file — gives the model's own remedy, BUE_FIX (the file and line numbers, never its bytes), once however many
 # settings it refused; the plain-line clause stays for any other refusal. Both are reset per setting: the reader sets
 # them only when it asks the model, so a stale one would pin a cause on a setting it never reached.
-# The fleet box's ccd-* sweeps read six of the settings through the same reader (wave 29, D-6981), and the check reports
+# The fleet box's ccd-* sweeps read four of the settings through the same reader (wave 29, D-6981), and the check reports
 # them like the rest, on every role; on a box whose ccrc.env records CCRC_ROLE=server, where no sweep timer runs, a sweep
 # setting the file sets says so (ruling 4). `sweeps` names them; ccrc-settings-census.test.ts holds it equal to the
 # settings the sweeps' own `_ccrc_knob` calls take.
 _check_box-settings() {
   local k v pre set="" unset="" why="" fix="" other=0 none="none of ccrc's settings" role=""   # a `'` inside "${set:-…}" would open a quote in bash
-  local sweeps=" CCRC_GRAPH_BUDGET CCRC_GRAPH_MAX_WORKERS CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS "
+  local sweeps=" CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS "
   [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   local plain="rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), or make the file itself readable when it cannot be read or scanned"
   for k in "${CCRC_SETTINGS[@]}"; do

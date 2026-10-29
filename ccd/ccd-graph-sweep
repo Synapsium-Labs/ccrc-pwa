@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 # ccd-graph-sweep — keep one AST graph fresh per git tree (spec §C). Serialized
-# oneshot driven by ccd-graph-sweep.timer. Its two operator settings,
-# CCRC_GRAPH_BUDGET and CCRC_GRAPH_MAX_WORKERS, are read as ccrc reads its own
-# (wave 29, D-6981): a set environment, else a line in ~/.ccrc/ccrc.env, else the
-# default, so a line there survives a reboot. Every other knob is
-# env-overridable for the test harness (CCRC_DOCTOR_GH_TIMEOUT precedent).
-# HOME-derived roots, no override — HOME is the harness's isolation boundary,
-# exactly as in ccd.
+# oneshot driven by ccd-graph-sweep.timer; every knob env-overridable for the
+# test harness (CCRC_DOCTOR_GH_TIMEOUT precedent). HOME-derived roots, no
+# override — HOME is the harness's isolation boundary, exactly as in ccd.
 set -uo pipefail
 
 REG="$HOME/.cc-sessions"
@@ -19,22 +15,8 @@ CENSUS="$HOME/.ccrc/graph-sweep.json"
 PAUSE="$HOME/.ccrc/graph-sweep-paused"
 LOCK="$HOME/.ccrc/graph-sweep.lock"
 : "${CCRC_GRAPH_BUILD_TIMEOUT:=600}"
-# The settings, through ccrc's one reader (wave 29, D-6981): this unit has no shell and no EnvironmentFile=, so the file
-# is read by `_ccrc_knob`, sourced from ccd/lib/ccrc-settings.sh beside this script (the repository's suites) or where
-# `_inst_bins` places it. A value it cannot read, or one out of range, stops the pass here, before the lock, exit 1, and
-# never runs a default: the line says which setting, where it came from and what was refused.
-_settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib" ] || _settings_lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"
-. "$_settings_lib" 2>/dev/null && declare -F _ccrc_knob >/dev/null 2>&1 || { echo "${0##*/}: the settings reader is missing or broken (~/.local/libexec/ccrc/ccrc-settings.sh) — this pass did nothing; 'ccrc update --force' places it" >&2; exit 1; }
-_gs_refuse() {   # <NAME> <lowest> <highest>: the value shown at most 32 bytes, a non-printable byte as `?`
-  local v="${!1}" src="~/.ccrc/ccrc.env"
-  [ "$KNOB_FROM" != environment ] || src="the environment"
-  local LC_ALL=C; v="${v:0:32}"; v="${v//[^[:print:]]/?}"
-  echo "graph-sweep: $1 must be a whole number from $2 to $3 — got '$v', as set in $src; nothing was swept" >&2; exit 1
-}
-_ccrc_knob CCRC_GRAPH_BUDGET 8 && CCRC_GRAPH_BUDGET="$KNOB" || { echo "graph-sweep: $KNOB_WHY — nothing was swept" >&2; exit 1; }
-[[ "$CCRC_GRAPH_BUDGET" =~ ^[0123456789]{1,3}$ ]] || _gs_refuse CCRC_GRAPH_BUDGET 0 999
-_ccrc_knob CCRC_GRAPH_MAX_WORKERS 4 && CCRC_GRAPH_MAX_WORKERS="$KNOB" || { echo "graph-sweep: $KNOB_WHY — nothing was swept" >&2; exit 1; }
-[[ "$CCRC_GRAPH_MAX_WORKERS" =~ ^[123456789][0123456789]?$ ]] || _gs_refuse CCRC_GRAPH_MAX_WORKERS 1 99
+: "${CCRC_GRAPH_BUDGET:=8}"
+: "${CCRC_GRAPH_MAX_WORKERS:=4}"
 : "${CCRC_GRAPH_STALE_ESCAPE_COMMITS:=20}"
 : "${CCRC_GRAPH_STALE_ESCAPE_SECS:=21600}"
 
