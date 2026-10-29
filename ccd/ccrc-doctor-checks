@@ -209,7 +209,7 @@ CCRC_DOCTOR_CHECKS=(
   build
   provenance
   fleet
-  memory
+  memory test-slice   # one line, as `flock timeout`: _check_test-slice follows _check_scopes
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
   models codex docs history secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   # ten entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), update-sweep and delegation-hooks before it, each pinned; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups checks (A11b) after them
 )
@@ -1205,6 +1205,42 @@ _check_scopes() {
   for b in "${bad[@]}"; do detail="${detail}${detail:+; }${b}"; done
   _dr_warn scopes "$detail" \
     "that scope is over its MemoryHigh and the kernel is throttling every process in it, the session's own agent included — find the workload inside it (ps against the workspace path) and stop it; do NOT raise the cap, it is what keeps one pane from stalling the whole box"
+  return 2
+}
+
+# ── test-slice (D-7298) ───────────────────────────────────
+# WHERE `ccrc test` RUNS, AND HOW FULL ITS QUEUE IS. `ccrc test` puts every test
+# and typecheck in `ccrctests.slice` and holds heavy runs in a fleet-wide
+# queue (ccd/ccrc-test's header). This check reports the slice's LIVE memory
+# against its LIVE cap (what the user manager enforces now, never the unit
+# file's text), its swap cap, CPU and IO weights and CPU quota, and how many
+# heavy slots are held and how many runs wait. The numbers come from
+# `ccrc-test --status`, the queue's own reader, so the queue has one owner.
+# WARN, never FAIL, `_check_scopes`' reason: `cmd_install` returns doctor's
+# code, and a slice the manager has not reloaded yet is a runtime fact. A
+# missing unit file WARNs too: until it is placed every `ccrc test` run is
+# uncontained (it degrades, saying so, and still queues), never refused, so a
+# session the hook sends there always has a way to run its tests.
+_check_test-slice() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_skip test-slice "the test slice is a systemd mechanism, and this box runs launchd"
+    return 3
+  fi
+  if ! _have_systemctl; then
+    _dr_skip test-slice "systemctl is not on PATH, so the test slice cannot be read"
+    return 3
+  fi
+  local unit="$HOME/.config/systemd/user/ccrctests.slice" line rc=0
+  if [ ! -f "$unit" ]; then
+    _dr_warn test-slice "~/.config/systemd/user/ccrctests.slice is missing, so ccrc test runs every run uncontained" \
+      "ccrc update (or ccrc install) places it; then systemctl --user daemon-reload"
+    return 2
+  fi
+  line=$("${BASH:-bash}" "$CCRC_HERE/ccrc-test" --status 2>/dev/null) || rc=$?   # the running bash: a contained PATH may hold none
+  line="${line%%$'\n'*}"
+  if [ "$rc" -eq 0 ] && [ -n "$line" ]; then _dr_pass test-slice "$line"; return 0; fi
+  _dr_warn test-slice "${line:-ccrc-test --status answered nothing (exit $rc)}" \
+    "systemctl --user daemon-reload, then re-run; if it persists, ccrc update (or ccrc install) re-places ~/.config/systemd/user/ccrctests.slice"
   return 2
 }
 

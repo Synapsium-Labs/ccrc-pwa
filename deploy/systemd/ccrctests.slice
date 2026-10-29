@@ -1,0 +1,46 @@
+# ccrctests.slice — where `ccrc test` (ccd/ccrc-test) runs every test and
+# typecheck on a fleet box, as one transient scope per run
+# (D-7298). Installed by `ccrc install`/`ccrc update`
+# (`_inst_units`) and by deploy.sh's agent lane, on Linux only.
+#
+# WHY A SLICE OF ITS OWN. Test runs (vitest's workers, tests-inclusive tsc,
+# browser and mutation tests) ran in the sessions' own pane scopes, so twenty
+# sessions' tests competed with the sessions themselves and with ccrc-agent:
+# the box's load passed what the agent could answer in time, and the server
+# read the fleet box as unreachable. In this slice a run is held below every
+# session: the CPU and IO weights are a fifth of app.slice's (systemd's
+# default 100), the quota caps its CPU outright, and a run past the memory cap
+# is killed here by the cgroup-local OOM killer, without pushing the session
+# slice into reclaim.
+#
+# THE NAME HAS NO DASH ON PURPOSE. A dash in a slice name is nesting:
+# `ccrc-tests.slice` would sit inside an implicit `ccrc.slice` at the default
+# weight 100, and the weights below would compete only inside it, where the
+# test slice has no siblings, leaving tests an equal share against the whole
+# of app.slice. As `ccrctests.slice` it is top-level in the user manager, a
+# sibling of app.slice, which holds every session (app-claude\x2dsession.slice),
+# the tmux pane scopes and ccrc-agent, so its weights compete with all of them
+# at once (ccrc-test-wrapper.test.ts holds the name).
+#
+# These values are the DEFAULTS of ccrc's settings CCRC_TEST_SLICE_MEMORY_MAX,
+# CCRC_TEST_SLICE_SWAP_MAX, CCRC_TEST_SLICE_CPU_WEIGHT,
+# CCRC_TEST_SLICE_CPU_QUOTA and CCRC_TEST_SLICE_IO_WEIGHT
+# (deploy/ccrc.env.example). `ccrc test` applies the box's own values with
+# `systemctl --user set-property --runtime` before every run, so this file is
+# what a box gets after a reboot until its first run, and what an unset key
+# reads. They are no box's measurements: 6G and four CPUs suit a small box
+# and stay a small share of a large one. ccrc-test-wrapper.test.ts holds them
+# equal to `_test_knobs`' defaults in ccd/ccrc.
+#
+# NO MemoryHigh, EVER (#72, #84): an aggregate MemoryHigh throttles every
+# allocation in the slice with synchronous reclaim and kills nothing, which is
+# the freeze the session slice suffered twice. Only the hard MemoryMax bites.
+[Unit]
+Description=ccrc test runs (ccrc test)
+
+[Slice]
+MemoryMax=6G
+MemorySwapMax=1G
+CPUWeight=20
+CPUQuota=400%
+IOWeight=20
