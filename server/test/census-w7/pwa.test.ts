@@ -265,10 +265,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(sites, (s) => s.kind)).toEqual({ definition: 1, call: 3, 'answer-dead': 2 });
   });
 
-  it('runMatchers(): 4 inline comparisons, 7 map lookups, runForSession 7 calls, childRunsSeen 1', () => {
+  // Desktop-polish Task G2 added three: the programme box's own matches (fleetTree's `claimed` index, programmeBoxes'
+  // claim map, and rowRun's call of runForSession).
+  it('runMatchers(): 4 inline comparisons, 9 map lookups, runForSession 8 calls, childRunsSeen 1', () => {
     const sites = runMatchers();
-    held('runMatchers', sites, 19);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 4, lookup: 7, runForSession: 7, childRunsSeen: 1 });
+    held('runMatchers', sites, 22);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 4, lookup: 9, runForSession: 8, childRunsSeen: 1 });
   });
 
   // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which
