@@ -279,10 +279,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
 
   // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which
   // C7m takes. The ratchet is `rings/pwa-one-owner.test.ts`'s one-owner block.
-  it('requestPolls(): 1 hand-written request poll, HotFilesStrip (useFleetHealth is on usePoll, C7m)', () => {
+  it('requestPolls(): 0 hand-written request polls (HotFilesStrip and useFleetHealth are on usePoll, C7m)', () => {
     const sites = requestPolls();
-    held('requestPolls', sites, 1);
-    expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx']);
+    held('requestPolls', sites, 0);
+    expect(sites.map((s) => s.file)).toEqual([]);
   });
 
   // C7e (D-7183): EnvelopeSheet's busy comes from the answer lifecycle (Step 4), DialogSheet's writes are the
