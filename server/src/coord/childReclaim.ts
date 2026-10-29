@@ -2370,7 +2370,12 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
       }
       return null;
     },
-    [RETIRE_STEPS.offSwitchLast]: (read, _f, req) => childSpentOffSwitchJudge(childReclaimDisabledDetailOf(read.disabled, ' at the act'), req),
+    // Step 6 (D-7401, OA-C19 (a)): a raised pause is re-read nearest the argv, ahead of the off switch as 2b is ahead of
+    // 2b'. Only a `set` pause takes this arm (D-7229): an unmeasurable or rejected listing falls through to the off
+    // switch's own sentence, as before.
+    [RETIRE_STEPS.offSwitchLast]: (read, _f, req) => (read.pause === 'set'
+      ? childSpentDeferredOf(req, 'paused-at-server', `${CHILD_SPENT_PAUSE_RAISED} at the act`)
+      : childSpentOffSwitchJudge(childReclaimDisabledDetailOf(read.disabled, ' at the act'), req)),
   },
   evidence: [childReclaimSweepVerdict, childReclaimDecision],
 };
