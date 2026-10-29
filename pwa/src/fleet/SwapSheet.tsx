@@ -18,6 +18,7 @@ import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool } from '../lib/accounts';
 import { ApiError, SWAP_REFUSAL_TEXT, api, failedTo } from '../lib/api';
 import { projectPoolOf, splitByPool } from '../lib/pools';
+import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useAccountUsage } from './useProjectedHome';
 import { AccountRow } from './AccountRow';
@@ -354,7 +355,7 @@ export function SwapSheet({
 
 /** D-5242: wake a sleeping session (`POST /api/sessions/:id/ensure`), saying so only when it fails. */
 function wakeSession(id: string, project: string): void {
-  api.ensure(id).catch((err: unknown) => { toast(failedTo(`wake ${project}`, err), 'error'); });
+  ensureSession(id).catch((err: unknown) => { toast(failedTo(`wake ${project}`, err), 'error'); });
 }
 
 /** The swap route's refusal code a failure carries (`409 {error}`, D-5240), or `null` for any other failure. */
