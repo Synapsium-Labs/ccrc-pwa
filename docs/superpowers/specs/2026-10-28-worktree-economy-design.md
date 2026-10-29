@@ -50,14 +50,15 @@ unproven confirm for the whole programme.
 The stale age stays raise-only, as the retention spec ruled (§5.1, R-3a): the Settings row can raise it and never
 lower it below the box's floor. Whether to overturn that is the operator's call (§10, Q11; recommended no). The box
 does not report that floor today (`ccd caps` prints only verb and capability tokens), so reporting it is its own build
-step (§9 step 5, agent first). Until it lands, the row is read-only and shows the box floor as unknown, never a guess.
+step (§9 step 5, in both fleet modes). Until it lands, the row is read-only and shows the box floor as unknown, never
+a guess.
 
 Every age, count, size and path below has a neutral default. Every new destructive arm ships in shadow. **Every
-operator act is one control in Settings › Automation backed by one stored value on the server (R-6, R-7).** When a
-box process needs that value, the server hands it to the box through the path it already uses to change box state (a
-ccd verb run through the agent's ccd grant). No box env var, and no `$REG` marker, is a second way to set it. What
-stays in install config is only what the operator is never asked to decide: paths, walk and timeout bounds, and the
-safety floors that cap a row (§8, "One control, one source").
+operator act is one control in Settings › Automation backed by one stored value on the server (R-6, R-7).** When a box
+process needs that value, the server hands it to the box through the path it already uses to change box state (a
+`CCD_ARGV` call: the server's own ccd runner in local mode, the agent's ccd grant in remote mode). No box env var, and
+no `$REG` marker, is a second way to set it. What stays in install config is only what the operator is never asked to
+decide: paths, walk and timeout bounds, and the safety floors that cap a row (§8, "One control, one source").
 
 ## 1. The census
 
@@ -420,23 +421,27 @@ so it is the operator's call, not this spec's: §10, Q11.
   `CCRC_CHILD_STALE_IDLE_HOURS` and no `CCD_WS_STALE_IDLE_S`: neither side has a second knob for it.
 - **Raise-only.** The row's lower bound is the box's floor, `WS_STALE_IDLE_S` (604800 s, 168 hours, today). **The
   box does not report it today.** `cmd_caps` (`ccd/ccd`) prints only verb and capability tokens, and the shared parser
-  (`parseCcdCaps`, `shared/agent-protocol.ts`) keeps only identifier-shaped lines, so no value reaches the agent's
-  ready frame, its `caps` reply or the server. Reporting it is a build step of its own (§9 step 5: `ccd caps` prints
-  `limit stale-idle-s <n>`, agent first, with its own tests). Once the box reports it, the Ages route refuses a value
-  below it with `out-of-bounds`, and the row shows "not below 168 hours (the box's floor)". The server's own idle
-  check (`CHILD_STALE_IDLE_MS`, the server half of G2) reads the row, so the server half can be raised with the box
-  half and never falls below 168 hours either.
-- **Until the box reports its floor, the row is read-only.** While the box's reply carries no `stale-idle-s` limit
-  (before §9 step 5 lands, or with an older agent or ccd), or carries one the parser rejects, the row shows its stored
-  value (seeded 168 hours) and "box floor: unknown (this box does not report it)", and the Ages route refuses every
-  edit with `floor-unmeasured`. The server never guesses the floor, not even as today's 168 hours. It keeps sending
-  the stored value as `--stale-idle-s`, and the box's own check below stays the guard.
+  (`parseCcdCaps`, `shared/agent-protocol.ts`) keeps only identifier-shaped lines, so no value reaches the server in
+  either fleet mode: not through the local reader (`readLocalCcdCaps`, `server/src/localcaps.ts`, the default
+  `CCRC_FLEET=local`), and not through the agent's ready frame or `caps` reply (remote mode). Reporting it is a build
+  step of its own (§9 step 5: `ccd caps` prints `limit stale-idle-s <n>`, read by the one parser on both paths, with
+  tests for both modes). Once the box reports it, the Ages route refuses a value below it with `out-of-bounds`, and
+  the row shows "not below 168 hours (the box's floor)". The server's own idle check (`CHILD_STALE_IDLE_MS`, the
+  server half of G2) reads the row, so the server half can be raised with the box half and never falls below 168
+  hours either.
+- **Until the box reports its floor, the row is read-only.** In either fleet mode, while the server's caps record
+  carries no `stale-idle-s` limit (before §9 step 5 lands, a failed probe, or an older agent or ccd), or carries one
+  the parser rejects, the row shows its stored value (seeded 168 hours) and "box floor: unknown (this box does not
+  report it)", and the Ages route refuses every edit with `floor-unmeasured`. The server never guesses the floor, not
+  even as today's 168 hours. It keeps sending the stored value as `--stale-idle-s`, and the box's own check below
+  stays the guard.
 - **How the box gets it.** The stale arm already calls the box with `--stale <word>` on `ws-audit --reclaim` and
   `ws-reclaim`. `staleFlags` adds `--stale-idle-s <n>`, the row's value in seconds, to those same two calls, so the
   box checks the figure the server decided on, in the same call, and nothing has to be kept in step. This is the
-  existing path: a `CCD_ARGV` builder run through the agent's existing `ccd` grant for those verbs, whose new shape
-  `whitelist-subset.test.ts` enumerates. A call without the flag (an older server) acts at the box's floor, today's
-  value.
+  existing path: a `CCD_ARGV` builder, run by the server's own ccd runner in local mode and through the agent's
+  existing `ccd` grant for those verbs in remote mode, whose new shape `whitelist-subset.test.ts` enumerates; the
+  builder and the box's check are the same in both modes. A call without the flag (an older server) acts at the box's
+  floor, today's value.
 - **The box still refuses anything lower than its own floor.** `WS_STALE_IDLE_S` stays ccd's constant, raise-only, and
   becomes the floor that the flag can only raise. A figure below it is refused with `stale-idle-below-floor`, touching
   nothing, rather than acting early or silently acting at the floor. No install-config knob and no flag lowers it.
@@ -775,19 +780,21 @@ one stored value on the server. The rule has three parts.
   row shows, a value outside the row's bounds is refused with `out-of-bounds`, and the skills are forbidden to name the
   route.
 - **How the box gets a value it needs.** Through the path the server already uses to change box state: a `CCD_ARGV`
-  builder (`server/src/ccdargv.ts`) run through the agent's `ccd` grant, as the Cleanup pause card does today
+  builder (`server/src/ccdargv.ts`), run by the server's own ccd runner in local mode and through the agent's `ccd`
+  grant in remote mode, as the Cleanup pause card does today
   (`POST /api/coord/reclaim-pause` → `CCD_ARGV.reclaimPause` → `ccd reclaim-pause --state`). There are two shapes:
   - **On the call itself**, when only verbs the server calls read the value: the server adds it as a flag to the call
     it already makes. The stale floor uses this (`--stale-idle-s`, §5.1).
   - **A box copy**, when a box timer or a session-run verb reads it (the dependency cache: `ws-deps` and the tmp-sweep
-    arm). This is a new, small verb, `ccd box-setting --set <name> <value>`, in `reclaim-pause`'s shape: a fixed
-    name vocabulary in ccd (`deps-cache`, `deps-cache-max-gb`, `deps-cache-idle-days`), each value checked against
-    bounds in ccd, written atomically to one file per name under `$REG/box-settings/`, and echoed back. The server
-    sends it after every write of the row and again after every agent connect, so the box converges on the server's
-    value. `ccd box-setting --get` returns the box's copy, and the row shows "On the box: <value>" or "not yet on the
-    box". It is a disk-config verb, not a coordination mutation. It is added to the agent's grant
-    (`whitelist-subset.test.ts`) and to the CLAUDE.md SAFETY list, so only the server writes the box copy. A missing or
-    unreadable copy reads as the default that is today's behaviour (cache Off).
+    arm). This is a new, small verb, `ccd box-setting --set <name> <value>`, in `reclaim-pause`'s shape: a fixed name
+    vocabulary in ccd (`deps-cache`, `deps-cache-max-gb`, `deps-cache-idle-days`), each value checked against bounds
+    in ccd, written atomically to one file per name under `$REG/box-settings/`, and echoed back. The server sends it
+    after every write of the row and again whenever it starts talking to the box (each agent connect in remote mode;
+    server start in local mode, where there is no agent), so the box converges on the server's value. `ccd box-setting
+    --get` returns the box's copy, and the row shows "On the box: <value>" or "not yet on the box". It is a
+    disk-config verb, not a coordination mutation. It is added to the agent's grant for remote mode
+    (`whitelist-subset.test.ts`) and to the CLAUDE.md SAFETY list, so only the server writes the box copy. A missing
+    or unreadable copy reads as the default that is today's behaviour (cache Off).
 - **What stays in install config.** Only what the operator is never asked to decide and that limits rather than sets
   a row: paths, walk and timeout bounds, sample rates and safety floors. Each exists on one side only. Where one caps
   or gates a row, the box reports it in `ccd caps` and the row shows it read-only and will not go past it. **The box
@@ -806,7 +813,7 @@ Every value and switch in this spec, under that rule:
 | Parked-run line (R-3b.2) | Ages › Parked-run line | 168 h | server | not needed |
 | Abandon settle wait (R-3b.4) | Ages › Abandon settle wait | 30 min | server | not needed |
 | Failing-lane alert (R-0.5) | Ages › Failing-lane alert | 4 h | server | not needed |
-| Dependency cache: on, size cap, idle age (R-2) | Automation › Dependency cache | Off, 20 GB, 14 days | box (`ws-deps`, tmp sweep) | `ccd box-setting`, after each write and each agent connect |
+| Dependency cache: on, size cap, idle age (R-2) | Automation › Dependency cache | Off, 20 GB, 14 days | box (`ws-deps`, tmp sweep) | `ccd box-setting`, after each write and each agent connect (remote) or server start (local) |
 | Each switch and its age in the Shadow lanes table above | its Shadow lanes row | Shadow; ages as listed | server; D4's hook through the `runs list` reply | not needed |
 
 | Install config, one side only, never an operator act | Side | Why it is not a setting |
@@ -837,39 +844,68 @@ Each step is one PR. Every destructive arm ships in shadow first.
    sets the Stale archive row live (R-4a), after reading its shadow rows.
 4. **R-1a** one reviewer per work run (the capacity spec's W2), with the re-bind rules, the per-verdict keep tests and
    the fenced tree advance.
-5. **`ccd caps` reports the box's limits, agent first.** Today `cmd_caps` (`ccd/ccd`) prints one verb or capability
-   token per line and no value, and `parseCcdCaps` (`shared/agent-protocol.ts`) keeps only lines shaped like
-   `/^[a-z][a-z0-9-]*$/`, so the agent's ready frame (`ccdVerbs`) and its `caps` reply (`verbs`) carry tokens only.
-   This step makes the box report each value that caps or gates a Settings row:
+5. **`ccd caps` reports the box's limits, in both fleet modes.** Today `cmd_caps` (`ccd/ccd`) prints one verb or
+   capability token per line and no value, and `parseCcdCaps` (`shared/agent-protocol.ts`) keeps only lines shaped
+   like `/^[a-z][a-z0-9-]*$/` and returns `string[]`. It has two callers, and the server reaches the box's caps by two
+   paths, one per fleet mode:
+   - **Local mode** (`CCRC_FLEET=local`, the default deployment in `deploy/ccrc.env.example`). There is no agent. The
+     server runs its own box's `ccd caps` once at boot with `readLocalCcdCaps` (`server/src/localcaps.ts`), which
+     returns `parseCcdCaps`'s `string[]`, or `null` when the probe failed, and `index.ts` records it with
+     `recordCcdVerbs`. Nothing re-reads it before the next server restart.
+   - **Remote mode.** The agent runs `ccd caps` (`readCcdVerbs`, `agent/src/server.ts`, cached by `refreshVerbs`)
+     and sends the tokens in its ready frame (`ccdVerbs`) and its `caps` reply (`verbs`).
+
+   This step makes the box report each value that caps or gates a Settings row, through the one parser, so both paths
+   carry it:
    - **ccd.** `cmd_caps` prints one `limit <name> <value>` line per value, from a fixed vocabulary in ccd:
      `limit stale-idle-s <n>` from `WS_STALE_IDLE_S`, and `limit deps-cache-root set|unset` (whether
-     `CCD_DEPS_CACHE_ROOT` is configured; never the path). The line holds a space, so today's `parseCcdCaps` and every
-     older agent drop it, and their token lists are unchanged.
-   - **The parser.** One new parser beside `parseCcdCaps`, in the same file and under the same single-definition
-     test, reads only `limit` lines. An unknown name, a malformed value, or a name given twice reads as unknown for
-     that name, never as a default.
-   - **The agent.** It adds the parsed limits as one optional field to its ready frame and to its `caps` reply
-     (additive; an older agent omits it, which the server reads as unknown for every name). Its `ccd caps` cache today
-     re-runs the verb only when the `ccd` entry or body changes (`refreshVerbs`, `agent/src/server.ts`), so its key
-     also covers every file a limit is read from (`ccd/lib/disk-retention.sh`, and any install-config file ccd
-     sources), or a changed floor would never be re-read.
-   - **The server.** It keeps the limits beside the verb list in its fleet state and hands them to the Ages and
-     Dependency cache rows. A name it has no value for is unknown.
-   - **Order.** The agent lane ships before the server lane (agent first), so the server never reads a field no
-     deployed agent sends; until then it reads unknown.
+     `CCD_DEPS_CACHE_ROOT` is configured; never the path). The line holds a space, so today's `parseCcdCaps`, every
+     older agent and every older server drop it, and their token lists are unchanged.
+   - **The parser: one result shape, changed once.** `parseCcdCaps` itself grows its result from `string[]` to
+     `CcdCaps = { verbs: string[]; limits: CcdLimits }`, where `CcdLimits` holds one field per vocabulary name
+     (`staleIdleS: number | null`, `depsCacheRoot: 'set' | 'unset' | null`). `verbs` is exactly today's list. It reads
+     `limit` lines in the same function, so the `single-definition.test.ts` scan still finds one definition and both
+     readers still import it. An unknown name is ignored; a malformed value, or a name given twice, reads as `null`
+     (unknown) for that name, never as a default. There is no second parser for either mode.
+   - **Both readers return that shape.** `readLocalCcdCaps` returns `CcdCaps | null` and the agent's `readCcdVerbs`
+     returns `CcdCaps | null`; `null` (no evidence) still means every verb check behaves as today and every limit is
+     unknown. The caps cache key, today the `ccd` entry and body in `refreshVerbs`, also covers every file a limit is
+     read from (`ccd/lib/disk-retention.sh`, and any install-config file ccd sources). That file list is one constant
+     beside `parseCcdCaps`, used by the agent's cache and the local reader alike, or a changed floor would never be
+     re-read.
+   - **The server, one field for both modes.** `FleetState` gains `ccdLimits: CcdLimits | null` beside `ccdVerbs`,
+     written by the same `recordCcdVerbs` call and the same measured rule (a `null` answer writes nothing). In local
+     mode `index.ts` records the boot read's `limits`, and the local reader re-runs, inside its existing bound, when
+     the Ages or Dependency cache card is read and the key above has changed since the last read, so a changed floor
+     is seen without a restart. In remote mode the agent adds `limits` as one optional field to its ready frame and to
+     its `caps` reply (additive; an older agent omits it, which the server reads as `null`). The Ages and Dependency
+     cache rows read only `fleetState.ccdLimits`, never the mode, so the hand-off is one code path. A name with no
+     value is unknown.
+   - **Order.** In remote mode the agent lane ships before the server lane (agent first), so the server never reads a
+     field no deployed agent sends; until then it reads unknown. In local mode ccd and the server are on one box: a
+     server whose ccd predates this step reads `null` for every name until ccd is updated, and the key change then
+     triggers the re-read.
    - **Tests.** A test that reads the bash pins the reported `stale-idle-s` to `WS_STALE_IDLE_S`; `deps-cache-root`
-     reads `set` and `unset` from the install config; the parser's unknown, malformed and repeated cases; an old-shape
-     caps output gives unknown for every name and an unchanged token list; the ready frame and the `caps` reply carry
-     the field; a change to the lib file re-reads caps.
+     reads `set` and `unset` from the install config. The parser: verbs unchanged by `limit` lines; the unknown,
+     malformed and repeated cases; an old-shape output gives `null` for every name and an unchanged token list.
+     **Local mode:** `readLocalCcdCaps` against a ccd stub that prints `limit` lines returns them; against an
+     old-shape stub returns unknown limits and the same verbs; a failed or timed-out probe still returns `null`; the
+     boot wiring sets `fleetState.ccdLimits`; a changed limit file re-reads on the next card read and an unchanged
+     one does not; the Ages route, with the server in local mode, accepts a value at or above the stub's floor,
+     refuses one below with `out-of-bounds`, and refuses every edit with `floor-unmeasured` when the stub reports no
+     floor. **Remote mode:** the ready frame and the `caps` reply carry the field; an older agent's frame reads
+     unknown; a change to the lib file re-reads caps in the agent; the same three Ages route cases with the limits
+     arriving from the agent. The Dependency cache row's `cache-root-unset` and `cache-root-unmeasured` cases run in
+     both modes too.
 
-   **Until this step lands**, the Stale reclaim row is read-only and shows the box floor as unknown, with edits refused
-   `floor-unmeasured` (§5.1), and the Dependency cache row shows the cache root as unknown, with On refused
-   `cache-root-unmeasured` (§4). Neither value is guessed.
+   **Until this step lands**, in either mode, the Stale reclaim row is read-only and shows the box floor as unknown,
+   with edits refused `floor-unmeasured` (§5.1), and the Dependency cache row shows the cache root as unknown, with On
+   refused `cache-root-unmeasured` (§4). Neither value is guessed.
 6. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine, fenced replace and `--check`, the
    `ws-add --child` hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, the Dependency cache
-   row with `ccd box-setting` and its re-send on agent connect, and **in the same PR** the CLAUDE.md and worker and
-   reviewer skill changes that replace the blanket `npm ci`. The cache is off until its row is set On, which needs
-   `CCD_DEPS_CACHE_ROOT` in the box's install config.
+   row with `ccd box-setting` and its re-send on agent connect (remote) or server start (local), and **in the same
+   PR** the CLAUDE.md and worker and reviewer skill changes that replace the blanket `npm ci`. The cache is off until
+   its row is set On, which needs `CCD_DEPS_CACHE_ROOT` in the box's install config.
 7. **R-1c** the deps-shed row for review children between rounds, in shadow.
 8. **R-3a** ages as Ages rows: the stale age, raise-only (with `--stale-idle-s`, the box's floor `WS_STALE_IDLE_S` in
    `ccd caps` from step 5, kept as ccd's constant, and `stale-idle-below-floor`), the review ceiling and stale archive's
@@ -908,12 +944,12 @@ record shows the evidence named below.
 | Q3 | Dependencies: (a) the read-only cache with manifest and the `npm ci` instructions change (R-2), (b) a symlinked shared directory, or (c) deps-shed alone | **(a)**, seeded Off; 20 GB, 14 days idle | Removes the per-tree copy without letting one tree change another's | a design ruling; then the Dependency cache row (On, size cap, idle age), handed to the box by `ccd box-setting`. The cache root is install config and only makes On possible |
 | Q4 | Parked runs: (a) nudge at 48 h, mark the existing run row "parked" at 7 days, add the PR check to the existing Abandon with the operator's bounded wait or unproven confirm, and to the archive door's programme end with its unproven confirm (R-3b.4); never automatic. Or (b) also auto-abandon | **(a)**; revisit (b) after two weeks of nudges | No new control outside the existing sheet. Keeps the Rejected-list rule that a close is a person's or a coordinator's act, and never locks the operator out of it | the Ages rows Parked-run nudge, Parked-run line and Abandon settle wait; the run row's Abandon. Under (b), one Shadow lanes row holds auto-abandon's switch and age |
 | Q5 | Coordinators: (a) auto-archive after N idle days with countdown and Keep, built after D8, or (b) never | **(a), N = 14** | Deps-shed already takes their bytes; this takes the count, and only once claims are proven | a design ruling; then the coordinator archive's Shadow lanes row (switch and N), and Keep or Archive now on each session row |
-| Q6 | Stale reclaim age in this deployment (R-3a) | **Keep 168 h**, the floor | The row can only raise it (Q11), and raising it keeps trees longer, which the census does not call for | the Ages row Stale reclaim after, editable once the box reports its floor (§9 step 5) and read-only until then; the box takes it on each stale call (`--stale-idle-s`) and refuses a figure below its own floor |
+| Q6 | Stale reclaim age in this deployment (R-3a) | **Keep 168 h**, the floor | The row can only raise it (Q11), and raising it keeps trees longer, which the census does not call for | the Ages row Stale reclaim after, editable once the box reports its floor (§9 step 5, local and remote mode alike) and read-only until then; the box takes it on each stale call (`--stale-idle-s`) and refuses a figure below its own floor |
 | Q7 | Set the Roster card row live (D4) | **Yes, as soon as** its existing log shows the evidence below | It only adds context, fails open, and directly prevents forgotten runs | its Shadow lanes row; the hook reads it from the `runs list` reply |
 | Q8 | Set the Drift push row live (D7) | **After DT4 lands**, on the evidence below | A push must land on a PWA section the operator can act from | its Shadow lanes row |
 | Q9 | Set the Dead-coordinator lane row live (OA-D6) | **Only after D8's DT7**, then on the evidence below | Until DT7 a coordinator revived under a new id reads as dead, and no hand check of today's rows covers a later revive | its Shadow lanes row; its gate refuses Live before DT7 |
 | Q10 | Arming and ages: (a) the Shadow lanes and Ages cards as the one source, with today's markers imported once and retired (R-6, R-7), or (b) hand-touched markers and env vars, as today | **(a)** | The operator acts from the app, and a value has one place to be read and changed. It is the collector's and the Cleanup pause's existing pattern, not a new one | the two cards |
-| Q11 | Allow the operator to LOWER the stale-idle floor from Settings (overturns the 2026-10-23 raise-only ruling)? | **No, not now**; revisit once §2 to §4 have landed and the census is taken again | The census shows lowering does little: 17 trees are past 7 days and 12 of them are manual sessions, which G1 takes (§1, §6). A stale reclaim destroys the tree, branch, clips and registry row, and the box's own idle measurement, behind a floor the server cannot lower, is what catches a server that measured idle wrongly. The saving is in §2 to §4, not in waiting less. If the operator rules yes, the floor becomes install config with a hard minimum in ccd (24 hours), the row may go down to it behind a confirm that names the trees it would now reach, and the retention spec's §2.5.1 and §2.7.3 are amended in the same PR | a design ruling, made once here. Under no, nothing changes on the box. Under yes, the same Ages row, whose lower bound becomes the box's reported minimum (reported through §9 step 5's `limit` line; unknown, and the row read-only, until the box reports it) |
+| Q11 | Allow the operator to LOWER the stale-idle floor from Settings (overturns the 2026-10-23 raise-only ruling)? | **No, not now**; revisit once §2 to §4 have landed and the census is taken again | The census shows lowering does little: 17 trees are past 7 days and 12 of them are manual sessions, which G1 takes (§1, §6). A stale reclaim destroys the tree, branch, clips and registry row, and the box's own idle measurement, behind a floor the server cannot lower, is what catches a server that measured idle wrongly. The saving is in §2 to §4, not in waiting less. If the operator rules yes, the floor becomes install config with a hard minimum in ccd (24 hours), the row may go down to it behind a confirm that names the trees it would now reach, and the retention spec's §2.5.1 and §2.7.3 are amended in the same PR | a design ruling, made once here. Under no, nothing changes on the box. Under yes, the same Ages row, whose lower bound becomes the box's reported minimum (reported through §9 step 5's `limit` line in either fleet mode; unknown, and the row read-only, until the box reports it) |
 
 Stale archive (R-4a) and deps-shed are not separate choices. The operator sets Stale archive's row live once R-4c's
 G1 half ships and its "would archive" rows name only manual sessions they would let go, and sets deps-shed's row live
