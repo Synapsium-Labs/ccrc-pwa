@@ -439,15 +439,24 @@ describe('push-sw: the answer-lifecycle region', () => {
 
   // The rendered function and answerRequest over one action corpus. `new Function` runs only the renderer's own
   // output, built from this repo's declared shape; the corpus values are arguments, never part of the body.
-  it('the rendered askRequestOf equals answerRequest(askCommandOf(…)) over the action corpus', () => {
-    const askRequestOf = new Function(`${renderAnswerRegion()}\nreturn askRequestOf;`)() as
-      (action: string, sessionId: string | null) => unknown;
+  // W7 C7g (D-7185, D-7485): the parser and the request are two rendered functions now, `askOf` and
+  // `askRequestOf(ask, questions)`, so the row holds each to its TypeScript source, the request on both doors.
+  it('the rendered askOf equals askCommandOf, and askRequestOf equals answerRequest on both doors, over the action corpus', () => {
+    const { askOf, askRequestOf } = new Function(`${renderAnswerRegion()}\nreturn { askOf, askRequestOf };`)() as {
+      askOf: (action: string, sessionId: string | null) => unknown;
+      askRequestOf: (ask: unknown, questions: boolean) => unknown;
+    };
     const ACTIONS = ['ask:k1:2', 'ask:k1:0', 'ask:a-b_c.9:10', 'ask:k1:x', 'ask::1', 'ask:k1:2:3', 'ask:k1:', 'open', ''];
     const SESSIONS = ['session-a', 'cc a/b?c', null];
     for (const action of ACTIONS) {
       for (const sid of SESSIONS) {
         const c = askCommandOf(action, sid);
-        expect(askRequestOf(action, sid), `${action} on ${String(sid)}`).toEqual(c === null ? null : { ...answerRequest(c, false) });
+        const ask = askOf(action, sid);
+        expect(ask, `${action} on ${String(sid)}`).toEqual(c);
+        if (c === null) continue;
+        for (const questions of [false, true]) {
+          expect(askRequestOf(ask, questions), `${action} on ${String(sid)}, questions ${String(questions)}`).toEqual({ ...answerRequest(c, questions) });
+        }
       }
     }
   });
