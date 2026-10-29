@@ -52,6 +52,13 @@ export const ROUTES: readonly Route[] = [
   { id: 'digest', pattern: /^\/digest\/?$/, title: 'Digest', top: false, path: null },
 ];
 
+/** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
+ *  id; over `isSessionIdShape`'s charset, every id the wire carries, `encodeURIComponent` is the identity, so the
+ *  path is the id itself (`w7-session-path.test.ts`). */
+export function sessionPath(id: string): string {
+  return `/s/${encodeURIComponent(id)}`;
+}
+
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
  *  existing `accounts` route, as the digest's `?day=` does, with no new route and no registry command. */
 export const ACCOUNTS_LANE_QUERY = 'lane';
