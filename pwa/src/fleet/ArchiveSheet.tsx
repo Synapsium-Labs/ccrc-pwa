@@ -24,7 +24,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, TERMINAL_RUN_STATES, archiveInterrupts, inArchivedFold, isArchiveRefusal,
+  ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, archiveInterrupts, inArchivedFold, isArchiveRefusal,
   substrateFault, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
@@ -34,6 +34,7 @@ import {
   CLAIMED_CONSEQUENCE, CLAIMED_TITLE, claimedSentence, isArchiveConflictRun, runPhrase,
   type ArchiveConflictRun,
 } from './ArchiveConflictSheet';
+import { claimedRunsOf } from './runWords';
 import './fleet.css';
 import { substrateFaultText } from './substrateWords';
 
@@ -131,8 +132,7 @@ export function ArchiveSheet({
     setError(null);
     setEnded([]);
     if (!open || session === null) return;
-    const claimed = runs.filter((r) => r.claimedBy === session.id
-      && !(TERMINAL_RUN_STATES as readonly string[]).includes(r.state))
+    const claimed = claimedRunsOf(runs, session.id)
       .map((r) => ({ id: r.id, program: r.program, wave: r.wave, waveOf: r.waveOf }));
     setAsk(archiveInterrupts(session) ? { kind: 'busy' }
       : claimed.length > 0 ? { kind: 'programme', runs: claimed } : { kind: 'confirm' });
