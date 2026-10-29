@@ -607,6 +607,15 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
     expect(document.querySelector('button.sess-held')).toBeNull();
   });
 
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the door follows the wire's binding. A run that names the session by id
+  // but that the server binds to no incarnation of it (#746's recycled id, or an older server's frame with no binding)
+  // is not the session's run, so the hold reads as the inert text it is (a door before C7d).
+  it('opens no door for an open run that names the session but that the wire does not bind to it', () => {
+    render(<ProjectCard group={grp({ sessions: [{ ...heldWorker, run: null, openRun: null }] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
+  });
+
   it('opens no door for a run that names a DIFFERENT session on the same card', () => {
     // The edge is `run.sessionId === session.id` and nothing looser. A card
     // carrying one run and two held rows must not light both.
