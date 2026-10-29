@@ -37,17 +37,17 @@ const FRAMES: Record<string, TestboxFrame> = {
     prepareFailed: { id: 'install-failed', text: 'test box: install failed (pwa, exit 1)' },
   },
   'run.cancel': { t: 'run.cancel', runId: RUN },
-  'tools.sync': { t: 'tools.sync', release: '1.2.3', versions: TOOLS, measuredAt: '2026-10-29T12:00:00Z' },
+  'tools.sync': { t: 'tools.sync', release: 'v0.0.830', versions: TOOLS, measuredAt: '2026-10-29T12:00:00Z' },
   status: {
     t: 'status', state: 'degraded', reason: 'tools differ (node 22.11.0 vs 22.10.0)', serviceVersion: '1.2.3', proto: TESTBOX_PROTO,
-    release: '1.2.3', tools: { ...TOOLS, node: '22.10.0' }, sync: { state: 'failed', detail: 'chrome: checksum', at: '2026-10-29T11:00:00Z' },
+    release: 'v0.0.830', tools: { ...TOOLS, node: '22.10.0' }, sync: { state: 'failed', detail: 'chrome: checksum', at: '2026-10-29T11:00:00Z' },
     runs: { inProgress: 2, limit: 4 }, queueDepth: 5,
     pristine: [{ repository: 'project-a', package: 'server', key: 'ab12cd34' }],
     failedKeys: [{ repository: 'project-a', package: 'pwa', key: 'ef56', exit: 1, attempts: 2, nextAttempt: '2026-10-29T13:00:00Z' }],
     heldRunUsers: ['ccrc-tb-3'], repositories: [{ name: 'project-a', mirrorPath: '/srv/testbox/mirrors/project-a.git' }],
   },
   'status (ok)': {
-    t: 'status', state: 'ok', reason: null, serviceVersion: '1.2.3', proto: 1, release: '1.2.3', tools: TOOLS,
+    t: 'status', state: 'ok', reason: null, serviceVersion: '1.2.3', proto: 1, release: 'v10.20.3000', tools: TOOLS,
     sync: { state: 'idle', detail: null, at: null }, runs: { inProgress: 0, limit: 4 }, queueDepth: 0, pristine: [],
     failedKeys: [], heldRunUsers: [], repositories: [],
   },
@@ -105,6 +105,29 @@ describe('the frames: one reader each, every field checked (D-7404, D-7428)', ()
     expect(bad({ ...FRAMES['tools.sync'], measuredAt: '2026-10-29T12:00:00.000Z' })).toBe(false);
     expect(bad({ t: 'req', runId: RUN })).toBe(false);
     expect(readTestboxFrame('{')).toEqual({ ok: false, reason: 'not JSON' });
+  });
+});
+
+describe("the release field reads the release tag's own shape, not a tool version", () => {
+  // The fleet host's release tag is `v<major>.<minor>.<patch>` (deploy/release-artifact.sh's SHAPE), and the tools
+  // sync passes it on as-is; a tool version's reader would refuse the leading `v`.
+  it.each(['v0.0.830', 'v1.2.3', 'v10.20.3000'])('a tools.sync and a status carrying %s round-trip', (tag) => {
+    const sync = { ...FRAMES['tools.sync'], release: tag };
+    expect(readTestboxFrame(JSON.stringify(sync))).toEqual({ ok: true, value: sync });
+    const status = { ...FRAMES.status, release: tag };
+    expect(readTestboxFrame(JSON.stringify(status))).toEqual({ ok: true, value: status });
+  });
+
+  it.each(['0.0.830', 'V0.0.830', 'v0.0', 'v0.0.830a', 'v0.0.830.1', 'v0.0.830-rc1', ' v0.0.830', 'v', '', 830])(
+    'a release of %j is refused as not a release tag, in a tools.sync and in a status', (tag) => {
+      const why = { ok: false, reason: 'release: not a release tag' };
+      expect(readTestboxFrame(JSON.stringify({ ...FRAMES['tools.sync'], release: tag }))).toEqual(why);
+      expect(readTestboxFrame(JSON.stringify({ ...FRAMES.status, release: tag }))).toEqual(why);
+    });
+
+  it('a tool version keeps its own reader: a leading v is still refused there', () => {
+    expect(readTestboxFrame(JSON.stringify({ ...FRAMES['tools.sync'], versions: { ...TOOLS, node: 'v22.11.0' } })))
+      .toEqual({ ok: false, reason: 'versions.node: not a version' });
   });
 });
 
