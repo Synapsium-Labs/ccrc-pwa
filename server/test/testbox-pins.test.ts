@@ -241,14 +241,17 @@ function git(args: string[]): { status: number | null; stdout: string } {
 describe('testboxReaders(): nothing outside docs/ reads a test box setting or the remote-live marker yet (D-7402)', () => {
   // This file names both in its own pattern, so it is left out by path. Each later TB task raises the list to its own
   // literal list of readers.
-  it('the tracked readers are exactly the literal list (empty at base)', () => {
+  // TB2 (D-7404) adds the switch row: its definer and the two tests that pin it name the marker; none of them reads it
+  // (single-definition's switch pin holds that no shell line and no TypeScript writer names it until TB8 and TB9).
+  const TB2_HOLDERS = ['server/test/single-definition/switches-history.test.ts', 'server/test/switches.test.ts', 'shared/switches.ts'];
+  it('the tracked readers are exactly the literal list (TB2: the switch row and its two pins)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
-    expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual([]);
+    expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(TB2_HOLDERS);
   });
   it('the pattern reaches: without the exclusion, it finds this file', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/']);
-    expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual([SELF]);
+    expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual([...TB2_HOLDERS.slice(0, 2), SELF, TB2_HOLDERS[2]]);
   });
 });
 
