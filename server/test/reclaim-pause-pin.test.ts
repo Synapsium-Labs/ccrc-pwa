@@ -160,15 +160,25 @@ describe('childReclaim.ts — childReclaimPauseRead, the server\'s read of the r
 
 /** A marked child of a finished run with nothing open on it: every re-read before the pause passes, so step 2b is
  *  the one thing that can stop it before the audit. Registry listing 1 is step 1's marker re-read; listing 2 is 2b. */
-const childRig = async () => {
+const childRig = async (o: { readonly reclaimable?: boolean } = {}) => {
   const home = mkTmp('ccrc-pause-pin-child-');
   const calls: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { ran: true as const, code: 1, stdout: '', stderr: '' }; });
+  // `reclaimable`: ws-audit mints a token (so the act's step 6 is reached); every other call fails, as before.
+  let childOf = 0;
+  const base = testDeps(home, async (_cmd, args) => {
+    calls.push(args);
+    if (o.reclaimable === true && args[0] === 'ws-audit') {
+      return { ran: true as const, code: 0, stderr: '',
+        stdout: JSON.stringify({ id: 'demo-a', mode: 'reclaim', childOf, verdict: 'reclaimable', token: 'a'.repeat(64) }) };
+    }
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
+  });
   const reg = base.cfg.registryDir;
   mkdirSync(reg, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const opened = coord.openRun({ program: 'pin-paused', title: 'pin-paused', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
   if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+  childOf = opened.id;
   const closed = coord.closeRun({ runId: opened.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'pin-paused', viaClosing: false });
   if (!closed.ok) throw new Error(`close refused: ${JSON.stringify(closed)}`);
   const fields: Record<string, string> = {
@@ -224,6 +234,17 @@ describe('childReclaim.ts — reclaimChild step 2b: the pause, read before prese
     const s = scripted(f.base.io, f.reg, (n) => (n === 1 ? 'real' : 'reject'));
     const out = await reclaimChild(f.deps(s.io), f.req);
     expect(out.kind === 'deferred' ? out.detail : '').toBe(UNREAD_RECLAIM);
+  });
+
+  it('a pause raised during the act holds: child reclaim — clean at 2b, raised before step 6, no ws-reclaim', async () => {
+    // Listings 1 to 3 are step 1, 2b and 2b'; listing 4 is step 6's, nearest the argv (C4o, D-7401).
+    const f = await childRig({ reclaimable: true });
+    const s = scripted(f.base.io, f.reg, (n) => (n < 4 ? 'real' : 'present'));
+    const out = await reclaimChild(f.deps(s.io), f.req);
+    expect(s.listings(), 'step 6 re-reads the pause off the listing it already takes: no fifth listing').toBe(4);
+    expect(out).toEqual({ kind: 'deferred', sessionId: 'demo-a', runId: f.req.runId, why: 'paused-at-server',
+      detail: `${RAISED_RECLAIM} at the act` });
+    expect(f.calls.map((c) => c[0]), 'the audit only: no destructive argv').toEqual(['ws-audit']);
   });
 });
 
