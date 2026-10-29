@@ -627,6 +627,35 @@ export interface FleetSession {
   readonly run?: SessionRun | null;
   /** The newest OPEN run that names this incarnation, or `null`: the other named query beside `run`, with its contract. */
   readonly openRun?: SessionRun | null;
+  /** The landing radar's reading of THIS session's pull request, or ABSENT (landing order wave 4b, `SessionLanding`
+   *  below carries the contract). ADDITIVE and optional (`FLEET_PROTO` untouched). Absence DELIBERATELY collapses every
+   *  condition in which the radar does not speak for the session now: no radar, no or stale, unreadable, oversized or
+   *  unmeasured `probe`, a head with no match, a branch or PR that moved since the tick, an older server (D-7481). No
+   *  reader may branch on which one applies, and absence is never "no conflict". The live frame is CAST, so the PWA
+   *  reads the field only through `landingOf`, which also ages it. */
+  readonly landing?: SessionLanding;
+}
+
+/** One merge answer of the radar, as the wire carries it (wave 3b's `clean`, `conflict` and `unmeasured`). */
+export const LANDING_MERGE_STATES = ['clean', 'conflict', 'unmeasured'] as const;
+export type LandingMergeState = (typeof LANDING_MERGE_STATES)[number];
+export const isLandingMergeState = (v: unknown): v is LandingMergeState =>
+  typeof v === 'string' && (LANDING_MERGE_STATES as readonly string[]).includes(v);
+
+/** A predicted conflict of one head with ANOTHER open head: that head's PR number and the paths git named. */
+export interface LandingConflict { pr: number; paths: string[]; pathsCut: boolean }
+
+/** What the radar measured for one session's head (D-7479, D-7484): `at` is the doc's own clock. `base` is the head
+ *  against the base branch `baseRef`. `paired` is whether the head was in the radar's pairwise set; `conflicts` and
+ *  `unmeasuredWith` are the other heads it conflicts with or could not be measured against. `cut` says what the radar
+ *  left out: `heads` and `pairs` are its own cuts, `unbound` is a fleet head the radar did not pair (D-7479). Every
+ *  path is cut to 300 characters. "No predicted conflicts" is only ever said of a landing that is clean in every
+ *  field (D-7480). */
+export interface SessionLanding {
+  at: string; pr: number; head: string; baseRef: string;
+  base: { state: LandingMergeState; paths?: string[]; pathsCut?: boolean };
+  paired: boolean; conflicts: LandingConflict[]; unmeasuredWith: number[];
+  cut: { heads: boolean; pairs: boolean; unbound: boolean };
 }
 
 /**
@@ -3268,6 +3297,8 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
         : unnamedSpawnWord === 'keep' ? spawnWord as SpawnVerdict
         : 'unrecognised';
 
+    const landing = reviveSessionLanding(o, 'landing');
+
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
     // reading of `o`, which is how the two could drift apart.
@@ -3385,6 +3416,9 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // build does not know revives as no key (it reads `unknown`, never a guess); `deadSince` a finite number or null.
       ...(o['presence'] === undefined || !isPresenceWord(o['presence']) ? {} : { presence: o['presence'] }),
       ...(o['deadSince'] === undefined ? {} : { deadSince: reviveDeadSince(o['deadSince']) }),
+      // Landing order wave 4b (D-7481): an absent key stays absent, and a malformed one revives as no key with the
+      // session kept, never as `landing: null`: absence means unknown, and a cached prediction is aged by `landingOf`.
+      ...(landing === undefined ? {} : { landing }),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -12552,8 +12586,9 @@ export interface AdvanceOk {
 export const FRESH_FUTURE_SKEW_S = 60;
 
 /** A radar file's clock, read as fresh: written at most `freshS` ago and at most FRESH_FUTURE_SKEW_S ahead (D-7475). The
- *  one rule of the landing radar's files: the server's readers of the `enabled` marker and a lineage doc take it, and so
- *  will wave 4b's readers of the `probe` doc on the server and in the PWA, so no reader keeps a copy. `at` is the file's own string, read as
+ *  one rule of the landing radar's files on the server: the readers of the `enabled` marker, a lineage doc and (wave 4b)
+ *  the `probe` doc take it, so no server reader keeps a copy. The PWA reads `landingShown` below instead, for the reason
+ *  D-7481 records. `at` is the file's own string, read as
  *  `Date.parse` reads it; a missing, non-string or unparseable one is not fresh. Pure: `nowMs` is the caller's clock. */
 export function freshWithin(at: unknown, freshS: number, nowMs: number): boolean {
   if (typeof at !== 'string') return false;
@@ -12561,6 +12596,59 @@ export function freshWithin(at: unknown, freshS: number, nowMs: number): boolean
   if (Number.isNaN(t)) return false;
   const ageMs = nowMs - t;
   return ageMs <= freshS * 1000 && ageMs >= -FRESH_FUTURE_SKEW_S * 1000;
+}
+
+/** Four timer intervals of the radar (doctor's CCRC_LAND_PROBE_STALE_S); both sides age a landing by it (D-7482). */
+export const RADAR_PROBE_FRESH_S = 1200;
+
+/** The DISPLAY's clock rule for a landing's `at` (D-7481): the stale bound only. Legitimately different from
+ *  `freshWithin`: a phone's clock is not the fleet box's, and a device clock that runs behind must not hide every live
+ *  landing, while the server has already refused a doc dated ahead. The one reader is the PWA's `landingOf`. A missing,
+ *  non-string or unparseable `at` is not shown. Pure: `nowMs` is the caller's clock. */
+export function landingShown(at: unknown, nowMs: number): boolean {
+  if (typeof at !== 'string') return false;
+  const t = Date.parse(at);
+  if (Number.isNaN(t)) return false;
+  return nowMs - t <= RADAR_PROBE_FRESH_S * 1000;
+}
+
+const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const isPrNum = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+const isRawObj = (v: unknown): v is RawObj => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** `FleetSession.landing` read from a persisted row (or by the PWA's `landingOf`): every field checked, and anything
+ *  malformed answers `undefined`, which the caller spreads as an ABSENT key, never as a throw or a null (D-7481). The
+ *  session around it is kept. */
+export function reviveSessionLanding(o: RawObj, k: string): SessionLanding | undefined {
+  const v = o[k];
+  if (!isRawObj(v)) return undefined;
+  const base = v['base'];
+  const cut = v['cut'];
+  if (typeof v['at'] !== 'string' || !isPrNum(v['pr']) || typeof v['head'] !== 'string' || typeof v['baseRef'] !== 'string') return undefined;
+  if (!isRawObj(base) || !isLandingMergeState(base['state'])) return undefined;
+  if (base['paths'] !== undefined && !isStrArr(base['paths'])) return undefined;
+  if (base['pathsCut'] !== undefined && typeof base['pathsCut'] !== 'boolean') return undefined;
+  if (typeof v['paired'] !== 'boolean') return undefined;
+  const conflicts = v['conflicts'];
+  if (!Array.isArray(conflicts)) return undefined;
+  const outConflicts: LandingConflict[] = [];
+  for (const c of conflicts as unknown[]) {
+    if (!isRawObj(c) || !isPrNum(c['pr']) || !isStrArr(c['paths']) || typeof c['pathsCut'] !== 'boolean') return undefined;
+    outConflicts.push({ pr: c['pr'], paths: c['paths'], pathsCut: c['pathsCut'] });
+  }
+  const unm = v['unmeasuredWith'];
+  if (!Array.isArray(unm) || !(unm as unknown[]).every(isPrNum)) return undefined;
+  if (!isRawObj(cut) || typeof cut['heads'] !== 'boolean' || typeof cut['pairs'] !== 'boolean' || typeof cut['unbound'] !== 'boolean') return undefined;
+  return {
+    at: v['at'], pr: v['pr'], head: v['head'], baseRef: v['baseRef'],
+    base: {
+      state: base['state'],
+      ...(base['paths'] === undefined ? {} : { paths: base['paths'] }),
+      ...(base['pathsCut'] === undefined ? {} : { pathsCut: base['pathsCut'] }),
+    },
+    paired: v['paired'], conflicts: outConflicts, unmeasuredWith: unm as number[],
+    cut: { heads: cut['heads'], pairs: cut['pairs'], unbound: cut['unbound'] },
+  };
 }
 
 /** `FleetHealth`'s host-pressure block (#1170), at the foot as an interface merge, the disk block's rule, so no line
