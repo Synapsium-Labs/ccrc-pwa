@@ -5999,7 +5999,9 @@ things:
 
 - **Conflicts.** Which open pull requests conflict with the base, and which pairs of them conflict with each other.
   This uses `git merge-tree` on the head shas gh reports. Only heads whose branch is a registered workspace's are
-  paired, at most ten of them, highest PR number first.
+  paired, at most ten of them, highest PR number first. A head's `id` names the registry row whose branch it is;
+  `id` null means no row names the head's branch, or more than one row does, or the registry could not be listed;
+  the record does not say which.
 - **Base health.** Whether the base tip's required checks are green. The required set is the union of the
   branch's rulesets (every page of them) and its protection. Each name is judged by its newest check run, pinned to its App where the rule
   names one. A combined status counts only for a name no App is pinned to.
@@ -6028,13 +6030,22 @@ read itself was cut or `store.before`'s count had already spent the budget, writ
 `main-health` `fetch-failed`, and the lineage files `repo-unreadable` as the lineage pass decides them (below).
 `fetch-failed` also covers a scratch, alternates or refspec failure before the first write, since the probe's set
 has no closer word. A failed or cut fetch, or an error before the first write, rewrites `probe`, `main-health` and
-the project's lineage files, so none of them keeps an older measurement, with three exceptions: when the registry
-cannot be listed, no lineage file is written or removed; a row whose registry `.project` or `.branch` exists but
-cannot be read is held, and its file is left as it was; and a signal that interrupts the tick leaves the files as
-they were until the next tick. A row the tick could not decide keeps its last lineage file, with that file's own
-`at`. This happens when the budget ran out after the fetch, when one row's read timed out, was killed or answered
-anything but a sha (rc 0) or rc 1, when the tick never reached the project, when the registry could not be listed,
-and, on every route, when the row's registry files could not be read (the row is held). rc 1 is git's answer that
+the project's lineage files, so none of them keeps an older measurement, with three exceptions. When the registry
+cannot be listed, no lineage file is written or removed. A row is held, and its file left as it was, when its
+registry `.project` or `.branch` exists but cannot be read, or when its `.branch` starts with `ws/` but does not
+name a well-formed branch after it (corrupt registry content, such as a NUL byte, `ws/a~0` or `ws/a.lock`); each
+case logs its own `lineage-skip:` line. And a signal leaves the lineage files as they were only when it is recorded
+before the last read checkpoint the tick's route passes through. Recorded later on a failed or cut fetch, or when no
+GitHub repository could be read from the origin URL, it lets the rewrite and the removal of stale files finish. On a measured
+base, rows rewritten before a later row's walk checkpoint raises stay rewritten. The before-first-write fallback
+raises at no checkpoint, so it always finishes. On every route, `probe` and `main-health` are this tick's by the
+time the lineage files are written; a signal at the fetch's own checkpoint, before any write, leaves the old ones
+standing and runs no fallback. On a measured base, a row the tick could not decide keeps its last lineage file,
+with that file's own `at`: when the budget ran out after the fetch, or when one row's read timed out, was killed or
+answered anything but a sha (rc 0) or rc 1. On a failed or cut fetch, when no GitHub repository could
+be read from the origin URL, or in the before-first-write fallback, such a row with an old file is rewritten unmeasured with
+`tip: null`. The last file also stands when the tick never reached the project, when the registry could not be
+listed, and, on every route, when the row is held. rc 1 is git's answer that
 the ref is not there: a missing ref, and also one git itself ignores as broken or cannot read. That row is decided,
 its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For a
 kept file, stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
@@ -6086,8 +6097,10 @@ is one the project already holds. Three layers hold this:
    aliased import of `subprocess` or `os`, and the rest of the banned list) by their literal spellings. A syntax-tree
    census of the embedded program holds its imports to a pinned list, module names and aliases both and wherever the
    statement stands, and holds out the dynamic builtins (`__import__`, `eval`, `exec`, `compile`, `getattr`,
-   `setattr`, `vars`, `globals`, `locals`) and `__dict__`. A text pin cannot see a name built from pieces, or a lookup
-   through an imported module's own attributes that no pinned name spells: that is the known limit. The planting
+   `setattr`, `vars`, `globals`, `locals`, `__builtins__`) as bare names, and `__dict__`, `__import__`,
+   `__builtins__`, `__globals__`, `f_globals` and `f_locals` as attributes. The known limit, measured by planting each
+   route: a pin cannot see what names a value only as a string, through an object's own `__getattribute__` (the name
+   whole or built from pieces), or a refused builtin reached as an attribute of the builtins module. The planting
    evidence for every layer is the wave's measured mutation rows, not that test file.
 
 One git child runs outside `git_ro`. With the project as an alternate, `git fetch` itself starts a `for-each-ref`
