@@ -719,14 +719,15 @@ function pairDecl(): { bodySource: string; templateSource: string; entryDest: st
   return { bodySource: one('BODY_SOURCE'), templateSource: one('TEMPLATE_SOURCE'), entryDest: one('ENTRY_DEST'), bodyDest: one('BODY_DEST') };
 }
 
-/** The library the body pins and the publisher places FIRST (D-6913): its source and destination, read from the same helper. */
-function libDecl(): { libSource: string; libDest: string } {
+/** The library the body pins and the publisher places FIRST (D-6913): its source and destination, read from the same helper.
+ *  `prefix` `TRAIN_` reads the second library's pair instead (D-7463), placed right after the first. */
+function libDecl(prefix: '' | 'TRAIN_' = ''): { libSource: string; libDest: string } {
   const one = (name: string): string => {
     const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
     if (all.length !== 1) throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, found ${all.length}`);
     return all[0]![1]!;
   };
-  return { libSource: one('LIB_SOURCE'), libDest: one('LIB_DEST') };
+  return { libSource: one(`${prefix}LIB_SOURCE`), libDest: one(`${prefix}LIB_DEST`) };
 }
 
 /** The `.local/bin` name the pair publisher places, when `body` calls `publisher`
@@ -1803,16 +1804,18 @@ describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, remov
   });
 });
 
-describe('ccd\'s library (D-6913): the file the body pins is placed by the pair publisher, removed by name and backed up before the body', () => {
+// Both libraries the body pins (D-6913, D-7463), each held to the same four facts.
+for (const prefix of ['', 'TRAIN_'] as const) {
+describe(`ccd's ${prefix === '' ? 'library (D-6913)' : 'second library (D-7463)'}: the file the body pins is placed by the pair publisher, removed by name and backed up before the body`, () => {
   it('the publisher declares it once, under a lib/ directory beside the body, and it is a tracked file', () => {
-    const { libSource, libDest } = libDecl();
+    const { libSource, libDest } = libDecl(prefix);
     const { bodyDest } = pairDecl();
     expect(libDest, 'the library lives in lib/ beside the body').toBe(`${path.posix.dirname(bodyDest)}/lib/${path.posix.basename(libSource)}`);
     expect(trackedFiles().has(libSource), `${libSource} is not tracked`).toBe(true);
   });
 
   it('the uninstall removes the library by name and its directory only with rmdir, before the directory that holds it', () => {
-    const { libDest } = libDecl();
+    const { libDest } = libDecl(prefix);
     const { bodyDest } = pairDecl();
     const body = fnBody('_uninst_tree_bins');
     expect(rmFOperands(body), `_uninst_tree_bins does not rm -f the library at $HOME/${libDest}`).toContain(`$HOME/${libDest}`);
@@ -1824,7 +1827,7 @@ describe('ccd\'s library (D-6913): the file the body pins is placed by the pair 
   });
 
   it('the update backup takes the library BEFORE the body that pins it — arm 3 restores in that order', () => {
-    const { libDest } = libDecl();
+    const { libDest } = libDecl(prefix);
     const { bodyDest } = pairDecl();
     const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
     expect(sources.indexOf(`$HOME/${libDest}`), `_upd_backup_set does not back up the library at $HOME/${libDest}`).toBeGreaterThan(-1);
@@ -1832,7 +1835,7 @@ describe('ccd\'s library (D-6913): the file the body pins is placed by the pair 
   });
 
   it('deploy.sh backs the library up before the body, in the same remote command', () => {
-    const { libDest } = libDecl();
+    const { libDest } = libDecl(prefix);
     const { bodyDest } = pairDecl();
     const text = deployText();
     const l = text.indexOf(`~/${libDest}`);
@@ -1840,7 +1843,18 @@ describe('ccd\'s library (D-6913): the file the body pins is placed by the pair 
     expect(l, `deploy.sh does not back up the library at ~/${libDest}`).toBeGreaterThan(-1);
     expect(l).toBeLessThan(b);
   });
+
+  if (prefix === 'TRAIN_') {
+    it('the second library is backed up right after the first, by the update and by deploy.sh', () => {
+      const first = libDecl().libDest; const second = libDecl(prefix).libDest;
+      const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+      expect(sources.indexOf(`$HOME/${second}`)).toBe(sources.indexOf(`$HOME/${first}`) + 1);
+      const text = deployText();
+      expect(text.indexOf(`[ ! -f ~/${first} ] || cp -a`)).toBeLessThan(text.indexOf(`[ ! -f ~/${second} ] || cp -a`));
+    });
+  }
 });
+}
 
 /** The docs redactor's two files the pair publisher places beside the body (D-7077): sources and destinations, read from the
  *  same helper, in the order it renames them. */

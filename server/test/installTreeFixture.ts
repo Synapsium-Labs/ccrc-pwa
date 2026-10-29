@@ -165,6 +165,8 @@ export const TREE_FILES = [
   // The library the body pins and loads (D-6913): the publisher reads it from the tree and refuses a tree
   // without it, or with one the body does not pin, so it is COPIED beside the body it belongs to.
   'ccd/lib/disk-retention.sh',
+  // Its second library (D-7463), the train proof: read, pinned and published exactly as the first.
+  'ccd/lib/train-proof.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
