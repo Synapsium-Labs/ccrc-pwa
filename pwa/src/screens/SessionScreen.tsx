@@ -31,6 +31,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
+import { useEnsure } from '../session/useEnsure';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
@@ -215,7 +216,7 @@ export function SessionScreen({
   const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
 
   const kbInset = useKeyboardInsets();
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [terminalOpen, setTerminalOpen] = useState(false);
   // D-286 (was D-B4-13)'s nonce. Bumped by the transcript's one `Answer` control; read by
   // `DialogSheet` to clear a dismissal the reader had made. It carries no
@@ -406,17 +407,8 @@ export function SessionScreen({
   const { asleepAt, waking, pending: wakePending, wake } = useWakeOnOpen(id, live, fault);
   const asleep = asleepAt !== null;
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(id);
-    } catch (err) {
-      toast(`Couldn't restart — ${err instanceof Error ? err.message : String(err)}`, 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  const restart = (): Promise<void> =>
+    ensureNow(id, (err) => `Couldn't restart — ${err instanceof Error ? err.message : String(err)}`);
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
   // quietly; anything else is a real failure. `background-only` (D-5236): the
