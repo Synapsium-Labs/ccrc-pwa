@@ -398,3 +398,30 @@ describe('W7 PWA census, C7q: transcriptCopyRules (D-7212)', () => {
     ]);
   });
 });
+
+// C7i (D-7187; OA-C16 (a)): Claude Code's prompt glyph has one pane-text spelling. Imported in the block, so the file's
+// header imports stay as other tasks append to them.
+describe('W7 PWA census: the prompt glyph\'s pane-text spellings (C7i, D-7187)', () => {
+  it('FIXTURE promptGlyphSpellings: a string that is the glyph counts; the glyph in a regex, a longer string and JSX text do not', async () => {
+    const { promptGlyphSpellingsIn } = await import('./pwa.js');
+    const got = run(promptGlyphSpellingsIn, [
+      "export const PROMPT_GLYPH = '❯';",
+      "export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }",
+      'const OPTION_RE = /^\\s*(❯)?\\s*(\\d+)\\.\\s+(.+)$/;',
+      "const hint = '❯ 1. Yes';",
+      'export const Row = () => <span>❯</span>;',
+    ].join('\n'));
+    // A module-scope binding is not a symbol (`scan/parse.ts`), so the constant's site is `(module)`.
+    expect(got.map((s) => [s.symbol, s.text, s.line])).toEqual([['(module)', "'❯'", 1], ['startsWithPromptGlyph', "'❯'", 2]]);
+  });
+
+  it('REAL promptGlyphSpellings(): 2 (drawerView.ts\'s PROMPT_GLYPH, dialog.ts#startsWithPromptGlyph)', async () => {
+    const { promptGlyphSpellings } = await import('./pwa.js');
+    const sites = promptGlyphSpellings();
+    held('promptGlyphSpellings', sites, 2);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual([
+      'pwa/src/session/drawerView.ts#(module)',
+      'server/src/pane/dialog.ts#startsWithPromptGlyph',
+    ]);
+  });
+});

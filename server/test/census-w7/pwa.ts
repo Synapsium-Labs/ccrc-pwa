@@ -9,7 +9,7 @@
 // destructured binding or a re-export is not seen; a site is attributed to its innermost enclosing symbol as
 // `scan/parse.ts` keys symbols (an object-literal method or an arrow passed straight to a call is not a symbol, so its
 // sites belong to the symbol around it); a file that does not parse yields what the parser recovered.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { identifierReferences, parseSource, stringExpressions, type CallSite, type Comparison, type ParsedFile } from '../scan/parse.js';
 import { parsedFile } from '../scan/symbols.js';
@@ -262,6 +262,20 @@ export const clientPairingDefinitions = (): W7Site[] => overPwa(clientPairingDef
 export const PANE_TEXT_DECISION_NAMES: readonly string[] = ['COMPACTION_RE', 'showsPrompt'];
 export const paneTextDecisionsIn = (p: ParsedFile, file: string): W7Site[] => moduleDefinitions(p, file, PANE_TEXT_DECISION_NAMES);
 export const paneTextDecisions = (): W7Site[] => overPwa(paneTextDecisionsIn);
+
+/** Claude Code's prompt glyph, U+276F, as one string expression whose whole value is the glyph (`'❯'`), in the files
+ *  that read pane text for it: the drawer's view (`pwa/src/session/drawerView.ts#PROMPT_GLYPH`, which `showsPrompt` and
+ *  `anchorRow` read), the server's dialog parser (`server/src/pane/dialog.ts#startsWithPromptGlyph`), and the one
+ *  spelling C7i adds under OA-C16 (a) (`shared/pane-glyph.ts`, D-7187). 2 on the base (one per reader); 1 since C7i,
+ *  the shared spelling, which both readers import. KNOWN WIDTH: string expressions only, in the listed files: the
+ *  glyph inside a regular expression (`dialog.ts`'s option and busy patterns, the parser's verdicts) and the PWA's
+ *  rendered `❯` glyphs (a menu's cursor drawn in JSX) are not pane-text spellings and are not read. */
+export const PROMPT_GLYPH_FILES: readonly string[] = ['shared/pane-glyph.ts', 'pwa/src/session/drawerView.ts', 'server/src/pane/dialog.ts'];
+export const promptGlyphSpellingsIn = (p: ParsedFile, file: string): W7Site[] =>
+  stringExpressions(p.text, file).filter((e) => e.text === '\u276f').map((e) => site(p, file, e.start, e.line, p.text.slice(e.start, e.end)));
+export const promptGlyphSpellings = (): W7Site[] => PROMPT_GLYPH_FILES
+  .filter((rel) => existsSync(path.join(REPO, rel)))
+  .flatMap((rel) => promptGlyphSpellingsIn(parsedFile(rel), rel));
 
 // ─── 9, 10. bucket orders and "archived" (ARCH-75, C7j) ────────────────────────────────────────────────────────────
 
