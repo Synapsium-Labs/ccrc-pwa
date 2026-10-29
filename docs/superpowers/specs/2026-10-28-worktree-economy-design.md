@@ -48,7 +48,9 @@ other operator act on the same abandon arm, reads every claimed run's PR before 
 unproven confirm for the whole programme.
 
 The stale age stays raise-only, as the retention spec ruled (§5.1, R-3a): the Settings row can raise it and never
-lower it below the box's floor. Whether to overturn that is the operator's call (§10, Q11; recommended no).
+lower it below the box's floor. Whether to overturn that is the operator's call (§10, Q11; recommended no). The box
+does not report that floor today (`ccd caps` prints only verb and capability tokens), so reporting it is its own build
+step (§9 step 5, agent first). Until it lands, the row is read-only and shows the box floor as unknown, never a guess.
 
 Every age, count, size and path below has a neutral default. Every new destructive arm ships in shadow. **Every
 operator act is one control in Settings › Automation backed by one stored value on the server (R-6, R-7).** When a
@@ -128,7 +130,8 @@ explain why review copies, which hold full dependency trees, make up most of the
 3. **Make the bounds deployment config.** `REAP_SCAN_SECONDS`, `WS_PATH_USERS_SCAN_S` and `WS_RECLAIM_WALK_S` become
    box install-config knobs (`CCD_REAP_SCAN_S`, `CCD_PATH_USERS_SCAN_S`, `CCD_RECLAIM_WALK_S`), with today's values as
    the defaults. They are bounded both ways: a floor so a misconfiguration cannot turn a bound off, and a ceiling under
-   the verb's runner row in `CCD_VERB_TIMEOUT_MS`, which a budget test already checks for `ws-shed-deps`. These are
+   the verb's runner row in `CCD_VERB_TIMEOUT_MS`, which a budget test on #1772's branch checks for `ws-shed-deps`
+   (`deps-shed-budget.test.ts`; neither the row nor the test is on `main` yet). These are
    walk bounds, not operator decisions: no §10 question asks for one, they exist only on the box, and a change to one
    is a deploy change. If the diagnosis shows a bound is wrong for every box, the fix is a new default in code.
 4. **Skip what is rebuildable.** Once deps-shed (§8) has run on a tree, its `node_modules` is gone and the scan is
@@ -261,7 +264,9 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
   an idle age (default 14 days), stored once in coord.db and seeded Off. The server hands the three values to the box
   with `ccd box-setting` (§8, "One control, one source"), and `ws-deps` and the tmp-sweep arm read only that copy. A
   copy that is missing or unreadable reads as Off, which is today's behaviour. On is refused with `cache-root-unset`
-  while the box reports no `CCD_DEPS_CACHE_ROOT`, and the row says so.
+  when the box reports `CCD_DEPS_CACHE_ROOT` as unset, and the row says so. The box does not report it today: that
+  report is §9 step 5's `limit deps-cache-root` line. While the box reports nothing (before step 5, or an older agent
+  or ccd), the row shows the cache root as unknown, and On is refused with `cache-root-unmeasured`, never assumed.
 - **Fill: only from shared, reviewed inputs.** An entry is shared with every other tree, so one session must not be
   able to fill it from its own modified repository. A miss is filled only when the lockfile and `package.json` blobs
   appear at the tip of the project's default branch on its remote. The verb fills from that commit, not from the
@@ -413,11 +418,19 @@ so it is the operator's call, not this spec's: §10, Q11.
 - **The one source.** A **Stale reclaim after** row on the Ages card in Settings › Automation (R-7), in hours,
   default 168 (today's value), stored once in coord.db and written only by the Ages card's route. There is no
   `CCRC_CHILD_STALE_IDLE_HOURS` and no `CCD_WS_STALE_IDLE_S`: neither side has a second knob for it.
-- **Raise-only.** The row's lower bound is the box's floor, which the box reports in its `ccd caps` reply (604800 s,
-  168 hours, today). The Ages route refuses a value below it with `out-of-bounds`, and the row shows "not below 168
-  hours (the box's floor)". The server's own idle check (`CHILD_STALE_IDLE_MS`, the server half of G2) reads the row,
-  so the server half can be raised with the box half and never falls below 168 hours either. While the box's floor
-  cannot be read, the row keeps its stored value and refuses edits with `floor-unmeasured`.
+- **Raise-only.** The row's lower bound is the box's floor, `WS_STALE_IDLE_S` (604800 s, 168 hours, today). **The
+  box does not report it today.** `cmd_caps` (`ccd/ccd`) prints only verb and capability tokens, and the shared parser
+  (`parseCcdCaps`, `shared/agent-protocol.ts`) keeps only identifier-shaped lines, so no value reaches the agent's
+  ready frame, its `caps` reply or the server. Reporting it is a build step of its own (§9 step 5: `ccd caps` prints
+  `limit stale-idle-s <n>`, agent first, with its own tests). Once the box reports it, the Ages route refuses a value
+  below it with `out-of-bounds`, and the row shows "not below 168 hours (the box's floor)". The server's own idle
+  check (`CHILD_STALE_IDLE_MS`, the server half of G2) reads the row, so the server half can be raised with the box
+  half and never falls below 168 hours either.
+- **Until the box reports its floor, the row is read-only.** While the box's reply carries no `stale-idle-s` limit
+  (before §9 step 5 lands, or with an older agent or ccd), or carries one the parser rejects, the row shows its stored
+  value (seeded 168 hours) and "box floor: unknown (this box does not report it)", and the Ages route refuses every
+  edit with `floor-unmeasured`. The server never guesses the floor, not even as today's 168 hours. It keeps sending
+  the stored value as `--stale-idle-s`, and the box's own check below stays the guard.
 - **How the box gets it.** The stale arm already calls the box with `--stale <word>` on `ws-audit --reclaim` and
   `ws-reclaim`. `staleFlags` adds `--stale-idle-s <n>`, the row's value in seconds, to those same two calls, so the
   box checks the figure the server decided on, in the same call, and nothing has to be kept in step. This is the
@@ -429,8 +442,9 @@ so it is the operator's call, not this spec's: §10, Q11.
   nothing, rather than acting early or silently acting at the floor. No install-config knob and no flag lowers it.
   So the row never shows a value the box would not use, and a server bug that sends a low figure reclaims nothing.
   Tests: a flag at the floor or above acts at the flag; a flag below the floor refuses and reclaims nothing; no flag
-  acts at the floor; the route refuses a value below the reported floor; a test that reads the bash pins the floor
-  that `ccd caps` reports to `WS_STALE_IDLE_S`.
+  acts at the floor; the route refuses a value below the reported floor; the route refuses every edit with
+  `floor-unmeasured`, and the row reads unknown, when the caps reply carries no floor. The test that pins the
+  reported floor to `WS_STALE_IDLE_S` is §9 step 5's.
 - The idle wording in banners, feed rows and ccd's `not-idle` refusal is formatted from the value actually used.
 - The same treatment applies to the other hard-coded ages this spec touches, each a row on the Ages card and each
   read only by the server, so nothing is handed to the box: `REVIEW_CHILD_CEILING_MS` (7 days) and the stale-archive
@@ -478,7 +492,9 @@ or a coordinator's act, through the control that exists. No new control is added
    - a PR in the merge queue, with required checks pending, or whose state the server could not read: the sheet
      shows the "unproven" block of item 4 in place of its single confirm. Abandon is never disabled.
 4. **The server re-checks at the press, and the operator always has a way through (R-3b.4).** The sheet is only a
-   rendering. The abandon arm of `closeRun` reads the run's PR state from GitHub again and answers with one of three
+   rendering. The abandon arm of `closeRun` reads the run's PR state again, through the box reads the server already
+   makes (it has no GitHub client of its own for PRs): `ccd pr-state --project` for the merge-queue word (`queueFor`,
+   `server/src/prstate.ts`) and `ccd pr-landing` for the required checks. It answers with one of three
    words when it cannot prove the release is safe: `pr-enqueued`, `checks-pending`, or `pr-state-unreadable` when it
    cannot read the state. A run with no PR recorded needs no read, and never gets a word. What a word does depends on
    who pressed:
@@ -490,8 +506,8 @@ or a coordinator's act, through the control that exists. No new control is added
      waits on DT7 (§7).
    - **The operator's Abandon always goes through, by one of two routes it chooses.** (The archive door's
      programme end is the other operator act on this arm; it has its own way through, below.) `POST /api/runs/:id/abandon`
-     keeps its rule of reading no body. On a word it answers 409 with the word, the facts it read (PR number, queue
-     position or the pending required checks by name, or the read's error), and a single-use **confirm key** the
+     keeps its rule of reading no body. On a word it answers 409 with the word, the facts it read (PR number, the queue
+     word or the pending required checks by name, or the read's error), and a single-use **confirm key** the
      server mints, bound to the run id, the word and a digest of those facts, and valid for 10 minutes. Two new
      operator doors take only that key (a strict body of `{ "key" }` and nothing else), sit beside the abandon door
      with its auth (ungated by the box token, session-gated when sign-in is armed, listed in
@@ -508,7 +524,7 @@ or a coordinator's act, through the control that exists. No new control is added
        queue), it refuses with `facts-changed` and a fresh key, so the second confirmation always names what is true
        at the press.
    - **What the sheet shows.** On a word, the sheet replaces its confirm with an **unproven** block:
-     - a title per word: "PR #n is in the merge queue (position k)", "PR #n has required checks still running:
+     - a title per word: "PR #n is in the merge queue", "PR #n has required checks still running:
        <names>", or "ccrc could not read PR #n from GitHub: <reason>";
      - one line of what is unproven: "Not proven: that releasing this worker leaves nothing PR #n still needs. If
        the PR merges or fails after the abandon, its coordinator (or you) gets an attention item to open a run on its
@@ -731,8 +747,10 @@ below has one, so this spec adds them. It reuses the collector's control and doe
   it. Nothing in the tree writes one. The Now column therefore shows only Shadow or Live, and both buttons always
   work. The existing `-disabled` kill switches are outside this spec and keep winning over the row.
 - **Readers.** The server's lanes read the row through one helper beside `readSwitches`. The session hook (D4) reads
-  it from one field in the `ccrc-api runs list` reply it already makes. When it cannot read that field, it injects no
-  card, as today. No box process reads a marker for these switches.
+  it from one field in the `ccrc-api runs list` reply it already makes. That reply carries no such field today (the
+  hook tests the `$REG/coordinator-roster-card-live` marker), so the roster card's row adds the field to the reply,
+  with a test. When the hook cannot read that field (an older server, or a failed read), it injects no card, as
+  today. No box process reads a marker for these switches.
 
 | Switch | Marker imported once at upgrade, then retired | Gate before Live |
 |---|---|---|
@@ -772,7 +790,10 @@ one stored value on the server. The rule has three parts.
     unreadable copy reads as the default that is today's behaviour (cache Off).
 - **What stays in install config.** Only what the operator is never asked to decide and that limits rather than sets
   a row: paths, walk and timeout bounds, sample rates and safety floors. Each exists on one side only. Where one caps
-  a row, the box reports it in `ccd caps` and the row shows it read-only and will not go past it.
+  or gates a row, the box reports it in `ccd caps` and the row shows it read-only and will not go past it. **The box
+  reports no such value today**: `ccd caps` prints verb and capability tokens only. §9 step 5 adds the report. Until
+  it lands, and with any box that does not report a given value, the row it caps is read-only and shows that value
+  as unknown; nothing on the server assumes it.
 
 Every value and switch in this spec, under that rule:
 
@@ -791,8 +812,8 @@ Every value and switch in this spec, under that rule:
 | Install config, one side only, never an operator act | Side | Why it is not a setting |
 |---|---|---|
 | `CCD_REAP_SCAN_S`, `CCD_PATH_USERS_SCAN_S`, `CCD_RECLAIM_WALK_S` (R-0.3) | box | walk bounds; a wrong one is fixed by a new default in code |
-| `WS_STALE_IDLE_S`, ccd's constant, not install config (R-3a) | box | the ruled raise-only floor under the Stale reclaim row; reported by `ccd caps` and shown on the row, read-only; lowering it is §10, Q11 |
-| `CCD_DEPS_CACHE_ROOT`, `_LOCKFILES`, `_ENV_KEYS`, `_KEY_PATHS`, `_OWNER` (R-2) | box | where the cache may live and how a key is built; the root's absence refuses the row's On |
+| `WS_STALE_IDLE_S`, ccd's constant, not install config (R-3a) | box | the ruled raise-only floor under the Stale reclaim row; reported by `ccd caps` once §9 step 5 lands and shown on the row, read-only (unknown, and the row read-only, until then); lowering it is §10, Q11 |
+| `CCD_DEPS_CACHE_ROOT`, `_LOCKFILES`, `_ENV_KEYS`, `_KEY_PATHS`, `_OWNER` (R-2) | box | where the cache may live and how a key is built; the root's absence refuses the row's On. Whether the root is set (never its path) is reported by `ccd caps` once §9 step 5 lands; unknown until then, and On is refused |
 | `CCD_DEPS_CACHE_HASH_SAMPLE`, `_HYDRATE_S`, `_VERIFY_HOURS` (R-2) | box | integrity and walk bounds |
 
 **Also found by the census, for the plan's backlog.** Four "reclaimed" runs leave an empty or near-empty directory,
@@ -816,31 +837,61 @@ Each step is one PR. Every destructive arm ships in shadow first.
    sets the Stale archive row live (R-4a), after reading its shadow rows.
 4. **R-1a** one reviewer per work run (the capacity spec's W2), with the re-bind rules, the per-verdict keep tests and
    the fenced tree advance.
-5. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine, fenced replace and `--check`, the
+5. **`ccd caps` reports the box's limits, agent first.** Today `cmd_caps` (`ccd/ccd`) prints one verb or capability
+   token per line and no value, and `parseCcdCaps` (`shared/agent-protocol.ts`) keeps only lines shaped like
+   `/^[a-z][a-z0-9-]*$/`, so the agent's ready frame (`ccdVerbs`) and its `caps` reply (`verbs`) carry tokens only.
+   This step makes the box report each value that caps or gates a Settings row:
+   - **ccd.** `cmd_caps` prints one `limit <name> <value>` line per value, from a fixed vocabulary in ccd:
+     `limit stale-idle-s <n>` from `WS_STALE_IDLE_S`, and `limit deps-cache-root set|unset` (whether
+     `CCD_DEPS_CACHE_ROOT` is configured; never the path). The line holds a space, so today's `parseCcdCaps` and every
+     older agent drop it, and their token lists are unchanged.
+   - **The parser.** One new parser beside `parseCcdCaps`, in the same file and under the same single-definition
+     test, reads only `limit` lines. An unknown name, a malformed value, or a name given twice reads as unknown for
+     that name, never as a default.
+   - **The agent.** It adds the parsed limits as one optional field to its ready frame and to its `caps` reply
+     (additive; an older agent omits it, which the server reads as unknown for every name). Its `ccd caps` cache today
+     re-runs the verb only when the `ccd` entry or body changes (`refreshVerbs`, `agent/src/server.ts`), so its key
+     also covers every file a limit is read from (`ccd/lib/disk-retention.sh`, and any install-config file ccd
+     sources), or a changed floor would never be re-read.
+   - **The server.** It keeps the limits beside the verb list in its fleet state and hands them to the Ages and
+     Dependency cache rows. A name it has no value for is unknown.
+   - **Order.** The agent lane ships before the server lane (agent first), so the server never reads a field no
+     deployed agent sends; until then it reads unknown.
+   - **Tests.** A test that reads the bash pins the reported `stale-idle-s` to `WS_STALE_IDLE_S`; `deps-cache-root`
+     reads `set` and `unset` from the install config; the parser's unknown, malformed and repeated cases; an old-shape
+     caps output gives unknown for every name and an unchanged token list; the ready frame and the `caps` reply carry
+     the field; a change to the lib file re-reads caps.
+
+   **Until this step lands**, the Stale reclaim row is read-only and shows the box floor as unknown, with edits refused
+   `floor-unmeasured` (§5.1), and the Dependency cache row shows the cache root as unknown, with On refused
+   `cache-root-unmeasured` (§4). Neither value is guessed.
+6. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine, fenced replace and `--check`, the
    `ws-add --child` hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, the Dependency cache
    row with `ccd box-setting` and its re-send on agent connect, and **in the same PR** the CLAUDE.md and worker and
    reviewer skill changes that replace the blanket `npm ci`. The cache is off until its row is set On, which needs
    `CCD_DEPS_CACHE_ROOT` in the box's install config.
-6. **R-1c** the deps-shed row for review children between rounds, in shadow.
-7. **R-3a** ages as Ages rows: the stale age, raise-only (with `--stale-idle-s`, the box's floor `WS_STALE_IDLE_S` in
-   `ccd caps`, kept as ccd's constant, and `stale-idle-below-floor`), the review ceiling and stale archive's 14 days.
-8. **R-5a** the D4 wake arm and its shared card builder; **#1407**.
-9. **R-3b** the parked-run nudge, the parked line on the existing run row, the PR sentence and the unproven block in
+7. **R-1c** the deps-shed row for review children between rounds, in shadow.
+8. **R-3a** ages as Ages rows: the stale age, raise-only (with `--stale-idle-s`, the box's floor `WS_STALE_IDLE_S` in
+   `ccd caps` from step 5, kept as ccd's constant, and `stale-idle-below-floor`), the review ceiling and stale archive's
+   14 days.
+9. **R-5a** the D4 wake arm and its shared card builder; **#1407**.
+10. **R-3b** the parked-run nudge, the parked line on the existing run row, the PR sentence and the unproven block in
    `AbandonSheet`, the PR-state re-check in the abandon arm, the confirm key with the `when-settled` and `unproven`
    doors and the pending-abandon record, their three Ages rows, and the ejected-PR attention item; and, in the same
    PR, the archive door's programme end: `abandonPrCheck` in its pre-loop, `programme-pr-unproven` with its key, the
    `archive/unproven` door and `ArchiveSheet`'s unproven block.
-10. **DT4** the PWA "Out of step" section; the operator then sets the drift push's row live.
-11. D8 (DT6, DT7) per the tail spec.
-12. **Arm OA-D6**: the operator sets the dead-coordinator lane's row live after reading its shadow record. Its gate
-    refuses it before step 11.
-13. **R-4b and R-4c's coordinator half** the coordinator archive arm in shadow, its countdown with Keep and Archive
+11. **DT4** the PWA "Out of step" section; the operator then sets the drift push's row live.
+12. D8 (DT6, DT7) per the tail spec.
+13. **Arm OA-D6**: the operator sets the dead-coordinator lane's row live after reading its shadow record. Its gate
+    refuses it before step 12.
+14. **R-4b and R-4c's coordinator half** the coordinator archive arm in shadow, its countdown with Keep and Archive
     now, and its Settings row.
 
-Steps 4 and 5 can be built in parallel. Every arming step needs step 2's card. Step 3's arming waits on its own UI
-half. Step 6 needs steps 4 and #1772.
-Step 7's lowered review ceiling needs step 4's per-verdict keep (a re-bound reviewer must not age out). Step 11 needs
-step 8 (#1407). Step 12 needs step 11 (DT7). Step 13 needs steps 7, 8 and 11.
+Steps 4, 5 and 6 can be built in parallel. Every arming step needs step 2's card. Step 3's arming waits on its own UI
+half. Step 6's Dependency cache row can be set On only once step 5 reports the cache root, and step 8's stale row is
+editable only once step 5 reports the floor. Step 7 needs steps 4 and #1772.
+Step 8's lowered review ceiling needs step 4's per-verdict keep (a re-bound reviewer must not age out). Step 12 needs
+step 9 (#1407). Step 13 needs step 12 (DT7). Step 14 needs steps 8, 9 and 12.
 
 ## 10. Operator decisions
 
@@ -857,12 +908,12 @@ record shows the evidence named below.
 | Q3 | Dependencies: (a) the read-only cache with manifest and the `npm ci` instructions change (R-2), (b) a symlinked shared directory, or (c) deps-shed alone | **(a)**, seeded Off; 20 GB, 14 days idle | Removes the per-tree copy without letting one tree change another's | a design ruling; then the Dependency cache row (On, size cap, idle age), handed to the box by `ccd box-setting`. The cache root is install config and only makes On possible |
 | Q4 | Parked runs: (a) nudge at 48 h, mark the existing run row "parked" at 7 days, add the PR check to the existing Abandon with the operator's bounded wait or unproven confirm, and to the archive door's programme end with its unproven confirm (R-3b.4); never automatic. Or (b) also auto-abandon | **(a)**; revisit (b) after two weeks of nudges | No new control outside the existing sheet. Keeps the Rejected-list rule that a close is a person's or a coordinator's act, and never locks the operator out of it | the Ages rows Parked-run nudge, Parked-run line and Abandon settle wait; the run row's Abandon. Under (b), one Shadow lanes row holds auto-abandon's switch and age |
 | Q5 | Coordinators: (a) auto-archive after N idle days with countdown and Keep, built after D8, or (b) never | **(a), N = 14** | Deps-shed already takes their bytes; this takes the count, and only once claims are proven | a design ruling; then the coordinator archive's Shadow lanes row (switch and N), and Keep or Archive now on each session row |
-| Q6 | Stale reclaim age in this deployment (R-3a) | **Keep 168 h**, the floor | The row can only raise it (Q11), and raising it keeps trees longer, which the census does not call for | the Ages row Stale reclaim after; the box takes it on each stale call (`--stale-idle-s`) and refuses a figure below its own floor |
+| Q6 | Stale reclaim age in this deployment (R-3a) | **Keep 168 h**, the floor | The row can only raise it (Q11), and raising it keeps trees longer, which the census does not call for | the Ages row Stale reclaim after, editable once the box reports its floor (§9 step 5) and read-only until then; the box takes it on each stale call (`--stale-idle-s`) and refuses a figure below its own floor |
 | Q7 | Set the Roster card row live (D4) | **Yes, as soon as** its existing log shows the evidence below | It only adds context, fails open, and directly prevents forgotten runs | its Shadow lanes row; the hook reads it from the `runs list` reply |
 | Q8 | Set the Drift push row live (D7) | **After DT4 lands**, on the evidence below | A push must land on a PWA section the operator can act from | its Shadow lanes row |
 | Q9 | Set the Dead-coordinator lane row live (OA-D6) | **Only after D8's DT7**, then on the evidence below | Until DT7 a coordinator revived under a new id reads as dead, and no hand check of today's rows covers a later revive | its Shadow lanes row; its gate refuses Live before DT7 |
 | Q10 | Arming and ages: (a) the Shadow lanes and Ages cards as the one source, with today's markers imported once and retired (R-6, R-7), or (b) hand-touched markers and env vars, as today | **(a)** | The operator acts from the app, and a value has one place to be read and changed. It is the collector's and the Cleanup pause's existing pattern, not a new one | the two cards |
-| Q11 | Allow the operator to LOWER the stale-idle floor from Settings (overturns the 2026-10-23 raise-only ruling)? | **No, not now**; revisit once §2 to §4 have landed and the census is taken again | The census shows lowering does little: 17 trees are past 7 days and 12 of them are manual sessions, which G1 takes (§1, §6). A stale reclaim destroys the tree, branch, clips and registry row, and the box's own idle measurement, behind a floor the server cannot lower, is what catches a server that measured idle wrongly. The saving is in §2 to §4, not in waiting less. If the operator rules yes, the floor becomes install config with a hard minimum in ccd (24 hours), the row may go down to it behind a confirm that names the trees it would now reach, and the retention spec's §2.5.1 and §2.7.3 are amended in the same PR | a design ruling, made once here. Under no, nothing changes on the box. Under yes, the same Ages row, whose lower bound becomes the box's reported minimum |
+| Q11 | Allow the operator to LOWER the stale-idle floor from Settings (overturns the 2026-10-23 raise-only ruling)? | **No, not now**; revisit once §2 to §4 have landed and the census is taken again | The census shows lowering does little: 17 trees are past 7 days and 12 of them are manual sessions, which G1 takes (§1, §6). A stale reclaim destroys the tree, branch, clips and registry row, and the box's own idle measurement, behind a floor the server cannot lower, is what catches a server that measured idle wrongly. The saving is in §2 to §4, not in waiting less. If the operator rules yes, the floor becomes install config with a hard minimum in ccd (24 hours), the row may go down to it behind a confirm that names the trees it would now reach, and the retention spec's §2.5.1 and §2.7.3 are amended in the same PR | a design ruling, made once here. Under no, nothing changes on the box. Under yes, the same Ages row, whose lower bound becomes the box's reported minimum (reported through §9 step 5's `limit` line; unknown, and the row read-only, until the box reports it) |
 
 Stale archive (R-4a) and deps-shed are not separate choices. The operator sets Stale archive's row live once R-4c's
 G1 half ships and its "would archive" rows name only manual sessions they would let go, and sets deps-shed's row live
