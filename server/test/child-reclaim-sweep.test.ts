@@ -48,6 +48,7 @@ import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
 import { SPAWN_STALL_MS, holdReason, lcRefusalWord, type ChildReclaimStatus } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -1620,8 +1621,10 @@ describe('the production path', () => {
   });
 
   it("goes through the session's own KeyedQueue — the one the close path and the reap route join", () => {
-    const src = readFileSync(path.join(__dirname, '../src/watch.ts'), 'utf8');
-    expect(src).toMatch(/this\.deps\.queue\.run\(req\.sessionId, \(\) => reclaimChild\(\{/);
+    // C4n (D-7171): the queue call is retireExecutor's (the one owner of a retire's KeyedQueue run), read off the
+    // executor's own symbol through scan/symbols.ts, never the file's text.
+    const exec = sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.execChildReclaim');
+    expect(exec).toMatch(/retireExecutor\(this\.deps\.queue, req\.sessionId, \(\) => reclaimChild\(\{/);
   });
 
   it('composes the SAME ports the close route does — presence blocks it before any argv is composed', async () => {
