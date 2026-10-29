@@ -1093,6 +1093,12 @@ describe('the bypass deny (wave 2b)', () => {
         'gh api -X PUT repos/o/r/pulls/$(gh pr view --json number -q .number)/merge',
         'gh api -X PUT repos/o/r/pulls/$(echo 42)/merge',
         'gh api -X PUT repos/$(echo o)/$(echo r)/merges',
+        // The space-free reading too: a `|` or `&` inside arithmetic is not a separator to it.
+        'gh api -X PUT repos/o/r/pulls/$((42|0))/merge', 'gh api -X PUT repos/o/r/pulls/$((42&255))/merge',
+        'gh api -X POST repos/$((1|0))/r/merges',
+        // The accepted cost (hook header, THE COST of the api half): the separator-bounded reading crosses
+        // blanks, so a non-merge call whose later argument ends in `/merge` is refused.
+        'gh api repos/o/r/pulls/42 -f body=docs/merge',
       ]) {
         expect(flagsOf(c), `no p flag: ${c}`).toContain('p');
         expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
@@ -1111,7 +1117,8 @@ describe('the bypass deny (wave 2b)', () => {
     it('answers a cap-sized run of path starts with long segments, and no merge path, in bounded time', () => {
       // `pulls/` and `repos/` repeated with long runs between them, and the `merge` the payload needs for the
       // arm to run: each start reads its own segments once, so the cost is linear in the command.
-      for (const unit of ['pulls/' + 'a b'.repeat(40) + ' ', 'repos/' + 'a'.repeat(100) + '/', 'pulls/$(' + 'x '.repeat(50) + ')']) {
+      for (const unit of ['pulls/' + 'a b'.repeat(40) + ' ', 'repos/' + 'a'.repeat(100) + '/', 'pulls/$(' + 'x '.repeat(50) + ')',
+        'pulls/' + '$((1|0))'.repeat(20) + ' ', 'repos/' + 'a|'.repeat(40) + '/' + 'b&'.repeat(40) + ' ']) {
         const c = sized('gh api x ' + unit, ' echo merge', CAP);
         expect(Buffer.byteLength(c)).toBe(CAP);
         const r = timed(c);
@@ -1170,6 +1177,11 @@ describe('the bypass deny (wave 2b)', () => {
       ['gh api repos/o/r/pulls/42/merge-queue'],
       ['gh api graphql -F p=42 -f query=\'query { repository(owner: "o", name: "r") { pullRequest(number: 42) { mergeQueueEntry { state } } } }\''],
       ['gh api repos/o/r/pulls/42 --jq .merged_at # merge state'],
+      // The separator-bounded reading stops at a separator: a later command's `a/merge` is not the path.
+      ['gh api repos/o/r/pulls/42; echo a/merge'], ['gh api repos/o/r/pulls/42 && echo a/merge'],
+      ['gh api repos/o/r/pulls/42 | echo a/merge'], ['gh api repos/o/r/pulls/42\necho a/merge'],
+      ['gh api repos/o/r/pulls/42;echo a/merge'], ['gh api repos/o/r/pulls/42&&echo a/merge'],
+      ['gh api repos/o/r/pulls/42|echo a/merge'],
     ])('passes a read that is not a merge call: %j', (c) => {
       expect(bash(c).deny, `refused: ${c}`).toBeNull();
     });
@@ -1202,6 +1214,8 @@ describe('the bypass deny (wave 2b)', () => {
       ['q=merge; r=PullRequest; gh api graphql -f query="mutation { $q$r }"', 'a word or path assembled at run time'],
       ['gh api -X PUT repos/o/r/pulls/$(cat /tmp/n)/merge', 'a word or path assembled at run time'],
       ['gh api -X PUT repos/o/r/pulls/42/m""erge', 'a word or path broken by quotes or a backslash'],
+      // Broken before the prefilter: the payload holds none of the three trigger strings, so the arm never runs.
+      ['gh api graphql -f query=enqueue""PullRequest', 'a word or path broken by quotes or a backslash'],
       ['xargs gh api -X PUT repos/o/r/pulls/42/merge', 'the head grammar\'s own classes'],
       ['gh api -X PUT repos/o/r/pulls/42/%6derge', 'an encoded or non-canonical merge path'],
       ['gh api -X PUT repos/o/r/pulls/42//merge', 'an encoded or non-canonical merge path'],

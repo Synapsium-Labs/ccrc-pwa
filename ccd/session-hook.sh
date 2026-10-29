@@ -4108,8 +4108,10 @@ fi
 #     `gh api` head as they pass the merge head: `xargs gh api …`, `bash -c "…"`,
 #     `eval`, a leading redirection, an unlisted wrapper and a path-spelled wrapper;
 #   - an encoded or non-canonical merge path: a percent-encoded character
-#     (`pulls/42/%6derge`), a doubled slash (`pulls/42//merge`, `repos/o/r//merges`)
-#     or a case variant (`pulls/42/Merge`): the path test reads the text as written;
+#     (`pulls/42/%6derge`, which holds no `merge`, so the bash prefilter never wakes
+#     the arm), a doubled slash (`pulls/42//merge`, `repos/o/r//merges`) or a case
+#     variant (`pulls/42/Merge`), which wake the arm and which the path test does not
+#     read, since it reads the text as written;
 #   - a mutation word written with JSON `\u` escapes in a `--input -` body or a
 #     `-f query=` value (`enqueuePullRequest`): the escape is the body's, not
 #     the shell's, and the hook does not decode JSON. Such a payload can also skip
@@ -4181,11 +4183,16 @@ fi
 # `enablePullRequestAutoMerge` or `mergeBranch`, the set written once in the jq
 # program) or a merge path (`p`: `pulls/<seg>/merge` or `repos/<seg>/<seg>/merges`,
 # each END-BOUNDED so `pulls/42/merges/x` is not one, and possessive, so the test
-# cannot backtrack). A segment is read up to the next `/` or separator (`;` `&` `|`
-# or a newline), blanks, `(` and `)` included, so a `$(…)` operand is read as part of
-# the path: `pulls/$(gh pr view --json number -q .number)/merge` and
-# `pulls/$(echo 42)/merge` are paths, while a `$(…)` that holds a `;` `&` `|`
-# or a `/` is not (below). Any METHOD is refused, a GET
+# cannot backtrack). A path counts when EITHER of two readings finds it (one
+# alternation in the same jq, every segment possessive, the same end boundary): a
+# segment up to the next blank or `/` (`[^[:space:]/]++`), which reads
+# `pulls/$((42|0))/merge` and `pulls/$((42&255))/merge`; and a segment up to the next
+# `/` or separator (`;` `&` `|` or a newline), blanks, `(` and `)` included
+# (`[^;&|\n/]++`), so a `$(…)` operand with blanks is read as part of the path:
+# `pulls/$(gh pr view --json number -q .number)/merge` and `pulls/$(echo 42)/merge`
+# are paths, while a `$(…)` that holds a `/` or a `;` `&` `|` beside a blank is not
+# (below). The second reading stops at a separator: `gh api repos/o/r/pulls/42; echo
+# a/merge` is not a path. Any METHOD is refused, a GET
 # included (D-7112): a text-read GET exemption is defeated by a later `-X PUT` or a
 # `GET` inside a quoted field, and `gh pr view <n> --json state,mergedAt` answers
 # the same question, which the reason names. The wide reading is the same on
@@ -4368,6 +4375,10 @@ fi
 # GH_MERGE_RE needs a blank before `pr` and `merge`), and a backslash-newline
 # straight after `merge` (`gh pr merge\<newline> 42`).
 # Classified, not closed (the stopping line, ruled 2026-10-03).
+# THE COST of the api half under the cap, accepted: the separator-bounded path reading
+# crosses blanks, so a non-merge `gh api` call whose later argument ends in `/merge`
+# (`gh api repos/o/r/pulls/42 -f body=docs/merge`) is refused too. Run it as a
+# separate command or pass the body as a file.
 # The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
 # never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
 # are what the cap prevents, not what a command costs.
@@ -4452,7 +4463,7 @@ def ocapiwords: contains("gh") and contains("api")
   and any(ocsegs[] | select(contains("gh") and contains("api")) | ocapi; true);
 def ockinds: (ocwords) as $m | (ocapiwords) as $a
   | [(if $m then "merge" else empty end), (if $m and contains("--admin") then "admin" else empty end), (if $a then "api" else empty end)] | join(",");
-def mergepath: "pulls/[^;&|\\n/]++/merge(?![A-Za-z0-9_-])|repos/[^;&|\\n/]++/[^;&|\\n/]++/merges(?![A-Za-z0-9_-])";
+def mergepath: "pulls/[^[:space:]/]++/merge(?![A-Za-z0-9_-])|repos/[^[:space:]/]++/[^[:space:]/]++/merges(?![A-Za-z0-9_-])|pulls/[^;&|\\n/]++/merge(?![A-Za-z0-9_-])|repos/[^;&|\\n/]++/[^;&|\\n/]++/merges(?![A-Za-z0-9_-])";
 def vflags: (unq) as $u | (if contains("--admin") then "a" else "" end) + (if test($allow) then "s" else "" end)
   + (if ($u | mutword) then "w" else "" end) + (if ($u | test(mergepath)) then "p" else "" end);
 def capped(f): (.tool_input.command // "") as $c
