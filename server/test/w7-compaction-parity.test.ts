@@ -95,3 +95,41 @@ describe('the compaction flag beside foldsAway (D-7186)', () => {
     }
   });
 });
+
+// C7i (D-7187), Step 1: the PWA's own fold inputs carry the flag, and this row proves the flag on each is the server's.
+// `pwa/test/markdownCorpus.ts` is imported by path, as `MessageBubble.tsx` is above: every corpus case and every recap
+// placement is parsed as the user and the assistant record Claude Code writes, and the parser's flag must equal the
+// case's own `compaction`, so no PWA input claims a flag the server would not send, or drops one it would.
+describe('the PWA corpus inputs carry the server\'s compaction flag (D-7187)', () => {
+  interface Case { readonly name: string; readonly text: string; readonly compaction?: true }
+  interface Placement { readonly kind: 'user' | 'assistant'; readonly text: string; readonly compaction?: true }
+  interface Corpus {
+    CHAT_CORPUS: readonly Case[]; RECAP_CASE: Case; RECAP_PLACEMENTS: readonly Placement[];
+    CHAT_ALIAS_TAGS: readonly string[]; CHAT_UNREGISTERED_TAGS: readonly string[]; languageCases: (tags: readonly string[]) => Case[];
+  }
+  const corpus = async (): Promise<Corpus> => await import(path.join(ROOT, 'pwa/test/markdownCorpus.ts')) as Corpus;
+  const line = (kind: 'user' | 'assistant', text: string): string => (kind === 'user'
+    ? tl.user(text)
+    : JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } }));
+  const flagOf = (kind: 'user' | 'assistant', text: string): boolean[] =>
+    parseTranscriptLine(line(kind, text)).flatMap((e) => (e.kind === kind ? [e.compaction === true] : []));
+
+  it('every corpus case, as a user and an assistant record: the server flags exactly the cases marked compaction', async () => {
+    const c = await corpus();
+    const cases = [...c.CHAT_CORPUS, c.RECAP_CASE, ...c.languageCases([...c.CHAT_ALIAS_TAGS, ...c.CHAT_UNREGISTERED_TAGS])];
+    expect(cases.length).toBeGreaterThan(40);
+    // A case yields one event of its kind, or none for an empty text (the `empty` case), never two.
+    for (const kind of ['user', 'assistant'] as const) {
+      const off = cases.filter((k) => flagOf(kind, k.text).some((f) => f !== (k.compaction === true))).map((k) => k.name);
+      expect(off, kind).toEqual([]);
+      expect(cases.filter((k) => flagOf(kind, k.text).length !== 1).map((k) => k.name), kind).toEqual(['empty']);
+    }
+    expect(cases.filter((k) => k.compaction === true).map((k) => k.name)).toEqual(['recap-opened']);
+  });
+
+  it('every recap placement: the server flags exactly the placements marked compaction', async () => {
+    const { RECAP_PLACEMENTS } = await corpus();
+    expect(RECAP_PLACEMENTS.map((p) => flagOf(p.kind, p.text))).toEqual(RECAP_PLACEMENTS.map((p) => [p.compaction === true]));
+    expect(RECAP_PLACEMENTS.map((p) => p.compaction === true)).toEqual([true, true, false, false]);
+  });
+});

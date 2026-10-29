@@ -560,7 +560,7 @@ describe('it seeds virtuoso with a size for EVERY row, not one for all of them',
     learned();
     const recap = 'This session is being continued from a previous conversation that ran out of context.\n'
       + linesOf(300, 'summary');
-    visit([{ kind: 'user', uuid: 'u0', ts: at(0), text: recap }, { kind: 'assistant', uuid: 'a0', ts: at(0), text: 'ok' }]);
+    visit([{ kind: 'user', uuid: 'u0', ts: at(0), text: recap, compaction: true }, { kind: 'assistant', uuid: 'a0', ts: at(0), text: 'ok' }]);
     expect(seededRows()).toEqual([35, 47, 58]);
   });
 
@@ -618,8 +618,8 @@ describe('a row is priced by what it RENDERS', () => {
     + linesOf(380, 'summary');
 
   it('a compaction recap is ONE folded card, whoever said it and however long it is', () => {
-    expect(only([{ kind: 'user', uuid: 'u', ts: at(0), text: RECAP }])).toEqual({ bucket: 'folded', lines: 0 });
-    expect(only([{ kind: 'assistant', uuid: 'a', ts: at(0), text: RECAP }])).toEqual({ bucket: 'folded', lines: 0 });
+    expect(only([{ kind: 'user', uuid: 'u', ts: at(0), text: RECAP, compaction: true }])).toEqual({ bucket: 'folded', lines: 0 });
+    expect(only([{ kind: 'assistant', uuid: 'a', ts: at(0), text: RECAP, compaction: true }])).toEqual({ bucket: 'folded', lines: 0 });
   });
 
   it('a multi-line system row folds too; a one-line one is a pill', () => {

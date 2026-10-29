@@ -15,6 +15,9 @@ export interface CorpusCase {
   readonly text: string;
   /** Renders the assistant turn with the streaming caret after its body. */
   readonly streaming?: boolean;
+  /** The server's compaction flag on this case's user or assistant event (`ChatEvent`'s `compaction`, D-7186), set
+   *  where the server sets it: `server/test/w7-compaction-parity.test.ts` parses every case and holds the two equal. */
+  readonly compaction?: true;
 }
 
 /** Fence tags that `MessageBubble` resolves through an alias rather than a grammar's own name: the three
@@ -268,10 +271,11 @@ export const CHAT_CORPUS: readonly CorpusCase[] = [
   },
 ];
 
-/** A recap that `MessageBubble` folds into the compaction card (it matches `COMPACTION_RE`). Its Markdown body is
- *  the second Markdown site, which renders only once the card is opened. */
+/** A recap that `MessageBubble` folds into the compaction card (its event carries the server's `compaction` flag,
+ *  D-7187). Its Markdown body is the second Markdown site, which renders only once the card is opened. */
 export const RECAP_CASE: CorpusCase = {
   name: 'recap-opened',
+  compaction: true,
   text: [
     'This session is being continued from a previous conversation that ran out of context.',
     '',
@@ -288,3 +292,14 @@ export const RECAP_CASE: CorpusCase = {
     '',
   ].join('\n'),
 };
+
+/** Where the recap sentence sits, as `w7-compaction-corpus.test.ts` reads it: at the start, after a bracketed tag,
+ *  quoted mid-text, and lower-cased. Each carries the server's `compaction` flag exactly where the server's pattern
+ *  sets it (the first two), which `server/test/w7-compaction-parity.test.ts` holds by parsing each one. */
+export const RECAP_PHRASE = 'This session is being continued from a previous conversation that ran out of context.';
+export const RECAP_PLACEMENTS: ReadonlyArray<{ readonly kind: 'user' | 'assistant'; readonly text: string; readonly compaction?: true }> = [
+  { kind: 'user', text: RECAP_PHRASE, compaction: true },
+  { kind: 'user', text: `  [summary] ${RECAP_PHRASE}`, compaction: true },
+  { kind: 'assistant', text: `As the note says: ${RECAP_PHRASE}` },
+  { kind: 'assistant', text: RECAP_PHRASE.toLowerCase() },
+];

@@ -5,16 +5,22 @@
 // server's transcript fixtures, which imports `foldsAway` by path.
 import { describe, it, expect } from 'vitest';
 import { foldsAway, type MessageEvent } from '../src/session/MessageBubble';
-import { CHAT_ALIAS_TAGS, CHAT_CORPUS, CHAT_UNREGISTERED_TAGS, RECAP_CASE, languageCases, type CorpusCase } from './markdownCorpus';
+import {
+  CHAT_ALIAS_TAGS, CHAT_CORPUS, CHAT_UNREGISTERED_TAGS, RECAP_CASE, RECAP_PLACEMENTS, languageCases, type CorpusCase,
+} from './markdownCorpus';
 
 const CASES: readonly CorpusCase[] = [...CHAT_CORPUS, RECAP_CASE, ...languageCases([...CHAT_ALIAS_TAGS, ...CHAT_UNREGISTERED_TAGS])];
-const event = (kind: 'user' | 'assistant' | 'system', text: string): MessageEvent =>
-  (kind === 'system' ? { kind, uuid: 'u-1', ts: '2026-10-27T00:00:00.000Z', text } : { kind, uuid: 'u-1', ts: '2026-10-27T00:00:00.000Z', text });
+// C7i (D-7187): a user- or assistant-kind input carries the server's `compaction` flag where the server sets it (the
+// corpus case's own `compaction`, which `server/test/w7-compaction-parity.test.ts` holds to the server's parser).
+const event = (kind: 'user' | 'assistant' | 'system', text: string, compaction?: true): MessageEvent =>
+  (kind === 'system'
+    ? { kind, uuid: 'u-1', ts: '2026-10-27T00:00:00.000Z', text }
+    : { kind, uuid: 'u-1', ts: '2026-10-27T00:00:00.000Z', text, ...(compaction === true ? { compaction } : {}) });
 
 describe('foldsAway over the PWA corpus (every verdict, by kind)', () => {
   it('a user or assistant row folds exactly when it is the recap; every other case renders', () => {
     for (const kind of ['user', 'assistant'] as const) {
-      const folds = CASES.filter((c) => foldsAway(event(kind, c.text))).map((c) => c.name);
+      const folds = CASES.filter((c) => foldsAway(event(kind, c.text, c.compaction))).map((c) => c.name);
       expect(folds, kind).toEqual(['recap-opened']);
     }
     expect(CASES.length).toBeGreaterThan(40);
@@ -27,12 +33,6 @@ describe('foldsAway over the PWA corpus (every verdict, by kind)', () => {
   });
 
   it('the recap phrase folds only at the start (after an optional bracketed tag), never quoted mid-text', () => {
-    const recap = 'This session is being continued from a previous conversation that ran out of context.';
-    expect([
-      foldsAway(event('user', recap)),
-      foldsAway(event('user', `  [summary] ${recap}`)),
-      foldsAway(event('assistant', `As the note says: ${recap}`)),
-      foldsAway(event('assistant', recap.toLowerCase())),
-    ]).toEqual([true, true, false, false]);
+    expect(RECAP_PLACEMENTS.map((p) => foldsAway(event(p.kind, p.text, p.compaction)))).toEqual([true, true, false, false]);
   });
 });
