@@ -1641,7 +1641,10 @@ describe('ccd-land-probe: only rc 0 and rc 1 decide a row (fix round 3, review 1
   });
 });
 
-describe('ccd-land-probe: a registry the probe cannot read decides no row (fix round 4, review 1143 F5, F6)', () => {
+// Mode bits do not deny root, so every case here that relies on one carries R8b's uid-0 guard (review 1158 F5), and
+// each restores the mode it changed in a finally.
+
+describe('ccd-land-probe: a registry the probe cannot read decides no row (fix round 4, review 1143 F5, F6; fix round 5, review 1158 F2, F5)', () => {
   const ALPHA = 'lane-a-proj-a-alpha';
   const BETA = 'lane-a-proj-a-beta';
   const FAIL_FETCH = 'case " $* " in *" fetch "*) exit 1;; esac';
@@ -1677,7 +1680,7 @@ describe('ccd-land-probe: a registry the probe cannot read decides no row (fix r
     }
   };
 
-  it('F5-a a registry that can be traversed but not listed (mode 0311) keeps every old lineage byte-identical, on a measured tick and on a failed fetch', { timeout: 120_000 }, () => {
+  it.skipIf(process.getuid?.() === 0)('F5-a a registry that can be traversed but not listed (mode 0311) keeps every old lineage byte-identical, on a measured tick and on a failed fetch', { timeout: 120_000 }, () => {
     const old = seeded([ALPHA, BETA]);
     fs.chmodSync(fx.reg, 0o311);
     try {
@@ -1698,7 +1701,101 @@ describe('ccd-land-probe: a registry the probe cannot read decides no row (fix r
     }
   });
 
-  it('F6-a a .branch that cannot be read (mode 000) holds its row: the old file is byte-identical on a measured tick and on a failed fetch, and the other row is measured', { timeout: 120_000 }, () => {
+  it.skipIf(process.getuid?.() === 0)('F5-b an unlistable registry (mode 0311) on the before-first-write fallback keeps every old lineage byte-identical, and the fallback\'s re-read says the skip line again', { timeout: 120_000 }, () => {
+    const old = seeded([ALPHA, BETA]);
+    fs.chmodSync(fx.reg, 0o311);
+    try {
+      const r = fx.runPatched('def bad(*a):\n    raise RuntimeError("planted")\nns["fetch_into_scratch"] = bad');
+      expect(r.status, 'fallback').toBe(0);
+      expect(lines(r.stderr), 'the fallback was reached').toContain(`land-probe: project-error ${fx.project}: RuntimeError`);
+      expect(fx.readJson('probe'), 'fallback').toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+      unchanged(old, 'fallback');
+      said(r.stderr, 'the registry could not be listed', [ALPHA, BETA], 'fallback');
+      expect(lines(r.stderr).filter((l) => l === 'land-probe: lineage-skip: the registry could not be listed'),
+        'the first read, and the fallback\'s re-read').toHaveLength(2);
+    } finally {
+      fs.chmodSync(fx.reg, 0o755);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('F5-c an unlistable registry (mode 0311) with a slug that is None keeps every old lineage byte-identical', { timeout: 120_000 }, () => {
+    const old = seeded([ALPHA, BETA]);
+    fx.setOrigin('https://example.com/o/r');
+    fs.chmodSync(fx.reg, 0o311);
+    try {
+      const r = fx.run();
+      expect(r.status, 'slug None').toBe(0);
+      expect(fx.readJson('probe').why, 'the route: a slug that is None').toBe('repo-unreadable');
+      expect(fx.readJson('main-health'), 'slug None').toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+      unchanged(old, 'slug None');
+      said(r.stderr, 'the registry could not be listed', [ALPHA, BETA], 'slug None');
+    } finally {
+      fs.chmodSync(fx.reg, 0o755);
+    }
+  });
+
+  /** A malformed ws/ branch, written over ALPHA's seeded `.branch` (review 1158 F2, F6). */
+  const branchFile = (): string => path.join(fx.reg, `${ALPHA}.branch`);
+  const MALFORMED = 'a registry row names no well-formed branch';
+
+  it('F2-a a .branch holding a NUL byte holds its row, and costs no other row: the old file is byte-identical, and a row added later is measured, on a measured tick and on a failed fetch', { timeout: 120_000 }, () => {
+    const old = seeded([ALPHA]);
+    fs.writeFileSync(branchFile(), 'ws/alpha\0b\n');
+    fx.addRow(BETA, 'ws/beta');   // after the seeding tick: BETA has no old file
+    const m = fx.run();
+    expect(m.status, 'measured tick').toBe(0);
+    expect(fx.readJson('probe').state, 'measured tick').toBe('measured');
+    unchanged(old, 'measured tick');
+    expect(fx.exists(`${BETA}.lineage`), 'measured tick: the other row has its file').toBe(true);
+    expect(fx.readJson(`${BETA}.lineage`), 'measured tick: the other row')
+      .toMatchObject({ state: 'measured', branch: 'ws/beta', tip: fx.gitIn(fx.repo, 'rev-parse', 'ws/beta') });
+    expect(m.stderr, 'measured tick').not.toContain('lineage-error');
+    said(m.stderr, MALFORMED, [ALPHA], 'measured tick');
+
+    fx.wrapGit(FAIL_FETCH);
+    const f = fx.run();
+    expect(f.status, 'failed fetch').toBe(0);
+    expect(fx.readJson('probe'), 'failed fetch').toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+    unchanged(old, 'failed fetch');
+    expect(fx.readJson(`${BETA}.lineage`), 'failed fetch: the other row is rewritten').toMatchObject({ state: 'unmeasured', why: 'fetch-failed' });
+    expect(f.stderr, 'failed fetch').not.toContain('lineage-error');
+    said(f.stderr, MALFORMED, [ALPHA], 'failed fetch');
+  });
+
+  it('F2-b a .branch that is a revision expression (ws/alpha~0, with ws/alpha present) holds its row: the old file is byte-identical, never rewritten with a tip', { timeout: 90_000 }, () => {
+    const old = seeded([ALPHA]);
+    fs.writeFileSync(branchFile(), 'ws/alpha~0\n');
+    const m = fx.run();
+    expect(m.status).toBe(0);
+    expect(fx.readJson('probe').state).toBe('measured');
+    unchanged(old, 'measured tick');
+    said(m.stderr, MALFORMED, [ALPHA], 'measured tick');
+  });
+
+  it('F2-c a .branch with `..`, a component led by `.`, a `.lock` component or a trailing `.` holds its row: the old file is byte-identical, never pruned', { timeout: 150_000 }, () => {
+    const old = seeded([ALPHA]);
+    for (const b of ['ws/alpha.lock', 'ws/alpha..b', 'ws/.alpha', 'ws/alpha.']) {
+      fs.writeFileSync(branchFile(), `${b}\n`);
+      const m = fx.run();
+      expect(m.status, b).toBe(0);
+      expect(fx.readJson('probe').state, b).toBe('measured');
+      unchanged(old, b);
+      said(m.stderr, MALFORMED, [ALPHA], b);
+    }
+  });
+
+  it('F2-d (control) a renamed ws/ branch of a well-formed shape (ws/Feat_x.2), present in the repository, is measured as an ordinary row', { timeout: 90_000 }, () => {
+    const FEAT = 'lane-a-proj-a-feat';
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addRow(FEAT, 'ws/Feat_x.2');
+    fx.conf(fx.project, 'lineage=on\n');
+    const m = fx.run();
+    expect(m.status).toBe(0);
+    expect(fx.readJson(`${FEAT}.lineage`)).toMatchObject({ state: 'measured', branch: 'ws/Feat_x.2', tip: fx.gitIn(fx.repo, 'rev-parse', 'ws/Feat_x.2') });
+    expect(m.stderr).not.toContain('lineage-skip');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('F6-a a .branch that cannot be read (mode 000) holds its row: the old file is byte-identical on a measured tick and on a failed fetch, and the other row is measured', { timeout: 120_000 }, () => {
     const old = seeded([ALPHA, BETA]);
     const branch = path.join(fx.reg, `${ALPHA}.branch`);
     fs.chmodSync(branch, 0o000);
@@ -1729,7 +1826,7 @@ describe('ccd-land-probe: a registry the probe cannot read decides no row (fix r
     said(m.stderr, 'a registry row could not be read', [ALPHA], 'measured tick');
   });
 
-  it('F6-c a .project that cannot be read (mode 000) holds its row: the old file is byte-identical on a measured tick', { timeout: 90_000 }, () => {
+  it.skipIf(process.getuid?.() === 0)('F6-c a .project that cannot be read (mode 000) holds its row: the old file is byte-identical on a measured tick', { timeout: 90_000 }, () => {
     const old = seeded([ALPHA]);
     const project = path.join(fx.reg, `${ALPHA}.project`);
     fs.chmodSync(project, 0o000);

@@ -8435,11 +8435,16 @@ _check_scope-sweep() {
 # came back unmeasured (", K unmeasured") when some but not all did.
 # AN INTERRUPTED TICK READS AS A RUNNING ONE (review 1140 F2, accepted): a SIGTERM or SIGINT leaves the probe in the interim
 # record's shape (R7: store.after and scratch.sizeKiB null), so until the next tick rewrites the trio this check reads it as a
-# tick still running. Its PASS line carries the previous tick's main-health verdict when the signal landed before this tick's
-# main-health write, and this tick's when it landed after that write and before the closing rewrite's nulling test (review
-# 1143 A1). A signal before the tick's first `probe` write leaves the previous complete record, and one recorded after the
-# nulling test leaves the measured record whole. That is what it shows during every running tick too, bounded by the next
-# tick and by the stale arm. Telling an interrupted tick from a running one needs an explicit marker, which is a later wave's
+# tick still running. The verdict switches at the probe's checkpoints, not at its writes (review 1158 F4). Its PASS line
+# carries the previous tick's main-health verdict when the signal was recorded before `read_checks`' last forge checkpoint,
+# and this tick's when it was recorded after that checkpoint and before the closing rewrite's nulling test (review 1143 A1):
+# a signal recorded after the last forge checkpoint but before this tick's main-health write still leaves this tick's
+# verdict, beside a `probe` with the interim figures, because no checkpoint runs between them. A signal recorded before the
+# last checkpoint ahead of the tick's first `probe` write leaves the previous complete record; when there are zero open
+# PRs, or the PR list failed, no checkpoint runs between the base rev-parse and that write, so a signal recorded after the
+# base rev-parse's checkpoint leaves this tick's `probe` with the interim figures, beside the previous main-health. One
+# recorded after the nulling test leaves the measured record whole. That is what it shows during every running tick too,
+# bounded by the next tick and by the stale arm. Telling an interrupted tick from a running one needs an explicit marker, which is a later wave's
 # to add if a reader needs it.
 # A red base is likewise a fact about the repository, and the PASS line says "red". The PASS line per project reads
 # `<project>: N heads, M conflicting with <base>, <base> green; store +K objects, scratch S KiB this tick`: the store figure is

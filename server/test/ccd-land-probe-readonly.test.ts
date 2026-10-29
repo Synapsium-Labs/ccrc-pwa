@@ -4,19 +4,24 @@
 // WHAT THE PINS HOLD. The pins read ccd/ccd-land-probe's whole text, in two ways. An AST CENSUS of the embedded
 // program (R5b, `python3 -I` with the `ast` module) holds the imports to a pinned list, module names and aliases both,
 // wherever a statement stands (after a `;` or a `:`, inside a function), so any other module is red; and it holds the
-// dynamic builtins out (`__import__`, `eval`, `exec`, `compile`, `getattr`, `setattr`, `vars`, `globals`, `locals`,
-// as bare names, and a `__dict__` attribute). The spawn names are held by their LITERAL SPELLINGS (`subprocess.Popen`
-// once, `os.system`, `pty.spawn` and the rest of the banned list, an aliased import, a bare module handed to another
-// name). They are not a proof that no process can be started. The census also pins every node that names
-// OPTION_FORMS, exactly (review 1143 F4): the target of its one module-level assignment, and git_check's two reads (a
-// subscript's value and an `in` comparator). Every node kind that can name it is counted (a Name in any context, an
-// argument, an import alias, a def, class or except name, a global or nonlocal, a keyword, an attribute, a match
-// capture, a type parameter), so a rebinding, a store, a delete, a method call, a copy or an alias (`x = OPTION_FORMS`)
-// is a fourth entry, and a read respelled in git_check changes the entries. The KNOWN LIMIT is what names nothing:
-// a lookup through an object's own method with the name as a string, which the banned list does not refuse (for
-// example `type(m).__getattribute__(m, 'OPTION_FORMS')` on the module `sys.modules` holds; `getattr`, `globals`,
-// `vars` and `__dict__` are refused), a name built from pieces, and code in another file. The behaviour that matters
-// is held by the self-test below, which runs git_check's verdicts, and by the behaviour suite.
+// dynamic builtins out (`__import__`, `eval`, `exec`, `compile`, `getattr`, `setattr`, `vars`, `globals`, `locals` and
+// `__builtins__` as bare names, and `__dict__`, `__import__`, `__builtins__`, `__globals__`, `f_globals` and `f_locals`
+// as attributes, so a function's or a frame's globals are refused too, review 1158 F1). The spawn names are held by
+// their LITERAL SPELLINGS (`subprocess.Popen` once, `os.system`, `pty.spawn` and the rest of the banned list, an aliased
+// import, a bare module handed to another name). They are not a proof that no process can be started. The census also
+// pins every node that names OPTION_FORMS, exactly (review 1143 F4): the target of its one module-level assignment, and
+// git_check's two reads (a subscript's value and an `in` comparator). The node kinds it counts are these: a Name in any
+// context, an argument (`ast.arg`), an import alias (its `asname`, or a part of its dotted name), a def, async def or
+// class name, an except name, a global or nonlocal, a call's keyword, an attribute, a match capture (`MatchAs` and
+// `MatchStar`), a mapping pattern's rest, a class pattern's keyword attribute (`MatchClass.kwd_attrs`, review 1158 F1)
+// and a type parameter. So a rebinding, a store, a delete, a method call, a copy, an alias (`x = OPTION_FORMS`) or a
+// class pattern (`case object(OPTION_FORMS=t)`) is a fourth entry, and a read respelled in git_check changes the
+// entries. The KNOWN LIMIT is what names the table only as a string, which the census does not read; each of these was
+// planted beside the table and measured green on R5b (fix round 5): a lookup through an object's own method with the
+// name as a string (`type(m).__getattribute__(m, 'OPTION_FORMS')`, on the module that `sys.modules` holds), the same
+// lookup with the name built from pieces (`'OPTION' + '_FORMS'`), and a refused builtin reached as an attribute of the
+// builtins module instead of as a bare name (`sys.modules['builtins'].globals()` and `.getattr(...)`). The behaviour that
+// matters is held by the self-test below, which runs git_check's verdicts, and by the behaviour suite.
 //
 // WHERE THE PLANTING EVIDENCE IS. This file plants nothing. A pin is a request until a planted violation turns it red,
 // and that evidence is the mutation rows (one planted violation each, measured one at a time on the final files, the
@@ -38,9 +43,10 @@ const headCode = head.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 const program = src.slice(src.indexOf(MARK) + MARK.length + 1, src.lastIndexOf('\nPY'));
 
 /** What the AST census reads from a program's text: its imports as [module, name, alias] (a plain `import m` has no
- *  name; a from-import's module carries its leading dots), each bare name from the banned list, and each attribute
- *  named `__dict__`. Run with `python3 -I` over the program on stdin, so it parses the real syntax tree: a statement
- *  after a `;` or a `:`, or inside a function, is seen as the statement it is. */
+ *  name; a from-import's module carries its leading dots), each bare name from the banned list, each attribute named
+ *  `__dict__`, `__import__`, `__builtins__`, `__globals__`, `f_globals` or `f_locals`, and each node that names
+ *  OPTION_FORMS, with its role and its scope. Run with `python3 -I` over the program on stdin, so it parses the real
+ *  syntax tree: a statement after a `;` or a `:`, or inside a function, is seen as the statement it is. */
 const CENSUS = `
 import ast, json, sys
 BANNED = ('__import__', 'eval', 'exec', 'compile', 'getattr', 'setattr', 'vars', 'globals', 'locals', '__builtins__')
@@ -97,6 +103,8 @@ for n in ast.walk(tree):
         role = type(n).__name__ + ' name'
     elif hasattr(ast, 'MatchMapping') and isinstance(n, ast.MatchMapping) and n.rest == TABLE:
         role = 'MatchMapping rest'
+    elif hasattr(ast, 'MatchClass') and isinstance(n, ast.MatchClass) and TABLE in n.kwd_attrs:
+        role = 'MatchClass keyword attribute'   # case C(OPTION_FORMS=t): kwd_attrs holds plain strings (review 1158 F1)
     elif TYPEPARAMS and isinstance(n, TYPEPARAMS) and n.name == TABLE:
         role = type(n).__name__ + ' name'
     if role is not None:
@@ -107,7 +115,7 @@ for n in ast.walk(tree):
         imports += [['.' * n.level + (n.module or ''), a.name, a.asname] for a in n.names]
     elif isinstance(n, ast.Name) and n.id in BANNED:
         names.append(n.id)
-    elif isinstance(n, ast.Attribute) and n.attr in ('__dict__', '__import__', '__builtins__'):
+    elif isinstance(n, ast.Attribute) and n.attr in ('__dict__', '__import__', '__builtins__', '__globals__', 'f_globals', 'f_locals'):
         attrs.append(n.attr)
 print(json.dumps({'imports': sorted(imports, key=repr), 'names': sorted(names), 'attrs': sorted(attrs), 'forms': sorted(forms)}))
 `;
@@ -220,14 +228,15 @@ describe('ccd-land-probe: the literal source pins', () => {
   it('R5b every child process is spawned in one place: one Popen, three callers of run_child, the imports a pinned list, no dynamic builtin, and the spawn names by their literal spellings', () => {
     // The AST census (review 1125 F4, F5): the program's imports are exactly this list, module names and aliases both and
     // wherever a statement stands, so no other module (asyncio, multiprocessing, pty, ctypes, importlib, ...) and no
-    // alias is admitted; none of the dynamic builtins appears as a bare name; no `__dict__` attribute.
+    // alias is admitted; none of the dynamic builtins appears as a bare name; no `__dict__`, `__import__`, `__builtins__`,
+    // `__globals__`, `f_globals` or `f_locals` attribute (review 1158 F1: a function's or a frame's globals reach the table).
     const mods = ['errno', 'json', 'os', 're', 'shutil', 'signal', 'stat', 'subprocess', 'sys', 'tempfile', 'time'];
     const want = [...mods.map((m) => [m, null, null]), ['collections', 'namedtuple', null]];
     const seen = census(program);
     expect([...seen.imports].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual(
       [...want].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
     expect(seen.names, 'a dynamic builtin as a bare name').toEqual([]);
-    expect(seen.attrs, 'a __dict__, __import__ or __builtins__ attribute').toEqual([]);
+    expect(seen.attrs, 'a __dict__, __import__, __builtins__, __globals__, f_globals or f_locals attribute').toEqual([]);
     // Every node that names OPTION_FORMS, exactly (review 1140 A2, review 1143 F4): its one module-level binding, and
     // git_check's subscript read and `in` test. R5 pins its literal, and this holds that nothing else touches it.
     expect(seen.forms, 'a node that names OPTION_FORMS').toEqual([
