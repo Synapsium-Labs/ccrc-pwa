@@ -19,7 +19,7 @@ export interface ConflictLine {
 }
 
 export interface ConflictSummary {
-  /** The PRs with a landing in the window. */
+  /** The (project, PR) landings in the window. */
   measured: number;
   conflicted: readonly ConflictLine[];
   /** Some landing is neither clean nor in conflict, or carries a cut (D-7480). */
@@ -50,11 +50,13 @@ const hasCut = (l: SessionLanding): boolean => l.cut.pairs || l.cut.heads || l.c
 
 /** What the fleet's landings say together, or `null` when no session has a landing in the window. */
 export function conflictSummaryOf(sessions: readonly FleetSession[], nowMs: number): ConflictSummary | null {
-  // One landing per PR: two sessions naming one PR are one measured PR.
-  const byPr = new Map<number, SessionLanding>();
+  // One landing per (project, PR): the radar is per project, so #12 of one project is not #12 of another. Two sessions
+  // naming one PR of one project are one measured PR. Every key below is scoped the same way, so a clean landing of one
+  // project never hides a partial or conflicting one of another (D-7480).
+  const byPr = new Map<string, SessionLanding & { project: string }>();
   for (const s of sessions) {
     const l = landingOf(s, nowMs);
-    if (l !== null && !byPr.has(l.pr)) byPr.set(l.pr, l);
+    if (l !== null && !byPr.has(`${s.project}:${l.pr}`)) byPr.set(`${s.project}:${l.pr}`, { ...l, project: s.project });
   }
   if (byPr.size === 0) return null;
 
@@ -66,21 +68,23 @@ export function conflictSummaryOf(sessions: readonly FleetSession[], nowMs: numb
   let oldestAt = '';
   let oldestMs = Infinity;
   for (const l of byPr.values()) {
+    // Orders the landings for the "measured HH:MM" stamp ONLY. Freshness is `landingShown`'s alone (D-7481).
     const ms = new Date(l.at).getTime();
     if (ms < oldestMs) { oldestMs = ms; oldestAt = l.at; }
     if (!isClean(l) && !inConflict(l)) partial = true;
     if (hasCut(l)) { partial = true; cut = true; }
     if (l.base.state === 'unmeasured') unmeasured += 1;
     if (l.base.state === 'conflict') {
-      lines.set(`b:${l.pr}`, { pr: l.pr, against: { base: l.baseRef }, paths: l.base.paths ?? [], pathsCut: l.base.pathsCut === true });
+      lines.set(`${l.project}:b:${l.pr}`, { pr: l.pr, against: { base: l.baseRef }, paths: l.base.paths ?? [], pathsCut: l.base.pathsCut === true });
     }
-    // A pair {a, b} is listed once, under its lower PR number, whichever side reported it.
+    // A pair {a, b} is listed once within its project, under its lower PR number, whichever side reported it.
     for (const c of l.conflicts) {
       const lo = Math.min(l.pr, c.pr);
       const hi = Math.max(l.pr, c.pr);
-      if (!lines.has(`p:${lo}:${hi}`)) lines.set(`p:${lo}:${hi}`, { pr: lo, against: { pr: hi }, paths: c.paths, pathsCut: c.pathsCut });
+      const key = `${l.project}:p:${lo}:${hi}`;
+      if (!lines.has(key)) lines.set(key, { pr: lo, against: { pr: hi }, paths: c.paths, pathsCut: c.pathsCut });
     }
-    for (const other of l.unmeasuredWith) unmeasuredPairs.add(`${Math.min(l.pr, other)}:${Math.max(l.pr, other)}`);
+    for (const other of l.unmeasuredWith) unmeasuredPairs.add(`${l.project}:${Math.min(l.pr, other)}:${Math.max(l.pr, other)}`);
   }
   const conflicted = [...lines.values()].sort((a, b) => a.pr - b.pr || againstPr(a) - againstPr(b));
   return { measured: byPr.size, conflicted, partial, unmeasured: unmeasured + unmeasuredPairs.size, cut, oldestAt };

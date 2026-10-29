@@ -16,8 +16,8 @@ const landing = (over: Partial<SessionLanding> = {}): SessionLanding => ({
   cut: { heads: false, pairs: false, unbound: false },
   ...over,
 });
-const sess = (id: string, l?: SessionLanding | Record<string, unknown>) =>
-  fleetSession({ id, ...(l === undefined ? {} : { landing: l as SessionLanding }) });
+const sess = (id: string, l?: SessionLanding | Record<string, unknown>, project = 'proj-a') =>
+  fleetSession({ id, project, ...(l === undefined ? {} : { landing: l as SessionLanding }) });
 
 describe('landingOf — the one reader of FleetSession.landing', () => {
   it('reads absent as null, never as clean (an older server)', () => {
@@ -126,5 +126,70 @@ describe('conflictSummaryOf and the words', () => {
     expect(name.startsWith('2 predicted conflicts. ')).toBe(true);
     expect(name).toContain('PR #12 conflicts with main in src/a.ts');
     expect(name).toContain('PRs #12 and #14 conflict in src/x.ts');
+  });
+});
+
+// The radar is per project: PR #12 of one project is not PR #12 of another, so every key is scoped by the session's project.
+describe('the summary keys each landing by its project (D-7480)', () => {
+  it('counts the same PR number of two projects as two measured PRs, and a clean one never hides a partial one', () => {
+    const s = conflictSummaryOf([sess('a', landing(), 'proj-a'), sess('b', landing({ paired: false }), 'proj-b')], NOW)!;
+    expect(s.measured).toBe(2);
+    expect(conflictChipWord(s)).toBe('Conflicts partly measured');
+  });
+
+  it('does not let a clean landing hide a conflicting one of the same number in another project', () => {
+    const s = conflictSummaryOf([
+      sess('a', landing(), 'proj-a'),
+      sess('b', landing({ base: { state: 'conflict', paths: ['src/a.ts'] } }), 'proj-b'),
+    ], NOW)!;
+    expect(s.measured).toBe(2);
+    expect(conflictChipWord(s)).toBe('1 predicted conflict');
+  });
+
+  it('is order-free: the conflicting project first reads the same', () => {
+    const s = conflictSummaryOf([
+      sess('b', landing({ base: { state: 'conflict' } }), 'proj-b'),
+      sess('a', landing(), 'proj-a'),
+    ], NOW)!;
+    expect(conflictChipWord(s)).toBe('1 predicted conflict');
+  });
+
+  it('lists the same pair numbers in conflict in two projects twice, and each project\'s pair once', () => {
+    const a = landing({ pr: 12, conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: false }] });
+    const b = landing({ pr: 14, conflicts: [{ pr: 12, paths: ['src/x.ts'], pathsCut: false }] });
+    const s = conflictSummaryOf([
+      sess('a1', a, 'proj-a'), sess('a2', b, 'proj-a'), sess('b1', a, 'proj-b'), sess('b2', b, 'proj-b'),
+    ], NOW)!;
+    expect(s.conflicted).toHaveLength(2);
+    expect(conflictChipWord(s)).toBe('2 predicted conflicts');
+    expect(s.measured).toBe(4);
+  });
+
+  it('counts a base conflict of the same PR number in two projects twice', () => {
+    const l = landing({ base: { state: 'conflict', paths: ['src/a.ts'] } });
+    expect(conflictSummaryOf([sess('a', l, 'proj-a'), sess('b', l, 'proj-b')], NOW)!.conflicted).toHaveLength(2);
+  });
+
+  it('still counts one PR of one project once when two sessions name it', () => {
+    expect(conflictSummaryOf([sess('a', landing(), 'proj-a'), sess('b', landing(), 'proj-a')], NOW)!.measured).toBe(1);
+  });
+});
+
+describe('"N not measured"', () => {
+  it('counts unmeasuredWith across sessions, and a pair reported from both of its PRs once', () => {
+    const s = conflictSummaryOf([
+      sess('a', landing({ pr: 12, unmeasuredWith: [14, 15] })),
+      sess('b', landing({ pr: 14, unmeasuredWith: [12] })),
+    ], NOW)!;
+    expect(s.unmeasured).toBe(2);
+    expect(conflictChipSentence(s)).toContain('2 not measured');
+  });
+
+  it('counts the same pair numbers of two projects separately, and an unmeasured base beside them', () => {
+    const s = conflictSummaryOf([
+      sess('a', landing({ pr: 12, unmeasuredWith: [14] }), 'proj-a'),
+      sess('b', landing({ pr: 12, unmeasuredWith: [14], base: { state: 'unmeasured' } }), 'proj-b'),
+    ], NOW)!;
+    expect(s.unmeasured).toBe(3);
   });
 });
