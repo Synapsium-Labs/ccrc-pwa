@@ -5,11 +5,11 @@
 // poisons at its call sites. The harness's poison `gh` stays on PATH and its record must be empty after each case:
 // the probe reaches the forge only through CCD_LAND_PROBE_GH.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghPoisonAt, type CcdHarness } from './ccdWsHelpers.js';
-import { makeLandFixture, pidGone, until, PROBE, type LandFixture, type CheckRun } from './ccdLandProbeFixture.js';
+import { makeLandFixture, holdLandLock, lockHeld, pidGone, until, PROBE, type LandFixture, type CheckRun } from './ccdLandProbeFixture.js';
 
 let h: CcdHarness;
 let fx: LandFixture;
@@ -287,12 +287,9 @@ describe('ccd-land-probe: the radar', () => {
     fx.conf(fx.project, '');
     fs.mkdirSync(path.join(h.home, '.ccrc'), { recursive: true });
     const lock = path.join(h.home, '.ccrc', 'land-probe.lock');
-    // --no-fork: flock execs the sleep itself, so the SIGKILL below ends the holder and leaves no orphan behind.
-    const holder = spawn('flock', ['--no-fork', lock, 'sleep', '30'], { stdio: 'ignore' });
+    const holder = holdLandLock(lock);
     try {
-      const held = (): boolean => {
-        try { execFileSync('flock', ['-n', lock, 'true']); return false; } catch { return true; }
-      };
+      const held = (): boolean => lockHeld(lock);
       expect(await until(held, 5000), 'the test never took the lock').toBe(true);
       const r = fx.run();
       expect(r).toEqual({ status: 0, stdout: '', stderr: '' });
@@ -1154,7 +1151,9 @@ describe('ccd-land-probe: the exit paths leave nothing behind (fix round 1, revi
     fx.addHead(1, { 'a.txt': 'a\n' });
     fx.conf(fx.project, '');
     const blk = path.join(h.home, 'sigblk.log');
-    fx.wrapGit(`grep '^SigBlk' /proc/$$/status >> '${blk}'`);
+    // The wrapper's own mask, read by a child it forks (a forked child keeps its parent's blocked set across the exec):
+    // one JSON list per git call. Portable, where /proc/<pid>/status is Linux-only and left the log empty on macOS.
+    fx.wrapGit(`python3 -I -c 'import json, signal; print(json.dumps(sorted(int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK, []))))' >> '${blk}'`);
     const maskLog = path.join(h.home, 'sigmask.log');
     // The mask at the moment Popen is called, from inside the probe's own process: the two signals, and only them.
     const r = fx.runPatched([
@@ -1172,8 +1171,8 @@ describe('ccd-land-probe: the exit paths leave nothing behind (fix round 1, revi
     expect(new Set(masks)).toEqual(new Set(['[2,15]']));
     const childMasks = fs.readFileSync(blk, 'utf8').split('\n').filter(Boolean);
     expect(childMasks.length).toBeGreaterThan(5);
-    // Bit n-1 is signal n: SIGINT (2) is 0x2, SIGTERM (15) is 0x4000. (The shell may hold SIGCHLD itself while it forks.)
-    for (const l of childMasks) expect(Number.parseInt(l.split('\t')[1]!, 16) & 0x4002, l).toBe(0);
+    // Neither SIGINT (2) nor SIGTERM (15) is held in the child. (The shell may hold SIGCHLD itself while it forks.)
+    for (const l of childMasks) expect((JSON.parse(l) as number[]).filter((n) => n === 2 || n === 15), l).toEqual([]);
   });
 
   it('a scratch that cannot get its sentinel removes the directory it made, and the old records become unmeasured', { timeout: 90_000 }, () => {
