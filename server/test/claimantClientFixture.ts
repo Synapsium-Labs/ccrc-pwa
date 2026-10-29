@@ -7,6 +7,7 @@
 // it. Neutral ids only (`approvalsHarness.ts`'s). Nothing here touches the live HOME or a live server.
 import { beforeEach, afterEach, vi } from 'vitest';
 import { createHash, createPrivateKey } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { Tmux } from '../src/exec.js';
 import { askKey } from '../src/askkey.js';
 import type { Questions } from '../src/coord/questions.js';
-import { APPROVAL_SIGNING_KEY_FILE } from '../../shared/api.js';
+import { APPROVAL_SIGNING_KEY_FILE, renderServerCaps, SERVER_CAPS_FILE } from '../../shared/api.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import {
   CHILD, CHILD2, hookInput, PARENT, requestBody, standardFixture, TOKEN, uuidOf, type Approvals,
@@ -90,13 +91,25 @@ export function installRealServerHooks(): void {
   });
 }
 
+/** The REAL clock in unix seconds: `realServer` fakes `Date` at `NOW`, and the client reads its cap file's lease by
+ *  the box's own clock (`EPOCHREALTIME`), so a cap file stamped by the faked `Date` would read as stale. */
+const realNowS = (): number => Math.floor((performance.timeOrigin + performance.now()) / 1000);
+
+/** What a real server is built with: the box token unconfigured, and the client the rows run (`ccd/ccrc-api` unless a
+ *  suite names another copy, as `claimant-client-skew.test.ts` names the base commit's). */
+export interface RealOptions { mailToken?: 'unconfigured'; client?: string }
+
 /** A real server for one row: the standard family, the fixture signing key, the clock at `NOW`, listening on
- *  loopback, a client HOME pointing at it, and the composition's door-ins spied (calling through). */
+ *  loopback, a client HOME pointing at it, and the composition's door-ins spied (calling through). The client HOME's
+ *  `~/.ccrc/server-caps` is written, current, from the server's own `GET /health` (the words `ccd-update-sync` would
+ *  record on a fleet node), so the rows run through whatever door that server advertises (D-7322). `doors` is every
+ *  request the server received, method and path. */
 export interface Real {
   f: Approvals; home: string; ask: number; approval: number; doorIns: () => string[]; mail0: number;
+  doors: () => string[];
   client: (verb: Verb | 'approvals ruling', args: string[], body?: string | null) => Promise<Run>;
 }
-export async function realServer(o: { mailToken?: 'unconfigured' } = {}): Promise<Real> {
+export async function realServer(o: RealOptions = {}): Promise<Real> {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   const f = await standardFixture();
@@ -127,11 +140,15 @@ export async function realServer(o: { mailToken?: 'unconfigured' } = {}): Promis
   const home = mkTmp('claimant-pin-real-');
   live.push(async () => { fs.rmSync(home, { recursive: true, force: true }); });
   writeClientHome(home, `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`, TOKEN);
+  const health = (await app.inject({ method: 'GET', url: '/health' })).json() as { caps: string[] };
+  fs.writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(health.caps, realNowS()));
+  const doors: string[] = [];
+  app.server.on('request', (req: IncomingMessage) => { doors.push(`${req.method ?? ''} ${req.url ?? ''}`); });
   return {
-    f, home, ask, approval, doorIns: () => [...calls], mail0: mailBodiesTo(f, PARENT).length,
+    f, home, ask, approval, doorIns: () => [...calls], mail0: mailBodiesTo(f, PARENT).length, doors: () => [...doors],
     client: (verb, args, body = null) => {
       const [group, name] = verb.split(' ') as [string, string];
-      return runClient(home, [group, name, ...args, ...(body === null ? [] : ['--json', '-'])], body ?? undefined);
+      return runClient(home, [group, name, ...args, ...(body === null ? [] : ['--json', '-'])], body ?? undefined, undefined, o.client);
     },
   };
 }
@@ -326,14 +343,20 @@ export const EXPECTED: Record<string, Outcome> = {
     {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token is configured on this server — POST /api/approvals/:id/release fails shut on an unconfigured token, it does not fail open\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
 };
 
-export const runRow = async ([name, verb, call, before]: Row, o: { mailToken?: 'unconfigured' } = {}): Promise<Outcome> => {
+/** The requests the last `runRow` call's own call sent (its `before` setup excluded): method and path. */
+let lastDoors: string[] = [];
+export const lastRunDoors = (): string[] => [...lastDoors];
+
+export const runRow = async ([name, verb, call, before]: Row, o: RealOptions = {}): Promise<Outcome> => {
   const r = await realServer(o);
   await before?.(r);
   KEYS = [];
   const id = call.id ?? String(verb.startsWith('asks') ? r.ask : r.approval);
   const mail0 = mailBodiesTo(r.f, PARENT).length;
   const doorIns0 = r.doorIns().length;
+  const doors0 = r.doors().length;
   const run = await r.client(verb, [id], call.body);
+  lastDoors = r.doors().slice(doors0);
   const out = outcome(r, run, verb);
   out.effects['doorIns'] = r.doorIns().slice(doorIns0);
   out.effects['mailToParent'] = mailBodiesTo(r.f, PARENT).length - mail0;

@@ -24,6 +24,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { clientRoutes } from './ccrcApiTable.js';
+import { renderServerCaps, SERVER_CAPS, SERVER_CAPS_FILE } from '../../shared/api.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -152,7 +153,10 @@ describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
   // table if every row is reachable and lands where it says. The ids here are
   // deliberately plain: the id-validation cases live in their own describe.
-  const ROWS: [string[], string, string][] = [
+  // The four claimant rows carry a fourth element, the question door family's path the row names (D-7325), sent in
+  // place of the third only while the server advertises `questions-v1` (the describe below); with no cap file, as
+  // every row here runs, each row sends its own path.
+  const ROWS: [string[], string, string, string?][] = [
     [['runs', 'list'], 'GET', '/api/runs'],
     [['runs', 'open'], 'POST', '/api/runs'],
     [['runs', 'dispatch', '12'], 'POST', '/api/runs/12/dispatch'],
@@ -176,8 +180,8 @@ describe('the closed route table', () => {
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
     [['asks', 'list'], 'GET', '/api/asks'],
-    [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer'],
-    [['asks', 'release', '7'], 'POST', '/api/asks/7/release'],
+    [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer', '/api/questions/ask-7/rule'],
+    [['asks', 'release', '7'], 'POST', '/api/asks/7/release', '/api/questions/ask-7/release'],
     // The durable feed, filterable by programme (cross-repo programmes §4). A
     // NEW ROW rather than a `--program` on some existing one: the table is the
     // client's own contract and grows by a row, never by a URL argument.
@@ -190,12 +194,12 @@ describe('the closed route table', () => {
     [['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], 'GET', '/api/approvals/41/ruling'],
     [['approvals', 'key'], 'GET', '/api/approvals/key'],
     // The claimant's three rows (coordinator-first routing, plan Task 16, D-5298).
-    [['approvals', 'rule', '41'], 'POST', '/api/approvals/41/rule'],
-    [['approvals', 'release', '41'], 'POST', '/api/approvals/41/release'],
+    [['approvals', 'rule', '41'], 'POST', '/api/approvals/41/rule', '/api/questions/approval-41/rule'],
+    [['approvals', 'release', '41'], 'POST', '/api/approvals/41/release', '/api/questions/approval-41/release'],
     [['approvals', 'show', '41'], 'GET', '/api/approvals/41'],
   ];
 
-  it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
+  it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
       || (args[0] === 'approvals' && args[1] === 'show');
     if (paned) plantPane('demo-ws');
@@ -205,6 +209,10 @@ describe('the closed route table', () => {
     // Query strings are the caller's (`mail list --to x` appends one); the path
     // is the table's, so compare the path half exactly.
     expect(seen[0]!.url.split('?')[0]).toBe(url);
+    // The row's fifth field, read through the one reader of the table (D-7320): the family's template on the four
+    // claimant rows, none on every other row.
+    const row = clientRoutes().find((r) => r.key === `${args[0]}.${args[1]}`)!;
+    expect(row.family === null ? null : row.family.replace('{id}', args[2]!)).toBe(family ?? null);
   });
 
   it('has exactly the rows exercised above — the table is read from the client, not from here', () => {
@@ -266,6 +274,119 @@ describe('the closed route table', () => {
     const r = await run(['coord', 'pause']);
     expect(r.status).not.toBe(0);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe('the four claimant rows send the question door family while the server advertises questions-v1 (D-7322)', () => {
+  // `~/.ccrc/server-caps`, as `ccd-update-sync` writes it on a fleet node: `at`, the words, `end`. Only the four
+  // claimant rows read it, through the one guarded call `census-w3/claimant.ts#capReaderCalls()` counts; no row here
+  // puts a FIFO or any other blocking file at the path, because the reader's `<` open blocks on one (D-7339).
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const CLAIMANT: ReadonlyArray<readonly [string, string, string, 'ask' | 'approval', string]> = [
+    ['asks', 'answer', '/api/questions/ask-7/rule', 'ask', '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+    ['asks', 'release', '/api/questions/ask-7/release', 'ask', '{"fromId":"parent","fromUuid":"u"}'],
+    ['approvals', 'rule', '/api/questions/approval-7/rule', 'approval', '{"fromId":"parent","fromUuid":"u","verdict":"allow","reason":"r"}'],
+    ['approvals', 'release', '/api/questions/approval-7/release', 'approval', '{"fromId":"parent","fromUuid":"u"}'],
+  ];
+
+  it('the family rows are exactly the four claimant rows, read through clientRoutes()', () => {
+    expect(clientRoutes().filter((r) => r.family !== null).map((r) => [r.key, r.family])).toEqual([
+      ['asks.answer', '/api/questions/ask-{id}/rule'], ['asks.release', '/api/questions/ask-{id}/release'],
+      ['approvals.rule', '/api/questions/approval-{id}/rule'], ['approvals.release', '/api/questions/approval-{id}/release'],
+    ]);
+  });
+
+  it.each(CLAIMANT)('%s %s, with a current cap file listing questions-v1, sends POST %s with the row\'s kind (%s) spliced first', async (group, verb, url, kind, body) => {
+    writeCaps();
+    const r = await run([group, verb, '7', '--json', '-'], body);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toEqual([{ method: 'POST', url, auth: TOKEN, body: `{"kind":"${kind}",${body.slice(1)}` }]);
+  });
+
+  it('the spliced kind is the row\'s: the same body is spliced ask on an asks row and approval on an approvals row', async () => {
+    writeCaps();
+    const body = '{"fromId":"parent","fromUuid":"u"}';
+    await run(['asks', 'release', '7', '--json', '-'], body);
+    await run(['approvals', 'release', '7', '--json', '-'], body);
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      ['/api/questions/ask-7/release', '{"kind":"ask","fromId":"parent","fromUuid":"u"}'],
+      ['/api/questions/approval-7/release', '{"kind":"approval","fromId":"parent","fromUuid":"u"}'],
+    ]);
+  });
+
+  it('a body naming kind is left alone, so a contrary kind reaches the server (the byId fill\'s textual rule)', async () => {
+    writeCaps();
+    const bodies = ['{"fromId":"parent","fromUuid":"u","kind":"approval"}', '{ "kind" : "ask", "fromId":"parent","fromUuid":"u"}'];
+    for (const b of bodies) await run(['asks', 'release', '7', '--json', '-'], b);
+    expect(seen.map((s) => [s.url, s.body])).toEqual(bodies.map((b) => ['/api/questions/ask-7/release', b]));
+  });
+
+  it('a bodyless call is sent as the row\'s kind alone, and {} as the kind alone', async () => {
+    writeCaps();
+    await run(['approvals', 'rule', '7']);
+    await run(['asks', 'answer', '7', '--json', '-'], ' { } ');
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      ['/api/questions/approval-7/rule', '{"kind":"approval"}'], ['/api/questions/ask-7/rule', '{"kind":"ask"}'],
+    ]);
+  });
+
+  it('a body that is not a JSON object is refused bad-body, exit 2, and nothing is sent', async () => {
+    writeCaps();
+    for (const b of ['[]', '"x"', '[{"kind":"ask"}]']) {
+      const r = await run(['asks', 'answer', '7', '--json', '-'], b);
+      expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], b).toEqual([2, 'bad-body']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('an absent cap file sends the old door, the body unchanged', async () => {
+    const body = '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}';
+    await run(['asks', 'answer', '7', '--json', '-'], body);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/asks/7/answer', auth: TOKEN, body }]);
+  });
+
+  it('a cap file 181 s old sends the old door, the body unchanged', async () => {
+    writeCaps(SERVER_CAPS, nowS() - 181);
+    const body = '{"fromId":"parent","fromUuid":"u","verdict":"allow","reason":"r"}';
+    await run(['approvals', 'rule', '7', '--json', '-'], body);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/approvals/7/rule', auth: TOKEN, body }]);
+  });
+
+  it('a current cap file that omits questions-v1 sends the old door, and a non-object body goes to the server as today', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'questions-v1'));
+    await run(['approvals', 'release', '7', '--json', '-'], '[]');
+    expect(seen).toEqual([{ method: 'POST', url: '/api/approvals/7/release', auth: TOKEN, body: '[]' }]);
+  });
+
+  it('with that same current file, every non-claimant row sends a request byte-identical to its no-file request', async () => {
+    const keys = new Set(CLAIMANT.map(([g, v]) => `${g}.${v}`));
+    const rows: string[][] = [
+      ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
+      ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'signals', '12'],
+      ['runs', 'route', '12'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
+      ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
+      ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
+      ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
+      ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
+    ];
+    expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
+    plantPane('demo-ws');
+    const pane = { TMUX_PANE: '%7' };
+    const sendAll = async (): Promise<typeof seen> => {
+      seen = [];
+      for (const a of rows) await run(a, a.includes('--json') ? '{"title":"t","program":"p"}' : undefined, pane);
+      return seen;
+    };
+    fs.rmSync(capFile(), { force: true });
+    const without = await sendAll();
+    writeCaps();
+    const withFile = await sendAll();
+    expect(without).toHaveLength(rows.length);
+    expect(withFile).toEqual(without);
   });
 });
 
