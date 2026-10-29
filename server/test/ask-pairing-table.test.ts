@@ -12,14 +12,16 @@
 // recorded one with a `patch` over its reading. A row's `expect` is never regenerated to make a change pass: a change to
 // the pairing is a behaviour change, and its PR says so.
 //
-// The PWA module is imported dynamically by path (`collect-attention.test.ts`'s precedent): the server does not depend
-// on the PWA at build time, and this test reads it, never edits it.
+// W7 Task C7f (D-7184) deleted the client's copy: the PWA reads the server's answer off the wire. So the table is now
+// the RECORD of what the client answered, and its rows hold the server's port (`pane/askPairing.ts`) to it, where they
+// once imported the PWA module by path.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Dialog, HookAskQuestion } from '../../shared/api.js';
 import { parseDialog } from '../src/pane/dialog.js';
+import { askScreen, liveQuestion, namedQuestion, questionCorresponds, shownQuestion } from '../src/pane/askPairing.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PANES = path.join(ROOT, 'server/test/fixtures/panes');
@@ -37,15 +39,6 @@ const CORPUS = JSON.parse(readFileSync(path.join(ROOT, 'server/test/fixtures/ask
   envelopes: Record<string, Envelope>; rows: Row[];
 };
 
-interface AskLive {
-  questionCorresponds(q: HookAskQuestion, d: Dialog | null): boolean;
-  liveQuestion(a: Envelope, d: Dialog | null): number | null;
-  namedQuestion(a: Envelope, d: Dialog | null): number | null;
-  shownQuestion(a: Envelope, d: Dialog | null): Expect['shown'];
-  askScreen(a: Envelope, d: Dialog | null): string | null;
-}
-const askLive = async (): Promise<AskLive> => await import(path.join(ROOT, 'pwa/src/session/askLive.ts')) as AskLive;
-
 /** The row's screen: the recorded pane through `parseDialog`, with the row's patch over it; `null` for no pane. */
 const dialogOf = (row: Row): Dialog | null => {
   if (row.pane === null) return null;
@@ -55,7 +48,7 @@ const dialogOf = (row: Row): Dialog | null => {
 };
 const label = (r: Row): string => `${r.pane ?? '(no pane)'} x ${r.envelope}${r.why === undefined ? '' : ` (${r.why})`}`;
 
-describe('the ask-pairing table: askLive.ts over the corpus (slug question-census)', () => {
+describe('the ask-pairing table: the recorded client answers over the corpus, the server held to them (slug question-census)', () => {
   it('the corpus is whole: every row names an envelope and a recorded pane, and the synthetic rows are present', () => {
     expect(CORPUS.rows.length).toBeGreaterThan(0);
     for (const r of CORPUS.rows) {
@@ -70,16 +63,15 @@ describe('the ask-pairing table: askLive.ts over the corpus (slug question-censu
     }
   });
 
-  it.each(CORPUS.rows.map((r) => [label(r), r] as const))('%s', async (_name, row) => {
-    const L = await askLive();
+  it.each(CORPUS.rows.map((r) => [label(r), r] as const))('%s', (_name, row) => {
     const env = CORPUS.envelopes[row.envelope]!;
     const d = dialogOf(row);
     expect({
-      corresponds: env.questions.map((q) => L.questionCorresponds(q, d)),
-      live: L.liveQuestion(env, d),
-      named: L.namedQuestion(env, d),
-      shown: L.shownQuestion(env, d),
-      screen: L.askScreen(env, d),
+      corresponds: env.questions.map((q) => questionCorresponds(q, d)),
+      live: liveQuestion(env, d),
+      named: namedQuestion(env, d),
+      shown: shownQuestion(env, d),
+      screen: askScreen(env, d),
     }).toEqual(row.expect);
   });
 });
