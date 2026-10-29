@@ -7550,12 +7550,17 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
     // (finding V10 measured it: 117 ms and 238 ms).
     const g = v[14]!.toLowerCase() === 'x' ? 'z' : 'x';
     const shape = (bytes: number): string => `${v.slice(0, 14)}${g}`.repeat(Math.ceil(bytes / 15));
+    // D-7368: CPU time, not wall time. On a loaded runner the 512 KiB pass (about 8 ms) is far likelier to be
+    // descheduled than the 64 KiB one (about 1 ms), so a wall-clock ratio read 18.8 on a post-merge macOS shard and
+    // 17-32 in 2 of 20 runs under load on a laptop. process.cpuUsage counts only the time this process ran (forks
+    // pool: one process per file), so the ratio stays near 8 under the same load; the quadratic shape is still 64.
+    const cpuMs = (): number => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
     const best = (t: string): number => {
       let m = Infinity;
       for (let k = 0; k < 5; k += 1) {
-        const t0 = performance.now();
+        const t0 = cpuMs();
         const out = libRedact.beltMask(t, idx.belt, true);
-        m = Math.min(m, performance.now() - t0);
+        m = Math.min(m, cpuMs() - t0);
         expect(out === libRedact.REDACTED_MARK, 'the whole run is one mark').toBe(true);
       }
       return m;
