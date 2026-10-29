@@ -9,7 +9,7 @@
 //
 // The skew rows (spec §5.1 rule 1c): against a server without `questions-v1` (an older server, a rollback, a `/health`
 // that cannot be read or reached) the same command goes to the old door, with today's bytes.
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { createElement } from 'react';
 import { cleanup, render } from '@testing-library/react';
 import { api } from '../src/lib/api';
@@ -18,7 +18,7 @@ import { createSessionStore } from '../src/stores/session';
 import { parseQuestionId, readDialogAnswer, SERVER_CAPS } from '../../shared/api';
 import { createApi } from '../src/lib/api';
 import { HEALTH_CORPUS } from './healthCorpus';
-import { advertisesQuestions, createServerCaps, QUESTIONS_CAP, SERVER_CAPS_READ } from '../src/lib/serverCaps';
+import { advertisesQuestions, createServerCaps, QUESTIONS_CAP, SERVER_CAPS_HOLD_MS, SERVER_CAPS_READ } from '../src/lib/serverCaps';
 import { answerRequest, performAnswer, questionBodyOf, type AnswerCommand, type AnswerSeam } from '../src/session/answerLifecycle';
 
 const SID = 'session-a';
@@ -222,5 +222,131 @@ describe('DialogSheet reads which door an answer takes when it mounts, never on 
     expect(door).toHaveBeenCalledTimes(1);
     view.rerender(createElement(DialogSheet, { id: 'lane-a:project-a', store }));
     expect(door).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── a tap never waits on the read (stale-while-revalidate) ────────────────────────────────────────────────────────
+//
+// Once any read has settled, `questionsDoor()` answers at once with the last door the server gave (the old door, which
+// every server before C7p answers, when it never gave one), and a read older than `SERVER_CAPS_HOLD_MS`, or one that
+// failed, is re-read in the background. Only a tap before the first read has settled waits, and it shares that read.
+
+/** Let every queued microtask run, and nothing else: no timer, no I/O. A request issued "at once" is issued here. */
+const microtasks = async (): Promise<void> => { for (let i = 0; i < 50; i += 1) await Promise.resolve(); };
+const never = <T>(): Promise<T> => new Promise<T>(() => {});
+
+describe('createServerCaps: the last door at once, re-read in the background', () => {
+  const scripted = () => {
+    let t = 0;
+    const answers: Array<() => Promise<Response>> = [];
+    const fetchImpl = vi.fn((_url: string, _init?: RequestInit) => (answers.shift() ?? (() => never<Response>()))());
+    return { caps: createServerCaps(fetchImpl as unknown as typeof fetch, () => t), fetchImpl, answers, at: (ms: number) => { t = ms; } };
+  };
+  const settledNow = async (p: Promise<boolean>): Promise<boolean | 'waiting'> => {
+    let got: boolean | 'waiting' = 'waiting';
+    void p.then((v) => { got = v; });
+    await microtasks();
+    return got;
+  };
+  it('past the lease: the held door at once, one re-read under way, and its answer served after it lands', async () => {
+    const c = scripted();
+    let land!: (r: Response) => void;
+    c.answers.push(async () => health({ ok: true, caps: ['questions-v1'] }), () => new Promise<Response>((r) => { land = r; }));
+    expect(await c.caps.questionsDoor()).toBe(true);
+    c.at(SERVER_CAPS_HOLD_MS + 1);
+    expect(await settledNow(c.caps.questionsDoor())).toBe(true);
+    expect(await settledNow(c.caps.questionsDoor())).toBe(true);
+    expect(c.fetchImpl).toHaveBeenCalledTimes(2);
+    land(health({ ok: true, caps: [] }));
+    await microtasks();
+    expect(await settledNow(c.caps.questionsDoor())).toBe(false);
+    expect(c.fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it('a re-read that fails keeps the last door the server gave, and the next answer re-reads again', async () => {
+    const c = scripted();
+    c.answers.push(async () => health({ ok: true, caps: ['questions-v1'] }), async () => { throw new TypeError('offline'); });
+    expect(await c.caps.questionsDoor()).toBe(true);
+    c.at(SERVER_CAPS_HOLD_MS + 1);
+    expect(await settledNow(c.caps.questionsDoor())).toBe(true);
+    await microtasks();
+    expect(await settledNow(c.caps.questionsDoor())).toBe(true);
+    expect(c.fetchImpl).toHaveBeenCalledTimes(3);
+  });
+  it('after a first read that failed: the old door at once, re-read in the background', async () => {
+    const c = scripted();
+    c.answers.push(async () => { throw new TypeError('offline'); });
+    expect(await c.caps.questionsDoor()).toBe(false);
+    expect(await settledNow(c.caps.questionsDoor())).toBe(false);
+    expect(c.fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it('before any read has settled, an answer waits for that one read and shares it', async () => {
+    const c = scripted();
+    let land!: (r: Response) => void;
+    c.answers.push(() => new Promise<Response>((r) => { land = r; }));
+    const first = c.caps.questionsDoor();
+    expect(await settledNow(c.caps.questionsDoor())).toBe('waiting');
+    land(health({ ok: true, caps: ['questions-v1'] }));
+    expect(await first).toBe(true);
+    expect(c.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('api.answerQuestion: a tap\'s POST goes out at once, never one /health read behind it', () => {
+  // The sheet read the door when it mounted (`DialogSheet`); then `/health` hangs, as a slow or stalled server's does.
+  // The clock is `Date`'s, faked alone (no timer is), as `api`'s reader reads it.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(1_000_000); });
+  afterEach(() => { vi.useRealTimers(); });
+  const apiOver2 = (mount: 'v1' | 'fails') => {
+    let reads = 0;
+    const sent: Sent[] = [];
+    const api = createApi((async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/health') {
+        reads += 1;
+        if (reads > 1) return never<Response>();
+        if (mount === 'fails') throw new TypeError('offline');
+        return health({ ok: true, caps: ['questions-v1'] });
+      }
+      sent.push({ method: init?.method ?? 'GET', url, body: typeof init?.body === 'string' ? init.body : undefined });
+      return health({ ok: true, next: null });
+    }) as typeof fetch);
+    return { api, sent, reads: () => reads, at: (ms: number) => { vi.setSystemTime(Date.now() + ms); } };
+  };
+  it('a sheet open past the lease: the tap\'s POST is issued at once, on the family\'s door, while /health is re-read', async () => {
+    const o = apiOver2('v1');
+    await o.api.questionsDoor();
+    o.at(SERVER_CAPS_HOLD_MS + 1);
+    void o.api.answerQuestion(SID, { kind: 'dialog', dialogId: 'd1', optionIndex: 2 });
+    await microtasks();
+    expect(o.sent).toEqual([{ method: 'POST', url: FAMILY, body: '{"kind":"dialog","dialogId":"d1","optionIndex":2}' }]);
+    expect(o.reads()).toBe(2);
+  });
+  it('a sheet whose mount read failed: the tap\'s POST is issued at once, on the old door, while /health is re-read', async () => {
+    const o = apiOver2('fails');
+    await o.api.questionsDoor();
+    void o.api.answerQuestion(SID, { kind: 'dialog', dialogId: 'd1', optionIndex: 2 });
+    await microtasks();
+    expect(o.sent).toEqual([{ method: 'POST', url: `/api/sessions/${SID}/dialog`, body: '{"dialogId":"d1","optionIndex":2}' }]);
+    expect(o.reads()).toBe(2);
+  });
+});
+
+describe('DialogSheet re-reads the door when the page comes back into view', () => {
+  it('a visibilitychange to visible reads again; one to hidden does not', () => {
+    const door = vi.spyOn(api, 'questionsDoor').mockResolvedValue(true);
+    const fakeSocket = (): WebSocket => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
+    const store = createSessionStore('lane-a:project-a', { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const view = render(createElement(DialogSheet, { id: 'lane-a:project-a', store }));
+    expect(door).toHaveBeenCalledTimes(1);
+    const state = vi.spyOn(document, 'visibilityState', 'get');
+    state.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(door).toHaveBeenCalledTimes(1);
+    state.mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(door).toHaveBeenCalledTimes(2);
+    view.unmount();
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(door).toHaveBeenCalledTimes(2);
   });
 });
