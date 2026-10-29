@@ -306,12 +306,14 @@ describe('nestFleet\'s attentionFirst lookup: the child order under one coordina
   const waiting = (over: Partial<FleetSession>): FleetSession => worker({ child: { kind: 'child', runId: 61 }, status: 'idle', bucket: 'attention', ...over });
   const ORDERS: ReadonlyArray<{ name: string; sessions: readonly FleetSession[]; tree: readonly string[]; nest: readonly string[] }> = [
     { name: 'the waiting worker is unbound (no run on the wire), the stale run names it by id',
-      // C7d's behaviour row, OA-C15 (a): the tree brackets only the run the wire binds, so the unbound waiting worker is
-      // not this coordinator's child on the card (tree: [W, O] before).
-      sessions: [coord(), ordinary(), waiting({ run: null, openRun: null })], tree: [O], nest: [W, O] },
+      // C7d's behaviour rows, OA-C15 (a): the tree brackets only the run the wire binds, so the unbound waiting worker is
+      // not this coordinator's child on the card (tree: [W, O] before); and `attentionFirst` asks the run's bound worker
+      // (`workerOf`), so the unbound worker's run does not sort first (nest: [W, O] before).
+      sessions: [coord(), ordinary(), waiting({ run: null, openRun: null })], tree: [O], nest: [O, W] },
     { name: 'the waiting worker is a recycled id (its binding names another run), the stale run names it by id',
-      // C7d's behaviour row, OA-C15 (a): the recycled id's binding names another run (tree: [W, O] before).
-      sessions: [coord(), ordinary(), waiting({ run: bound(closed(90)), openRun: null })], tree: [O], nest: [W, O] },
+      // C7d's behaviour rows, OA-C15 (a): the recycled id's binding names another run (tree: [W, O] and nest: [W, O]
+      // before).
+      sessions: [coord(), ordinary(), waiting({ run: bound(closed(90)), openRun: null })], tree: [O], nest: [O, W] },
     { name: 'the control: the waiting worker is bound to the wave-2 run',
       sessions: [coord(), ordinary(), waiting({ run: bound(r61), openRun: bound(r61) })], tree: [W, O], nest: [W, O] },
   ];

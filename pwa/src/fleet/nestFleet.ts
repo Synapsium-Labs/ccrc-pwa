@@ -35,7 +35,7 @@
 // top level — a child's position is a fact about the programme, everyone
 // else's is a fact about the fleet, and the two orders must not contend.
 import type { FleetSession, RunSummary } from '../../../shared/api';
-import { isDispatchPending } from './runWords';
+import { isDispatchPending, workerOf } from './runWords';
 
 /** How deep a row sits. ONE level, deliberately — see `nestFleet`'s rule 4. */
 export type RowDepth = 0 | 1;
@@ -67,16 +67,18 @@ const programOrder = (a: RunSummary, b: RunSummary): number => a.wave - b.wave |
  *  one thing this screen exists to surface (`groupFleet.ts`'s own principle);
  *  `programOrder`'s "a worker does not climb the tree by being busy" is about
  *  busy-ness, and this is not that. A pending spawn has no session and so no
- *  bucket; it keeps programme order (rule 5). The `r.sessionId !== null` and
- *  `?.` guards below are type-driven, not a defensive scope widener: `settled`
- *  is pre-filtered by `onList` before this ever runs, so on that list they
- *  never fire — they are not a licence to call this comparator on an
+ *  bucket; it keeps programme order (rule 5). The waiting worker is the run's
+ *  BOUND worker (`workerOf`, D-7182): a session that carries the run's id but
+ *  that the wire does not bind to it (#746) does not sort its run first. The
+ *  `?.` guard below is type-driven, not a defensive scope widener: `settled` is
+ *  pre-filtered by `onList` before this ever runs, so a run with no listed
+ *  session never reaches it; it is not a licence to call this comparator on an
  *  unfiltered one. */
 const attentionFirst =
   (byId: ReadonlyMap<string, FleetSession>) =>
   (a: RunSummary, b: RunSummary): number => {
     const waiting = (r: RunSummary): 0 | 1 =>
-      r.sessionId !== null && byId.get(r.sessionId)?.bucket === 'attention' ? 0 : 1;
+      workerOf(r, byId)?.bucket === 'attention' ? 0 : 1;
     return waiting(a) - waiting(b) || programOrder(a, b);
   };
 
