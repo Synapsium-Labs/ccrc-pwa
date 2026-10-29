@@ -1,84 +1,82 @@
-// The claimant client's characterization pin (D-7320; K5 tail, Task Q3h; plan
+// The claimant client's characterization pin (D-7320, D-7322; K5 tail, Tasks Q3h and Q3j; plan
 // 2026-10-29-consolidation-k5-claimant-doors.md; spec 2026-10-19 §5.1 rules 1 and 3). The four claimant verbs
 // `ccd/ccrc-api` runs, `asks answer`, `asks release`, `approvals rule` and `approvals release`, run for real, in a
 // fixture HOME (`ccrcApiClient.ts`: the HOME, the contained PATH with its `tmux` stub, the token document and
 // `agent.env` that `ccrc-api.test.ts` builds), against two servers:
 //
 //   (a) A RECORDING SERVER: for each verb, each state of `~/.ccrc/server-caps` in the fixture HOME, and each body,
-//       what the client sent (method, path, content-type, whether the box token rode, the body bytes). On this base
-//       every state sends the old door and the caller's body unchanged; Q3j's behaviour commit flips the path while
-//       `questions-v1` is advertised and current, and only then. The bodies are the server's mailed commands, RUN as
+//       what the client sent (method, path, content-type, whether the box token rode, the body bytes). On Q3h's base
+//       every state sent the old door and the caller's body unchanged; since Q3j's behaviour commit the state
+//       "current, lists questions-v1", and only that state, sends the family's door with the row's `kind` spliced
+//       first (a body naming `"kind":` left alone, no body sent as the kind alone, a non-object body refused by the
+//       client and nothing sent). The bodies are the server's mailed commands, RUN as
 //       mailed (the briefs `renderAskBrief` and `renderApprovalBrief` print, read off the mail a real server sends),
 //       `{}`, no `--json` at all, each verb's mailed body with the contrary top-level `kind`, an approval-shaped body
 //       on `asks answer`, and a non-object body. No FIFO at the path: the cap reader blocks on one (D-7339).
 //   (b) A REAL `buildServer` (`approvalsHarness.ts`'s standard family, the fixture signing key, a fixed clock): per
 //       verb, the outcome of the success arm and each front-ladder refusal a caller of the client can reach (status,
-//       body bytes, the row after, the door-ins called, keys pressed, mail to the parent). On this base they run
-//       through the old doors.
+//       body bytes, the row after, the door-ins called, keys pressed, mail to the parent). The rows and their table
+//       live in `claimantClientFixture.ts` (moved, so the skew suite reads the same table). The client HOME's cap file
+//       is written from the server's own `/health`, so since Q3j they run through the family, and every outcome cell
+//       is the base's except the named-difference rows of (d).
 //   (c) THE SIGNED RULING, END TO END: an allow ruled through `approvals rule` with a reason padded by one space at
 //       each end, fetched with `approvals ruling`, its canonical record bytes and signature held as literals, and
-//       `ccd/approval-verify.mjs`'s `verdictFor` accepting it under the fixture public key.
-//   (d) THE NAMED-DIFFERENCE ROWS (D-7325), recorded as the base answers them: the unconfigured box token's detail,
-//       the five contrary-kind bodies, and the non-object body. MEASURED, not assumed: the old doors ignore a
-//       contrary `kind` (an ask body with `"kind":"approval"` is pressed and recorded; an approval-shaped body on
-//       `asks answer` is the ask ladder's `bad-request`), and `[]` is valid JSON, so fastify parses it and the route's
-//       own body check answers `bad-request` with its detail; no fastify parse refusal is reached.
+//       `ccd/approval-verify.mjs`'s `verdictFor` accepting it under the fixture public key. Since Q3j the HOME's cap
+//       file lists `questions-v1`, so that row rules through the family; two more rows pin the same record bytes and
+//       signature through each path by name: the family's door, and the old door with the cap file absent.
+//   (d) THE NAMED-DIFFERENCE ROWS (D-7325), recorded as the base answers them (`EXPECTED`): the unconfigured box
+//       token's detail, the five contrary-kind bodies, and the non-object body. MEASURED, not assumed: the old doors
+//       ignore a contrary `kind` (an ask body with `"kind":"approval"` is pressed and recorded; an approval-shaped body
+//       on `asks answer` is the ask ladder's `bad-request`), and `[]` is valid JSON, so fastify parses it and the
+//       route's own body check answers `bad-request` with its detail; no fastify parse refusal is reached. Through the
+//       family those rows, and only those, take the answers `FAMILY_DIFFERENCE` names (Q3j's behaviour commit).
 //
 // Neutral ids only (`approvalsHarness.ts`'s). Nothing here touches the live HOME or a live server.
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import { createHash, createPrivateKey } from 'node:crypto';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FastifyInstance } from 'fastify';
-import { buildServer } from '../src/server.js';
-import { Bus } from '../src/bus.js';
-import { FleetWatcher } from '../src/watch.js';
-import { Tmux } from '../src/exec.js';
-import { askKey } from '../src/askkey.js';
-import type { Questions } from '../src/coord/questions.js';
-import { APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, renderServerCaps, SERVER_CAPS, type ApprovalRulingRecord } from '../../shared/api.js';
+import { approvalRulingBytes, renderServerCaps, SERVER_CAPS, SERVER_CAPS_FILE, type ApprovalRulingRecord } from '../../shared/api.js';
 import { verdictFor } from '../../ccd/approval-verify.mjs';
 import { CCRC_API } from './ccdWsHelpers.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
-import {
-  CHILD, CHILD2, hookInput, PARENT, requestBody, standardFixture, TOKEN, uuidOf, type Approvals,
-} from './approvalsHarness.js';
+import { CHILD, PARENT, requestBody, standardFixture, TOKEN, uuidOf } from './approvalsHarness.js';
 import { mkTmp } from './tmpHelpers.js';
+import {
+  ANSWER, ASK_PANE, bodyOf, DIFFERENCE, EXPECTED, hookstate, installRealServerHooks, json, LADDER, lastRunDoors,
+  mailBodiesTo, NONCE, NOW, ORDINARY, type Outcome, P, realServer, REL, type Row, RULE, runRow, statusOf, type Verb, VERBS,
+  withKind,
+} from './claimantClientFixture.js';
 
-const P = { fromId: PARENT, fromUuid: uuidOf(PARENT) };
-const json = (o: unknown): string => JSON.stringify(o);
-
-/** The four verbs, and the old door each sends on this base. */
-type Verb = 'asks answer' | 'asks release' | 'approvals rule' | 'approvals release';
-const VERBS: readonly Verb[] = ['asks answer', 'asks release', 'approvals rule', 'approvals release'];
+/** The old door each verb sends whenever `questions-v1` is not advertised, current and listed. */
 const OLD_DOOR: Record<Verb, (id: string) => string> = {
   'asks answer': (id) => `/api/asks/${id}/answer`,
   'asks release': (id) => `/api/asks/${id}/release`,
   'approvals rule': (id) => `/api/approvals/${id}/rule`,
   'approvals release': (id) => `/api/approvals/${id}/release`,
 };
-
-// ── The mailed commands, read off the mail a real server sends ────────────────────────────────────────────────────
-
-const QUESTION = { question: 'Which colour?', header: 'Colour', multiSelect: false, options: [{ label: 'Red' }, { label: 'Blue' }] };
-const ASK_KEY = askKey({ questions: [QUESTION] })!;
-const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
-const ORDINARY = hookInput({ command: 'rm -rf build' });
-
-/** A waiting hookstate for `id` carrying `QUESTION` at `updatedAt` (the stamp the take re-measures). `event: null`
- *  leaves the field out, as an AskUserQuestion's wait writes it, which is what the hold mints an ask row for. */
-const hookstate = (f: Approvals, id: string, updatedAt: number, o: { event?: null } = {}): void => {
-  fs.writeFileSync(path.join(f.home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
-    v: 1, state: 'waiting', ...(o.event === null ? {} : { event: 'PermissionRequest' }), sessionId: uuidOf(id), pid: 4242, updatedAt,
-    ask: { questions: [QUESTION] }, subagents: [],
-  }));
+/** The question door family's door each verb sends while it is (D-7322), and the kind the row splices: the row's,
+ *  from the template's prefix, never the caller's. */
+const FAMILY_DOOR: Record<Verb, (id: string) => string> = {
+  'asks answer': (id) => `/api/questions/ask-${id}/rule`,
+  'asks release': (id) => `/api/questions/ask-${id}/release`,
+  'approvals rule': (id) => `/api/questions/approval-${id}/rule`,
+  'approvals release': (id) => `/api/questions/approval-${id}/release`,
+};
+const KIND: Record<Verb, 'ask' | 'approval'> = {
+  'asks answer': 'ask', 'asks release': 'ask', 'approvals rule': 'approval', 'approvals release': 'approval',
+};
+/** What the family is sent for a caller's `body`: `"kind"` first, unless the whitespace-stripped body names `"kind":`
+ *  already; no body is sent as the kind alone. */
+const spliced = (verb: Verb, body: string | null): string => {
+  if (body === null) return `{"kind":"${KIND[verb]}"}`;
+  if (body.replace(/\s/g, '').includes('"kind":')) return body;
+  const rest = body.trimStart().slice(1);
+  return rest.replace(/\s/g, '') === '}' ? `{"kind":"${KIND[verb]}"}` : `{"kind":"${KIND[verb]}",${rest}`;
 };
 
-const mailBodiesTo = (f: Approvals, to: string): string[] =>
-  (f.coord.db.prepare('SELECT m.body AS body FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE d.toId = ? ORDER BY m.id')
-    .all(to) as { body: string }[]).map((r) => r.body);
+// ── The mailed commands, read off the mail a real server sends ────────────────────────────────────────────────────
 
 /** One mailed command block, as the brief prints it, with the verb and the id it names. */
 interface Mailed { verb: Verb; id: string; block: string }
@@ -129,6 +127,8 @@ interface Sent { method: string; path: string; contentType: string | null; token
 /** Each state the fixture HOME's `~/.ccrc/server-caps` is put in. Never a FIFO (D-7339). */
 type CapState = 'absent' | 'current, lists questions-v1' | 'current, omits questions-v1' | 'stale by 181 s'
   | '`at` in the future' | 'torn to two lines' | 'a directory';
+/** The one state the family is sent in (D-7326). */
+const ADVERTISED: CapState = 'current, lists questions-v1';
 const CAP_STATES: readonly CapState[] = ['absent', 'current, lists questions-v1', 'current, omits questions-v1', 'stale by 181 s',
   '`at` in the future', 'torn to two lines', 'a directory'];
 const capFile = (home: string): string => path.join(home, '.ccrc', 'server-caps');
@@ -148,8 +148,6 @@ const putCaps = (home: string, state: CapState): void => {
   }
 };
 
-/** A body with `"kind":<kind>` added as its last top-level key. */
-const withKind = (body: string, kind: string): string => `${body.slice(0, -1)},"kind":"${kind}"}`;
 const CONTRARY: Record<Verb, string> = {
   'asks answer': 'approval', 'asks release': 'approval', 'approvals rule': 'ask', 'approvals release': 'ask',
 };
@@ -163,7 +161,7 @@ const bodiesFor = (verb: Verb): ReadonlyArray<readonly [string, string | null]> 
   ['a non-object body', '[]'],
 ];
 
-describe('(a) what the four verbs send, per cap-file state (the base sends the old door, the body unchanged)', () => {
+describe('(a) what the four verbs send, per cap-file state (the old door and the body unchanged, but while questions-v1 is advertised)', () => {
   let home = '';
   let scratch = '';
   let server: Server;
@@ -206,9 +204,14 @@ describe('(a) what the four verbs send, per cap-file state (the base sends the o
     seen = [];
     return s;
   };
-  const sentAs = (verb: Verb, id: string, body: string | null): Sent => ({
-    method: 'POST', path: OLD_DOOR[verb](id), contentType: body === null ? null : 'application/json', token: true, body: body ?? '',
-  });
+  const sentAs = (verb: Verb, id: string, body: string | null, state: CapState): Sent => state === ADVERTISED
+    ? { method: 'POST', path: FAMILY_DOOR[verb](id), contentType: 'application/json', token: true, body: spliced(verb, body) }
+    : { method: 'POST', path: OLD_DOOR[verb](id), contentType: body === null ? null : 'application/json', token: true, body: body ?? '' };
+  /** A run the client refused before sending: `bad-body`, exit 2, no request. */
+  const refusedHere = (r: Run, what: string): void => {
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], `${what}: ${r.stdout}${r.stderr}`).toEqual([2, 'bad-body']);
+    expect(seen, `${what}: nothing sent`).toEqual([]);
+  };
 
   it('the mailed briefs carry the blocks this pin runs: two answers and a release per ask, an allow, a deny and a release per approval', () => {
     expect(mailed.map((m) => `${m.verb} ${m.id}`)).toEqual([
@@ -226,328 +229,104 @@ describe('(a) what the four verbs send, per cap-file state (the base sends the o
         fs.writeFileSync(block, `${m.block}\n`);
         const s = one(await runClient(home, [CCRC_API, PARENT, uuidOf(PARENT), block], undefined, undefined, driver), `${state} | ${m.verb}`);
         (seenBodies[m.verb] ??= []).push(s.body);
-        expect(s, `${state} | ${m.verb}`).toEqual(sentAs(m.verb, m.id, s.body));
+        expect(s, `${state} | ${m.verb}`).toEqual(sentAs(m.verb, m.id, s.body, state));
       }
-      expect(seenBodies, state).toEqual(MAILED_BODIES);
+      expect(seenBodies, state).toEqual(state === ADVERTISED
+        ? Object.fromEntries(Object.entries(MAILED_BODIES).map(([v, bs]) => [v, bs.map((b) => spliced(v as Verb, b))]))
+        : MAILED_BODIES);
     }
   });
 
-  it.each(VERBS.map((v) => [v, OLD_DOOR[v]('<n>')] as const))('%s sends POST %s, in every cap state', async (verb) => {
-    const [group, name] = verb.split(' ') as [string, string];
-    for (const state of CAP_STATES) {
-      putCaps(home, state);
-      for (const [label, body] of [...MAILED_BODIES[verb].map((b, i) => [`mailed body ${i}`, b] as const), ...bodiesFor(verb)]) {
-        const args = body === null ? [group, name, '7'] : [group, name, '7', '--json', '-'];
-        const s = one(await runClient(home, args, body ?? undefined), `${state} | ${label}`);
-        expect(s, `${state} | ${label}`).toEqual(sentAs(verb, '7', body));
+  it.each(VERBS.map((v) => [v, OLD_DOOR[v]('<n>'), FAMILY_DOOR[v]('<n>')] as const))(
+    '%s sends POST %s in every cap state but one, and POST %s while questions-v1 is advertised', async (verb) => {
+      const [group, name] = verb.split(' ') as [string, string];
+      for (const state of CAP_STATES) {
+        putCaps(home, state);
+        for (const [label, body] of [...MAILED_BODIES[verb].map((b, i) => [`mailed body ${i}`, b] as const), ...bodiesFor(verb)]) {
+          const args = body === null ? [group, name, '7'] : [group, name, '7', '--json', '-'];
+          const r = await runClient(home, args, body ?? undefined);
+          if (state === ADVERTISED && body === '[]') { refusedHere(r, `${state} | ${label}`); continue; }
+          expect(one(r, `${state} | ${label}`), `${state} | ${label}`).toEqual(sentAs(verb, '7', body, state));
+        }
       }
-    }
-  });
+    });
 });
 
 // ── (b), (c), (d): a real server ──────────────────────────────────────────────────────────────────────────────────
 
-/** The fixed clock, and the fixture signing key from a fixed, public 32-byte seed (Ed25519 signs deterministically),
- *  derived as `approval-signing-pin.test.ts` derives it. It signs nothing real: no box pins its public half. */
-const NOW = 1_760_000_000_000;
-const SEED = Buffer.alloc(32, 0x5a);
-const FIXTURE_KEY = createPrivateKey({
-  key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), SEED]), format: 'der', type: 'pkcs8',
-});
-const NONCE = '0123456789abcdef0123456789abcdef';
+installRealServerHooks();
 
-interface Outcome { status: number; body: string; effects: Record<string, unknown> }
-/** The client's stdout is the body and one newline; over 400 characters it is held by its SHA-256, as
- *  `question-doors.test.ts#bodyOf` holds a response. */
-const bodyOf = (stdout: string): string => {
-  const b = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
-  return b.length > 400 ? `sha256:${createHash('sha256').update(b, 'utf8').digest('hex')}` : b;
+/** The family's own answers to the named-difference rows (D-7325), MEASURED through the family: the unconfigured box
+ *  token's detail names the family's route; a contrary kind is read by the family's ladder for that kind (on `rule`
+ *  the body's kind picks the arm before attribution and the id check, so the mailed body with the contrary kind is the
+ *  other arm's `bad-request`, and only a body well formed for the contrary kind reaches `kind-mismatch`; on `release`,
+ *  `kind-mismatch`); a non-object body is refused by the client (`bad-body`, exit 2, no response: status -1). Every
+ *  other cell is `EXPECTED`'s, the base's, unedited. */
+const HELD_ASK = { state: 'held', answeredBy: null, answer: null };
+const HELD_APPROVAL = { state: 'held', answeredBy: null, releaseReason: null };
+const NOTHING = { doorIns: [], keys: [], mailToParent: 0 };
+const CLIENT_BAD_BODY = '{"ok":false,"error":"bad-body","detail":"the body is not a JSON object; kind cannot be added"}';
+const unconfigured = (route: string): string =>
+  `{"ok":false,"error":"unauthenticated","detail":"no box token is configured on this server — ${route} fails shut on an unconfigured token, it does not fail open"}`;
+const FAMILY_DIFFERENCE: Record<string, Outcome> = {
+  'difference | asks answer | the mailed body with "kind":"approval"':
+    { status: 400, body: '{"ok":false,"error":"bad-request","detail":"fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to 1000 characters"}', effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks answer | a body well formed for an approval':
+    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks release | the mailed body with "kind":"approval"':
+    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | approvals rule | the mailed body with "kind":"ask"':
+    { status: 400, body: '{"ok":false,"error":"bad-request","detail":"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given"}', effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | approvals release | the mailed body with "kind":"ask"':
+    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | asks answer | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks release | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | approvals rule | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | approvals release | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | asks answer | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/rule'), effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks release | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/release'), effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | approvals rule | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/rule'), effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | approvals release | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/release'), effects: { row: HELD_APPROVAL, ...NOTHING } },
 };
-const statusOf = (r: Run): number => Number(/^http (\d+)$/m.exec(r.stderr)?.[1] ?? -1);
+/** The table the family answers: the base's, with the named differences and nothing else. */
+const THROUGH_FAMILY: Record<string, Outcome> = { ...EXPECTED, ...FAMILY_DIFFERENCE };
 
-const DOOR_INS: ReadonlyArray<readonly [keyof Questions, number]> = [['released', 1], ['answeredLate', 3], ['approvalReleased', 1], ['approvalRuled', 4]];
+/** The door a row's own call reaches: the family's, with the row's id (a bad id rides through to the server, which
+ *  refuses it); none for a body the client refuses. */
+const familyDoor = ([, verb, call]: Row, r: { ask: number; approval: number }): string[] =>
+  call.body === '[]' ? [] : [`POST ${FAMILY_DOOR[verb](call.id ?? String(verb.startsWith('asks') ? r.ask : r.approval))}`];
+/** Every row's fixture mints ask 1 and approval 1. */
+const IDS = { ask: 1, approval: 1 };
 
-let KEYS: string[] = [];
-const live: Array<() => Promise<void>> = [];
-beforeEach(() => {
-  KEYS = [];
-  vi.spyOn(Tmux.prototype, 'sendKey').mockImplementation(async (id: string, k: string) => { KEYS.push(`${id} ${k}`); return true; });
-  vi.spyOn(Tmux.prototype, 'sendLiteral').mockImplementation(async (id: string, t: string) => { KEYS.push(`${id} -l ${t}`); return true; });
-});
-afterEach(async () => {
-  for (const c of live.splice(0)) await c();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-/** A real server for one row: the standard family, the fixture signing key, the clock at `NOW`, listening on
- *  loopback, a client HOME pointing at it, and the composition's door-ins spied (calling through). */
-interface Real {
-  f: Approvals; home: string; ask: number; approval: number; doorIns: () => string[]; mail0: number;
-  client: (verb: Verb | 'approvals ruling', args: string[], body?: string | null) => Promise<Run>;
-}
-async function realServer(o: { mailToken?: 'unconfigured' } = {}): Promise<Real> {
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(NOW);
-  const f = await standardFixture();
-  live.push(async () => { await f.close(); });
-  fs.writeFileSync(path.join(f.home, '.ccrc', APPROVAL_SIGNING_KEY_FILE), FIXTURE_KEY.export({ type: 'pkcs8', format: 'pem' }) as string, { mode: 0o600 });
-  await f.restart();
-  let app: FastifyInstance = f.app;
-  if (o.mailToken === 'unconfigured') {
-    app = await buildServer({ ...f.deps, mailToken: undefined }, new Bus(), new FleetWatcher({ ...f.deps, mailToken: undefined }, new Bus(), 10_000));
-    live.push(async () => { await app.close(); });
-  }
-  const calls: string[] = [];
-  const q = f.watcher.questions;
-  for (const [m, n] of DOOR_INS) {
-    const real = (q[m] as (...a: unknown[]) => unknown).bind(q);
-    vi.spyOn(q, m).mockImplementation(((...a: unknown[]) => { calls.push(`${m}(${a.slice(0, n).map((x) => json(x)).join(',')})`); return real(...a); }) as never);
-  }
-  hookstate(f, CHILD, NOW);
-  f.panes.set(CHILD, ASK_PANE);
-  const ask = f.coord.insertAsk({
-    childId: CHILD, parentId: PARENT, runId: f.runId, askKey: ASK_KEY, askAt: NOW, dialogId: 'dlg-1',
-    question: QUESTION.question, options: QUESTION.options.map((x) => x.label), now: NOW,
-  });
-  const raised = await f.request({ ...requestBody(ORDINARY), nonce: NONCE });
-  if (raised.statusCode !== 201) throw new Error(`the fixture raise answered ${raised.statusCode}: ${raised.body}`);
-  const approval = (raised.json() as { id: number }).id;
-  await app.listen({ host: '127.0.0.1', port: 0 });
-  const home = mkTmp('claimant-pin-real-');
-  live.push(async () => { fs.rmSync(home, { recursive: true, force: true }); });
-  writeClientHome(home, `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`, TOKEN);
-  return {
-    f, home, ask, approval, doorIns: () => [...calls], mail0: mailBodiesTo(f, PARENT).length,
-    client: (verb, args, body = null) => {
-      const [group, name] = verb.split(' ') as [string, string];
-      return runClient(home, [group, name, ...args, ...(body === null ? [] : ['--json', '-'])], body ?? undefined);
-    },
-  };
-}
-
-const askState = (r: Real) => {
-  const a = r.f.coord.askById(r.ask);
-  return a.ok && a.ask !== null ? { state: a.ask.state, answeredBy: a.ask.answeredBy, answer: a.ask.answer } : null;
-};
-const approvalState = (r: Real) => {
-  const a = r.f.coord.approvalById(r.approval);
-  return a.ok && a.row !== null ? { state: a.row.state, answeredBy: a.row.answeredBy, releaseReason: a.row.releaseReason } : null;
-};
-const outcome = (r: Real, run: Run, verb: Verb): Outcome => ({
-  status: statusOf(run), body: bodyOf(run.stdout),
-  effects: {
-    row: verb.startsWith('asks') ? askState(r) : approvalState(r), doorIns: r.doorIns(), keys: [...KEYS],
-    mailToParent: mailBodiesTo(r.f, PARENT).length - r.mail0,
-  },
-});
-
-/** One row: the verb, how the row is set up after the mint, and the call (the id, the body). `id` is the row's own
- *  question id unless a literal is given. */
-type Row = readonly [name: string, verb: Verb, call: { id?: string; body: string | null }, before?: (r: Real) => Promise<void>];
-const ANSWER = (i: number): string => json({ ...P, optionIndexes: [i] });
-const RULE = (verdict: 'allow' | 'deny', extra: Record<string, unknown> = {}): string =>
-  json({ ...P, verdict, reason: `${verdict} through the client`, ...extra });
-const REL = json(P);
-const STALE = { fromId: PARENT, fromUuid: 'u-stale' };
-const NOT_PARENT = { fromId: CHILD2, fromUuid: uuidOf(CHILD2) };
-
-const LADDER: Row[] = [
-  ['asks answer | success: pressed, recorded', 'asks answer', { body: ANSWER(1) }],
-  ['asks answer | a bad body', 'asks answer', { body: '{}' }],
-  ['asks answer | a wrong fromUuid is refused, nothing pressed', 'asks answer', { body: json({ ...STALE, optionIndexes: [0] }) }],
-  ['asks answer | a bad id: 01', 'asks answer', { id: '01', body: ANSWER(0) }],
-  ['asks answer | a bad id: abc', 'asks answer', { id: 'abc', body: ANSWER(0) }],
-  ['asks answer | an unknown id', 'asks answer', { id: '99', body: ANSWER(0) }],
-  ['asks answer | not the parent', 'asks answer', { body: json({ ...NOT_PARENT, optionIndexes: [0] }) }],
-  ['asks answer | declined after a release', 'asks answer', { body: ANSWER(0) },
-    async (r) => { await r.client('asks release', [String(r.ask)], REL); }],
-  ['asks answer | already answered', 'asks answer', { body: ANSWER(0) },
-    async (r) => { await r.client('asks answer', [String(r.ask)], ANSWER(1)); }],
-  ['asks release | success: declined, the door-in fires', 'asks release', { body: REL }],
-  ['asks release | a bad body', 'asks release', { body: '{}' }],
-  ['asks release | a wrong fromUuid', 'asks release', { body: json(STALE) }],
-  ['asks release | a bad id: 01', 'asks release', { id: '01', body: REL }],
-  ['asks release | a bad id: abc', 'asks release', { id: 'abc', body: REL }],
-  ['asks release | an unknown id', 'asks release', { id: '99', body: REL }],
-  ['asks release | not the parent', 'asks release', { body: json(NOT_PARENT) }],
-  ['asks release | declined after a release', 'asks release', { body: REL },
-    async (r) => { await r.client('asks release', [String(r.ask)], REL); }],
-  ['asks release | already answered', 'asks release', { body: REL },
-    async (r) => { await r.client('asks answer', [String(r.ask)], ANSWER(1)); }],
-  ['approvals rule | success: allowed, signed, recorded', 'approvals rule', { body: RULE('allow') }],
-  ['approvals rule | success: denied, signed, recorded', 'approvals rule', { body: RULE('deny') }],
-  ['approvals rule | a bad body', 'approvals rule', { body: '{}' }],
-  ['approvals rule | a wrong fromUuid', 'approvals rule', { body: json({ ...STALE, verdict: 'allow', reason: 'r' }) }],
-  ['approvals rule | a bad id: 01', 'approvals rule', { id: '01', body: RULE('allow') }],
-  ['approvals rule | a bad id: abc', 'approvals rule', { id: 'abc', body: RULE('allow') }],
-  ['approvals rule | an unknown id', 'approvals rule', { id: '99', body: RULE('allow') }],
-  ['approvals rule | not the parent', 'approvals rule', { body: json({ ...NOT_PARENT, verdict: 'allow', reason: 'r' }) }],
-  ['approvals rule | declined after a release', 'approvals rule', { body: RULE('allow') },
-    async (r) => { await r.client('approvals release', [String(r.approval)], REL); }],
-  ['approvals rule | already ruled', 'approvals rule', { body: RULE('allow') },
-    async (r) => { await r.client('approvals rule', [String(r.approval)], RULE('deny')); }],
-  ['approvals rule | permanent is bad-request, nothing signed', 'approvals rule', { body: RULE('allow', { permanent: true }) }],
-  ['approvals release | success: declined, the door-in fires', 'approvals release', { body: REL }],
-  ['approvals release | a bad body', 'approvals release', { body: '{}' }],
-  ['approvals release | a wrong fromUuid', 'approvals release', { body: json(STALE) }],
-  ['approvals release | a bad id: 01', 'approvals release', { id: '01', body: REL }],
-  ['approvals release | a bad id: abc', 'approvals release', { id: 'abc', body: REL }],
-  ['approvals release | an unknown id', 'approvals release', { id: '99', body: REL }],
-  ['approvals release | not the parent', 'approvals release', { body: json(NOT_PARENT) }],
-  ['approvals release | declined after a release', 'approvals release', { body: REL },
-    async (r) => { await r.client('approvals release', [String(r.approval)], REL); }],
-  ['approvals release | already ruled', 'approvals release', { body: REL },
-    async (r) => { await r.client('approvals rule', [String(r.approval)], RULE('deny')); }],
-];
-
-/** (d) The named-difference rows (D-7325), as the base answers them. */
-const DIFFERENCE: Row[] = [
-  ['difference | asks answer | the mailed body with "kind":"approval"', 'asks answer', { body: withKind(ANSWER(0), 'approval') }],
-  ['difference | asks answer | a body well formed for an approval', 'asks answer', { body: json({ ...P, kind: 'approval', verdict: 'allow', reason: 'r' }) }],
-  ['difference | asks release | the mailed body with "kind":"approval"', 'asks release', { body: withKind(REL, 'approval') }],
-  ['difference | approvals rule | the mailed body with "kind":"ask"', 'approvals rule', { body: withKind(RULE('allow'), 'ask') }],
-  ['difference | approvals release | the mailed body with "kind":"ask"', 'approvals release', { body: withKind(REL, 'ask') }],
-  ...VERBS.map((v) => [`difference | ${v} | a non-object body`, v, { body: '[]' }] as const),
-];
-
-const EXPECTED: Record<string, Outcome> = {
-  "asks answer | success: pressed, recorded":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Blue"}, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "mailToParent": 0}},
-  "asks answer | a bad body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks answer | a wrong fromUuid is refused, nothing pressed":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"stale-uuid\",\"detail\":\"fromUuid does not match the registry — stale sender; re-read your own .uuid\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks answer | a bad id: 01":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks answer | a bad id: abc":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks answer | an unknown id":
-    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-ask\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks answer | not the parent":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only this child's derived parent may pre-empt its question\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks answer | declined after a release":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"declined\"}", "effects": {"row": {"state": "declined", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks answer | already answered":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"already-answered\"}", "effects": {"row": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Blue"}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | success: declined, the door-in fires":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "declined", "answeredBy": null, "answer": null}, "doorIns": ["released(\"project-a-quiet-basin\")"], "keys": [], "mailToParent": 0}},
-  "asks release | a bad body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | a wrong fromUuid":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"stale-uuid\",\"detail\":\"fromUuid does not match the registry — stale sender; re-read your own .uuid\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | a bad id: 01":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | a bad id: abc":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | an unknown id":
-    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-ask\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | not the parent":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only this child's derived parent may decline its question\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | declined after a release":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"row": {"state": "declined", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "asks release | already answered":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"row": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Blue"}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | success: allowed, signed, recorded":
-    {"status": 200, "body": "{\"ok\":true,\"state\":\"allowed\"}", "effects": {"row": {"state": "allowed", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"allow\")"], "keys": [], "mailToParent": 0}},
-  "approvals rule | success: denied, signed, recorded":
-    {"status": 200, "body": "{\"ok\":true,\"state\":\"denied\"}", "effects": {"row": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "mailToParent": 0}},
-  "approvals rule | a bad body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to 1000 characters\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | a wrong fromUuid":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"stale-uuid\",\"detail\":\"fromUuid does not match the registry — stale sender; re-read your own .uuid\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | a bad id: 01":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | a bad id: abc":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | an unknown id":
-    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-approval\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | not the parent":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only the claimant this prompt was held for may rule on it\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | declined after a release":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"declined\"}", "effects": {"row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | already ruled":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"already-ruled\"}", "effects": {"row": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals rule | permanent is bad-request, nothing signed":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"a ruling allows once only; permanent is never accepted\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | success: declined, the door-in fires":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalReleased(\"project-a-quiet-basin\")"], "keys": [], "mailToParent": 0}},
-  "approvals release | a bad body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | a wrong fromUuid":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"stale-uuid\",\"detail\":\"fromUuid does not match the registry — stale sender; re-read your own .uuid\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | a bad id: 01":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | a bad id: abc":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | an unknown id":
-    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-approval\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | not the parent":
-    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only the claimant this prompt was held for may hand it over\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | declined after a release":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "approvals release | already ruled":
-    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"row": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | asks answer | the mailed body with \"kind\":\"approval\"":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Red"}, "doorIns": [], "keys": ["project-a-quiet-basin 1"], "mailToParent": 0}},
-  "difference | asks answer | a body well formed for an approval":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | asks release | the mailed body with \"kind\":\"approval\"":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "declined", "answeredBy": null, "answer": null}, "doorIns": ["released(\"project-a-quiet-basin\")"], "keys": [], "mailToParent": 0}},
-  "difference | approvals rule | the mailed body with \"kind\":\"ask\"":
-    {"status": 200, "body": "{\"ok\":true,\"state\":\"allowed\"}", "effects": {"row": {"state": "allowed", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"allow\")"], "keys": [], "mailToParent": 0}},
-  "difference | approvals release | the mailed body with \"kind\":\"ask\"":
-    {"status": 200, "body": "{\"ok\":true}", "effects": {"row": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalReleased(\"project-a-quiet-basin\")"], "keys": [], "mailToParent": 0}},
-  "difference | asks answer | a non-object body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | asks release | a non-object body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | approvals rule | a non-object body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to 1000 characters\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | approvals release | a non-object body":
-    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | asks answer | the box token unconfigured":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token is configured on this server — POST /api/asks/:id/answer fails shut on an unconfigured token, it does not fail open\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | asks release | the box token unconfigured":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token is configured on this server — POST /api/asks/:id/release fails shut on an unconfigured token, it does not fail open\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | approvals rule | the box token unconfigured":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token is configured on this server — POST /api/approvals/:id/rule fails shut on an unconfigured token, it does not fail open\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-  "difference | approvals release | the box token unconfigured":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token is configured on this server — POST /api/approvals/:id/release fails shut on an unconfigured token, it does not fail open\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
-};
-
-const runRow = async ([name, verb, call, before]: Row, o: { mailToken?: 'unconfigured' } = {}): Promise<Outcome> => {
-  const r = await realServer(o);
-  await before?.(r);
-  KEYS = [];
-  const id = call.id ?? String(verb.startsWith('asks') ? r.ask : r.approval);
-  const mail0 = mailBodiesTo(r.f, PARENT).length;
-  const doorIns0 = r.doorIns().length;
-  const run = await r.client(verb, [id], call.body);
-  const out = outcome(r, run, verb);
-  out.effects['doorIns'] = r.doorIns().slice(doorIns0);
-  out.effects['mailToParent'] = mailBodiesTo(r.f, PARENT).length - mail0;
-  return out;
-};
-
-describe('(b) what a real server answers each verb, through the old doors on this base', () => {
+describe('(b) what a real server answers each verb, through the family while it advertises questions-v1', () => {
   it('the rows are uniquely named, and every row has an expectation', () => {
     const names = [...LADDER, ...DIFFERENCE].map(([n]) => n);
     expect(new Set(names).size).toBe(names.length);
     expect(Object.keys(EXPECTED).sort()).toEqual([...names, ...VERBS.map((v) => `difference | ${v} | the box token unconfigured`)].sort());
   });
+  it('the family differs from the base on the named-difference rows only: every one of (d), no ladder row (D-7325)', () => {
+    expect(Object.keys(FAMILY_DIFFERENCE).sort()).toEqual(Object.keys(EXPECTED).filter((n) => n.startsWith('difference | ')).sort());
+    for (const [n, o] of Object.entries(FAMILY_DIFFERENCE)) expect(o, n).not.toEqual(EXPECTED[n]);
+  });
   it.each(LADDER.map((row) => [row[0], row] as const))('%s', async (_n, row) => {
-    expect(await runRow(row)).toEqual(EXPECTED[row[0]]);
+    expect(await runRow(row)).toEqual(THROUGH_FAMILY[row[0]]);
+    expect(lastRunDoors(), 'the door the call reached').toEqual(familyDoor(row, IDS));
   });
 });
 
-describe('(d) the named-difference rows, recorded as the base answers them (D-7325)', () => {
+describe('(d) the named-difference rows: the base\'s answers in EXPECTED, the family\'s in FAMILY_DIFFERENCE (D-7325)', () => {
   it.each(DIFFERENCE.map((row) => [row[0], row] as const))('%s', async (_n, row) => {
-    expect(await runRow(row)).toEqual(EXPECTED[row[0]]);
+    expect(await runRow(row)).toEqual(THROUGH_FAMILY[row[0]]);
+    expect(lastRunDoors(), 'the door the call reached').toEqual(familyDoor(row, IDS));
   });
   it.each(VERBS.map((v) => [`difference | ${v} | the box token unconfigured`, v] as const))('%s', async (name, verb) => {
     const body = verb === 'asks answer' ? ANSWER(0) : verb === 'approvals rule' ? RULE('allow') : REL;
-    expect(await runRow([name, verb, { body }], { mailToken: 'unconfigured' })).toEqual(EXPECTED[name]);
+    expect(await runRow([name, verb, { body }], { mailToken: 'unconfigured' })).toEqual(THROUGH_FAMILY[name]);
+    expect(lastRunDoors(), 'the door the call reached').toEqual(familyDoor([name, verb, { body }], IDS));
   });
 });
 
@@ -576,6 +355,29 @@ describe('(c) the signed ruling, end to end', () => {
       sessionId: CHILD, agentId: '', digest: answer.ruling.record.digest, nonce: NONCE, rowId: r.approval, now: NOW,
     };
     expect(verdictFor(answer.ruling, expected, pub)).toBe(`allow ${PADDED_REASON}`);
+  });
+  it('approvals rule through the family signs the fixture ruling: the same record bytes and signature (D-7322)', async () => {
+    const r = await realServer();
+    const doors0 = r.doors().length;
+    const ruled = await r.client('approvals rule', [String(r.approval)], json({ ...P, verdict: 'allow', reason: PADDED_REASON }));
+    expect(r.doors().slice(doors0), 'the door the ruling reached').toEqual([`POST /api/questions/approval-${r.approval}/rule`]);
+    expect([statusOf(ruled), bodyOf(ruled.stdout)]).toEqual([200, '{"ok":true,"state":"allowed"}']);
+    const got = await runClient(r.home, ['approvals', 'ruling', String(r.approval), '--nonce', NONCE]);
+    const answer = JSON.parse(got.stdout) as { state: string; ruling: { record: ApprovalRulingRecord; sig: string } };
+    expect([approvalRulingBytes(answer.ruling.record), answer.ruling.sig]).toEqual([RULING_RECORD_BYTES, RULING_SIG]);
+  });
+  it('approvals rule through the old door, the cap file absent, signs the fixture ruling: the same record bytes and signature (D-7326)', async () => {
+    const r = await realServer();
+    // No cap file: questions-v1 is not advertised, so the client sends the old door, every non-advertised state's
+    // fallback until the old doors retire.
+    fs.rmSync(path.join(r.home, '.ccrc', SERVER_CAPS_FILE));
+    const doors0 = r.doors().length;
+    const ruled = await r.client('approvals rule', [String(r.approval)], json({ ...P, verdict: 'allow', reason: PADDED_REASON }));
+    expect(r.doors().slice(doors0), 'the door the ruling reached').toEqual([`POST /api/approvals/${r.approval}/rule`]);
+    expect([statusOf(ruled), bodyOf(ruled.stdout)]).toEqual([200, '{"ok":true,"state":"allowed"}']);
+    const got = await runClient(r.home, ['approvals', 'ruling', String(r.approval), '--nonce', NONCE]);
+    const answer = JSON.parse(got.stdout) as { state: string; ruling: { record: ApprovalRulingRecord; sig: string } };
+    expect([approvalRulingBytes(answer.ruling.record), answer.ruling.sig]).toEqual([RULING_RECORD_BYTES, RULING_SIG]);
   });
 });
 

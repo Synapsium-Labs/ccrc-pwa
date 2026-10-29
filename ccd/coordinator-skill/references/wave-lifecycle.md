@@ -1577,6 +1577,10 @@ Clause 11 is what licenses this: `POST /api/asks/:id/answer` is the one route th
 a child's pane, and this session never does it by any other means. All three routes in the
 lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
 entry, not an invitation like the operator-only doors above.
+The client sends `asks answer` and `asks release` to the question door family's claimant pair,
+`POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), when the
+server advertises `questions-v1`, and to `POST /api/asks/:id/answer` and `/release` otherwise;
+both answer through the same core, refusal for refusal, and the commands below do not change.
 
 **A cross-project coordinator receives its children's questions** (the operator's ruling of
 2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
@@ -1695,6 +1699,12 @@ UTC and the ready-to-run commands. Three routes are yours, each through the clie
   final.
 - `GET /api/approvals/:id` (`"$API" approvals show <id>`) — the row, redacted, for the claimant
   it was held for; anyone else is `403`.
+
+The client sends `approvals rule` and `approvals release` to the question door family's
+claimant pair, `POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id
+`approval-<n>`), when the server advertises `questions-v1`, and to the rule and release routes
+above otherwise; both answer through the same core, refusal for refusal, and the mailed commands
+do not change.
 
 A ruling after the window is refused `hook-gone`: the child's hook has returned and the
 operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other

@@ -749,18 +749,13 @@ describe('the coordinator skill: linkage', () => {
       // DISK RETENTION shadow journal (D-6861) — a read-only view for the operator (and the agent that
       // reviews a disk lane before the operator arms it), not a coordination door: no session decides or acts through it.
       'GET /api/coord/shadow-journal',
-      // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): three routes the skill corpus does not name
-      // YET, each for its own reason. The follow-up is ccd's: `ccrc-api` and the coordinator skill name the claimant's two
-      // when the client moves onto them (W7 gates on the `questions-v1` cap word); until then the coordinator's doors are
-      // the old pair, which stay as aliases and stay named.
+      // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
+      // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
+      // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the
+      // approval lane of `wave-lifecycle.md` name them beside the old pair, which stay as aliases and stay named.
       // The OPERATOR's answer: session-gated, never a coordinator's door, for `POST /api/coord/pause`'s reason: naming it
       // would be an invitation to answer the operator's question in the operator's name.
       'POST /api/questions/:id/answer',
-      // The claimant's ruling: the same core as `POST /api/asks/:id/answer` and `POST /api/approvals/:id/rule`, which the
-      // corpus names and which keep answering byte for byte.
-      'POST /api/questions/:id/rule',
-      // The claimant's hand-over: the same core as `POST /api/asks/:id/release` and `POST /api/approvals/:id/release`.
-      'POST /api/questions/:id/release',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
