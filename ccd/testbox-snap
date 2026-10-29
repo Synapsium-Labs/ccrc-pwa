@@ -95,6 +95,16 @@ done
 ((TBS_HAVE_BASE && TBS_HAVE_MIRROR && TBS_HAVE_DENY)) || _tbs_usage
 [[ $TBS_UNTRACKED_MAX =~ ^[0-9]+$ && $TBS_SNAPSHOT_MAX =~ ^[0-9]+$ ]] || _tbs_usage
 
+# ---- the platform layer: ccrc beside this file, sourced for its `_plat_` shims ---------------------------------------
+# A file size is `stat`, whose GNU and BSD spellings differ, and macos-platform.test.ts allows those spellings inside the
+# platform block only. This file ships in ccd/ beside ccrc (ccrc-test's arrangement), so it sources ccrc, as ccrc-test
+# does, and reads sizes through `_plat_size`. Sourced after the arguments (nothing positional reaches ccrc) and before
+# the snapshot's `cd`; sourcing defines functions and reads no setting.
+TBS_HERE="${BASH_SOURCE[0]}"
+[[ $TBS_HERE == */* ]] || TBS_HERE="./$TBS_HERE"
+# shellcheck source=ccrc
+. "${TBS_HERE%/*}/ccrc" > /dev/null || _tbs_fall 'unreachable (snapshot: cannot load ccrc)'
+
 TBS_TMP=$(mktemp -d "${TMPDIR:-/tmp}/testbox-snap.XXXXXX") || _tbs_fall 'unreachable (snapshot: no temporary directory)'
 trap 'rm -rf "$TBS_TMP"' EXIT
 TBS_INDEX="$TBS_TMP/index"
@@ -160,7 +170,9 @@ _tbs_sizes() {
     if [[ -L $p || -e $p ]]; then printf '%s\0' "$p" >> "$1.paths"; fi
   done < "$1"
   if [[ -s $1.paths ]]; then
-    xargs -0 "${TBS_STAT[@]}" < "$1.paths" > "$1.sizes" 2>/dev/null || _tbs_fall 'unreachable (snapshot: cannot read file sizes)'
+    # The shim, batched as xargs batches: each batch is one bash that carries `_plat_size`'s own definition.
+    CCD_OS=$CCD_OS xargs -0 bash -c "$(declare -f _plat_size)"'; _plat_size -- "$@"' _plat_size < "$1.paths" > "$1.sizes" 2>/dev/null \
+      || _tbs_fall 'unreachable (snapshot: cannot read file sizes)'
   else
     : > "$1.sizes"
   fi
@@ -321,8 +333,6 @@ _tbs_frame() {
   out+='}}'
   printf '%s\n' "$out"
 }
-
-if stat -c %s / > /dev/null 2>&1; then TBS_STAT=(stat -c %s --); else TBS_STAT=(stat -f %z --); fi
 
 _tbs_runid
 _tbs_state
