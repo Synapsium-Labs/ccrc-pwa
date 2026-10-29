@@ -36,3 +36,18 @@ describe('foldsAway over the PWA corpus (every verdict, by kind)', () => {
     expect(RECAP_PLACEMENTS.map((p) => foldsAway(event(p.kind, p.text, p.compaction)))).toEqual([true, true, false, false]);
   });
 });
+
+// D-7361 (C7i's named behaviour row): Claude Code's `isCompactSummary` marker on a summary whose words are not the
+// recap sentence. The server flags it (D-7186's marker half); before C7i the PWA's own pattern left it as text, and
+// after C7i it folds like every other flagged recap, user- and assistant-kind both.
+describe('a marker-only summary folds on the flag (D-7361)', () => {
+  const MARKER_ONLY = 'Summary of the work so far: the census landed.';
+  it('a flagged row folds whatever its words; the same words unflagged render', () => {
+    expect([
+      foldsAway(event('user', MARKER_ONLY, true)),
+      foldsAway(event('assistant', MARKER_ONLY, true)),
+      foldsAway(event('user', MARKER_ONLY)),
+      foldsAway(event('assistant', MARKER_ONLY)),
+    ]).toEqual([true, true, false, false]);
+  });
+});

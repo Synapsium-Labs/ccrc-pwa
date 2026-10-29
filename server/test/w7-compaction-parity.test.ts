@@ -45,20 +45,23 @@ describe('foldsAway over the server transcript rows (the PWA verdict beside the 
       }
     }
     console.log(`w7-compaction-parity: ${rows.length} rows\n${rows.map((r) => `  ${r}`).join('\n')}`);
+    // C7i (D-7187) folds on the flag, so the marker-only summary now folds (D-7361's named row; it rendered as text
+    // before C7i, `folds=false`).
     expect(rows.filter((r) => r.endsWith('folds=true'))).toEqual([
       'compactCardFixtures.summary (the recap) user marker=true folds=true',
+      'compactCardFixtures.summary (a summary in other words) user marker=true folds=true',
       'compactCardFixtures.user (the recap, typed by a person) user marker=false folds=true',
     ]);
-    // Where the marker and the PWA's verdict disagree today: the rows C7h's flag decides.
+    // Where the marker and the PWA's verdict disagree: only the recap a person typed, which the flag's pattern half
+    // folds as the PWA did before C7i.
     expect(rows.filter((r) => /marker=true folds=false|marker=false folds=true/.test(r))).toEqual([
-      'compactCardFixtures.summary (a summary in other words) user marker=true folds=false',
       'compactCardFixtures.user (the recap, typed by a person) user marker=false folds=true',
     ]);
     expect(rows).toEqual([
       'transcript-sample.jsonl:3 user marker=false folds=false',
       'transcript-sample.jsonl:6 assistant marker=false folds=false',
       'compactCardFixtures.summary (the recap) user marker=true folds=true',
-      'compactCardFixtures.summary (a summary in other words) user marker=true folds=false',
+      'compactCardFixtures.summary (a summary in other words) user marker=true folds=true',
       'compactCardFixtures.user (the recap, typed by a person) user marker=false folds=true',
       'compactCardFixtures.user (the recap quoted mid-text) user marker=false folds=false',
     ]);
@@ -73,13 +76,18 @@ describe('the compaction flag beside foldsAway (D-7186)', () => {
       return parseTranscriptLine(line).flatMap((e) => (e.kind === 'user' || e.kind === 'assistant' ? [{ source, marker, e }] : []));
     });
 
-  it('every event foldsAway folds carries the flag; the one other flagged row is the marker whose words the pattern does not match (D-7361)', async () => {
+  it('every event foldsAway folds carries the flag, and every flagged event folds: the marker-only row now folds too (D-7361)', async () => {
     const { foldsAway } = await bubble();
     const rows = events().map(({ source, marker, e }) => `${source} ${e.kind} marker=${marker} folds=${foldsAway(e)} flag=${e.compaction === true}`);
     expect(rows.length).toBe(6);
     expect(rows.filter((r) => r.includes('folds=true') && !r.endsWith('flag=true'))).toEqual([]);
-    expect(rows.filter((r) => r.endsWith('flag=true') && !r.includes('folds=true'))).toEqual([
-      'compactCardFixtures.summary (a summary in other words) user marker=true folds=false flag=true',
+    // D-7361: before C7i this list held the one named exception, the marker-only summary
+    // ('compactCardFixtures.summary (a summary in other words) user marker=true folds=false flag=true').
+    expect(rows.filter((r) => r.endsWith('flag=true') && !r.includes('folds=true'))).toEqual([]);
+    expect(rows.filter((r) => r.endsWith('flag=true'))).toEqual([
+      'compactCardFixtures.summary (the recap) user marker=true folds=true flag=true',
+      'compactCardFixtures.summary (a summary in other words) user marker=true folds=true flag=true',
+      'compactCardFixtures.user (the recap, typed by a person) user marker=false folds=true flag=true',
     ]);
     // The flag is `true` or absent, never `false`.
     expect(events().filter(({ e }) => 'compaction' in e && e.compaction !== true)).toEqual([]);

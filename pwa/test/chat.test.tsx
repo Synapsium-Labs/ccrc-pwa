@@ -937,6 +937,30 @@ describe('a system row that carries a BODY folds — it never floods the scroll'
   });
 });
 
+// D-7361 (C7i): a summary Claude Code marks `isCompactSummary` in words other than the recap sentence carries the
+// server's flag. Before C7i it rendered as the operator's bubble; after, it is the compaction card like any recap.
+describe('a marker-only compaction summary folds into the compaction card (D-7361)', () => {
+  const TS = '2026-10-29T09:00:00.000Z';
+  const text = 'Summary of the work so far: the census landed.\n\n## Next\n\nthe drawer';
+  it('the flagged row is the card, closed, its summary one tap away; no user bubble', () => {
+    const { container } = render(
+      <ChatListInner id="s" events={[{ kind: 'user', uuid: 'm1', ts: TS, text, compaction: true }]} pending={[]} />,
+    );
+    expect(container.querySelector('.msg-user')).toBeNull();
+    expect(container.querySelector('.compaction')).not.toBeNull();
+    expect(container.querySelector('.compaction--sys')).toBeNull();
+    const head = screen.getByRole('button', { name: /Context compacted/ });
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(head);
+    expect(container.querySelector('.compaction-body.msg-assist')?.textContent ?? '').toContain('the census landed');
+  });
+  it('the same words without the flag stay the operator\'s bubble', () => {
+    const { container } = render(<ChatListInner id="s" events={[{ kind: 'user', uuid: 'm2', ts: TS, text }]} pending={[]} />);
+    expect(container.querySelector('.compaction')).toBeNull();
+    expect(container.querySelector('.msg-user')).not.toBeNull();
+  });
+});
+
 describe('the quiet-gap divider measures from the newest time seen, not the last one (D-4950)', () => {
   // An absorbed mid-turn message is stamped with its ENQUEUE time (the
   // `queued_command` attachment's own `timestamp`), but it is written where
