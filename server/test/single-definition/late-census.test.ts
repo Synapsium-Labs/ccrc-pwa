@@ -768,3 +768,49 @@ describe('the temp-orphan executor has no gate ladder of its own (D-7168; ARCH-4
     expect(sites.filter((s) => !LEFT.includes(s)), 'a gate ladder outside the two reasons not yet moved').toEqual([]);
   });
 });
+
+// D-7169 (ARCH-44, consolidation plan 2026-10-27 Task C4l). APPENDED. `expireArchived` runs archive-expired's row,
+// `ARCHIVE_EXPIRED_RETIRE`, through the one executor loop (`retireLane.ts#retireAct`). The expiry id gate of
+// `id-argv-census.test.ts` now reads the id check alone, in `expiryIdJudge` (D-7204), so what its dropped capability half
+// meant (the id refused before the capability is asked) is read here off the row's declaration, through `scan/parse.ts`'s
+// `retireFacts` walk (D-7227): `id` before `capability` in the row's `decide`. The census modules are loaded inside the
+// rows, so this block adds no import line.
+describe('archive-expired runs through retireAct, its id judged before its capability (D-7169; ARCH-44)', () => {
+  const ROW_FILE = 'server/src/coord/expireArchived.ts';
+  /** The `RETIRE_STEPS` member each element of `row`'s `decide` array names, in declaration order. */
+  const decideSteps = async (p: ReturnType<typeof parseSource>, row: string): Promise<string[]> => {
+    const { retireFacts } = await import('../scan/parse.js');
+    const decide = retireFacts(p).literals[row]?.properties.find((m) => m.name === 'decide');
+    expect(decide?.elements, `${row} declares a decide array`).toBeTruthy();
+    return (decide?.elements ?? []).map((e) => {
+      const step = e.literal?.properties.find((m) => m.name === 'step');
+      const at = step === undefined ? '' : p.text.slice(step.start, step.end);
+      return /^step:\s*RETIRE_STEPS\.(\w+)$/.exec(at)?.[1] ?? `(unread: ${e.text})`;
+    });
+  };
+
+  it('CONTROL: the declaration reader sees a decide array\'s steps in order, through as const', async () => {
+    const SRC = [
+      'export const ROW = {',
+      '  decide: [{ step: RETIRE_STEPS.capability, sync: true }, { step: RETIRE_STEPS.id, sync: true }],',
+      '} as const;',
+    ].join('\n');
+    expect(await decideSteps(parseSource(SRC, 'control.ts'), 'ROW')).toEqual(['capability', 'id']);
+  });
+
+  it('ARCHIVE_EXPIRED_RETIRE.decide declares id before capability, and both', async () => {
+    const steps = await decideSteps(parsedFile(path.join(ccrcRoot, ROW_FILE)), 'ARCHIVE_EXPIRED_RETIRE');
+    expect(steps).toContain('id');
+    expect(steps).toContain('capability');
+    expect(steps.indexOf('id'), steps.join(' < ')).toBeLessThan(steps.indexOf('capability'));
+  });
+
+  it('the retire gate ladders are at most 1, and only the one not yet moved (2 -> 1 at C4l, after C4k; may only shrink)', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites.length, sites.join(', ')).toBeLessThanOrEqual(1);
+    for (const s of sites) {
+      expect(['server/src/coord/childReclaim.ts#childReclaimOutcome'], s).toContain(s);
+    }
+  });
+});
