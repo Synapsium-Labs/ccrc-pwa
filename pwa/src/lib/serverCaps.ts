@@ -35,22 +35,31 @@ export interface ServerCaps {
   questionsDoor(): Promise<boolean>;
 }
 
-/** One reader over `fetchImpl`. A read that answered (200 with a JSON body) is held for `SERVER_CAPS_HOLD_MS`, by
- *  `now`'s clock; a request that failed, a non-200 or an unreadable body reads as false and is NOT held, so the next
- *  answer reads again. Answers made while a read is under way share it. */
+/** One reader over `fetchImpl`. A read the server answered is held for `SERVER_CAPS_HOLD_MS`, by `now`'s clock: a 200
+ *  whose body advertises the word as true, and any other answer (a non-200, a body that is not JSON) as false. A
+ *  request that failed (no answer at all) reads as false and is NOT held, so the next answer reads again. Answers made
+ *  while a read is under way share it. Holding what the server said is what lets the sheet read the door before the
+ *  first tap (`DialogSheet`), so a tap's request goes out at once and is never one `/health` read behind it. */
 export function createServerCaps(fetchImpl: typeof fetch, now: () => number = () => Date.now()): ServerCaps {
   let held: { at: number; door: boolean } | null = null;
   let reading: Promise<boolean> | null = null;
   const read = async (): Promise<boolean> => {
+    let res: Response;
     try {
-      const res = await fetchImpl(SERVER_CAPS_READ.path, { cache: SERVER_CAPS_READ.cache });
-      if (!res.ok) return false;
-      const door = advertisesQuestions(await res.json());
-      held = { at: now(), door };
-      return door;
+      res = await fetchImpl(SERVER_CAPS_READ.path, { cache: SERVER_CAPS_READ.cache });
     } catch {
       return false;
     }
+    let door = false;
+    if (res.ok) {
+      try {
+        door = advertisesQuestions(await res.json());
+      } catch {
+        door = false;
+      }
+    }
+    held = { at: now(), door };
+    return door;
   };
   return {
     questionsDoor: () => {

@@ -9,7 +9,12 @@
 //
 // The skew rows (spec §5.1 rule 1c): against a server without `questions-v1` (an older server, a rollback, a `/health`
 // that cannot be read or reached) the same command goes to the old door, with today's bytes.
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { createElement } from 'react';
+import { cleanup, render } from '@testing-library/react';
+import { api } from '../src/lib/api';
+import { DialogSheet } from '../src/session/DialogSheet';
+import { createSessionStore } from '../src/stores/session';
 import { parseQuestionId, readDialogAnswer, SERVER_CAPS } from '../../shared/api';
 import { createApi } from '../src/lib/api';
 import { HEALTH_CORPUS } from './healthCorpus';
@@ -133,16 +138,21 @@ describe('createServerCaps: one GET /health, held for its lease; a failed read i
     expect(await Promise.all([c.caps.questionsDoor(), c.caps.questionsDoor()])).toEqual([true, true]);
     expect(c.fetchImpl).toHaveBeenCalledTimes(1);
   });
-  it('a request that fails, a non-200 or an unreadable body: false, and the next answer reads again', async () => {
+  it('a request that fails: false, and the next answer reads again', async () => {
+    const c = caps(async () => { throw new TypeError('offline'); });
+    expect(await c.caps.questionsDoor()).toBe(false);
+    expect(await c.caps.questionsDoor()).toBe(false);
+    expect(c.fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it('a non-200 or a body that is not JSON (the SPA\'s page): false, held for the lease like any answer', async () => {
     for (const answer of [
-      async () => { throw new TypeError('offline'); },
       async () => health({ error: 'bad-gateway' }, 502),
       async () => new Response('<!doctype html>', { status: 200, headers: { 'content-type': 'text/html' } }),
     ]) {
       const c = caps(answer);
       expect(await c.caps.questionsDoor()).toBe(false);
       expect(await c.caps.questionsDoor()).toBe(false);
-      expect(c.fetchImpl).toHaveBeenCalledTimes(2);
+      expect(c.fetchImpl).toHaveBeenCalledTimes(1);
     }
   });
 });
@@ -192,7 +202,25 @@ describe('api.answerQuestion: the family\'s door on a questions-v1 server, the o
   it('the old writers the family replaces are gone; the tab move and Deny stay', () => {
     const api = createApi();
     for (const gone of ['answerDialog', 'answerDialogText', 'answerDialogMulti', 'answerAsk']) expect(gone in api, gone).toBe(false);
-    for (const kept of ['answerQuestion', 'answerDialogTab', 'interrupt']) expect(kept in api, kept).toBe(true);
+    for (const kept of ['answerQuestion', 'questionsDoor', 'answerDialogTab', 'interrupt']) expect(kept in api, kept).toBe(true);
     expect('releaseQuestion' in api).toBe(false);
+  });
+});
+
+// ─── the sheet reads the door before the first tap ─────────────────────────────────────────────────────────────────
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+describe('DialogSheet reads which door an answer takes when it mounts, never on a tap alone', () => {
+  // A tap's request then goes out at once, not one `GET /health` read behind it (the browser leg's ask-inline rows
+  // measure a request in flight right after the tap). The read is `api`'s, where it is held, whatever seam answers.
+  it('one api.questionsDoor() read on mount, and none for a re-render', () => {
+    const door = vi.spyOn(api, 'questionsDoor').mockResolvedValue(true);
+    const fakeSocket = (): WebSocket => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
+    const store = createSessionStore('lane-a:project-a', { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const view = render(createElement(DialogSheet, { id: 'lane-a:project-a', store }));
+    expect(door).toHaveBeenCalledTimes(1);
+    view.rerender(createElement(DialogSheet, { id: 'lane-a:project-a', store }));
+    expect(door).toHaveBeenCalledTimes(1);
   });
 });
