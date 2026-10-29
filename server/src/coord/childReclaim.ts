@@ -35,7 +35,7 @@ import {
 } from '../../../shared/api.js';
 import { notify } from '../notice.js';
 import {
-  CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledRead, childReclaimDisabledSentence,
+  CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledRead, childReclaimDisabledSentence,
 } from './childReclaimDisabled.js';
 import { readChildSiblings } from './siblingRead.js';
 import { KeptReasonLimiter, keptReasonBody, keptReasonOf } from './keptReason.js';
@@ -1109,18 +1109,46 @@ export async function childReclaimGenerationRead(
   return REG_GENERATION_SHAPE.test(read.content) ? { kind: 'value', v: read.content } : { kind: 'unreadable' };
 }
 
-/** The executor's read of `child-reclaim-disabled` (steps 2b' and 6): the `paused-at-server` detail when the switch
- *  is set, or when the listing did not measure or threw (a set switch cannot be ruled out); `null` when it is clear.
- *  `when` is '' or ' at the act'. */
-async function childReclaimDisabledDetail(deps: ChildReclaimDeps, when: string): Promise<string | null> {
-  let state: MarkerState;
-  try {
-    state = await childReclaimDisabledRead(deps.io, deps.cfg.registryDir);
-  } catch (err) {
-    return `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when} (${err instanceof Error ? err.message : String(err)})`;
+/** `child-reclaim-disabled`'s reading, as the executor words it (steps 2b' and 6), a pure function of the reading: the
+ *  `paused-at-server` detail when the switch is set, or when the listing did not measure or threw (a set switch cannot
+ *  be ruled out); `null` when it is clear. `when` is '' or ' at the act'. */
+function childReclaimDisabledDetailOf(reading: MarkerState | RetireRejected, when: string): string | null {
+  if (reading instanceof RetireRejected) {
+    return `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when} (${childSpentRejected(reading)})`;
   }
-  if (state === 'set') return childReclaimDisabledSentence(when);
-  return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
+  if (reading === 'set') return childReclaimDisabledSentence(when);
+  return reading === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
+}
+
+/** The executor's read of `child-reclaim-disabled` at decide (step 2b'): one plain listing of its own, worded by
+ *  `childReclaimDisabledDetailOf`. */
+async function childReclaimDisabledDetail(deps: ChildReclaimDeps, when: string): Promise<string | null> {
+  let reading: MarkerState | RetireRejected;
+  try {
+    reading = await childReclaimDisabledRead(deps.io, deps.cfg.registryDir);
+  } catch (err) {
+    reading = new RetireRejected(err);
+  }
+  return childReclaimDisabledDetailOf(reading, when);
+}
+
+/** Step 6's two readings of its ONE plain listing (D-7172): `reclaim-paused` and `child-reclaim-disabled`, each the
+ *  listing's `MarkerState`, or both the rejection a rejecting `readdir` threw. */
+export interface ChildSpentActSwitches {
+  readonly pause: MarkerState | RetireRejected;
+  readonly disabled: MarkerState | RetireRejected;
+}
+
+/** Step 6's reader: the one listing the act already takes, read for both markers (no second registry read). */
+async function childSpentActSwitches(deps: ChildReclaimDeps): Promise<ChildSpentActSwitches> {
+  let names: readonly string[] | null;
+  try {
+    names = await deps.io.readdir(deps.cfg.registryDir);
+  } catch (err) {
+    const rejected = new RetireRejected(err);
+    return { pause: rejected, disabled: rejected };
+  }
+  return { pause: readSwitches(names)[RECLAIM_PAUSE_MARKER], disabled: childReclaimDisabledOf(names) };
 }
 
 /** What a second registry listing found, or that it could not be taken.
@@ -2171,12 +2199,15 @@ export interface ChildSpentFacts {
   readonly [RETIRE_STEPS.auditVerdict]?: RetireNoRead;
   readonly [RETIRE_STEPS.markerMatch]?: RetireNoRead;
   readonly [RETIRE_STEPS.auditGeneration]?: RetireNoRead;
-  readonly [RETIRE_STEPS.offSwitchLast]?: string | null;
+  /** `childSpentActSwitches`: both markers off the act's one listing. */
+  readonly [RETIRE_STEPS.offSwitchLast]?: ChildSpentActSwitches;
 }
 
 const childSpentDeferredOf = (req: ChildReclaimRequest, why: ChildReclaimDeferWhy, detail: string): ChildReclaimOutcome =>
   ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail });
 const childSpentRejected = (r: RetireRejected): string => (r.rejected instanceof Error ? r.rejected.message : String(r.rejected));
+/** Step 2b's sentence for a raised pause; step 6 says it with ' at the act'. */
+const CHILD_SPENT_PAUSE_RAISED = `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`;
 /** The audit's token, for a step after `audit-verdict` (which judged its refusal). */
 const childSpentTokenOf = (f: ChildSpentFacts): Extract<ChildReclaimAuditRead, { kind: 'token' }> => {
   const audit = f[RETIRE_STEPS.audit];
@@ -2226,13 +2257,13 @@ function childSpentSwitchesJudge(pause: MarkerState | RetireRejected, req: Child
   }
   if (pause !== 'clear') {
     return deferred('paused-at-server', pause === 'set'
-      ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
+      ? CHILD_SPENT_PAUSE_RAISED
       : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
   }
   return null;
 }
 
-/** Steps 2b' and 6: `childReclaimDisabledDetail`'s answer. */
+/** Steps 2b' and 6: `childReclaimDisabledDetailOf`'s answer. */
 const childSpentOffSwitchJudge = (detail: string | null, req: ChildReclaimRequest): ChildReclaimOutcome | null =>
   (detail !== null ? childSpentDeferredOf(req, 'paused-at-server', detail) : null);
 
@@ -2244,7 +2275,8 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
     { step: RETIRE_STEPS.coordinated, sync: true, onReject: 'judged' },
     { step: RETIRE_STEPS.switches, sync: false, onReject: 'judged', markers: [RECLAIM_PAUSE_MARKER] },
     // The off switch's one listing names its marker in its one reader's file (ARCH-77's single-reader guard), so its
-    // two steps name no marker here: `childReclaimDisabledDetail` lists for it.
+    // two steps name no marker here: `childReclaimDisabledDetail` lists for it at decide, and `childSpentActSwitches`
+    // reads it (and the pause) off the act's one listing.
     { step: RETIRE_STEPS.offSwitch, sync: false, onReject: 'propagate' },
     { step: RETIRE_STEPS.generation, sync: false, onReject: 'judged' },
     { step: RETIRE_STEPS.presence, sync: true, onReject: 'propagate' },
@@ -2338,7 +2370,7 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
       }
       return null;
     },
-    [RETIRE_STEPS.offSwitchLast]: (detail, _f, req) => childSpentOffSwitchJudge(detail, req),
+    [RETIRE_STEPS.offSwitchLast]: (read, _f, req) => childSpentOffSwitchJudge(childReclaimDisabledDetailOf(read.disabled, ' at the act'), req),
   },
   evidence: [childReclaimSweepVerdict, childReclaimDecision],
 };
@@ -2354,8 +2386,9 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
  * - `store` and `coordinated`: the sibling re-read (`readChildSiblings`), then COORDINATING, ANY STATE (spec §1 rule 4),
  *   each at the clock's own read, as before.
  * - `switches`: `childReclaimPauseRead`, not edited (D-7224), so a rejecting `readdir` lands on step 2b's own sentence
- *   (its mode is `judged`). `off-switch` and `off-switch-last`: `childReclaimDisabledDetail`, at decide and at the act
- *   (ARCH-77), two plain listings of their own.
+ *   (its mode is `judged`). `off-switch`: `childReclaimDisabledDetail`, a plain listing of its own (ARCH-77).
+ *   `off-switch-last`: `childSpentActSwitches`, the act's one plain listing read for both markers (D-7172); a rejecting
+ *   `readdir` is folded into both readings, so the step's mode stays `propagate` with nothing to propagate.
  * - `generation`: re-read only for a request that carries a licence (spec §5.5); close's `none` reads nothing.
  * - `presence`: `viewers.isVisible`, asked only until the request's defer ceiling.
  * - `capability`: `reclaim-v1`, then, for a stale request only, `reclaim-stale-v1` (D-6639).
@@ -2395,7 +2428,7 @@ export function childReclaimRetirePort(
       [RETIRE_STEPS.auditVerdict]: () => true,
       [RETIRE_STEPS.markerMatch]: () => true,
       [RETIRE_STEPS.auditGeneration]: () => true,
-      [RETIRE_STEPS.offSwitchLast]: () => childReclaimDisabledDetail(deps, ' at the act'),
+      [RETIRE_STEPS.offSwitchLast]: () => childSpentActSwitches(deps),
     },
     // ccd re-proves the token inside the reap lock.
     act: async (facts) => {

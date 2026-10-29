@@ -1553,7 +1553,10 @@ import {
 } from '../src/coord/childReclaim.js';
 import { readSessionRecord } from '../src/registry.js';
 import { readChildSiblings } from '../src/coord/siblingRead.js';
-import { CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledSentence } from '../src/coord/childReclaimDisabled.js';
+import {
+  CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledSentence,
+} from '../src/coord/childReclaimDisabled.js';
+import { readSwitches } from '../../shared/switches.js';
 import { ARCHIVE_EXPIRED_RETIRE, readExpiryStore, type ArchiveExpiredFacts, type ExpireArchivedRequest } from '../src/coord/expireArchived.js';
 import { parseExpireAudit } from '../src/archivedExpiry.js';
 import {
@@ -1638,6 +1641,15 @@ const childDisabledDetail = async (k: ChildRig, when: string): Promise<string | 
   if (state === 'set') return childReclaimDisabledSentence(when);
   return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
 };
+/** Step 6's two readings of its one plain listing: both markers, or both the rejection. */
+const childActSwitches = async (k: ChildRig) => {
+  let names: readonly string[] | null;
+  try { names = await k.deps.io.readdir(k.deps.cfg.registryDir); } catch (err) {
+    const rejected = new RetireRejected(err);
+    return { pause: rejected, disabled: rejected };
+  }
+  return { pause: readSwitches(names)[RECLAIM_PAUSE_MARKER], disabled: childReclaimDisabledOf(names) };
+};
 const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
   const { deps, req } = k;
   const now = (): number => (deps.now ?? Date.now)();
@@ -1671,7 +1683,7 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
     [RETIRE_STEPS.auditVerdict]: () => true,
     [RETIRE_STEPS.markerMatch]: () => true,
     [RETIRE_STEPS.auditGeneration]: () => true,
-    [RETIRE_STEPS.offSwitchLast]: () => childDisabledDetail(k, ' at the act'),
+    [RETIRE_STEPS.offSwitchLast]: () => childActSwitches(k),
   };
 };
 const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
