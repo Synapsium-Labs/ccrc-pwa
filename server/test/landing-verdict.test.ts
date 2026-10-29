@@ -249,6 +249,17 @@ describe('the notice bodies', () => {
       + '`landedInTrain: true`');
     expect(b).not.toContain('landed-in-train');
   });
+
+  it('a merged brief with a recorded head carries the recorded-head line AND the landedInTrain clause together', () => {
+    const head = 'c'.repeat(40);
+    const b = renderMergedBrief(ID, 42, head);
+    expect(b).toContain(`recorded head (its verified handoffCommit) is \`${head}\``);
+    expect(b).toContain(`or, when it answers CLOSED, PR #42's row of \`ccd pr-state --session ${ID}\` reads `
+      + '`landedInTrain: true`');
+    // With no head the brief is main's text exactly: the same proof clause and no recorded-head line.
+    expect(renderMergedBrief(ID, 42, null)).toContain('`landedInTrain: true`');
+    expect(renderMergedBrief(ID, 42, null)).not.toContain('recorded head');
+  });
 });
 
 // `stall-vocabulary.test.ts`'s purity pin, for this file's header's claim: the coord-ring scan in
