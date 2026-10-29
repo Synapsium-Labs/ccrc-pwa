@@ -1060,6 +1060,40 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(panelCardsOf(container)).toHaveLength(13);
     });
 
+    // Review 1149 F1: crossing to the desk makes the panel moot in the same commit that puts the focused card's lane on the
+    // desk's wider line. The close's hand-back runs as before (D-7254): focus goes to the control, and no flyout opens.
+    it('a device that crosses 900 while a panel card holds focus hands it to the control, though its lane is now on the line, and opens no flyout', async () => {
+      let desk = false;
+      const listeners = new Set<() => void>();
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        get matches() { return desk && q.includes('min-width: 900px'); }, media: q, onchange: null,
+        addEventListener(_t: string, l: () => void) { listeners.add(l); },
+        removeEventListener(_t: string, l: () => void) { listeners.delete(l); },
+        addListener() {}, removeListener() {}, dispatchEvent: () => false,
+      }));
+      vi.stubGlobal('ResizeObserver', class {
+        private readonly cb: ResizeObserverCallback;
+        constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+        observe(target: Element): void {
+          this.cb([{ target, contentRect: { width: 1900 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+        }
+        unobserve(): void {}
+        disconnect(): void {}
+      });
+      const cross = (to: boolean): void => { desk = to; act(() => { for (const l of [...listeners]) l(); }); };
+      const container = await openPanel();
+      const card = panelCardsOf(container)[0]!;
+      const lane = nameOf(card);
+      act(() => { card.focus(); });
+      vi.useFakeTimers();
+      cross(true);
+      // The desk's line, seven tracks at 1900, holds six lanes: the focused card's lane among them.
+      expect(lineCardsOf(container).map(nameOf)).toContain(lane);
+      expect(document.activeElement).toBe(control());
+      act(() => { vi.advanceTimersByTime(FLYOUT_OPEN_MS * 4); });
+      expect(container.querySelector('.accounts-flyout')).toBeNull();
+    });
+
     it('a poll that leaves nothing to fold takes the panel with it, and a later poll does not reopen it', async () => {
       const container = await openPanel();
       stubLanes(seventeenLanes(nowSec).accounts.slice(0, 5));
@@ -1082,6 +1116,47 @@ describe('the lanes fold (S5b, D-6530)', () => {
       const stop = lineCardsOf(container).find((c) => c.tabIndex === 0)!;
       expect(stop).toBe(lineCardsOf(container)[0]);
       expect(document.activeElement).toBe(stop);
+    });
+
+    // Review 1149 F2: the poll that puts the focused card's lane on the line also leaves nothing to fold, so the panel is
+    // moot: the close's hand-back runs as before, to the line's tab stop (the control went in the same commit), not to
+    // the lane's own card.
+    it("a poll that leaves nothing to fold and puts the focused panel card's lane on the line hands focus to the line's tab stop, as any moot panel does", async () => {
+      const container = await openPanel();
+      const five = seventeenLanes(nowSec).accounts.slice(0, 5);
+      const card = panelCardsOf(container).find((c) => five.some((a) => labelOf(a.wrapper) === nameOf(c)))!;
+      const lane = nameOf(card);
+      act(() => { card.focus(); });
+      stubLanes(five);
+      expect(panelOf(container)).toBeNull();
+      expect(lineCardsOf(container).map(nameOf)).toContain(lane);
+      // No line card was ever focused, so the line's tab stop is its first card, and the lane is not that card.
+      const first = lineCardsOf(container)[0]!;
+      expect(nameOf(first)).not.toBe(lane);
+      expect(document.activeElement).toBe(first);
+    });
+
+    // Review 1149 B2: the lane arm passes through the hand-back's guard. A stale flag (a poll dropped the focused card's
+    // lane, which fires no blur), focus since put in a field outside the strip, and a poll that brings the lane back
+    // onto the line: the field keeps its focus.
+    it('a stale panel flag never takes focus from a field outside the strip when a later poll brings the lane back onto the line', async () => {
+      const container = await openPanel();
+      const card = panelCardsOf(container)[0]!;
+      const lane = names.accounts.find((a) => labelOf(a.wrapper) === nameOf(card))!;
+      act(() => { card.focus(); });
+      stubLanes(names.accounts.filter((a) => a.wrapper !== lane.wrapper));
+      expect(card.isConnected).toBe(false);
+      const field = document.createElement('input');
+      document.body.appendChild(field);
+      try {
+        act(() => { field.focus(); });
+        stubLanes(names.accounts.map((a) => (a.wrapper === lane.wrapper ? { ...a, five: 0, seven: 0, fiveRolledOver: false } : a)));
+        expect(lineCardsOf(container).map(nameOf)).toContain(labelOf(lane.wrapper));
+        expect(panelOf(container)).not.toBeNull();
+        expect(document.activeElement).toBe(field);
+      } finally {
+        field.remove();
+      }
     });
 
     // Review 1131 A1 (C12 item 20): a poll that drops the focused panel card's lane fires no blur, so the panel's flag goes
@@ -1673,6 +1748,24 @@ describe('the lanes fold (S5b, D-6530)', () => {
       // The close rules are unchanged: the pointer is still on the strip, so the flyout stays open past its grace.
       advance(FLYOUT_CLOSE_MS * 2);
       expect(flyoutOf(container)).not.toBeNull();
+    });
+
+    // Review 1149 F2, the desk: the poll that puts the focused flyout card's lane on the line also leaves nothing to fold,
+    // so the flyout is moot, and its hand-back runs as before (C12 item 20): to the line's tab stop, not the lane's card.
+    it("a poll that leaves nothing to fold and puts the focused flyout card's lane on the line hands focus to the line's tab stop", async () => {
+      const container = await openByHover();
+      // Four lanes: the desk at 1248 shows three, so four leave too few to fold (it never hides fewer than two).
+      const four = names.accounts.slice(0, 4);
+      const card = flyCardsOf(container).find((c) => four.some((a) => labelOf(a.wrapper) === nameOf(c)))!;
+      const lane = nameOf(card);
+      const parked = lineCardsOf(container)[0]!;
+      act(() => { parked.focus(); });
+      act(() => { card.focus(); });
+      stubLanes(four);
+      expect(flyoutOf(container)).toBeNull();
+      expect(lineCardsOf(container).map(nameOf)).toContain(lane);
+      expect(nameOf(document.activeElement as HTMLElement)).toBe(nameOf(parked));
+      expect(nameOf(parked)).not.toBe(lane);
     });
 
     it("a poll that drops the lane of the flyout card holding focus: a field focused elsewhere keeps its focus when the flyout closes", async () => {

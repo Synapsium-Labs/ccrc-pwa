@@ -212,7 +212,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // body, or nothing: a card that left the DOM drops it there) or from a card of the flyout or panel being closed: a
   // flag gone stale (a poll dropped the focused card's lane, which fires no blur) must never pull focus out of a field,
   // or off All accounts in the strip's own end cell, where the operator has since put it (review 1131 A1). With `lane`,
-  // the held card's lane that a poll or a new fold count has moved onto the line (below), focus goes to that lane's line
+  // the held card's lane that moved onto the line while its panel stays shown (below), focus goes to that lane's line
   // card first: its panel card left the DOM holding focus, and the lane is still drawn, once, on the line (Task C13).
   const handFocusBack = (held: { current: boolean }, to: 'line' | 'control', lane?: string): void => {
     if (!held.current) return;
@@ -237,12 +237,17 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
     setFlyOpen(false);
     setFlyStopId(null);
   }, [flyoutOn]);
-  // The panel's stop is a lane the line folds away (`flyStop`); a poll's re-sort, or a resize that changes the fold's
-  // count, can move it onto the line, and the card holding focus leaves the panel. The one hand-back then follows the
-  // lane to its line card, for whichever panel held focus (review 1142 F1). A lane gone altogether is not on the line,
-  // so nothing runs here, and the close's hand-back takes it later, as before. A focused LINE card whose lane folds
-  // away is not followed into the panel.
-  const stopOnLine = flyStopId !== null && fold.shown.some((a) => a.wrapper === flyStopId) ? flyStopId : null;
+  // The panel's stop is a lane the line folds away (`flyStop`). While a panel stays SHOWN (the phone's panel open, or the
+  // desk's flyout on and open), a poll's re-sort, or a desk resize that widens the line and still folds (measured in
+  // real Chrome by review 1149, no committed case), can move it onto the line, and the card holding focus leaves the
+  // panel. The one hand-back then follows the lane to its line card, for the shown panel that held focus (review 1142
+  // F1). Only while shown: a change that also makes the panel moot (crossing 900 px, a poll or a widening that leaves
+  // nothing to fold) leaves this arm out, so each moot path hands focus back as it always did, the phone's close to the
+  // control (D-7254) and the desk's flyout to the line's tab stop (C12 item 20), whatever order the effects run in
+  // (review 1149 F1, F2). A lane gone altogether is not on the line, so nothing runs here, and the close's hand-back
+  // takes it later, as before. A focused LINE card whose lane folds away is not followed into the panel.
+  const panelUp = panelShown || (flyoutOn && flyOpen);
+  const stopOnLine = panelUp && flyStopId !== null && fold.shown.some((a) => a.wrapper === flyStopId) ? flyStopId : null;
   useEffect(() => {
     if (stopOnLine === null) return;
     handFocusBack(flyHeld, 'line', stopOnLine);
