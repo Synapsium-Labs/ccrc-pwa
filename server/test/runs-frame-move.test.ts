@@ -140,6 +140,36 @@ describe('the runs frame carries lastMoveAt and stallQuietMs (D-7334)', () => {
     const later = await connect();
     expect((await later.next()).stallQuietMs).toBe(chosen);
   });
+
+  // Fix round 1, F4: the two failure arms, through the frame.
+  it('a failed last-moves read still sends the frame, with lastMoveAt off every run, and says why', async () => {
+    const { coord, watcher, runId, connect } = await start();
+    const frames = await connect();
+    expect((await frames.next()).runs.map((r) => [r.id, r.lastMoveAt])).toEqual([[runId, null]]);
+    vi.spyOn(coord, 'runLastMoves').mockReturnValue({ ok: false, detail: 'disk I/O error' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await watcher.tick();
+    const pushed = await frames.next();
+    expect(pushed.runs.map((r) => r.id)).toEqual([runId]);
+    expect(pushed.runs.every((r) => !('lastMoveAt' in r))).toBe(true);
+    expect(pushed.stallQuietMs).toBe(STALL_QUIET_MS);
+    expect(warn.mock.calls.some(([m]) => /disk I\/O error.*lastMoveAt absent this tick/.test(String(m)))).toBe(true);
+  });
+
+  it('a quiet-time read that throws sends the frame with the built-in STALL_QUIET_MS', async () => {
+    const { coord, watcher, runId, connect } = await start();
+    const frames = await connect();
+    await frames.next();
+    const chosen = 4 * 3_600_000;
+    expect(coord.setStallSettings({ quiet: { kind: 'set', ms: chosen } }, Date.now(), coord.stallSettings())).toMatchObject({ kind: 'written' });
+    await watcher.tick();
+    expect((await frames.next()).stallQuietMs).toBe(chosen);
+    vi.spyOn(coord, 'stallSettings').mockImplementation(() => { throw new Error('database is locked'); });
+    await watcher.tick();
+    const pushed = await frames.next();
+    expect(pushed.stallQuietMs).toBe(STALL_QUIET_MS);
+    expect(pushed.runs.map((r) => r.id)).toEqual([runId]);
+  });
 });
 
 describe('the frame cache cannot serve a stale quiet time (maskedFrame keys on the runs array)', () => {
