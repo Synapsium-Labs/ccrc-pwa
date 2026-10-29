@@ -14,7 +14,7 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
+import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, failedTo } from '../lib/api';
 
@@ -430,7 +430,7 @@ export function SessionActionsSheet({
               exclusive renders (not a stacked sheet): with only ONE control
               ever on screen for this row, "tap Hold, submit empty" needs no
               disambiguation between two same-named buttons. */}
-          {session.workspace !== null && session.archivedAt === null
+          {session.workspace !== null && !isArchivedRow(session)
             && session.held === null && (
             <HoldControl session={session} sheetOpen={open} onHeld={onClose} />
           )}
@@ -452,7 +452,7 @@ export function SessionActionsSheet({
               carry. Archived only: archive is the staging step, and the audit
               this opens refuses `not-archived` anyway — offering it earlier
               would just be a button that always refuses. */}
-          {session.workspace !== null && session.archivedAt !== null && (
+          {session.workspace !== null && isArchivedRow(session) && (
             <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => onReap(session.id)}>

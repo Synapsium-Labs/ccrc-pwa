@@ -30,6 +30,24 @@ export type Presence = typeof PRESENCES[number];
 export type SessionBucket =
   | 'attention' | 'working' | 'done' | 'idle' | 'cleanup' | 'archived' | 'dead';
 
+/** The ONE order the buckets read in (D-7188, OA-C14 (a), D-7265): Needs you, Done, Working, Idle, Cleanup, Archived,
+ *  Dead, in both skins: the fleet list, the project cards, the bucket bar, Instrument's project mode and status table,
+ *  and the palette's order all read it. A `Record`, so a new `SessionBucket` member is a compile error here, never a
+ *  bucket with no place. Not which bucket a session is in: that is `sessionBucket`'s, below. */
+export const BUCKET_RANK: Readonly<Record<SessionBucket, number>> = {
+  attention: 0, done: 1, working: 2, idle: 3, cleanup: 4, archived: 5, dead: 6,
+};
+
+/** `BUCKET_RANK`'s keys, ascending: computed, never typed a second time. */
+export const BUCKET_ORDER: readonly SessionBucket[] =
+  (Object.keys(BUCKET_RANK) as SessionBucket[]).sort((a, b) => BUCKET_RANK[a] - BUCKET_RANK[b]);
+
+/** "Is this row archived", read from the server's bucket (D-7188, OA-C15 (a), D-7265): archived, or archived with its
+ *  PR merged, which `sessionBucket` files `cleanup`. It equals `archivedAt !== null && status === 'dead'`, the ladder's
+ *  first rung, so an archived row whose pane is live is not an archived row here. The one reader: no PWA site tests
+ *  `archivedAt` for absence, nor a bare `bucket === 'archived'`, which would drop the merged row. */
+export const isArchivedRow = (s: { readonly bucket: SessionBucket }): boolean => s.bucket === 'archived' || s.bucket === 'cleanup';
+
 /** The identity triple a registry read either measures or does not:
  *  `uuid`/`wrapper`/`workdir`, together — the fields `server/src/registry.ts`'s
  *  `SessionRecord.unmeasured` and `measuredIdentity()` gate on. Lives here,
@@ -12318,8 +12336,8 @@ export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
 const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
 export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
 
-/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
- *  which `pwa/src/fleet/sortFleet.ts` owns). */
+/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the order the buckets read in, which is
+ *  `BUCKET_ORDER`, near the top of this file, D-7188). */
 const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
   attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
 };

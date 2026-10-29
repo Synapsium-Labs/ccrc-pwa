@@ -6,7 +6,7 @@
 // (`sessionMenu`, the menu's own reader, each with its command id) and Stop's state. The hooks stay in the part: it
 // passes the clock (`now`, ticking at `headerTickMs`) and the pointer query (`finePointer`) in.
 import {
-  backgroundWork, backgroundWords, sessionWithCoordinator, withCoordinatorWords,
+  backgroundWork, backgroundWords, isArchivedRow, sessionWithCoordinator, withCoordinatorWords,
   type FleetSession, type PrState, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import { restartWords, type RestartWords } from '../lib/restart';
@@ -103,7 +103,7 @@ export interface SessionHeaderView {
 // saying "not running" there would bury `cleanup`'s merge facts under a liveness fact nobody is waiting on.
 function headerBucket(st: SessionStatus | null, session: FleetSession | null): SessionBucket | null {
   const snapshotBucket = session?.bucket ?? null;
-  return st === 'dead' && session != null && session.archivedAt == null
+  return st === 'dead' && session != null && !isArchivedRow(session)
     ? 'dead'
     : snapshotBucket ?? (st === null ? null : st === 'busy' ? 'working' : st);
 }
@@ -219,9 +219,10 @@ export function sessionHeaderView({
   if (wrapper !== '') chips.push({ kind: 'lane', text: accountLabel(roster, wrapper), title: facts?.lane.label });
   if (restart !== null) chips.push({ kind: 'restart', text: restart.text, title: restart.title, cause: restart.cause });
   if (repo !== null) chips.push({ kind: 'repo', text: repo });
-  // Derived from archivedAt, never from pr.phase — merging archives nothing, so a merged PR sits on a live workspace
-  // until a human archives it, and must not claim the chip meanwhile.
-  if (session?.archivedAt != null) {
+  // Derived from the archived bucket (`isArchivedRow`: archived or cleanup, OA-C15 (a), D-7188), never from pr.phase —
+  // merging archives nothing, so a merged PR sits on a live workspace until a human archives it, and must not claim
+  // the chip meanwhile.
+  if (session != null && isArchivedRow(session)) {
     const parts = session.pr?.number != null ? ['archived', ` · merged #${session.pr.number}`] : ['archived'];
     chips.push({ kind: 'archived', text: parts.join(''), parts });
   }

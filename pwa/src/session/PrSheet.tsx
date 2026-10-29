@@ -9,7 +9,7 @@
 // keeps ccrc's write surface at exactly one additive verb.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault } from '../../../shared/api';
+import { isArchivedRow, substrateFault } from '../../../shared/api';
 import type { FleetSession, PrView } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, TextInput, TEXT_INPUT_INLINE, toast } from '@ccrc/ui';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
@@ -142,7 +142,7 @@ export function PrSheet({
   const pr = view?.pr ?? session.pr;
   const facts = view?.facts ?? null;
   const draft = view?.draft ?? null;
-  const archived = session.archivedAt !== null;
+  const archived = isArchivedRow(session);
 
   // The substrate gate (spec §4, branch review): the actions sheet disables
   // Archive/Clean-up with the named reason, and this sheet offered the SAME

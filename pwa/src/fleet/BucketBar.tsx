@@ -14,9 +14,8 @@
 // markup and stays OUTSIDE the chip, for the reason its own comment gives: the
 // update it reports is the one that unmounts the chip.
 import type { ReactNode } from 'react';
-import type { FleetSession, SessionBucket } from '../../../shared/api';
+import { BUCKET_ORDER, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { CountBadge } from '@ccrc/ui';
-import { BUCKET_ORDER } from './sortFleet';
 import { STATUS_GROUPS } from './statusGroups';
 import { isUnseen, type Acks } from '../lib/seen';
 import { markAllSeenLabel, useMarkSeen } from './markSeen';
@@ -50,7 +49,7 @@ export function BucketBar(
   return (
     <>
           {/* Bucket chips — above the project cards, one per non-empty
-              bucket, in the same RANK order the list itself sorts by. Counts
+              bucket, in `BUCKET_ORDER`, the order the list itself sorts by. Counts
               come from THIS render's own `sessions` array, the identical one
               the cards below iterate, so a chip's number is always the number
               of ROWS the cards hold for that bucket. `groupFleet` splits its

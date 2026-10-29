@@ -294,13 +294,17 @@ export const BUCKETS: readonly string[] = ['attention', 'done', 'idle', 'working
 /** A bucket order: a module-scope binding whose initialiser is an object literal giving EVERY bucket a numeric rank, as a
  *  bare number (`attention: 0`) or an `order:` field (`attention: { order: 0, … }`). 2 on the base (`sortFleet.ts#RANK`,
  *  `statusGroups.ts#STATUS_GROUPS`). A label-only table (`BUCKET_WORD`) and a derived list (`BUCKET_ORDER`, computed
- *  from `RANK`) are not orders. KNOWN WIDTH: an order written as an array literal of the words is not seen. */
+ *  from `RANK`) are not orders. KNOWN WIDTH: an order written as an array literal of the words is not seen.
+ *  Read over the PWA's sources AND `shared/api.ts` (C7j, D-7188), where the one order `BUCKET_RANK` lives, so the
+ *  count is every definition the PWA reads, not only the ones under `pwa/src`. */
 export function bucketOrdersIn(p: ParsedFile, file: string): W7Site[] {
   return p.bindings.filter((b) => atModuleScope(p, b) && /^\s*\{/.test(b.init)
     && BUCKETS.every((w) => new RegExp(`\\b${w}\\s*:\\s*(?:\\d|\\{[^}]*\\border\\s*:\\s*\\d)`).test(b.init)))
     .map((b) => ({ file, symbol: b.name, line: b.line, text: lineStart(p.text, b.line).trim().slice(0, 140), kind: '' }));
 }
-export const bucketOrders = (): W7Site[] => overPwa(bucketOrdersIn);
+/** `shared/api.ts`, the one file outside `pwa/src` the bucket-order query also reads. */
+export const BUCKET_ORDER_SHARED = 'shared/api.ts';
+export const bucketOrders = (): W7Site[] => [...overPwa(bucketOrdersIn), ...bucketOrdersIn(parsedFile(BUCKET_ORDER_SHARED), BUCKET_ORDER_SHARED)];
 
 /** An absence check on `archivedAt`: an equality comparison with an `archivedAt` leaf and an absent operand (`null`,
  *  `undefined`), either operator. 8 on the base (plan item 10). KNOWN WIDTH: a truthiness test (`if (s.archivedAt)`) is
