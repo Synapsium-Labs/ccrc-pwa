@@ -304,6 +304,18 @@ describe('(viii) the review screen\'s dismissal key is the pairing\'s screen (D-
     apply(store, { type: 'dialog', dialog: Q1(), pairing: P1() });
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
+
+  it('the other way round: dismissed on question 1, a frame whose pairing names the review re-shows it', async () => {
+    const store = makeStore();
+    const PR = tablePairing('cc300-ask-review-same-labels', 'CACHING_TRACING');
+    apply(store, { type: 'ask_cleared' }, { type: 'dialog', dialog: Q1() }, { type: 'ask', ask: ASK, key: null, pairing: P1() });
+    mount(store);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).toBeNull();
+    apply(store, { type: 'dialog', dialog: REVIEW(), pairing: PR });
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeInTheDocument();
+  });
 });
 
 // ─── the skew rows (THE NAMED BEHAVIOUR ROW) ───────────────────────────────────────────────────────────────────────
