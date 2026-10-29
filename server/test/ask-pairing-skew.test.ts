@@ -11,7 +11,19 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SessionStreamMsg } from '../../shared/api.js';
-import { SCENARIOS, runScenario, withoutPairing } from './askPairingStream.js';
+import { SCENARIOS, TRANSCRIPT_SEQUENCES, runScenario, withoutPairing, type Scenario } from './askPairingStream.js';
+
+// Task C7q (D-7206, D-7211): the transcript-copy states and the frame sequences join the scenarios, so an old client
+// folds the copy's pairing, `ask_cleared`'s included, to the snapshot it folds without it.
+const TRANSCRIPT_STATES: readonly Scenario[] = [
+  { name: 'a copy on the second question\'s screen, no envelope', steps: [{ pane: 'cc300-ask-q2-of-2-single', envelope: null, copy: 'FRUIT_DRINK' }] },
+  { name: 'a copy under the free-text row, no envelope', steps: [{ pane: 'cc300-ask-freetext-held', envelope: null, copy: 'FRUIT_DRINK' }] },
+  { name: 'an approval under a menu with a copy', steps: [
+    { pane: 'cc300-ask-1q-open', envelope: 'APPROVAL', copy: 'COLOUR_ONE' },
+    { pane: 'cc300-ask-1q-open', envelope: null, copy: 'COLOUR_ONE' },
+  ] },
+];
+const ALL: readonly Scenario[] = [...SCENARIOS, ...TRANSCRIPT_STATES, ...TRANSCRIPT_SEQUENCES];
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -27,7 +39,7 @@ const EMPTY: Snapshot = {
 };
 
 describe('the pairing field across a version skew (Task Q3g, rule 1c)', () => {
-  it.each(SCENARIOS.map((sc) => [sc.name, sc] as const))('old client, new server: %s folds to the same snapshot', async (_n, sc) => {
+  it.each(ALL.map((sc) => [sc.name, sc] as const))('old client, new server: %s folds to the same snapshot', async (_n, sc) => {
     const { applySessionMsg } = await store();
     const frames = (await runScenario(sc)).map((f) => f.frame);
     let withField = EMPTY;
@@ -45,7 +57,7 @@ describe('the pairing field across a version skew (Task Q3g, rule 1c)', () => {
     expect(carried.length).toBeGreaterThan(0);
   }, 60_000);
 
-  it.each(SCENARIOS.map((sc) => [sc.name, sc] as const))('new client, old server: %s, a frame without pairing is the pre-W3 frame', async (_n, sc) => {
+  it.each(ALL.map((sc) => [sc.name, sc] as const))('new client, old server: %s, a frame without pairing is the pre-W3 frame', async (_n, sc) => {
     for (const { frame } of await runScenario(sc)) {
       const bytes = JSON.stringify(frame);
       const old = JSON.stringify(withoutPairing(frame));
@@ -59,4 +71,10 @@ describe('the pairing field across a version skew (Task Q3g, rule 1c)', () => {
       }
     }
   }, 30_000);
+
+  it('old client, new server (C7q): the transcript states carry the copy\'s pairing on dialog and on ask_cleared, so the fold above compares it', async () => {
+    const carried = (await Promise.all([...TRANSCRIPT_STATES, ...TRANSCRIPT_SEQUENCES].map(runScenario))).flat()
+      .filter(({ frame }) => (frame as { pairing?: { from?: string } }).pairing?.from === 'transcript');
+    expect(new Set(carried.map(({ frame }) => frame.type))).toEqual(new Set(['dialog', 'ask', 'ask_cleared']));
+  }, 60_000);
 });
