@@ -630,6 +630,10 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       for (const bad of [
         'nowhere', null, 7, [], {},
         { ...landing, at: 7 },
+        { ...landing, at: undefined },
+        { ...landing, at: 'yesterday' },
+        { ...landing, at: '2026-10-27 09:00:00' },
+        { ...landing, at: '2026-10-27T09:00:00.000Z' },
         { ...landing, pr: 0 },
         { ...landing, base: { state: 'green' } },
         { ...landing, base: { state: 'conflict', paths: [1] } },

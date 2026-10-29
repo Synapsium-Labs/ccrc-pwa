@@ -96,7 +96,7 @@ describe('fleet snapshot (lib/offline)', () => {
 // round trip, an absent key stays absent (never a clean landing), and a malformed one revives as no key, the session kept.
 describe('the landing radar reading in the snapshot (wave 4b)', () => {
   const landing = {
-    at: '2026-10-29T12:00:00.000Z', pr: 12, head: 'abc1234', baseRef: 'main',
+    at: '2026-10-29T12:00:00Z', pr: 12, head: 'abc1234', baseRef: 'main',
     base: { state: 'conflict', paths: ['src/a.ts'] }, paired: true,
     conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: false }], unmeasuredWith: [],
     cut: { heads: false, pairs: false, unbound: false },

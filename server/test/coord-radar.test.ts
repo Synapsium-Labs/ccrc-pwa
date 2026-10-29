@@ -168,6 +168,15 @@ describe('parseProbe: the files', () => {
     }
   });
 
+  it('a head\'s id is null or a registry id: an empty string or a non-string is unreadable', () => {
+    const one = (id: unknown) => [{ pr: 12, head: sha(12), branch: 'ws/alpha', id, base: { state: 'clean' } }];
+    expect(read(worked({ heads: one(null), pairs: [], pairHeads: [] })).ok).toBe(true);
+    unreadable(read(worked({ heads: one(''), pairs: [], pairHeads: [] })));
+    unreadable(read(worked({ heads: one(''), pairs: [], pairHeads: [12] })));
+    unreadable(read(worked({ heads: one(7), pairs: [], pairHeads: [] })));
+    unreadable(read(worked({ heads: one('-x'), pairs: [], pairHeads: [] })));
+  });
+
   it('pairHeads: a pr that is no head, a repeat, a head with a null id, or a non-number is unreadable', () => {
     unreadable(read(worked({ pairHeads: [14, 99] })));
     unreadable(read(worked({ pairHeads: [14, 14] })));
@@ -217,10 +226,19 @@ describe('parseProbe: the files', () => {
       expect(read(worked({ at: iso(60) })).ok).toBe(true);
       expect(read(worked({ at: iso(61) }))).toEqual({ ok: false, reason: 'stale' });
     });
-    it('a missing or unparseable at is stale, not ok', () => {
-      expect(read(worked({ at: undefined }))).toEqual({ ok: false, reason: 'stale' });
-      expect(read(worked({ at: 'yesterday' }))).toEqual({ ok: false, reason: 'stale' });
-      expect(read(worked({ at: 17 }))).toEqual({ ok: false, reason: 'stale' });
+    // D-7481: the radar writes `%Y-%m-%dT%H:%M:%SZ`; an `at` of any other shape is a doc the radar did not write.
+    it('a missing, non-string or malformed at is unreadable, not stale (the radar\'s stamp grammar)', () => {
+      unreadable(read(worked({ at: undefined })));
+      unreadable(read(worked({ at: 'yesterday' })));
+      unreadable(read(worked({ at: 17 })));
+      unreadable(read(worked({ at: null })));
+      unreadable(read(worked({ at: '2026-10-27 09:00:00' })));
+      unreadable(read(worked({ at: '2026-10-27T09:00:00.000Z' })));   // with millis
+      unreadable(read(worked({ at: '2026-10-27T09:00:00+00:00' })));
+      unreadable(read(worked({ ...FETCH_FAILED, at: 'yesterday' })));
+    });
+    it('a well-formed stamp still reads', () => {
+      expect(read(worked({ at: '2026-10-27T09:00:00Z' })).ok).toBe(true);
     });
     it('a stale unmeasured doc is stale; an unreadable stale doc is unreadable (the order of the reasons)', () => {
       expect(read(worked({ ...FETCH_FAILED, at: iso(-5000) }))).toEqual({ ok: false, reason: 'stale' });

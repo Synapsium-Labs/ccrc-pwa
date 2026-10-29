@@ -12,6 +12,8 @@ import { isRecord } from '../lib/wire';
 
 /** One predicted conflict, shown once: the PR, what it conflicts with (the base branch, or another PR) and the paths. */
 export interface ConflictLine {
+  /** The project the PR numbers belong to: #12 of one project is not #12 of another. */
+  project: string;
   pr: number;
   against: { base: string } | { pr: number };
   paths: readonly string[];
@@ -21,6 +23,10 @@ export interface ConflictLine {
 export interface ConflictSummary {
   /** The (project, PR) landings in the window. */
   measured: number;
+  /** How many projects those landings span: the sentence names the project of a line only when this is above one. */
+  projects: number;
+  /** Measured landings whose head the radar left out of its pairwise set (`paired: false`). */
+  unpaired: number;
   conflicted: readonly ConflictLine[];
   /** Some landing is neither clean nor in conflict, or carries a cut (D-7480). */
   partial: boolean;
@@ -63,31 +69,33 @@ export function conflictSummaryOf(sessions: readonly FleetSession[], nowMs: numb
   const lines = new Map<string, ConflictLine>();
   const unmeasuredPairs = new Set<string>();
   let unmeasured = 0;
+  let unpaired = 0;
   let partial = false;
   let cut = false;
   let oldestAt = '';
-  let oldestMs = Infinity;
   for (const l of byPr.values()) {
-    // Orders the landings for the "measured HH:MM" stamp ONLY. Freshness is `landingShown`'s alone (D-7481).
-    const ms = new Date(l.at).getTime();
-    if (ms < oldestMs) { oldestMs = ms; oldestAt = l.at; }
+    // Orders the landings for the "measured HH:MM" stamp ONLY: `at` is one fixed-width UTC stamp (`isRadarStamp`), so
+    // strings order like times. Freshness is `landingShown`'s alone (D-7481).
+    if (oldestAt === '' || l.at < oldestAt) oldestAt = l.at;
+    if (!l.paired) unpaired += 1;
     if (!isClean(l) && !inConflict(l)) partial = true;
     if (hasCut(l)) { partial = true; cut = true; }
     if (l.base.state === 'unmeasured') unmeasured += 1;
     if (l.base.state === 'conflict') {
-      lines.set(`${l.project}:b:${l.pr}`, { pr: l.pr, against: { base: l.baseRef }, paths: l.base.paths ?? [], pathsCut: l.base.pathsCut === true });
+      lines.set(`${l.project}:b:${l.pr}`, { project: l.project, pr: l.pr, against: { base: l.baseRef }, paths: l.base.paths ?? [], pathsCut: l.base.pathsCut === true });
     }
     // A pair {a, b} is listed once within its project, under its lower PR number, whichever side reported it.
     for (const c of l.conflicts) {
       const lo = Math.min(l.pr, c.pr);
       const hi = Math.max(l.pr, c.pr);
       const key = `${l.project}:p:${lo}:${hi}`;
-      if (!lines.has(key)) lines.set(key, { pr: lo, against: { pr: hi }, paths: c.paths, pathsCut: c.pathsCut });
+      if (!lines.has(key)) lines.set(key, { project: l.project, pr: lo, against: { pr: hi }, paths: c.paths, pathsCut: c.pathsCut });
     }
     for (const other of l.unmeasuredWith) unmeasuredPairs.add(`${l.project}:${Math.min(l.pr, other)}:${Math.max(l.pr, other)}`);
   }
-  const conflicted = [...lines.values()].sort((a, b) => a.pr - b.pr || againstPr(a) - againstPr(b));
-  return { measured: byPr.size, conflicted, partial, unmeasured: unmeasured + unmeasuredPairs.size, cut, oldestAt };
+  const conflicted = [...lines.values()].sort((a, b) => a.project.localeCompare(b.project) || a.pr - b.pr || againstPr(a) - againstPr(b));
+  const projects = new Set([...byPr.values()].map((l) => l.project)).size;
+  return { measured: byPr.size, projects, unpaired, conflicted, partial, unmeasured: unmeasured + unmeasuredPairs.size, cut, oldestAt };
 }
 
 const againstPr = (line: ConflictLine): number => ('pr' in line.against ? line.against.pr : 0);
@@ -107,12 +115,13 @@ export function conflictChipWord(summary: ConflictSummary): string {
   return summary.measured === 1 ? 'No predicted conflicts in 1 measured PR' : `No predicted conflicts in ${summary.measured} measured PRs`;
 }
 
-const lineSentence = (line: ConflictLine): string => {
+const lineSentence = (line: ConflictLine, named: boolean): string => {
+  const who = named ? `${line.project}: ` : '';
   const where = line.paths.length === 0 ? '' : ` in ${line.paths.join(', ')}`;
   const cut = line.pathsCut ? ' (list cut)' : '';
-  return 'base' in line.against
+  return who + ('base' in line.against
     ? `PR #${line.pr} conflicts with ${line.against.base}${where}${cut}`
-    : `PRs #${line.pr} and #${line.against.pr} conflict${where}${cut}`;
+    : `PRs #${line.pr} and #${line.against.pr} conflict${where}${cut}`);
 };
 
 /** The chip's accessible name and title: the word, each conflict by PR number, base and path, what was left out, and
@@ -121,9 +130,10 @@ export function conflictChipSentence(summary: ConflictSummary): string {
   const at = timeOf(summary.oldestAt);
   return [
     conflictChipWord(summary),
-    ...summary.conflicted.map(lineSentence),
+    ...summary.conflicted.map((line) => lineSentence(line, summary.projects > 1)),
     ...(summary.cut ? ['(list cut)'] : []),
     ...(summary.unmeasured > 0 ? [`${summary.unmeasured} not measured`] : []),
+    ...(summary.unpaired > 0 ? [`${summary.unpaired} not paired`] : []),
     ...(at === '' ? [] : [`measured ${at}`]),
   ].join('. ');
 }

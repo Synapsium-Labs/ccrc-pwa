@@ -12601,6 +12601,11 @@ export function freshWithin(at: unknown, freshS: number, nowMs: number): boolean
 /** Four timer intervals of the radar (doctor's CCRC_LAND_PROBE_STALE_S); both sides age a landing by it (D-7482). */
 export const RADAR_PROBE_FRESH_S = 1200;
 
+/** The one shape of a radar stamp: the `at` the radar writes is `%Y-%m-%dT%H:%M:%SZ` (wave 3b), UTC, fixed width, so a
+ *  stamp of any other shape (no zone, millis, a space for the `T`) is a doc or a frame the radar did not write, and two
+ *  stamps order by plain string comparison. Shape only: a reader still asks `freshWithin` or `landingShown` for the clock. */
+export const isRadarStamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(v);
+
 /** The DISPLAY's clock rule for a landing's `at` (D-7481): the stale bound only. Legitimately different from
  *  `freshWithin`: a phone's clock is not the fleet box's, and a device clock that runs behind must not hide every live
  *  landing, while the server has already refused a doc dated ahead. The one reader is the PWA's `landingOf`. A missing,
@@ -12624,7 +12629,7 @@ export function reviveSessionLanding(o: RawObj, k: string): SessionLanding | und
   if (!isRawObj(v)) return undefined;
   const base = v['base'];
   const cut = v['cut'];
-  if (typeof v['at'] !== 'string' || !isPrNum(v['pr']) || typeof v['head'] !== 'string' || typeof v['baseRef'] !== 'string') return undefined;
+  if (!isRadarStamp(v['at']) || !isPrNum(v['pr']) || typeof v['head'] !== 'string' || typeof v['baseRef'] !== 'string') return undefined;
   if (!isRawObj(base) || !isLandingMergeState(base['state'])) return undefined;
   if (base['paths'] !== undefined && !isStrArr(base['paths'])) return undefined;
   if (base['pathsCut'] !== undefined && typeof base['pathsCut'] !== 'boolean') return undefined;

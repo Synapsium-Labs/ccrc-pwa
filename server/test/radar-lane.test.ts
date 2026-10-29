@@ -129,6 +129,18 @@ describe('the radar lane', () => {
       await w.sweepRadar(await rows(), NOW);
       expect(keys(w), 'a merged PR keeps its number and must match nothing').toEqual([]);
     });
+
+    // D-7515: the radar lists drafts as open PRs, and the server's sweep calls the same PR `draft`.
+    it('a session with a DRAFT PR of the head\'s number matches; a closed one does not', async () => {
+      plantRow(ALPHA, { prphase: 'draft', prnumber: '12' });
+      plantProbe(worked());
+      const w = make();
+      await w.sweepRadar(await rows(), NOW);
+      expect(keys(w), 'a draft is an open PR to the radar').toEqual([ALPHA]);
+      plantRow(ALPHA, { prphase: 'closed', prnumber: '12' });
+      await w.sweepRadar(await rows(), NOW);
+      expect(keys(w)).toEqual([]);
+    });
   });
 
   describe('every condition in which the radar does not speak for a session gives no landing (Review Focus 1)', () => {

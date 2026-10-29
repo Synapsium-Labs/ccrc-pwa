@@ -398,8 +398,13 @@ describe('Build 7 nouns', () => {
     const READERS = ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts', 'server/src/coord/lineageRead.ts',
       'server/src/watch.ts', 'server/src/fleet.ts', 'server/src/server.ts',
       'pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
-    const SECOND_RULE = [/Date\.parse\(/, /FRESH_FUTURE_SKEW_S/, /RADAR_PROBE_FRESH_S\s*\*\s*1000/, /LINEAGE_FRESH_S\s*\*\s*1000/,
-      /1000\s*\*\s*(?:RADAR_PROBE_FRESH_S|LINEAGE_FRESH_S)/];
+    // `1000` is spelled three ways in a window's milliseconds: `1000`, `1_000` and `1e3`.
+    const SECOND_RULE = [/Date\.parse\(/, /FRESH_FUTURE_SKEW_S/, /RADAR_PROBE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/,
+      /LINEAGE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/, /(?:1000|1_000|1e3)\s*\*\s*(?:RADAR_PROBE_FRESH_S|LINEAGE_FRESH_S)/];
+    // The PWA's two readers also never build a `Date` (D-7514): `at` is a fixed-width stamp, and the chip orders it as a
+    // string. Not applied to the server readers: `watch.ts` formats a log line with `new Date(...)`, which is no clock read.
+    const PWA_READERS = ['pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
+    const PWA_ONLY = /\bnew Date\(/;
     const codeOf = (f: string): string => stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8'));
 
     it('no radar reader parses a date, names the skew, or multiplies a window by 1000 on a code line', () => {
@@ -407,12 +412,24 @@ describe('Build 7 nouns', () => {
       expect(SECOND_RULE.map((re) => re.test('const t = Date.parse(at); x = RADAR_PROBE_FRESH_S * 1000; FRESH_FUTURE_SKEW_S; LINEAGE_FRESH_S*1000')))
         .toEqual([true, true, true, true, false]);
       expect(SECOND_RULE[4]!.test('const w = 1000 * LINEAGE_FRESH_S;')).toBe(true);
+      // CONTROL: the other spellings of 1000 are seen too, and a longer number is not.
+      for (const t of ['x = RADAR_PROBE_FRESH_S * 1_000;', 'x = RADAR_PROBE_FRESH_S*1e3;', 'x = LINEAGE_FRESH_S * 1_000', 'x = 1e3 * RADAR_PROBE_FRESH_S',
+        'x = 1_000*LINEAGE_FRESH_S']) {
+        expect(SECOND_RULE.some((re) => re.test(t)), t).toBe(true);
+      }
+      expect(SECOND_RULE.some((re) => re.test('x = RADAR_PROBE_FRESH_S * 10000;')), 'a longer number').toBe(false);
+      // CONTROL: `new Date(` is seen on a code line and dropped from a comment.
+      expect(PWA_ONLY.test(stallCodeText('const ms = new Date(l.at).getTime();'))).toBe(true);
+      expect(PWA_ONLY.test(stallCodeText('// orders by new Date(at) once\nconst a = 1;'))).toBe(false);
       expect(SECOND_RULE.some((re) => re.test(stallCodeText(' * a window is Date.parse( by 1000 * LINEAGE_FRESH_S\n// FRESH_FUTURE_SKEW_S')))).toBe(false);
 
       const present = READERS.filter((f) => existsSync(path.join(ccrcRoot, f)));
       for (const must of ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts']) expect(present, must).toContain(must);
       const hits = present.flatMap((f) => SECOND_RULE.filter((re) => re.test(codeOf(f))).map((re) => `${f}: ${re.source}`));
       expect(hits, 'a radar reader with a freshness rule of its own').toEqual([]);
+      const dates = PWA_READERS.filter((f) => existsSync(path.join(ccrcRoot, f))).filter((f) => PWA_ONLY.test(codeOf(f)));
+      expect(dates, 'a PWA radar reader that builds a Date').toEqual([]);
+      expect(PWA_READERS.filter((f) => existsSync(path.join(ccrcRoot, f))), 'the PWA scan is never vacuous').toContain('pwa/src/fleet/conflictWords.ts');
     });
 
     it('radar.ts and lineage.ts each call freshWithin(, so the scan above is never vacuous', () => {

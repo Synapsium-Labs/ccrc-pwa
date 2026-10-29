@@ -8,7 +8,8 @@ import {
 import { fleetSession } from './fleetFixture';
 
 const NOW = Date.parse('2026-10-29T12:00:00.000Z');
-const iso = (agoS: number): string => new Date(NOW - agoS * 1000).toISOString();
+// The radar's own stamp shape (`isRadarStamp`): whole seconds, no millis.
+const iso = (agoS: number): string => new Date(NOW - agoS * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 const landing = (over: Partial<SessionLanding> = {}): SessionLanding => ({
   at: iso(30), pr: 12, head: 'abc1234', baseRef: 'main',
@@ -98,12 +99,17 @@ describe('conflictSummaryOf and the words', () => {
     const a = landing({ pr: 12, conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: false }] });
     const b = landing({ pr: 14, conflicts: [{ pr: 12, paths: ['src/x.ts'], pathsCut: false }] });
     const both = conflictSummaryOf([sess('a', a), sess('b', b)], NOW)!;
-    expect(both.conflicted).toEqual([{ pr: 12, against: { pr: 14 }, paths: ['src/x.ts'], pathsCut: false }]);
+    expect(both.conflicted).toEqual([{ project: 'proj-a', pr: 12, against: { pr: 14 }, paths: ['src/x.ts'], pathsCut: false }]);
     expect(conflictChipWord(both)).toBe('1 predicted conflict');
     expect(conflictChipSentence(both)).toContain('PRs #12 and #14 conflict in src/x.ts');
     // Reported by the higher PR alone: still under the lower number.
     const only = conflictSummaryOf([sess('b', b)], NOW)!;
-    expect(only.conflicted).toEqual([{ pr: 12, against: { pr: 14 }, paths: ['src/x.ts'], pathsCut: false }]);
+    expect(only.conflicted).toEqual([{ project: 'proj-a', pr: 12, against: { pr: 14 }, paths: ['src/x.ts'], pathsCut: false }]);
+  });
+
+  it('rejects a landing whose at is not the radar\'s stamp (millis, a space) as no landing', () => {
+    expect(landingOf(sess('a', landing({ at: '2026-10-29T11:59:30.000Z' })), NOW)).toBeNull();
+    expect(landingOf(sess('a', landing({ at: '2026-10-29 11:59:30' })), NOW)).toBeNull();
   });
 
   it('says what was cut, what was not measured, and when the oldest reading was measured', () => {
@@ -191,5 +197,41 @@ describe('"N not measured"', () => {
       sess('b', landing({ pr: 12, unmeasuredWith: [14], base: { state: 'unmeasured' } }), 'proj-b'),
     ], NOW)!;
     expect(s.unmeasured).toBe(3);
+  });
+});
+
+describe('the sentence names the project when the fleet spans projects, and says what is not paired', () => {
+  const base = (paths: string[]) => landing({ base: { state: 'conflict', paths } });
+
+  it('prefixes each line with its project when more than one project has a landing', () => {
+    const s = conflictSummaryOf([sess('a', base(['src/a.ts']), 'proj-a'), sess('b', base(['src/b.ts']), 'proj-b')], NOW)!;
+    expect(s.projects).toBe(2);
+    const sentence = conflictChipSentence(s);
+    expect(sentence).toContain('proj-a: PR #12 conflicts with main in src/a.ts');
+    expect(sentence).toContain('proj-b: PR #12 conflicts with main in src/b.ts');
+  });
+
+  it('prefixes a pair line the same way', () => {
+    const a = landing({ conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: false }] });
+    const s = conflictSummaryOf([sess('a', a, 'proj-a'), sess('b', landing({ pr: 30 }), 'proj-b')], NOW)!;
+    expect(conflictChipSentence(s)).toContain('proj-a: PRs #12 and #14 conflict in src/x.ts');
+  });
+
+  it('leaves the sentence unchanged with one project, however many sessions', () => {
+    const s = conflictSummaryOf([sess('a', base(['src/a.ts']), 'proj-a'), sess('b', landing({ pr: 14 }), 'proj-a')], NOW)!;
+    expect(s.projects).toBe(1);
+    expect(conflictChipSentence(s)).toContain('. PR #12 conflicts with main in src/a.ts');
+    expect(conflictChipSentence(s)).not.toContain('proj-a');
+  });
+
+  it('adds "N not paired" for a landing the radar left out of its pairs, beside the unchanged word', () => {
+    const s = conflictSummaryOf([sess('a', landing({ paired: false })), sess('b', landing({ pr: 14, paired: false })), sess('c', landing({ pr: 15 }))], NOW)!;
+    expect(s.unpaired).toBe(2);
+    expect(conflictChipWord(s)).toBe('Conflicts partly measured');
+    expect(conflictChipSentence(s)).toContain('2 not paired');
+  });
+
+  it('says nothing of pairing when every landing is paired', () => {
+    expect(conflictChipSentence(conflictSummaryOf([sess('a', landing())], NOW)!)).not.toContain('not paired');
   });
 });

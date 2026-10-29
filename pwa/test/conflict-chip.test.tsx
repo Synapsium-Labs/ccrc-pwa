@@ -9,7 +9,7 @@ import { fleetSession } from './fleetFixture';
 afterEach(cleanup);
 
 const landing = (over: Partial<SessionLanding> = {}): SessionLanding => ({
-  at: new Date(Date.now() - 30_000).toISOString(), pr: 12, head: 'abc1234', baseRef: 'main',
+  at: new Date(Date.now() - 30_000).toISOString().replace(/\.\d{3}Z$/, 'Z'), pr: 12, head: 'abc1234', baseRef: 'main',
   base: { state: 'clean' }, paired: true, conflicts: [], unmeasuredWith: [],
   cut: { heads: false, pairs: false, unbound: false },
   ...over,
@@ -23,7 +23,7 @@ describe('ConflictChip', () => {
   });
 
   it('renders nothing for a snapshot row whose landing is past the window', () => {
-    const old = landing({ at: new Date(Date.now() - 1201_000).toISOString() });
+    const old = landing({ at: new Date(Date.now() - 1201_000).toISOString().replace(/\.\d{3}Z$/, 'Z') });
     expect(render(<ConflictChip sessions={[fleetSession({ id: 'a', landing: old })]} />).container).toBeEmptyDOMElement();
   });
 

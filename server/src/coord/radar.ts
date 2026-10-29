@@ -18,8 +18,8 @@
  * landing of the project `cut.unbound`: no landing can claim it was paired against that head.
  */
 import {
-  RADAR_PROBE_FRESH_S, freshWithin,
-  type LandingConflict, type SessionLanding,
+  RADAR_PROBE_FRESH_S, freshWithin, isRadarStamp, isRegistryId,
+  type LandingConflict, type LandingMergeState, type SessionLanding,
 } from '../../../shared/api.js';
 
 /** The radar writes no cap of its own (D-7482): the reader refuses a `probe` over 512 KiB, measured before the read
@@ -35,9 +35,9 @@ const SHA = /^[0-9a-f]{40}$/;
 
 /** One merge answer as the radar writes it, less the `why` that is never shown. */
 export type ProbeAnswer =
-  | { state: 'clean' }
-  | { state: 'conflict'; paths: string[]; pathsCut: boolean }
-  | { state: 'unmeasured' };
+  | { state: Extract<LandingMergeState, 'clean'> }
+  | { state: Extract<LandingMergeState, 'conflict'>; paths: string[]; pathsCut: boolean }
+  | { state: Extract<LandingMergeState, 'unmeasured'> };
 
 export interface ProbeHead { pr: number; head: string; branch: string; id: string | null; base: ProbeAnswer }
 export interface ProbePair { a: number; b: number; answer: ProbeAnswer }
@@ -107,6 +107,8 @@ export function parseProbe(content: string, project: string, nowMs: number): Pro
   if (measured ? o.why !== undefined : !isWhy(o.why)) return bad;
 
   if (typeof o.headsCut !== 'boolean' || typeof o.pairsCut !== 'boolean') return bad;
+  // The radar's own stamp shape; a missing, non-string or odd-shaped `at` is no doc of the radar's, not a stale one.
+  if (!isRadarStamp(o.at)) return bad;
 
   const rawHeads = o.heads;
   const rawPairs = o.pairs;
@@ -118,7 +120,9 @@ export function parseProbe(content: string, project: string, nowMs: number): Pro
   const byPr = new Map<number, ProbeHead>();
   for (const e of rawHeads as unknown[]) {
     if (!isRecord(e) || !isPr(e.pr) || !isSha(e.head) || typeof e.branch !== 'string') return bad;
-    if (e.id !== null && typeof e.id !== 'string') return bad;
+    // An `id` is `null` or a registry id: the empty string is no id, and is not `null` either (it would enter `pairHeads`
+    // and never set `unbound`).
+    if (e.id !== null && !isRegistryId(e.id)) return bad;
     if (!isRecord(e.base)) return bad;
     const base = parseAnswer(e.base);
     if (base === null || byPr.has(e.pr)) return bad;
@@ -130,17 +134,19 @@ export function parseProbe(content: string, project: string, nowMs: number): Pro
   // `pairHeads` are the bound heads the radar paired: distinct, each a head of this doc with an `id`. The radar's
   // `CCD_LAND_PROBE_PAIR_HEADS` knob has no upper bound, so no constant bounds the length here.
   const pairHeads: number[] = [];
+  const pairHeadSet = new Set<number>();
   for (const p of rawPairHeads as unknown[]) {
     const bound = isPr(p) ? byPr.get(p) : undefined;
-    if (!isPr(p) || pairHeads.includes(p) || bound === undefined || bound.id === null) return bad;
+    if (!isPr(p) || pairHeadSet.has(p) || bound === undefined || bound.id === null) return bad;
     pairHeads.push(p);
+    pairHeadSet.add(p);
   }
 
   const pairs: ProbePair[] = [];
   const seen = new Set<string>();
   for (const e of rawPairs as unknown[]) {
     if (!isRecord(e) || !isPr(e.a) || !isPr(e.b) || e.a >= e.b) return bad;
-    if (!pairHeads.includes(e.a) || !pairHeads.includes(e.b)) return bad;
+    if (!pairHeadSet.has(e.a) || !pairHeadSet.has(e.b)) return bad;
     const key = `${e.a}:${e.b}`;
     if (seen.has(key)) return bad;
     seen.add(key);
@@ -199,7 +205,7 @@ export function sessionLandingsOf(
   const idCount = new Map<string, number>();
   for (const h of doc.heads) if (h.id !== null) idCount.set(h.id, (idCount.get(h.id) ?? 0) + 1);
   const headOfId = new Map<string, ProbeHead>();
-  for (const h of doc.heads) if (h.id !== null && h.id !== '' && idCount.get(h.id) === 1) headOfId.set(h.id, h);
+  for (const h of doc.heads) if (h.id !== null && idCount.get(h.id) === 1) headOfId.set(h.id, h);
 
   for (const r of rows) {
     const h = headOfId.get(r.id);
