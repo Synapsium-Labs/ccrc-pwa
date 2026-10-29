@@ -6,6 +6,7 @@ import { PROVIDER_IDS } from '../../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, prose, rel, sources } from './helpers.js';
 import { accountMarkerWriters, disabledProjectionWriters } from '../census-w5/accountMarkers.js';
+import { gateDefinitions, loopbackSets, verdictTypeDecls } from '../census-kernel/baseUrl.js';
 
 
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
@@ -208,9 +209,9 @@ describe('the provider table — one table, one home', () => {
   });
 
   it('BASE_URL_OK is declared in exactly one file, and it is not the table', () => {
-    const RE = /^\s*(?:export\s+)?const\s+BASE_URL_OK\b/m;
-    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(holders).toEqual(['shared/base-url.ts']);
+    const fileOf = (site: string): string => site.split('#')[0]!;
+    const holders = [...new Set(gateDefinitions().definitions.map(fileOf))];
+    expect(holders).toEqual(['shared/base-url.mjs']);
     // The loopback SET — the three hosts written as one closed list — is the
     // other value a second copy would be spelled from, and a caller that
     // re-spells it has re-decided the exception rather than reused it.
@@ -226,10 +227,11 @@ describe('the provider table — one table, one home', () => {
     // ordered three-element spelling catches the copy this task is about and
     // leaves those four alone. Measured before writing it: the set spelling has
     // ZERO holders under the four roots today, so this goes from `[]` to
-    // `['shared/base-url.ts']` and never through a red.
-    const LOOP_SET = /\['127\.0\.0\.1', '\[::1\]', 'localhost'\]/;
-    const loopHolders = ALL.filter((f) => LOOP_SET.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(loopHolders).toEqual(['shared/base-url.ts']);
+    // `['shared/base-url.ts']` and never through a red. Since D-7306 both scans
+    // read the census module (`census-kernel/baseUrl.ts`), so the set scan is
+    // order-insensitive and both read `.mjs` files as well as `.ts` ones.
+    const loopHolders = [...new Set(loopbackSets().map(fileOf))];
+    expect(loopHolders).toEqual(['shared/base-url.mjs', 'shared/models.mjs']);
   });
 });
 
@@ -1402,5 +1404,21 @@ describe('the auth-dead marker has one write primitive (D-7049)', () => {
 describe('the disabled switch has one write primitive (D-7050)', () => {
   it('its writer bodies are exactly ccd/ccrc#_acct_switch_write: 1', () => {
     expect(accountMarkerWriters('disabled').map((s) => s.name)).toEqual(['ccd/ccrc#_acct_switch_write']);
+  });
+});
+
+// THE ENDPOINT GATE'S CENSUS (D-7305; D-7306, D-7307; spec §5.13, §5.1 rule 3). The ceilings the base-url move reaches,
+// over the census module's queries (`census-kernel/baseUrl.ts`, whose exact characterization rows live in its sibling
+// test). At the plan's base 2 definitions of `BASE_URL_OK` (`shared/base-url.ts`, `shared/base-url.mjs`) and 2
+// declarations of each verdict type (`shared/base-url.ts`, `shared/base-url.d.mts`); here 1 each. MAY ONLY SHRINK: a
+// second implementation of the gate under any census root, in any of `.ts`, `.tsx`, `.mjs`, or a second declaration of
+// a verdict type under `shared/`, reds here.
+describe("the endpoint gate's census (D-7305)", () => {
+  it('BASE_URL_OK has at most one definition (D-7306)', () => {
+    expect(gateDefinitions().definitions.length).toBeLessThanOrEqual(1);
+  });
+
+  it('each verdict type has at most one declaration (D-7307)', () => {
+    for (const [name, sites] of Object.entries(verdictTypeDecls())) expect(sites.length, name).toBeLessThanOrEqual(1);
   });
 });
