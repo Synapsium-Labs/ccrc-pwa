@@ -58,6 +58,14 @@
 // The plain move of the dense block's media prelude (without `(pointer: fine)`) is NOT red here: its floors are
 // `--row-h`, which is 44 under a coarse pointer already. That mutant is test/instrument-list.test.tsx's.
 //
+// Desktop polish G3 (D-7333; RUN, this file alone with -t "programmes", each mutant restored from a saved copy with its
+// sha256 checked): the Status view's programme boxes at 390 and 1280 in both palettes, and the five phone tabs at 360.
+//   `.ins-tab` back to equal parts (`flex: 1 1 0`) ..... the 360 case and both 390 cases (`its words fit its tab`)
+//   `.ins-tabs` without `overflow-x: auto` ............. the 360 case (`the tablist scrolls inside itself`)
+//   `.ins-tab` without `width: auto` ................... both 390 cases (`Programmes is visible beside Needs you`)
+// The task's jsdom rows are test/status-programmes.test.tsx's header.
+// `CCRC_SHOTS=<a directory outside the work tree>` writes one screenshot per palette and width there.
+//
 // Chrome comes from `resolveChrome()` in `beforeAll`, which THROWS when neither `CCRC_CHROME` nor
 // `/usr/bin/google-chrome` is an executable file: a box without Chrome gives a red leg, never a skipped one.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -532,4 +540,177 @@ describe('a touch screen keeps the tap floor', () => {
       }
     });
   }
+});
+
+// Desktop polish G3 (D-7333; programme-boxes spec §2.7): in the Status view a coordinator's open work is its programme's
+// box, and a child is drawn only inside it, only while it asks. Two programmes: `billing` (project-a) needs you through
+// `billing-w1`, `port-api` (project-b) does not; three sessions in no programme, one asking.
+describe('the Status view shows programmes, not children (G3)', () => {
+  const NOW = Date.now();
+  let id = 300;
+  const prun = (program: string, title: string, project: string, claimedBy: string, sessionId: string, wave: number): object => ({
+    id: id++, program, programTitle: title, wave, waveOf: 4, project, homeProject: project, sessionId, workspace: sessionId,
+    branch: `ws/${sessionId}`, state: 'working', kind: 'work', reviews: null, claimedBy, resumed: false, clearedAt: null,
+    openedAt: NOW - 3_600_000, dispatchStartedAt: null, dispatchedAt: NOW - 3_000_000, closedAt: null, handoffCommit: null,
+    items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: false,
+      clearError: null, coordKickoffPendingSince: null },
+    childReclaim: null, reviewCap: null,
+  });
+  const on = (ws: string, project: string, bucket: string, status: string, extra: object = {}): object =>
+    session(ws, bucket, status, { id: ws, project, workdir: `/w/${project}/${ws}`, ...extra });
+  const asks = { dialogPending: true, hookState: 'waiting', askSummary: 'Which branch should the fix land on?' };
+  const PSESSIONS = [
+    on('billing-coord', 'project-a', 'working', 'busy', { role: 'coordinator' }),
+    on('billing-w1', 'project-a', 'attention', 'idle', { role: 'child', ...asks }),
+    on('billing-w2', 'project-a', 'working', 'busy', { role: 'child' }),
+    on('billing-w3', 'project-a', 'done', 'idle', { role: 'child' }),
+    on('port-coord', 'project-b', 'working', 'busy', { role: 'coordinator' }),
+    on('port-w1', 'project-b', 'working', 'busy', { role: 'child' }),
+    on('port-w2', 'project-b', 'idle', 'idle', { role: 'child' }),
+    on('lone-ask-routing', 'project-a', 'attention', 'idle', asks),
+    on('lone-desk-density', 'project-a', 'working', 'busy'),
+    on('lone-banner-quiet', 'project-b', 'done', 'idle'),
+  ];
+  const PRUNS = [
+    prun('billing', 'Billing rework', 'project-a', 'billing-coord', 'billing-w1', 3),
+    prun('billing', 'Billing rework', 'project-a', 'billing-coord', 'billing-w2', 2),
+    prun('billing', 'Billing rework', 'project-a', 'billing-coord', 'billing-w3', 1),
+    prun('port-api', 'Port the API', 'project-b', 'port-coord', 'port-w1', 2),
+    prun('port-api', 'Port the API', 'project-b', 'port-coord', 'port-w2', 1),
+  ];
+  const CHILDREN = ['billing-w1', 'billing-w2', 'billing-w3', 'port-w1', 'port-w2'];
+  const PFIXTURE: AppFixture = {
+    api: { ...FIXTURE.api, '/api/runs': PRUNS },
+    fleetFrames: [{ type: 'fleet', sessions: PSESSIONS }, { type: 'runs', runs: PRUNS }],
+  };
+
+  async function openStatus(theme: string, width: number, touch = false) {
+    const opened = await openApp(browser!, { skin: INSTRUMENT, theme, width, touch }, PFIXTURE);
+    await opened.page.setViewportSize({ width, height: 800 });
+    await opened.page.goto(server!.origin + '/');
+    await opened.page.waitForSelector('.ins-table section.pg-box', { timeout: 20_000 });
+    await opened.page.evaluate(async () => { await document.fonts.ready; });
+    await opened.page.waitForTimeout(600); // the first paint's transitions and the fleet frame settle
+    return opened;
+  }
+
+  /** What the view draws: the groups and their heads, each box's coordinator, tray, hue, rule and kicker contrast, and
+   *  every row drawn outside a box. */
+  const measure = () => {
+    const rgb = (v: string): number[] => (v.match(/[\d.]+/g) ?? []).map(Number);
+    const lum = ([r, g, b]: number[]): number => {
+      const ch = (v: number): number => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * ch(r!) + 0.7152 * ch(g!) + 0.0722 * ch(b!);
+    };
+    const table = document.querySelector('.ins-table')!;
+    return {
+      groups: [...table.querySelectorAll('[data-status-group]')].map((g) => g.getAttribute('data-status-group')),
+      tabs: [...table.querySelectorAll('[role="tab"]')].map((t) => (t.textContent ?? '').replace(/\s+/g, ' ').trim()),
+      // Each tab's box, and whether its words fit it: five tabs must never overprint (they scroll sideways instead).
+      tablistRight: table.querySelector('[role="tablist"]')?.getBoundingClientRect().right ?? 0,
+      tabBoxes: [...table.querySelectorAll<HTMLElement>('[role="tab"]')].map((t) => {
+        const r = t.getBoundingClientRect();
+        return { left: r.left, right: r.right, whole: t.scrollWidth <= t.clientWidth };
+      }),
+      loose: [...table.querySelectorAll('[data-row]')].filter((r) => r.closest('section.pg-box') === null).map((r) => r.getAttribute('data-row')),
+      boxes: [...table.querySelectorAll<HTMLElement>('section.pg-box')].map((box) => {
+        const hue = box.getAttribute('data-hue');
+        const probe = document.createElement('span');
+        probe.style.color = `var(--prog-${hue})`;
+        box.appendChild(probe);
+        const hueColour = getComputedStyle(probe).color;
+        probe.remove();
+        const k = getComputedStyle(box.querySelector('.pg-kicker')!);
+        const [a, b] = [lum(rgb(k.color)), lum(rgb(k.backgroundColor))].sort((x, y) => y - x);
+        return {
+          group: box.closest('[data-status-group]')?.getAttribute('data-status-group'),
+          coord: [...box.querySelectorAll('.pg-coord [data-row]')].map((r) => r.getAttribute('data-row')),
+          tray: [...box.querySelectorAll('.pg-tray [data-row]')].map((r) => r.getAttribute('data-row')),
+          kicker: (box.querySelector('.pg-kicker')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+          rule: getComputedStyle(box).borderLeftColor, hueColour, ratio: (a! + 0.05) / (b! + 0.05),
+          foot: box.querySelector('.pg-foot') !== null,
+        };
+      }),
+    };
+  };
+
+  for (const theme of THEMES) {
+    for (const width of [390, 1280] as const) {
+      it(`at ${width} (${theme}): programmes before the lone rows, no child outside its box, each box in its hue, no sideways scroll`, async () => {
+        const { ctx, page, errors } = await openStatus(theme, width);
+        try {
+          const shots = process.env['CCRC_SHOTS'];
+          if (shots !== undefined && shots !== '') await page.screenshot({ path: `${shots}/status-${theme}-${width}.png`, fullPage: true });
+          expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 'sideways scroll').toBe(0);
+          const m = await page.evaluate(measure);
+          expect(m.groups).toEqual(['attention', 'programmes', 'done', 'working']);
+          if (width === 390) {
+            expect(m.tabs).toEqual(['Needs you 2', 'Programmes 1', 'Done 1', 'Working 1', 'All 5']);
+            m.tabBoxes.forEach((t, i) => {
+              expect(t.whole, `${m.tabs[i]}: its words fit its tab`).toBe(true);
+              if (i > 0) expect(t.left, `${m.tabs[i]} starts after ${m.tabs[i - 1]} ends`).toBeGreaterThanOrEqual(m.tabBoxes[i - 1]!.right);
+            });
+            // The two the operator reads first are on screen together, before any scroll.
+            expect(m.tabBoxes[1]!.right, 'Programmes is visible beside Needs you').toBeLessThanOrEqual(m.tablistRight);
+          }
+          expect(m.boxes.map((b) => [b.group, b.coord, b.tray, b.foot])).toEqual([
+            ['attention', ['billing-coord'], ['billing-w1'], false], ['programmes', ['port-coord'], [], false],
+          ]);
+          expect(m.loose).toEqual(['lone-ask-routing', 'lone-banner-quiet', 'lone-desk-density']);
+          for (const c of CHILDREN.slice(1)) expect(m.loose, c).not.toContain(c);
+          for (const b of m.boxes) {
+            expect(b.kicker, 'the kicker names the project').toMatch(/project-[ab]/);
+            expect(b.rule, `${b.coord[0]}: the left rule is the computed --prog hue`).toBe(b.hueColour);
+            expect(b.ratio, `${b.coord[0]}: the kicker's text on its band`).toBeGreaterThanOrEqual(4.5);
+          }
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
+    }
+  }
+
+  it('at 360 the five tabs scroll inside the tablist, each whole, and the page never scrolls sideways', async () => {
+    const { ctx, page, errors } = await openStatus(PHOSPHOR, 360);
+    try {
+      const m = await page.evaluate(() => {
+        const list = document.querySelector<HTMLElement>('.ins-table [role="tablist"]')!;
+        return {
+          page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          scrolls: list.scrollWidth > list.clientWidth && getComputedStyle(list).overflowX === 'auto',
+          whole: [...list.querySelectorAll<HTMLElement>('[role="tab"]')].map((t) => t.scrollWidth <= t.clientWidth),
+        };
+      });
+      expect(m.page, 'sideways scroll').toBe(0);
+      expect(m.scrolls, 'the tablist scrolls inside itself').toBe(true);
+      expect(m.whole).toEqual([true, true, true, true, true]);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it('at 390 under a coarse pointer the asking child\'s row and its ⋯ keep the 44 px tap floor', async () => {
+    const { ctx, page, errors } = await openStatus(PHOSPHOR, 390, true);
+    try {
+      const m = await page.evaluate(() => {
+        const tray = document.querySelector('.ins-table section.pg-box .pg-tray')!;
+        const actions = [...tray.querySelectorAll<HTMLElement>('.sess-actions')].map((el) => {
+          const inset = parseFloat(getComputedStyle(el, '::before').top);
+          return { w: Math.round(el.clientWidth - 2 * inset), h: Math.round(el.clientHeight - 2 * inset) };
+        });
+        return { rows: [...tray.querySelectorAll('.ins-row')].map((el) => Math.round(el.getBoundingClientRect().height)), actions };
+      });
+      expect(m.rows.length).toBe(1);
+      expect(m.rows[0]).toBeGreaterThanOrEqual(44);
+      expect(m.actions.length).toBe(1);
+      expect(m.actions[0]!.h).toBeGreaterThanOrEqual(44);
+      expect(m.actions[0]!.w).toBeGreaterThanOrEqual(44);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  });
 });

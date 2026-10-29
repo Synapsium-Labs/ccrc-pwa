@@ -16,6 +16,11 @@
 //   Wordmark removed from TopBar ....................... skin-boundary (a)
 //   a hex in instrument.css ............................ skin-boundary (c)
 //
+// Desktop polish G3 (D-7333): status mode draws `statusView`'s groups (statusGroups.ts); the skin scan below holds over the
+// new FleetTable. MUTATION TABLE (RUN, on the working tree, this suite alone, then restored from a saved copy, sha checked;
+// the task's other 19 rows are status-programmes.test.tsx's header):
+//   FleetTable holding Needs you open by `s.bucket === 'attention'` itself  "the status bar renders fleetSummary" (the skin scan)
+//
 // W2 Task T2e (desk-polish, D-6335): the frame's fourth track, the list column's one head, the pool-lag readout.
 // MUTATION TABLE (plan Task T2e Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   the fourth track unconditional ..................... "the fourth-track attribute follows the set's Inspector part, whatever its id"

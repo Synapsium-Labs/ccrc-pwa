@@ -96,6 +96,10 @@ const RUN: RunSummary = {
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
             briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
 } as RunSummary;
+/** No open run: every session is in no programme, so status mode draws today's groups exactly (Task G3, D-7333). With
+ *  `RUN`, the coordinator's open work is a programme box and its child is drawn only inside it, while it asks
+ *  (status-programmes.test.tsx). */
+const NO_PROGRAMME: RunSummary[] = [];
 
 /** A desk (or a phone), and a fine pointer (or a coarse one). */
 function stubWidth(desk: boolean, fine = true): void {
@@ -118,7 +122,7 @@ function mount(sessions: FleetSession[] = FLEET, runs: RunSummary[] = [RUN]): vo
 const table = (): HTMLElement => document.querySelector<HTMLElement>('.ins-table')!;
 const groups = (): HTMLElement[] => [...table().querySelectorAll<HTMLElement>('[data-status-group]')];
 const head = (g: HTMLElement): HTMLElement => g.querySelector<HTMLElement>('[aria-expanded]')!;
-const groupOf = (bucket: SessionBucket): HTMLElement => table().querySelector<HTMLElement>(`[data-status-group="${bucket}"]`)!;
+const groupOf = (bucket: SessionBucket | 'programmes'): HTMLElement => table().querySelector<HTMLElement>(`[data-status-group="${bucket}"]`)!;
 const rowIds = (el: HTMLElement): string[] =>
   [...el.querySelectorAll<HTMLElement>('[data-row]')].map((r) => r.getAttribute('data-row')!);
 const toggle = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Group sessions by' });
@@ -216,7 +220,7 @@ afterEach(() => {
 
 describe('status mode', () => {
   it('status mode renders the groups in groupByStatus\'s order, the last four folded', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
       ['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
@@ -230,7 +234,7 @@ describe('status mode', () => {
   });
 
   it('status mode shows Done above Working', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     const order = groups().map((g) => g.getAttribute('data-status-group'));
     expect(order.indexOf('done')).toBeGreaterThanOrEqual(0);
     expect(order.indexOf('done')).toBeLessThan(order.indexOf('working'));
@@ -243,7 +247,7 @@ describe('status mode', () => {
   });
 
   it('each group header names its status, and in project mode each row shows its word beside its lamp', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(groups().map((g) => head(g).textContent)).toEqual(LABELS.map((l) => expect.stringContaining(l)));
     // Each header carries its count in its name, so a folded group still says how many it holds.
     expect(head(groupOf('idle'))).toHaveAccessibleName(/^Idle.*1/);
@@ -266,15 +270,17 @@ describe('status mode', () => {
     for (const w of ['waiting', 'exited', 'merged', 'needs you']) expect(code).not.toContain(`'${w}'`);
   });
 
-  it('in status mode a child row carries its coordinator\'s crumb; in project mode it nests as today', () => {
+  it('in status mode a child is drawn only in its programme\'s box, while it asks; in project mode it nests as today (Task G3)', () => {
     mount();
-    const child = groupOf('done').querySelector<HTMLElement>(`[data-row="${CHILD}"]`)!;
-    expect(child).not.toBeNull();
-    expect(child.querySelector('.ins-coord-crumb')?.textContent).toContain('the coordinator');
-    // The coordinator itself carries no crumb.
-    expect(groupOf('working').querySelector(`[data-row="${COORD}"] .ins-coord-crumb`)).toBeNull();
-    pick('Project');
+    // The coordinator's open work is its box, in Programmes, after Needs you; the child, which does not ask, is drawn
+    // nowhere, and no row carries a coordinator crumb any more.
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
+      ['attention', 'programmes', 'idle', 'cleanup', 'archived', 'dead']);
+    const box = groupOf('programmes').querySelector<HTMLElement>('section.pg-box')!;
+    expect(rowIds(box.querySelector('.pg-coord')!)).toEqual([COORD]);
+    expect(table().querySelector(`[data-row="${CHILD}"]`)).toBeNull();
     expect(table().querySelector('.ins-coord-crumb')).toBeNull();
+    pick('Project');
     // Project mode is the shared card: the child sits under its coordinator (a nest, or the rollup's workers line).
     const nested = table().querySelector('.proj-nest[data-depth="1"]') ?? table().querySelector('.proj-children-toggle');
     expect(nested).not.toBeNull();
@@ -421,12 +427,13 @@ describe('project mode and the doors', () => {
     pick('Status');
     const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual([
-      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Programmes/), expect.stringMatching(/^Done/),
+      expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
     expect(tabs.filter((t) => t.getAttribute('aria-selected') === 'true')).toHaveLength(1);
   });
 
   it('a fold is remembered through useFolded', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     fireEvent.click(head(groupOf('idle')));
     expect(head(groupOf('idle')).getAttribute('aria-expanded')).toBe('true');
     expect(rowIds(groupOf('idle'))).toEqual(['project-a-quiet']);
@@ -435,7 +442,7 @@ describe('project mode and the doors', () => {
     fireEvent.click(head(groupOf('working')));
     expect(head(groupOf('working')).getAttribute('aria-expanded')).toBe('false');
     cleanup();
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(head(groupOf('idle')).getAttribute('aria-expanded')).toBe('true');
     expect(head(groupOf('working')).getAttribute('aria-expanded')).toBe('false');
   });
@@ -505,7 +512,7 @@ describe('project mode and the doors', () => {
 describe('phone', () => {
   it('phone: the tabs select one group; All shows every group', () => {
     stubWidth(false, false);
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     const tab = (name: RegExp): HTMLElement => within(screen.getByRole('tablist', { name: 'Sessions by status' })).getByRole('tab', { name });
     fireEvent.click(tab(/^Working/));
     expect(tab(/^Working/).getAttribute('aria-selected')).toBe('true');
@@ -521,13 +528,14 @@ describe('phone', () => {
     expect(tab(/^Needs you/)).toHaveAccessibleName(/1/);
   });
 
-  it('the phone tabs read Needs you, Done, Working, All', () => {
+  it('the phone tabs read Needs you, Programmes, Done, Working, All (Task G3)', () => {
     stubWidth(false, false);
     mount();
     pick('Status');
     const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual([
-      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Programmes/), expect.stringMatching(/^Done/),
+      expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
   });
 });
 
@@ -544,7 +552,7 @@ describe('phone', () => {
 describe('review fixes', () => {
   it('Needs you is held open while it holds a row, whatever is stored (the fleet rollup\'s rule, D-6088)', () => {
     localStorage.setItem('ccrc.fleet-folded.v1', JSON.stringify(['status::attention']));
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     const h = head(groupOf('attention'));
     expect(h.getAttribute('aria-expanded')).toBe('true');
     expect(h.getAttribute('aria-disabled')).toBe('true');
@@ -553,12 +561,12 @@ describe('review fixes', () => {
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     cleanup();
     localStorage.clear();
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     fireEvent.click(head(groupOf('attention')));
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     expect(JSON.parse(localStorage.getItem('ccrc.fleet-folded.v1') ?? '[]')).not.toContain('status::attention');
     cleanup();
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     // Only the group holding a waiting row is held: Working still folds.
     expect(head(groupOf('working')).hasAttribute('aria-disabled')).toBe(false);
@@ -587,11 +595,11 @@ describe('review fixes', () => {
 
   it('a group with no rows is absent at a desk and under All, present under its own phone tab', () => {
     const sparse = FLEET.filter((s) => s.bucket !== 'attention' && s.bucket !== 'idle');
-    mount(sparse);
+    mount(sparse, NO_PROGRAMME);
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['done', 'working', 'cleanup', 'archived', 'dead']);
     cleanup();
     stubWidth(false, false);
-    mount(sparse);
+    mount(sparse, NO_PROGRAMME);
     const tab = (name: RegExp): HTMLElement => within(screen.getByRole('tablist', { name: 'Sessions by status' })).getByRole('tab', { name });
     fireEvent.click(tab(/^All/));
     expect(groups().map((g) => g.getAttribute('data-status-group'))).not.toContain('idle');

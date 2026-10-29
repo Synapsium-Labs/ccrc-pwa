@@ -5,11 +5,11 @@
 // for a set with no such part, so the counts appear once per screen (T3a, D-6331). Here the status groups' heads are
 // the counts, and project mode draws the bar itself, because the cards carry none.
 //
-// STATUS MODE reads `groupByStatus` (statusGroups.ts): the groups, their order, their labels and which fold are that
-// model's, never this file's. Needs you, Done and Working are open; Idle, Cleanup, Archived and Exited fold. A fold is
-// `useFolded`'s, under `status::<bucket>`, and the key means "not as it starts": for a folding group its presence
+// STATUS MODE reads `statusView` (statusGroups.ts): the groups, their order, their labels, their counts and which fold
+// are that model's, never this file's. Needs you, Programmes, Done and Working are open; Idle, Cleanup, Archived and
+// Exited fold. A fold is `useFolded`'s, under `status::<group>`, and the key means "not as it starts": for a folding group its presence
 // opens it (the archived fold's inversion, `FleetScreen`'s comment), for an open one its presence closes it. So a
-// device that never touched a fold sees the defaults. Needs you, while it holds a row, is HELD open whatever is stored:
+// device that never touched a fold sees the defaults. Needs you, while it draws anything, is HELD open whatever is stored:
 // an operator-facing session is never rolled up (the fleet rollup's rule 5, D-6088). Its head stays focusable
 // (aria-disabled, never `disabled`), says why in text, and its click is ignored, as `ProjectCardHead`'s held ▾ does.
 // A BADGED head reads `Done · 5 · 4 new` and offers Mark all seen, a SIBLING of the fold row (the row is itself a
@@ -23,10 +23,14 @@
 // one table for every reader, D-5545), its one marker and its context fact, so no fact a row shows today is dropped and
 // no second word table exists here. Selecting opens the session; ⋯ is the line's own `actionDoor('open-actions')`.
 //
-// A CHILD in status mode sits in its own status's group, never under its coordinator's, so folding the coordinator's
-// group cannot hide it; it carries a crumb naming its coordinator (`childRunContext`'s name, the label the row's own
-// programme cell reads). Its run, its cross-project chip and its orphan marker are read through `fleetTree`'s groups,
-// the card the server placed it on, exactly as the project card reads them (D-5527), so the two modes cannot disagree.
+// PROGRAMMES, NOT CHILDREN (Task G3, D-7333): status mode draws `statusView`'s groups (statusGroups.ts), over the same
+// `fleetTree` the project cards read. A coordinator's open work is its programme's box, G2's `ProgrammeBox` in its
+// `needs-only` mode (no fold, no footer, the project in its kicker), and a child never draws as a row of its own: it is
+// in its box's tray while it asks the operator, and nowhere otherwise. Needs you holds the boxes that need the operator,
+// then the rows in no programme that do; Programmes the other boxes; the rest are today's groups over the rows in no
+// programme. Every head counts what its group draws, a box as one. A row's run, its cross-project chip and its orphan
+// marker are read through `fleetTree`'s groups, the card the server placed it on, exactly as the project card reads
+// them (D-5527), so the two modes cannot disagree.
 //
 // PROJECT MODE places the shared `FleetCards`, the list Refined draws: its card heads hold the pool and add doors, its
 // Released fold holds archive-all, and the rollup's rules hold unchanged. A card mixes statuses, so there each row
@@ -40,26 +44,30 @@
 // `min-width: 0`, so no utility repeats it.
 //
 // THE TOGGLE is remembered per device under `ccrc-fleet-group`; storage that is absent, unreadable or holds an unknown
-// value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: All shows
-// every group with its folds. Both are one tab stop with roving focus: the arrow keys, Home and End move and choose
+// value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: Needs you,
+// Programmes, Done, Working, then All, which shows every group with its folds; each counts what its group draws. Both are one tab stop with roving focus: the arrow keys, Home and End move and choose
 // (the settings theme grid's pattern), and the tabs control the tabpanel that holds the groups.
 import { useCallback, useId, useMemo, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { BareRow, Button, CountBadge } from '@ccrc/ui';
-import type { FleetSession, SessionBucket } from '../../../../shared/api';
+import type { FleetSession } from '../../../../shared/api';
 import { BucketBar } from '../../fleet/BucketBar';
 import { ClassChooser } from '../../fleet/ClassChooser';
 import { FleetCards } from '../../fleet/FleetCards';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { useFleetFlows } from '../../fleet/FleetFlows';
 import { useFolded } from '../../fleet/foldState';
-import { cardsOf, childRunContext, fleetTree, parentIdOf, workingOn, type FleetTreeGroup } from '../../fleet/fleetTree';
+import { cardsOf, childRunContext, fleetTree, workingOn, type FleetTreeGroup } from '../../fleet/fleetTree';
 import { orphanNote } from '../../fleet/orphanWords';
+import { ProgrammeBox } from '../../fleet/ProgrammeBox';
+import type { ProgHue } from '../../fleet/programmeBoxes';
 import { isRunClosed, runForSession } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
 import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
 import { OPEN_RUNS, openSession } from '../../fleet/openers';
-import { groupByStatus, STATUS_GROUPS, type StatusGroup } from '../../fleet/statusGroups';
+import {
+  statusGroupLabel, statusView, statusViewTotal, type StatusBox, type StatusGroupId, type StatusViewGroup,
+} from '../../fleet/statusGroups';
 import { ackAll, acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
 import { useLocation } from '../../lib/router';
@@ -93,10 +101,10 @@ const MODES: readonly { readonly id: GroupMode; readonly label: string }[] = [
   { id: 'project', label: 'Project' },
 ];
 
-/** The phone's tabs: the three open groups, then All. Labels are the model's. */
-type PhoneTab = 'attention' | 'done' | 'working' | 'all';
-const PHONE_TABS: readonly PhoneTab[] = ['attention', 'done', 'working', 'all'];
-const tabLabel = (t: PhoneTab): string => (t === 'all' ? 'All' : STATUS_GROUPS[t].label);
+/** The phone's tabs: Needs you, Programmes (Task G3), Done and Working, then All. Labels are the model's. */
+type PhoneTab = 'attention' | 'programmes' | 'done' | 'working' | 'all';
+const PHONE_TABS: readonly PhoneTab[] = ['attention', 'programmes', 'done', 'working', 'all'];
+const tabLabel = (t: PhoneTab): string => (t === 'all' ? 'All' : statusGroupLabel(t));
 
 /** Roving choice over a radiogroup or tablist: an arrow, Home or End picks its target and moves focus there. The step
  *  is `rovingStep`'s (wrapping, a choice that cycles); this is its event half. */
@@ -109,7 +117,7 @@ function rovingKey(e: KeyboardEvent<HTMLElement>, at: number, n: number, role: s
 }
 
 /** The fold key of a status group. */
-const foldKey = (bucket: SessionBucket): string => `status::${bucket}`;
+const foldKey = (id: StatusGroupId): string => `status::${id}`;
 
 export function FleetTable(): ReactNode {
   const [mode, setMode] = useState<GroupMode>(loadGroupMode);
@@ -194,29 +202,28 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
 
   // Memoised on what each reads (C9, D-6441), and every prop a row is handed is stable, so a one-row frame re-renders
   // that row's `SessionLine` only (`memo`, `lineProps.ts`).
-  const groups = useMemo(() => groupByStatus(sessions, acks), [sessions, acks]);
-  // Read by key, never compared: the bucket a group holds is the model's answer (instrument-shell's scan).
-  const byBucket = new Map(groups.map((g) => [g.bucket, g] as const));
   // The cards the server placed each row on, and their runs and live rows: what the project card reads for the same
   // row (its run door, its cross-project chip, its orphan marker), so a row says the same thing in either mode.
   const cards = useMemo(() => cardsOf(sessions), [sessions]);
-  const tree = useMemo(() => new Map<string, FleetTreeGroup>(
-    fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks).map((g) => [g.project, g] as const)),
-  [sessions, chrome.projects.knownProjects, activeRuns, acks]);
+  const treeGroups = useMemo(() => fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks),
+    [sessions, chrome.projects.knownProjects, activeRuns, acks]);
+  const tree = useMemo(() => new Map<string, FleetTreeGroup>(treeGroups.map((g) => [g.project, g] as const)), [treeGroups]);
+  const groups = useMemo(() => statusView(sessions, treeGroups, acks), [sessions, treeGroups, acks]);
+  // Read by key, never compared: the group a key names is the model's answer (instrument-shell's scan).
+  const byId = new Map<StatusGroupId, StatusViewGroup>(groups.map((g) => [g.id, g] as const));
   // By id, once per fleet: what `sessions.find` answered, without a scan per row.
-  const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
-  const lookup = useCallback((id: string): FleetSession | null => byId.get(id) ?? null, [byId]);
+  const sessionById = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
+  const lookup = useCallback((id: string): FleetSession | null => sessionById.get(id) ?? null, [sessionById]);
   const onActions = useCallback((x: FleetSession): void => flows.openActions(x.id), [flows]);
 
-  const row = (s: FleetSession): ReactNode => {
+  // A row of a group's list is an `li`; a row inside a box is a `div` (the box is no list), in its programme's hue.
+  const row = (s: FleetSession, Tag: 'li' | 'div' = 'li', hue?: ProgHue): ReactNode => {
     const card = tree.get(cards.get(s.id) ?? s.project) ?? null;
     const runs = card?.runs ?? activeRuns;
-    const child = childRunContext(s, runs, lookup);
-    const crumb = parentIdOf(s, runs) === null ? null : child.coordinator;
     const orphan = card === null ? null
       : orphanNote({ kind: 'session', depth: 0, session: s }, card.runs, card.project, card.sessions, lookup, frameSeen);
     return (
-      <li key={s.id} data-row={s.id} className="ins-row min-h-row">
+      <Tag key={s.id} data-row={s.id} data-hue={hue} className="ins-row min-h-row">
         <SessionLine
           session={s}
           onOpen={openSession}
@@ -226,53 +233,59 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           projectPool={chrome.projects.poolFor(s.project)}
           onOpenRun={runForSession(runs, s) === null ? null : OPEN_RUNS}
           workingOn={workingOn(s, cards)}
-          childRun={child}
+          childRun={childRunContext(s, runs, lookup)}
           coordinator={orphan?.presence ?? null}
           {...(orphan === null ? {} : { coordinatorTitle: orphan.title })}
         />
-        {crumb !== null && (
-          <span className="ins-coord-crumb" title={`coordinated by ${crumb}`}>
-            <span aria-hidden="true">↳ </span>
-            <span className="sr-only">coordinated by </span>
-            {crumb}
-          </span>
-        )}
-      </li>
+      </Tag>
     );
   };
 
-  // Needs you holding a row is held open, whatever is stored (D-6088 rule 5); every other group follows its fold. The
-  // group is read by key from the model's map, never by comparing a bucket (instrument-shell's scan).
-  const asks = byBucket.get('attention');
-  const held = (g: StatusGroup): boolean => g === asks && g.sessions.length > 0;
-  const isOpen = (g: StatusGroup): boolean => held(g) || g.folds === folded.has(foldKey(g.bucket));
-  // At a desk and under All, every group that holds a row; under a phone tab, that one group, even when empty.
+  // A programme's box, drawn with the table's own row: its tray is the members that ask, as the model handed them.
+  const box = (b: StatusBox): ReactNode => (
+    <ProgrammeBox
+      key={`box:${b.view.coordinatorId}`}
+      view={b.view}
+      state={b.state}
+      tray={b.tray}
+      drawRow={(r, hue) => (r.kind === 'session' ? row(r.session, 'div', hue) : null)}
+      drawAbroad={() => null}
+      hueOf={(r) => (r.kind === 'session' ? b.hues.get(r.session.id) : undefined)}
+      mode={{ folded: 'needs-only', project: b.project }}
+    />
+  );
+
+  // Needs you drawing anything is held open, whatever is stored (D-6088 rule 5; the model's `held`); every other group
+  // follows its fold.
+  const isOpen = (g: StatusViewGroup): boolean => g.held || g.folds === folded.has(foldKey(g.id));
+  // At a desk and under All, every group that draws something; under a phone tab, that one group, even when empty.
   const shown = phoneTab === null || phoneTab === 'all'
-    ? groups.filter((g) => g.sessions.length > 0)
-    : [byBucket.get(phoneTab)].filter((g): g is StatusGroup => g !== undefined);
+    ? groups.filter((g) => g.count > 0)
+    : [byId.get(phoneTab)].filter((g): g is StatusViewGroup => g !== undefined);
 
   const tabId = (t: PhoneTab): string => `${tabsId}-tab-${t}`;
   const panelId = `${tabsId}-panel`;
   const body = shown.map((g) => {
     const open = isOpen(g);
-    const hold = held(g);
+    const hold = g.held;
+    const seenKey = g.seenKey;
     return (
-      <section key={g.bucket} className="ins-group" data-status-group={g.bucket} aria-label={g.label}>
+      <section key={g.id} className="ins-group" data-status-group={g.id} aria-label={g.label}>
         {/* The fold row is a button, so the door beside it is its sibling, never inside it. `BareRow` takes no ref, so
             the focus target is found from the wrapper: the fold row, already focusable, needs no tabIndex. */}
         <div
           className="flex items-center"
-          ref={(el) => labelRef(g.bucket)(el?.querySelector<HTMLElement>('.ins-group-head') ?? null)}
+          ref={(el) => { if (seenKey !== null) labelRef(seenKey)(el?.querySelector<HTMLElement>('.ins-group-head') ?? null); }}
         >
           <BareRow
             className="ins-group-head min-w-0"
             aria-expanded={open}
             aria-disabled={hold ? true : undefined}
-            onClick={() => { if (!hold) toggleFold(foldKey(g.bucket)); }}
+            onClick={() => { if (!hold) toggleFold(foldKey(g.id)); }}
           >
             <span className="ins-group-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
             <span className="ins-group-word">{g.label}</span>
-            <span className="ins-group-count"> · {g.sessions.length}</span>
+            <span className="ins-group-count"> · {g.count}</span>
             {g.unseen > 0 && (
               <>
                 {/* Read, not hidden: the fold row's name is its content, and without this "3" and "4 new" run into "34 new". */}
@@ -282,20 +295,21 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
             )}
             {hold && <span className="sr-only">held open: a question here is waiting on you</span>}
           </BareRow>
-          {g.unseen > 0 && (
+          {g.unseen > 0 && seenKey !== null && (
             // The group is IN the name, as the chips' is: three badged groups are not three buttons named alike.
             <Button
               variant="ghost"
               size="fit"
               className="ins-group-seen shrink-0"
-              aria-label={markAllSeenLabel(g.bucket)}
-              onClick={() => markSeen(g.bucket, g.sessions, g.unseen)}
+              aria-label={markAllSeenLabel(seenKey)}
+              onClick={() => markSeen(seenKey, g.seen, g.unseen)}
             >
               Mark all seen
             </Button>
           )}
         </div>
-        {open && g.sessions.length > 0 && <ul className="ins-rows">{g.sessions.map(row)}</ul>}
+        {open && g.boxes.map(box)}
+        {open && g.sessions.length > 0 && <ul className="ins-rows">{g.sessions.map((s) => row(s))}</ul>}
       </section>
     );
   });
@@ -313,7 +327,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           (i) => onTab(PHONE_TABS[i]!))}
       >
         {PHONE_TABS.map((t) => {
-          const count = t === 'all' ? sessions.length : byBucket.get(t)?.sessions.length ?? 0;
+          const count = t === 'all' ? statusViewTotal(groups) : byId.get(t)?.count ?? 0;
           return (
             <Button
               key={t}
