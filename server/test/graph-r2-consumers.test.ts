@@ -308,7 +308,12 @@ describe('treeWriteSites: what the sweep writes under a tree (D-7347)', () => {
 });
 
 // ── engineCalls ───────────────────────────────────────────────────────────
-const ENGINE_CALL = /\$\{?ENGINE\}?"?\s+\S|\bgraphify\s+update\b/;
+// A call is the sweep's `$ENGINE` with any argument, or a build (`update`) run
+// through a local `$engine` (the doctor's spelling) or through any path that
+// ends in `graphify`, quoted or not (`"$VENV/bin/graphify" update .`). The
+// lowercase variable is counted only with `update`: the doctor tests it
+// (`-x "$engine"`, `realpath "$engine"`), and a test of the path is not a call.
+const ENGINE_CALL = /\$\{?ENGINE\}?"?\s+\S|(?:\$\{?engine\}?|\bgraphify)"?\s+update\b/;
 const engineCalls = (files: Map<string, string>): string[] =>
   ccdFiles(files).flatMap(([f, t]) => codeLines(f, t).filter((l) => ENGINE_CALL.test(l.code)).map((l) => `${f}#${l.fn}`));
 
@@ -317,7 +322,7 @@ describe('engineCalls: who runs the engine (D-7347)', () => {
     expect(engineCalls(trackedText())).toEqual(['ccd/ccd-graph-sweep#_gs_build']);
   });
 
-  it('calibration: the assignment, a comment and the card\'s prohibition are not calls; a bare call is', () => {
+  it('calibration: the assignment, a comment, the card\'s prohibition and a test of the path are not calls; a bare, a quoted-path and a local-variable call are', () => {
     const probe = new Map([['ccd/probe', [
       'ENGINE="$VENV/bin/graphify"',
       '# "$ENGINE" update . here would be a comment',
@@ -325,8 +330,20 @@ describe('engineCalls: who runs the engine (D-7347)', () => {
       'f() {',
       '  ( cd "$tree" && graphify update . )',
       '}',
+      'g() {',
+      '  ( cd "$tree" && "$VENV/bin/graphify" update . )',
+      '}',
+      'h() {',
+      '  ( cd "$tree" && "$HOME/.ccrc/graphify-venv/bin/graphify" update . )',
+      '}',
+      'k() {',
+      '  local engine="$HOME/.ccrc/graphify-venv/bin/graphify"',
+      '  [ ! -x "$engine" ] && return 1',
+      '  want="$(realpath "$engine" 2>/dev/null)"',
+      '  ( cd "$tree" && "$engine" update . )',
+      '}',
     ].join('\n')]]);
-    expect(engineCalls(probe)).toEqual(['ccd/probe#f']);
+    expect(engineCalls(probe)).toEqual(['ccd/probe#f', 'ccd/probe#g', 'ccd/probe#h', 'ccd/probe#k']);
   });
 });
 
