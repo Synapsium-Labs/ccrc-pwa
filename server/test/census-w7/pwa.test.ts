@@ -19,6 +19,7 @@ import {
   storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, type W7Site,
 } from './pwa.js';
 import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
+import { ENSURE_OWNER, SESSION_PATH_OWNER } from './pwa.js';
 
 const F = 'pwa/src/fixture.tsx';
 const run = (q: (p: ReturnType<typeof fixture>, file: string) => W7Site[], src: string, file = F): W7Site[] => q(fixture(src, file), file);
@@ -334,17 +335,22 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
   });
 
   // C9 (D-6441) gave FleetScreen and Instrument's FleetTable one session opener (`fleet/openers.ts`): their two
-  // literals became one, 14 in 12 files to 13 in 11.
-  it('sessionPathLiterals(): 13 string expressions starting /s/, in 11 files', () => {
+  // literals became one, 14 in 12 files to 13 in 11. C7k (D-7189) moved the 13 onto `lib/routes.ts#sessionPath`, whose
+  // own template is the one the query still sees.
+  it('sessionPathLiterals(): 1, sessionPath\'s own template, and 0 (from 13) outside it', () => {
     const sites = sessionPathLiterals();
-    held('sessionPathLiterals', sites, 13);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(11);
+    show('sessionPathLiterals', sites);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual([SESSION_PATH_OWNER]);
+    held('sessionPathLiterals outside sessionPath', sites.filter((s) => `${s.file}#${s.symbol}` !== SESSION_PATH_OWNER), 0);
   });
 
-  it('ensureCallers(): 6 owners of api.ensure (5 calls, 1 member reference)', () => {
+  // C7k (D-7189): the six owners (five calls and ResumeSheet's default) read `session/useEnsure.ts`, whose
+  // `ensureSession` is the one call.
+  it('ensureCallers(): 1 (from 6) owner of api.ensure, useEnsure.ts#ensureSession\'s call', () => {
     const sites = ensureCallers();
-    held('ensureCallers', sites, 6);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ call: 5, reference: 1 });
+    held('ensureCallers', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual([ENSURE_OWNER]);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ call: 1 });
   });
 
   it('storageOwners(): 12 files naming localStorage, none sessionStorage', () => {

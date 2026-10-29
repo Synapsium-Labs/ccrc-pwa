@@ -23,7 +23,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, SIGN_IN_EXPIRED } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate, useLocation } from '../lib/router';
-import { laneParam } from '../lib/routes';
+import { laneParam, sessionPath } from '../lib/routes';
 import { backToFleet } from '../command/door';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -409,7 +409,7 @@ export function AccountsScreen(): ReactNode {
                 <ul className="accounts-sessions">
                   {onAccount.map((s) => (
                     <li key={s.id}>
-                      <button type="button" className="accounts-session" onClick={() => navigate(`/s/${s.id}`)}>
+                      <button type="button" className="accounts-session" onClick={() => navigate(sessionPath(s.id))}>
                         {sessionLabel(s)}
                       </button>
                     </li>

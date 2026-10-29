@@ -17,6 +17,7 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Door, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
+import { sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
 import { cardFacts, contextFact, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
@@ -61,7 +62,7 @@ export function SessionCoordination({ facts, coordination }: {
         </CoordLink>
       )}
       {from !== null && (coordinatorId !== null ? (
-        <CoordLink glyph="⤴" label={`Open the coordinator — ${from}`} to={`/s/${encodeURIComponent(coordinatorId)}`}>
+        <CoordLink glyph="⤴" label={`Open the coordinator — ${from}`} to={sessionPath(coordinatorId)}>
           {`coordinator ${from}${coordination?.coordinatorState == null ? '' : ` · ${coordination.coordinatorState}`}`}
         </CoordLink>
       ) : (

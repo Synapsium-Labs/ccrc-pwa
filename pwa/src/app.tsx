@@ -25,7 +25,7 @@ import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';
-import { matchRoute } from './lib/routes';
+import { matchRoute, sessionPath } from './lib/routes';
 import { useSkin } from './lib/skin';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
@@ -52,7 +52,7 @@ function ShellCommands(): ReactNode {
 /** `/archive`: the one arm of the ladder that reads the fleet's rows, so it is the one that subscribes to them (C6). */
 function ArchiveRoute(): ReactNode {
   const sessions = useFleetStore((s) => s.sessions);
-  return <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />;
+  return <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(sessionPath(id))} />;
 }
 
 export function App(): ReactNode {

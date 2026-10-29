@@ -323,6 +323,9 @@ export function sessionPathLiteralsIn(p: ParsedFile, file: string): W7Site[] {
     .map((e) => site(p, file, e.start, e.line, p.text.slice(e.start, e.end).slice(0, 140)));
 }
 export const sessionPathLiterals = (): W7Site[] => overPwa(sessionPathLiteralsIn);
+/** The one session path builder (C7k, D-7189), as `file#symbol`: the query still sees its template, and every other
+ *  site is the count `rings/pwa-one-owner.test.ts` holds at 0. */
+export const SESSION_PATH_OWNER = 'pwa/src/lib/routes.ts#sessionPath';
 
 /** Every reference to the member `api.<member>`, called or not (an `identifierReferences` hit on `<member>` whose parent
  *  is the member expression `api.<member>`), kind `call` or `reference`. */
@@ -345,6 +348,8 @@ const lineOffset = (text: string, line: number, needle: string): number => {
  *  (plan item 12). A comment naming `api.ensure` is not code. */
 export const ensureCallersIn = (p: ParsedFile, file: string): W7Site[] => apiMemberRefs(p, file, 'ensure');
 export const ensureCallers = (): W7Site[] => overPwa(ensureCallersIn);
+/** The one ensure (C7k, D-7189), as `file#symbol`: since C7k the only owner of `api.ensure` in `pwa/src`. */
+export const ENSURE_OWNER = 'pwa/src/session/useEnsure.ts#ensureSession';
 
 // ─── 13. storage (ARCH-75, C7l) ────────────────────────────────────────────────────────────────────────────────────
 

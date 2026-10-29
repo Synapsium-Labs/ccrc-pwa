@@ -11,6 +11,7 @@ import { boardHome, type FleetSession, type RunSummary } from '../../../shared/a
 import { claimedRunsOf, isRunClosed, programmeTitle } from '../fleet/runWords';
 import { COORDINATOR_WORD, coordinatorRole } from '../fleet/sessionFacts';
 import { sessionLabel } from '../fleet/sessionLabel';
+import { sessionPath } from '../lib/routes';
 import type { Command } from './registry';
 
 /** A coordinator's tier, any other session's, and an exited one's whatever its role. */
@@ -48,7 +49,7 @@ export function sessionEntries(
       terms,
       tier: s.bucket === 'dead' ? TIER_EXITED : lead ? TIER_COORDINATOR : TIER_SESSION,
       searchOnly: where === 'top',
-      run: (c) => c.navigate(`/s/${encodeURIComponent(s.id)}`),
+      run: (c) => c.navigate(sessionPath(s.id)),
     };
   });
 }
