@@ -8,6 +8,7 @@
 // (network-only) — this snapshot is the only offline data, by design.
 import { reviveFleetSessions, unmeasuredFields, type FleetSession, type RosterWire } from '../../../shared/api';
 import { HUES } from '../../../shared/roster';
+import { readKey, writeKey } from './storage';
 
 // Stays at v1 — deliberately. A snapshot written before `tasks`/`pr`/`archivedAt`
 // existed is still usable data, and the read normalizes it (reviveFleetSessions);
@@ -16,9 +17,7 @@ import { HUES } from '../../../shared/roster';
 // for every future nullable field.
 const KEY = 'ccrc.fleet-snapshot.v1';
 
-// Always via `window.` — Node 22+ ships an experimental bare `localStorage`
-// global that shadows jsdom's working one under vitest.
-const storage = (): Storage => window.localStorage;
+// Read and written through the one storage port (`lib/storage.ts`, D-7190).
 
 export interface FleetSnapshot {
   savedAt: number; // epoch ms of the snapshot
@@ -110,12 +109,8 @@ export function snapshotRefused(sessions: readonly FleetSession[]): boolean {
  *  needed for `sessions` either. */
 export function saveFleetSnapshot(sessions: FleetSession[], roster: readonly RosterWire[] = []): void {
   if (snapshotRefused(sessions)) return;
-  try {
-    const snap: FleetSnapshot = { savedAt: Date.now(), sessions, roster: [...roster] };
-    storage().setItem(KEY, JSON.stringify(snap));
-  } catch {
-    /* ignore */
-  }
+  const snap: FleetSnapshot = { savedAt: Date.now(), sessions, roster: [...roster] };
+  writeKey(KEY, JSON.stringify(snap));
 }
 
 /** Last persisted snapshot, or null when absent/corrupt/unreadable.
@@ -136,7 +131,7 @@ export function saveFleetSnapshot(sessions: FleetSession[], roster: readonly Ros
  *  `accountLabel`/`accountColorVar` already have a fallback for. */
 export function loadFleetSnapshot(): FleetSnapshot | null {
   try {
-    const raw = storage().getItem(KEY);
+    const raw = readKey(KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;

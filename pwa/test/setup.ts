@@ -3,6 +3,7 @@ import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 import { setStripExpanded } from '../src/fleet/stripExpanded';
 import { clearEveryLru } from '../src/lib/highlightCache';
+import { memoryStorage } from '../src/lib/storage';
 import { useFleetStore } from '../src/stores/fleet';
 
 // ONE teardown hook doing three unrelated jobs, merged deliberately rather than
@@ -124,20 +125,10 @@ if (typeof window !== 'undefined') {
       return false;
     }
   })();
+  // The shim is the storage port's own test instance (`lib/storage.ts#memoryStorage`, D-7190).
   if (!storageUsable) {
-    const backing = new Map<string, string>();
-    const memStorage: Storage = {
-      get length() {
-        return backing.size;
-      },
-      clear: () => backing.clear(),
-      getItem: (k: string) => backing.get(k) ?? null,
-      key: (i: number) => [...backing.keys()][i] ?? null,
-      removeItem: (k: string) => void backing.delete(k),
-      setItem: (k: string, v: string) => void backing.set(k, String(v)),
-    };
     Object.defineProperty(window, 'localStorage', {
-      value: memStorage,
+      value: memoryStorage(),
       configurable: true,
       writable: true,
     });

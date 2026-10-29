@@ -11,6 +11,7 @@ import { REPO, walkSrc } from './walkSrc.js';
 import { DEAD_CHECK_OWNER, accountsReaders, answerPaths, coordPresenceSites, dialogSheetStates, inlineDeadChecks, inlineDeadChecksIn, requestPolls, transcriptCopyRules } from '../census-w7/pwa.js';
 import path from 'node:path';
 import { fixture, singleReaders, singleReadersIn } from '../census-w7/pwa.js';
+import { storageOwners, storageTypes } from '../census-w7/pwa.js';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
 const WIRE = 'pwa/src/lib/wire.ts';
@@ -345,5 +346,23 @@ describe('the PWA answers operator questions through one writer on Q3f\'s door (
     expect(sites.filter((s) => s.kind === 'door').map((s) => `${s.file}#${s.symbol}:${s.line} ${s.text}`)).toEqual([]);
     expect(sites.filter((s) => s.kind === 'skew-table').every((s) => s.file === 'pwa/src/session/answerLifecycle.ts')).toBe(true);
     expect(sites.length).toBeLessThanOrEqual(5);
+  });
+});
+
+// C7l (D-7190; ARCH-75 #810): the PWA's storage has one port, `pwa/src/lib/storage.ts`. Every per-device value is read,
+// written and removed through its `readKey`, `writeKey` and `removeKey`, and `StoragePort` is the one storage type. Read
+// through W7's census (`census-w7/pwa.ts#storageOwners`, `#storageTypes`), so the sites are the syntax tree's. The counts
+// outside the port may only stay at 0: an owner left on bare `localStorage`, or a second local storage type, reds.
+describe('the PWA reaches storage through one port (C7l, D-7190)', () => {
+  const PORT = 'pwa/src/lib/storage.ts';
+
+  it('storageOwners() 12 -> 0 outside lib/storage.ts, which holds the one window.localStorage', () => {
+    const sites = storageOwners();
+    expect(sites.filter((s) => s.file !== PORT).map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
+    expect(sites.map((s) => s.file)).toEqual([PORT]);
+  });
+
+  it('storageTypes() 1 -> 0 outside lib/storage.ts', () => {
+    expect(storageTypes().filter((s) => s.file !== PORT).map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
   });
 });

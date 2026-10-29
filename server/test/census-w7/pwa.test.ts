@@ -22,6 +22,8 @@ import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
 import { ENSURE_OWNER, SESSION_PATH_OWNER } from './pwa.js';
 
 const F = 'pwa/src/fixture.tsx';
+/** The one storage port (C7l, D-7190): the storage census counts the owners and types outside it. */
+const STORAGE_PORT = 'pwa/src/lib/storage.ts';
 const run = (q: (p: ReturnType<typeof fixture>, file: string) => W7Site[], src: string, file = F): W7Site[] => q(fixture(src, file), file);
 const lines = (sites: readonly W7Site[]): string[] => sites.map((s) => s.text);
 
@@ -353,14 +355,23 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(sites, (s) => s.kind)).toEqual({ call: 1 });
   });
 
-  it('storageOwners(): 12 files naming localStorage, none sessionStorage', () => {
+  // C7l (D-7190) adds the one storage port, `lib/storage.ts`, which names `window.localStorage` and declares the one
+  // storage type (and its in-memory instance's `getItem`); its own sites are held exactly, and the owners and types
+  // outside it are the count each owner's move lowers.
+  it('storageOwners(): the port, and 0 files outside it naming localStorage, none sessionStorage', () => {
     const sites = storageOwners();
-    held('storageOwners', sites, 12);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ localStorage: 12 });
+    show('storageOwners', sites);
+    expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['pageStorage']);
+    const outside = sites.filter((s) => s.file !== STORAGE_PORT);
+    held('storageOwners outside lib/storage.ts', outside, 0);
+    expect(countBy(outside, (s) => s.kind)).toEqual({});
   });
 
-  it('storageTypes(): 1 local storage type', () => {
-    held('storageTypes', storageTypes(), 1);
+  it('storageTypes(): the port\'s StoragePort and its in-memory instance, and 0 local storage types outside it', () => {
+    const sites = storageTypes();
+    show('storageTypes', sites);
+    expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['(module)', 'memoryStorage']);
+    held('storageTypes outside lib/storage.ts', sites.filter((s) => s.file !== STORAGE_PORT), 0);
   });
 
   it('pageClockSubscriptions(): 1 visibilitychange, 1 online', () => {

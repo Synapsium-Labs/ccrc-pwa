@@ -3,8 +3,8 @@
 //
 // THE CHOICE is `ccrc-inspector` in `localStorage`, and only the exact word `hidden` hides: absent, any other value and
 // storage that throws all read as shown, so a first visit, a private window and a value a later build writes all draw
-// the rail. The write sits in its own try/catch, which is what lets storage that refuses still toggle for the page; it
-// just will not survive a reload. The choice is applied in memory first, as `setSkin`'s is, but with the catch the order
+// the rail. The write goes through the storage port's guard (`lib/storage.ts`, D-7190), which is what lets storage that
+// refuses still toggle for the page; it just will not survive a reload. The choice is applied in memory first, as `setSkin`'s is, but with the catch the order
 // changes nothing (measured under C12: writing first stays green). Nothing else reads or writes the key.
 //
 // THE SHOWN FACT is `useInspectorShown()`: the rail's width AND the choice. The rail, `SessionScreen`'s strips rule and
@@ -17,6 +17,7 @@
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import type { InspectorCommandTarget } from '../command/registry';
 import { createTargetSlot } from '../command/targetSlot';
+import { readKey, writeKey } from '../lib/storage';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { INSPECTOR_QUERY } from './useInspectorSession';
 
@@ -29,11 +30,7 @@ const HIDDEN = 'hidden';
 /** Is the stored choice "hidden"? Only the exact word is; absent, unknown and unreadable storage are not. Storage
  *  throws in a private window and in previews, so the read is guarded: a failure is "no choice", which is shown. */
 export function storedInspectorHidden(): boolean {
-  try {
-    return localStorage.getItem(INSPECTOR_STORAGE_KEY) === HIDDEN;
-  } catch {
-    return false;
-  }
+  return readKey(INSPECTOR_STORAGE_KEY) === HIDDEN;
 }
 
 /** The choice in force for this page: the stored one until a person makes one, then theirs. `null` until first read. */
@@ -46,16 +43,12 @@ export function inspectorHidden(): boolean {
   return memory;
 }
 
-/** Apply a choice now, tell every subscriber, and remember it. The write's try/catch is what keeps storage that
+/** Apply a choice now, tell every subscriber, and remember it. The port's guarded write is what keeps storage that
  *  throws from stopping the toggle: the rail is still hidden or shown for the page. */
 export function setInspectorHidden(hidden: boolean): void {
   memory = hidden;
   for (const l of [...choiceListeners]) l();
-  try {
-    localStorage.setItem(INSPECTOR_STORAGE_KEY, hidden ? HIDDEN : 'shown');
-  } catch {
-    /* private window, blocked storage: the page keeps the choice anyway */
-  }
+  writeKey(INSPECTOR_STORAGE_KEY, hidden ? HIDDEN : 'shown'); // refused: the page keeps the choice anyway
 }
 
 /** Forget this page's copy, as a fresh page load would: the next read asks storage again. For tests only: a reload

@@ -1,6 +1,7 @@
 // The client half of the notification watermark. See `server/src/notifylog.ts`
 // for the other half and the reasoning both sides share.
 import { reviveNotifyEvent, type CatchUp, type NotifyEvent } from '../../../shared/api';
+import { readKey, writeKey } from './storage';
 
 const KEY = 'ccrc:notify:v1';
 
@@ -22,7 +23,7 @@ export interface Mark {
  */
 export function loadMark(): Mark | null {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(KEY) ?? 'null');
+    const raw: unknown = JSON.parse(readKey(KEY) ?? 'null');
     if (raw === null || typeof raw !== 'object') return null;
     const { epoch, seq } = raw as { epoch?: unknown; seq?: unknown };
     if (typeof epoch !== 'string' || epoch === '') return null;
@@ -34,11 +35,8 @@ export function loadMark(): Mark | null {
 }
 
 export function saveMark(mark: Mark): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(mark));
-  } catch {
-    /* private mode / quota — the next catch-up resyncs, which is correct */
-  }
+  // Refused (private mode / quota): the next catch-up resyncs, which is correct.
+  writeKey(KEY, JSON.stringify(mark));
 }
 
 /**
