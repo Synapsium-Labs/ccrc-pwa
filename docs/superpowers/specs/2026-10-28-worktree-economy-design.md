@@ -41,9 +41,16 @@ closes, and it keeps its worker. D4, D6 and D7 are mostly built but switched off
 switches a control in Settings (§8, R-6) and set them live there after their shadow records are read, cover "wake" in
 D4, build D7's PWA section, and land W6's #1407.
 
-Every age, count, size and path below is deployment config with a neutral default. Every new destructive arm ships
-in shadow. The operator sets it live from a row in Settings › Automation (R-6). Its `$REG` marker stays only as a
-terminal override, and nothing in the tree writes it.
+The operator's own **Abandon** always has a way through (§5.2, R-3b.4): the server's PR check refuses the automatic
+and agent paths when it cannot prove the release is safe, but the operator's sheet offers a bounded wait or an
+immediate abandon behind a second confirmation that names what is unproven.
+
+Every age, count, size and path below has a neutral default. Every new destructive arm ships in shadow. **Every
+operator act is one control in Settings › Automation backed by one stored value on the server (R-6, R-7).** When a
+box process needs that value, the server hands it to the box through the path it already uses to change box state (a
+ccd verb run through the agent's ccd grant). No box env var, and no `$REG` marker, is a second way to set it. What
+stays in install config is only what the operator is never asked to decide: paths, walk and timeout bounds, and the
+safety floors that cap a row (§8, "One control, one source").
 
 ## 1. The census
 
@@ -114,15 +121,18 @@ explain why review copies, which hold full dependency trees, make up most of the
    example `ignored-scan`, `perm-pass`, `proc-walk` or `id-walk`), placed before every dropped field. Then a
    truncated line still says what failed. A characterization test pins today's lines first.
 3. **Make the bounds deployment config.** `REAP_SCAN_SECONDS`, `WS_PATH_USERS_SCAN_S` and `WS_RECLAIM_WALK_S` become
-   box env knobs (`CCD_REAP_SCAN_S`, `CCD_PATH_USERS_SCAN_S`, `CCD_RECLAIM_WALK_S`), with today's values as the
-   defaults. They are bounded both ways: a floor so a misconfiguration cannot turn a bound off, and a ceiling under
-   the verb's runner row in `CCD_VERB_TIMEOUT_MS`, which a budget test already checks for `ws-shed-deps`.
+   box install-config knobs (`CCD_REAP_SCAN_S`, `CCD_PATH_USERS_SCAN_S`, `CCD_RECLAIM_WALK_S`), with today's values as
+   the defaults. They are bounded both ways: a floor so a misconfiguration cannot turn a bound off, and a ceiling under
+   the verb's runner row in `CCD_VERB_TIMEOUT_MS`, which a budget test already checks for `ws-shed-deps`. These are
+   walk bounds, not operator decisions: no §10 question asks for one, they exist only on the box, and a change to one
+   is a deploy change. If the diagnosis shows a bound is wrong for every box, the fix is a new default in code.
 4. **Skip what is rebuildable.** Once deps-shed (§8) has run on a tree, its `node_modules` is gone and the scan is
    cheap. Run order should follow from that: a sleeping tree is shed first and reclaimed later. The reclaim probe
    itself does not learn to skip `node_modules`. The scan exists to find work hidden inside ignored directories, and
    a nested checkout inside `node_modules` is exactly what it must catch.
-5. **Alert on a failing lane.** When a lane fails on every attempt for longer than `CCRC_LANE_FAILING_ALERT_HOURS`
-   (default 4), the server raises a banner and an operator notification. It goes through the existing attention
+5. **Alert on a failing lane.** When a lane fails on every attempt for longer than the **Failing-lane alert** age
+   (default 4 hours, a row on the Ages card, R-7; server only), the server raises a banner and an operator
+   notification. It goes through the existing attention
    path, not a new notifier. Eight hours of silent failure is the real defect here.
 
 **Why first.** It touches no policy. It frees 11.4 GB and 56 trees as soon as the cause is fixed, and every later
@@ -191,7 +201,7 @@ name-reuse bug. **This spec chooses to keep the tree across rounds (R-1a)** and 
 - **R-1b. A review checkout without its own dependencies.** A reviewer reads a branch tip and runs lenses. It may run
   tests, so it needs dependencies, but it does not need its own copy. With §4's cache, and once the reviewer skill
   stops running a blanket `npm ci` (§4, "Who installs"), a review tree gets its dependencies by hydrate in seconds and
-  for almost no space. Without the cache (the cache is off, or the key is missing from it), the review keeps today's
+  for almost no space. Without the cache (its row is Off, or the key is missing from it), the review keeps today's
   behaviour. A separate "lite" checkout kind, with no dependencies at all, is **rejected**: lenses that run the suite
   would fail in ways that look like findings.
 - **R-1c. Between rounds, shed rather than reclaim.** A reviewer that has posted its verdict and sleeps is kept, as
@@ -239,7 +249,14 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
   package manager's versions, platform and architecture, the install command, and the values of the environment
   variables in `CCD_DEPS_CACHE_ENV_KEYS` (default: the package manager's registry and script variables). A
   user-level `.npmrc` is not read during a fill (see Fill), so it is not part of the key. Entries live under
-  `CCD_DEPS_CACHE_ROOT` (default unset, which means the cache is off and behaviour is unchanged).
+  `CCD_DEPS_CACHE_ROOT`, an install-config path (default unset). The path says only where a cache may live; it does
+  not turn the cache on.
+- **On, off and its limits: one Settings row (R-7).** Whether the cache is used, and its size cap and idle age, are
+  the operator's, on the **Dependency cache** row in Settings › Automation: Off or On, a size cap (default 20 GB) and
+  an idle age (default 14 days), stored once in coord.db and seeded Off. The server hands the three values to the box
+  with `ccd box-setting` (§8, "One control, one source"), and `ws-deps` and the tmp-sweep arm read only that copy. A
+  copy that is missing or unreadable reads as Off, which is today's behaviour. On is refused with `cache-root-unset`
+  while the box reports no `CCD_DEPS_CACHE_ROOT`, and the row says so.
 - **Fill: only from shared, reviewed inputs.** An entry is shared with every other tree, so one session must not be
   able to fill it from its own modified repository. A miss is filled only when the lockfile and `package.json` blobs
   appear at the tip of the project's default branch on its remote. The verb fills from that commit, not from the
@@ -340,7 +357,7 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
     of `npm ci`, and run `npm ci` in a package only when `ws-deps` reports it installed nothing for that package.
   - A project that keeps a blanket `npm ci` in its own instructions still works correctly. It just gets no saving.
   - The saving claimed below is conditional on this change, and the plan measures it after the change, not before.
-- **Who calls it.** `ws-add --child` calls it after the checkout when the cache is configured. A coordinator or
+- **Who calls it.** `ws-add --child` calls it after the checkout when the cache is on. A coordinator or
   manual session can run it itself, and wake after a shed calls it again.
 - **The SAFETY list.** The cache root is shared state, so the verb's forms are split by what they write. A hydrate
   writes only the session's own tree, and its only reads of shared state are checked against the manifest. A fill
@@ -348,8 +365,8 @@ ignored (`ccd/ccd`, the `ws-add` exclude block). The fleet has used that shape b
   session cannot choose what it writes. Neither form is on the SAFETY list. The forms that remove or replace shared
   entries by hand (`ws-deps --purge`, `--quarantine`, `--evict`) **are** added to the CLAUDE.md SAFETY list. The
   sweep's own eviction and quarantine run on the box timer, not from a session.
-- **Eviction.** An entry with no hydrations recorded from a live tree, and unused for `CCD_DEPS_CACHE_IDLE_DAYS`
-  (default 14), is removed, oldest first, until the cache is under `CCD_DEPS_CACHE_MAX_GB` (default 20). A sampled
+- **Eviction.** An entry with no hydrations recorded from a live tree, and unused for the row's idle age (default 14
+  days), is removed, oldest first, until the cache is under the row's size cap (default 20 GB). A sampled
   link count of 1 is a second check, not the main one. This rides the existing `ccd-tmp-sweep` timer as one more arm
   (together with the full re-hash above), not as a new timer.
 - **Accounting.** With hardlinks, a per-tree `du` counts shared bytes in every tree. The disk alarm (retention spec,
@@ -370,28 +387,34 @@ keys the cache does not cover.
 
 ## 5. Finished work released promptly
 
-### 5.1 The stale floor becomes deployment config
+### 5.1 The stale floor becomes one Settings row
 
-**Today.** The stale arm of child reclaim waits seven idle days on both sides. On the server it is
-`CHILD_STALE_IDLE_MS = 7 * 24 * 3_600_000` (`server/src/childReclaimSweep.ts`). On the box it is
-`WS_STALE_IDLE_S=604800` (`ccd/lib/disk-retention.sh`), which can only be raised. The banner and feed text say
+**Today.** The stale arm of child reclaim waits seven idle days on both sides, as two separate constants. On the
+server it is `CHILD_STALE_IDLE_MS = 7 * 24 * 3_600_000` (`server/src/childReclaimSweep.ts`). On the box it is
+`WS_STALE_IDLE_S=604800` (`ccd/lib/disk-retention.sh`), checked again inside `ws-audit --reclaim` and `ws-reclaim`
+when the server's call carries `--stale` (`staleFlags`, `server/src/ccdargv.ts`). The banner and feed text say
 "seven days" as a literal.
 
-**Recommendation (R-3a).**
+**Recommendation (R-3a).** One value, set in one place, used on both sides.
 
-- Server: `CCRC_CHILD_STALE_IDLE_HOURS`, default 168, which is today's value.
-- Box: `CCD_WS_STALE_IDLE_S`, default 604800. It can be lowered, but the box clamps it to at least a box floor
-  `CCD_WS_STALE_IDLE_FLOOR_S` (default 86400): a value below the floor is read as the floor and logged once. The box
-  keeps the last word: it acts on `max(server's figure, CCD_WS_STALE_IDLE_S)`, with `CCD_WS_STALE_IDLE_S` already
-  clamped. The floor is never a term of that `max` on its own. So a server-only change, such as
-  `CCRC_CHILD_STALE_IDLE_HOURS=24` set by mistake, still leaves the box at its own 604800 and changes nothing it
-  reclaims. Lowering the age takes a change on both sides: the server's hours and the box's `CCD_WS_STALE_IDLE_S`.
-  A server misconfiguration therefore cannot make the box reclaim a tree it would refuse today. Tests: a server figure
-  below the box's value acts at the box's value; a box value below the floor acts at the floor; both lowered acts at
-  the larger of the two.
-- The idle wording in banners and feed rows is formatted from the configured value.
-- The same treatment applies to the other hard-coded ages this spec touches: `REVIEW_CHILD_CEILING_MS` (7 days) and
-  the stale-archive lane's 14 days (`server/src/coord/staleArchive.ts`, §6).
+- **The one source.** A **Stale reclaim after** row on the Ages card in Settings › Automation (R-7), in hours,
+  default 168 (today's value), stored once in coord.db and written only by the Ages card's route. There is no
+  `CCRC_CHILD_STALE_IDLE_HOURS` and no `CCD_WS_STALE_IDLE_S`: neither side has a second knob for it.
+- **How the box gets it.** The stale arm already calls the box with `--stale <word>` on `ws-audit --reclaim` and
+  `ws-reclaim`. `staleFlags` adds `--stale-idle-s <n>`, the row's value in seconds, to those same two calls, so the
+  box checks the figure the server decided on, in the same call, and nothing has to be kept in step. This is the
+  existing path: a `CCD_ARGV` builder run through the agent's existing `ccd` grant for those verbs, whose new shape
+  `whitelist-subset.test.ts` enumerates. A call without the flag (an older server) acts at 604800, today's value.
+- **The box's safety floor.** The box refuses a figure below `CCD_WS_STALE_IDLE_FLOOR_S`, an install-config bound
+  (default 86400), with `stale-idle-below-floor`, touching nothing, rather than acting early. This
+  is not a second setting: the operator never sets it, and it only caps the row. The box reports the floor in its
+  `ccd caps` reply, the row's input will not go below it, and the row shows "not below 24 hours on this box". So the
+  row never shows a value the box would not use. Tests: a flag at or above the floor acts at the flag; a flag below
+  the floor refuses and reclaims nothing; no flag acts at 604800; the row refuses a value below the reported floor.
+- The idle wording in banners, feed rows and ccd's `not-idle` refusal is formatted from the value actually used.
+- The same treatment applies to the other hard-coded ages this spec touches, each a row on the Ages card and each
+  read only by the server, so nothing is handed to the box: `REVIEW_CHILD_CEILING_MS` (7 days) and the stale-archive
+  lane's 14 days (`server/src/coord/staleArchive.ts`, §6).
 
 The census shows that this alone does little now. It matters once §2 to §4 have removed the fresh pile and the tail
 that remains is what ages out.
@@ -413,15 +436,17 @@ an abandon of a run whose PR is about to merge. Today the sheet would release th
 
 **A binding rejection.** The capacity plan's Rejected list says "no automatic close of a stale run (that stays the
 coordinator's act, prompted by the run-quiet banner of W1-3)". This spec keeps that rule. The close stays a person's
-or a coordinator's act, through the control that exists. No new control is added.
+or a coordinator's act, through the control that exists. No new control is added outside the existing sheet.
 
 **Recommendation (R-3b).**
 
-1. **Nudge.** A run that stays in `awaiting-review`, `merging` or `closing` longer than
-   `CCRC_PARKED_RUN_NUDGE_HOURS` (default 48) gets one system mail to its coordinator, naming the run, its state, its
-   age and what it keeps (trees, holds and siblings). It is repeated at most once per nudge period. The mail goes
-   through the existing system-mail path (`queueSystemMail`) and the run-quiet banner's facts, not a second notifier.
-2. **The row says it is parked.** Past `CCRC_PARKED_RUN_ABANDON_OFFER_HOURS` (default 168), the run's existing row
+1. **Nudge.** A run that stays in `awaiting-review`, `merging` or `closing` longer than the **Parked-run nudge** age
+   (default 48 hours, a row on the Ages card, R-7; server only) gets one system mail to its coordinator, naming the
+   run, its state, its age and what it keeps (trees, holds and siblings). It is repeated at most once per nudge
+   period. The mail goes through the existing system-mail path (`queueSystemMail`) and the run-quiet banner's facts,
+   not a second notifier.
+2. **The row says it is parked.** Past the **Parked-run line** age (default 168 hours, a row on the Ages card, R-7;
+   server only), the run's existing row
    gains one context line, from the server's view of the run: "Parked in awaiting review for 8 days · keeps 2 trees and
    holds its programme". The Abandon button next to it is the same button, unchanged. Before that age the row is
    exactly as today. That is all the hours decide: when the row says the run is parked, not whether Abandon exists.
@@ -430,23 +455,62 @@ or a coordinator's act, through the control that exists. No new control is added
    - no PR, or a closed or merged one: nothing is added;
    - an open PR that is not in the merge queue and has no required checks pending: "PR #n stays open with no worker. A
      later fix needs a new run on its branch." The branch on the remote is untouched, so a new run can pick it up;
-   - a PR in the merge queue, or with required checks pending: the sheet says which, and its confirm is disabled.
-4. **The server re-checks at the press.** The sheet is only a rendering. The abandon arm of `closeRun` reads the run's
-   PR state from GitHub again and **refuses** with 409 and a word: `pr-enqueued`, `checks-pending`, or
-   `pr-state-unreadable` when it cannot read the state (fail closed). A run with no PR recorded needs no read, and is
-   never refused for one. The check lives in the abandon arm, so the coordinator's abandon close gets it too. The plan's
-   PR says so, because the coordinator can now be refused an abandon it is allowed today. The route still reads no
-   body: there is no acknowledgement field, and the warning lives in the sheet. `ABANDON_COPY` gains a sentence for
-   each of the three words. The dead-coordinator lane's abandon is not changed here. Its arm waits on DT7 (§7).
-   Tests: one per word, and one for an enqueue that lands between the sheet's read and the press.
+   - a PR in the merge queue, with required checks pending, or whose state the server could not read: the sheet
+     shows the "unproven" block of item 4 in place of its single confirm. Abandon is never disabled.
+4. **The server re-checks at the press, and the operator always has a way through (R-3b.4).** The sheet is only a
+   rendering. The abandon arm of `closeRun` reads the run's PR state from GitHub again and answers with one of three
+   words when it cannot prove the release is safe: `pr-enqueued`, `checks-pending`, or `pr-state-unreadable` when it
+   cannot read the state. A run with no PR recorded needs no read, and never gets a word. What a word does depends on
+   who pressed:
+   - **Automatic and agent paths fail closed, with no way through.** The coordinator's abandon close (the box-token
+     `runs` route), the parked-run auto-abandon of item 6 if it is ever built, and every other lane that reaches the
+     abandon arm get 409 and the word, and nothing is released. They have no override parameter. The plan's PR says
+     so, because the coordinator can now be refused an abandon it is allowed today, and the refusal text tells it the
+     operator can abandon the run from its row. The dead-coordinator lane's abandon is not changed here. Its arm
+     waits on DT7 (§7).
+   - **The operator's Abandon always goes through, by one of two routes it chooses.** `POST /api/runs/:id/abandon`
+     keeps its rule of reading no body. On a word it answers 409 with the word, the facts it read (PR number, queue
+     position or the pending required checks by name, or the read's error), and a single-use **confirm key** the
+     server mints, bound to the run id, the word and a digest of those facts, and valid for 10 minutes. Two new
+     operator doors take only that key (a strict body of `{ "key" }` and nothing else), sit beside the abandon door
+     with its auth (ungated by the box token, session-gated when sign-in is armed, listed in
+     `coord-pause-route.test.ts`'s `UNGATED` set), and are forbidden to the coordinator, worker and reviewer skills:
+     - `POST /api/runs/:id/abandon/when-settled` **waits, bounded.** The server records a pending abandon and re-reads
+       the PR state once a minute. It abandons as soon as the word clears (the PR leaves the queue, the checks finish,
+       or the read succeeds and shows neither), and in any case when the **Abandon settle wait** has passed (default
+       30 minutes, a row on the Ages card, R-7; server only; bounded 5 to 240 minutes). The run row shows "Abandon
+       pending · waits for PR #n until 14:32" with **Cancel**, which removes the pending record. A restart keeps the
+       record in coord.db and resumes the wait.
+     - `POST /api/runs/:id/abandon/unproven` **abandons now.** The server re-reads once more. If the word has cleared,
+       it abandons as the ordinary door would. If a word still stands, it abandons anyway and journals the override
+       with the word and the facts. If the facts changed since the key was minted (for example, the PR entered the
+       queue), it refuses with `facts-changed` and a fresh key, so the second confirmation always names what is true
+       at the press.
+   - **What the sheet shows.** On a word, the sheet replaces its confirm with an **unproven** block:
+     - a title per word: "PR #n is in the merge queue (position k)", "PR #n has required checks still running:
+       <names>", or "ccrc could not read PR #n from GitHub: <reason>";
+     - one line of what is unproven: "Not proven: that releasing this worker leaves nothing PR #n still needs. If
+       the PR merges or fails after the abandon, its coordinator (or you) gets an attention item to open a run on its
+       branch." The PR and its branch are never touched;
+     - the release consequence that `abandonConsequence` already gives (worker released, programme hold lifted);
+     - two buttons. **Abandon when it settles (at most N min)**, N being the settle wait, is the primary and sends
+       `when-settled`. **Abandon now** opens a second step that repeats the title and the "Not proven" line and has
+       **Back** and **Abandon now, unproven** (destructive style). Only that second tap sends `unproven`.
+     The sheet has no disabled state for these words. `ABANDON_COPY` gains one sentence per word and one for
+     `facts-changed`.
+   Tests: one per word on each path (the coordinator's close refused; the operator's `when-settled` acting on clear
+   and at the bound; `unproven` acting with the word journaled); a key reused, expired, or minted for another run
+   refused; an enqueue that lands between the sheet's read and the press answering `facts-changed`; Cancel removing a
+   pending abandon; a restart resuming one.
 5. **If a PR merges or fails after its run was abandoned** (for example, the queue ejects it), the server raises one
    attention item to the programme's coordinator, or to the operator when there is no live coordinator. The item names
    the PR and the abandoned run and offers "open a run on this branch". It goes through the existing attention path.
    Nothing reopens the abandoned run.
-6. **Auto-abandon is off, and stays unbuilt unless Q4 is (b).** `CCRC_PARKED_RUN_AUTO_ABANDON_HOURS` (default unset)
-   would let the server abandon a parked run that has no PR, or only a closed one, and no activity on either side after
-   that age. It exists only if the operator overturns the Rejected-list rule (§10, Q4). Even then it ships in shadow,
-   with its own row in Settings (R-6), and it goes through the same abandon arm and its PR check. **"No activity on
+6. **Auto-abandon is off, and stays unbuilt unless Q4 is (b).** It would let the server abandon a parked run that has
+   no PR, or only a closed one, and no activity on either side after an age. It exists only if the operator overturns
+   the Rejected-list rule (§10, Q4). Even then it ships in shadow, and its switch and its age (default 168 hours) are
+   one row on the Shadow lanes card (R-6), with no env var and no marker. It goes through the same abandon arm and its
+   PR check as an automatic path, so a word refuses it and it has no override (item 4). **"No activity on
    either side"** means none of these, within the period:
    - a run state change;
    - a push to the run's branch on the remote;
@@ -475,11 +539,13 @@ anything that was ever a claimant.
   archive" shadow rows and sets its Settings row (R-6) to Live, but **only after R-4c's G1 half has shipped**: arming
   archives manual sessions, and expiry removes them 7 days later, so until the countdown, Keep and Archive now exist
   there is no in-UI warning and no way to keep a parked but resumable session from the app (the
-  operator-actions-in-the-UI rule). Its 14 days becomes `CCRC_STALE_ARCHIVE_IDLE_DAYS` (default 14), as in §5.1.
+  operator-actions-in-the-UI rule). Its 14 days becomes the **Stale archive after** row on the Ages card (default 14
+  days, R-7; server only), as in §5.1.
 - **R-4b. Coordinators: a second arm of the same lane, not a new lane.** A coordinator qualifies when all of these
   hold:
   - it claims no non-terminal run;
-  - its last chair ended more than `CCRC_COORDINATOR_ARCHIVE_IDLE_DAYS` ago (default unset, which means off);
+  - its last chair ended more than the arm's idle age ago (default 14 days, set on the arm's own Shadow lanes row,
+    R-6, which is also its only switch; there is no env var for either);
   - it has had no pane for the same period;
   - it has no pinned or held marker, and no unanswered operator-facing question (the fleet-rollup rule: a question
     is never hidden);
@@ -499,13 +565,14 @@ anything that was ever a claimant.
   used by another session, unless every run that ever named that name or a prior id is terminal.
 
   It is archived through the same act as G1, so expiry follows by the same path and the same safety checks: clean
-  tree, HEAD on a remote or rescued into the attic, no holder. It ships in shadow, with its own Settings row (R-6) and
-  `coordinator-archive-live` as its terminal override. This changes rule 4 from "never automatically" to "never while
-  it has work, and never without a recorded idle age". The operator rules on it (§10, Q5).
+  tree, HEAD on a remote or rescued into the attic, no holder. It ships in shadow, and its Settings row (R-6) is its
+  only switch: it is a new arm, so it has no marker. This changes rule 4 from "never automatically" to "never while it
+  has work, and never without a recorded idle age". The operator rules on it (§10, Q5).
 - **R-4c. Visible and overridable in the UI, in two halves.** The G1 half (manual sessions) ships before G1 is armed
   (§9 step 3); the coordinator half ships with R-4b. Every session row that either arm will archive shows "archives
   in N days" in the PWA, with **Keep** (it writes the existing hold marker through a whitelisted act) and **Archive now**.
-  The settings screen shows both idle ages as read-only facts, taken from the server's config.
+  The countdown is computed from the same stored ages the deciders read: the Ages card's Stale archive row for G1 and
+  the coordinator arm's row for R-4b, each editable there and nowhere else.
 
 ## 7. Coordinator durability: what remains of D4, D6 and D7
 
@@ -545,9 +612,10 @@ lists D3 and D4 as "to spec" and DT1 as "in review". Bring it up to date in the 
 ## 8. How this fits with deps-shed and the existing lanes
 
 **Deps-shed (#1772, #1781; worktree-leak note).** It removes git-ignored, untracked `node_modules` from a sleeping
-worker or coordinator whose work finished more than `CCRC_DEPS_SHED_AFTER_HOURS` ago (default 24), in shadow behind
-`deps-shed-live` (on #1772, a hand-only marker that R-6 gives a Settings row). This spec depends on it and does not
-duplicate it:
+worker or coordinator whose work finished more than an age ago (default 24 hours), in shadow behind `deps-shed-live`.
+On #1772 both are terminal knobs: the age is `CCRC_DEPS_SHED_AFTER_HOURS` and the switch a hand-only marker. R-6
+and R-7 move both onto deps-shed's one Shadow lanes row (switch and age), and the plan's PR removes the env read.
+This spec depends on it and does not duplicate it:
 
 - §2 relies on it to make the reclaim probe's ignored-directory scan cheap on sleeping trees.
 - §3's R-1c adds review children that sleep between rounds to its decider, as one row in shadow under the same
@@ -581,8 +649,8 @@ Stall watch (a level), Temp root collector (Off or Live) and Cleanup pause. None
 below has one, so this spec adds them. It reuses the collector's control and does not invent a new pattern:
 
 - **One card, one row per switch.** A new Automation card, **Shadow lanes**, mounted after Temp root collector. Each row
-  shows Now (Shadow, Live, or "Live from the terminal"), the counts from the lane's shadow record over the evidence
-  window (§10), and **Go live** or **Back to shadow**.
+  shows Now (Shadow or Live), the row's own value where it has one (an age), the counts from the lane's shadow record
+  over the evidence window (§10), and **Go live** or **Back to shadow**.
 - **One store and one route.** A coord.db settings row per switch, choice `shadow` or `live`, seeded `shadow`, written
   only by `POST /api/coord/lane-arm` (read by `GET` on the same path). Each switch's row in `SWITCHES` names that route
   as its writer. As with the collector: the server decides the confirm (409 `confirm-required` with the facts it
@@ -591,25 +659,76 @@ below has one, so this spec adds them. It reuses the collector's control and doe
   forbidden to name the route.
 - **A gate per row.** The server refuses Live with `gate-unmet` until the row's precondition is in the build (table
   below), and the row says what it waits for.
-- **The marker is a terminal override only.** A lane is live when its Settings row is Live **or** its marker stands.
-  The marker is still read as today, and nothing in the tree writes it. While it stands, the row says "Live from the
-  terminal" and Back to shadow is disabled, with a note naming the file, because the server cannot remove a hand-only
-  marker. The existing `-disabled` kill switches keep winning over both.
-- **Readers.** The server's lanes read the effective state through one helper beside `readSwitches`. The session hook
-  (D4) reads it from one field in the `ccrc-api runs list` reply it already makes, or from the marker. When it cannot
-  read either, it injects no card, as today.
+- **The row is the only switch; the marker is retired.** A lane is live when, and only when, its Settings row is
+  Live. For the switches that have a marker today, the PR that adds the row imports it once: on the first start after
+  upgrade, a standing marker sets the row Live, with a journal line and a feed row naming the file, and from then on
+  the marker is not read. `ccrc doctor` reports a marker that still stands as left over, with the line that removes
+  it. Nothing in the tree writes one. The Now column therefore shows only Shadow or Live, and both buttons always
+  work. The existing `-disabled` kill switches are outside this spec and keep winning over the row.
+- **Readers.** The server's lanes read the row through one helper beside `readSwitches`. The session hook (D4) reads
+  it from one field in the `ccrc-api runs list` reply it already makes. When it cannot read that field, it injects no
+  card, as today. No box process reads a marker for these switches.
 
-| Switch | Terminal override (marker) | Gate before Live |
+| Switch | Marker imported once at upgrade, then retired | Gate before Live |
 |---|---|---|
 | Roster card (D4, and its wake arm, R-5a) | `coordinator-roster-card-live` | none |
-| Deps-shed (with R-1c's review row) | `deps-shed-live` | #1772 merged |
+| Deps-shed (with R-1c's review row), with its age | `deps-shed-live` | #1772 merged |
 | Stale archive (G1, R-4a) | `stale-archive-live` | R-4c's G1 half |
 | Drift push (D7) | `drift-push-live` | DT4 |
 | Dead-coordinator lane (OA-D6) | `dead-coordinator-lane-live` | D8's DT7 |
-| Coordinator archive (R-4b) | `coordinator-archive-live` | R-4b, R-4c's coordinator half and D8 |
-| Parked-run auto-abandon (R-3b.6) | its own marker, named in the plan | Q4 ruled (b) |
+| Coordinator archive (R-4b), with its idle age | none (new arm) | R-4b, R-4c's coordinator half and D8 |
+| Parked-run auto-abandon (R-3b.6), with its age | none (new arm) | Q4 ruled (b) |
 
 The already-armed switches in §1 keep their markers. Moving them onto the card is a later choice, outside this spec.
+
+**One control, one source (R-7).** Every operator act in this spec is one control in Settings › Automation, backed by
+one stored value on the server. The rule has three parts.
+
+- **Where the value lives.** One coord.db settings row per value, seeded with the neutral default below, written only
+  by its card's route and read only through the helper beside `readSwitches`. No env var shadows it and no marker is a
+  second way to set it. The rows that are not switches go on one new card, **Ages**, mounted after Shadow lanes, which
+  follows the same pattern: one route (`POST /api/coord/ages`, read by `GET`), the server decides the confirm
+  (409 `confirm-required` for a lowered age, with the trees or runs it would now reach), the stored value is what the
+  row shows, a value outside the row's bounds is refused with `out-of-bounds`, and the skills are forbidden to name the
+  route.
+- **How the box gets a value it needs.** Through the path the server already uses to change box state: a `CCD_ARGV`
+  builder (`server/src/ccdargv.ts`) run through the agent's `ccd` grant, as the Cleanup pause card does today
+  (`POST /api/coord/reclaim-pause` → `CCD_ARGV.reclaimPause` → `ccd reclaim-pause --state`). There are two shapes:
+  - **On the call itself**, when only verbs the server calls read the value: the server adds it as a flag to the call
+    it already makes. The stale floor uses this (`--stale-idle-s`, §5.1).
+  - **A box copy**, when a box timer or a session-run verb reads it (the dependency cache: `ws-deps` and the tmp-sweep
+    arm). This is a new, small verb, `ccd box-setting --set <name> <value>`, in `reclaim-pause`'s shape: a fixed
+    name vocabulary in ccd (`deps-cache`, `deps-cache-max-gb`, `deps-cache-idle-days`), each value checked against
+    bounds in ccd, written atomically to one file per name under `$REG/box-settings/`, and echoed back. The server
+    sends it after every write of the row and again after every agent connect, so the box converges on the server's
+    value. `ccd box-setting --get` returns the box's copy, and the row shows "On the box: <value>" or "not yet on the
+    box". It is a disk-config verb, not a coordination mutation. It is added to the agent's grant
+    (`whitelist-subset.test.ts`) and to the CLAUDE.md SAFETY list, so only the server writes the box copy. A missing or
+    unreadable copy reads as the default that is today's behaviour (cache Off).
+- **What stays in install config.** Only what the operator is never asked to decide and that limits rather than sets
+  a row: paths, walk and timeout bounds, sample rates and safety floors. Each exists on one side only. Where one caps
+  a row, the box reports it in `ccd caps` and the row shows it read-only and will not go past it.
+
+Every value and switch in this spec, under that rule:
+
+| Value | The one control | Default | Read by | Handed to the box by |
+|---|---|---|---|---|
+| Stale reclaim after (R-3a) | Ages › Stale reclaim after | 168 h | server's stale arm; box's stale check | `--stale-idle-s` on `ws-audit --reclaim` and `ws-reclaim` |
+| Review ceiling (R-3a) | Ages › Review ceiling | 168 h | server | not needed |
+| Stale archive after (R-4a) | Ages › Stale archive after | 14 days | server (G1) | not needed |
+| Parked-run nudge (R-3b.1) | Ages › Parked-run nudge | 48 h | server | not needed |
+| Parked-run line (R-3b.2) | Ages › Parked-run line | 168 h | server | not needed |
+| Abandon settle wait (R-3b.4) | Ages › Abandon settle wait | 30 min | server | not needed |
+| Failing-lane alert (R-0.5) | Ages › Failing-lane alert | 4 h | server | not needed |
+| Dependency cache: on, size cap, idle age (R-2) | Automation › Dependency cache | Off, 20 GB, 14 days | box (`ws-deps`, tmp sweep) | `ccd box-setting`, after each write and each agent connect |
+| Each switch and its age in the Shadow lanes table above | its Shadow lanes row | Shadow; ages as listed | server; D4's hook through the `runs list` reply | not needed |
+
+| Install config, one side only, never an operator act | Side | Why it is not a setting |
+|---|---|---|
+| `CCD_REAP_SCAN_S`, `CCD_PATH_USERS_SCAN_S`, `CCD_RECLAIM_WALK_S` (R-0.3) | box | walk bounds; a wrong one is fixed by a new default in code |
+| `CCD_WS_STALE_IDLE_FLOOR_S` (R-3a) | box | a safety floor under the Stale reclaim row; shown on it, read-only |
+| `CCD_DEPS_CACHE_ROOT`, `_LOCKFILES`, `_ENV_KEYS`, `_KEY_PATHS`, `_OWNER` (R-2) | box | where the cache may live and how a key is built; the root's absence refuses the row's On |
+| `CCD_DEPS_CACHE_HASH_SAMPLE`, `_HYDRATE_S`, `_VERIFY_HOURS` (R-2) | box | integrity and walk bounds |
 
 **Also found by the census, for the plan's backlog.** Four "reclaimed" runs leave an empty or near-empty directory,
 which ccd lists as `orphan`; the orphan-tree lane should take these. One 2.2 GB worker's run is missing from the run
@@ -620,10 +739,12 @@ proof (#1132's area).
 
 Each step is one PR. Every destructive arm ships in shadow first.
 
-1. **R-0 diagnosis and visibility.** The `probe` journal field, the bounds as config, and the failing-lane alert.
+1. **R-0 diagnosis and visibility.** The `probe` journal field, the bounds as install config, and the failing-lane
+   alert (its 4 hours a constant until step 2 gives it its Ages row).
    Then the fix the diagnosis points to. Nothing else waits on this except the measurements that follow it.
-2. **R-6, the Shadow lanes card, then arm what is built.** The card, its store and route, the gates, and the
-   override reading. Then the operator sets two rows live, each after reading its shadow record: the roster card (D4),
+2. **R-6 and R-7, the Shadow lanes and Ages cards, then arm what is built.** Both cards, their store and routes, the
+   gates, the one-time marker import with its `ccrc doctor` check, and the Failing-lane alert row. Each later step
+   adds its own rows. Then the operator sets two rows live, each after reading its shadow record: the roster card (D4),
    and deps-shed once #1772 lands. Stale archive is **not** set live here (step 3).
 3. **R-4c's G1 half, then arm G1.** The "archives in N days" countdown, Keep and Archive now for every session G1
    would archive, read from G1's own decider, and the stale-archive age shown in settings. Only then the operator
@@ -631,14 +752,17 @@ Each step is one PR. Every destructive arm ships in shadow first.
 4. **R-1a** one reviewer per work run (the capacity spec's W2), with the re-bind rules, the per-verdict keep tests and
    the fenced tree advance.
 5. **R-2** the dependency cache: the `ws-deps` verb with its manifest, quarantine, fenced replace and `--check`, the
-   `ws-add --child` hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, and **in the same
-   PR** the CLAUDE.md and worker and reviewer skill changes that replace the blanket `npm ci`. The cache is off until
-   `CCD_DEPS_CACHE_ROOT` is set.
+   `ws-add --child` hook, cache eviction and re-hash in the tmp sweep, the SAFETY-list entries, the Dependency cache
+   row with `ccd box-setting` and its re-send on agent connect, and **in the same PR** the CLAUDE.md and worker and
+   reviewer skill changes that replace the blanket `npm ci`. The cache is off until its row is set On, which needs
+   `CCD_DEPS_CACHE_ROOT` in the box's install config.
 6. **R-1c** the deps-shed row for review children between rounds, in shadow.
-7. **R-3a** ages as config: the stale floor, the review ceiling and stale archive's 14 days.
+7. **R-3a** ages as Ages rows: the stale floor (with `--stale-idle-s`, the box's floor in `ccd caps`, and the
+   removal of the box's own constant), the review ceiling and stale archive's 14 days.
 8. **R-5a** the D4 wake arm and its shared card builder; **#1407**.
-9. **R-3b** the parked-run nudge, the parked line on the existing run row, the PR sentence in `AbandonSheet`, the
-   PR-state re-check in the abandon arm, and the ejected-PR attention item.
+9. **R-3b** the parked-run nudge, the parked line on the existing run row, the PR sentence and the unproven block in
+   `AbandonSheet`, the PR-state re-check in the abandon arm, the confirm key with the `when-settled` and `unproven`
+   doors and the pending-abandon record, their three Ages rows, and the ejected-PR attention item.
 10. **DT4** the PWA "Out of step" section; the operator then sets the drift push's row live.
 11. D8 (DT6, DT7) per the tail spec.
 12. **Arm OA-D6**: the operator sets the dead-coordinator lane's row live after reading its shadow record. Its gate
@@ -653,22 +777,24 @@ step 8 (#1407). Step 12 needs step 11 (DT7). Step 13 needs steps 7, 8 and 11.
 
 ## 10. Operator decisions
 
-Each is a real choice, with a recommendation and why. Every switch is set live from its row in Settings › Automation
-› Shadow lanes (R-6), and only after its shadow record shows the evidence named below. Its marker is only a terminal
-override.
+Each is a real choice, with a recommendation and why. The last column names where the operator acts on it, under
+R-7's rule: a design ruling is made once, in this spec, and leaves nothing to act on later; everything the operator
+sets or changes afterwards is one control in Settings › Automation backed by one stored value on the server, with no
+env var or marker beside it. Every switch is set live from its Shadow lanes row (R-6), and only after its shadow
+record shows the evidence named below.
 
-| # | Decision | Recommended | Why |
-|---|---|---|---|
-| Q1 | Approve one `ws-audit --reclaim` on one stuck id (a SAFETY-list verb) to diagnose §2 | **Yes, now** | Read-only, and the cheapest step to the largest saving |
-| Q2 | Review trees between rounds: (a) keep one per work run and shed its dependencies (R-1), or (b) release at each verdict | **(a)** | It is the ruled W2, deletes nothing earlier than today, and needs no new reclaim variant |
-| Q3 | Dependencies: (a) the read-only cache with manifest and the `npm ci` instructions change (R-2), (b) a symlinked shared directory, or (c) deps-shed alone | **(a)**, off until a root is set; 20 GB, 14 days idle | Removes the per-tree copy without letting one tree change another's |
-| Q4 | Parked runs: (a) nudge at 48 h, mark the existing run row "parked" at 7 days, and add the PR check to the existing Abandon; never automatic. Or (b) also auto-abandon | **(a)**; revisit (b) after two weeks of nudges | No new control. Keeps the Rejected-list rule that a close is a person's or a coordinator's act |
-| Q5 | Coordinators: (a) auto-archive after N idle days with countdown and Keep, built after D8, or (b) never | **(a), N = 14** | Deps-shed already takes their bytes; this takes the count, and only once claims are proven |
-| Q6 | Stale floor in this deployment (R-3a) | **2 days, set after §2 to §4 land** | Lowering it earlier mainly catches manual sessions, which G1 covers |
-| Q7 | Set the Roster card row live (D4) | **Yes, as soon as** its existing log shows the evidence below | It only adds context, fails open, and directly prevents forgotten runs |
-| Q8 | Set the Drift push row live (D7) | **After DT4 lands**, on the evidence below | A push must land on a PWA section the operator can act from |
-| Q9 | Set the Dead-coordinator lane row live (OA-D6) | **Only after D8's DT7**, then on the evidence below | Until DT7 a coordinator revived under a new id reads as dead, and no hand check of today's rows covers a later revive |
-| Q10 | Arming: (a) one Shadow lanes card in Settings, markers kept as terminal overrides (R-6), or (b) hand-touched markers, as today | **(a)** | The operator acts from the app. It is the collector's existing control, not a new one |
+| # | Decision | Recommended | Why | Where the operator acts |
+|---|---|---|---|---|
+| Q1 | Approve one `ws-audit --reclaim` on one stuck id (a SAFETY-list verb) to diagnose §2 | **Yes, now** | Read-only, and the cheapest step to the largest saving | the session's permission prompt in ccrc, the existing approval control; the request names the SAFETY rule. Nothing to build |
+| Q2 | Review trees between rounds: (a) keep one per work run and shed its dependencies (R-1), or (b) release at each verdict | **(a)** | It is the ruled W2, deletes nothing earlier than today, and needs no new reclaim variant | a design ruling; its shed row is armed with deps-shed's Shadow lanes row |
+| Q3 | Dependencies: (a) the read-only cache with manifest and the `npm ci` instructions change (R-2), (b) a symlinked shared directory, or (c) deps-shed alone | **(a)**, seeded Off; 20 GB, 14 days idle | Removes the per-tree copy without letting one tree change another's | a design ruling; then the Dependency cache row (On, size cap, idle age), handed to the box by `ccd box-setting`. The cache root is install config and only makes On possible |
+| Q4 | Parked runs: (a) nudge at 48 h, mark the existing run row "parked" at 7 days, add the PR check to the existing Abandon with the operator's bounded wait or unproven confirm (R-3b.4); never automatic. Or (b) also auto-abandon | **(a)**; revisit (b) after two weeks of nudges | No new control outside the existing sheet. Keeps the Rejected-list rule that a close is a person's or a coordinator's act, and never locks the operator out of it | the Ages rows Parked-run nudge, Parked-run line and Abandon settle wait; the run row's Abandon. Under (b), one Shadow lanes row holds auto-abandon's switch and age |
+| Q5 | Coordinators: (a) auto-archive after N idle days with countdown and Keep, built after D8, or (b) never | **(a), N = 14** | Deps-shed already takes their bytes; this takes the count, and only once claims are proven | a design ruling; then the coordinator archive's Shadow lanes row (switch and N), and Keep or Archive now on each session row |
+| Q6 | Stale floor in this deployment (R-3a) | **2 days, set after §2 to §4 land** | Lowering it earlier mainly catches manual sessions, which G1 covers | the Ages row Stale reclaim after; the box takes it on each stale call (`--stale-idle-s`) and has no knob of its own |
+| Q7 | Set the Roster card row live (D4) | **Yes, as soon as** its existing log shows the evidence below | It only adds context, fails open, and directly prevents forgotten runs | its Shadow lanes row; the hook reads it from the `runs list` reply |
+| Q8 | Set the Drift push row live (D7) | **After DT4 lands**, on the evidence below | A push must land on a PWA section the operator can act from | its Shadow lanes row |
+| Q9 | Set the Dead-coordinator lane row live (OA-D6) | **Only after D8's DT7**, then on the evidence below | Until DT7 a coordinator revived under a new id reads as dead, and no hand check of today's rows covers a later revive | its Shadow lanes row; its gate refuses Live before DT7 |
+| Q10 | Arming and ages: (a) the Shadow lanes and Ages cards as the one source, with today's markers imported once and retired (R-6, R-7), or (b) hand-touched markers and env vars, as today | **(a)** | The operator acts from the app, and a value has one place to be read and changed. It is the collector's and the Cleanup pause's existing pattern, not a new one | the two cards |
 
 Stale archive (R-4a) and deps-shed are not separate choices. The operator sets Stale archive's row live once R-4c's
 G1 half ships and its "would archive" rows name only manual sessions they would let go, and sets deps-shed's row live
@@ -710,7 +836,14 @@ once #1772 lands and its shadow rows name only finished, sleeping sessions.
   quarantined on its second hydrate. Mode is compared directly instead.
 - **A second Abandon control for parked runs.** Every open run row already has one. R-3b marks the row and makes the
   existing act check the PR.
-- **Arming by hand-touched markers alone.** The operator acts from the app. A marker stays only as a terminal override.
+- **Arming by hand-touched markers, alone or as a terminal override.** The operator acts from the app, and a second
+  way to arm is a second source of truth. Today's markers are imported once and retired (R-6).
+- **A box env var beside a server setting** (for example a box-side stale age next to the server's). Two knobs for
+  one value drift apart, and a row that the box can silently overrule does nothing on its own. The server's row is
+  the one source and the box is handed its value (R-7).
+- **Disabling the operator's Abandon while a PR's state is unproven.** It closes the operator's last-resort release.
+  The automatic and agent paths fail closed; the operator gets a bounded wait or an explicit unproven confirm
+  (R-3b.4).
 - **An early arm of OA-D6 after a hand audit of its shadow rows.** The audit cannot cover a coordinator revived
   under a new id after arming.
 - **`reset --hard` or `clean` to move a resumed reviewer to the fix round's tip.** Either can discard a reviewer's
