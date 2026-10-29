@@ -1,11 +1,13 @@
 // D-7404 (plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB2; spec 2026-10-28-test-box-design.md §2.4,
-// §2.6, §2.7, §2.9, §2.10). L0: imports NOTHING (the PWA may bundle this file). ONE VOCABULARY for the test box: the
-// run frames the wrapper's remote arm and the test service exchange, the states the server decides, the fallback
-// reasons in spec §2.4's order, the runs log's line, the version row and the repository row's parser.
+// §2.6, §2.7, §2.9, §2.10). L0: imports only shared/ siblings (the PWA may bundle this file). ONE VOCABULARY for the
+// test box: the run frames the wrapper's remote arm and the test service exchange, the states the server decides, the
+// fallback reasons in spec §2.4's order, the runs log's line, the version row and the repository row's parser.
 //
 // The frames are the test service's own family (D-7428): they are not members of the fleet agent's `AgentReq` union
 // and they bump no `FLEET_PROTO`; `TESTBOX_PROTO` is theirs. Each frame has ONE reader, `readTestboxFrame`, which
 // checks every field and refuses a frame with any field it does not name, so a frame is never half-read.
+
+import { isReleaseTag } from './api.js';
 
 /** The test service's protocol version (spec §2.4's protocol row compares it with the wrapper's). */
 export const TESTBOX_PROTO = 1;
@@ -367,10 +369,9 @@ const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const version = (v: unknown, at: string): string => (isVersion(v) ? v : refuse(at, 'not a version'));
 /** The fleet host's release tag, as the release lane cuts it and the tools sync passes it on (deploy/release-artifact.sh's
- *  SHAPE): `v<major>.<minor>.<patch>`, the leading `v` kept. A tool version's reader would refuse that `v`. */
-const RELEASE_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+ *  SHAPE, spelled once in shared/api.ts): `v<major>.<minor>.<patch>`, the leading `v` kept. A tool version's reader would refuse that `v`. */
 const releaseTag = (v: unknown, at: string): string =>
-  (typeof v === 'string' && v.length <= 64 && RELEASE_TAG.test(v) ? v : refuse(at, 'not a release tag'));
+  (isReleaseTag(v) && v.length <= 64 ? v : refuse(at, 'not a release tag'));
 const utc = (v: unknown, at: string): string => (typeof v === 'string' && isUtcSecond(v) ? v : refuse(at, 'not a UTC time to the second'));
 
 /** A relative path inside the repository: no leading `/`, no `.` or `..` segment, no empty segment. */
