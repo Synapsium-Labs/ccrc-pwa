@@ -19,7 +19,7 @@
 //
 // PROGRAMME BOXES (Task G2): a coordinator's open work is one box (`ProgrammeBox`), drawn first, most urgent first;
 // the workers of programmes elsewhere and the rows in no programme follow under their sub-headings. The decision is
-// `programmeBox.ts`'s; this maps over it with the one row renderer below. A box's movement readout ticks itself.
+// `programmeBoxes.ts`'s; this maps over it with the one row renderer below. A box's movement readout ticks itself.
 import { Fragment, memo } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow, Button, useNow } from '@ccrc/ui';
@@ -36,7 +36,7 @@ import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import {
   cardAbroad, foldedCard, programmeBoxes, rankBoxes, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
-} from './programmeBox';
+} from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine } from './SessionLine';
 import { sameCardProps } from './lineProps';

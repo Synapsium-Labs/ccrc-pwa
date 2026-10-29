@@ -1,4 +1,4 @@
-// A programme as a box in its project card (Task G2), as the card draws the decider's answer (`programmeBox.ts`,
+// A programme as a box in its project card (Task G2), as the card draws the decider's answer (`programmeBoxes.ts`,
 // pinned in `programme-box.test.ts`). One component in both skins: the card is drawn alone here, over the fleet tree
 // and the rollup exactly as `FleetCards` builds them, and the fold's storage is checked through each skin's own list.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +8,7 @@ import type { FleetSession, RunSummary, UpdatesView } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { NO_ROLLUP_PREFS, rollupFleet, type RollupPrefs } from '../src/fleet/rollup';
 import { ProjectCard } from '../src/fleet/ProjectCard';
-import { assignHues } from '../src/fleet/programmeBox';
+import { assignHues } from '../src/fleet/programmeBoxes';
 import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
 import { setSkin } from '../src/lib/skin';

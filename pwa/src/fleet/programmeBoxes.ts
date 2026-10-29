@@ -1,5 +1,7 @@
 // THE PROGRAMME BOX (Task G2): a coordinator's open work, seen as one thing inside its project card. Pure (L1): the
 // card hands it its rows and the runs, and draws the answer; nothing here renders, reads storage or reads the clock.
+// Named for its main export, `programmeBoxes`: `programmeBox.ts` beside `ProgrammeBox.tsx` (the component) would be two
+// modules a case-insensitive disk cannot tell apart (drawer-keybar.test.tsx's census).
 //
 // MEMBERS. A box is a session on this card that claims an open run of another session (or of a spawn not yet
 // bound): its children are the rows `nestFleet` brackets under it, unchanged, and its far workers (`abroad`) are the

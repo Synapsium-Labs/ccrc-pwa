@@ -8,7 +8,7 @@ import { nestFleet } from '../src/fleet/nestFleet';
 import {
   PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, foldedCard, movementWords, programmeBoxes, rankBoxes,
   type BoxState, type ProgrammeBoxView,
-} from '../src/fleet/programmeBox';
+} from '../src/fleet/programmeBoxes';
 import { HOUR, MIN, NOW, asking, run, sess } from './rollupFixture';
 
 const coord = sess('coord', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working' });

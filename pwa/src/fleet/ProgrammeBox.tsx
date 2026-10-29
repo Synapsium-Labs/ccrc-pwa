@@ -1,7 +1,7 @@
 // A coordinator's programme, drawn as one box inside its project card (Task G2): a kicker, the coordinator's own row,
 // a tray of its workers and the children toggle as its footer. Every row is the card's own (`ProjectCard`'s
 // `rowBody`, handed in as `drawRow`), so the box adds no row renderer and no door: it decides nothing either, since
-// its members, state, hue, tray and words are `programmeBox.ts`'s.
+// its members, state, hue, tray and words are `programmeBoxes.ts`'s.
 //
 // The movement readout ticks on its own leaf (`Movement`), as the folded header's `LastActive` does, so the card's
 // memo (C9, D-6441) holds: the card never re-renders for the time.
@@ -12,7 +12,7 @@ import type { RunSummary } from '../../../shared/api';
 import type { FleetRow } from './nestFleet';
 import {
   footerWords, movementWords, progressWords, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
-} from './programmeBox';
+} from './programmeBoxes';
 import './programmeBox.css';
 
 function Movement({ view, state, nowMs }: { view: ProgrammeBoxView; state: BoxState; nowMs: number | undefined }): ReactNode {
