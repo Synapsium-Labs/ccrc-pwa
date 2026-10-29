@@ -76,7 +76,7 @@ import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type CoordStore, type NodeRow } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -1529,8 +1529,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       sendFleet(sessions);
     };
     const onNotice = (n: Notice) => socket.send(maskedFrame(n, (mk) => mk.maskDeep({ type: 'notice', ...n } satisfies FleetMsg)));
-    const onRuns = (runs: RunSummary[]) =>
-      socket.send(maskedFrame(runs, (mk) => mk.maskDeep({ type: 'runs', runs } satisfies FleetMsg)));
+    // D-7334: the frame carries the stall watch's quiet time, as the watcher's last runs frame read it (`emitRuns`, whose
+    // byte-equality guard keys on it, so a Settings change re-emits). Absent before that first frame.
+    const onRuns = (runs: RunSummary[]) => {
+      const stallQuietMs = watcher?.currentStallQuietMs() ?? null;
+      socket.send(maskedFrame(runs, (mk) => mk.maskDeep(
+        { type: 'runs', runs, ...(stallQuietMs === null ? {} : { stallQuietMs }) } satisfies FleetMsg)));
+    };
     const onCoord = (coord: CoordStatus) =>
       socket.send(maskedFrame(coord, (mk) => mk.maskDeep({ type: 'coord', coord } satisfies FleetMsg)));
     const onPools = (pools: ProjectPoolsWire) =>
@@ -1594,7 +1599,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           } else {
             // ARCH-61 (#796): `childIds` against the fleet this socket's frame carries; with no listable registry there is
             // no reading of the sessions to decide against, so the frame goes without it (absence permits).
-            const summaries = read.runs.map(toRunSummary);
+            // D-7334: each run's last move, in one read for the frame (`withLastMoves`); a failed read leaves the field off.
+            const summaries = withLastMoves(deps.coord, read.runs.map(toRunSummary), (d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the runs' last moves (${d}) — lastMoveAt absent`));
             onRuns(sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`)));
           }
         }

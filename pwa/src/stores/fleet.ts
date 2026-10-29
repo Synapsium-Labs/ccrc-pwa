@@ -124,6 +124,11 @@ export interface FleetState {
    *  live frame it should have deferred to says `[]` (fix round 1, task 5,
    *  findings 1 and 3). */
   runsFrameSeen: boolean;
+  /** D-7334: the stall watch's quiet time, off the last `{type:'runs'}` frame, read here once. `null` when that frame
+   *  carried none (an older server, which sends no `lastMoveAt` either, or a server before its first runs frame) or no
+   *  runs frame has arrived: then no programme box reads as stalled. Replaced by every runs frame, never sticky past one
+   *  that omits it. */
+  stallQuietMs: number | null;
   /** Has `/ws/fleet` ever actually sent a `{type:'fleet'}` frame THIS store
    *  instance's lifetime — `runsFrameSeen`'s own sticky idiom just above, for a
    *  sharper version of its own reason. `sessions.length > 0` cannot answer it
@@ -458,6 +463,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       blocked: false,
       runs: [],
       runsFrameSeen: false,
+      stallQuietMs: null,
       fleetFrameSeen: false,
       coord: null,
       coordFrameSeen: false,
@@ -592,7 +598,9 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // (`runState`/`runItems`) is where a malformed ROW degrades.
               // `runsFrameSeen` flips once and stays flipped: the frame has
               // now genuinely spoken, even the FIRST time it says `[]`.
-              set({ runs: msg.runs, runsFrameSeen: true });
+              // D-7334: the frame's quiet time, this store's one read of it; anything but a positive finite number is none.
+              const q = msg.stallQuietMs;
+              set({ runs: msg.runs, runsFrameSeen: true, stallQuietMs: typeof q === 'number' && Number.isFinite(q) && q > 0 ? q : null });
             } else if (msg.type === 'coord') {
               // Shape-validated only at the frame level (`asFleetMsg`'s own
               // `typeof … === 'object'` check) — `CoordBanner`'s own

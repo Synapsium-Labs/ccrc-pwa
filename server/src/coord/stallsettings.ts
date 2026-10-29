@@ -214,6 +214,19 @@ export interface StallResolved {
   readonly held: StallHeld;
 }
 
+/** The whole-row fallback (§19 Q11): a stored row applies only when it is present and both its fields read. */
+const stallRowApplies = (settings: StallSettingsParsed): boolean =>
+  settings.stored === 'row' && settings.level.kind !== 'unreadable' && settings.quiet.kind !== 'unreadable';
+
+/** The resolver's quiet half, over the stored row alone: a row that applies whole sets its quiet time, anything else is
+ *  the built-in. `resolveStallWatch` takes its quiet time here, and so does the runs frame (D-7334), which carries it to the
+ *  app so the app's stalled word means what the stall watch means by quiet. It needs no box arming: no file changes it. */
+export function stallQuietOf(settings: StallSettingsParsed): { readonly quietMs: number; readonly quietSource: 'chosen' | 'default' } {
+  return stallRowApplies(settings) && settings.quiet.kind === 'set'
+    ? { quietMs: settings.quiet.ms, quietSource: 'chosen' }
+    : { quietMs: STALL_QUIET_MS, quietSource: 'default' };
+}
+
 /** The one resolver both sweeps and the view call (§6.2), over flags only.
  *  - **Whole-row fallback** (§19 Q11): a row that is absent or unreadable, or has either field unreadable, applies
  *    nothing; then the arming is the box object ITSELF, today's behaviour exactly, and the quiet time the built-in.
@@ -225,9 +238,8 @@ export interface StallResolved {
  *    its stages with no held flag (`free`) against the resolved ones, both with mail off read as on. A chosen `off`
  *    is never `held`. */
 export function resolveStallWatch(box: StallBoxArming, settings: StallSettingsParsed): StallResolved {
-  const applies = settings.stored === 'row' && settings.level.kind !== 'unreadable' && settings.quiet.kind !== 'unreadable';
-  const quietMs = applies && settings.quiet.kind === 'set' ? settings.quiet.ms : STALL_QUIET_MS;
-  const quietSource = applies && settings.quiet.kind === 'set' ? 'chosen' : 'default';
+  const applies = stallRowApplies(settings);
+  const { quietMs, quietSource } = stallQuietOf(settings);
   const chosen = applies && settings.level.kind === 'chosen' ? settings.level.level : null;
   const strict = box.mailMode === 'strict';
   const row = chosen === null ? null : STALL_LADDER[chosen];

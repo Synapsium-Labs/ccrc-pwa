@@ -125,7 +125,7 @@ import {
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
 import {
-  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock,
+  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, stallQuietOf,
   type StallBoxArming, type StallResolved, type StallSettingsParsed, type StallSettingsRead,
 } from './coord/stallsettings.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
@@ -134,7 +134,7 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import type { PushPayload } from './push.js';
 import { notify, noticeSink } from './notice.js';
@@ -1202,6 +1202,9 @@ export class FleetWatcher {
    *  least once, even into an empty fleet — mirroring `lastJson`'s own
    *  initial value. */
   private lastRunsJson: string | null = null;
+  /** D-7334: the stall watch's quiet time the last runs frame carried, for `/ws/fleet`'s frames (`currentStallQuietMs`).
+   *  `null` until `emitRuns` first emits. */
+  private runsQuietMs: number | null = null;
   /** The `coord` frame's last value and its own byte-equality guard, beside
    *  `lastRunsJson` and for the same reasons. `coord` is `null` until the first
    *  tick measures — see `currentCoord()`. */
@@ -1934,6 +1937,12 @@ export class FleetWatcher {
    *  came back unreadable. Same reasoning as currentPending(). */
   currentCoord(): CoordStatus | null {
     return this.coord;
+  }
+
+  /** The stall watch's quiet time as the last runs frame carried it (D-7334), for the frame's `stallQuietMs`; `null` before
+   *  the first runs frame, `currentCoord()`'s "never measured". */
+  currentStallQuietMs(): number | null {
+    return this.runsQuietMs;
   }
 
   /** The child marks off the last LISTED registry read, for `GET /api/runs`'s
@@ -2737,15 +2746,26 @@ export class FleetWatcher {
         return;
       }
       // ARCH-61 (#796): `childIds`, decided through `childrenOf` against this tick's reading of the fleet's sessions.
-      runs = withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`));
+      // D-7334: each run's last move, in one read for the frame; a failed read leaves the field off (`withLastMoves`).
+      runs = withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`));
     }
     catch (err) {
       console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
       return;
     }
-    const json = JSON.stringify(runs);
+    // D-7334: the frame carries the stall watch's quiet time (`server.ts`'s `onRuns`), read each tick by the resolver's own
+    // quiet half, so the first frame has it and a Settings change re-emits on the next tick. A read that throws is the
+    // built-in, as `stallResolveNow`'s fallback is, and never costs the runs their frame.
+    let quietMs: number;
+    try {
+      quietMs = stallQuietOf(parseStallSettings(coord.stallSettings())).quietMs;
+    } catch {
+      quietMs = STALL_QUIET_MS;
+    }
+    const json = JSON.stringify({ runs, stallQuietMs: quietMs });
     if (json === this.lastRunsJson) return;
     this.lastRunsJson = json;
+    this.runsQuietMs = quietMs;
     this.bus.emit('runs', runs);
   }
 
