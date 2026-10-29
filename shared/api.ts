@@ -3143,6 +3143,11 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
 export type UnnamedSpawnWord = 'unrecognised' | 'keep';
 
 /** One persisted session in today's shape, or null if it cannot be one. */
+/** A `Presence` word, read from a persisted row (`reviveFleetSession`, D-7208). */
+const isPresenceWord = (v: unknown): v is Presence => typeof v === 'string' && (PRESENCES as readonly string[]).includes(v);
+/** `deadSince` from a persisted row: a finite epoch, else null (a value this build cannot read is not a date). */
+const reviveDeadSince = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
 export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnWord = 'unrecognised'): FleetSession | null {
   try {
     const o = asObj(raw, 'session');
@@ -3342,6 +3347,11 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // nothing), and `sessionRunOf` reads either as null. A present value this build cannot read revives as null.
       ...(o['run'] === undefined ? {} : { run: reviveSessionRun(o, 'run') }),
       ...(o['openRun'] === undefined ? {} : { openRun: reviveSessionRun(o, 'openRun') }),
+      // D-7208 (ARCH-48's two keys, kept by the snapshot): the same form. An absent key stays absent, so a row from a
+      // snapshot written before the key reads `unknown` and `sameJson`'s live-frame takeover is unchanged; a word this
+      // build does not know revives as no key (it reads `unknown`, never a guess); `deadSince` a finite number or null.
+      ...(o['presence'] === undefined || !isPresenceWord(o['presence']) ? {} : { presence: o['presence'] }),
+      ...(o['deadSince'] === undefined ? {} : { deadSince: reviveDeadSince(o['deadSince']) }),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server

@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
+import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -800,9 +800,9 @@ describe('SessionScreen overflow menu', () => {
 
   it.each([
     ['a stopped main checkout is ENSURED — the stop stamp clears and its own registry fields respawn it', 'ensure',
-      { status: 'dead', bucket: 'dead', stoppedBy: { at: Date.now() - MIN, surface: 'pwa' } }],
+      { status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stoppedBy: { at: Date.now() - MIN, surface: 'pwa' } }],
     ['an archived workspace is RESTORED', 'restore',
-      { workspace: 'quiet-basin', status: 'dead', archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000 }],
+      { workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000 }],
   ] as const)('Restore in the menu of a session already put away: %s', async (_label, verb, patch) => {
     const ensure = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
     const restore = vi.spyOn(api, 'restore').mockResolvedValue(undefined);

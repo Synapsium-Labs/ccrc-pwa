@@ -1,6 +1,7 @@
 import { boardHome, releasedFromOf, type FleetSession, type ReleasedFrom } from '../../../shared/api';
 import { archivedFoldSince, inArchivedFold } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
+import { presenceOf } from './presence';
 import { sortFleet } from './sortFleet';
 
 /** The account a card's members call home — or why there is no one answer.
@@ -272,9 +273,9 @@ export function groupFleet(
       pin,
       // `(m.stranded ?? null) !== null`, never a truthiness test and never a
       // read of `m.stranded.at` — see this field's own docstring for the two
-      // producible reasons.
+      // producible reasons. Live is the server's word (`presenceOf`, OA-C15 (a), D-7181).
       stranded: live.filter(
-        (m) => m.status !== 'dead' && (m.stranded ?? null) !== null,
+        (m) => presenceOf(m) === 'alive' && (m.stranded ?? null) !== null,
       ).length,
       elsewhere,
     });

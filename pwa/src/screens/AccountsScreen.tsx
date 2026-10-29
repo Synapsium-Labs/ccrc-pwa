@@ -18,6 +18,7 @@ import { PageScaffold, Skeleton, toast, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
+import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, SIGN_IN_EXPIRED } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
@@ -313,15 +314,16 @@ export function AccountsScreen(): ReactNode {
               : `${SIGN_IN_EXPIRED} on the fleet host`;
           const ts = a?.ts ?? null;
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
-          // workspace that is archived, mid-cleanup, or whose tmux session is
-          // gone (`status: 'dead'`) is not load on this account, even though
-          // it still carries the account's `wrapper` and stays in the fleet
-          // store until reaped. `archivedAt !== null` is `sessionBucket`'s own
-          // first check (shared/api.ts) — it alone covers both 'archived' and
-          // 'cleanup', so this predicate is exactly "neither of those, nor
-          // dead" without re-deriving the bucket ladder here.
+          // workspace that is archived, mid-cleanup, or that the server does
+          // not read alive is not load on this account, even though it still
+          // carries the account's `wrapper` and stays in the fleet store until
+          // reaped. `archivedAt !== null` is `sessionBucket`'s own first check
+          // (shared/api.ts) — it alone covers both 'archived' and 'cleanup'.
+          // Live is the server's word (`presenceOf`, OA-C15 (a), D-7181): a
+          // doubted, sleeping or old-server row is not counted, as today, and
+          // a pane gone under `restarting` is the session itself, alive.
           const onAccount = sessions.filter(
-            (s) => s.wrapper === wrapper && s.archivedAt === null && s.status !== 'dead',
+            (s) => s.wrapper === wrapper && s.archivedAt === null && presenceOf(s) === 'alive',
           );
           // `accountPoolState`, not `accountPool` — this chip is the one
           // surface in the app whose whole job is to say WHICH carrier

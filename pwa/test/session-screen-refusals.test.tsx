@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
+import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
 // W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
 // `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
@@ -76,7 +76,7 @@ describe('Restart session — the one control a dead row offers', () => {
     // that left the button saying "Restarting…" for ever would make a
     // recoverable failure look terminal.
     ensure.mockRejectedValue(new Error('tmux: no server running'));
-    renderScreen({ status: 'dead', bucket: 'dead' }, 'dead');
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
     const btn = await screen.findByRole('button', { name: 'Restart session' });
     fireEvent.click(btn);
     const t = await screen.findByText("Couldn't restart — tmux: no server running");
@@ -88,7 +88,7 @@ describe('Restart session — the one control a dead row offers', () => {
     // The `String(err)` arm. ccd's own failures arrive as Errors; a rejected
     // fetch in a stale browser does not.
     ensure.mockRejectedValue('offline');
-    renderScreen({ status: 'dead', bucket: 'dead' }, 'dead');
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
     fireEvent.click(await screen.findByRole('button', { name: 'Restart session' }));
     expect(await screen.findByText("Couldn't restart — offline")).toBeInTheDocument();
   });
@@ -99,7 +99,7 @@ describe('Restart session — the one control a dead row offers', () => {
     // one.
     let release!: () => void;
     ensure.mockReturnValue(new Promise<void>((res) => { release = () => res(); }));
-    renderScreen({ status: 'dead', bucket: 'dead' }, 'dead');
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
     const btn = await screen.findByRole('button', { name: 'Restart session' });
     fireEvent.click(btn);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Restarting…' })).toBeDisabled());
@@ -510,5 +510,47 @@ describe('the session header knows what the card knows (D-5545)', () => {
     const marker = document.querySelector('.chat-head [data-marker="coordinator-gone"]');
     expect(marker?.textContent).toContain('coordinator gone');
     expect(marker?.getAttribute('title')).toContain('reclaim');
+  });
+
+  /** The same screen over a claimant `coord`: the header's orphan marker, or null when it shows none. */
+  const headerMarker = (coord: FleetSession): Element | null => {
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+    const fleet = createFleetStore();
+    const run = {
+      id: 44, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 3, waveOf: 5,
+      project: 'project-a', homeProject: null, sessionId: ID, workspace: null, branch: null,
+      state: 'dispatched', kind: 'work', reviews: null, claimedBy: 'claude:project-b', resumed: false, clearedAt: null,
+      openedAt: 1, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+      items: { done: 0, total: 0 }, unreadMail: 0,
+      health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+        briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+    };
+    act(() => {
+      fleet.setState({
+        roster: TEST_ROSTER, conn: 'open', fleetFrameSeen: true, runsFrameSeen: true,
+        sessions: [fleetSession({ held: 'program:tidy-docs wave:3/5 run:44', child: { kind: 'child', runId: 44 }, role: 'child' }), coord],
+        runs: [run],
+      } as never);
+    });
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+    return document.querySelector('.chat-head [data-marker]');
+  };
+
+  // D-7371: a hibernated orphan coordinator is asleep, never gone (D-5430): the header fact is `hibernated`.
+  it('an orphan whose coordinator is a hibernated orphan reads "coordinator hibernated", never "coordinator gone"', () => {
+    const marker = headerMarker(baseSession({ id: 'claude:project-b', project: 'project-b', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', hibernatedAt: 1_784_500_000_000 }));
+    expect(marker?.getAttribute('data-marker')).toBe('coordinator-hibernated');
+    expect(document.querySelector('.chat-head [data-marker="coordinator-gone"]')).toBeNull();
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): the header says nothing of a gone coordinator.
+  it('a coordinator whose gone pane carries a substrate stamp reads no orphan marker', () => {
+    const marker = headerMarker(baseSession({ id: 'claude:project-b', project: 'project-b', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }));
+    expect(marker).toBeNull();
   });
 });

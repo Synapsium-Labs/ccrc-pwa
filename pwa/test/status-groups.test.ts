@@ -23,7 +23,7 @@ import { groupByStatus, needsReason, STATUS_GROUPS } from '../src/fleet/statusGr
 import { BUCKET_ORDER, sortFleet } from '../src/fleet/sortFleet';
 import { BucketBar } from '../src/fleet/BucketBar';
 import type { Acks } from '../src/lib/seen';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { parseTs } from './literalWalker';
 
 const s = (over: Partial<FleetSession>): FleetSession =>
@@ -42,7 +42,7 @@ describe('groupByStatus (D-5473)', () => {
   });
 
   it('a dead session still dialogPending is in Exited, not Needs you', () => {
-    const killed = s({ id: 'k', status: 'dead', dialogPending: true, hookState: 'waiting', bucket: 'dead' });
+    const killed = s({ id: 'k', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, hookState: 'waiting', bucket: 'dead' });
     const g = groupByStatus([killed], {});
     expect(g.find((x) => x.bucket === 'attention')!.sessions).toEqual([]);
     expect(g.find((x) => x.bucket === 'dead')!.sessions.map((x) => x.id)).toEqual(['k']);
@@ -86,8 +86,8 @@ describe('groupByStatus (D-5473)', () => {
       // Never acked and dated: `isUnseenAt` alone would count it; the BADGED
       // precondition in `isUnseen` does not.
       s({ id: 'idle-never', bucket: 'idle', bucketSince: 300 }),
-      s({ id: 'clean-new', bucket: 'cleanup', status: 'dead', archivedAt: 1, bucketSince: 700 }),
-      s({ id: 'dead-new', bucket: 'dead', status: 'dead', bucketSince: 600 }),
+      s({ id: 'clean-new', bucket: 'cleanup', status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucketSince: 700 }),
+      s({ id: 'dead-new', bucket: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucketSince: 600 }),
     ];
     const acks: Acks = { 'att-seen': 200 };
     const g = groupByStatus(fleet, acks);
@@ -146,7 +146,7 @@ describe('needsReason (D-5473, D-5497)', () => {
 
   it('a session outside Needs you has no reason, whatever its fields say', () => {
     expect(needsReason(s({ bucket: 'working', substrate: { at: 1, text: 'x' } }))).toBeNull();
-    expect(needsReason(s({ bucket: 'dead', status: 'dead', dialogPending: true, ask: { state: 'held', parentId: 'p', answeredBy: null } }))).toBeNull();
+    expect(needsReason(s({ bucket: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, ask: { state: 'held', parentId: 'p', answeredBy: null } }))).toBeNull();
     expect(needsReason(s({
       bucket: 'working', withCoordinator: { kind: 'approval', parentId: 'p-coord', since: 1, notifyAt: 2 },
     }))).toBeNull();

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { ChatEvent, FleetSession, RosterWire, SessionLifecycle, SessionStreamMsg } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { BUCKET_ORDER, RANK, sortFleet } from '../src/fleet/sortFleet';
 import { lifecycleQualifier } from '../src/fleet/lifecycleWords';
 import { SessionLine } from '../src/fleet/SessionLine';
@@ -276,7 +276,7 @@ describe('the row says which kind of dead it is', () => {
   // the TypeError `unmeasuredFields`' docstring records. Kills a direct
   // `session.stoppedBy.surface` read and a dropped `?? null`.
   it('a row from a server that predates the field renders no qualifier', () => {
-    const older = s({ status: 'dead', bucket: 'dead' }) as unknown as Record<string, unknown>;
+    const older = s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }) as unknown as Record<string, unknown>;
     delete older['lifecycle'];
     delete older['stoppedBy'];
     delete older['swapBlocked'];

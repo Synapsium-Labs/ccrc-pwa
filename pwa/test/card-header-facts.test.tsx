@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import {
@@ -76,7 +76,7 @@ const CASES: Record<string, FactInput> = {
   },
   // Verifier round 1: the rows the first suite lacked.
   'a dead session that is not hibernated': {
-    session: s({ workspace: 'still-pond', status: 'dead', bucket: 'dead' }), now: NOW,
+    session: s({ workspace: 'still-pond', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }), now: NOW,
   },
   'a hand-held workspace (held, no child mark)': {
     session: s({ workspace: 'calm-bay', held: 'waiting on the schema decision' }), now: NOW,

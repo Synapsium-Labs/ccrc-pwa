@@ -7,7 +7,7 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { rankCommands, type CommandContext } from '../src/command/registry';
 import { sessionEntries } from '../src/command/sessionEntries';
 import { sessionLabel } from '../src/fleet/sessionLabel';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 
 const worker = fleetSession({
   id: 'project-a-one', project: 'project-a', name: 'first', workspace: 'ws-a', branch: 'ws/ws-a', bucket: 'attention',
@@ -110,8 +110,8 @@ describe('sessionEntries (D-6714)', () => {
   });
 
   it('tiers: coordinator 1, worker 2, exited 3 whatever the role', () => {
-    const deadLead = fleetSession({ id: 'dl', project: 'project-a', role: 'coordinator', bucket: 'dead', status: 'dead' });
-    const deadWorker = fleetSession({ id: 'dw', project: 'project-a', bucket: 'dead', status: 'dead' });
+    const deadLead = fleetSession({ id: 'dl', project: 'project-a', role: 'coordinator', bucket: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE });
+    const deadWorker = fleetSession({ id: 'dw', project: 'project-a', bucket: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE });
     expect(sessionEntries([lead, worker, deadLead, deadWorker], [], 'top').map((e) => e.tier)).toEqual([1, 2, 3, 3]);
   });
 

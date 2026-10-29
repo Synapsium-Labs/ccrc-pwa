@@ -15,7 +15,7 @@
 // run of a live session as its worker and as its coordinator; an older closed run of a live session beside its newer
 // bound run; and the four ordinary open runs `childIds` does not describe (planned with `sessionId: null`, an undecidable
 // binding, empty `childIds` on an unlistable tick, no `childIds` key). Each row pins today's worker, today's coordinator
-// (`coordSession`), `RunRow`'s `coordPresence` and whether the Resume door shows, and names the question it asks.
+// (`coordSession`), `RunRow`'s `coordinatorPresence` (the `coordPresence` column) and whether the Resume door shows, and names the question it asks.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -25,7 +25,7 @@ import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { runBelongsTo, runCard, runForSession } from '../src/fleet/runWords';
 import { cardsOf, fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
-import { coordPresence } from '../src/fleet/coordWords';
+import { coordinatorPresence } from '../src/fleet/presence';
 import { sessionEntries } from '../src/command/sessionEntries';
 import { ArchiveSheet } from '../src/fleet/ArchiveSheet';
 import { PrSheet } from '../src/session/PrSheet';
@@ -201,7 +201,7 @@ async function rowFacts(sc: Scenario): Promise<Record<number, Record<string, unk
       runBelongsTo: runBelongsTo(r, w),
       worker: row.session,
       coordSession: row.coord,
-      coordPresence: coordPresence(r.claimedBy, coordSession, true),
+      coordPresence: coordinatorPresence(r.claimedBy, coordSession, true),
       resumeDoor: row.resume,
       abandonChild: b.abandon.get(id) ?? '-',
       runCard: runCard(r, cards),

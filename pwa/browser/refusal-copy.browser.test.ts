@@ -41,7 +41,7 @@ const session = (id: string, ws: string, extra: object = {}): object => ({
   ultracode: false, branch: `ws/${ws}`, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null,
   archivedBytes: null, held: null, hookState: null, askSummary: null, subagents: null, background: null,
   withCoordinator: null, lastEnd: null, hibernatedAt: null, bucket: 'idle', unmeasured: [], started: true,
-  child: { kind: 'none' }, lifecycle: 'running', ...extra,
+  child: { kind: 'none' }, lifecycle: 'running', presence: 'alive', ...extra,
 });
 
 const MERGED_PR = {
@@ -63,7 +63,7 @@ const RUN = {
 
 const SESSIONS = [
   session(WORKER, 'one', { pr: MERGED_PR }),
-  session(COORD, 'coord', { status: 'dead', lifecycle: 'orphan', bucket: 'idle' }),
+  session(COORD, 'coord', { status: 'dead', lifecycle: 'orphan', presence: 'dead', bucket: 'idle' }),
 ];
 
 const FIXTURE: AppFixture = {

@@ -22,7 +22,7 @@ import type { ReactNode } from 'react';
 import type { FleetSession, ProjectPoolWire, RosterWire } from '../../../shared/api';
 import { Icon, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import type { ChildRunContext } from './runWords';
-import type { CoordPresence } from './coordWords';
+import type { CoordinatorPresence } from './presence';
 import { SessionMeta } from './SessionMeta';
 import { cardFacts, sessionFacts } from './sessionFacts';
 import { sameLineProps } from './lineProps';
@@ -101,7 +101,7 @@ function SessionLineView({
   childRun?: ChildRunContext;
   /** D-5545: the presence of this row's coordinator when it is not a live row on this card (`orphanNote`):
    *  `dead` puts "coordinator gone" on the row, its one marker — the line the card used to repeat under it. */
-  coordinator?: CoordPresence | null;
+  coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanNote`'s `title`). */
   coordinatorTitle?: string;
   /** The clock, for a test; the row ticks its own otherwise. */

@@ -55,6 +55,12 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
     expect(got.map((s) => [s.symbol, s.text])).toEqual([['gone', "s.status === 'dead'"], ['live', "'dead' !== s.status"]]);
   });
 
+  it('inlineDeadChecks: the owner, fleet/presence.ts, holds the definition and is not counted (C7c, D-7181)', () => {
+    const text = "export function paneGone(s: S): boolean { return s.status === 'dead'; }";
+    expect(run(inlineDeadChecksIn, text, 'pwa/src/fleet/presence.ts')).toEqual([]);
+    expect(run(inlineDeadChecksIn, text, 'pwa/src/fleet/other.ts').map((s) => s.symbol)).toEqual(['paneGone']);
+  });
+
   it('coordPresenceSites: the definition, each call and an answer compared with dead; another function is not', () => {
     const got = run(coordPresenceSitesIn, [
       'export function coordPresence(c: string | null, s: S | null, f: boolean): P { return "alive"; }',
@@ -253,16 +259,14 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(sites.map((s) => s.file)).toEqual(['pwa/src/stores/fleet.ts']);
   });
 
-  it('inlineDeadChecks(): 16 comparisons of a status with dead, in 9 files', () => {
+  it('inlineDeadChecks(): 0 comparisons of a status with dead outside fleet/presence.ts (C7c, D-7181)', () => {
     const sites = inlineDeadChecks();
-    held('inlineDeadChecks', sites, 16);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(9);
+    held('inlineDeadChecks', sites, 0);
   });
 
-  it('coordPresenceSites(): 1 definition, 3 calls, 2 answers compared with dead', () => {
+  it('coordPresenceSites(): 0 (coordPresence deleted, C7c; its callers read fleet/presence.ts#coordinatorPresence)', () => {
     const sites = coordPresenceSites();
-    held('coordPresenceSites', sites, 6);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ definition: 1, call: 3, 'answer-dead': 2 });
+    held('coordPresenceSites', sites, 0);
   });
 
   // Desktop-polish Task G2 added three: the programme box's own matches (fleetTree's `claimed` index, programmeBoxes'

@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ApiError, api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -1963,7 +1963,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [
         session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: now }),
-        session({ id: 'd', project: 'beta', status: 'dead', bucket: 'dead', bucketSince: now }),
+        session({ id: 'd', project: 'beta', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', bucketSince: now }),
       ],
     });
 
@@ -2221,7 +2221,7 @@ describe('the head count', () => {
     renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
-      sessions: [session({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true, bucket: 'dead' })],
+      sessions: [session({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, bucket: 'dead' })],
     });
 
     expect(screen.getByText('1 session')).toBeInTheDocument(); // not '1 session · 1 waiting'
@@ -2285,14 +2285,14 @@ describe('an ack written by another screen', () => {
 describe('a chip never names rows that are not on the screen', () => {
   const merged = (): FleetSession => session({
     id: 'wt-merged', project: 'P', workspace: 'wt-merged',
-    status: 'dead', archivedAt: 1785300000, archivedBytes: 1_200_000_000,
+    status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, archivedBytes: 1_200_000_000,
     pr: { phase: 'merged', number: 157, url: null, title: null, checks: null, checkNames: null,
           ahead: 0, reason: null, checkedAt: null, mergedAt: 1785300000_000, retryAt: null },
     bucket: 'cleanup', bucketSince: 1785300000_000,
   });
   const plain = (): FleetSession => session({
     id: 'wt-plain', project: 'P', workspace: 'wt-plain',
-    status: 'dead', archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000,
+    status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000,
   });
 
   const seedBoth = (): FleetStore => {
@@ -2333,7 +2333,7 @@ describe('a chip never names rows that are not on the screen', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [plain(), session({
-      id: 'claude-P', project: 'P', workspace: null, status: 'dead', bucket: 'dead',
+      id: 'claude-P', project: 'P', workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead',
       stoppedBy: { at: 1785300000_000, surface: 'pwa' },
     })] });
     const exitedChip = screen.getByText('Exited').closest('.bucket-head') as HTMLElement;
@@ -2721,7 +2721,7 @@ describe('the programme tree on the fleet screen', () => {
     // `g.sessions` — the coordinator sits on alpha's card while the marker is
     // drawn on beta's. Nothing in project-card.test.tsx alone can catch a
     // regression at the wiring site (it passes the props directly), so this
-    // case mounts the whole screen and seeds the store the way `coordPresence`
+    // case mounts the whole screen and seeds the store the way `coordinatorPresence`
     // actually needs: a dead-measured session fleet-wide, and BOTH frame-seen
     // flags true.
     const store = makeStore();

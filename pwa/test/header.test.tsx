@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession as baseSession, hibernatedSession } from './fleetFixture';
+import { fleetSession as baseSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
@@ -146,7 +146,7 @@ describe('SessionHeader', () => {
     renderHeader({
       status: 'dead',
       session: fleetSession({
-        status: 'dead', archivedAt: 1785300000, bucket: 'cleanup',
+        status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'cleanup',
         pr: { phase: 'merged', number: 157, url: null, title: null, checks: null,
               checkNames: null, ahead: 0, reason: null, checkedAt: null,
               mergedAt: 1785300000_000, retryAt: null },
@@ -189,7 +189,7 @@ describe('SessionHeader', () => {
     // used to read the raw status and call the same session dead.
     renderHeader({
       status: 'dead',
-      session: fleetSession({ status: 'dead', archivedAt: 1, bucket: 'cleanup' }),
+      session: fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'cleanup' }),
     });
     expect(screen.getByRole('img', { name: 'merged, ready to clean up' })).toBeInTheDocument();
     expect(screen.getByText('merged, ready to clean up')).toBeInTheDocument();
@@ -197,7 +197,7 @@ describe('SessionHeader', () => {
   });
 
   it('still says not running for a dead session', () => {
-    renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
+    renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }) });
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
     // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
     expect(screen.getByText('exited')).toBeInTheDocument();
@@ -593,7 +593,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
   it('a put-away MAIN CHECKOUT under a fault: Restore is disabled, names the fault, and a click is inert', async () => {
     // Its Restore is `POST /ensure` — the request the dead banner's Restart refuses under the same fault.
     const p = renderHeader({ session: fleetSession({
-      status: 'dead', bucket: 'dead', stoppedBy: { at: Date.now() - 60_000, surface: 'pwa' },
+      status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stoppedBy: { at: Date.now() - 60_000, surface: 'pwa' },
       substrate: { at: 1, text: 'x' } }) });
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     const restore = await screen.findByRole('button', { name: 'Restore' });
@@ -606,7 +606,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
 
   it('an archived WORKSPACE under a fault keeps Restore live — ws-restore is not /ensure', async () => {
     const p = renderHeader({ session: fleetSession({
-      workspace: 'quiet-basin', status: 'dead', bucket: 'archived', archivedAt: 1785300000,
+      workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1785300000,
       substrate: { at: 1, text: 'x' } }) });
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     const restore = await screen.findByRole('button', { name: 'Restore' });
@@ -617,7 +617,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
   });
 
   it('a session already put away offers Restore in Archive\'s place', async () => {
-    const p = renderHeader({ session: fleetSession({ status: 'dead', bucket: 'archived', archivedAt: 1785300000 }) });
+    const p = renderHeader({ session: fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1785300000 }) });
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
     expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
@@ -630,7 +630,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
       fleet.setState({
-        sessions: [fleetSession({ status: 'dead', bucket: 'dead', substrate: { at: 1, text: 'x' } })],
+        sessions: [fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', substrate: { at: 1, text: 'x' } })],
         conn: 'open',
       });
     });
@@ -806,7 +806,7 @@ describe('the PR cap in the header', () => {
   it('renders while the agent link is down (status dead)', () => {
     render(<SessionHeaderHost {...props({
       status: 'dead',
-      session: fleetSession({ workspace: 'quiet-basin', status: 'dead', pr: null }),
+      session: fleetSession({ workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, pr: null }),
     })} />);
     expect(screen.getByLabelText(/pull request/i)).toBeInTheDocument();
   });
@@ -1337,7 +1337,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
   // The guard that keeps the words off any bucket but `working`: the server
   // keeps the field on a dead row, or an idle one whose asks row is still held.
   it('a dead row with the field set reads its dead word, never the coordinator words', () => {
-    renderHeader({ session: held({ status: 'dead', bucket: 'dead' }), status: 'dead' });
+    renderHeader({ session: held({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }), status: 'dead' });
     const line = document.querySelector('.status-line');
     expect(line?.textContent).not.toContain('with coordinator');
     expect(line?.className).not.toContain('status-line--coordinator');
@@ -1426,7 +1426,7 @@ describe('the header of a hibernated row (D-5242)', () => {
   });
 
   it('a dead row without hibernatedAt still reads "exited" (the lamp: "not running")', () => {
-    renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
+    renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }) });
     // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
     expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText('hibernated')).toBeNull();

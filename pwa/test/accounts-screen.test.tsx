@@ -8,7 +8,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
@@ -248,7 +248,7 @@ describe('AccountsScreen — sessions on this account', () => {
       sessions: [
         sess({ id: 'live', wrapper: 'claude', name: 'still running' }),
         sess({ id: 'gone', wrapper: 'claude', name: 'old workspace', archivedAt: 100 }),
-        sess({ id: 'dead', wrapper: 'claude', name: 'crashed pane', status: 'dead' }),
+        sess({ id: 'dead', wrapper: 'claude', name: 'crashed pane', status: 'dead', lifecycle: DEAD_LIFECYCLE }),
       ],
     }));
     render(<AccountsScreen />);
