@@ -5032,6 +5032,31 @@ for drop in (None, "reason", "cgraw", "meas"):
     if len(s.encode("utf-8")) <= cap:
         sys.stdout.write(s); raise SystemExit(0)
 
+# THEN THE DETAIL IS CUT, NEVER DROPPED WHOLE. A failed
+# check says WHY in `detail`, and a long one (a rows rung naming fifty rows) is
+# exactly the line the last resort below would reduce to "something failed".
+# So the longest first part of it that fits is kept, closed by
+# ` [N bytes cut]`, N the UTF-8 bytes of what was cut, so kept and cut add up
+# to the whole. The cut falls between characters, never inside one; the
+# search is a bisection, because one escaped character can cost six bytes.
+# A line that is over the cap without its detail still falls to the minimum.
+d = ev.get("detail")
+if isinstance(d, str) and d:
+    def cut(n):
+        return d[:n] + " [%d bytes cut]" % len(d[n:].encode("utf-8", "surrogateescape"))
+    lo, hi, best = 0, len(d) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        ev["detail"] = cut(mid)
+        if len(line(ev).encode("utf-8")) <= cap:
+            best, lo = mid, mid + 1
+        else:
+            hi = mid - 1
+    if best is not None:
+        ev["detail"] = cut(best); ev["truncated"] = True
+        sys.stdout.write(line(ev)); raise SystemExit(0)
+    ev["detail"] = d
+
 # THE LAST RESORT CARRIES THE JOINABLE MINIMUM. `tx` and `dec.surface` and the
 # refusal token are what a reader needs to pair an intent with its outcome and
 # to know what was refused; dropping them here loses the record at exactly the
@@ -30794,7 +30819,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #   (d) only for a row whose current spelling resolved `complete`, never a
   #       gone row: its recorded identity differs from its current one, and its
   #       recorded path does not stand with the recorded identity. Where it
-  #       entered can no longer be placed, and that holds.
+  #       entered can no longer be placed, and that holds — save after a box
+  #       move: a recorded device this host does not mount, with the recorded
+  #       path standing where the row's workdir resolves now, places the row by
+  #       that path (the release's own comment says what it needs).
   # A BIRTH TIME THE WALK COULD NOT READ IS NEVER "NONE KEPT". `-` (a file
   # system that keeps none) compares device and inode alone (`_ws_ident_eq`);
   # a birth time that could not be read leaves rule (a) or (d) unasked, and
@@ -31013,6 +31041,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       [[ "$efx" == T$'\t'0$'\t'* ]] || continue
       wbt+=("${efx#T$'\t'0$'\t'}"); efbt0=$(( ${#wbt[@]} - 1 )); break
     done
+    # A BOX MOVE (rule (d)'s one release, below): each field's recorded device, asked of the table, only where the
+    # table itself is asked (target 0 standing, Linux). Before the F requests, so those stay the last of the list.
+    if (( mreq )) && [[ -n "$mi" ]]; then
+      for (( eff = 0; eff < ${#efo[@]}; eff++ )); do req+=("D"$'\t'"$eff"$'\t'"${efi[eff]%%:*}"); done
+    fi
     for (( eff = 0; eff < ${#efo[@]}; eff++ )); do
       req+=("F"$'\t'"$eff"$'\t'"${efp[eff]}")
       wbt+=("${efp[eff]}"); efbp+=("$(( ${#wbt[@]} - 1 ))"); efbw+=(-1)
@@ -31088,7 +31121,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       while IFS=' ' read -r efk efn efr; do
         [[ "$efn" =~ ^[0-9]+$ ]] || continue
         case "$efk" in
-          T|A|F) efans["$efk$efn"]="$efr" ;;
+          T|A|F|D) efans["$efk$efn"]="$efr" ;;
           B) efbt["$efn"]="$efr" ;;
         esac
       done <<< "${_WS_IDWALK_OUT-}"
@@ -31144,6 +31177,29 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
                 efstand=2; unwalk+="${unwalk:+, }row ${efo[eff]} (the birth time of where it entered could not be read)"
               elif _ws_ident_eq "$efr1" "$efrc"; then
                 efstand=1
+              fi
+            fi
+            # A BOX MOVE: the one release of this rule, and it places the row by PATH only.
+            # A registry copied onto new hardware keeps the old host's identities, so every row reads as having
+            # entered elsewhere, while the tree, copied, stands at the path its field records. The row is placed
+            # by that path, which every arm above has already compared, when all of these hold: the recorded
+            # device is a real one (major not 0) that no line of this host's mount table carries (`D … absent`),
+            # so the directory it names is reachable at no path here, the child's tree included, moved or not;
+            # it is the device of no target the walk measured; and the recorded path stands now, is where the
+            # row's workdir resolves now, and is the directory that resolution walked (one device and inode at
+            # one instant). Nothing is written: the field has one writer, the pane, and a reclaim reads other
+            # rows only. A row that entered elsewhere on a device this host mounts (a tree copied within one
+            # file system, or moved and replaced) still holds: a copy and a move are the same answer here.
+            # Darwin asks no table, so it holds there.
+            if (( efstand == 0 )) && [[ "${efans[D$eff]-}" == absent && "$efr" == ok\ * && "$efp1" == "${efw[eff]}" ]]; then
+              efy="${efr#ok }"; efy="${efy%% *}"; efx="${efans[A$efa]#ok }"; efx="${efx%% *}"
+              if [[ "$efy" == "$efx" ]]; then
+                efstand=3
+                for efk in T0 T1 T2; do
+                  efn="${efans[$efk]-}"; [[ "$efn" == ok\ * ]] || continue
+                  efn="${efn#ok }"; efn="${efn%%:*}"
+                  [[ "$efn" != "${efr1%%:*}" ]] || efstand=0
+                done
               fi
             fi
             (( efstand != 0 )) || unrec+="${unrec:+, }${efo[eff]}"
@@ -31713,6 +31769,12 @@ _ws_reclaim_idwalk() {   # mi [btpath...] ; NUL-separated requests on THIS funct
   #       `M 0 un empty|malformed|unreadable|nochild` when the table has no
   #       line, has a line that is not a mount, cannot be read (or is not
   #       `mi`), or T0 is not `ok`.
+  #   D i <st_dev>    whether a recorded entry's device (decimal, as `stat`
+  #       wrote it) is on this host, asked of the table `mi`: `D i anon` for a
+  #       major of 0 (an anonymous device: a btrfs subvolume, an overlay, which
+  #       no table has to list), `D i mounted` when a line's field 3 is its
+  #       major:minor, `D i absent` when none is, and
+  #       `D i un empty|malformed|unreadable|error` otherwise, `mi` '' included.
   # Then one `B j <raw>` per btpath (absolute paths). `_plat_btime` is asked
   # once of every path, and its answer is taken only whole (rc 0, one line per
   # path); otherwise each path is asked alone. `B j un` for a path whose own
@@ -31862,6 +31924,34 @@ def mounts(tab, child, s):
         if root == rel or root.startswith(rel.rstrip(b"/") + b"/"):
             return b"hold deleted" if gone else b"hold root"
     return b"clear %d" % len(rows)
+TABLE = dict()
+def devon(tab, d):
+    if not d.isdigit() or len(d) > 19:
+        return b"un error"
+    dv = int(d)
+    if os.major(dv) == 0:
+        return b"anon"
+    if tab not in TABLE:
+        try:
+            with open(tab, "rb") as fh:
+                lines = fh.read().split(b"\n")
+        except OSError:
+            TABLE[tab] = b"un unreadable"
+        else:
+            if lines[-1] == b"":
+                lines.pop()
+            devs = set()
+            for ln in lines:
+                f = ln.split(b" ")
+                if b" - " not in ln or len(f) < 5 or not f[4].startswith(b"/"):
+                    devs = b"un malformed"
+                    break
+                devs.add(f[2])
+            TABLE[tab] = devs if lines else b"un empty"
+    t = TABLE[tab]
+    if isinstance(t, bytes):
+        return t
+    return b"mounted" if (b"%d:%d" % (os.major(dv), os.minor(dv))) in t else b"absent"
 def walk():
     mi = os.fsencode(sys.argv[1])
     reqs = []
@@ -31869,7 +31959,7 @@ def walk():
         if r == b"":
             continue
         f = r.split(b"\t", 2)
-        if len(f) != 3 or f[0] not in (b"T", b"A", b"P", b"F", b"M") or not f[1].isdigit():
+        if len(f) != 3 or f[0] not in (b"T", b"A", b"P", b"F", b"M", b"D") or not f[1].isdigit():
             sys.exit(3)
         reqs.append(f)
     ans = [b""] * len(reqs)
@@ -31905,6 +31995,8 @@ def walk():
                 ans[i] = b"un unreadable"
             else:
                 ans[i] = mounts(mi, seen[b"0"][0], seen[b"0"][1])
+        elif kind == b"D":
+            ans[i] = devon(mi, p) if mi else b"un unreadable"
     sys.stdout.buffer.write(b"".join(r[0] + b" " + r[1] + b" " + a + b"\n" for r, a in zip(reqs, ans)))
 try:
     walk()
