@@ -300,11 +300,13 @@ _ws_reclaim_workdir_shared -> _reg_read
 _ws_shed_asleep_why -> _session_probe
 _ws_shed_asleep_why -> _svc_is_active
 _ws_shed_failed -> _lc_fail
+_ws_shed_int -> _child_runid_valid
 _ws_shed_locked -> _child_runid_valid
 _ws_shed_locked -> _reg_get_to
 _ws_shed_refused -> _lc_emit
 _ws_shed_run -> _lc_done
 _ws_shed_run -> _reg_set
+_ws_shed_spawn_held -> _child_runid_valid
 _ws_status -> _cfg_dir
 _ws_status -> _reg_get
 _ws_status -> _session_verdict
