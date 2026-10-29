@@ -1626,3 +1626,47 @@ describe('the kept Other on a return to its question, desk and phone (R102)', ()
     expect(r.fieldFocused).toBe(true);
   }, 90_000);
 });
+
+// W7 C7g (D-7185, D-7485; ARCH-57 #792, PWA half): on a server that advertises `questions-v1` in `GET /health`'s `caps`,
+// a tapped row answers through W3 Q3f's `POST /api/questions/session-<id>/answer` with the family's body, and nothing
+// goes to the old `/dialog`. Every other row in this file runs against the harness's `/health`, which is the app's own
+// page (no such word), so they are the old-server rows: their answers still go to `/dialog`, as before.
+describe('a tapped row answers through the question family\'s door on a questions-v1 server (W7 C7g)', () => {
+  const DOOR_VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
+    [360, 390, 1280, 1920].map((width) => ({ skin, theme, width }))));
+  for (const view of DOOR_VIEWS) {
+    it(named(view), async () => {
+      const opened = await openApp(browser!, view, FIXTURE);
+      try {
+        await opened.page.route('**/health', (route) => route.fulfill({
+          status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, build: null, caps: ['ask-pairing-v1', 'questions-v1'] }),
+        }));
+        const family: string[] = [];
+        await opened.page.route(`**/api/questions/session-${SESSION.id}/answer`, (route) => {
+          family.push(route.request().postData() ?? '');
+          void route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+        });
+        const old: string[] = [];
+        opened.page.on('request', (r) => {
+          if (r.method() === 'POST' && new URL(r.url()).pathname === `/api/sessions/${SESSION.id}/dialog`) old.push(r.postData() ?? '');
+        });
+        await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+          servedSocket(ws);
+          for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
+        });
+        await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+        // At a desk the ask is the inline card (D-6326); on a phone it is the sheet.
+        const option = view.width >= 1280 ? `${CARD} button.opt` : '.sheet-panel button.opt';
+        await opened.page.waitForSelector(option, { timeout: 30_000 });
+        await opened.page.waitForTimeout(800);
+        await opened.page.locator(option).nth(1).click();
+        await expect.poll(() => family.length, { timeout: 10_000, interval: 100 }).toBe(1);
+        expect(JSON.parse(family[0]!), 'the second row answers option 2, with the family\'s body').toMatchObject({ kind: 'dialog', optionIndex: 2 });
+        expect(old, 'nothing goes to the old door').toEqual([]);
+        expect(opened.errors).toEqual([]);
+      } finally {
+        await opened.ctx.close();
+      }
+    }, 90_000);
+  }
+});
