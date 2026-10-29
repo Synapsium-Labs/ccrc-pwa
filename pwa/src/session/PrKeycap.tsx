@@ -106,6 +106,9 @@ const REASON_TEXT: Record<PrReason, string> = {
   // So this copy must not blame the connection — it says what is missing and
   // implies the safe consequence (ccrc will not offer cleanup on this).
   'merge-unproven': 'GitHub reports this merged but named no usable merge commit, so ccrc will not call it merged.',
+  // The third reason that is NOT a failed read, and the one a `closed` phase carries (D-7362): GitHub answered, the PR
+  // wears the landed-in-train label, and no merged train PR lists it at its head, so ccrc will not call it merged.
+  'train-unproven': 'It is labelled as landed in a merge train, but no merged train PR lists it at its head, so ccrc will not call it merged.',
   // The second reason that is NOT a failed read: ccrc's registry and git
   // disagree about which branch this workspace is on, so there are two
   // candidate answers to "its PR" and ccd measured neither rather than
@@ -162,7 +165,10 @@ export function prSentence(pr: PrState, branch?: string): string {
       return `Pull request #${pr.number ?? '?'}: merged${ago === null ? '' : ` ${ago} ago`}.`;
     }
     case 'closed':
-      return `Pull request #${pr.number ?? '?'}: closed without merging. This branch's commits are not on main.`;
+      // `train-unproven` (D-7362): the PR wears the landed-in-train label, but the train record did not prove it.
+      return pr.reason === 'train-unproven'
+        ? `Pull request #${pr.number ?? '?'}: closed. ${REASON_TEXT['train-unproven']}`
+        : `Pull request #${pr.number ?? '?'}: closed without merging. This branch's commits are not on main.`;
     case 'unknown':
       return `Pull request: ${unknownReasonText(pr.reason)}${retryText(pr.retryAt)}${stale}`;
   }

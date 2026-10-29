@@ -770,7 +770,9 @@ whole time, which is the only prevention this ordering rule buys.
    MERGED with `headRefOid` equal to it, or CLOSED with `headRefOid` equal to it
    and `landedInTrain: true` on the PR's row of `ccd pr-state --session
    <sessionId>` (a merge train landed its work through a train PR and closed
-   it; ccd reads the deployment's train label, so you never name one) — the
+   it; ccd sets it only when that train PR is MERGED and its record lists the
+   PR at exactly this head, so a label alone reads `trainUnproven` and you
+   never name a label) — the
    coordinator lands every PR with
    `--match-head-commit <handoffCommit>`, by the route §5b reads from the
    repository's own rules, for exactly this reason (`--admin` and GitHub API

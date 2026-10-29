@@ -5817,7 +5817,7 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. One of ccd's embedded h
   # `python3 - "$@" <<PY` gives stdin='', `python3 /dev/fd/3 "$@" 3<<PY` gives
   # the rows, with sys.argv identical. The rows cannot move to argv instead —
   # spec §7 is that no GitHub-sourced string is ever placed in an argv.
-  PR_LANDED_LABEL="${CCD_LANDED_LABEL-$PR_LANDED_LABEL_DEFAULT}" python3 /dev/fd/3 "$@" 3<<'PY'
+  PR_TRAIN_PROOFS="${_PR_TRAIN_PROOFS-}" PR_LANDED_LABEL="${CCD_LANDED_LABEL-$PR_LANDED_LABEL_DEFAULT}" python3 /dev/fd/3 "$@" 3<<'PY'
 import fcntl, json, os, re, stat, subprocess, sys, time
 
 mode = sys.argv[1]
@@ -5896,6 +5896,26 @@ def one_ours(main, tip, oid):
 # `closed`, never make one `merged`.
 LANDED_LABEL = os.environ.get('PR_LANDED_LABEL', '')
 
+# THE TRAIN PROOFS (D-7362), handed down by `_pr_py` from `_pr_train_proofs`:
+# one `<member> <head sha> <train> <train merge commit>` line per member whose
+# train record `_ws_train_record` PROVED. The label is GitHub's claim and this
+# is the proof: a labelled PR is `landedInTrain` only when its number and its
+# exact head are listed here. Nothing handed down proves nothing, so a missing
+# value can only keep a PR `closed`, never make one `merged`.
+def train_proofs():
+    got = {}
+    for l in os.environ.get('PR_TRAIN_PROOFS', '').splitlines():
+        m = re.fullmatch(r'([1-9][0-9]{0,9}) ([0-9a-f]{40}) ([1-9][0-9]{0,9}) ([0-9a-f]{40})', l)
+        if m:
+            got[(m.group(1), m.group(2))] = (m.group(3), m.group(4))
+    return got
+
+TRAIN_PROOFS = train_proofs()
+
+def labelled(r):
+    """CLOSED and carrying the deployment's train label: a CLAIM of a train landing, never its proof."""
+    return LANDED_LABEL != '' and r.get('state') == 'CLOSED' and LANDED_LABEL in label_names(r)
+
 def label_names(r):
     """gh pr list's `labels: [{name}]` or GraphQL's `labels: {nodes: [{name}]}`; anything else is no labels."""
     ls = r.get('labels')
@@ -5907,10 +5927,15 @@ def annotate(rows, main, tip, branch, base_short):
     out = [r for r in rows if isinstance(r, dict)]
     for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
         r['ours'] = ours
-        # Annotated here, beside `ours`, so this box's config is the ONE reader
-        # of the label name: prstate.ts reads this boolean and never a label.
-        r['landedInTrain'] = (LANDED_LABEL != '' and r.get('state') == 'CLOSED'
-                              and LANDED_LABEL in label_names(r))
+        # Annotated here, beside `ours`, so this box is the ONE reader of the
+        # label and the ONE judge of the train record: prstate.ts, the landing
+        # lane, the queue word and the reap read these two booleans and never a
+        # label. `landedInTrain` is the PROOF (the train PR is MERGED and its
+        # record lists this member at exactly this head); a label without it
+        # is `trainUnproven`, which reads as closed, never merged.
+        claim = labelled(r)
+        r['landedInTrain'] = claim and (str(r.get('number')), r.get('headRefOid')) in TRAIN_PROOFS
+        r['trainUnproven'] = claim and not r['landedInTrain']
     return out
 
 def bound(r, branch, base_short):
@@ -6005,7 +6030,11 @@ if mode == 'state':
         # worked. phaseFor answers the same token for the same row.
         phase, number, reason = 'unknown', chosen.get('number'), 'merge-unproven'
     elif chosen.get('state') == 'CLOSED':
+        # A train label with no train record behind it is CLOSED and unmerged,
+        # and says why: `train-unproven`, which phaseFor answers for the same row.
         phase, number = 'closed', chosen.get('number')
+        if chosen.get('trainUnproven') is True:
+            reason = 'train-unproven'
     elif chosen.get('isDraft') is True:
         phase, number = 'draft', chosen.get('number')
     else:
@@ -6563,6 +6592,10 @@ elif mode == 'pick':
             str(chosen.get('number') or ''), str(chosen.get('url') or ''), 'landed',
             str(chosen.get('headRefOid') or ''),
         ]) + '\n')
+    elif chosen.get('trainUnproven') is True:
+        # Labelled, and the train record did not prove it: the reap names the
+        # number so `_ws_reap_eval` can say which read failed and how.
+        sys.stdout.write('!not-merged train %s\n' % str(chosen.get('number') or ''))
     elif not is_merged(chosen, branch, base_short):
         sys.stdout.write('!not-merged\n')
     else:
@@ -6572,12 +6605,30 @@ elif mode == 'pick':
             str(chosen.get('headRefOid') or ''),
         ]) + '\n')
 
+elif mode == 'train-cands':
+    # The rows `_pr_train_proofs` must prove: CLOSED with the train label, on
+    # this branch and base, from this repository, with a number and a full
+    # head sha. Only digits and hex leave here, `<n>\t<head>` per row, so the
+    # shell can anchor both before either reaches an argv. Never a proof.
+    (branch, base_short) = sys.argv[2:4]
+    for r in rows_in() or []:
+        if not isinstance(r, dict) or not labelled(r):
+            continue
+        n, head = r.get('number'), r.get('headRefOid')
+        if (isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10 ** 10
+                and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)
+                and r.get('headRefName') == branch and r.get('baseRefName') == base_short
+                and r.get('isCrossRepository') is False):
+            sys.stdout.write('%d\t%s\n' % (n, head))
+
 elif mode == 'train-refs':
     # The train PRs a member's comments name: `train #<n>` in any comment, the
     # comment a merge train leaves when it closes a member with the label.
-    # Newest comment first, each number once, at most `cap`. Only digits leave
-    # here, so the shell can anchor them before any reaches an argv.
-    (member, cap) = sys.argv[2:4]
+    # Newest comment first, each number once, and EVERY one: a cap would let
+    # stray newer mentions hide the real train, and `_ws_train_record`'s
+    # deadline is what bounds the reads. Only digits leave here, so the shell
+    # can anchor them before any reaches an argv.
+    (member,) = sys.argv[2:3]
     try:
         doc = json.loads(sys.stdin.read() or 'null')
     except ValueError:
@@ -6591,7 +6642,7 @@ elif mode == 'train-refs':
         for m in re.finditer(r'(?i)\btrain\s+#([1-9][0-9]{0,9})\b', body):
             if m.group(1) != member and m.group(1) not in seen:
                 seen.append(m.group(1))
-    sys.stdout.write(''.join(n + '\n' for n in seen[:int(cap)]))
+    sys.stdout.write(''.join(n + '\n' for n in seen))
 
 elif mode == 'train-check':
     # THE TRAIN RECORD (D-7335). stdin is one train PR (`gh pr view`) or a list
@@ -11316,6 +11367,9 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   fi
   tmpl=""
   [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
+  # The train proof (D-7362) under the verb's budget (`_PR_TRAIN_DEADLINE`,
+  # none when this is called on its own), keeping what it proves.
+  _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
     "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
 }
@@ -11446,6 +11500,11 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # a refusal that stops a phase from ever updating.
   answeredAt=$(_plat_epoch_ms 2>/dev/null)
   [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
+  # THE TRAIN PROOF'S BUDGET (D-7362): `--session` may read train records for
+  # its one branch; the `--project` sweep has no room left inside its bound and
+  # reads only the proofs already kept (see PR_STATE_TRAIN_TIMEOUT).
+  local _PR_TRAIN_DEADLINE=$SECONDS
+  [[ $mode == --session ]] && _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))
 
   # ── THE ROLLUPS, WHICH THE WIDE WINDOW CANNOT CARRY ────────────────
   # `_gh_pr_list` sends `statusCheckRollup` only with a head filter, because a
@@ -11842,6 +11901,8 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
 
   # THE BINDING, per session, through the code `pr-state` binds with and persisting nothing.
   local branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL facts="" bind bases=$'\n'
+  # The train proof's budget for the whole call (D-7362); this read keeps nothing.
+  local _PR_TRAIN_DEADLINE=$(( SECONDS + $PR_LANDING_TRAIN_TIMEOUT ))
   for (( i = 0; i < k; i++ )); do
     id="${ids[$i]}"
     if ! _pr_bind_facts "$id" "$main" ""; then
@@ -11849,6 +11910,7 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
     elif (( gqlok == 0 )); then
       facts+="$(printf '{"id":"%s","gql":true}' "$id")"$'\n'
     else
+      _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 0 "$rows"
       bind=$(printf '%s' "$rows" | _pr_py bind "$main" "$branch" "$baseShort" "$tip" "$i" 2>/dev/null) || bind="unreadable-alias"
       case "$bind" in
         unreadable-alias) facts+="$(printf '{"id":"%s","unreadable":true}' "$id")"$'\n' ;;
@@ -12800,11 +12862,35 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
-# How many train PRs a member's comments may name before `_ws_train_record`
-# stops asking: each is one `gh pr view` inside ws-audit's runner budget.
-WS_TRAIN_REFS_MAX=2
+# THE TRAIN PROOF'S TIME BUDGETS (D-7362), in seconds: the most one verb may
+# spend on train records, over every member it proves, each gh call bounded by
+# what is left (never more than `PR_GH_TIMEOUT`). The proof is computed in ONE
+# place (`_pr_train_proofs` -> `_ws_train_record`) and every reader takes its
+# answer, so the budgets are the only per-verb difference:
+#   pr-state --session  PR_STATE_TRAIN_TIMEOUT (inside the 25 s bound, beside its one rows call)
+#   pr-state --project  0 — the sweep has no room (`pr-timeout-budget.test.ts`) and reads proofs a
+#                       `--session` read, a landing read or an audit already made and kept
+#   pr-landing          PR_LANDING_TRAIN_TIMEOUT, beside its GraphQL and REST reads, keeping nothing
+#   ws-audit / ws-reap  WS_TRAIN_TIMEOUT per workspace
+# Running out of budget proves nothing and is `unreadable`, never `not landed`.
+PR_STATE_TRAIN_TIMEOUT=6
+PR_LANDING_TRAIN_TIMEOUT=3
+WS_TRAIN_TIMEOUT=16
+# THE KEPT PROOFS: one `<repo> <member> <head> <train> <train merge commit>`
+# line per proven member, appended by a proof made with keep=1. A MERGED train
+# never un-merges, so a proof stands for good; nothing but a proof is written,
+# so a refusal is always re-asked. Every field is anchored on the way in and
+# again on the way out, and a line that does not parse is no proof.
+PR_TRAIN_PROOFS_FILE=.train-proofs
 
-_ws_train_record() {   # main repo number headOid baseShort -> 0 with the train PR's merge commit in _WS_TRAIN_MERGE; else 1 (not landed) or 2 (gh unreadable), the sentence in _WS_TRAIN_WHY. Called directly, never in $(…), so both globals reach the caller
+_ws_train_left() {   # -> on stdout, the seconds the next train-record gh call may take: what is left of `_PR_TRAIN_DEADLINE` (a `$SECONDS` value; unset is none left), never more than PR_GH_TIMEOUT; rc 1 once it is spent
+  local l=$(( ${_PR_TRAIN_DEADLINE:-$SECONDS} - SECONDS ))
+  (( l > 0 )) || return 1
+  (( l < PR_GH_TIMEOUT )) || l=$PR_GH_TIMEOUT
+  printf '%s' "$l"
+}
+
+_ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the train PR in _WS_TRAIN_NUM and its merge commit in _WS_TRAIN_MERGE; else 1 (not landed) or 2 (GitHub could not be reached, or the budget ran out, before anything proved it), the sentence in _WS_TRAIN_WHY. Called directly, never in $(…), so the globals reach the caller
   # THE PROOF FOR A PR CLOSED AS LANDED IN A MERGE TRAIN, and it is the TRAIN
   # RECORD, never a tree merge. A train squashes its members together and
   # resolves their overlaps, so no member's tree need be in the landing commit
@@ -12815,37 +12901,100 @@ _ws_train_record() {   # main repo number headOid baseShort -> 0 with the train 
   # search on the member's head sha finds, is MERGED and its one `ccrc-train v1`
   # block lists this member at exactly this member's head sha (`_pr_py
   # train-check`, D-7335; the format is in the README).
-  # `pick` already bound the member: CLOSED with the label, ours, head reachable
-  # from the branch. Every number and sha placed in a gh argv is anchored first
-  # (spec §7): the member number and head are checked here, a train number by
-  # `train-refs`'s digit-only output and again below.
-  local main="$1" repo="$2" n="$3" head="$4" base="$5" out t ans why=""
-  _WS_TRAIN_WHY="" _WS_TRAIN_MERGE=""
+  #
+  # EVERY REFERENCE IS A CANDIDATE, AND A BAD ONE IS ONLY A FAILED CANDIDATE
+  # (D-7362). A number that is an issue, a missing number, or a train that
+  # cannot be read is one refusal among the candidates, and the search goes on
+  # through every reference the comments name and then the search fallback: a
+  # newer stray `train #77` never hides the real train named before it. `2`
+  # means GitHub itself did not answer — the member's comments or the search
+  # could not be read, or the deadline (`_PR_TRAIN_DEADLINE`, a `$SECONDS`
+  # value the verb set; unset is no budget at all) ran out — and nothing proved
+  # the landing; a proof found first always wins.
+  #
+  # The caller bound the member: CLOSED with the label, on this branch and
+  # base. Every number and sha placed in a gh argv is anchored first (spec §7):
+  # the member number and head here, a train number by `train-refs`'s
+  # digit-only output and again below.
+  local main="$1" repo="$2" n="$3" head="$4" base="$5" keep="${6:-0}" out t ans why="" unreach=0 left kept
+  _WS_TRAIN_WHY="" _WS_TRAIN_MERGE="" _WS_TRAIN_NUM=""
   [[ "$n" =~ ^[1-9][0-9]{0,9}$ && "$head" =~ ^[0-9a-f]{40}$ ]] \
     || { _WS_TRAIN_WHY="gh named #$n at '$head', not a full head sha a train record can list"; return 1; }
+  # A proof already kept answers without a gh call.
+  if [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ && -f "$REG/$PR_TRAIN_PROOFS_FILE" ]]; then
+    kept=$(awk -v r="$repo" -v n="$n" -v h="$head" '$1 == r && $2 == n && $3 == h && NF == 5 { print $4 " " $5; exit }' \
+             "$REG/$PR_TRAIN_PROOFS_FILE" 2>/dev/null)
+    if [[ "$kept" =~ ^([1-9][0-9]{0,9})\ ([0-9a-f]{40})$ ]]; then
+      _WS_TRAIN_NUM="${BASH_REMATCH[1]}" _WS_TRAIN_MERGE="${BASH_REMATCH[2]}"; return 0
+    fi
+  fi
   local fields=number,state,mergedAt,mergeCommit,body,baseRefName,isCrossRepository
-  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh pr view "$n" --repo "$repo" --json comments 2>/dev/null) \
-    || { _WS_TRAIN_WHY="could not read the comments on #$n"; return 2; }
-  while IFS= read -r t; do
-    [[ "$t" =~ ^[1-9][0-9]{0,9}$ ]] || continue
-    ans=$(_plat_timeout "$PR_GH_TIMEOUT" gh pr view "$t" --repo "$repo" --json "$fields" 2>/dev/null) \
-      || { _WS_TRAIN_WHY="could not read train #$t, which #$n names"; return 2; }
-    ans=$(printf '%s' "$ans" | _pr_py train-check "$n" "$head" "$base")
-    case "$ans" in
-      '!'*) [[ -n "$why" ]] || why="${ans#!}" ;;
-      ?*)   _WS_TRAIN_MERGE="${ans#*$'\t'}"; return 0 ;;
-    esac
-  done < <(printf '%s' "$out" | _pr_py train-refs "$n" "$WS_TRAIN_REFS_MAX")
-  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" --state merged --limit 5 \
-          --search "$head in:body" --json "$fields" 2>/dev/null) \
-    || { _WS_TRAIN_WHY="could not search for a train listing #$n"; return 2; }
-  ans=$(printf '%s' "$out" | _pr_py train-check "$n" "$head" "$base")
-  case "$ans" in
-    '!'*) [[ -n "$why" ]] || why="${ans#!}" ;;
-    ?*)   _WS_TRAIN_MERGE="${ans#*$'\t'}"; return 0 ;;
-  esac
+  if ! left=$(_ws_train_left); then
+    _WS_TRAIN_WHY="the train record for #$n was not read inside this read's time budget"; return 2
+  fi
+  if out=$(_plat_timeout "$left" gh pr view "$n" --repo "$repo" --json comments 2>/dev/null); then
+    while IFS= read -r t; do
+      [[ "$t" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+      left=$(_ws_train_left) || { unreach=1; break; }
+      if ! ans=$(_plat_timeout "$left" gh pr view "$t" --repo "$repo" --json "$fields" 2>/dev/null); then
+        [[ -n "$why" ]] || why="#$n names train #$t, which is not a pull request this repository could read"
+        continue
+      fi
+      ans=$(printf '%s' "$ans" | _pr_py train-check "$n" "$head" "$base")
+      case "$ans" in
+        '!'*) [[ -n "$why" ]] || why="${ans#!}" ;;
+        ?*)   _WS_TRAIN_NUM="${ans%%$'\t'*}" _WS_TRAIN_MERGE="${ans#*$'\t'}"; break ;;
+      esac
+    done < <(printf '%s' "$out" | _pr_py train-refs "$n")
+  else
+    unreach=1
+  fi
+  if [[ -z "$_WS_TRAIN_MERGE" ]]; then
+    if left=$(_ws_train_left) && out=$(_plat_timeout "$left" gh pr list --repo "$repo" --state merged --limit 5 \
+            --search "$head in:body" --json "$fields" 2>/dev/null); then
+      ans=$(printf '%s' "$out" | _pr_py train-check "$n" "$head" "$base")
+      case "$ans" in
+        '!'*) [[ -n "$why" ]] || why="${ans#!}" ;;
+        ?*)   _WS_TRAIN_NUM="${ans%%$'\t'*}" _WS_TRAIN_MERGE="${ans#*$'\t'}" ;;
+      esac
+    else
+      unreach=1
+    fi
+  fi
+  if [[ "$_WS_TRAIN_NUM" =~ ^[1-9][0-9]{0,9}$ && "$_WS_TRAIN_MERGE" =~ ^[0-9a-f]{40}$ ]]; then
+    if [[ "$keep" == 1 && "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+      printf '%s %s %s %s %s\n' "$repo" "$n" "$head" "$_WS_TRAIN_NUM" "$_WS_TRAIN_MERGE" \
+        >> "$REG/$PR_TRAIN_PROOFS_FILE" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  _WS_TRAIN_NUM="" _WS_TRAIN_MERGE=""
+  if (( unreach )); then
+    _WS_TRAIN_WHY="GitHub could not be read for the train record of #$n${why:+, and $why}"; return 2
+  fi
   _WS_TRAIN_WHY="${why:-no merged train PR names #$n or lists it at $head}"
   return 1
+}
+
+_pr_train_proofs() {   # main repo branch baseShort keep rows -> _PR_TRAIN_PROOFS (the lines `_pr_py` hands python) and _PR_TRAIN_FAILS (`<n> <rc> <sentence>` per refused member). Called directly, never in $(…)
+  # THE ONE PLACE `landedInTrain` IS DECIDED (D-7362). Every reader of a train
+  # landing — `pr-state`'s phase and the archive trigger it feeds, the landing
+  # lane's merged notice, the queue word, the cleanup audit and the reap —
+  # runs the rows through here before `_pr_py` annotates them, and `annotate`
+  # sets `landedInTrain` only for a member listed in `_PR_TRAIN_PROOFS`. A
+  # label alone is `trainUnproven`: closed, never merged.
+  local main="$1" repo="$2" branch="$3" base="$4" keep="$5" rows="$6" c h rc
+  _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS=""
+  while IFS=$'\t' read -r c h; do
+    [[ "$c" =~ ^[1-9][0-9]{0,9}$ && "$h" =~ ^[0-9a-f]{40}$ ]] || continue
+    _ws_train_record "$main" "$repo" "$c" "$h" "$base" "$keep"; rc=$?
+    if (( rc == 0 )); then
+      _PR_TRAIN_PROOFS+="$c $h $_WS_TRAIN_NUM $_WS_TRAIN_MERGE"$'\n'
+    else
+      _PR_TRAIN_FAILS+="$c $rc $_WS_TRAIN_WHY"$'\n'
+    fi
+  done < <(printf '%s' "$rows" | _pr_py train-cands "$branch" "$base")
+  return 0
 }
 
 _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest childrenDigest
@@ -13715,6 +13864,11 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # this function (C2), where the sentence is true.
   if repo=$(_gh_repo_slug "$main"); then
     rows=$(_gh_pr_list "$repo")   || { _ws_refuse gh-unreadable "$rows"; return 1; }
+    # The train proof first (D-7362): `pick` reads `landedInTrain` off the
+    # same `_pr_train_proofs` every other reader uses, with this workspace's
+    # own budget, and keeps what it proves.
+    local _PR_TRAIN_DEADLINE=$(( SECONDS + WS_TRAIN_TIMEOUT ))
+    _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
     row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
   else
     row=''
@@ -13754,6 +13908,18 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       fi
       return 1 ;;
     '!pr-head-not-ours')  _ws_refuse pr-head-not-ours "the PR head commit is not reachable from $branch"; return 1 ;;
+    '!not-merged train '*)
+      # Labelled as landed in a merge train, and the train record did not
+      # prove it: `gh-unreadable` only when GitHub itself did not answer
+      # (`_ws_train_record`'s 2), otherwise `not-merged`, with the sentence.
+      local tn="${row#!not-merged train }" tf
+      tf=$(awk -v n="$tn" '$1 == n { $1 = ""; print substr($0, 2); exit }' <<< "$_PR_TRAIN_FAILS")
+      if [[ "$tf" == 2\ * ]]; then
+        _ws_refuse gh-unreadable "the PR was closed as landed in a merge train, but ${tf#2 }"
+      else
+        _ws_refuse not-merged "the PR was closed as landed in a merge train, but ${tf#1 }"
+      fi
+      return 1 ;;
     '!'*)                 _ws_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
   esac
   IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
@@ -13771,13 +13937,10 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # never saw.
   if [[ "$REAP_MERGE" == landed ]]; then
     landed=1
-    local trc
-    _ws_train_record "$main" "$repo" "$REAP_PRNUM" "$REAP_HEADOID" "$baseShort"; trc=$?
-    case "$trc" in
-      0) REAP_MERGE="$_WS_TRAIN_MERGE" ;;
-      2) _ws_refuse gh-unreadable "the PR was closed as landed in a merge train, but $_WS_TRAIN_WHY"; return 1 ;;
-      *) _ws_refuse not-merged "the PR was closed as landed in a merge train, but $_WS_TRAIN_WHY"; return 1 ;;
-    esac
+    # `pick` says `landed` only for a member `_pr_train_proofs` proved, so
+    # its proof line is there; the train PR's merge commit stands in for the
+    # oid gh did not name.
+    REAP_MERGE=$(awk -v n="$REAP_PRNUM" -v h="$REAP_HEADOID" '$1 == n && $2 == h { print $4; exit }' <<< "$_PR_TRAIN_PROOFS")
   fi
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one

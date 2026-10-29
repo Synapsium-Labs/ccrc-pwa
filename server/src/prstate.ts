@@ -19,12 +19,18 @@ export interface CcdPrRow {
   /** gh's own labels and close time, passed through unchanged. Neither is read
    *  here: the label is read on the box, into `landedInTrain` below. */
   labels?: unknown; closedAt?: string | null;
-  /** ccd's annotation, beside `ours`: GitHub says CLOSED and the PR carries the
-   *  deployment's train label (ccd's `CCD_LANDED_LABEL`, default
-   *  `landed-in-train`), i.e. a merge train landed its work and closed it.
-   *  The fleet box is the one reader of the label name, so this side never
-   *  names one. Absent on a row from an older ccd, which reads as not landed. */
+  /** ccd's annotation, beside `ours`: a merge train PROVABLY landed this PR's
+   *  work and closed it — GitHub says CLOSED, the PR carries the deployment's
+   *  train label (ccd's `CCD_LANDED_LABEL`, default `landed-in-train`), AND the
+   *  train record proves it: the train PR is MERGED and its `ccrc-train v1`
+   *  block lists this PR at exactly its head sha (D-7362). The label alone is
+   *  never enough. The fleet box is the one reader of the label and the record,
+   *  so this side never names either. Absent on a row from an older ccd, which
+   *  reads as not landed. */
   landedInTrain?: boolean;
+  /** ccd's other half of the same judgement: CLOSED with the train label and NOT proven by the train record, so
+   *  `closed` with reason `train-unproven`, never merged. Absent on a row from an older ccd. */
+  trainUnproven?: boolean;
 }
 
 export interface CcdPrLine {
@@ -247,7 +253,10 @@ export function phaseFor(line: CcdPrLine): PrState {
   // for the same row (Task 3), and Step 6's agreement test pins the two equal on
   // `reason` as well as `phase`.
   if (row.state === 'MERGED') return { ...common, phase: 'unknown', reason: 'merge-unproven' };
-  if (row.state === 'CLOSED') return { ...common, phase: 'closed' };
+  // A train label ccd could not prove from the train record: closed, and why (`train-unproven`, D-7362).
+  if (row.state === 'CLOSED') {
+    return { ...common, phase: 'closed', reason: row.trainUnproven === true ? 'train-unproven' : null };
+  }
   return { ...common, phase: row.isDraft === true ? 'draft' : 'open' };
 }
 
@@ -434,8 +443,8 @@ export interface PrLandingLine {
   protectionNamed: string[];
   /** Required names the rules pin to an App. Absent from an older line, which reads as none. */
   pinnedNames: string[];
-  /** ccd's `landedInTrain` (see `CcdPrRow`): CLOSED, and the PR carries the deployment's train label. False when the
-   *  line does not say exactly `true`, including every line from an older ccd. */
+  /** ccd's `landedInTrain` (see `CcdPrRow`): CLOSED, labelled, and proven by the train record. False when the line
+   *  does not say exactly `true`, including every line from an older ccd. */
   landedInTrain: boolean;
   unmeasured: string[];
 }

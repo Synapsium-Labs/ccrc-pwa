@@ -199,13 +199,15 @@ export function renderDequeueBrief(sessionId: string, pr: number): string {
  *  proof that the exact head the review read is the one that landed. A PR a
  *  merge train landed and closed is mailed too (`isMergedRow`), and `gh`
  *  answers CLOSED for it, so the brief names the second proof the way the
- *  server read it: ccd's `landedInTrain`, never a label name of its own. */
+ *  server read it: ccd's `landedInTrain`, which ccd sets only from the train
+ *  record (D-7362), never a label name of its own. */
 export function renderMergedBrief(sessionId: string, pr: number): string {
   return `PR #${pr} (workspace \`${sessionId}\`) merged while its run waited at \`merging\`.\n` +
     `Prove it from your own shell — \`gh pr view ${pr} --json state,headRefOid\` answers MERGED with ` +
     `\`headRefOid\` equal to the run's verified handoffCommit, or, when it answers CLOSED, PR #${pr}'s row of ` +
-    `\`ccd pr-state --session ${sessionId}\` reads \`landedInTrain: true\` (a merge train landed its work and ` +
-    `closed it) with that same \`headRefOid\` — then close the run as ` +
+    `\`ccd pr-state --session ${sessionId}\` reads \`landedInTrain: true\` with that same \`headRefOid\` (ccd ` +
+    `sets it only when the merge train's own record proves the landing; a label alone reads \`trainUnproven\`) ` +
+    `— then close the run as ` +
     `references/wave-lifecycle.md §5 closes a producer.\n\n` +
     `Run the ccrc-coordinator skill.`;
 }
@@ -425,7 +427,8 @@ export function landingLineAct(episode: LandingEpisode, line: PrLandingLine | nu
   if (line === null || line.unmeasured.length > 0) return { act: 'unmeasured' };
   if (!line.bound || line.number !== episode.pr) return { act: 'left', phase: 'unbound' };
   // A PR closed as landed in a merge train left as merged: the train merged its work, and `sweepLanding`'s `merged:`
-  // is the wake for it as for any merge.
+  // is the wake for it as for any merge. `landedInTrain` is ccd's PROOF from the train record (D-7362), so a labelled
+  // PR whose train never merged, or lists another head, reads `closed` here.
   if (line.state === 'MERGED' || (line.state === 'CLOSED' && line.landedInTrain)) return { act: 'left', phase: 'merged' };
   if (line.state === 'CLOSED') return { act: 'left', phase: 'closed' };
   if (line.state !== 'OPEN' || line.head === null || !isHead40(line.head)) return { act: 'unmeasured' };

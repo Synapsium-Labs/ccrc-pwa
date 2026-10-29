@@ -6726,18 +6726,27 @@ isolation boundary its test harness relies on:
 `~/worktrees` — an environment override `ccd` allows because it can only make
 `ccd` refuse, never aim it at a different tree. `CCD_LANDED_LABEL` (default
 `landed-in-train`; set empty to turn it off) names the label a merge train puts
-on a member PR it closes after landing its work: `pr-state` and `pr-landing`
-read a CLOSED PR carrying it as merged, so the archive reason, the cleanup
-bucket and the merged notice treat it as a merge. The cleanup itself
-(`ws-audit`/`ws-reap`) has no merge commit to prove against for such a PR, so
-it proves it by the train record instead, as proof `train`: the train PR the
-member names (a `train #<n>` comment on it, as a train leaves when it closes a
-member), or one a search finds whose record lists the member's head sha, must
-be MERGED into the same base and its record must list the member at exactly the
-member's head, and the branch must hold nothing beyond that head. A CLOSED
-train that never merged proves nothing. The token's merge fact is the train
-PR's merge commit, so main later editing the same lines never turns a proven
-landing into a refusal.
+on a member PR it closes after landing its work. The label is a claim, never
+the proof (D-7362): a CLOSED PR carrying it reads as merged — in `pr-state`'s
+phase, and so the archive reason, the cleanup bucket and the merged notice, in
+`pr-landing`, and in the cleanup itself (`ws-audit`/`ws-reap`, as proof
+`train`) — only when the train record proves it, and ccd decides that once, in
+one place, for every reader (`landedInTrain: true` on the row). The proof: the
+train PR the member names (a `train #<n>` comment on it, as a train leaves when
+it closes a member — every such reference is tried, newest first, and one that
+is an issue, a missing number or unreadable is only a failed candidate), or one
+a search finds whose record lists the member's head sha, must be MERGED into
+the same base and its record must list the member at exactly the member's head;
+the reap also requires that the branch hold nothing beyond that head. A
+labelled PR without that proof reads as closed, with reason `train-unproven`
+(`trainUnproven: true` on the row), and the reap refuses it `not-merged`, or
+`gh-unreadable` only when GitHub itself could not be read. A CLOSED train that
+never merged proves nothing. The token's merge fact is the train PR's merge
+commit, so main later editing the same lines never turns a proven landing into
+a refusal. A proof, once made, is kept in `$REG/.train-proofs` (a merged train
+never un-merges), which is how the `pr-state --project` sweep, which has no time
+left for train reads, sees a landing a `--session` read, a landing read or an
+audit proved.
 
 **The train record (D-7335)** is the one machine-readable block in a train PR's
 body, and a train tool writes exactly one: an HTML comment on lines of its own,
@@ -6751,7 +6760,10 @@ member #1800 89abcdef0123456789abcdef0123456789abcdef
 -->
 ```
 
-Leading and trailing spaces on a line are ignored; nothing else is. Tables,
+A member line is exactly `member`, one space, `#` and the PR number, one space,
+and the full 40-character head sha in lowercase hex: no tabs, no second space,
+no short or uppercase sha. Leading and trailing spaces on a line are ignored;
+nothing else is. Tables,
 lists and prose beside the block are for people and are never parsed, so a
 body with only a table proves nothing. No block, two blocks, a block that never
 closes, a line inside it that is not a member line, or a member listed twice
