@@ -298,7 +298,7 @@ describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs 
     for (const f of scanned) expect(thresholdLiterals(read(f)), f).toEqual(KNOWN[f]);
   });
 
-  it('the scanner itself: it sees a literal threshold and passes presence tests, exit statuses and a setting', () => {
+  it('the scanner itself: it sees a literal threshold, an expansion\'s fallback default and a nested-paren arithmetic test, and passes presence tests, exit statuses and a setting', () => {
     expect(thresholdLiterals([
       '[ "$changed" -gt 200 ] && full=1',
       'if (( share > 25 )); then arm=0; fi',
@@ -308,11 +308,30 @@ describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs 
       '[ "${#rows[@]}" -gt 0 ] && echo rows',
       '[ "$rc" -eq 124 ] && timed_out=1',
       '[ "$changed" -gt "${GK[CCRC_GRAPH_INCREMENTAL_MAX_FILES]}" ] && full=1',
+      // a default brought back as an expansion's fallback, in a comparison or outside one
+      '[ "$n" -gt "${CCRC_GRAPH_BUDGET:-4}" ] && wait=1',
+      '[ "$changed" -gt "${GK[CCRC_GRAPH_INCREMENTAL_MAX_FILES]:-200}" ] && full=1',
+      '[[ $n -ge ${CCRC_GRAPH_X:=4} ]] && wait=1',
+      'local budget=${CCRC_GRAPH_BUDGET:-8}',
+      // a comparison inside `(( … ))` whose operands hold a command substitution or an arithmetic expansion
+      '(( $(date +%s) - t0 >= 600 )) && timed_out=1',
+      'if (( $((now - t0)) > 21600 )); then stale=1; fi',
+      // not thresholds: an exit status's fallback, a 0 fallback, nested parens with no comparison
+      '[ "${rc:-124}" -ne 0 ] && failed=1',
+      '--argjson d "${4:-0}"',
+      'dur=$(( $(date +%s%3N) - t0 ))',
+      'age=$(( now - $(stat -c %Y "$f" 2>/dev/null || echo "$now") ))',
     ].join('\n'))).toEqual([
       '[ "$changed" -gt 200 ] && full=1',
       'if (( share > 25 )); then arm=0; fi',
       '[ 3 -le "$denials" ]',
       ': "${CCRC_GRAPH_X:=900}"',
+      '[ "$n" -gt "${CCRC_GRAPH_BUDGET:-4}" ] && wait=1',
+      '[ "$changed" -gt "${GK[CCRC_GRAPH_INCREMENTAL_MAX_FILES]:-200}" ] && full=1',
+      '[[ $n -ge ${CCRC_GRAPH_X:=4} ]] && wait=1',
+      'local budget=${CCRC_GRAPH_BUDGET:-8}',
+      '(( $(date +%s) - t0 >= 600 )) && timed_out=1',
+      'if (( $((now - t0)) > 21600 )); then stale=1; fi',
     ]);
   });
 });
