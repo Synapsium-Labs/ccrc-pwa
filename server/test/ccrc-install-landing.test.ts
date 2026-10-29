@@ -154,8 +154,9 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // mutation site for its line too (spec §18 "the puller is installed
         // where its timer looks").
         // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
+        // landing order wave 3b: `ccd-land-probe` joins on the reaper's terms (every role), and this set is the mutation site for its line.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
-           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-land-probe', 'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort());
   });
 

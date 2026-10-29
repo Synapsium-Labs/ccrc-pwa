@@ -166,6 +166,25 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-history-sweep(?![\w-])/m);
   });
 
+  itLinux('places the conflict radar\'s bin and units, and enables its timer, on a fleet box (landing order wave 3b)', async () => {
+    const { home, r } = await fleet();
+    const bin = join(home, '.local', 'bin', 'ccd-land-probe');
+    expect(existsSync(bin), '--role fleet did not place ccd-land-probe').toBe(true);
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-land-probe')));
+    expect(statSync(bin).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-land-probe(?![\w-])/m);
+    for (const u of ['ccd-land-probe.service', 'ccd-land-probe.timer']) {
+      const p = unitDir(home, u);
+      expect(existsSync(p), `${u} never reached ~/.config/systemd/user on the fleet role`).toBe(true);
+      expect(readFileSync(p), `${u} is not the shipped file`).toEqual(readFileSync(placed(home, 'deploy', 'systemd', u)));
+      expect(statSync(p).mode & 0o777, `${u} has the wrong mode`).toBe(0o644);
+    }
+    const argv = systemctlCalls(home).map((c) => c.argv);
+    expect(argv).toContain('--user enable --now ccd-land-probe.timer');
+    expect(argv.indexOf('--user enable --now ccd-land-probe.timer'), 'the radar timer was enabled before daemon-reload read its unit file')
+      .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
+  });
+
   it('skips the server-only landing lines — no PWA address, no passphrase gate', async () => {
     const { r } = await fleet();
     expect(r.stdout).not.toContain('install: PWA:');
@@ -213,6 +232,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     }
     expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    // landing order wave 3b: the radar's pair is in UNIT_FILES above (so placed on `both`), its bin is placed too.
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-land-probe')), '--role both did not place ccd-land-probe').toBe(true);
     // Ruling T4-R1, the unit-file half: `_inst_units` gates the pool-sync
     // pair on `fleet` too, so a `both` box is never given a unit file for the
     // timer it is not supposed to arm.
@@ -244,6 +265,8 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-tmp-sweep.timer',
       '--user enable --now ccd-scope-sweep.timer',
+      // landing order wave 3b: the conflict radar's timer, `!= server` like the sweeps beside it, so `both` enables it.
+      '--user enable --now ccd-land-probe.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
@@ -275,7 +298,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -296,6 +319,12 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The pane-scope sweep: a server box runs no pane scopes.
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
+    // landing order wave 3b: the conflict radar's pair is role-gated out (a server box checks out no project to
+    // measure), while its BIN is placed on every role (a binary is never the gate), outside the GPT-lane block.
+    expect(existsSync(unitDir(home, 'ccd-land-probe.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-land-probe.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-land-probe');
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-land-probe')), '--role server did not place ccd-land-probe').toBe(true);
     // history spec §9.5: no shim, no unit pair and no enable on a server box —
     // it hosts no sessions and must never hold a store D-4183.
     expect(existsSync(join(home, '.local', 'bin', 'ccd-history-sweep')), '--role server placed ccd-history-sweep').toBe(false);

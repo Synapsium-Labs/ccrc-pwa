@@ -491,6 +491,38 @@ describeLinux('C8b step 4: scope-sweep\'s "every minute" sentence, its unit file
   });
 });
 
+describeLinux('C8b step 4: land-probe\'s stale bound and not-yet window, ccd-land-probe.timer unreadable or its reader unloaded', () => {
+  /** One opted-in project with no probe yet: the arm that needs the not-yet window. */
+  const optedIn = (home: string): void => {
+    mkdirSync(join(home, '.ccrc', 'landing'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'landing', 'proj-a.conf'), 'lineage=off\n');
+  };
+  const NEVER = 'WARN land-probe: land-probe-never: proj-a is opted in but the radar has never written its probe, so no PR conflict is measured and coordinators send sync and order mail without one';
+  const NEVER_FIX = '  remedy: systemctl --user status ccd-land-probe.timer ccd-land-probe.service; journalctl --user -u ccd-land-probe.service; a pause marker (<home>/.cc-sessions/land-probe-paused or <home>/.cc-sessions/landing/<project>/paused) stops the writes by design; an invalid conf or a missing checkout under <home>/projects also stops them, and the journal names it';
+  const BOUNDS = "the stale bound (four of the timer's periods; the stale arm did not run) and the not-yet window (two of the timer's periods; the not-yet arm did not run)";
+
+  it('an unreadable ccd-land-probe.timer: no literal bound, a WARN naming the unit', () => {
+    const now = fixedNow();
+    const home = box('c8b-land-probe-unread-', now);
+    optedIn(home);
+    noTimer(home, 'ccd-land-probe.timer');
+    const r = runChecks(home, 'CCD_OS=linux; _check_land-probe');
+    expect(r.stdout.split('\n')).toEqual([NEVER, NEVER_FIX, ...warnUnread('land-probe', 'ccd-land-probe.timer', BOUNDS), '']);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(2);
+  });
+
+  it('BOX_TREE_DIR not loaded: the FAIL names the bug', () => {
+    const now = fixedNow();
+    const home = box('c8b-land-probe-unloaded-', now);
+    optedIn(home);
+    const r = runChecks(home, 'CCD_OS=linux; BOX_TREE_DIR=; _check_land-probe');
+    expect(r.stdout.split('\n')).toEqual([NEVER, NEVER_FIX, ...unloaded('land-probe', 'ccd-land-probe.timer', BOUNDS), '']);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(1);
+  });
+});
+
 describeLinux('C8b step 4: server-caps\' fleet writer sentence, ccd-update-sync.timer unreadable or its reader unloaded', () => {
   const caps = (home: string): string => join(home, '.ccrc', 'server-caps');
   const fleet = (prefix: string, now: number, unitAgeS = 240): string => {

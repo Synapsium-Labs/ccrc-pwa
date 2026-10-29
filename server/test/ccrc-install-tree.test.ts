@@ -1204,6 +1204,15 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-land-probe lands beside them too (the read-only conflict radar, landing order wave 3b) — every role, but not Darwin', () => {
+    // Mirrors the reaper's case above: its only runner is a systemd timer and it takes flock(1). Its UNITS and ENABLE are
+    // role-gated (server skips both) — see the `--role server` describe.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-land-probe');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-land-probe')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   itLinux('ccd-tool-adj lands beside them (D-5241, the tool-child priority\'s shell prefix) — every role, but not Darwin', () => {
     // `ccd`'s `_spawn_start` names it in CLAUDE_CODE_SHELL_PREFIX on Linux only; macOS has no
     // /proc/self/oom_score_adj to raise, so it is not placed there (the Darwin describe pins the absence).
