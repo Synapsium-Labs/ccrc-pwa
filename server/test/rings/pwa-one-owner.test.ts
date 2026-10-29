@@ -131,8 +131,8 @@ describe('the PWA reads a session\'s presence through fleet/presence.ts (ARCH-49
     expect(inlineDeadChecksIn(parseSource(text, DEAD_CHECK_OWNER), DEAD_CHECK_OWNER)).toEqual([]);
   });
 
-  it('no status === \'dead\' outside fleet/presence.ts but AccountsScreen.tsx\'s one, which moves after C7b (#1774)', () => {
-    expect(inlineDeadChecks().map((s) => s.file)).toEqual(['pwa/src/screens/AccountsScreen.tsx']);
+  it('no status === \'dead\' outside fleet/presence.ts', () => {
+    expect(inlineDeadChecks().map((s) => s.file)).toEqual([]);
   });
 
   it('coordPresence is gone: no definition and no call in pwa/src', () => {

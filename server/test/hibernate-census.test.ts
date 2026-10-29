@@ -162,8 +162,8 @@ const CENSUS: readonly Row[] = [
       + 'is not running; it is still listed and found, and opening it is the session screen\'s wake' },
   { source: 'presence-reader', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
     why: 'counts the batch\'s rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
-  { source: 'dead-compare', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
-    why: 'counts an account\'s running sessions: a sleeper is not running' },
+  { source: 'presence-reader', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'counts an account\'s sessions the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
   { source: 'presence-reader', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 3, stances: ['true-of-pane'],
     why: 'the live main checkout (alive or doubted), the started session and the live ids read the server\'s word '
       + '(`presenceOf`, D-7181): a sleeping session is not running, which is true of its pane' },

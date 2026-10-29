@@ -259,10 +259,9 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(sites.map((s) => s.file)).toEqual(['pwa/src/stores/fleet.ts']);
   });
 
-  it('inlineDeadChecks(): 1 comparisons of a status with dead, in 1 files', () => {
+  it('inlineDeadChecks(): 0 comparisons of a status with dead outside fleet/presence.ts (C7c, D-7181)', () => {
     const sites = inlineDeadChecks();
-    held('inlineDeadChecks', sites, 1);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(1);
+    held('inlineDeadChecks', sites, 0);
   });
 
   it('coordPresenceSites(): 0 (coordPresence deleted, C7c; its callers read fleet/presence.ts#coordinatorPresence)', () => {
