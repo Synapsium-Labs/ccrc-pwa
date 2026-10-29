@@ -1,6 +1,6 @@
 # The test box: test runs off the fleet host, results streamed back to the session
 
-**Spec** · 2026-10-28 · Status: draft for review, rev 7 and its close-out (no further design rounds). It designs #1695 (step 2 of moving test runs off the fleet
+**Spec** · 2026-10-28 · Status: approved by the operator 2026-10-29, rev 7 and its close-out (no further design rounds); the operator ruled all seven decisions in §8 as recommended on 2026-10-29. It designs #1695 (step 2 of moving test runs off the fleet
 host). It builds on #1694 (step 1: the capped tests slice, the fleet-wide admission queue and the `ccrc test` wrapper),
 which is not built yet; this spec names what it needs from step 1 in §3.1. Docs only: no code ships with it.
 
@@ -80,7 +80,7 @@ The test box is a second, separate box that runs those suites instead. The desig
   box's state, runs and queue depth, read through a new agent op shaped like `disk` (§2.7).
 
 Everything box-specific is a ccrc setting with a neutral default (§4). Seven operator decisions close the spec (§8),
-including when the old box stops being the rollback source.
+including when the old box stops being the rollback source; the operator ruled all seven as recommended on 2026-10-29.
 
 ## 1. Measured
 
@@ -924,24 +924,24 @@ that option.
 - The server keeps one agent link and never reaches a third box.
 - The merge-queue CI stays the authority for landing, so even a wrong answer from the box cannot land a change.
 
-## 8. Operator decisions
+## 8. Operator decisions (ruled 2026-10-29)
 
 Everything else in this spec is design, settled by the reasons given where it is described. The transport (§2.1), the
 secrets rule (§2.3), the disposable runs with reflink clones of a pristine install on XFS (§2.2, from the
 2026-10-28 ruling) and the tools synced to the fleet host's measured versions with the release fetched and verified
 as the fleet host's update lane verifies it (§2.10) are among those, so none is
-a choice here. These are the choices the operator makes; each row names
-the recommended option first.
+a choice here. These are the choices the operator made: the operator ruled all seven on 2026-10-29, each as
+recommended, and each row keeps the reason it was recommended.
 
-| # | decision | recommended | why |
+| # | decision | ruling | why |
 |---|---|---|---|
-| 1 | Which box, and when it stops being the fleet move's rollback source (§2.0) | **the old Hetzner CX53, retired as the rollback source once the new fleet host has run 7 days with no rollback-class incident and a full snapshot of the old box is verified restorable; the snapshot stays the rollback source for 30 more days, then the operator deletes it; the box is rebuilt clean** | it is already paid for and sized for the load, and the snapshot keeps the rollback while the box is wiped |
-| 2 | What runs where (§2.5) | **box: single files, file sets under the 15-minute budget, the tests-inclusive typecheck, mutation loops, browser tests; local slice: everything else and every fallback; GitHub CI: the full suites and the macOS legs** | the full server suite is CI-sized (about 16,000 file-seconds) and the merge queue runs it anyway |
-| 3 | Concurrency and caps on this box (§2.2, §4) | **4 runs at once, each capped at 6 GB memory and 4 CPUs (`MemoryMax=6G`, a 400% CPU quota), 3 vitest workers a run** | 4 × 6 GB is 24 GB, which leaves headroom for the service, the registry proxy and the page cache on a 16-vCPU 32 GB box |
-| 4 | Fallback when the box is down, full, refusing or failing to prepare (§2.4) | **run in step 1's local slice and say why in the first and last line; a worktree with no `node_modules` installs inside the slice** | the session always gets its answer and the exit status is the local run's |
-| 5 | A run lost mid-way (§2.4) | **re-run locally, as now, after sending `run.cancel`; the alternative is to fail fast (`CCRC_TESTBOX_LOST_RUN=fail`)** | the session gets its answer either way, at the cost of running the command twice when the box was only slow |
-| 6 | On/off control (§2.7) | **one switch on the Settings › Automation Test box card, backed by a marker file a terminal can remove; armed only after the parity check in §6 passes** | the operator can turn it off from the UI or a shell, and it works with the server down |
-| 7 | Which repositories first (§2.6) | **ccrc-pwa only; another repository by adding a row once its own parity check passes** | its suites are the measured load |
+| 1 | Which box, and when it stops being the fleet move's rollback source (§2.0) | ruled 2026-10-29: **the old Hetzner CX53, retired as the rollback source once the new fleet host has run 7 days with no rollback-class incident and a full snapshot of the old box is verified restorable; the snapshot stays the rollback source for 30 more days, then the operator deletes it; the box is rebuilt clean** | it is already paid for and sized for the load, and the snapshot keeps the rollback while the box is wiped |
+| 2 | What runs where (§2.5) | ruled 2026-10-29: **box: single files, file sets under the 15-minute budget, the tests-inclusive typecheck, mutation loops, browser tests; local slice: everything else and every fallback; GitHub CI: the full suites and the macOS legs** | the full server suite is CI-sized (about 16,000 file-seconds) and the merge queue runs it anyway |
+| 3 | Concurrency and caps on this box (§2.2, §4) | ruled 2026-10-29: **4 runs at once, each capped at 6 GB memory and 4 CPUs (`MemoryMax=6G`, a 400% CPU quota), 3 vitest workers a run** | 4 × 6 GB is 24 GB, which leaves headroom for the service, the registry proxy and the page cache on a 16-vCPU 32 GB box |
+| 4 | Fallback when the box is down, full, refusing or failing to prepare (§2.4) | ruled 2026-10-29: **run in step 1's local slice and say why in the first and last line; a worktree with no `node_modules` installs inside the slice** | the session always gets its answer and the exit status is the local run's |
+| 5 | A run lost mid-way (§2.4) | ruled 2026-10-29: **re-run locally, as now, after sending `run.cancel`; the alternative is to fail fast (`CCRC_TESTBOX_LOST_RUN=fail`)** | the session gets its answer either way, at the cost of running the command twice when the box was only slow |
+| 6 | On/off control (§2.7) | ruled 2026-10-29: **one switch on the Settings › Automation Test box card, backed by a marker file a terminal can remove; armed only after the parity check in §6 passes** | the operator can turn it off from the UI or a shell, and it works with the server down |
+| 7 | Which repositories first (§2.6) | ruled 2026-10-29: **ccrc-pwa only; another repository by adding a row once its own parity check passes** | its suites are the measured load |
 
 ## Decisions this spec adds
 
