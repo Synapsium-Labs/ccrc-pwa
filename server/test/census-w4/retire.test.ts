@@ -260,16 +260,21 @@ describe('the retire executors\' censuses (ARCH-44, C4h)', () => {
     ]);
   });
 
-  it('REAL retireQueueSites reports (4 via queue.run at the C4h base; 4 via retireExecutor after C4n)', () => {
+  it('REAL retireQueueSites is pinned exact: the same four sites, all via retireExecutor (4 via queue.run at the C4h base; C4n, D-7171)', () => {
     const sites = retireQueueSites();
     show('retireQueueSites', sites);
-    expect(Array.isArray(sites)).toBe(true);
+    expect(sites.map((s) => [s.symbol, s.via, s.entry]).sort()).toEqual([
+      ['server/src/coord/routes.ts#childReclaimPort', 'retireExecutor', 'reclaimChild'],
+      ['server/src/watch.ts#archivedExpiryPass', 'retireExecutor', 'expireArchived'],
+      ['server/src/watch.ts#collectAct', 'retireExecutor', 'collectTempRoot'],
+      ['server/src/watch.ts#execChildReclaim', 'retireExecutor', 'reclaimChild'],
+    ]);
   });
 
-  it('REAL retireQueueOwners reports (4 by (a) at the C4h base; 1 by (b) after C4n)', () => {
+  it('REAL retireQueueOwners is pinned exact: retireExecutor.ts#retireExecutor, by (b) (4 by (a) at the C4h base; C4n, D-7171)', () => {
     const sites = retireQueueOwners();
     show('retireQueueOwners', sites);
-    expect(Array.isArray(sites)).toBe(true);
+    expect(sites.map((s) => [s.symbol, s.by])).toEqual([['server/src/retireExecutor.ts#retireExecutor', 'b']]);
   });
 
   it('REAL retireNoticeSites is pinned exact, as measured at C4h (D-7176: no notice moves)', () => {
