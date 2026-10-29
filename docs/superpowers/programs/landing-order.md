@@ -27,8 +27,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–6; accepted on `c8b56b8e` after review run 1141 and merged through the native queue as `7e38b5f4` (Decisions, 2026-10-28 19:12); D-6336–D-6345; live proof complete 2026-10-29 (Decisions, 2026-10-29 06:01) |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | #1383 | ruled 2026-10-21; the fix shipped from outside the programme in #1383 (`5a009277`, 2026-10-25); the cadence-cost measurement is left (Decisions, 2026-10-29 09:41) |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); run 1189 (the run's wave 9) dispatched 2026-10-29, block 7433–7442, with the coordinator's rulings on where the plan had drifted from `main` (Decisions, 2026-10-29 09:41); PR #1884; fix round 1 after review 1212; accepted on `5aa30a97` after review run 1216 and merged through the native queue as `f6b67a5b` (Decisions, 2026-10-29 17:38); D-7433–D-7442 and D-7464–D-7467 defined after the merge; deploy, arming (the operator's) and the live proof wait (Next-wave brief) |
-| 4b | 3, the console half | the radar's server reader, its wire field `FleetSession.landing` and the PWA predicted-conflict chip (moved out of wave 3b, D-4329) | server, pwa | waves 4 and 4c | plan in this ledger's PR | planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4b-radar-console.md`, D-7477 to D-7484); dispatches after wave 4c merges, its run opened then (Decisions, 2026-10-29 18:40) |
-| 4c | 4, hardening | the lineage hardening carried from wave 4's reviews (Carried constraints), kept apart from 4b so that no PR mixes an acceptance change with a display change (D-4329's reason) | server, skills | wave 4 | — | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed, under the title "wave 4b: lineage hardening" given before this row was split from 4b (Decisions, 2026-10-29 17:38); planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4c-lineage-hardening.md`, D-7469 to D-7476); the coordinator-side re-proof moved to the operator (Decisions, 2026-10-29 18:40) |
+| 4b | 3, the console half | the radar's server reader, its wire field `FleetSession.landing` and the PWA predicted-conflict chip (moved out of wave 3b, D-4329) | server, pwa | waves 4 and 4c | plan #1906 | planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4b-radar-console.md`, D-7477 to D-7484; Decisions, 2026-10-29 18:40); run 1224 (the run's wave 12) opened and dispatched after wave 4c merged, before run 1219 closed (Decisions, 2026-10-29 22:55) |
+| 4c | 4, hardening | the lineage hardening carried from wave 4's reviews (Carried constraints), kept apart from 4b so that no PR mixes an acceptance change with a display change (D-4329's reason) | server, skills | wave 4 | #1911 | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed, under the title "wave 4b: lineage hardening" given before this row was split from 4b (Decisions, 2026-10-29 17:38); planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4c-lineage-hardening.md`, D-7469 to D-7476); the coordinator-side re-proof moved to the operator (Decisions, 2026-10-29 18:40); accepted on `0a9ff1b2` after review run 1220, then one clean merge of `main` reviewed alone (run 1223), and merged through the native queue as `9ec4fc54` (Decisions, 2026-10-29 22:55); D-7486–D-7495 defined after the merge |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
@@ -1299,6 +1299,35 @@ carries it (spec §5.1, amended 2026-09-24).
     - `main-health` is stage 5's to read (D-7478).
   - **Wave 4b alone does not move spec §10's stage 3 metric.** It gives the operator the reading. A coordinator-skill
     reader is not yet planned (D-7483), so the metric's two-week clock should not start at wave 4b's rollout.
+- **2026-10-29 22:55 — a red `main` fixed first; wave 4c accepted and merged; wave 4b dispatched.**
+  - **`main` went red under every landing.** #1897 gave `ccd/ccd` a second sourced library, and
+    `ccd-retire-verdicts.test.ts` extracted the merge base's `ccd` with only the first one beside it. Its 15 rows failed
+    wherever the file ran: in at least six pull-request runs on four branches, none of them touching `ccd/ccd` or
+    `ccd/lib`, and in one merge-queue run (#1910's). By the same code it would red the daily run too. No fix was open, so this programme ran one (run 1221, the run's wave 11): `baseCcd()` writes every
+    file the merge base's own `ccd/lib/` holds (D-7496, defined in
+    `docs/superpowers/plans/2026-10-29-retire-verdicts-base-libs.md`). Review run 1222 confirmed no finding.
+  - **#1913 merged before its review reported.** Auto-merge was enabled on it at 20:41Z, before its wave-done and its
+    review. The coordinator did not enable it, and the brief forbids the worker any merge command. GitHub records one
+    shared login for every session, so it cannot show which one did. The PR landed through the queue at the head the
+    review then read (`23b426d9`, as `62857ed9`), and the review confirmed nothing, so the landing stands. Who enabled
+    it is put to the operator.
+  - **Review run 1220** (wave 4c, `0a9ff1b2`) found nothing critical or important. Every touched suite and guard was
+    green at the worker's counts, all 12 plan mutation rows were red, and red-first was measured against the merge
+    base. Every radar shape git's tools can make still parses, and each new refused case fails one rule. Its eight
+    minor findings fail closed or are text. **Accepted, with no fix round for its findings.**
+    - **F1:** a hand-made commit object with two identical parent lines passes the radar's walk, and the `p1 === p2`
+      rule refuses its doc. The rule stays (D-7494).
+    - **F2, F3, F4 and F8** are carried to wave 5 (Carried constraints).
+    - **F5:** nothing pins `freshWithin`'s one definition. It is added in wave 4b's Task 1, from that run's block.
+  - **The landing needed a new head (D-7495).** The verdict judges every check suite on the head, and two runs on
+    `0a9ff1b2` stay red on `main`'s old failure for good, because a rerun replays a run's original merge commit. Closing
+    and reopening the PR started fresh runs, the first on a merge ref GitHub had not yet recomputed. So the run was sent
+    back once (fix round 1) for one clean merge of `main` and nothing else, which gave the PR a new head. Review run 1223 found the merge's tree equal to `git merge-tree` of its
+    parents and the wave's 11 files unchanged.
+  - **Landed.** The verdict on the new head read `ROUTE Q method=squash admin=never strict=no`, run on its own, and the
+    required-checks gate exited `0`. PR #1911 was enqueued at `390445dc` and merged as `9ec4fc54`, with no dequeue.
+  - **Wave 4b** is run 1224 (the run's wave 12). It was opened before run 1219 closed, so the programme keeps an open
+    run, and dispatched with an execution block minted then and the `freshWithin` row added to its Task 1.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1611,7 +1640,7 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
     - the allowance header and README list fewer refusals than the code makes;
     - the `\u` listed pass pairs `--input -` with `-f query=`, where gh encodes the value, so that call cannot merge.
   - **jq 1.6 and 1.7** are unmeasured; only 1.8.1 was installed where the wave was measured.
-- **From wave 4's reviews (1212 and 1216), carried to wave 4c.** None of them accepts wrongly a doc the radar writes:
+- **From wave 4's reviews (1212 and 1216), carried to wave 4c** (landed in #1911, except the re-proof, which is the operator's (D-7472), the review-cap ask, which is another programme's, the close after a second merge, the lenient chains and times, and the header's restatement, carried to wave 5). None of them accepts wrongly a doc the radar writes:
   each fails closed, or needs a hand-written file within the attribution-grade reach the plan states.
   - **The parser header** says the parser reads only the radar's shapes. But a measured doc with no `branch`, a cut walk
     with no `why`, a measured doc with a `why`, and an `unmeasured` doc with an 8-entry chain still accept. Require
@@ -1638,6 +1667,24 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
     MERGED proof comes first.
   - **Lenient chains and times:** a cycle, duplicate entries, `p2 === p1` and `Date.parse`'s leniency all accept. None
     adds reach beyond the forgery.
+- **From wave 4c's review (1220) and its landing, carried to wave 5.** Each fails closed or is text.
+  - **F2.** The unmeasured half of the `state`/`stop` rule (wave 4 fix round 1) can no longer go red: wave 4c's two
+    unmeasured rules refuse every doc it refuses. Delete it, or keep it as a stated belt with a measured red.
+  - **F3 and F4.** The parser header says it refuses every doc the radar cannot write, and that the accept row is
+    reachable only through the radar's shapes. Docs the radar cannot write still parse and accept, though none widens
+    what `decideLineage` accepts, and a null `tip` with a sha `base` parses and answers `tip-unmeasured`. Restate the
+    header, and D-7469's text, to the measured rules, and decide whether to refuse a null `tip` with a base.
+  - **F8.** No lane-level case dequeues a run sent back to `working`. The verdict-level cases pin the arm, and the
+    review measured the production loop. An optional pin.
+  - **The verdict's reading of several check suites on one head (D-7495).** It calls a required name red if any run of
+    it on the head failed, which is stricter than GitHub's rule that the newest run counts, because a later passing run
+    of the same name could hide a real failure. But it leaves a main-red fixed on `main` no route through a rerun. Decide
+    between judging the newest run per name, app and workflow, and keeping the rule while the skill names the new-head
+    route.
+- **From review 1222 (the retire-verdicts fix, D-7496), for the next wave that edits that test.** No present failure.
+  - The guard compares the extracted `ccd/lib` names with the base's, never their contents; compare blob ids.
+  - The extraction drops each entry's mode, so a symlink or an executable library would extract as a plain file.
+  - `baseCcd()`'s comment says it never throws at collection time, but its temp writes can.
 - **From wave 4's review 1216, for the next wave that edits the merge-train proof text (#1797).** Both fail closed: the
   coordinator reports instead of acting.
   - A train-landed spent producer cannot prove its landing once its row is reclaimed, because the proof reads
@@ -1649,8 +1696,8 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
 
 ## Next-wave brief
 
-Waves 1–3, 2b, 3b, 3c, 3d, 3e and 4 are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
-#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
+Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4 and 4c are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
+#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
 it stays on by the operator's ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose
 reason is `merged` reads `landed` (Decisions, 2026-10-21 14:49 and 19:17).
 
@@ -1678,7 +1725,8 @@ its review, for a project the operator opts in.
   `lineage=off`.
 - **The live proof** is the programme's next work run whose worker absorbs the base cleanly after its wave-done. The
   advance with the original claim answers `verifiedHead`, the landing binds it, and the ledger records both shas. That
-  run's brief names the opt-in and the base; until wave 4c lands, a first brief names `origin/<default branch>`.
+  run's brief names the opt-in and the base: a PR's `baseRefName`, or, before a PR exists, the repository's default
+  branch (wave 4c, D-7473).
 
 **Wave 2b is merged** (#1863 `d3250900`; Decisions, 2026-10-29 09:41): `--admin` and `gh api` merges are refused in every
 fleet session, with the operator's per-project allowance (D-7249).
@@ -1688,12 +1736,17 @@ fleet session, with the operator's per-project allowance (D-7249).
   denied, and clause 15's spelling and one verdict read pass.
 - **From then on,** the landing verdict, the checks gate and the enqueue run as separate commands (D-7314).
 
-**Wave 4c is planned** as run 1219 (Decisions, 2026-10-29 18:40). It dispatches next, with its plan's block,
-7469–7476, and an execution block minted at dispatch.
+**Wave 4c is merged** (#1911 `9ec4fc54`; Decisions, 2026-10-29 22:55): the lineage parser refuses the docs the radar's
+rules rule out (a measured doc with no `branch`, a `why` that disagrees with `state`, an 8-entry chain not at `limit`, a
+`p1` equal to its `p2`), though it still reads some docs the radar cannot write (carried to wave 5); the radar files'
+freshness rule is one predicate (`freshWithin`); the dequeue brief prints a head only at `merging`; and a first brief
+names its base before a PR exists. It ships with the next release: the skill sentence through ccrc's updater, skills
+before the server, and the rest with the server. Nothing in it needs arming, and `lineage=on` stays the operator's.
 
-**Wave 4b is planned** and dispatches after wave 4c merges, because it imports wave 4c's `freshWithin`. Its run is
-opened at that point. Its deploy and live read come after its merge (its plan's Task 4 Step 4).
+**Wave 4b is dispatched** (Decisions, 2026-10-29 22:55), with the `freshWithin` single-definition row added to its
+Task 1. Its deploy and live read come after its merge (its plan's Task 4 Step 4).
 
 **Waiting on the operator:** the coordinator-side re-proof's stopping line (D-7472).
 
-**Wave 5** is planned once waves 4b and 4c have landed what it reads.
+**Wave 5** is planned once wave 4b has landed what it reads. It takes the items carried from wave 4c (Carried
+constraints).
