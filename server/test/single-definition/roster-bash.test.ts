@@ -6,7 +6,7 @@ import { PROVIDER_IDS } from '../../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, prose, rel, sources } from './helpers.js';
 import { accountMarkerWriters, disabledProjectionWriters } from '../census-w5/accountMarkers.js';
-import { gateDefinitions, loopbackSets, verdictTypeDecls } from '../census-kernel/baseUrl.js';
+import { gateDefinitions, inlineGates, loopbackSets, verdictTypeDecls } from '../census-kernel/baseUrl.js';
 
 
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
@@ -231,7 +231,7 @@ describe('the provider table — one table, one home', () => {
     // read the census module (`census-kernel/baseUrl.ts`), so the set scan is
     // order-insensitive and both read `.mjs` files as well as `.ts` ones.
     const loopHolders = [...new Set(loopbackSets().map(fileOf))];
-    expect(loopHolders).toEqual(['shared/base-url.mjs', 'shared/models.mjs']);
+    expect(loopHolders).toEqual(['shared/base-url.mjs']);
   });
 });
 
@@ -1420,5 +1420,13 @@ describe("the endpoint gate's census (D-7305)", () => {
 
   it('each verdict type has at most one declaration (D-7307)', () => {
     for (const [name, sites] of Object.entries(verdictTypeDecls())) expect(sites.length, name).toBeLessThanOrEqual(1);
+  });
+
+  it('the loopback set is spelled at most once (D-7308)', () => {
+    expect(loopbackSets().length).toBeLessThanOrEqual(1);
+  });
+
+  it('no function outside the gate tests a URL inline for https: or a loopback http: (D-7308)', () => {
+    expect(inlineGates().gates.length).toBeLessThanOrEqual(0);
   });
 });

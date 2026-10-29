@@ -322,7 +322,7 @@ describe('lanes', () => {
     expect(lanes.find((l) => l['id'] === 'router')).toEqual({
       id: 'router', configDirSuffix: '.claude-router', anthropic: false,
       hasRegistry: true, registryInvalid: null, catalogueInvalid: null,
-      probe: 'compatible', baseUrl: 'https://api.cortecs.ai',
+      probe: 'compatible', baseUrl: 'https://api.cortecs.ai/', // stored as the gate's url (D-7460)
     });
   });
 
@@ -565,8 +565,16 @@ describe('init (§10, §13.1)', () => {
   it('an unseeded compatible registry keeps the baseUrl it was given', () => {
     op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
       '--base-url', 'https://api.cortecs.ai');
-    expect(registryOf('router')['baseUrl']).toBe('https://api.cortecs.ai');
+    expect(registryOf('router')['baseUrl']).toBe('https://api.cortecs.ai/'); // stored as the gate's url (D-7460)
     expect(registryOf('router')['discovery']).toBe('catalogue');
+  });
+
+  it('refuses a --base-url with a user name and password by the baseUrl field, and writes nothing (D-7308)', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+      '--base-url', 'https://u:p@compatible.example.invalid');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('baseUrl');
+    expect(fs.existsSync(regPath('router'))).toBe(false);
   });
 
   it('refuses compatible with no --base-url, and writes nothing', () => {
