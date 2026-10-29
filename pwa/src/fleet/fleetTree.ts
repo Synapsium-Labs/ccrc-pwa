@@ -56,6 +56,7 @@ import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
 import { programmeWave, runCard, runForSession, runHomeProject, runSentence, type ChildRunContext } from './runWords';
 import { hibernatedSince } from './hibernated';
+import { cardHues, fleetHues, type ProgHue } from './programmeBoxes';
 import { STATE_WORD } from './sessionFacts';
 import { sessionLabel } from './sessionLabel';
 
@@ -109,12 +110,17 @@ const latestPerSession = (
   runs.filter((r) => r.sessionId === null || runForSession(runs, byId.get(r.sessionId) ?? { id: r.sessionId }) === r);
 
 /** A card of the tree: `groupFleet`'s group, plus the rows `nestFleet` draws
- *  from it, the runs that drew them, and the runs this project is the HOME of
- *  that work on another card (`ProjectCard`'s `abroad`, spec §3 F4). */
+ *  from it, the runs that drew them, the runs this project is the HOME of
+ *  that work on another card (`ProjectCard`'s `abroad`, spec §3 F4), and the
+ *  runs a session on this card claims whose worker renders on another card
+ *  (Task G2: a programme box's far workers, its lead and its last move), and
+ *  this card's entries of the fleet's one programme hue map (`fleetHues`). */
 export interface FleetTreeGroup extends FleetGroup {
   readonly rows: readonly FleetRow[];
   readonly runs: readonly RunSummary[];
   readonly abroad: readonly RunSummary[];
+  readonly claimed: readonly RunSummary[];
+  readonly hues: ReadonlyMap<string, ProgHue>;
 }
 
 /** The fleet as cards of nested rows. `runs` is the ACTIVE runs. Pure. */
@@ -123,8 +129,13 @@ export function fleetTree(
 ): FleetTreeGroup[] {
   const cards = cardsOf(sessions);
   const byId = new Map(sessions.map((s) => [s.id, s] as const));
+  // ONE hue map per runs frame, over every open programme, so a programme keeps its hue on every card (Task G2).
+  const hues = fleetHues(runs);
   return groupFleet(sessions, projects, acks).map((g) => {
     const mine = runs.filter((r) => runCard(r, cards) === g.project);
+    // The cross-card run index the box reads (Task G2): claimed here, drawn elsewhere, so not in `runs`.
+    const claimed = runs.filter((r) => r.claimedBy !== null && cards.get(r.claimedBy) === g.project
+      && runCard(r, cards) !== g.project);
     return {
       ...g,
       // Rule 1, ONE parent: the bracket reads only each session's LATEST active
@@ -136,6 +147,8 @@ export function fleetTree(
       // on this very card — that run is a bracketed row here already (spec §6).
       abroad: runs.filter((r) => runHomeProject(r) === g.project && r.project !== g.project
         && runCard(r, cards) !== g.project),
+      claimed,
+      hues: cardHues(hues, [...mine, ...claimed]),
     };
   });
 }

@@ -460,7 +460,10 @@ describe('the nesting bracket', () => {
     // reads off a run stays identical. Nesting is then the only variable left.
     const orphaned = runFor({ id: 11, sessionId: 'demo-still-cove', claimedBy: 'other-project-coordinator' });
     const flat = render(<ProjectCard group={g} runs={[orphaned]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
-    const before = flat.container.querySelectorAll('.sess-line')[1]?.outerHTML;
+    // By its label, not its index: a worker of a programme elsewhere is drawn under its own sub-heading (Task G2).
+    const before = [...flat.container.querySelectorAll('.sess-line')]
+      .find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')?.outerHTML;
+    expect(before).toBeDefined();
     cleanup();
     const { container } = render(
       <ProjectCard group={g} runs={[childRun]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
@@ -1049,7 +1052,9 @@ describe('the orphan worker\'s marker rides its row', () => {
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-nest')).toBeNull();
     expect(container.querySelector('.proj-crossing')).toBeNull();
-    const row = container.querySelectorAll('.sess-line')[1]!;
+    // Task G2: a worker whose coordinator is off this card sits under "Workers of programmes elsewhere".
+    const row = [...container.querySelectorAll('.sess-line')].find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')!;
+    expect(row.closest('.pg-elsewhere')).not.toBeNull();
     expect(row.textContent!.split('build9b').length - 1).toBe(1);
     expect(row.textContent).toContain('build9b · wave 2 of 3');
   });
@@ -1078,13 +1083,16 @@ describe('the orphan worker\'s marker rides its row', () => {
     expect(marker(container)).toBeNull();
   });
 
-  it('keeps the marked row a direct child of the card body — no wrapper, no sibling line', () => {
+  it('keeps the marked row its own line — no marker wrapper, no sibling line', () => {
     const { container } = render(
       <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
                    coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
                    onOpen={() => {}} onActions={() => {}} />);
-    const row = container.querySelectorAll('.sess-line')[1]!;
-    expect(row.parentElement).toBe(container.querySelector('.proj-card-body'));
+    const row = [...container.querySelectorAll('.sess-line')].find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')!;
+    // Task G2: its one wrapper is the elsewhere group's row slot (the programme's hue), never a marker line.
+    expect(row.parentElement?.classList.contains('pg-far')).toBe(true);
+    expect(row.parentElement?.childElementCount).toBe(1);
+    expect(row.parentElement?.parentElement?.parentElement).toBe(container.querySelector('.proj-card-body'));
     expect(row.nextElementSibling?.classList.contains('proj-crossing') ?? false).toBe(false);
     expect(marker(row as HTMLElement)).not.toBeNull();
   });

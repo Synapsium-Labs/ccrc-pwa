@@ -1158,6 +1158,7 @@ describe('every stylesheet under src/ is audited', () => {
     const APP_SHEETS = [
       'src/docs/docs.css',
       'src/fleet/fleet.css',
+      'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
@@ -2271,6 +2272,66 @@ describe('the well hues are gated', () => {
         expect(row.detail, row.label).toBe(pair);
         expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+});
+
+// Task G2: a programme box borrows the four cool lane hues as the `--prog-*` aliases (tokens.css). Hue text sits on
+// the hue's own tint only in the kicker, and on the card's surface everywhere else; the coordinator band is not
+// tinted, because the session row's own inks fail on the tints in several palettes (a red pair is fixed by its
+// ground, never by the hue). These rows pin every pair in every palette, so a rule that stops naming its ground —
+// and so falls into the uncovered census — or a tint spread to another band goes red here.
+describe('the programme box\'s hues (Task G2)', () => {
+  const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
+  const palettes = loadThemes(ROOT).all;
+
+  it('aliases each --prog-* token to its lane hue and tint, in every palette', () => {
+    expect(palettes).toHaveLength(THEME_COUNT);
+    for (const [name, theme] of palettes) {
+      for (const h of PROG_HUES) {
+        expect(resolveColor(`var(--prog-${h})`, theme), `${name} ${h}`).toEqual(resolveColor(`var(--acct-${h})`, theme));
+        expect(resolveColor(`var(--prog-${h}-tint)`, theme), `${name} ${h}-tint`).toEqual(resolveColor(`var(--acct-${h}-tint)`, theme));
+      }
+    }
+  });
+
+  it('clears 4.5:1 for each hue on its own tint and on the card surface, in every palette', () => {
+    for (const [name, theme] of palettes) {
+      for (const h of PROG_HUES) {
+        expect(ratio(`var(--prog-${h})`, [`var(--prog-${h}-tint)`], theme), `${name} ${h} on its tint`).toBeGreaterThanOrEqual(4.5);
+        expect(ratio(`var(--prog-${h})`, ['var(--bg-surface)'], theme), `${name} ${h} on surface`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('measures the kicker on the tint and the workers\' slugs on the surface, through the stylesheet, in every palette', () => {
+    for (const h of PROG_HUES) {
+      for (const [key, pair] of [
+        [`.pg-kicker [as .pg-kicker[data-hue='${h}']]`, 'var(--pg) on var(--pg-tint)'],
+        [`.pg-tray [data-hue='${h}'] .sess-pw-prog [in .pg-tray]`, `var(--prog-${h}) on var(--bg-surface)`],
+        [`.pg-elsewhere [data-hue='${h}'] .sess-pw-prog [in .pg-elsewhere]`, `var(--prog-${h}) on var(--bg-surface)`],
+      ] as const) {
+        const rows = rowsFor(key);
+        expect(rows, key).toHaveLength(THEME_COUNT);
+        for (const row of rows) {
+          expect(row.detail, row.label).toBe(pair);
+          expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+    const programmeRules = rulesOf(ROOT, 'src/fleet/programmeBox.css').map(ruleKey);
+    expect(programmeRules.length).toBeGreaterThan(10);
+    for (const key of programmeRules) expect(report.uncovered, key).not.toContain(key);
+  });
+
+  it('tints only the kicker: every other band of the box sits on the card surface', () => {
+    const tinted = rulesOf(ROOT, 'src/fleet/programmeBox.css')
+      .filter((r) => /-tint\b/.test(bgOf(r.body) ?? ''))
+      .map(ruleKey);
+    expect(tinted).toEqual(['.pg-kicker']);
+    for (const band of ['.pg-coord', '.pg-tray', '.pg-foot', '.pg-elsewhere']) {
+      const rule = rulesOf(ROOT, 'src/fleet/programmeBox.css').find((r) => ruleKey(r) === band);
+      expect(bgOf(rule?.body ?? ''), band).toBe('var(--bg-surface)');
     }
   });
 });

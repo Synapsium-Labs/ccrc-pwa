@@ -88,27 +88,30 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     expect(busy.querySelectorAll('.sess-line')).toHaveLength(1);
   });
 
-  it('folds the workers to one line and keeps the one with the operator\'s question as its own row', () => {
+  // Task G2: the coordinator's workers fold into its programme box, and the box's footer is the one toggle
+  // that was the separate summary line.
+  it('folds the workers into the programme box and keeps the one with the operator\'s question in its tray', () => {
     mount(skin);
     const c = cardOf('project-c');
     expect(c.getAttribute('data-collapsed')).toBeNull();
-    const line = within(c).getByRole('button', { name: /5 workers · 1 needs you · 2 working · 2 idle/ });
+    const box = c.querySelector<HTMLElement>('section.pg-box')!;
+    const line = within(box).getByRole('button', { name: '4 more workers · 2 working' });
     expect(line.getAttribute('aria-expanded')).toBe('false');
-    // The coordinator and the asking worker: two rows, the three quiet siblings folded away.
+    // The coordinator and the asking worker: two rows, the four quiet siblings folded away.
     expect(c.querySelectorAll('.sess-line')).toHaveLength(2);
+    expect(box.querySelector('.pg-tray .sess-label')?.textContent).toBe('w5');
     fireEvent.click(line);
     expect(c.querySelectorAll('.sess-line')).toHaveLength(6);
   });
 
-  it('draws each count of the worker line as one unbreakable part, needs you first and in the attention ink', () => {
+  it('draws each count of the footer as one unbreakable part, and never counts the worker it draws', () => {
     mount(skin);
-    const line = within(cardOf('project-c')).getByRole('button', { name: /5 workers/ });
+    const line = within(cardOf('project-c')).getByRole('button', { name: /more workers/ });
     const parts = [...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent);
-    expect(parts).toEqual(['5 workers', '1 needs you', '2 working', '2 idle']);
-    expect(line.querySelector('.proj-children-part--needs-you')?.textContent).toBe('1 needs you');
+    // The worker that needs you is in the tray, with its ask, so the footer counts only what it hides.
+    expect(parts).toEqual(['4 more workers', '2 working']);
     const css = readFileSync(join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
     expect(css).toMatch(/\.proj-children-part\s*\{[^}]*white-space:\s*nowrap/);
-    expect(css).toMatch(/\.proj-children-part--needs-you\s*\{[^}]*color:\s*var\(--status-attention-text\)/);
   });
 
   it('keeps a held-open project\'s ▾ in the tab order and says why it does nothing', () => {

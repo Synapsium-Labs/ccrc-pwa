@@ -1,0 +1,124 @@
+/* Task G2: a coordinator's programme as one box in its project card (`ProgrammeBox.tsx`). The box borrows each
+   skin's own row rules (`.sess-line`, `.proj-nest`, `.proj-children-toggle` in fleet.css and the skins' sheets) and
+   adds only its frame, its kicker and its hue. One hue per programme (`data-hue`, `assignHues`): the `--prog-*`
+   aliases of the four cool lane hues (tokens.css), always beside the programme's title in words, never a glow.
+
+   GROUNDS. Hue text sits only on the hue's own tint (the kicker band, a pair the lane hues are already gated on) or
+   on the card's surface (the coordinator band, the tray, the workers of programmes elsewhere). The coordinator band
+   is NOT tinted, unlike prototype v6: the session row's own inks fail on the four tints in several palettes
+   (measured: --ink-tertiary 3.70:1 on the cyan tint in tokyo-night), and a red pair is fixed by its ground. Every
+   rule that paints a hue as text names the ground it sits on, so the contrast audit measures it in every palette:
+   each band states its ground and its ink (the page's own --ink-primary, unchanged), which makes it the painter the
+   audit measures its descendants on. */
+
+/* The non-text uses read `--pg` from the box: the left rule, the tray's inset rule. */
+.pg-box { --pg: var(--edge-strong); }
+.pg-box[data-hue='cyan'] { --pg: var(--prog-cyan); }
+.pg-box[data-hue='violet'] { --pg: var(--prog-violet); }
+.pg-box[data-hue='magenta'] { --pg: var(--prog-magenta); }
+.pg-box[data-hue='blue'] { --pg: var(--prog-blue); }
+
+.pg-box {
+  display: flex;
+  flex-direction: column;
+  margin: var(--sp-1) 0 var(--sp-2);
+  border: 1px solid var(--edge-strong);
+  border-left: 4px solid var(--pg);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+/* The state rides the outline, never the hue: needs is the attention edge, stalled the stall edge. No glow. */
+.pg-box[data-state='needs'] {
+  border-top-color: var(--status-attention);
+  border-right-color: var(--status-attention);
+  border-bottom-color: var(--status-attention);
+}
+.pg-box[data-state='stalled'] {
+  border-top-color: var(--status-dead);
+  border-right-color: var(--status-dead);
+  border-bottom-color: var(--status-dead);
+}
+
+/* The kicker: the hue on its own tint, the gated pair. Its words, icon, count and bar inherit the one colour. */
+.pg-kicker {
+  --pg: var(--ink-secondary);
+  --pg-tint: var(--bg-surface);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--pg-tint);
+  color: var(--pg);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+}
+.pg-kicker[data-hue='cyan'] { --pg: var(--prog-cyan); --pg-tint: var(--prog-cyan-tint); }
+.pg-kicker[data-hue='violet'] { --pg: var(--prog-violet); --pg-tint: var(--prog-violet-tint); }
+.pg-kicker[data-hue='magenta'] { --pg: var(--prog-magenta); --pg-tint: var(--prog-magenta-tint); }
+.pg-kicker[data-hue='blue'] { --pg: var(--prog-blue); --pg-tint: var(--prog-blue-tint); }
+.pg-ico { flex: none; }
+.pg-word { flex: none; text-transform: uppercase; letter-spacing: 0.08em; }
+.pg-sep,
+.pg-also { flex: none; }
+/* The title before the progress: in a narrow column the progress wraps below it, and only a title longer than the
+   whole line is cut. */
+.pg-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-prog { margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); flex: none; }
+.pg-count { white-space: nowrap; }
+/* The bar is a picture of the count beside it, never the only cue: a non-text rule in the hue. */
+.pg-bar { width: 56px; height: 4px; border-radius: 2px; background: var(--edge-strong); overflow: hidden; }
+.pg-bar > i { display: block; height: 100%; background: currentColor; }
+
+.pg-coord {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--sp-1);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+}
+.pg-coord .pg-moved { padding: 0 var(--sp-1) var(--sp-1); font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-tertiary); }
+.pg-coord .pg-moved[data-state='stalled'] { color: var(--status-dead-text); }
+
+/* The tray: the card's own ground, no tint, and an inset rule in the hue at reduced strength (a non-text rule). The
+   box is the edge, so the bracket is not drawn here; the DOM keeps it, one row renderer for every depth-1 row. */
+.pg-tray {
+  display: flex;
+  flex-direction: column;
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-1);
+  border-top: 1px solid var(--edge-subtle);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--pg) 55%, transparent);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+}
+.pg-tray .proj-nest-bracket { display: none; }
+/* A worker's programme slug in its own programme's hue (the lead's, or another of this coordinator's). */
+.pg-tray [data-hue='cyan'] .sess-pw-prog { color: var(--prog-cyan); }
+.pg-tray [data-hue='violet'] .sess-pw-prog { color: var(--prog-violet); }
+.pg-tray [data-hue='magenta'] .sess-pw-prog { color: var(--prog-magenta); }
+.pg-tray [data-hue='blue'] .sess-pw-prog { color: var(--prog-blue); }
+
+.pg-foot { padding: 0 var(--sp-2); border-top: 1px solid var(--edge-subtle); background: var(--bg-surface); }
+.pg-foot .proj-children-toggle { width: 100%; }
+
+/* The workers of programmes elsewhere: each slug in its programme's hue, on the card's surface. */
+.pg-elsewhere { display: flex; flex-direction: column; background: var(--bg-surface); color: var(--ink-primary); }
+.pg-far { display: flex; flex-direction: column; }
+.pg-elsewhere [data-hue='cyan'] .sess-pw-prog { color: var(--prog-cyan); }
+.pg-elsewhere [data-hue='violet'] .sess-pw-prog { color: var(--prog-violet); }
+.pg-elsewhere [data-hue='magenta'] .sess-pw-prog { color: var(--prog-magenta); }
+.pg-elsewhere [data-hue='blue'] .sess-pw-prog { color: var(--prog-blue); }
+
+.pg-sub,
+.pg-more {
+  padding: var(--sp-2) var(--sp-1) var(--sp-1);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-tertiary);
+  /* The card's own ground, stated, so the audit measures the quiet ink on it. */
+  background: var(--bg-surface);
+}
+.pg-sub { text-transform: uppercase; letter-spacing: 0.08em; }
