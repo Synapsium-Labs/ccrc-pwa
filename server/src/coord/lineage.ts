@@ -2,13 +2,18 @@
  * Landing order, wave 4 (plan docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md, Task 1):
  * the DECISION whether a stale `branchTip` claim is accepted because the live tip is only the claim plus clean base
  * merges, and the PARSERS of the two files wave 3b's radar writes under `$REG/landing/<project>/` (`enabled`, and
- * one `<id>.lineage` per qualifying registry row). Pure policy: it imports types only, reads no file and no clock
- * (`nowMs` is an argument), so every case is a table row.
+ * one `<id>.lineage` per qualifying registry row). Pure policy: it imports types and one pure value of L0 (`freshWithin`,
+ * the radar files' one freshness rule, D-7475), reads no file and no clock (`nowMs` is an argument), so every case is a
+ * table row.
  *
- * The parser reads only the shapes the radar writes (`lineage_unmeasured` and `lineage_pass` in `ccd/ccd-land-probe`): a
- * failed fetch (`unmeasured`, no base, no stop, an empty chain), a walk under a measured base, and a walk cut under one
- * (`unmeasured`, `stop: 'unmeasured'`, a partial chain). A doc of any other shape is unreadable, so the accept row is
- * reachable only through the radar's two walk shapes.
+ * The parser reads only the shapes the radar writes (`lineage_unmeasured`, `lineage_pass` and `walk_lineage` in
+ * `ccd/ccd-land-probe`), and refuses a doc the radar's writers cannot produce (D-7469). The three shapes: a failed fetch
+ * (`unmeasured`, a `why`, no base, no stop, an empty chain), a walk under a measured base (`measured`, no `why`, a stop),
+ * and a walk cut under one (`unmeasured`, a `why`, `stop: 'unmeasured'`, a partial chain). Every one carries the row's
+ * `branch`. A walk of `LINEAGE_MAX_CHAIN` entries stopped at its limit, so it is `measured` with `stop: 'limit'`; a
+ * `limit` walk of fewer is readable, because the step count is a knob. A chain is a first-parent walk of two-parent
+ * merges, so no entry has `p1 === p2` and no `merge` repeats. A doc of any other shape is unreadable, so the accept row
+ * is reachable only through the radar's walk shapes.
  *
  * Fail closed. Every unreadable, malformed, foreign, stale, inconsistent, non-qualifying or unknown fact answers
  * `today` (the caller's own refusal) or `unmeasured` (re-send after the radar's next tick), and never `accept`. The
@@ -17,6 +22,7 @@
  * `handoffCommit` itself: this file proves the files agree with themselves and with the live tip, no more.
  */
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
+import { freshWithin } from '../../../shared/api.js';
 
 /** The `enabled` marker is trusted for four timer intervals (D-7104): a radar that stopped ticking cannot keep
  *  acceptance alive. */
@@ -28,8 +34,6 @@ export const LINEAGE_FRESH_S = 2400;
 export const LINEAGE_MAX_BYTES = 16384;
 /** The longest chain wave 3b's walk writes (`CCD_LAND_PROBE_LINEAGE_STEPS`, default and maximum). */
 export const LINEAGE_MAX_CHAIN = 8;
-/** A clock that reads this far ahead of `nowMs` is not a clock to trust. */
-const FUTURE_SKEW_S = 60;
 
 const SHA = /^[0-9a-f]{40}$/;
 
@@ -49,7 +53,8 @@ export interface LineageDoc {
   state: 'measured' | 'unmeasured';
   chain: LineageEntry[];
   stop?: LineageStop;
-  branch?: string;
+  /** Every shape the radar writes carries the row's branch (D-7469), so a doc that passed has it. */
+  branch: string;
 }
 
 export type LineageRead =
@@ -71,15 +76,6 @@ function parseObject(content: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-/** Whether a doc's `at` is within `freshS` of `nowMs`, and not more than a minute ahead of it. */
-function freshAt(at: unknown, freshS: number, nowMs: number): boolean {
-  if (typeof at !== 'string') return false;
-  const t = Date.parse(at);
-  if (Number.isNaN(t)) return false;
-  const ageMs = nowMs - t;
-  return ageMs <= freshS * 1000 && ageMs >= -FUTURE_SKEW_S * 1000;
 }
 
 /** One `<id>.lineage` file's bytes, read against the row it must describe. */
@@ -106,8 +102,17 @@ export function parseLineage(
   // `state` and `stop` agree (fix round 1, F1): only a cut walk is `unmeasured` with a stop, and that stop says so.
   if (measured ? stop === 'unmeasured' : stop !== undefined && stop !== 'unmeasured') return bad;
 
+  // Both of the radar's writers set `branch` (D-7469), so a doc without it is not one of theirs.
   const branch = o.branch;
-  if (branch !== undefined && branch !== expect.branch) return bad;
+  if (typeof branch !== 'string' || branch !== expect.branch) return bad;
+
+  // `why` marks an unmeasured doc, and only one: `walk_lineage` sets it only on its unmeasured exits and
+  // `lineage_unmeasured` always does (D-7469). A `null` reads as absent, like `base` and `stop`.
+  const why = o.why ?? undefined;
+  if (measured ? why !== undefined : typeof why !== 'string' || why === '') return bad;
+  // An unmeasured doc under a base is a cut walk, so it says so; one with no base is a failed fetch, which has no stop.
+  if (!measured && base !== undefined && stop !== 'unmeasured') return bad;
+  if (!measured && base === undefined && stop !== undefined) return bad;
 
   const rawChain = o.chain;
   if (!Array.isArray(rawChain) || rawChain.length > LINEAGE_MAX_CHAIN) return bad;
@@ -120,12 +125,17 @@ export function parseLineage(
   if (chain.length > 0 && (base === undefined || stop === undefined)) return bad;
   if (chain.length > 0 && chain[0]!.merge !== tip) return bad;
   for (let i = 0; i + 1 < chain.length; i++) if (chain[i]!.p1 !== chain[i + 1]!.merge) return bad;
+  // A walk stops with `limit` exactly when its chain reaches its step count, whose maximum is the length cap (D-7469); a
+  // `limit` walk of fewer entries stays readable (the step count is a knob).
+  if (chain.length === LINEAGE_MAX_CHAIN && (!measured || stop !== 'limit')) return bad;
+  // A first-parent walk of two-parent merges: no merge of one commit with itself, and no commit walked twice.
+  if (chain.some((e) => e.p1 === e.p2)) return bad;
+  if (new Set(chain.map((e) => e.merge)).size !== chain.length) return bad;
 
-  if (!freshAt(o.at, LINEAGE_FRESH_S, nowMs)) return { ok: false, reason: 'stale' };
-  const doc: LineageDoc = { tip: tip as string | null, state, chain };
+  if (!freshWithin(o.at, LINEAGE_FRESH_S, nowMs)) return { ok: false, reason: 'stale' };
+  const doc: LineageDoc = { tip: tip as string | null, state, chain, branch };
   if (base !== undefined) doc.base = base;
   if (stop !== undefined) doc.stop = stop as LineageStop;
-  if (branch !== undefined) doc.branch = branch;
   return { ok: true, doc };
 }
 
@@ -133,7 +143,7 @@ export function parseLineage(
 export function parseEnabled(content: string, project: string, nowMs: number): MarkerRead {
   const o = parseObject(content);
   if (o === null || o.v !== 1 || o.project !== project) return 'unreadable';
-  return freshAt(o.at, LAND_PROBE_ENABLED_FRESH_S, nowMs) ? 'trusted' : 'stale';
+  return freshWithin(o.at, LAND_PROBE_ENABLED_FRESH_S, nowMs) ? 'trusted' : 'stale';
 }
 
 export interface LineageInput {

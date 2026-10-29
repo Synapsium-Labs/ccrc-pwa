@@ -1063,14 +1063,14 @@ describe('the opted-in lineage path (landing order wave 4)', () => {
       });
       it('a partly-measured doc without the claim waits; a measured one without it is today\'s refusal', async () => {
         const OTHER_CHAIN = [{ merge: LIVE, p1: 'e'.repeat(40), p2: BASE }];
-        unmeasured(await v.run(world({ lineage: JSON.stringify(doc({ state: 'unmeasured', stop: 'unmeasured', chain: OTHER_CHAIN })) })),
+        unmeasured(await v.run(world({ lineage: JSON.stringify(doc({ state: 'unmeasured', why: 'budget', stop: 'unmeasured', chain: OTHER_CHAIN })) })),
           'partly-measured');
         const res = await v.run(world({ lineage: JSON.stringify(doc({ chain: OTHER_CHAIN })) }));
         expect(res).toMatchObject({ ok: false, code: today });
         expect(res.detail).toEqual((await baseline()).detail);
       });
       it('a partly-measured doc accepts a claim its chain does hold (D-7106)', async () => {
-        const lineage = JSON.stringify(doc({ state: 'unmeasured', stop: 'unmeasured' }));
+        const lineage = JSON.stringify(doc({ state: 'unmeasured', why: 'budget', stop: 'unmeasured' }));
         expect(await v.run(world({ lineage }))).toEqual({ ok: true, tip: LIVE, via: 'base-only-merge' });
       });
       it('an unmeasured doc with no base that holds the claim is lineage-unreadable, never an accept (fix round 1, F1)', async () => {

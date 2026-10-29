@@ -4921,7 +4921,8 @@ describe('an opted-in project: the lineage through the run routes (landing order
       const report = path.join(root, 'report.md'); writeFileSync(report, '# findings\n');
       const lineage = o.lineage === undefined
         ? JSON.stringify({ v: 1, project: PROJECT, id: WID, at: nowIso(-5), state: 'measured', branch: `ws/${WID}`, tip: LIVE,
-          base: BASE, chain: [{ merge: LIVE, p1: TIPW, p2: BASE }], stop: 'not-a-merge' })
+          // p2 is not TIPW: here TIPW and BASE are one sha, and a merge whose two parents agree is no radar shape (D-7469).
+          base: BASE, chain: [{ merge: LIVE, p1: TIPW, p2: 'e'.repeat(40) }], stop: 'not-a-merge' })
         : o.lineage;
       optIn(home, WID, `ws/${WID}`, { ...(o.marker === undefined ? {} : { marker: o.marker }), lineage });
       calls.length = 0;

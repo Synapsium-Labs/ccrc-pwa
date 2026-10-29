@@ -4,6 +4,7 @@
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { FRESH_FUTURE_SKEW_S, freshWithin } from '../../shared/api.js';
 import { localIO, type FleetIO, type MeasuredPathKind } from '../src/io.js';
 import {
   LAND_PROBE_ENABLED_FRESH_S, LINEAGE_FRESH_S, LINEAGE_MAX_BYTES,
@@ -73,7 +74,8 @@ describe('parseLineage: unreadable', () => {
   it('nine entries', () => {
     const chain = Array.from({ length: 9 }, (_, i) => ({ merge: sha(i + 1), p1: sha(i + 2), p2: sha(99) }));
     unreadable(lin({ chain }));
-    expect(lin({ chain: chain.slice(0, 8) }).ok).toBe(true);
+    // Eight entries are the walk's limit (D-7469): a measured doc with `stop: 'limit'`.
+    expect(lin({ chain: chain.slice(0, 8), stop: 'limit' }).ok).toBe(true);
   });
 
   it('chain[0].merge is not the tip', () => { unreadable(lin({ tip: sha(5) })); });
@@ -84,9 +86,11 @@ describe('parseLineage: unreadable', () => {
 
   it('a doc larger than LINEAGE_MAX_BYTES (16385 bytes); 16384 reads', () => {
     expect(LINEAGE_MAX_BYTES).toBe(16384);
+    // The padding rides `why`, which only a cut walk (`unmeasured`, `stop: 'unmeasured'`) may carry (D-7469).
+    const cut = { state: 'unmeasured', stop: 'unmeasured' };
     const sized = (bytes: number): string => {
-      const bare = JSON.stringify(doc({ why: '' }));
-      return JSON.stringify(doc({ why: 'x'.repeat(bytes - Buffer.byteLength(bare)) }));
+      const bare = JSON.stringify(doc({ ...cut, why: '' }));
+      return JSON.stringify(doc({ ...cut, why: 'x'.repeat(bytes - Buffer.byteLength(bare)) }));
     };
     expect(Buffer.byteLength(sized(16385))).toBe(16385);
     unreadable(parseLineage(sized(16385), EXPECT, NOW));
@@ -113,8 +117,8 @@ describe('parseLineage: readable unmeasured shapes', () => {
     if (r.ok) expect(r.doc.tip).toBeNull();
   });
 
-  it('the same shapes with the keys absent, and no branch key', () => {
-    const r = lin({ ...FETCH_FAILED, base: undefined, stop: undefined, branch: undefined });
+  it('the same shapes with the keys absent (the radar writes `branch` on every shape)', () => {
+    const r = lin({ ...FETCH_FAILED, base: undefined, stop: undefined });
     expect(r.ok).toBe(true);
   });
 
@@ -178,10 +182,125 @@ describe('parseLineage: the radar writes three shapes only (fix round 1, F1)', (
     it('the three-entry measured chain', () => {
       expect(lin().ok).toBe(true);
     });
-    it('a cut walk under a sha base with an empty chain and no stop is readable (nothing to accept through)', () => {
-      expect(lin({ state: 'unmeasured', chain: [], stop: null }).ok).toBe(true);
+  });
+});
+
+describe("parseLineage: the radar's shapes only (wave 4c, D-7469)", () => {
+  /** Eight linked entries, tip s1 -> s9: the longest chain the walk writes. */
+  const EIGHT = Array.from({ length: 8 }, (_, i) => ({ merge: sha(i + 1), p1: sha(i + 2), p2: sha(99) }));
+  /** The claim, sha(2), is `chain[0].p1` in every doc below that has a chain: the doc would accept were it readable. */
+  const refused = (over: Record<string, unknown>): void => {
+    expect(lin(over)).toEqual({ ok: false, reason: 'unreadable' });
+    expect(decideLineage({
+      claim: sha(2), live: sha(1), marker: 'trusted', globalPause: 'running', projectPause: 'running', qualifies: true,
+      lineage: lin(over),
+    })).toEqual({ answer: 'unmeasured', detail: 'lineage-unreadable' });
+  };
+
+  describe('refused: each case fails exactly one rule', () => {
+    it('a measured doc with no branch key (the branch rule)', () => {
+      refused({ branch: undefined });
+    });
+    it('a measured doc carrying a why (the why rule: a measured doc has none)', () => {
+      refused({ why: 'budget' });
+    });
+    it('a cut walk with no why (the why rule: an unmeasured doc has one)', () => {
+      refused({ state: 'unmeasured', stop: 'unmeasured', chain: THREE.slice(0, 2) });
+    });
+    it('a cut walk with an empty or non-string why (the same rule)', () => {
+      refused({ state: 'unmeasured', stop: 'unmeasured', chain: THREE.slice(0, 2), why: '' });
+      refused({ state: 'unmeasured', stop: 'unmeasured', chain: THREE.slice(0, 2), why: 7 });
+    });
+    it('an unmeasured doc under a sha base with no stop and an empty chain (the base-bearing-unmeasured rule)', () => {
+      // The old "radar control". Its claim cannot be in an empty chain; the answer is the same.
+      refused({ state: 'unmeasured', why: 'budget', chain: [], stop: null });
+    });
+    it("an unmeasured doc with no base but a stop and an empty chain (the same rule's other half: no base, no stop)", () => {
+      refused({ state: 'unmeasured', why: 'budget', chain: [], base: null, stop: 'unmeasured' });
+    });
+    it("an unmeasured walk of eight entries (the eight-entries rule: eight is a measured limit)", () => {
+      refused({ state: 'unmeasured', why: 'budget', stop: 'unmeasured', chain: EIGHT });
+    });
+    it("a measured walk of eight entries that stops at not-a-merge (the same rule)", () => {
+      refused({ stop: 'not-a-merge', chain: EIGHT });
+    });
+    it('an entry whose two parents are one commit (the p1 === p2 check)', () => {
+      refused({ chain: [{ merge: sha(1), p1: sha(2), p2: sha(2) }, { merge: sha(2), p1: sha(3), p2: sha(9) }] });
+    });
+    it('A -> B -> A: two linked entries with the same merge (the duplicate-merge check)', () => {
+      refused({
+        chain: [
+          { merge: sha(1), p1: sha(2), p2: sha(9) },
+          { merge: sha(2), p1: sha(1), p2: sha(9) },
+          { merge: sha(1), p1: sha(3), p2: sha(9) },
+        ],
+      });
     });
   });
+
+  describe('controls: every shape the radar writes stays readable', () => {
+    it('a limit walk of no entries (CCD_LAND_PROBE_LINEAGE_STEPS=0)', () => {
+      expect(lin({ stop: 'limit', chain: [] }).ok).toBe(true);
+    });
+    it('a limit walk of eight entries accepts a claim in its chain', () => {
+      const lineage = lin({ stop: 'limit', chain: EIGHT });
+      expect(lineage.ok).toBe(true);
+      expect(decideLineage({
+        claim: sha(5), live: sha(1), marker: 'trusted', globalPause: 'running', projectPause: 'running', qualifies: true, lineage,
+      })).toEqual({ answer: 'accept' });
+    });
+    it('a limit walk of fewer than eight entries (a lower step count)', () => {
+      expect(lin({ stop: 'limit', chain: THREE }).ok).toBe(true);
+    });
+    it.each([0, 1, 7])('a cut walk, with a why, of %i entries', (n) => {
+      expect(lin({ state: 'unmeasured', why: 'budget', stop: 'unmeasured', chain: EIGHT.slice(0, n) }).ok).toBe(true);
+    });
+    it('the failed-fetch doc, with its why, with a sha tip and with a null tip', () => {
+      expect(lin({ ...FETCH_FAILED, tip: sha(1) }).ok).toBe(true);
+      expect(lin({ ...FETCH_FAILED, tip: null }).ok).toBe(true);
+    });
+    it('a measured doc whose why is null (absent and null read alike)', () => {
+      expect(lin({ why: null }).ok).toBe(true);
+    });
+  });
+});
+
+describe('freshWithin: the one freshness rule (D-7475)', () => {
+  const ENABLED_S = LAND_PROBE_ENABLED_FRESH_S;
+  const rows: ReadonlyArray<readonly [string, unknown, number, boolean]> = [
+    ['1200 s old against 1200', iso(-1200), ENABLED_S, true],
+    ['1201 s old against 1200', iso(-1201), ENABLED_S, false],
+    ['2400 s old against 2400', iso(-2400), LINEAGE_FRESH_S, true],
+    ['2399 s old against 2400', iso(-2399), LINEAGE_FRESH_S, true],
+    ['2401 s old against 2400', iso(-2401), LINEAGE_FRESH_S, false],
+    ['59 s ahead', iso(59), LINEAGE_FRESH_S, true],
+    ['60 s ahead', iso(60), LINEAGE_FRESH_S, true],
+    ['61 s ahead', iso(61), LINEAGE_FRESH_S, false],
+    ['an unparseable time', 'not a date', LINEAGE_FRESH_S, false],
+    ['a number', NOW, LINEAGE_FRESH_S, false],
+    ['null', null, LINEAGE_FRESH_S, false],
+    ['a missing time', undefined, LINEAGE_FRESH_S, false],
+  ];
+
+  it('the skew is a minute', () => { expect(FRESH_FUTURE_SKEW_S).toBe(60); });
+
+  it.each(rows)('freshWithin: %s', (_name, at, freshS, want) => {
+    expect(freshWithin(at, freshS, NOW)).toBe(want);
+  });
+
+  // Both readers keep their verdicts at the same boundaries: the marker at 1200, the lineage at 2400.
+  // The marker takes the rows against 1200 and the rows that name no age (skew, unparseable, missing).
+  it.each(rows.filter((r) => r[2] === ENABLED_S || !r[0].includes('against')))(
+    'the marker agrees (%s)', (_name, at, _freshS, want) => {
+      const text = JSON.stringify({ v: 1, project: 'proj-a', at });
+      expect(parseEnabled(text, 'proj-a', NOW)).toBe(want ? 'trusted' : 'stale');
+    });
+  // The lineage takes every row but the two against 1200.
+  it.each(rows.filter((r) => r[2] === LINEAGE_FRESH_S))(
+    'the lineage agrees (%s)', (_name, at, _freshS, want) => {
+      expect(lin({ at }).ok).toBe(want);
+      if (!want) expect(lin({ at })).toEqual({ ok: false, reason: 'stale' });
+    });
 });
 
 describe('parseLineage: stale', () => {
