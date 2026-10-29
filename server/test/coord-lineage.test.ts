@@ -134,6 +134,56 @@ describe('parseLineage: readable unmeasured shapes', () => {
   });
 });
 
+describe('parseLineage: the radar writes three shapes only (fix round 1, F1)', () => {
+  /** The shape of each case below: the claim (sha(2)) is held by a chain, but the radar could never have written the doc. */
+  const refused = (over: Record<string, unknown>): void => {
+    expect(lin(over)).toEqual({ ok: false, reason: 'unreadable' });
+    // The same doc through the decision: a re-send after the next tick, never an accept.
+    expect(decideLineage({
+      claim: sha(2), live: sha(1), marker: 'trusted', globalPause: 'running', projectPause: 'running', qualifies: true,
+      lineage: lin(over),
+    })).toEqual({ answer: 'unmeasured', detail: 'lineage-unreadable' });
+  };
+
+  it("(a) state: 'unmeasured', stop: 'unmeasured', a chain holding the claim and base: null", () => {
+    refused({ state: 'unmeasured', stop: 'unmeasured', base: null });
+  });
+  it("(b) the same with no base key", () => {
+    refused({ state: 'unmeasured', stop: 'unmeasured', base: undefined });
+  });
+  it("(c) state: 'unmeasured' beside a measured stop (conflict), a sha base and a chain holding the claim", () => {
+    refused({ state: 'unmeasured', stop: 'conflict' });
+  });
+  it("(d) state: 'measured' beside stop: 'unmeasured', a sha base and a chain holding the claim", () => {
+    refused({ state: 'measured', stop: 'unmeasured' });
+  });
+  it("(e) state: 'unmeasured', a sha base, a chain holding the claim and no stop", () => {
+    refused({ state: 'unmeasured', stop: undefined });
+    refused({ state: 'unmeasured', stop: null });
+  });
+
+  describe('controls: the shapes the radar writes stay readable', () => {
+    it("the failed fetch's shape, with a sha tip and with a null tip", () => {
+      expect(lin({ ...FETCH_FAILED, tip: sha(1) }).ok).toBe(true);
+      expect(lin({ ...FETCH_FAILED, tip: null }).ok).toBe(true);
+    });
+    it('the walk-cut doc still accepts a claim in its chain', () => {
+      const lineage = lin({ state: 'unmeasured', why: 'merge-tree-timeout', stop: 'unmeasured', chain: THREE.slice(0, 2) });
+      expect(lineage.ok).toBe(true);
+      expect(decideLineage({
+        claim: sha(3), live: sha(1), marker: 'trusted', globalPause: 'running', projectPause: 'running', qualifies: true,
+        lineage,
+      })).toEqual({ answer: 'accept' });
+    });
+    it('the three-entry measured chain', () => {
+      expect(lin().ok).toBe(true);
+    });
+    it('a cut walk under a sha base with an empty chain and no stop is readable (nothing to accept through)', () => {
+      expect(lin({ state: 'unmeasured', chain: [], stop: null }).ok).toBe(true);
+    });
+  });
+});
+
 describe('parseLineage: stale', () => {
   const stale = (r: LineageRead): void => { expect(r).toEqual({ ok: false, reason: 'stale' }); };
 

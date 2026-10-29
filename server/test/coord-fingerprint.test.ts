@@ -1073,6 +1073,10 @@ describe('the opted-in lineage path (landing order wave 4)', () => {
         const lineage = JSON.stringify(doc({ state: 'unmeasured', stop: 'unmeasured' }));
         expect(await v.run(world({ lineage }))).toEqual({ ok: true, tip: LIVE, via: 'base-only-merge' });
       });
+      it('an unmeasured doc with no base that holds the claim is lineage-unreadable, never an accept (fix round 1, F1)', async () => {
+        const lineage = JSON.stringify(doc({ state: 'unmeasured', stop: 'unmeasured', base: null }));
+        unmeasured(await v.run(world({ lineage })), 'lineage-unreadable');
+      });
       it('is never read through a symlink', async () => {
         const w = world({ lineage: null });
         const real = path.join(w.home, 'real.lineage');

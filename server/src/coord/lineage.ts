@@ -5,6 +5,11 @@
  * one `<id>.lineage` per qualifying registry row). Pure policy: it imports types only, reads no file and no clock
  * (`nowMs` is an argument), so every case is a table row.
  *
+ * The parser reads only the shapes the radar writes (`lineage_unmeasured` and `lineage_pass` in `ccd/ccd-land-probe`): a
+ * failed fetch (`unmeasured`, no base, no stop, an empty chain), a walk under a measured base, and a walk cut under one
+ * (`unmeasured`, `stop: 'unmeasured'`, a partial chain). A doc of any other shape is unreadable, so the accept row is
+ * reachable only through the radar's two walk shapes.
+ *
  * Fail closed. Every unreadable, malformed, foreign, stale, inconsistent, non-qualifying or unknown fact answers
  * `today` (the caller's own refusal) or `unmeasured` (re-send after the radar's next tick), and never `accept`. The
  * one `accept` row is a claim that is some chain entry's first parent in a lineage whose own tip IS the live tip.
@@ -98,6 +103,8 @@ export function parseLineage(
   const stop = o.stop ?? undefined;
   if (stop !== undefined && !(LINEAGE_STOPS as readonly unknown[]).includes(stop)) return bad;
   if (measured && (base === undefined || stop === undefined)) return bad;
+  // `state` and `stop` agree (fix round 1, F1): only a cut walk is `unmeasured` with a stop, and that stop says so.
+  if (measured ? stop === 'unmeasured' : stop !== undefined && stop !== 'unmeasured') return bad;
 
   const branch = o.branch;
   if (branch !== undefined && branch !== expect.branch) return bad;
@@ -109,6 +116,8 @@ export function parseLineage(
     if (!isRecord(e) || !isSha(e.merge) || !isSha(e.p1) || !isSha(e.p2)) return bad;
     chain.push({ merge: e.merge, p1: e.p1, p2: e.p2 });
   }
+  // A chain is a walk under a measured base, and a walk ends with a stop (fix round 1, F1).
+  if (chain.length > 0 && (base === undefined || stop === undefined)) return bad;
   if (chain.length > 0 && chain[0]!.merge !== tip) return bad;
   for (let i = 0; i + 1 < chain.length; i++) if (chain[i]!.p1 !== chain[i + 1]!.merge) return bad;
 
