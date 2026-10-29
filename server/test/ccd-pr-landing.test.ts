@@ -38,7 +38,8 @@ gh() {
       if [[ -f "$HOME/rules-\${2##*/}.json" ]]; then cat "$HOME/rules-\${2##*/}.json"; elif [[ -f "$HOME/rules.json" ]]; then cat "$HOME/rules.json"; fi; return "$rc" ;;
     'api repos/o/r/branches/'*) if [[ -f "$HOME/branch-\${2##*/}.json" ]]; then cat "$HOME/branch-\${2##*/}.json"; elif [[ -f "$HOME/branch.json" ]]; then cat "$HOME/branch.json"; fi; return 0 ;;
     'pr list') echo '[]'; return 0 ;;
-    'pr view') [[ -f "$HOME/view-$3.rc" ]] && return "$(cat "$HOME/view-$3.rc")"
+    'pr view') [[ -f "$HOME/view-$3.err" ]] && cat "$HOME/view-$3.err" >&2
+      [[ -f "$HOME/view-$3.rc" ]] && return "$(cat "$HOME/view-$3.rc")"
       [[ -f "$HOME/view-$3.json" ]] && { cat "$HOME/view-$3.json"; return 0; }; return 1 ;;
   esac
   return 1
@@ -492,6 +493,45 @@ describe('the required contexts', () => {
 
   it('keeps no proof: the landing read writes nothing under $REG', () => {
     labelled((t0) => trainPr([[41, t0]]));
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.train-proofs'))).toBe(false);
+  });
+
+  // #1797 round 7 (D-7381): keep=0 reads GitHub, so a fresh `failed` tried
+  // line never answers it; an OPEN train is unread; and a proof it finds clears
+  // a stale line though it keeps no proof.
+  const tried = (): string => {
+    const f = path.join(h.home, '.cc-sessions', '.train-tried');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  const freshFailed = (t0: string): void => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-tried'),
+      `o/r main 41 ${t0} failed ${Math.floor(Date.now() / 1000) - 60}\n`);
+  };
+
+  it('a fresh failed line, a 502 on the train and an empty search is unmeasured, never closed', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    put('view-50.rc', '1');
+    put('view-50.err', 'HTTP 502: Bad Gateway (https://api.github.com/graphql)\n');
+    const l = labelled((t0) => { freshFailed(t0); return trainPr([[41, t0]]); });
+    expect(l).toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false, unmeasured: ['train'] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'unmeasured' });
+    // keep=0 writes no tried line of its own: the stale one is left as it was.
+    expect(tried()).toMatch(/ failed [0-9]+\n$/);
+  });
+
+  it('an OPEN train is unmeasured, never closed', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    const l = labelled((t0) => trainPr([[41, t0]], { state: 'OPEN', mergedAt: null, mergeCommit: null }));
+    expect(l).toMatchObject({ landedInTrain: false, unmeasured: ['train'] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'unmeasured' });
+  });
+
+  it('a proof the landing read finds clears a stale failed line, and still keeps no proof', () => {
+    const l = labelled((t0) => { freshFailed(t0); return trainPr([[41, t0]]); });
+    expect(l).toMatchObject({ landedInTrain: true, unmeasured: [] });
+    expect(tried()).toBe('');
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.train-proofs'))).toBe(false);
   });
 

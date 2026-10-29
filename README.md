@@ -6745,7 +6745,8 @@ request here, or no train names it) reads as closed, with reason
 `train-unproven` (`trainUnproven: true` on the row), and the reap refuses it
 `not-merged`. Only such a definitive answer fails a candidate (D-7381): a train
 read that fails any other way (an HTTP 5xx, a rate limit, the network, auth, a
-timeout, a signal, an answer that is not a PR's JSON) is unread, and one unread
+timeout, a signal, an answer that is not a PR's JSON) is unread, as is a train
+that is still OPEN (it may yet merge) or whose state is missing or odd, and one unread
 candidate makes the whole record unread unless something proved the landing,
 even when the search fallback answered empty. A labelled PR whose train record
 could not be READ (no time left in the read's budget, a timeout, GitHub
@@ -6767,7 +6768,11 @@ file, never read as a proof), and each call asks the members with no tried line
 first, then the oldest tried. A member whose record was read and failed less
 than `PR_TRAIN_TRIED_TTL` (30 minutes) ago is not asked again, and the sweep
 reads it `train-unproven`, not `train-unread`, until the line expires; an
-`unread` outcome is asked again on the next call.
+`unread` outcome is asked again on the next call. Only a read that can make no
+gh call at all (the sweep) answers from a fresh `failed` line, and a kept proof
+is read before it: a read that asked GitHub and hit an unread candidate reads
+`train-unread` whatever the line says. A proof found by any read, `pr-landing`'s
+included (which keeps none), removes the member's tried line.
 
 **The train record (D-7335)** is the one machine-readable block in a train PR's
 body, and a train tool writes exactly one: an HTML comment on lines of its own,

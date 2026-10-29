@@ -6684,9 +6684,11 @@ elif mode == 'train-check':
     # Human tables and lists beside it are never parsed. No block, two blocks,
     # a block that never closes, a line in it that is not a member line, or a
     # member listed twice proves nothing. Prints `<train>\t<merge oid>` for the
-    # first that proves; else `!<sentence>` for the first candidate's reason,
-    # nothing when there was no candidate at all, or `?unreadable` when stdin
-    # was no PR's JSON and no list of them (D-7381).
+    # first that proves; else `?<sentence>` when a candidate's answer was not
+    # definitive (an OPEN train, a missing or odd state), `!<sentence>` for the
+    # first failed candidate's reason, nothing when there was no candidate at
+    # all, or `?unreadable` when stdin was no PR's JSON and no list of them
+    # (D-7381). Only a CLOSED train, another sha or no listing fails.
     (member, head, base_short) = sys.argv[2:5]
     try:
         doc = json.loads(sys.stdin.read() or 'null')
@@ -6722,6 +6724,7 @@ elif mode == 'train-check':
         return None, 'has a ccrc-train v1 block that never closes'
 
     why = None
+    unread = None
     for t in cands:
         if not isinstance(t, dict):
             continue
@@ -6729,9 +6732,18 @@ elif mode == 'train-check':
         if not isinstance(n, int) or str(n) == member:
             continue
         oid = (t.get('mergeCommit') or {}).get('oid')
-        if (t.get('state') != 'MERGED' or not isinstance(t.get('mergedAt'), str)
+        state = t.get('state')
+        if state == 'CLOSED':
+            # GitHub's definitive answer: closed and never merged. A failed candidate.
+            why = why or 'train #%d is closed, not merged' % n
+            continue
+        if (state != 'MERGED' or not isinstance(t.get('mergedAt'), str)
                 or not isinstance(oid, str) or re.fullmatch(r'[0-9a-f]{40}', oid) is None):
-            why = why or 'train #%d is %s, not merged' % (n, str(t.get('state') or 'unreadable').lower())
+            # An OPEN train may still merge, and a missing or odd state (or a
+            # MERGED one with no merge commit) says nothing definitive: UNREAD,
+            # never a failed candidate (#1797 round 7, D-7381).
+            unread = unread or ('train #%d is still open' % n if state == 'OPEN'
+                                else "train #%d's state could not be read" % n)
             continue
         if t.get('baseRefName') != base_short or t.get('isCrossRepository') is not False:
             why = why or 'train #%d did not merge into %s from this repository' % (n, base_short)
@@ -6749,7 +6761,10 @@ elif mode == 'train-check':
             continue
         sys.stdout.write('%d\t%s\n' % (n, oid))
         sys.exit(0)
-    if why:
+    # An unread candidate is never outvoted by a failed one: `?` wins over `!`.
+    if unread:
+        sys.stdout.write('?' + unread + '\n')
+    elif why:
         sys.stdout.write('!' + why + '\n')
 
 elif mode == 'bind':
@@ -13030,9 +13045,10 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
 #                       its own server row, run by the 120 s sweep after `pr-state --project` (D-7378)
 #   pr-landing          PR_LANDING_TRAIN_TIMEOUT, beside its GraphQL and REST reads, keeping nothing
 #   ws-audit / ws-reap  WS_TRAIN_TIMEOUT per workspace
-# Running out of budget proves nothing and is UNREAD (rc 2), never `not landed`,
-# unless the member's tried record says it was read and FAILED less than
-# PR_TRAIN_TRIED_TTL ago (D-7381): then it is that refusal (rc 1).
+# Running out of budget proves nothing and is UNREAD (rc 2), never `not landed`.
+# Only a read with no budget at all (it can make no gh call: the sweep) answers
+# from the member's tried record, when it says the record was read and FAILED
+# less than PR_TRAIN_TRIED_TTL ago (D-7381): then it is that refusal (rc 1).
 PR_STATE_TRAIN_TIMEOUT=6
 PR_LANDING_TRAIN_TIMEOUT=3
 WS_TRAIN_TIMEOUT=16
@@ -13052,10 +13068,12 @@ PR_TRAIN_PROOFS_FILE=.train-proofs
 # the record did not prove it: `_ws_train_record`'s 1) or `unread` (its 2). A
 # separate file from the proofs, and NEVER read as a proof: it only orders the
 # prover (no record first, then the oldest tried) and, while a `failed` line is
-# fresh (PR_TRAIN_TRIED_TTL), lets a read with no budget left answer
-# `train-unproven` instead of `train-unread` and keeps the prover from asking
-# again. An `unread` line is retried on the next call. A proof removes the
-# member's line; lines older than PR_TRAIN_TRIED_KEEP are dropped on write.
+# fresh (PR_TRAIN_TRIED_TTL), lets a read with no budget at all (no gh call
+# made) answer `train-unproven` instead of `train-unread` and keeps the prover
+# from asking again. An `unread` line is retried on the next call. A proof found
+# by any read (keep=0 too) removes the member's line, and a kept proof is
+# consulted before any line; lines older than PR_TRAIN_TRIED_KEEP are dropped
+# on write.
 PR_TRAIN_TRIED_FILE=.train-tried
 PR_TRAIN_TRIED_TTL=1800
 PR_TRAIN_TRIED_KEEP=86400
@@ -13129,7 +13147,8 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
   #
   # EVERY REFERENCE IS A CANDIDATE, AND A BAD ONE IS ONLY A FAILED CANDIDATE
   # (D-7362) — and a candidate FAILS only when GitHub DEFINITIVELY answered
-  # about it (D-7381): the train PR was read and is CLOSED unmerged, lists
+  # about it (D-7381): the train PR was read and is CLOSED unmerged (an OPEN
+  # train, or a missing or odd state, is unread: it may yet merge), lists
   # another sha or does not list the member, or gh said the number is not a
   # pull request in this repository (rc 1 with `Could not resolve to a
   # PullRequest` on its stderr). Every other failure — rc 1 with an HTTP 5xx, a
@@ -13143,12 +13162,15 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
   # unread candidate is never outvoted by an empty search. A proof found first
   # always wins.
   #
-  # A READ WITH NO BUDGET LEFT answers from the member's TRIED record (D-7381):
-  # a record read and FAILED less than PR_TRAIN_TRIED_TTL ago is `1` (closed,
+  # A READ WITH NO BUDGET LEFT — one that can make no gh call at all, the
+  # `--project` sweep — answers from the member's TRIED record (D-7381): a
+  # record read and FAILED less than PR_TRAIN_TRIED_TTL ago is `1` (closed,
   # `train-unproven`), so the sweep shows a refused member as refused while the
-  # record is fresh; anything else is `2`. With keep=1 an attempt that did not
-  # prove writes the member's tried line (`failed` for 1, `unread` for 2) and a
-  # proof removes it; an answer taken from a fresh line rewrites nothing.
+  # record is fresh; anything else is `2`. A read that DID ask GitHub and hit an
+  # unread candidate is `2` regardless of a fresh line (#1797 round 7). With
+  # keep=1 an attempt that did not prove writes the member's tried line
+  # (`failed` for 1, `unread` for 2); a proof found by any read, keep=0
+  # included, removes it; an answer taken from a fresh line rewrites nothing.
   #
   # The caller bound the member: CLOSED with the label, on this branch and
   # base. Every number and sha placed in a gh argv is anchored first (spec §7):
@@ -13158,8 +13180,12 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
   _WS_TRAIN_WHY="" _WS_TRAIN_MERGE="" _WS_TRAIN_NUM=""
   [[ "$n" =~ ^[1-9][0-9]{0,9}$ && "$head" =~ ^[0-9a-f]{40}$ ]] \
     || { _WS_TRAIN_WHY="gh named #$n at '$head', not a full head sha a train record can list"; return 1; }
-  # A proof already kept answers without a gh call.
-  _ws_train_kept "$repo" "$base" "$n" "$head" && return 0
+  # A proof already kept answers without a gh call, before any tried line is
+  # consulted, and clears a stale one (round 7).
+  if _ws_train_kept "$repo" "$base" "$n" "$head"; then
+    _ws_train_tried_get "$repo" "$base" "$n" "$head" && _ws_train_tried_put "$repo" "$base" "$n" "$head" ""
+    return 0
+  fi
   local fields=number,state,mergedAt,mergeCommit,body,baseRefName,isCrossRepository
   if ! left=$(_ws_train_left); then
     if _ws_train_tried_fresh_failed "$repo" "$base" "$n" "$head"; then
@@ -13218,16 +13244,17 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
     if [[ "$keep" == 1 ]] && _ws_train_keyable "$repo" "$base"; then
       printf '%s %s %s %s %s %s\n' "$repo" "$base" "$n" "$head" "$_WS_TRAIN_NUM" "$_WS_TRAIN_MERGE" \
         >> "$REG/$PR_TRAIN_PROOFS_FILE" 2>/dev/null || true
-      _ws_train_tried_put "$repo" "$base" "$n" "$head" ""
     fi
+    # A proof found by ANY read removes the member's tried line, keep=0 too: a
+    # read that keeps no proof still never leaves a stale `failed` line behind.
+    _ws_train_tried_put "$repo" "$base" "$n" "$head" ""
     return 0
   fi
   _WS_TRAIN_NUM="" _WS_TRAIN_MERGE=""
   if (( unreach )); then
-    if _ws_train_tried_fresh_failed "$repo" "$base" "$n" "$head"; then
-      _WS_TRAIN_WHY="the train record for #$n could not be read now, and was read and did not prove it less than $(( PR_TRAIN_TRIED_TTL / 60 )) minutes ago${why:+; $why}"
-      return 1
-    fi
+    # A read that made gh calls and hit an unread candidate is UNREAD, whatever
+    # a fresh `failed` line says (round 7): only the no-budget return above,
+    # which could ask GitHub nothing, answers from that line.
     [[ "$keep" == 1 ]] && _ws_train_tried_put "$repo" "$base" "$n" "$head" unread
     _WS_TRAIN_WHY="GitHub could not be read for the train record of #$n${why:+, and $why}"; return 2
   fi
