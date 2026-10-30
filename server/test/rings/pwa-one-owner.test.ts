@@ -375,8 +375,6 @@ describe('the PWA reaches storage through one port (C7l, D-7190)', () => {
 describe('viewer facts take viewer words; "presence" in TS is session presence (C7o, D-7193)', () => {
   it('viewerWordsAsPresence() 62 -> 0 across server/src, shared/ and pwa/src; may only shrink', async () => {
     const { viewerWordsAsPresence, showSite } = await import('../census-w7/pwa.js');
-    const sites = viewerWordsAsPresence();
-    expect(sites.filter((s) => s.kind !== 'collectAfterPresence').map(showSite)).toEqual([]);
-    expect(sites.length).toBeLessThanOrEqual(4);
+    expect(viewerWordsAsPresence().map(showSite)).toEqual([]);
   });
 });

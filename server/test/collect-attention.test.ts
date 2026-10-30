@@ -16,7 +16,7 @@ import {
   childReclaimKeptManySentence, childReclaimTierFrom, type ChildReclaimCollectInput, type ChildReclaimLeafKept,
 } from '../src/childReclaimSweep.js';
 import {
-  COLLECT_RUN_NONE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence, collectAttentionItems,
+  COLLECT_RUN_NONE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterViewer, collectAttentionItems,
   collectAttentionViewOf, collectBoxProbesAfter, collectBoxProbesAtArrival, collectFeedStep, collectFirstSighting, collectPassClass,
   collectRunTier, collectWouldCollectKey, parseCollectResult,
   type CollectAttentionView, type CollectAudit, type CollectBoxFacts, type CollectBoxProbeState, type CollectEntry,
@@ -381,7 +381,7 @@ describe('collectAttentionViewOf — Task 4’s causes decide what stands, first
     expect(collectAttentionViewOf(held(CEIL - 1)).hold, 'held short').toBeNull();
     expect(collectAttentionViewOf(held(CEIL)).hold).toEqual({ why: 'run-open', since: 0 });
     const present = (gap: number): CollectEntry =>
-      collectAfterPresence(collectAfterPresence(collectFirstSighting(1), step(0, 2)), step(gap, 3));
+      collectAfterViewer(collectAfterViewer(collectFirstSighting(1), step(0, 2)), step(gap, 3));
     expect(collectAttentionViewOf(present(CEIL - 1)).viewerSince, 'presence short').toBeNull();
     expect(collectAttentionViewOf(present(CEIL)).viewerSince).toBe(0);
   });

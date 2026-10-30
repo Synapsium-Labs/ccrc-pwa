@@ -401,12 +401,12 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('placementCopies', placementCopies(), 0);
   });
 
-  it('viewerWordsAsPresence(): the viewer constants and the defer-derived identifiers, by name', () => {
+  it('viewerWordsAsPresence(): 0 (from 62): no viewer constant or defer-derived identifier says presence (C7o, D-7193)', () => {
     const sites = viewerWordsAsPresence();
     const byName = countBy(sites, (s) => s.kind);
     console.log(`census-w7 viewerWordsAsPresence: ${sites.length} ${JSON.stringify(byName)}`);
-    held('viewerWordsAsPresence', sites, 4);
-    expect(byName).toEqual({ collectAfterPresence: 4 });
+    held('viewerWordsAsPresence', sites, 0);
+    expect(byName).toEqual({});
   });
 
   it("persistedPresenceWords(): the 'presence' word the wire, the feed, coord.db and the journals carry, by file (C7o keeps it)", () => {

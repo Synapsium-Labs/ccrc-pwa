@@ -13,7 +13,7 @@ import {
 } from '../src/childReclaimSweep.js';
 import {
   COLLECT_CHANGED_RECENTLY_SPAN_MS, COLLECT_PROBE_CLASS, COLLECT_RUN_NONE, COLLECT_VERDICT_TABLE, COLLECT_VERDICT_WORDS,
-  collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold, collectAfterPresence, collectAfterWouldCollect,
+  collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold, collectAfterViewer, collectAfterWouldCollect,
   collectAttentionCauses, collectDue, collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedStep, collectFirstSighting,
   collectIdleSchedule, collectLicence,
   collectNextAskMono, collectRefusalClass, collectRipe, collectRunTier, collectWouldCollectKey, collectWouldCollectStands,
@@ -39,7 +39,7 @@ const id = () => {
     audit: (a: CollectAudit, mono: number, wall?: number) => { e = collectAfterAudit(e, a, step(mono, ++g, wall), true); return self; },
     act: (r: CollectResult, mono: number) => { e = collectAfterAct(e, r, step(mono, ++g)); return self; },
     hold: (mono: number) => { e = collectAfterHold(e, 'run-open', step(mono, ++g)); return self; },
-    presence: (mono: number) => { e = collectAfterPresence(e, step(mono, ++g)); return self; },
+    presence: (mono: number) => { e = collectAfterViewer(e, step(mono, ++g)); return self; },
     wouldCollect: (mono: number) => { e = collectAfterWouldCollect(e, step(mono, ++g)); return self; },
     next: (): number | null => collectNextAskMono(e, PASS, OBSERVE),
   };

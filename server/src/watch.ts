@@ -227,7 +227,7 @@ import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
-  collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
+  collectAfterViewer, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
   collectBoxProbesAtArrival, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
   collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectLaneLive, collectSwitchFeedBody,
   collectFeedWouldCollectBody, COLLECT_SETTING_FEED_TITLE,
@@ -833,7 +833,7 @@ export class FleetWatcher {
    *  (`childReclaimTierSeed`), so a lost memory costs a tier child one extra
    *  ask, never a fresh tier wait.
    *  Its decision clocks are this process's monotonic clock; `firstDeferredAt`
-   *  and `lastPresenceWallAt` are wall-clock epoch ms and `bornAt` is ccd's
+   *  and `lastViewerWallAt` are wall-clock epoch ms and `bornAt` is ccd's
    *  clock, compared for equality only (`ChildReclaimSweepEntry`). An entry
    *  describes one workspace generation; a new birth, a marker naming a new
    *  run or a new registry generation replaces it with a first sighting. */
@@ -2034,7 +2034,7 @@ export class FleetWatcher {
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
    *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
    *  `firstDeferredAt` is wall-clock epoch ms, the one field a reader outside the lane may
-   *  read as a time. `lastPresenceWallAt` (wall clock) and `bornAt` (ccd's clock, compared for
+   *  read as a time. `lastViewerWallAt` (wall clock) and `bornAt` (ccd's clock, compared for
    *  equality only) are the lane's own; every other clock in it is this process's monotonic clock. */
   currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry> {
     return this.childReclaimSweepState;
@@ -4128,7 +4128,7 @@ export class FleetWatcher {
     // is what is compared with another process's stamps (the generation
     // fences, the attention list, the verdict's spawn-stall window), and what
     // L1 stamps from `ask.at.wallMs`: the displayed `firstDeferredAt` and
-    // `lastPresenceWallAt`, the presence gap's second operand (the gap reads
+    // `lastViewerWallAt`, the presence gap's second operand (the gap reads
     // the larger of the monotonic and the wall-clock difference).
     const asked = this.childReclaimLaneNow();
     const now = asked.wallMs;
@@ -5079,10 +5079,10 @@ export class FleetWatcher {
    *  when no later answer has changed the box-wide probes since it arrived (`collectBoxProbesAtArrival`). Nothing here
    *  decides a pace; L1 does.
    *  - `not-asked`: caps and paused were cleared through the port already, and a refused id has nothing to pace;
-   *    presence (step 3) is `collectAfterPresence`.
+   *    presence (step 3) is `collectAfterViewer`.
    *  - every arm that carries observation 2's answer folds it first (`collectFoldAudit`): an observation only under its
    *    capture, so a stale, paused, flipped, capability-less or cleared job's answer paces and never observes; then
-   *    `answered` presence (step 6) is `collectAfterPresence`, `held` is `collectAfterHold`, `would-collect` is
+   *    `answered` presence (step 6) is `collectAfterViewer`, `held` is `collectAfterHold`, `would-collect` is
    *    `collectAfterWouldCollect` with its once-per-(id, token) row, and `acted` is `collectAfterAct` with its row.
    *  - an id forgotten while the job was out: every fold is dropped but an `acted` outcome's word about the box and a
    *    `collected` act's row (`collectForgottenActRow`), worded from the job's own observation-2 document.
@@ -5095,7 +5095,7 @@ export class FleetWatcher {
     }
     if (s.kind === 'not-asked') {
       const e = this.collectState.get(id);
-      if (s.why === 'presence' && e !== undefined) this.collectState.set(id, collectAfterPresence(e, this.collectStepAt(clock)));
+      if (s.why === 'presence' && e !== undefined) this.collectState.set(id, collectAfterViewer(e, this.collectStepAt(clock)));
       return;
     }
     const e = this.collectFoldAudit(coord, id, pass, s.audit.value, s.audit.arrived, s.audit.composed);
@@ -5112,7 +5112,7 @@ export class FleetWatcher {
     const at = this.collectStepAt(s.audit.arrived);
     switch (s.kind) {
       case 'answered':
-        if (s.why === 'presence') this.collectState.set(id, collectAfterPresence(e, at));
+        if (s.why === 'presence') this.collectState.set(id, collectAfterViewer(e, at));
         return;
       case 'held':
         this.collectState.set(id, collectAfterHold(e, s.hold.why, at));

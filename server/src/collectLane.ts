@@ -973,7 +973,7 @@ export function collectAfterHold(e: CollectEntry, why: CollectHoldWhy, s: Collec
 
 /** The memory after the presence defer (spec §5.10, the gates): the pair resets, and presence's own count and
  *  continuity run on. No ceiling licenses past it: it is only ever listed. */
-export function collectAfterPresence(e: CollectEntry, s: CollectStep): CollectEntry {
+export function collectAfterViewer(e: CollectEntry, s: CollectStep): CollectEntry {
   const t = s.now.monoMs;
   return { ...e, obs: null, idGen: s.gen, held: null,
     presence: { count: (e.presence?.count ?? 0) + 1, sinceMono: e.presence?.sinceMono ?? t, atMono: t } };
