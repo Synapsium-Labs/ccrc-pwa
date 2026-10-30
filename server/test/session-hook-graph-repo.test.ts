@@ -177,6 +177,71 @@ describe('N18: the card of a linked tree names the graph of main and the tree\'s
   });
 });
 
+// THE LIST IS BOUNDED BY CHARACTERS, NOT ONLY BY COUNT. The standing subjects
+// (graphify, then hold or role, then co-tenant) share ONE `CARD_MAX_CHARS` clip
+// at the emitter, and graphify comes first: a count-bounded list of real
+// repository paths grew the graph card to about 2150 characters and the clip
+// cut the hold sentence that follows it mid-word. This row plants every other
+// subject at its structural worst case (held case A naming a run, a
+// 127-character workdir in the subject and a 40-character id; a 64-character
+// project at a two-digit co-tenant count) beside 20 long branch paths, and
+// asserts that each subject's WHOLE sentence reaches the session.
+describe('the diff list leaves room for the subjects after it (CARD_MAX_CHARS)', () => {
+  it('20 long branch paths, held case A and a two-digit co-tenant: every sentence whole', () => {
+    const LONG_ID = `lane-${'a'.repeat(35)}`;
+    expect(LONG_ID).toHaveLength(40);
+    const reg = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${LONG_ID}"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(reg, `${LONG_ID}.generation`), GENERATION);
+    fs.writeFileSync(path.join(reg, `${LONG_ID}.child`), '');
+    const files = Array.from({ length: 20 }, (_, i) =>
+      `server/src/some/deeply/nested/module/path/component-${String(i).padStart(2, '0')}-${'x'.repeat(20)}.ts`);
+    expect(files.every((f) => f.length >= 65)).toBe(true);
+    const r = makeRepo(files);
+    publish(r);
+    const holdText = `program:${'p'.repeat(127 - 'program: wave:1/2 run:12'.length)} wave:1/2 run:12`;
+    expect(holdText).toHaveLength(127);
+    fs.writeFileSync(path.join(reg, `${LONG_ID}.hold`), holdText);
+    const wd = `/${'w'.repeat(126)}`;
+    fs.writeFileSync(path.join(reg, `${LONG_ID}.workdir`), wd);
+    const project = 'q'.repeat(64);
+    fs.writeFileSync(path.join(reg, `${LONG_ID}.project`), project);
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 12; i++) {
+      fs.writeFileSync(path.join(reg, `peer-${i}.uuid`), `uuid-peer-${i}`);
+      fs.writeFileSync(path.join(reg, `peer-${i}.project`), project);
+      fs.writeFileSync(path.join(reg, `peer-${i}.supervised`), String(now - 5));
+    }
+    const text = graphLine(start(r.tree));
+    const max = Number(/^CARD_MAX_CHARS=(\d+)$/m.exec(fs.readFileSync(HOOK, 'utf8'))?.[1]);
+    expect(max).toBeGreaterThan(0);
+    expect(text.length, 'the standing card reached the clip').toBeLessThan(max);
+    // graphify: its whole sentence, the branch's own named first and the rest counted
+    expect(text).toContain(`main at ${r.graph.slice(0, 8)}`);
+    expect(text).toContain(`Your tree differs from it in 21 files, 20 of them your branch's own: ${files[0]}, `);
+    expect(text).toMatch(/ and \d+ more — read those directly\. Answer codebase questions/);
+    expect(text).toContain(ADVICE + GATE_ARMED);
+    // the hold, held case A naming a run, whole
+    expect(text).toContain(`ccrc-program: the workspace \`${LONG_ID}\` (\`${wd}\`) is claimed — `
+      + `\`~/.cc-sessions/${LONG_ID}.hold\` reads \`${holdText}\`, which names a program and a wave — `
+      + 'what the `ccrc-worker` skill is for. Run that skill. Any brief sent to you is listed by '
+      + `\`~/.local/bin/ccrc-api mail list --to ${LONG_ID}\`, and one you already acked is not listed again — `
+      + 'the plan it named is the durable record. The hold can outlive the run that wrote it: whether that run '
+      + 'is still open, and whether any brief was sent, are answered only by `~/.local/bin/ccrc-api runs list`, '
+      + 'never by this file.');
+    // the co-tenant, whole
+    expect(text).toContain(`ccrc: 12 other supervised rows name project \`${project}\`; `
+      + `\`~/.local/bin/ccrc-api peers list --of ${LONG_ID}\` names them and returns the five peer rules.`);
+  });
+
+  it('a list that fits is named whole: the character bound changes nothing for short paths', () => {
+    const files = Array.from({ length: 19 }, (_, i) => `f${String(i).padStart(2, '0')}.ts`);
+    const r = makeRepo(files);
+    publish(r);
+    expect(graphLine(start(r.tree))).toContain(`own: ${files.join(', ')}, a-main.txt — read those directly`);
+  });
+});
+
 describe('N19: the gate of a linked tree arms by share of files, from settings.json (spec §6.3, §5.3)', () => {
   // 3 files differ (N18's fixture); meta.files 100.
   it('gate_max_diff_pct is read: 3% arms, 2% does not', () => {
