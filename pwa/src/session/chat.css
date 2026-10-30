@@ -1979,9 +1979,11 @@ button.metachip:active {
  *  it has no scrim and no ✕.                                          *
  * ------------------------------------------------------------------ */
 /* ONE bordered surface on --bg-surface, which also grounds every `.dlg-*` and `.opts` rule inside it (the audit's
-   GROUNDS name it where a selector names no painted ancestor). It shrinks before the transcript does (`flex: 0 1 auto`,
-   `min-height: 0`): the header never shrinks and the one scroller below takes the loss, so a short question has no
-   scrollbar and a 40-line one scrolls inside the card. */
+   GROUNDS name it where a selector names no painted ancestor). Task T1d (amending D-6326 at the desk; the order the
+   operator's ruling of 2026-10-30 set): the card comes first while a question is up. It takes the height it needs, its
+   question at most 40% of the pane, and shrinks only once the transcript is down to its floor (`flex: 0 1 auto`,
+   `min-height: 0`, and the floor below). Inside it the question gives way first, down to two lines, and only then the
+   surface, which scrolls on its own; so a short question has no scrollbar and a 40-line one keeps its options in view. */
 .ask-inline {
   flex: 0 1 auto;
   min-height: 0;
@@ -2009,9 +2011,10 @@ button.metachip:active {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* The transcript keeps at least a third of the pane while a card is up: the card yields to it, never the other way. */
+/* The transcript keeps at least 48px while a card is up (Task T1d; a third of the pane under D-6326): it is the pane's
+   remainder, so it gives way to the card first, down to this floor, and past it the card yields. */
 .chat[data-ask-inline] > .chat-body {
-  min-height: calc(100% / 3);
+  min-height: var(--sp-12);
 }
 .ask-inline .ask-inline-eyebrow {
   flex: none;
@@ -2019,24 +2022,80 @@ button.metachip:active {
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;
 }
-/* The ONE scroller: the title and the surface scroll as one (as the sheet's body does). The side inset gives the focus
-   ring its room (a box that scrolls on one axis clips on both; the ring draws 4px outside its control). */
+/* Below the header: the QUESTION region, then the SURFACE (the tab row, the options, Other and the answer controls). This
+   box does not scroll. It hands its flexed height to the two, so the surface's share below has a definite height to be
+   taken from. `--ask-question-floor` is the question's floor: two lines at the prose size.
+
+   WHO SHRINKS, AND IN WHAT ORDER. Each region sits in a SLOT: a flex item that is not a scroll container, so its
+   automatic minimum height is the smaller of its content and its `height`, while `flex-basis: content` keeps its size
+   its content's. Each slot's region is the scroller inside it.
+     - The question's slot: content or the floor, whichever is less. A short question never shrinks; a long one keeps
+       its floor. It is never taller than 40% of the pane (`--ask-pane`, the pane's height, which `InlineCard` measures:
+       a percentage here would be of the card, not of the pane).
+     - The surface's slot: content or what the card leaves it below the question's floor, whichever is less. A surface
+       that fits never shrinks; a taller one keeps all but that floor and scrolls, on its own, from its top.
+   So when the card is capped the question takes the loss first, down to its floor, and only then the surface, with no
+   sub-pixel share for either: a clamp to an exact content height is not a proportion. */
 .ask-inline-body {
-  flex: 1 1 auto;
+  --ask-question-floor: calc(2 * var(--lh-normal) * var(--fs-prose));
+  flex: 0 1 auto;
   min-height: 0;
-  margin-inline: calc(-1 * var(--sp-1));
-  padding-inline: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.ask-inline-question-slot {
+  flex: 0 1 content;
+  height: var(--ask-question-floor);
+  max-height: max(var(--ask-question-floor), 0.4 * var(--ask-pane, 100dvh));
+  display: flex;
+  flex-direction: column;
+}
+.ask-inline-question {
+  flex: 0 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  /* A focused option revealed with `scrollIntoView({ block: 'nearest' })` stops flush with this scroller's edge, which
-     clips the bottom of its focus ring (base.css's `:focus-visible` outline and offset, drawn outside the option). The
-     padding sits on this scroller, the app's own class, so no ui-owned row is restyled (ui-package-boundary): it leaves
-     room for that ring, which the browser test measures from the focused option itself. */
+}
+.ask-inline-surface-slot {
+  flex: 0 1 content;
+  height: calc(100% - var(--ask-question-floor) - var(--sp-4));
+  display: flex;
+  flex-direction: column;
+}
+/* A box that scrolls on one axis clips on both, and an option's focus ring draws 4px outside it (base.css's
+   `:focus-visible` outline and offset), so the surface pads by --sp-1 on every side within a matching negative margin,
+   and a focused option revealed with `scrollIntoView({ block: 'nearest' })` stops that far short of its edge
+   (`scroll-padding-block`). Both sit on this box, the app's own class, so no ui-owned row is restyled
+   (ui-package-boundary). */
+.ask-inline-surface {
+  flex: 0 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  margin: calc(-1 * var(--sp-1));
+  padding: var(--sp-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   scroll-padding-block: var(--sp-1);
 }
+/* THE SHORT-WINDOW RULE (the operator's ruling of 2026-10-30 on ask 212's follow-up, measured). In a window under 700px tall
+   both floors leave the first option out of view (at 1280x600 the card is about 208px: the header takes 80, two lines and
+   the gap 61, and the option needs about 64 under the tab row), so they yield there and nowhere else: the transcript's
+   floor drops to none and the question's to one line, which keeps the header, a line of the question, the tab row and the
+   first option whole. */
+@media (height < 700px) {
+  .chat[data-ask-inline] > .chat-body {
+    min-height: 0;
+  }
+  .ask-inline-body {
+    --ask-question-floor: calc(1 * var(--lh-normal) * var(--fs-prose));
+  }
+}
+/* The question at the prose size (a transcript message's), regular weight: it is read, not announced. The `h2` stays
+   the card's accessible name (`aria-labelledby`). */
 .ask-inline .ask-inline-title {
-  margin: 0 0 var(--sp-4);
-  font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-ui);
+  margin: 0;
+  font: var(--weight-regular) var(--fs-prose) / var(--lh-normal) var(--family-ui);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }

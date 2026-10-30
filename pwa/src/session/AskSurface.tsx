@@ -64,9 +64,12 @@ export function AskSurface({ open, onClose, eyebrow, title, raise = 0, onInline,
   );
 }
 
-/** The inline card: the header (T1b's `AskHeader`, passed as the eyebrow), then ONE scroller holding the title and the
- *  surface, so a long question and its options scroll as one and a short one has no scrollbar. `aria-labelledby` names
- *  it by the question; `tabIndex={-1}` lets a click on its text put focus inside, which is what makes its keys act. */
+/** The inline card: the header (T1b's `AskHeader`, passed as the eyebrow), then the QUESTION in a region of its own, then
+ *  the SURFACE (the options and the answer controls) in its own (Task T1d, amending D-6326's one scroller at the desk). Each
+ *  region sits in a slot that sets the order in which they give up height (`chat.css`): a long question scrolls in its
+ *  region while the options under it stay whole, a short one has no scrollbar, and only a surface taller than the card
+ *  leaves it scrolls, on its own. `aria-labelledby` names the card by the question; `tabIndex={-1}` lets a click on its
+ *  text put focus inside, which is what makes its keys act. */
 function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfaceProps, 'open' | 'onClose'> & { raise: number }): ReactNode {
   const titleId = useId();
   const section = useRef<HTMLElement | null>(null);
@@ -76,6 +79,20 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
     onInline?.(true);
     return () => onInline?.(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The pane's height, as `--ask-pane` on the card: the question region is at most 40% of it (Task T1d), and a percentage
+  // in the card's own rules would be of the card. Measured where the card is seated (its parent, `.chat`) and again when
+  // that pane resizes; without a ResizeObserver (jsdom) the rule falls back to the window's height.
+  useLayoutEffect(() => {
+    const card = section.current;
+    const pane = card?.parentElement;
+    if (card == null || pane == null || typeof ResizeObserver === 'undefined') return;
+    const measure = (): void => card.style.setProperty('--ask-pane', `${pane.clientHeight}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    return () => observer.disconnect();
   }, []);
 
   // A raise is a CHANGE to a non-zero value after the card is up: a card that mounts under a standing nonce (the ask
@@ -98,11 +115,12 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
       ?? card.querySelector<HTMLElement>(`.opt${enabled}`)
       ?? card;
     first.focus({ preventScroll: true });
-    // Then REVEAL it (R69 F3). `preventScroll` keeps the focus from jumping the page, but on a long question the first
-    // option sits below the card's one scroller (`.ask-inline-body`, scrollTop 0) and below the window, so it was
-    // focused and unseen, and a digit answered by number with nothing on screen. `nearest` scrolls the card's body to
-    // the option and, if the option is still off the window, the page, and moves nothing when it is already in view.
-    // The card section needs no reveal: the card-into-view step above already placed it.
+    // Then REVEAL it (R69 F3). `preventScroll` keeps the focus from jumping the page, but the option can sit out of view:
+    // before T1d below a long question in the card's one scroller, and since T1d low in a surface that scrolls on its own
+    // (a surface taller than the card leaves it). Focused and unseen, a digit answered by number with nothing on screen.
+    // `nearest` scrolls the option's own scroller (the surface, never the question region, which is not its ancestor) and,
+    // if the option is still off the window, the page, and moves nothing when it is already in view. The card section
+    // needs no reveal: the card-into-view step above already placed it.
     if (first !== card) first.scrollIntoView?.({ block: 'nearest' });
   }, [raise]);
 
@@ -117,8 +135,14 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
     >
       <p className={`ask-inline-eyebrow ${EYEBROW}`}>{eyebrow}</p>
       <div className="ask-inline-body">
-        <h2 id={titleId} className="ask-inline-title">{title}</h2>
-        {children}
+        <div className="ask-inline-question-slot">
+          <div className="ask-inline-question">
+            <h2 id={titleId} className="ask-inline-title">{title}</h2>
+          </div>
+        </div>
+        <div className="ask-inline-surface-slot">
+          <div className="ask-inline-surface">{children}</div>
+        </div>
       </div>
     </section>
   );
