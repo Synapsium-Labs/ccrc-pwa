@@ -465,7 +465,7 @@ describe('every other egress of session-derived text (D-5513)', () => {
     // the push payload, captured at the push stub
     sent.length = 0;
     const push = new PushService({ publicKey: 'p', privateKey: 'k', subject: 'mailto:ops@example.invalid' },
-      path.join(home, '.ccrc', 'push-subs.json'));
+      path.join(home, '.ccrc', 'push-subs.json'), SHAPE_ONLY_MASKER);
     await push.subscribe({ endpoint: 'https://push.example.invalid/1', keys: { p256dh: 'x', auth: 'y' } });
     await push.notify({ title: `ask ${OAT}`, body: askPushBody(null, { title: `paste ${ORKEY}` }), actions: [{ action: 'a', title: OAT }] });
     expect(sent).toHaveLength(1);

@@ -18,7 +18,7 @@ vi.mock('web-push', () => {
 });
 
 import { PushService, type PushPayload } from '../src/push.js';
-import { SecretMasker, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
+import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { SECRET_MASK } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -43,7 +43,7 @@ const SUB = { endpoint: 'https://push.example.invalid/1', keys: { p256dh: 'x', a
 /** The one place a row builds its service. */
 const pushUnderTest = async (): Promise<PushService> => {
   const storePath = path.join(mkTmp('ccrc-push-masker-'), '.ccrc', 'push-subs.json');
-  const push = new PushService(CFG, storePath);
+  const push = new PushService(CFG, storePath, SHAPE_ONLY_MASKER);
   await push.subscribe(SUB);
   sent.length = 0;
   return push;
