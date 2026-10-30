@@ -5,16 +5,16 @@
 //
 // THE ESTIMATE. A vitest run's named test files, each at its duration in the file, a file the file does not know at the
 // median of the package's known files; a wide run (no file named, a directory, a glob or a name filter) at every
-// duration the package has, or, with no durations, at the package's test files on disk. The sum is divided by the
-// run's worker count: the session's own `--maxWorkers=<n>` or `VITEST_MAX_WORKERS`, else one, since the box's count
-// is a box setting the fleet host cannot read (D-7558). A whole suite through the package manager (`npm test`,
-// `npm run test…`) is a wide run. Any other command (a typecheck) names no test file and estimates zero: the budget
-// is about test file sets (spec §2.5).
+// duration the package has plus each test file on disk the durations do not name at the median, or, with no
+// durations, at the package's test files on disk. The sum is divided by the run's worker count: the session's own
+// `--maxWorkers=<n>` or `VITEST_MAX_WORKERS`, else one, since the box's count is a box setting the fleet host cannot
+// read (D-7558). A whole suite through the package manager (`npm test`, `npm run test…`) is a wide run. Any other
+// command (a typecheck) names no test file and estimates zero: the budget is about test file sets (spec §2.5).
 //
-// NO DURATIONS. With no durations file, or one that does not parse, every file counts at `DEFAULT_FILE_SECONDS`, the
-// per-file default spec §2.5 and D-7421 give the repository row. The row (`shared/testbox.ts#TestboxRepoRow`) has no
-// such field and the fleet host holds no row, so the default is spelled here, once (D-7558), and the summary says
-// `estimate: no durations (<why>)`.
+// NO DURATIONS. With no durations file, one that does not parse, or one that names no file of the run's package,
+// every file counts at `DEFAULT_FILE_SECONDS`, the per-file default spec §2.5 and D-7421 give the repository row. The
+// row (`shared/testbox.ts#TestboxRepoRow`) has no such field and the fleet host holds no row, so the default is
+// spelled here, once (D-7558), and the summary says `estimate: no durations (<why>)`.
 //
 // THE DURATIONS FILE. `.github/ci/shards.mjs times` writes `{ "<repo-relative path>": <ms>, … }`. A file of
 // several repositories nests that map under each repository's name (`{ "<repository>": { … } }`); both are read.
@@ -118,7 +118,7 @@ export interface EstimateInput {
   readonly pkg: string;
   readonly durations: DurationsRead;
   readonly workers: number;
-  /** The package's test files on disk, repo-relative; read only for a wide run with no durations. */
+  /** The package's test files on disk, repo-relative; read only for a wide run. */
   readonly packageTestFiles: () => readonly string[];
 }
 
@@ -133,16 +133,21 @@ export interface Estimate {
 /** The estimate of one command (see the header). */
 export function estimate(i: EstimateInput): Estimate {
   const set = fileSet(i.argv);
-  const note = i.durations.ok ? null : `estimate: no durations (${i.durations.why})`;
+  const prefix = `${i.pkg}/`;
+  const d = i.durations.ok ? i.durations.durations : null;
+  const known = d === null ? [] : [...d].filter(([k]) => k.startsWith(prefix)).map(([, v]) => v);
+  // A durations file that names no file of this package is no durations for it (spec §2.5): every file at the default.
+  const why = !i.durations.ok ? i.durations.why : known.length === 0 ? `the durations file names no file of ${i.pkg}` : null;
+  const note = why === null ? null : `estimate: no durations (${why})`;
   if (set.t === 'none') return { ms: 0, files: 0, note };
   const fallbackMs = DEFAULT_FILE_SECONDS * SECOND_MS;
-  const prefix = `${i.pkg}/`;
   let costs: number[];
-  if (i.durations.ok) {
-    const d = i.durations.durations;
-    const known = [...d].filter(([k]) => k.startsWith(prefix)).map(([, v]) => v);
-    const mid = known.length > 0 ? median(known) : fallbackMs;
-    costs = set.t === 'wide' ? known : set.files.map((f) => d.get(repoPath(i.pkg, f)) ?? mid);
+  if (d !== null && known.length > 0) {
+    const mid = median(known);
+    // A wide run: every duration the package has, and each test file on disk the durations do not name at the median.
+    costs = set.t === 'wide'
+      ? [...known, ...i.packageTestFiles().filter((f) => !d.has(f)).map(() => mid)]
+      : set.files.map((f) => d.get(repoPath(i.pkg, f)) ?? mid);
   } else {
     const n = set.t === 'wide' ? i.packageTestFiles().length : set.files.length;
     costs = Array.from({ length: n }, () => fallbackMs);

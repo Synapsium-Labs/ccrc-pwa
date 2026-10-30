@@ -636,6 +636,29 @@ describe('TB8: the three refusals, exit 75, nothing run (spec §2.5; D-7417)', (
     expect(runsRows(w)).toEqual([expect.objectContaining({ outcome: 'refused', fallback: 'over-budget', exit: 75 })]);
   }, T);
 
+  // Spec §2.5: an unknown file costs the median, or the per-file default with no durations. A durations file that
+  // names only another package's files is no durations for this one, so a wide run still counts every test file.
+  it('a durations file of another package only: a wide --remote run over the budget still refuses, exit 75', async () => {
+    const w = await world({ settings: { CCRC_TESTBOX_BUDGET: '1s' } });
+    writeFileSync(path.join(w.home, '.ccrc', 'testbox-times.json'), JSON.stringify({ 'agent/test/x.test.ts': 60_000 }));
+    const r = await wrap(w, ['--remote', '--', './node_modules/.bin/vitest', 'run']);
+    expect(r.status).toBe(75);
+    expect(r.lines[0]).toMatch(reasonOf('over-budget'));
+    expect(r.stderr).toContain('over 2 files');
+    expect(r.stdout).toBe('');
+    expect(w.mgr.log).toEqual([]);
+  }, T);
+
+  it('a wide run counts an on-disk test file the durations do not name at the median: over the budget, exit 75', async () => {
+    const w = await world({ settings: { CCRC_TESTBOX_BUDGET: '90s' } });
+    writeFileSync(path.join(w.home, '.ccrc', 'testbox-times.json'), JSON.stringify({ 'server/test/a.test.ts': 60_000 }));
+    const r = await wrap(w, ['--remote', '--', './node_modules/.bin/vitest', 'run']);
+    expect(r.status).toBe(75);
+    expect(r.lines[0]).toMatch(reasonOf('over-budget'));
+    expect(r.stderr).toContain('estimate 2 min 0 s over 2 files');
+    expect(w.mgr.log).toEqual([]);
+  }, T);
+
   it('CCRC_TESTBOX_FALLBACK_INSTALL=install: a fallback with no node_modules runs npm ci through the wrapper first, then the run', async () => {
     const w = await world({ url: 'closed', noNodeModules: true });
     const r = await wrap(w, VITEST_A);

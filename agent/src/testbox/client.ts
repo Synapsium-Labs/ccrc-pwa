@@ -328,7 +328,7 @@ async function whereAmI(): Promise<Where> {
   return { top, pkg: prefix.split('/')[0] ?? '', repository: seg.replace(/\.git$/, '').toLowerCase() };
 }
 
-/** The package's test files on disk, repo-relative, for a wide run with no durations. */
+/** The package's test files on disk, repo-relative, for a wide run. */
 function packageTestFiles(top: string, pkg: string): string[] {
   const out: string[] = [];
   const walk = (rel: string): void => {
