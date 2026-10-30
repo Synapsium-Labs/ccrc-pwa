@@ -34,19 +34,9 @@ const read = (rel: string): string => (existsSync(path.join(REPO, rel)) ? readFi
 const UID = process.getuid?.() ?? 0;
 const US = '\x1f';
 
-/** The one driver: $1 ccd/ccrc, $2 ccd/testbox-knobs (or a copy), $3 the operation, $4 its argument. PROG is the
- *  wrapper's, as `ccrc test --testbox-knobs` runs it (ccd/ccrc sets its own when sourced). */
-const DRIVER = `. "$1" || exit 90
-PROG="ccrc test"
-. "$2" || exit 91
-case "$3" in
-  knobs) _testbox_knobs "$4"; exit $? ;;
-  owner) _tb_box_owner_uid ;;
-  fileok) if _tb_box_file_ok "$4"; then echo ok; else printf 'refused\\t%s\\n' "$TB_BOX_WHY"; fi ;;
-  envfile) _tb_box_env_file ;;
-  *) exit 93 ;;
-esac
-`;
+/** The one driver, a fixed script that gets ccd/ccrc, ccd/testbox-knobs (or a copy), the operation and its argument
+ *  as arguments (the file's header says each). */
+const DRIVER = path.join(REPO, 'server', 'test', 'fixtures', 'testbox-knobs-driver.sh');
 
 // ── the defaults table ───────────────────────────────────────────────────
 /** Spec §4's two tables, in order: each key and its default as the printer spells it. A cell's backticked values joined
@@ -166,7 +156,7 @@ function fixture(o: BoxOpts = {}): Box {
 
 interface Out { status: number | null; stdout: string; stderr: string }
 const drive = (b: Box, op: string, arg = '', knobs = KNOBS): Out => {
-  const r = spawnSync('bash', ['-c', DRIVER, 'testbox-knobs-driver', CCRC, knobs, op, arg], { env: b.env, encoding: 'utf8', cwd: b.home, timeout: 60000 });
+  const r = spawnSync('bash', [DRIVER, CCRC, knobs, op, arg], { env: b.env, encoding: 'utf8', cwd: b.home, timeout: 60000 });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 interface Knobs { lines: string[][]; value: Record<string, string>; warn: string[]; status: number | null; stderr: string }
@@ -230,8 +220,8 @@ const NUMERIC_CLASSES = /^(count|duration|durations|size|percent)$/;
 const SHAPE_CLASS = (() => {
   const out: Record<string, string> = {};
   const body = /^_tb_shape_class\(\) \{[\s\S]*?\n\}$/m.exec(read('ccd/testbox-knobs'))?.[0] ?? '';
-  for (const m of body.matchAll(/^\s+((?:CCRC_TESTBOX_[A-Z0-9_]+\|?)+)\) echo ([a-z]+) ;;$/gm))
-    for (const k of m[1]!.split('|')) out[k] = m[2]!;
+  for (const m of body.matchAll(/^[ \t]+([A-Z0-9_|]+)\) echo ([a-z]+) ;;$/gm))
+    for (const k of m[1]!.split('|')) if (k.startsWith('CCRC_TESTBOX_')) out[k] = m[2]!;
   return out;
 })();
 const QUANTITY_WORDS: string[] = Object.entries(SHAPE_CLASS).filter(([, c]) => NUMERIC_CLASSES.test(c))
