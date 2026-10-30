@@ -495,6 +495,7 @@ cmd_hibernate	C4
 cmd_forget	C4
 cmd_ls	C1
 cmd_reclaim_pause	C4
+cmd_testbox_remote	C2
 _tmux_at	C2
 _tmux_t	C2
 cmd_attach	C2
