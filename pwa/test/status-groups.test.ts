@@ -20,10 +20,10 @@ import { createElement } from 'react';
 import { render, cleanup } from '@testing-library/react';
 import type { FleetSession, SessionBucket } from '../../shared/api';
 import {
-  groupByStatus, needsReason, PROGRAMMES_GROUP, STATUS_GROUPS, statusGroupLabel, statusView, statusViewTotal,
+  groupByStatus, needsReason, PROGRAMMES_GROUP, STATUS_GROUPS, statusGroupLabel, statusView, statusViewTotal, type BoxClock,
 } from '../src/fleet/statusGroups';
 import { fleetTree } from '../src/fleet/fleetTree';
-import { asking, run, sess } from './rollupFixture';
+import { asking, HOUR, MIN, NOW, run, sess } from './rollupFixture';
 import { withRunBinding } from './runBindingFixture';
 import { sortFleet } from '../src/fleet/sortFleet';
 import { BUCKET_ORDER } from '../../shared/api';
@@ -134,9 +134,9 @@ describe('statusView (Task G3, D-7333)', () => {
   ];
   const lookupIn = (s: readonly FleetSession[]) => (id: string): FleetSession | null => s.find((x) => x.id === id) ?? null;
   /** A current server's frame: each session carries its run binding over the runs (D-7461). */
-  const statusOf = (s: FleetSession[], r: typeof runs, selectedId: string | null, frameSeen: boolean) => {
+  const statusOf = (s: FleetSession[], r: typeof runs, selectedId: string | null, frameSeen: boolean, clock?: BoxClock) => {
     const b = withRunBinding(s, r);
-    return statusView(b, fleetTree(b, ['project-a', 'project-b'], r), {}, selectedId, lookupIn(b), frameSeen);
+    return statusView(b, fleetTree(b, ['project-a', 'project-b'], r), {}, selectedId, lookupIn(b), frameSeen, clock);
   };
   const view = (s: FleetSession[] = fleet, r = runs) => statusOf(s, r, null, true);
   const ids = (xs: readonly FleetSession[]): string[] => xs.map((x) => x.id);
@@ -214,6 +214,45 @@ describe('statusView (Task G3, D-7333)', () => {
     // The frame unseen measures nothing, so nothing is gone.
     const unseen = statusOf(s, runs, null, false);
     expect(unseen.flatMap((x) => x.boxes).every((b) => !b.gone)).toBe(true);
+  });
+
+  // Task G1c (D-7380, D-7373, D-7376): the Status view's boxes read stalled or paused exactly as a project card's do, from the
+  // moves on the runs (`runLastMove`), the stall watch's quiet time and the operator's pause, handed in as one clock.
+  describe('movement: the box reads stalled or paused as its card does (Task G1c, D-7380)', () => {
+    const QUIET = 2 * HOUR;
+    const clock = (over: Partial<BoxClock> = {}): BoxClock => ({ now: NOW, quietMs: QUIET, paused: false, ...over });
+    /** `fleet`'s runs, the programme of `c2` last moved at `at`, and c1's a minute ago. */
+    const moved = (at: number | null) => runs.map((r) => ({ ...r, lastMoveAt: r.claimedBy === 'c2' ? at : NOW - MIN }));
+    const stateOf = (g: ReturnType<typeof statusOf>, coordinator: string): string | undefined =>
+      g.flatMap((x) => x.boxes).find((b) => b.view.coordinatorId === coordinator)?.state;
+
+    it('a box quiet for the threshold reads stalled, and one a millisecond short of it reads moving', () => {
+      expect(stateOf(statusOf(fleet, moved(NOW - QUIET), null, true, clock()), 'c2')).toBe('stalled');
+      expect(stateOf(statusOf(fleet, moved(NOW - QUIET + 1), null, true, clock()), 'c2')).toBe('moving');
+    });
+
+    it('the threshold is the frame\'s own quiet time, never a default (D-7376)', () => {
+      const r = moved(NOW - 150 * MIN);
+      expect(stateOf(statusOf(fleet, r, null, true, clock({ quietMs: 3 * HOUR })), 'c2')).toBe('moving');
+      expect(stateOf(statusOf(fleet, r, null, true, clock({ quietMs: HOUR })), 'c2')).toBe('stalled');
+    });
+
+    it('with no quiet time a box never stalls, however long it has been quiet', () => {
+      expect(stateOf(statusOf(fleet, moved(NOW - 5 * HOUR), null, true, clock({ quietMs: null })), 'c2')).toBe('moving');
+    });
+
+    it('under the operator\'s pause a quiet box reads paused, never stalled, and a box that needs you still needs you', () => {
+      const g = statusOf(fleet, moved(NOW - 3 * HOUR), null, true, clock({ paused: true }));
+      expect(stateOf(g, 'c2')).toBe('paused');
+      expect(stateOf(g, 'c1')).toBe('needs');
+    });
+
+    it('Programmes runs stalled first, then moving (spec §2.7)', () => {
+      const s = [...fleet, coord('c3', 'project-a'), sess('k4', 'project-a', { bucket: 'working', status: 'busy' })];
+      const r = [...moved(NOW - QUIET), { ...run(7, 'c3', 'k4', { program: 'prog-c', project: 'project-a' }), lastMoveAt: NOW - MIN }];
+      const programmes = statusOf(s, r, null, true, clock()).find((x) => x.id === 'programmes')!;
+      expect(programmes.boxes.map((b) => [b.view.coordinatorId, b.state])).toEqual([['c2', 'stalled'], ['c3', 'moving']]);
+    });
   });
 
   it('with no open run it is groupByStatus exactly, and no Programmes', () => {

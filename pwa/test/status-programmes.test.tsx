@@ -14,10 +14,10 @@
 // then restored from a saved copy with its sha256 checked: the task's 26 rows, fix round 1's four, fix round 2's five and
 // fix round 3's one, 36 in all, each run red; instrument-shell holds one more. Fix round 3 re-ran every jsdom row on the
 // merge of main c69ad8807, each red, and the red lists of fix rounds 1 and 2 below are that run's):
-//   a child row drawn outside its box (members not hidden) ..... 15 cases, here, status-groups and instrument-list
+//   a child row drawn outside its box (members not hidden) ..... 24 cases, here, status-groups and instrument-list
 //   counts taken from sessions (a box as its coordinator and
-//     children) instead of drawn rows ......................... 9 cases, "every group counts what it draws…" among them
-//   the tray showing every member ............................... 8 cases, "the needing box's tray shows only the child that asks…" among them
+//     children) instead of drawn rows ......................... 14 cases, "every group counts what it draws…" among them
+//   the tray showing every member ............................... 12 cases, "the needing box's tray shows only the child that asks…" among them
 //   the tray dropping the session the operator has open ......... "the session the operator has open stays in its box's tray…", here and in status-groups
 //   the open session making its box need you .................... status-groups' open-session case
 //   Programmes taking the needing boxes too ..................... 13 cases, "the groups are Needs you…" among them
@@ -67,18 +67,37 @@
 //                                                                  operator has open…" (as `!== 'alive'`, also the unmeasured case and
 //                                                                  status-groups' dead-claimant case, 4)
 //   an unmeasured presence counted gone (`=== 'dead' || === 'unknown'`)
-//                                                                  "a claimant whose presence was not measured is not gone…", status-groups' frame case
+//                                                                  "a claimant whose presence was not measured is not gone…", status-groups' dead-claimant case
 // Fix round 3 (review 1183, F1) added one row, RUN red on its new case and green restored:
 //   the orphan marker asking no box at all (`keepers` an empty list, FleetTable)
 //                                                                  "a hibernated claimant's worker the operator has open…" (it draws
 //                                                                  `coordinator-hibernated`; D-7377 as amended rules no marker there)
+// Task G1c (D-7380, D-7373, D-7376; review 1239's S1, R1 and C1) added the movement rows, each RUN red on its new cases and
+// green restored, over this suite, status-groups, instrument-list and programme-box-card (the three counts above, refreshed
+// from a run on the tree after G1c, are cases over this suite, status-groups and instrument-list). The new cases were RED FIRST
+// on main (87cfba3dd): 8 of them (4 here, 4 in status-groups), the Status view's `() => null` and `boxState(…, 0, null, false)`;
+// the case with no quiet time in status-groups and the R123 pin pass on main by design (they pin what main already does).
+//   the stall boundary dropped from the Status view's clock (the runs given the clock are `[]`)
+//                                                                  "turns from moving to stalled at its boundary with no frame between…" (1)
+//   the pause ignored in the view (`statusView` reads `false`) ... status-groups' pause case, "under the coord frame's pause…" (2)
+//   the pause ignored by the table (`paused: false` in its clock)  "under the coord frame's pause…" (1)
+//   the quiet time a constant 2 h in the view ................... status-groups' two quiet-time cases, "reads the frame's own quiet time…",
+//                                                                  "with no quiet time on the runs frame…" (4)
+//   the quiet time a constant 2 h in the table ................ "reads the frame's own quiet time…", "with no quiet time…" (2)
+//   the moves ignored (`programmeBoxes(…, () => null, …)`) ...... 7 cases, status-groups' four movement cases among them
+//   the clock not passed to `statusView` ........................ "turns from moving to stalled…", "under the coord frame's pause…" (2)
+//   `boxNow` frozen at first render (memo deps `[]`) ............ "turns from moving to stalled…", "under the coord frame's pause…" (2)
+//   the orphan marker asking no box (`keepers` an empty list) ... "a hibernated claimant's worker the operator has open…" and the R123
+//                                                                  nested-coordinator case (2)
+// programme-box-card (review 1253's F5): the folded hold key over-firing (`-${kept}@${boxNow}`) or bare (`-`) ... both new key cases, in both
+// skins (4 each).
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../shared/api';
-import { asking, run, sess } from './rollupFixture';
+import { asking, HOUR, MIN, NOW, run, sess } from './rollupFixture';
 import { withRunBinding } from './runBindingFixture';
 
 const { App } = await import('../src/app');
@@ -460,6 +479,92 @@ describe('a dead claimant is gone: its workers are lone orphan rows (G3 fix roun
       asking({ ask: { state: 'held', parentId: 'dc', answeredBy: null } }));
     mount(asked.sessions, asked.runs);
     expect(rowIds(boxOf(groupOf('attention'), 'dc').querySelector('.pg-tray')!)).toEqual(['w']);
+  });
+});
+
+// Task G1c (D-7380, D-7373, D-7376): through the real table, its clock and the store, a box in the Status view reads stalled
+// and paused as its project card's does (programme-box-card.test.tsx's cases, here): no test-only clock, no new frame
+// between a box's last move and its threshold.
+describe('a box in the Status view reads stalled or paused (Task G1c, D-7380)', () => {
+  const QUIET = 2 * HOUR;
+  const coordFrame = (pause: 'set' | 'clear') =>
+    ({ coordFrameSeen: true, coord: { pause, mail: 'clear' as const, reclaim: 'clear' as const, childReclaimAttention: [] } });
+  /** SESSIONS' runs, every run of `coord-b`'s programme last moved at `at`, and the quiet time the runs frame carries. */
+  const quiet = (at: number | null, stallQuietMs: number | null = QUIET): Partial<ReturnType<typeof useFleetStore.getState>> => {
+    const runs = RUNS.map((r) => (r.claimedBy === 'coord-b' ? { ...r, lastMoveAt: at } : { ...r, lastMoveAt: NOW - MIN }));
+    return { runs, sessions: withRunBinding(SESSIONS, runs), stallQuietMs };
+  };
+  const clockedMount = (frame: ReturnType<typeof quiet>): void => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    mount(frame.sessions as FleetSession[], frame.runs as RunSummary[]);
+    act(() => useFleetStore.setState(frame));
+  };
+  const stateB = (): string | null => boxOf(table(), 'coord-b').getAttribute('data-state');
+  const movedB = (): string | undefined => boxOf(table(), 'coord-b').querySelector('.pg-moved')?.textContent ?? undefined;
+  afterEach(() => {
+    vi.useRealTimers();
+    act(() => useFleetStore.setState({ stallQuietMs: null, coord: null, coordFrameSeen: false }));
+  });
+
+  it('turns from moving to stalled at its boundary with no frame between, and the readout agrees', () => {
+    clockedMount(quiet(NOW - QUIET + MIN));
+    expect(stateB()).toBe('moving');
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(stateB()).toBe('stalled');
+    expect(movedB()).toBe('no move 2h');
+    // Stalled outranks moving: the box is still in Programmes, now ahead of the rows it was behind.
+    expect(boxes(groupOf('programmes')).map((b) => b.getAttribute('data-state'))).toEqual(['stalled']);
+  });
+
+  it('under the coord frame\'s pause a quiet box reads paused, and stalled again once the pause clears', () => {
+    clockedMount(quiet(NOW - QUIET + MIN));
+    act(() => { useFleetStore.setState(coordFrame('set')); });
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(stateB()).toBe('paused');
+    expect(movedB()).toBe('paused');
+    // The box that needs you keeps its state under the pause.
+    expect(boxOf(table(), 'coord-a').getAttribute('data-state')).toBe('needs');
+    act(() => { useFleetStore.setState(coordFrame('clear')); });
+    expect(stateB()).toBe('stalled');
+  });
+
+  it('with no quiet time on the runs frame a box never stalls, however long it has been quiet (D-7376)', () => {
+    clockedMount(quiet(NOW - 5 * HOUR, null));
+    expect(stateB()).toBe('moving');
+    expect(movedB()).toBe('moved 5h ago');
+  });
+
+  it('reads the frame\'s own quiet time, not a default: 2h 30m quiet under a 3 h threshold is moving', () => {
+    clockedMount(quiet(NOW - 150 * MIN, 3 * HOUR));
+    expect(stateB()).toBe('moving');
+    expect(movedB()).toBe('moved 2h 30m ago');
+  });
+});
+
+// R123 (the operator's ruling of 2026-10-30; review 1239 C1): in the Status view a hibernated claimant's workers carry no
+// `coordinator-hibernated` marker anywhere, because the hibernated box the view draws says it. Besides a box's members one
+// row reaches that rule: a coordinator that is itself a worker of a hibernated head's run elsewhere (nested), drawn as its
+// own box's head. The other shape review 1239's C1 named, an archived worker whose run a hibernated head still claims, draws
+// no coordinator marker at all (measured with `keepers` emptied: the line shows only its lifecycle word), so no case pins it.
+describe('a hibernated claimant\'s workers carry no marker anywhere in the Status view (R123)', () => {
+  const hibernated = sess('hc', 'project-b', {
+    role: 'coordinator', status: 'dead', presence: 'dead', bucket: 'dead', lifecycle: 'stopped', hibernatedAt: Date.now() - 3_600_000,
+  });
+  const marker = (row: Element): string | null =>
+    row.querySelector('[data-marker^="coordinator-"]')?.getAttribute('data-marker') ?? null;
+
+  it('a coordinator that is a worker of a hibernated head\'s run on another card draws its own box with no marker', () => {
+    // `coord-a` heads its own programme on project-a AND is the worker of run 9, which `hc` claims for project-b.
+    const runs = [...RUNS, run(9, 'hc', 'coord-a', { program: 'prog-h', programTitle: 'Programme H', project: 'project-a' })];
+    mount([...SESSIONS, hibernated], runs);
+    const box = boxOf(table(), 'coord-a');
+    expect(box.getAttribute('data-state')).toBe('needs');
+    const own = box.querySelector<HTMLElement>('.pg-coord [data-row="coord-a"]')!;
+    expect(own).not.toBeNull();
+    expect(marker(own)).toBeNull();
+    // The hibernated head is drawn, so the view still says what is hibernated.
+    expect(boxOf(table(), 'hc')).toBeDefined();
   });
 });
 

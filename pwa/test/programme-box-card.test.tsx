@@ -459,7 +459,7 @@ describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet l
     expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
   });
 
-  it('the box stalls at the frame\'s own quiet time, not at a default (F6 iii)', () => {
+  it('a box 2h 30m quiet stays moving under the frame\'s 3 h quiet time, so no default sets the threshold (F6 iii)', () => {
     const store = mount();
     const f = quietFleet(NOW - 150 * MIN);
     act(() => { store.setState({ ...frames(active(f.sessions), f.runs), stallQuietMs: 3 * HOUR }); });
@@ -467,7 +467,7 @@ describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet l
     expect(boxOf(document)?.querySelector('.pg-moved')?.textContent).toBe('moved 2h 30m ago');
   });
 
-  it('a folded card that gains a stalled box with no frame changes its view-hold key (D-6090; F1)', () => {
+  it('a folded card that gains a stalled box with no frame changes its view-hold key, from `project-c:-0` to `project-c:-1` (D-6090; F1, F5)', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(NOW);
     const store = mount();
@@ -475,10 +475,27 @@ describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet l
     const sessions = f.sessions.map((x) => ({ ...x, status: 'idle' as const, bucket: 'idle' as const }));
     act(() => { store.setState(frames(sessions, f.runs)); });
     expect(boxOf(document)).toBeNull();
-    const before = holdKeys.at(-1);
+    expect(holdKeys.at(-1)).toBe('project-c:-0');
     act(() => { vi.advanceTimersByTime(MIN + 1_000); });
     expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
-    expect(holdKeys.at(-1)).not.toBe(before);
+    expect(holdKeys.at(-1)).toBe('project-c:-1');
+  });
+
+  it('a folded card\'s view-hold key holds across a frame that changes no kept box, whatever the clock read (F5)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(NOW - QUIET + MIN);
+    const sessions = f.sessions.map((x) => ({ ...x, status: 'idle' as const, bucket: 'idle' as const }));
+    act(() => { store.setState(frames(sessions, f.runs)); });
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(holdKeys.at(-1)).toBe('project-c:-1');
+    const renders = holdKeys.length;
+    // The runs frame re-reads the clock (`boxNow` moves with the runs) but keeps the same boxes: the key must not move.
+    act(() => { vi.advanceTimersByTime(5_000); });
+    act(() => { store.setState({ runs: f.runs.map((r) => ({ ...r })) }); });
+    expect(holdKeys.length).toBeGreaterThan(renders);
+    expect(holdKeys.at(-1)).toBe('project-c:-1');
   });
 
   it('the readout agrees with the state from the boundary on, whatever its own clock last read (spec §2.5; F9)', () => {
