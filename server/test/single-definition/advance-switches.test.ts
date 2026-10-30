@@ -763,7 +763,6 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('literal source pins over every other server/src file may only shrink (ARCH-06; the counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/accounts/mask.ts': 1,
       'server/src/askbody.ts': 1,
       'server/src/askkey.ts': 1,
       'server/src/askwindow.ts': 1,

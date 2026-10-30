@@ -486,7 +486,7 @@ describe('secret_fingerprints never leaves the server (D-5513)', () => {
       .map((f) => path.relative(srcRoot, f)).sort();
     expect(holders).toEqual(['accounts/mask.ts', 'coord/schema.ts']);
     // mask.ts registers no route and answers no request
-    const mask = readFileSync(path.join(srcRoot, 'accounts', 'mask.ts'), 'utf8');
+    const mask = parsedFile('server/src/accounts/mask.ts').text;
     expect(mask).not.toMatch(/app\.(get|post|put|delete)\(|reply\.|FastifyInstance/);
     // and the table holds no column a secret could sit in: the fingerprint, its lane, its generation and a time
     const db = new DatabaseSync(':memory:');
