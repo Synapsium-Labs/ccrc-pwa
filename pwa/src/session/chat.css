@@ -1979,7 +1979,7 @@ button.metachip:active {
  *  it has no scrim and no ✕.                                          *
  * ------------------------------------------------------------------ */
 /* ONE bordered surface on --bg-surface, which also grounds every `.dlg-*` and `.opts` rule inside it (the audit's
-   GROUNDS name it where a selector names no painted ancestor). Task T1d (amending D-6326 at the desk): the card comes
+   GROUNDS name it where a selector names no painted ancestor). Task T1d, D-7565 (amending D-6326 at the desk): the card comes
    first while a question is up. It takes the height it needs, its question at most 40% of the pane, and shrinks only
    once the transcript is down to its floor (`flex: 0 1 auto`, `min-height: 0`, and the floor below). Inside it the
    question gives way first, down to two lines, and only then the surface, which scrolls on its own; so a short question
@@ -2014,7 +2014,7 @@ button.metachip:active {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* The transcript keeps at least 48px while a card is up (Task T1d; a third of the pane under D-6326): it is the pane's
+/* The transcript keeps at least 48px while a card is up (Task T1d, D-7565; a third of the pane under D-6326): it is the pane's
    remainder, so it gives way to the card first, down to this floor, and past it the card yields. */
 .chat[data-ask-inline] > .chat-body {
   min-height: var(--sp-12);
@@ -2028,7 +2028,7 @@ button.metachip:active {
 /* Below the header: the QUESTION region, then the SURFACE (the tab row, the options, Other and the answer controls). This
    box does not scroll. `--ask-question-floor` is the question's floor: two lines at the prose size.
 
-   WHO SHRINKS, AND IN WHAT ORDER (Task T1d). Each region sits in a SLOT, and each slot's region is the scroller inside
+   WHO SHRINKS, AND IN WHAT ORDER (Task T1d, D-7565). Each region sits in a SLOT, and each slot's region is the scroller inside
    it. Nothing here is a percentage: this box's height is the card's flexed height, which an engine may treat as
    indefinite for a percentage (flexbox §9.8), so the order is set by flex factors and lengths alone, which every engine
    flexes alike.
@@ -2039,14 +2039,16 @@ button.metachip:active {
      - The surface's slot: sized to its surface, and free to shrink to nothing (`min-height: 0`).
    The question's shrink factor dwarfs the surface's, so when the card is capped the question takes the loss: down to its
    floor, where flexing freezes it at its minimum and hands every remaining pixel of the loss to the surface. Before that
-   the surface's share is its base size over a million times the question's, under a thousandth of a pixel, which no
-   engine lays out (Chrome's unit is 1/64px, Firefox's 1/60px).
+   the surface's share of the loss is under a millionth of the surface's own height: the loss is at most the question's
+   base size Qb, so a loss L gives the surface L x Sb / (1e6 x Qb + Sb) < Sb x 1e-6. Under 1/128px (half of Chrome's unit,
+   1/64px; Firefox's is 1/60px) up to a surface of about 7800px, which an engine rounds away.
 
    THE CLIP. When the card's room is less than the header and the question's floor (measured in Chrome: a window of about
    435px or less), the question would paint past the card's border; this box clips it (`overflow: clip`, which is not a
-   scroll container, so nothing can scroll it). An option's focus ring draws 4px outside its row, and the surface sits
-   flush with this box's content edges, so this box pads by --sp-1 within a matching negative margin, and the clip, at its
-   padding edge, falls outside every ring. */
+   scroll container, so nothing can scroll it). An option's focus ring draws 4px outside its row, and the surface's SLOT
+   sits flush with this box's content edges (the surface itself overhangs its slot by --sp-1 through its own negative margin,
+   so its box lands on this box's padding edge), so this box pads by --sp-1 within a matching negative margin, and the
+   clip, at its padding edge, falls outside every ring. */
 .ask-inline-body {
   --ask-question-floor: calc(2 * var(--lh-normal) * var(--fs-prose));
   flex: 0 1 auto;
@@ -2092,7 +2094,7 @@ button.metachip:active {
   overscroll-behavior: contain;
   scroll-padding-block: var(--sp-1);
 }
-/* THE SHORT-WINDOW RULE (Task T1d). In a window under 700px tall
+/* THE SHORT-WINDOW RULE (Task T1d, D-7565). In a window under 700px tall
    both floors leave the first option out of view (at 1280x600 the card is about 208px: the header takes 80, two lines and
    the gap 61, and the option needs about 64 under the tab row), so they yield there and nowhere else: the transcript's
    floor drops to none and the question's to one line, which keeps the header, a line of the question, the tab row and the

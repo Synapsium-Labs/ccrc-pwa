@@ -526,9 +526,11 @@ describe('the inline ask keeps its options in view and reads its question at pro
         expect(m.errors).toEqual([]);
       });
 
-      // Fixture 1's own surface (560px) is taller than any of these cards can hold, so "no scrollbar anywhere" is measured
-      // on fixture 2, one question with no tab row and no list (five rows, about 315px), which fits the card of a 900px or
-      // 1080px window. At 1280x600 the card (about 210px) holds no five-row surface, so the case is not run there.
+      // Fixture 1's own surface (560px) is taller than the card of every window here but 1920x1080, where it fits in Instrument
+      // (`scrolls: false`) and overflows by about 7px in Refined, so "no scrollbar anywhere" is measured on fixture 2, one
+      // question with no tab row and no list (five rows, about 315px), which fits the card of a 900px or 1080px window
+      // (`roomy`). At 1280x700, 1280x699 and 1280x600 the card (about 210px at 600) holds no five-row surface, so the case
+      // is not run in any of the three: twelve skipped cells, those three heights in each of the four skin and theme pairs.
       it.skipIf(!roomy)('with a 2-line question, no scrollbar anywhere in the card', () => {
         const m = fits!;
         expect(m.scrollers, 'nothing in the card scrolls').toEqual([]);
@@ -577,14 +579,56 @@ describe('in a very short window the question never paints past the card (T1d)',
           .toBeGreaterThan(m.paint.cardInner + 1);
         expect(m.head.bottom, 'premise: the header is inside the card').toBeLessThanOrEqual(m.paint.cardInner);
       }
-      const clipped = m.paint.overflowY === 'clip' || m.paint.overflowY === 'hidden';
-      const shows = clipped ? Math.min(m.question!.bottom, m.paint.body.bottom) : m.question!.bottom;
+      // `clip`, exactly (Task T1e, review 1284 F4): `hidden` clips the same pixels but makes the body a scroll container, which
+      // a script can scroll and `scrollIntoView` then moves, so a body of `hidden` would pass every other line here.
+      expect(m.paint.overflowY, 'the card\'s body clips and is no scroll container').toBe('clip');
+      const shows = Math.min(m.question!.bottom, m.paint.body.bottom);
       expect(shows, `what shows of the question ends at ${shows} (the body ${m.paint.overflowY}), inside the card's border (${m.paint.cardInner})`)
         .toBeLessThanOrEqual(m.paint.cardInner + 1);
       expect(m.paint.overflowY, 'and the card\'s body is no scroller').not.toMatch(/auto|scroll/);
       expect(m.errors).toEqual([]);
     }, 90_000);
   }
+});
+
+// Task T1e (D-7565, review 1284 F1): the question region is a Tab stop with nothing focusable in it, and a long question
+// scrolls by its keys there: Space, PageUp and PageDown, Home and End scroll it natively. An ARROW on it does not scroll: it
+// is T1c's key model (the region is not a row, so an arrow puts the highlight on the start row), which T1e keeps. This cell
+// holds the key that scrolls, in Chrome: Tab from the card section reaches the region, PageDown moves its `scrollTop` above 0
+// with focus still on it, and no request is sent (a scrolling key is not an answer).
+describe('the question region scrolls by its keys (T1d, T1e, D-7565)', () => {
+  it('Tab to the question region, then PageDown: the region scrolls, focus stays on it, and no request is sent', async () => {
+    const opened = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width: 1280 }, FIXTURE);
+    try {
+      await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
+        for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
+      });
+      const answers: string[] = [];
+      // A later page route wins over `openApp`'s context route: this one records the request and never fulfils it.
+      await opened.page.route('**/api/questions/*/answer', (route) => { answers.push(route.request().postData() ?? ''); });
+      await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
+      await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
+      await opened.page.waitForTimeout(800);
+      await opened.page.evaluate((card) => document.querySelector<HTMLElement>(card)!.focus(), CARD);
+      await opened.page.keyboard.press('Tab');
+      const region = () => opened.page.evaluate(() => {
+        const a = document.activeElement as HTMLElement | null;
+        return { onRegion: a?.matches('.ask-inline-question') ?? false, scrollTop: a?.scrollTop ?? -1, scrollHeight: a?.scrollHeight ?? 0, clientHeight: a?.clientHeight ?? 0 };
+      });
+      const before = await region();
+      expect(before.onRegion, 'premise: Tab from the card section reached the question region').toBe(true);
+      expect(before.scrollHeight, 'premise: the forty-line question overflows its region').toBeGreaterThan(before.clientHeight + 1);
+      expect(before.scrollTop, 'premise: the region starts at its top').toBe(0);
+      await opened.page.keyboard.press('PageDown');
+      await expect.poll(async () => (await region()).scrollTop, { message: 'PageDown scrolled the question region', timeout: 5_000 }).toBeGreaterThan(0);
+      expect((await region()).onRegion, 'focus is still on the question region').toBe(true);
+      expect(answers, 'a scrolling key sends no answer request').toEqual([]);
+      expect(opened.errors).toEqual([]);
+    } finally {
+      await opened.ctx.close();
+    }
+  }, 90_000);
 });
 
 // At 1600 Refined draws its inspector rail and the page gains no sideways scroll. The card is bounded by
@@ -742,6 +786,42 @@ describe('Go to question at the desk (R64 F5, D-6326)', () => {
   }, 90_000);
 });
 
+/** Where the FOCUSED element's focus ring falls against every ancestor that clips, from its parent up to the card section
+ *  (Task T1e, D-7565, review 1284 F2). The ring's outer box is the element's rect grown by its computed outline width plus
+ *  offset; an ancestor clips at its padding box (`clientLeft`/`clientWidth`), on the axes whose `overflow` is not visible.
+ *  `.ask-inline-body` is one of them (`overflow: clip`) and its margin and padding are the ring's room: the question region
+ *  and a full-width option row both draw their ring up to that clip's edge, so a body without the room cuts it. `breaches`
+ *  names each ancestor the box leaves, with both boxes, and `grow` is read so a cell can refuse a ring that is not drawn. */
+const FOCUS_RING_CLIPS = (card: string): { inCard: boolean; active: string; grow: number; breaches: string[] } => {
+  const root = document.querySelector<HTMLElement>(card)!;
+  const a = document.activeElement as HTMLElement;
+  const cs = getComputedStyle(a);
+  const grow = (cs.outlineStyle === 'none' ? 0 : parseFloat(cs.outlineWidth)) + parseFloat(cs.outlineOffset);
+  const r = a.getBoundingClientRect();
+  const box = { left: r.left - grow, top: r.top - grow, right: r.right + grow, bottom: r.bottom + grow };
+  const breaches: string[] = [];
+  for (let p = a.parentElement; root.contains(a) && p !== null && p !== root; p = p.parentElement) {
+    const pcs = getComputedStyle(p);
+    const x = pcs.overflowX !== 'visible';
+    const y = pcs.overflowY !== 'visible';
+    if (!x && !y) continue;
+    const pr = p.getBoundingClientRect();
+    const clip = { left: pr.left + p.clientLeft, top: pr.top + p.clientTop, right: pr.left + p.clientLeft + p.clientWidth, bottom: pr.top + p.clientTop + p.clientHeight };
+    if ((x && (box.left < clip.left - 0.5 || box.right > clip.right + 0.5)) || (y && (box.top < clip.top - 0.5 || box.bottom > clip.bottom + 0.5))) {
+      breaches.push(`${p.tagName.toLowerCase()}.${p.getAttribute('class') ?? ''}: ring ${JSON.stringify(box)} leaves its clip ${JSON.stringify(clip)}`);
+    }
+  }
+  return { inCard: root.contains(a), active: `${a.tagName.toLowerCase()}.${a.getAttribute('class') ?? ''}`.slice(0, 80), grow, breaches };
+};
+
+type RingClips = ReturnType<typeof FOCUS_RING_CLIPS>;
+/** A ring is drawn on the focused element `what`, which is in the card, and lies inside every clipping ancestor up to it. */
+const ringInsideClips = (rings: RingClips, what: string): void => {
+  expect(rings.inCard, `premise: the focused element ${rings.active} is in the card`).toBe(true);
+  expect(rings.grow, `premise: ${what} (${rings.active}) draws a focus ring (outline width plus offset ${rings.grow}px)`).toBeGreaterThan(0);
+  expect(rings.breaches, `${what}'s ring lies inside every clipping ancestor up to the card (.ask-inline-body's margin and padding are its room)`).toEqual([]);
+};
+
 // R69 F3: "Go to question" must leave the FOCUSED option visible, not only focused. The raise's `preventScroll` focus
 // lands on the first option, which on fixture 1's forty-line question sits below the card's one scroller (`.ask-inline-body`,
 // `scrollTop` 0) and below the window. Review 932 measured it in these three views (scroller 496-769 / option 997-1061 at
@@ -800,7 +880,8 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
   };
   /** Open `frames` at `view` with the call in the transcript, park focus on the body, click Go to question, and measure.
    *  `away` first scrolls the surface to its end and the question region a little way down, as a reader might have. */
-  async function goTo(view: AppView, frames: object[], away = false): Promise<{ g: Geometry; before: Stand; after: Stand; errors: string[] }> {
+  async function goTo(view: AppView, frames: object[], away = false):
+    Promise<{ g: Geometry; rings: RingClips; before: Stand; after: Stand; errors: string[] }> {
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
@@ -828,7 +909,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
       // the ring is the one a keyboard user sees, and its width and offset are real computed values to measure.
       await opened.page.keyboard.press('Shift');
       await opened.page.waitForTimeout(100);
-      return { g: await opened.page.evaluate(MEASURE, CARD), before, after: await opened.page.evaluate(STAND, CARD), errors: opened.errors };
+      return { g: await opened.page.evaluate(MEASURE, CARD), rings: await opened.page.evaluate(FOCUS_RING_CLIPS, CARD), before, after: await opened.page.evaluate(STAND, CARD), errors: opened.errors };
     } finally {
       await opened.ctx.close();
     }
@@ -837,7 +918,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
 
   for (const view of GOTO_VIEWS) {
     it(`${named(view)}: the focused first option lies inside the card's surface and the window after Go to question, and the question did not scroll`, async () => {
-      const { g, before, after, errors } = await goTo(view, FRAMES());
+      const { g, rings, before, after, errors } = await goTo(view, FRAMES());
       expect(g.inCard && g.focusIsFirst, 'premise: focus is on the first option (the identity control)').toBe(true);
       expect(g.question.scrollHeight, 'premise: the forty-line question overflows its region').toBeGreaterThan(g.question.clientHeight);
       expect(inside(g.option, g.scroller), `the option ${JSON.stringify(g.option)} lies inside the surface ${JSON.stringify(g.scroller)} (scrollTop ${g.scrollTop})`).toBe(true);
@@ -860,6 +941,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
         .toBeLessThanOrEqual(g.scroller[1] - g.ring + 1);
       expect(g.option[0], `ring room: the option's top ${g.option[0]} is at least ${g.ring}px below the surface's top ${g.scroller[0]}`)
         .toBeGreaterThanOrEqual(g.scroller[0] + g.ring - 1);
+      ringInsideClips(rings, 'the focused first option');
       expect(errors).toEqual([]);
     }, 90_000);
   }
@@ -869,7 +951,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
   // reveal brings the option back: the surface's scroll moves up to it and the question region's stays where it stood.
   for (const view of GOTO_VIEWS) {
     it(`${named(view)}: with the surface scrolled away, Go to question scrolls the surface back to the focused option and leaves the question region where it stood`, async () => {
-      const { g, before, after, errors } = await goTo(view, FRAMES(), true);
+      const { g, rings, before, after, errors } = await goTo(view, FRAMES(), true);
       expect(g.inCard && g.focusIsFirst, 'premise: focus is on the first option').toBe(true);
       expect(before.surface, 'premise: the surface was scrolled away from its top').toBeGreaterThan(0);
       expect(before.question, 'premise: the question region was scrolled a little way down').toBeGreaterThan(0);
@@ -877,6 +959,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
       expect(inside(g.option, g.scroller), `the option ${JSON.stringify(g.option)} lies inside the surface ${JSON.stringify(g.scroller)}`).toBe(true);
       expect(inside(g.option, [0, g.vh]), `the option ${JSON.stringify(g.option)} lies inside the window (0-${g.vh})`).toBe(true);
       expect(after.question, 'the question region did not scroll across the click').toBe(before.question);
+      ringInsideClips(rings, 'the focused first option');
       expect(errors).toEqual([]);
     }, 90_000);
   }
@@ -1754,12 +1837,14 @@ describe('after a send the keys in the card are fenced in real Chrome (R102)', (
       const onQuestion = (): Promise<boolean> => a.page.evaluate(() => document.activeElement?.matches('.ask-inline-question') ?? false);
       await a.page.keyboard.press('Tab');
       expect(await onQuestion(), 'Tab moved focus from the card section to its question region').toBe(true);
+      ringInsideClips(await a.page.evaluate(FOCUS_RING_CLIPS, CARD), 'the question region');
       await a.page.keyboard.press('2');
       await a.page.waitForTimeout(300);
       expect((await a.snap()).posts, 'a digit on the question region sends nothing: Tab unlocked nothing').toBe(1);
       await a.page.keyboard.press('Tab');
       const into = await a.snap();
       expect(into.inCard && into.activeTag === 'BUTTON', `Tab moved focus from the question region to a control in the card (${into.activeTag})`).toBe(true);
+      ringInsideClips(await a.page.evaluate(FOCUS_RING_CLIPS, CARD), 'the option row');
       await a.page.keyboard.press('2');
       await a.page.waitForTimeout(300);
       expect((await a.snap()).posts, 'a digit inside the card sends nothing: Tab unlocked nothing').toBe(1);

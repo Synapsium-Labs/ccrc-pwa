@@ -11,9 +11,10 @@
 //   - "no horizontal page scroll": the document is no wider than the window;
 //   - "no page error": nothing uncaught was thrown.
 // Each view also asserts what the surface DOES show (the question's first line and the who line) and that the question
-// "reads from its top when the sheet opens": measured as the sheet settled, with nothing scrolled by the test, the body
-// is at its top and both lines lie inside the body's own rectangle. A desk view (1280, where the ask is the inline card of
-// D-6326) holds that case alone, since the open-time focus differs there.
+// "reads from its top when the sheet opens": measured as the sheet settled, with nothing scrolled by the test, the sheet
+// body is at its top and both lines lie inside the body's own rectangle. A desk view (1280, where the ask is the inline
+// card of D-6326) holds that case alone, since the open-time focus differs there: its two scrollers, the question region
+// (the rectangle the question is read in) and the answer surface, are each at their top (Task T1d, D-7565).
 //
 // The fixture's data is `test/askFixtures.ts`'s (`askFixture(1)` and `longHookEnvelope()`, the forty-line variant
 // this file alone reads), so no copy is kept here; the browser config imports from `../test/` as
@@ -198,12 +199,13 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
 }
 
 /** The claim of the open sheet: nothing has scrolled the question or the options away (at the desk, neither the
- *  question region nor the surface), its first line sits inside the rectangle it is read in (not merely inside the window), and the who line, which the eyebrow keeps above the body, sits inside the
+ *  question region nor the surface; `scrollers` is how many boxes are read, one at the phone and two at the desk, so a
+ *  selector that stops matching one of them reds here), its first line sits inside the rectangle it is read in (not merely inside the window), and the who line, which the eyebrow keeps above the body, sits inside the
  *  panel. (Two pixels of slack: a Range's rectangle is the glyphs' box, which a tight line height lets reach a pixel
  *  past the line.) */
-function expectReadsFromTop(m: Measure): void {
+function expectReadsFromTop(m: Measure, scrollers: number): void {
   expect(m.body, 'the sheet has a body').not.toBeNull();
-  expect(m.scrollTops.length, 'premise: the sheet\'s body, or the card\'s question region and surface, are read').toBeGreaterThan(0);
+  expect(m.scrollTops.length, `premise: ${scrollers} box(es) are read: the sheet's body, or the card's question region and surface (${m.scrollTops.map((t) => t.cls).join(', ')})`).toBe(scrollers);
   for (const { cls, top } of m.scrollTops) expect(top, `${cls} opens at its top`).toBeLessThanOrEqual(1);
   const inside = (what: string, box: Box | null, within: Box, name: string): void => {
     expect(box, `${what} is in the sheet`).not.toBeNull();
@@ -232,7 +234,7 @@ describe('an ask holds one vertical scroller (D-6325)', () => {
       });
 
       it('the question reads from its top when the sheet opens', () => {
-        expectReadsFromTop(measured!);
+        expectReadsFromTop(measured!, 1);
       });
 
       it('the ask has one vertical scroller', () => {
@@ -255,7 +257,8 @@ describe('an ask holds one vertical scroller (D-6325)', () => {
 
 // At a desk the ask is T1c's inline card (D-6326), where the open-time focus (`useAskKeys`, a fine pointer's) does not
 // run: the card opens at its top because nothing moves focus into it. Its own view, with an eighty-line question so that
-// the first option is below the fold and focusing it would scroll the body; this case also holds that nothing did.
+// the longest question. Since Task T1d the first option sits in the answer surface under the question's own region, not
+// below a fold of one body, so this case holds that nothing took focus and that neither box was scrolled.
 describe('an ask at a desk opens at its top too (D-6325, D-6326)', () => {
   const desk: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
   it(named(desk), async () => {
@@ -267,7 +270,7 @@ describe('an ask at a desk opens at its top too (D-6325, D-6326)', () => {
     expect(cls.filter((c) => c.startsWith('ask-inline-question')), 'the question overflows its region').toHaveLength(1);
     expect(cls.filter((c) => !c.startsWith('ask-inline-question') && !c.startsWith('ask-inline-surface')), 'nothing else scrolls').toEqual([]);
     expect(measured.focusIn, 'the arriving ask takes no focus').toBe(false);
-    expectReadsFromTop(measured);
+    expectReadsFromTop(measured, 2);
     expect(errors).toEqual([]);
   }, 90_000);
 });
