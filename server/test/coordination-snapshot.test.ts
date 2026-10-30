@@ -15,6 +15,7 @@ import {
   delegationJournalId,
   encodeDelegationJournalRecord,
   parseDelegationJournal,
+  readDelegationRetainedRecords,
   validateDelegationJournalBytes,
   type DelegationJournalPosition,
 } from '../src/coord/delegation-journal.js';
@@ -233,7 +234,7 @@ describe('8A: journal-grammar rows (delegation broker wave 3, W3-M20 to W3-M24) 
 import { afterEach, beforeAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -438,6 +439,233 @@ const bothAgree = (name: string, bytes: Uint8Array, opts: Parameters<typeof vali
   expect(h, name).toEqual(s);
   return s;
 };
+
+// Compacted sets need recovery's whole-set verdict, but coverage describes only the contiguous journal suffix.
+interface RetainedFixture { checkpoint: Uint8Array; carried: Uint8Array | null; journal: Uint8Array }
+const CARRIED_NAME = 'delegation-carried.log';
+function compactedFixture(): RetainedFixture {
+  const records = chainOf(8);
+  const checkpoint = recoverDelegation(null, records.slice(0, 6)).state.checkpoint;
+  return {
+    checkpoint: encodeDelegationCheckpoint({ ...checkpoint, revision: 7, pruningHolds: [
+      ...checkpoint.pruningHolds,
+      ...[records[0]!, records[2]!].map((r) => ({ journalId: r.journalId, reason: 'identity-candidate' as const, ownerId: 'agent-1' })),
+    ] }),
+    carried: bytesOf(records[0]!, records[2]!, records[5]!),
+    journal: bytesOf(...records.slice(4)),
+  };
+}
+function plantRetained(home: string, fixture: RetainedFixture): void {
+  setLive(home, { checkpoint: fixture.checkpoint, journal: fixture.journal });
+  if (fixture.carried !== null) writeFileSync(liveFile(home, CARRIED_NAME), fixture.carried);
+}
+async function retainedVerdicts(fixture: RetainedFixture): Promise<{ server: Verdict; helper: Verdict; home: string }> {
+  const home = mkHome();
+  plantRetained(home, fixture);
+  const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(home));
+  expect(readFileSync(liveFile(home, 'delegation-events.log'))).toEqual(Buffer.from(fixture.journal));
+  const header = H.readCheckpointHeader(fixture.checkpoint);
+  const server: Verdict = report.failure === null
+    ? serverVerdict(fixture.journal, { completeFromStart: header.appliedJournalSequence === 0, anchor: header.anchor })
+    : { ok: false, code: report.failure.code };
+  const got = outcome(() => H.validateSidecars(H.realFs, {
+    checkpointBytes: fixture.checkpoint, carriedPath: liveFile(home, CARRIED_NAME), journalPath: liveFile(home, 'delegation-events.log'),
+  }));
+  const helper: Verdict = got.ok ? { ok: true, coverage: (got.value as { coverage: unknown }).coverage } : { ok: false, code: got.code };
+  return { server, helper, home };
+}
+
+describe('Task 3.6: compacted coordination snapshots', () => {
+  it('W4-C23: sparse carried evidence and matching overlap capture with the same recovery verdict and suffix-only coverage', async () => {
+    const fixture = compactedFixture();
+    const { server, helper, home } = await retainedVerdicts(fixture);
+    expect(helper, 'whole-set helper/server differential').toEqual(server);
+    expect(server).toMatchObject({ ok: true, coverage: { firstSequence: 5, lastSequence: 8, recordCount: 4 } });
+    const retained: Array<[number, string]> = [];
+    for await (const line of readDelegationRetainedRecords(nodeDelegationFilePort, liveFile(home, CARRIED_NAME), liveFile(home, 'delegation-events.log'))) {
+      retained.push([line.record.sequence, line.source]);
+    }
+    expect(retained).toEqual([[1, 'carried'], [3, 'carried'], [5, 'journal'], [6, 'journal'], [7, 'journal'], [8, 'journal']]);
+    const { dir, manifest } = snapshotOf(home);
+    expect(manifest.members.delegationCarried).toEqual({ filename: CARRIED_NAME, present: true, bytes: fixture.carried!.length, sha256: sha(fixture.carried!) });
+    expect(manifest.delegation.journal).toEqual((server as { ok: true; coverage: unknown }).coverage);
+    expect(readFileSync(path.join(dir, CARRIED_NAME))).toEqual(Buffer.from(fixture.carried!));
+    expect(H.classify({ from: dir }).kind).toBe('v1');
+  });
+
+  it('W4-C24: a suffix past applied plus one refuses sequence-gap in actual recovery and the helper', async () => {
+    const checkpoint = encodeDelegationCheckpoint({ ...recoverDelegation(null, [RA]).state.checkpoint, revision: 1 });
+    const { server, helper } = await retainedVerdicts({ checkpoint, carried: bytesOf(RA), journal: bytesOf(RC) });
+    expect(server, 'actual recovery refusal, without a test-local gap gate').toEqual({ ok: false, code: 'sequence-gap' });
+    expect(helper).toEqual(server);
+  });
+
+  for (const defect of ['duplicate', 'descending', 'mismatch', 'unmatched', 'tail'] as const) {
+    it(`W4-C23: carried ${defect} refuses with the actual recovery code, including the iterator's final checks`, async () => {
+      const records = chainOf(9);
+      const fixture = compactedFixture();
+      if (defect === 'duplicate') fixture.carried = bytesOf(records[0]!, records[0]!);
+      if (defect === 'descending') fixture.carried = bytesOf(records[2]!, records[0]!);
+      if (defect === 'mismatch') {
+        const different = rec({ ...records[5]! }, { ...EVENT_A, source: 'different-overlap' });
+        fixture.carried = bytesOf(records[0]!, records[2]!, different);
+      }
+      if (defect === 'unmatched') fixture.carried = bytesOf(records[0]!, records[2]!, records[8]!);
+      if (defect === 'tail') fixture.carried = fixture.carried!.subarray(0, fixture.carried!.length - 1);
+      const code = defect === 'duplicate' || defect === 'descending' ? 'carried-order'
+        : defect === 'tail' ? 'missing-final-lf' : 'carried-past-journal';
+      const { server, helper, home } = await retainedVerdicts(fixture);
+      expect(server).toEqual({ ok: false, code });
+      expect(helper, 'whole-set refusal differential').toEqual(server);
+      const consume = async (): Promise<void> => {
+        for await (const line of readDelegationRetainedRecords(nodeDelegationFilePort, liveFile(home, CARRIED_NAME), liveFile(home, 'delegation-events.log'))) void line;
+      };
+      await expect(consume()).rejects.toMatchObject({ code });
+      const dir = snapDirOf(home);
+      expect(outcome(() => H.capture({ home, dir, sleep: () => undefined })).ok).toBe(false);
+      expect(dirListing(dir)).toEqual([]);
+    });
+  }
+
+  it('W4-C25: compaction renames between carried A/B retry before any mixed manifest is published', async () => {
+    const home = mkHome();
+    const fixture = compactedFixture();
+    setLive(home, { checkpoint: fixture.checkpoint, journal: bytesOf(...chainOf(8)) });
+    const dir = snapDirOf(home);
+    const attempts: number[] = [];
+    const pauses: number[] = [];
+    const manifest = H.capture({ home, dir, sleep: (ms: number) => pauses.push(ms), hooks: {
+      afterJournalCopy(attempt: number) {
+        attempts.push(attempt);
+        expect(dirListing(dir)).not.toContain('coordination-snapshot.json');
+        if (attempt !== 1) return;
+        writeFileSync(liveFile(home, `${CARRIED_NAME}.next`), fixture.carried!);
+        renameSync(liveFile(home, `${CARRIED_NAME}.next`), liveFile(home, CARRIED_NAME));
+        writeFileSync(liveFile(home, 'delegation-events.log.next'), fixture.journal);
+        renameSync(liveFile(home, 'delegation-events.log.next'), liveFile(home, 'delegation-events.log'));
+      },
+    } });
+    expect(attempts).toEqual([1, 2]);
+    expect(pauses).toEqual([10]);
+    expect(manifest.delegation.journal.firstSequence).toBe(5);
+    expect(readFileSync(path.join(dir, CARRIED_NAME))).toEqual(Buffer.from(fixture.carried!));
+    expect(readFileSync(path.join(dir, 'delegation-events.log'))).toEqual(Buffer.from(fixture.journal));
+    expect(H.classify({ from: dir }).kind).toBe('v1');
+    expect((await recoverDelegationFromFiles(nodeDelegationFilePort, dir)).failure).toBeNull();
+  });
+
+  it('W4-C26: an old snapshot moves live carried bytes to the foreign directory, while a compacted restore places both files', async () => {
+    const source = mkHome();
+    const fixture = compactedFixture();
+    setLive(source, { checkpoint: fixture.checkpoint, journal: bytesOf(...chainOf(8)) });
+    const old = snapshotOf(source);
+    expect(old.manifest.members).not.toHaveProperty('delegationCarried');
+    const target = mkHome();
+    plantRetained(target, fixture);
+    expect((await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target))).failure).toBeNull();
+    H.restore({ home: target, from: old.dir, probe: inactive });
+    // Recovery alone misses CM25: stale matching copies are suppressed, so preservation needs a directory/bytes assertion.
+    expect((await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target))).failure).toBeNull();
+    const foreign = path.join(liveDir(target), H.RESTORE_FOREIGN_DIR);
+    const restores = dirListing(foreign);
+    expect(restores).toHaveLength(1);
+    expect(dirListing(path.join(foreign, restores[0]!))).toEqual([CARRIED_NAME]);
+    expect(readFileSync(path.join(foreign, restores[0]!, CARRIED_NAME))).toEqual(Buffer.from(fixture.carried!));
+    expect(existsSync(liveFile(target, CARRIED_NAME))).toBe(false);
+    expect(readFileSync(liveFile(target, 'delegation-checkpoint.json'))).toEqual(Buffer.from(fixture.checkpoint));
+    expect(readFileSync(liveFile(target, 'delegation-events.log'))).toEqual(Buffer.from(bytesOf(...chainOf(8))));
+    plantRetained(source, fixture);
+    const compacted = snapshotOf(source, '20261014-120001');
+    H.restore({ home: target, from: compacted.dir, probe: inactive });
+    expect(readFileSync(liveFile(target, CARRIED_NAME))).toEqual(Buffer.from(fixture.carried!));
+    expect(readFileSync(liveFile(target, 'delegation-events.log'))).toEqual(Buffer.from(fixture.journal));
+    expect((await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target))).failure).toBeNull();
+  });
+
+  it('W4-C26: every interrupted restore recovers the old carried set or preserves it in foreign after commit', () => {
+    const fixture = compactedFixture();
+    const source = mkHome();
+    const full = bytesOf(...chainOf(8));
+    setLive(source, { checkpoint: fixture.checkpoint, journal: full });
+    const snapshot = snapshotOf(source);
+    const baseline = mkHome();
+    plantRetained(baseline, fixture);
+    const trace = loggedFs(baseline);
+    H.restore({ home: baseline, from: snapshot.dir, probe: inactive, fs: trace.fs });
+    for (let crashAt = 0; crashAt < trace.log.mutating.length; crashAt++) {
+      const target = mkHome();
+      plantRetained(target, fixture);
+      const fault = loggedFs(target, { crashAt });
+      expect(outcome(() => H.restore({ home: target, from: snapshot.dir, probe: inactive, fs: fault.fs })).ok).toBe(false);
+      const markerPath = liveFile(target, H.RESTORE_MARKER_FILE);
+      const marker = existsSync(markerPath) ? JSON.parse(readFileSync(markerPath, 'utf8')) : null;
+      const committed = marker?.state === 'committed' || (marker === null && existsSync(liveFile(target, 'delegation-events.log'))
+        && sha(readFileSync(liveFile(target, 'delegation-events.log'))) === sha(full));
+      H.recover({ home: target, probe: inactive });
+      expect(readFileSync(liveFile(target, 'delegation-events.log')), `journal after crash ${crashAt}`).toEqual(Buffer.from(committed ? full : fixture.journal));
+      if (committed) {
+        const foreign = path.join(liveDir(target), H.RESTORE_FOREIGN_DIR);
+        const ids = dirListing(foreign);
+        expect(ids, `foreign after crash ${crashAt}`).toHaveLength(1);
+        expect(readFileSync(path.join(foreign, ids[0]!, CARRIED_NAME))).toEqual(Buffer.from(fixture.carried!));
+        expect(existsSync(liveFile(target, CARRIED_NAME))).toBe(false);
+      } else expect(readFileSync(liveFile(target, CARRIED_NAME)), `carried after crash ${crashAt}`).toEqual(Buffer.from(fixture.carried!));
+      expect(existsSync(markerPath)).toBe(false);
+      expect(H.recover({ home: target, probe: inactive })).toBe('none');
+    }
+  });
+
+  it('W4-C27: old v1 manifests remain valid and thinning records, hashes and removes all five compacted snapshot names', () => {
+    const home = mkHome();
+    const fixture = compactedFixture();
+    setLive(home, { checkpoint: fixture.checkpoint, journal: bytesOf(...chainOf(8)), db: { marker: 42 } });
+    const old = snapshotOf(home, '20261014-120000');
+    expect(old.manifest.members).not.toHaveProperty('delegationCarried');
+    expect(H.classify({ from: old.dir }).kind).toBe('v1');
+    plantRetained(home, fixture);
+    const dirs = ['20261014-120003', '20261014-120002', '20261014-120001'].map((ts) => snapshotOf(home, ts).dir);
+    const lines: string[] = [];
+    const r = H.thinBackups({ own: dirs[0], dirs: dirs.slice(1), keep: 2, by: 'backup', out: (line: string) => lines.push(line) });
+    expect(r, lines.join('\n')).toMatchObject({ kept: 2, thinned: 1, refused: 0 });
+    const dropped = JSON.parse(readFileSync(path.join(dirs[2]!, 'coordination-thinned.json'), 'utf8')).dropped;
+    expect(dropped.map((d: { filename: string }) => d.filename)).toEqual([
+      'coord.db', 'delegation-events.log', 'delegation-checkpoint.json', CARRIED_NAME, 'coordination-snapshot.json',
+    ]);
+    expect(dropped.find((d: { filename: string }) => d.filename === CARRIED_NAME)).toEqual({ filename: CARRIED_NAME, bytes: fixture.carried!.length, sha256: sha(fixture.carried!) });
+    expect(dirListing(dirs[2]!)).toEqual(['coordination-thinned.json']);
+    expect(H.classify({ from: dirs[2] }).kind).toBe('thinned');
+    // A surviving carried member is resumable only while it is exactly the entry recorded before deletion.
+    writeFileSync(path.join(dirs[2]!, CARRIED_NAME), fixture.carried!);
+    expect(H.quickState(H.realFs, dirs[2]).word).toBe('interrupted');
+    expect(H.classify({ from: dirs[2] }).reason).toContain('the next completed update');
+    const resumed = H.thinBackups({ dirs: [dirs[2]], keep: 2, by: 'backup', out: () => undefined });
+    expect(resumed).toMatchObject({ thinned: 1, refused: 0 });
+    expect(dirListing(dirs[2]!)).toEqual(['coordination-thinned.json']);
+    writeFileSync(path.join(dirs[2]!, CARRIED_NAME), 'foreign carried bytes');
+    expect(H.classify({ from: dirs[2] }).reason).toContain('cannot be finished');
+    expect(H.thinBackups({ dirs: [dirs[2]], keep: 2, by: 'backup', out: () => undefined })).toMatchObject({ thinned: 0, refused: 1 });
+    expect(readFileSync(path.join(dirs[2]!, CARRIED_NAME), 'utf8')).toBe('foreign carried bytes');
+  });
+
+  it('W4-C27: carried files cannot hide beside old manifests, absent members or a legacy directory', () => {
+    const home = mkHome();
+    const old = snapshotOf(home);
+    writeFileSync(path.join(old.dir, CARRIED_NAME), bytesOf(RA));
+    expect(H.classify({ from: old.dir })).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('member-undeclared') });
+    expect(H.quickState(H.realFs, old.dir).word).toBe('damaged');
+    expect(outcome(() => H.restore({ home: mkHome(), from: old.dir, probe: inactive }))).toMatchObject({ ok: false, code: 'source-invalid' });
+    rmSync(path.join(old.dir, CARRIED_NAME));
+    const optional = { ...old.manifest, members: { ...old.manifest.members, delegationCarried: { filename: CARRIED_NAME, present: false } } };
+    writeFileSync(path.join(old.dir, 'coordination-snapshot.json'), `${H.canonicalJson(optional)}\n`);
+    expect(H.classify({ from: old.dir }).kind).toBe('v1');
+    writeFileSync(path.join(old.dir, CARRIED_NAME), bytesOf(RA));
+    expect(H.classify({ from: old.dir }).kind).toBe('invalid');
+    const bare = snapDirOf(home, '20261014-120001');
+    writeFileSync(path.join(bare, CARRIED_NAME), bytesOf(RA));
+    expect(H.classify({ from: bare })).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('without a manifest') });
+    expect(H.quickState(H.realFs, bare).word).toBe('damaged');
+  });
+});
 
 describe('8B: the helper validates a journal exactly as the server does (differential, one meaning)', () => {
   const full = bytesOf(RA, RB, RC);
