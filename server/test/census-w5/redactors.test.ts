@@ -78,6 +78,18 @@ describe('logLineRedactors: bash functions that redact a line (D-7071)', () => {
     expect(logLineRedactors(absent).map((s) => s.name)).toEqual(['ccd/sibling#fx_redact']);
   });
 
+  // C5i: the log-line row is given ccd/ccrc, so a copy under its BEGIN line is compared with ccd/ccrc's function, not
+  // ccd/ccd's. The BEGIN line is spelled here: the row's own constant is imported only once the row exists.
+  it('FIXTURE: a copy under the log-line region is compared with ccd/ccrc: byte-equal counts zero, one byte changed counts', () => {
+    const ll = (body: string): string =>
+      `# ── BEGIN GENERATED LOG-LINE REDACTOR (shared/hook-helpers.mjs; edit it in ccd/ccrc, then regenerate) ──\n# ccrc:generated 1 sha256=${'0'.repeat(64)}\n${body}\n# ── END GENERATED LOG-LINE REDACTOR ──\n`;
+    const ccdNo = `${SH}names_home() { local d="$1"; echo "$HOME/$d"; }\n`;
+    const copy = tree({ 'ccd/ccd': ccdNo, 'ccd/ccrc': `${SH}${FX_REDACT}\n`, 'ccd/sibling': `${SH}${ll(FX_REDACT)}` });
+    expect(logLineRedactors(copy).map((s) => s.name)).toEqual(['ccd/ccrc#fx_redact']);
+    const edited = tree({ 'ccd/ccd': ccdNo, 'ccd/ccrc': `${SH}${FX_REDACT}\n`, 'ccd/sibling': `${SH}${ll(FX_REDACT.replace('${1:-}', '${1-}'))}` });
+    expect(logLineRedactors(edited).map((s) => s.name)).toEqual(['ccd/ccrc#fx_redact', 'ccd/sibling#fx_redact']);
+  });
+
   it('REAL: reported by name (2 at base, `ccd/ccrc#_upd_redact` and `ccd/ccd-update-sync#redact`; C5i takes it to 1)', () => {
     const sites = logLineRedactors();
     show('logLineRedactors', sites);
