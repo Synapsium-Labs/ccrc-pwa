@@ -12,7 +12,8 @@
 // why this flow is three existing calls rather than one route.
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import type { useProjectedHome } from './useProjectedHome';
-import { ApiError, apiErrorText } from '../lib/api';
+import { ApiError } from '../lib/apiError';
+import { apiErrorText } from '../lib/refusalWords';
 import { presenceOf } from './presence';
 
 /** D-291: how long the sheet waits for the freshly created session to
