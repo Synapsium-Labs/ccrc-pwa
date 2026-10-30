@@ -181,7 +181,9 @@ export interface CollectJob { readonly id: string; readonly epoch: number }
 export interface CollectHeld { readonly kind: 'held'; readonly why: CollectHoldWhy; readonly detail: string }
 export type CollectHoldRead = { readonly kind: 'clear' } | CollectHeld;
 
-/** Why a job that asked the box for observation 2 composed nothing. */
+/** Why a job that asked the box for observation 2 composed nothing.
+ *  `presence` (here and in `CollectJobOutcome`'s `not-asked` arm) means a VIEWER: the id is open on a screen
+ *  (`server/src/viewer.ts`). The persisted word stays `presence`; the TS identifiers that read it say viewer. */
 export type CollectAnsweredWhy =
   | 'stale' | 'not-collectable' | 'not-licensed' | 'paused' | 'switch-flip' | 'epoch-changed' | 'unknown-fleet'
   | 'safety-stopped' | 'pair-cleared' | 'presence' | 'caps';

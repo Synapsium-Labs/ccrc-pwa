@@ -395,11 +395,8 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     const sites = viewerWordsAsPresence();
     const byName = countBy(sites, (s) => s.kind);
     console.log(`census-w7 viewerWordsAsPresence: ${sites.length} ${JSON.stringify(byName)}`);
-    held('viewerWordsAsPresence', sites, 49);
-    expect(byName).toEqual({
-      presenceHeldSince: 7, lastPresenceWallAt: 7, lastPresenceDeferredAt: 7, firstPresenceDeferredAt: 9, collectAfterPresence: 4,
-      presenceSince: 5, childReclaimPresenceWithin: 3, CollectPresence: 2, CHILD_RECLAIM_PRESENCE_GAP_PASSES: 2, CHILD_RECLAIM_PRESENCE_DEFERS: 3,
-    });
+    held('viewerWordsAsPresence', sites, 4);
+    expect(byName).toEqual({ collectAfterPresence: 4 });
   });
 });
 

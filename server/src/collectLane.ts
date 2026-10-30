@@ -747,7 +747,7 @@ export interface CollectDieStreak {
   readonly word: CollectDieWord; readonly sinceMono: number; readonly lastMono: number;
 }
 /** The presence defer's continuity and count: deferred `count` times, first at `sinceMono`, last at `atMono`. */
-export interface CollectPresence { readonly count: number; readonly sinceMono: number; readonly atMono: number }
+export interface CollectViewer { readonly count: number; readonly sinceMono: number; readonly atMono: number }
 /** The LATEST document's own evidence (spec §5.10): its witness's run and its leaf (ccd's path, display only). A
  *  collectable, verdict or unmeasured document brings its own; no document and an unreadable one bring none. */
 export interface CollectEvidence { readonly runId: number | null; readonly leaf: string | null }
@@ -790,7 +790,7 @@ export interface CollectEntry {
   readonly streak: CollectStreak | null;
   readonly die: CollectDieStreak | null;
   readonly held: CollectHoldClock | null;
-  readonly presence: CollectPresence | null;
+  readonly presence: CollectViewer | null;
   readonly evidence: CollectEvidence;
   readonly feedEpisode: string | null;
   readonly feedOutlivesObservations: boolean;
@@ -1176,7 +1176,7 @@ export interface CollectAttentionView {
   /** A STANDING deferral (`in-use`, `registered`, `in-progress`): its word, ccd's latest detail, and since when that
    *  word has answered with no break. Null when none stands. */
   readonly deferral: { readonly word: string; readonly detail: string; readonly since: number } | null;
-  readonly presenceSince: number | null;
+  readonly viewerSince: number | null;
   readonly hold: { readonly why: CollectHoldWhy; readonly since: number } | null;
   readonly changedRecentlySince: number | null;
   /** A recognised arm-1 die other than `flock-unavailable`, recurring for the ceiling, or null. */
@@ -1196,13 +1196,13 @@ const collectRunView = (r: CollectRun, token: CollectRunToken): CollectRunView =
  *  the runs are projected whole; the evidence is the latest document's. */
 export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
   let deferral: CollectAttentionView['deferral'] = null;
-  let presenceSince: number | null = null;
+  let viewerSince: number | null = null;
   let hold: CollectAttentionView['hold'] = null;
   let changedRecentlySince: number | null = null;
   let die: CollectAttentionView['die'] = null;
   for (const c of collectAttentionCauses(e)) {
     if (c.kind === 'held') hold = { why: c.why, since: c.sinceMono };
-    else if (c.kind === 'presence') presenceSince = c.sinceMono;
+    else if (c.kind === 'presence') viewerSince = c.sinceMono;
     else if (c.kind === 'die') die = { word: c.word, since: c.sinceMono };
     else if (!('sinceMono' in c)) continue;   // the three runs, projected whole below
     else if (c.kind === COLLECT_CHANGED_RECENTLY) changedRecentlySince = c.sinceMono;
@@ -1212,7 +1212,7 @@ export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
     witnessRun: e.evidence.runId, leaf: e.evidence.leaf,
     failing: collectRunView(e.failing, 'failing'), verbFailed: collectRunView(e.verbFailed, 'verb-failed'),
     terminal: collectRunView(e.terminal, 'terminal'),
-    deferral, presenceSince, hold, changedRecentlySince, die, wouldCollect: collectWouldCollectStands(e),
+    deferral, viewerSince, hold, changedRecentlySince, die, wouldCollect: collectWouldCollectStands(e),
   };
 }
 
@@ -1480,7 +1480,7 @@ function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boo
         + `the temp-root collector treats ${tmp} as that workspace’s and leaves it alone. ccrc asks again later; this `
         + 'line ends once the id is free.' };
   }
-  if (v.presenceSince !== null) {
+  if (v.viewerSince !== null) {
     return { word: 'presence', many: COLLECT_ITEM_MANY.presence,
       sentence: `This id has been open on a screen for at least ${CEILING_MIN} minutes, so the temp-root collector `
         + `leaves ${tmp} alone. It never collects a temp root while its id is open, and asks again once it is not.` };

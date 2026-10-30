@@ -35,7 +35,7 @@ const runOf = (cls: string, word: string, n: number, stuck = false, detail: stri
   ({ tier: childReclaimTierFrom(cls, n, stuck), word, detail });
 const view = (over: Partial<CollectAttentionView> = {}): CollectAttentionView => ({
   witnessRun: 41, leaf: '/h/tmp-root/demo-a', failing: NO_RUN, verbFailed: NO_RUN, terminal: NO_RUN, deferral: null,
-  presenceSince: null, hold: null, changedRecentlySince: null, die: null, wouldCollect: false, ...over,
+  viewerSince: null, hold: null, changedRecentlySince: null, die: null, wouldCollect: false, ...over,
 });
 const BOX: CollectBoxFacts = {
   unmeasured: [], refusedNames: 0, boxProbes: new Map(), passAudits: new Map(), flockLatched: false, unsettled: new Map(),
@@ -59,7 +59,7 @@ describe('collectAttentionItems — one item per id, each at its own threshold (
     const cases: readonly (readonly [string, CollectAttentionView])[] = [
       ['registered', view({ deferral: { word: 'registered', detail: '', since: 0 } })],
       ['in-progress', view({ deferral: { word: 'in-progress', detail: '', since: 0 } })],
-      ['presence', view({ presenceSince: 0 })],
+      ['presence', view({ viewerSince: 0 })],
       ['held', view({ hold: { why: 'run-open', since: 0 } })],
     ];
     for (const [word, v] of cases) expect(one(v)?.word, word).toBe(word);
@@ -382,8 +382,8 @@ describe('collectAttentionViewOf — Task 4’s causes decide what stands, first
     expect(collectAttentionViewOf(held(CEIL)).hold).toEqual({ why: 'run-open', since: 0 });
     const present = (gap: number): CollectEntry =>
       collectAfterPresence(collectAfterPresence(collectFirstSighting(1), step(0, 2)), step(gap, 3));
-    expect(collectAttentionViewOf(present(CEIL - 1)).presenceSince, 'presence short').toBeNull();
-    expect(collectAttentionViewOf(present(CEIL)).presenceSince).toBe(0);
+    expect(collectAttentionViewOf(present(CEIL - 1)).viewerSince, 'presence short').toBeNull();
+    expect(collectAttentionViewOf(present(CEIL)).viewerSince).toBe(0);
   });
 
   it('a pre-lock die recurring for a ceiling, first answer to latest, stands; a shorter recurrence does not', () => {
