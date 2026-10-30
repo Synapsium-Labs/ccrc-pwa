@@ -27,9 +27,9 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–6; accepted on `c8b56b8e` after review run 1141 and merged through the native queue as `7e38b5f4` (Decisions, 2026-10-28 19:12); D-6336–D-6345; live proof complete 2026-10-29 (Decisions, 2026-10-29 06:01) |
 | 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | #1383 | ruled 2026-10-21; the fix shipped from outside the programme in #1383 (`5a009277`, 2026-10-25); the cadence-cost measurement is left (Decisions, 2026-10-29 09:41) |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); run 1189 (the run's wave 9) dispatched 2026-10-29, block 7433–7442, with the coordinator's rulings on where the plan had drifted from `main` (Decisions, 2026-10-29 09:41); PR #1884; fix round 1 after review 1212; accepted on `5aa30a97` after review run 1216 and merged through the native queue as `f6b67a5b` (Decisions, 2026-10-29 17:38); D-7433–D-7442 and D-7464–D-7467 defined after the merge; deploy, arming (the operator's) and the live proof wait (Next-wave brief) |
-| 4b | 3, the console half | the radar's server reader, its wire field `FleetSession.landing` and the PWA predicted-conflict chip (moved out of wave 3b, D-4329) | server, pwa | waves 4 and 4c | plan #1906 | planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4b-radar-console.md`, D-7477 to D-7484; Decisions, 2026-10-29 18:40); run 1224 (the run's wave 12) opened and dispatched after wave 4c merged, before run 1219 closed (Decisions, 2026-10-29 22:55) |
+| 4b | 3, the console half | the radar's server reader, its wire field `FleetSession.landing` and the PWA predicted-conflict chip (moved out of wave 3b, D-4329) | server, pwa | waves 4 and 4c | #1923 (plan #1906) | planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4b-radar-console.md`, D-7477 to D-7484; Decisions, 2026-10-29 18:40); run 1224 (the run's wave 12) opened and dispatched after wave 4c merged, before run 1219 closed (Decisions, 2026-10-29 22:55); sent back once after review run 1225, accepted on `38bcaf1e` after review run 1226, and merged through the native queue as `85d61aa8` (Decisions, 2026-10-30 02:32); D-7514–D-7523 defined in its departures note, and D-7526 after the merge |
 | 4c | 4, hardening | the lineage hardening carried from wave 4's reviews (Carried constraints), kept apart from 4b so that no PR mixes an acceptance change with a display change (D-4329's reason) | server, skills | wave 4 | #1911 | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed, under the title "wave 4b: lineage hardening" given before this row was split from 4b (Decisions, 2026-10-29 17:38); planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4c-lineage-hardening.md`, D-7469 to D-7476); the coordinator-side re-proof moved to the operator (Decisions, 2026-10-29 18:40); accepted on `0a9ff1b2` after review run 1220, then one clean merge of `main` reviewed alone (run 1223), and merged through the native queue as `9ec4fc54` (Decisions, 2026-10-29 22:55); D-7486–D-7495 defined after the merge |
-| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
+| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan; run 1227 (the run's wave 13) opened 2026-10-30, before run 1224 closed (Decisions, 2026-10-30 02:32) |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -1328,6 +1328,36 @@ carries it (spec §5.1, amended 2026-09-24).
     required-checks gate exited `0`. PR #1911 was enqueued at `390445dc` and merged as `9ec4fc54`, with no dequeue.
   - **Wave 4b** is run 1224 (the run's wave 12). It was opened before run 1219 closed, so the programme keeps an open
     run, and dispatched with an execution block minted then and the `freshWithin` row added to its Task 1.
+- **2026-10-30 02:32 — wave 4b sent back once, accepted and merged; wave 5 opened.**
+  - **Review run 1225** (wave 4b, `38409807`) found nothing critical or important after refutation. All 23 plan
+    mutation rows were red, and every touched suite, every guard the plan names and all three typechecks were green, the
+    full PWA suite included; the full server suite is left to the merge queue. But the wave's one promise is that the
+    chip's words are true, and the review measured a landing past its window on the wire. While the registry
+    could not be listed, the `/ws/fleet` cold frame and `GET /api/fleet`'s degraded arm sent the watcher's last fleet,
+    aged landing and all. And the chip could show such a landing as fresh for one render, the first after a long gap. **Sent
+    back once (fix round 1):**
+    - **R1:** one helper in `fleet.ts`, `dropStaleLandings`, drops every landing `freshWithin` no longer accepts from
+      the four sends that do not assemble afresh: the cold frame, the degraded arm, that arm's fallback to the saved
+      snapshot, and the remote disconnected arm. `assembleFleet` keeps its own check.
+    - **R2:** the chip ages by the later of its stored clock and the render's own.
+    - **R3:** three things the review's own mutants showed unpinned are now pinned: the tick's `null` hand-off for an
+      unlistable registry, the radar lane's 60 s cadence and its skip-while-in-flight rule, and `readRegular`'s check of
+      the bytes it read.
+    - **R4:** a PR the sweep is backing off on (`unknown`, `unchecked`) keeps its number and matches nothing, so its
+      sessions' landings are absent while the sweep fails. That fails closed and stays, and the text now says so.
+    - **R5 and R6:** the PR body discloses three more decisions against the plan's text, and the departures note
+      defines D-7516 to D-7523.
+    - Review 1225's F5, F6, F9 and the smaller gaps of its F4 are carried to wave 5 (Carried constraints). Its F8, four
+      intermediate commits red on one census, is accepted, because the merge is a squash.
+  - **Review run 1226** (the round, `38bcaf1e`) found nothing critical or important. No send was missed, the new tests were
+    red before the fix, all six mutants were red as predicted, and the departures matched the rulings byte for byte. **Accepted, with no
+    second round.** Its F1 and F2 are text, carried to wave 5. Its F3 is the worker's one departure, D-7526:
+    `dropStaleLandings` returns its input when nothing is stale, because the cold frame's cache is keyed on the array.
+    It is defined in the departures note after the merge.
+  - **Landed.** The verdict on the new head read `ROUTE Q method=squash admin=never strict=no`, run on its own, and the
+    required-checks gate exited `0`. PR #1923 was enqueued at `38bcaf1e` and merged as `85d61aa8`, with no dequeue.
+  - **Wave 5** is run 1227 (the run's wave 13). It was opened as planned before run 1224 closed, so the programme keeps
+    an open run.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1681,6 +1711,32 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
     of the same name could hide a real failure. But it leaves a main-red fixed on `main` no route through a rerun. Decide
     between judging the newest run per name, app and workflow, and keeping the rule while the skill names the new-head
     route.
+- **From wave 4b's reviews (1225 and 1226), carried to wave 5.** None fails on a healthy box at today's scale: each
+  needs an unreadable file, a hostile listing or a much larger fleet, or is text or a gap in a test or guard.
+  - **A row whose `.project` the server cannot read** is filed under its own id, so its branch is absent from its
+    project's rows while the radar gives that branch's head `id:null`. `unbound` can then be missed for that head, and
+    the project's landings can read clean. It needs an unreadable `.project` (review 1225, F5).
+  - **The chip's sentence** has no length cap: ten heads of twenty 300-character paths measured a 334,403-character
+    accessible name. "(list cut)" names three different cuts, and the partial clauses name no PR or project (F6).
+  - **Hardening at scale and against a hostile `FleetIO`** (review 1225, F9). Only the first needs a listing a real
+    `readdir` cannot return; the rest are scale and fault cases:
+    - the radar's reads apply no `isSafeProjectSegment` to the listing;
+    - a newline in a project name forges a second log line;
+    - the per-project fan-out is unbounded;
+    - the deadline covers the reads only, so a hung local listing never settles, and an abandoned pass released
+      later overwrites a newer map with an empty one;
+    - a thrown listing warns on every pass.
+  - **The smaller gaps of review 1225's F4:**
+    - no case checks that the chip sits after the hot-files strip;
+    - one test's title names the broadcast but asserts only `currentLandings()`;
+    - `core-vocab`'s D-7514 scan skips a reader file that no longer exists, and does not see a server reader's
+      `new Date(`;
+    - no guard pins that `landingOf` is the PWA's one reader.
+  - **Two comments still say the cold frame is what the watcher last broadcast:** `server.ts`'s comment above the cold frame
+    and `watch.ts`'s `currentFleet` docstring. Since fix round 1, a cold frame past the window drops the landing, and
+    the next tick that can list the registry corrects it. Correct both (review 1226, F1).
+  - **The G6 case's title says "re-aged"**, but its second tick runs inside the window, so it pins the hand-off and
+    the kept map only. Retitle it (review 1226, F2).
 - **From review 1222 (the retire-verdicts fix, D-7496), for the next wave that edits that test.** No present failure.
   - The guard compares the extracted `ccd/lib` names with the base's, never their contents; compare blob ids.
   - The extraction drops each entry's mode, so a symlink or an executable library would extract as a plain file.
@@ -1696,8 +1752,8 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
 
 ## Next-wave brief
 
-Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4 and 4c are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
-#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
+Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c and 4b are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
+#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
 it stays on by the operator's ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose
 reason is `merged` reads `landed` (Decisions, 2026-10-21 14:49 and 19:17).
 
@@ -1743,10 +1799,16 @@ freshness rule is one predicate (`freshWithin`); the dequeue brief prints a head
 names its base before a PR exists. It ships with the next release: the skill sentence through ccrc's updater, skills
 before the server, and the rest with the server. Nothing in it needs arming, and `lineage=on` stays the operator's.
 
-**Wave 4b is dispatched** (Decisions, 2026-10-29 22:55), with the `freshWithin` single-definition row added to its
-Task 1. Its deploy and live read come after its merge (its plan's Task 4 Step 4).
+**Wave 4b is merged** (#1923 `85d61aa8`; Decisions, 2026-10-30 02:32). The server reads the radar's probe for each
+project a fleet session belongs to. A session whose current PR matches a head the radar measured, in a probe within its
+window, carries `FleetSession.landing`, and the PWA shows a read-only predicted-conflict chip. No send carries a landing
+past its window, and the chip ages a frame it already holds.
+- **Deploy.** ccrc's updater carries the server and the PWA. The order of the two boxes does not matter, because the
+  wave reads files wave 3b already writes.
+- **The live read** (plan Task 4 Step 4) is the coordinator's, read-only, once a project has a conf: `GET /api/fleet`'s
+  `landing` for that project's bound sessions, and the chip. The ledger then records the release, the rollout date
+  (which starts §10's stage 3 clock for the operator's view only, D-7483) and the first fresh landing seen.
 
 **Waiting on the operator:** the coordinator-side re-proof's stopping line (D-7472).
 
-**Wave 5** is planned once wave 4b has landed what it reads. It takes the items carried from wave 4c (Carried
-constraints).
+**Wave 5** is run 1227, to plan. It takes the items carried from waves 4c and 4b (Carried constraints).
