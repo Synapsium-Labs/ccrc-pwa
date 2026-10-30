@@ -908,6 +908,40 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     expect(existsSync(path.join(b.tools, 'chrome', NEW.chrome)), 'the first sync\'s Chrome is pruned, so a Chrome read once at start would be gone').toBe(false);
   }, 180_000);
 
+  it('a run\'s and an install\'s PATH are the set current when the spec is built: a node change after it leaves the spec\'s node, npm and npx the old ones', async () => {
+    const b = makeBox();
+    const node2 = '22.2.0';
+    const tar = nodeTarball(mkTmp('ccrc-tb-tools-node2-'), node2, W.log);
+    W.dl.files.set(`/dist/v${node2}/node-v${node2}-linux-x64.tar.xz`, tar);
+    W.dl.files.set(`/dist/v${node2}/SHASUMS256.txt`, Buffer.from(`${sha256(tar)}  node-v${node2}-linux-x64.tar.xz\n`));
+    const d = driver(b);
+    // The entry point's service and the settings it hands buildRunSpec and buildInstallSpec.
+    const svc = serviceFor(cfgFor(b), path.join(b.tools, 'release', 'installed'), () => undefined);
+    const settingsOf = (): SpecSettings => (svc as unknown as { d: { settings: SpecSettings } }).d.settings;
+    const firstOf = (env: readonly (readonly [string, string])[]): string => (env.find(([k]) => k === 'PATH')?.[1] ?? '').split(':')[0]!;
+    const runPath = (): string => { const r = buildRunSpec(SPEC_SUBMIT, SPEC_ROW, 1, settingsOf(), '/c'); if (!r.ok) throw new Error(r.reason); return firstOf(r.spec.env); };
+    const installPath = (): string => firstOf(buildInstallSpec('k1', 'server', [], [], settingsOf()).env);
+    await d.t.request(frameOf(BOOT_TAG));
+    expect(report(b).result).toBe('ok');
+    const nodeAt = (v: string): string => realpathSync(path.join(b.tools, 'node', v, 'bin', 'node'));
+    // The prepare and the install start now, under the first sync's set.
+    const [run1, install1] = [runPath(), installPath()];
+    expect(realpathSync(path.join(run1, 'node'))).toBe(nodeAt(NEW.node));
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, node: node2 }));
+    expect(report(b)).toMatchObject({ result: 'ok', nodeChanged: true });
+    expect(realpathSync(path.join(b.tools, 'current', 'node')), 'current names the new node').toBe(nodeAt(node2));
+    // The specs built before the sync still name the old set's node, npm and npx: their PATH entry is no link the
+    // sync switched.
+    for (const first of [run1, install1]) {
+      expect(realpathSync(path.join(first, 'node'))).toBe(nodeAt(NEW.node));
+      expect(path.isAbsolute(first) && !first.split(path.sep).includes('current'), first).toBe(true);
+      for (const t of ['npm', 'npx']) expect(existsSync(path.join(first, t)), `${first}/${t}`).toBe(true);
+    }
+    // A prepare that starts after the sync gets the new set.
+    expect(realpathSync(path.join(runPath(), 'node'))).toBe(nodeAt(node2));
+    expect(realpathSync(path.join(installPath(), 'node'))).toBe(nodeAt(node2));
+  }, 180_000);
+
   it('a node change queues the pristine rebuilds at once (one tick of the service\'s timer work); a sync with the same node does not', async () => {
     const b = makeBox();
     const d = driver(b);
