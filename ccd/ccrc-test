@@ -2,7 +2,7 @@
 # ccrc-test — `ccrc test`: run one test or typecheck command inside the fleet's
 # test slice, behind the fleet-wide admission queue (D-7298).
 #
-#   ccrc test [--heavy|--light] [--] <command> [<arg>...]   # --light only confirms a light reading
+#   ccrc test [--local|--remote] [--heavy|--light] [--] <command> [<arg>...]   # --light only confirms a light reading
 #   ccrc test --classify [--] <command> [<arg>...]   # prints heavy or light
 #   ccrc test --classify-shell [--] '<command line>'  # heavy, wrapped (a systemd-run of one's own around a test) or light
 #   ccrc test --status                               # the slice and the queue, one line
@@ -80,10 +80,44 @@
 # cgexec prefixes, find -exec, a python os.system, an npm script that wraps
 # the suite.
 #
-# EXIT. The command's own exit code. This wrapper refuses only a usage error,
-# exit 2 (ccrc's house convention), and a ccd/ccrc it cannot load beside it,
-# exit 1, each with one `ccrc test:` line on stderr; the command never ran
-# when either is printed. A slice or a queue that
+# THE TEST BOX (D-7410; test box spec §2.4, §2.5). With the switch marker in
+# the registry and CCRC_TESTBOX_URL set (the fleet host's test box settings,
+# read through ccrc's one reader by ccd/testbox-knobs), a run goes to the test
+# box: the client (agent/dist/agent/src/testbox/client.js, run with the fleet
+# host's node) checks spec §2.4's rows in shared/testbox.ts TESTBOX_FALLBACK's
+# order, pushes the snapshot (ccd/testbox-snap), submits the command and
+# streams its output back; the summary's last line is `ran on: test box`. A
+# row that fails prints `test box: <reason>` first and runs TODAY'S LOCAL PATH
+# UNCHANGED (the slice and the queue below), whose last line is then `ran on:
+# local (fallback: <reason>)`; a fallback in a package with no node_modules
+# first runs `npm ci` there through this wrapper (the slice and the queue), or,
+# with CCRC_TESTBOX_FALLBACK_INSTALL=refuse, refuses. `--local` forces the local
+# path and reads nothing of the test box; `--remote` asks for the box alone:
+# over the budget it refuses (EXIT), and every other row falls back as for a
+# bare run. The package is the first path segment of the cwd under the
+# repository root (D-7417). With the marker absent and no `--remote`, or with
+# CCRC_TESTBOX_URL unset, nothing of the test box runs, is read or is written:
+# the switch off is today, byte for byte (server/test/testbox-pins.test.ts).
+#
+# THE RUNS LOG (D-7445). When CCRC_TESTBOX_URL is set and the marker is present
+# or `--remote` was given, this wrapper, its one writer, appends exactly one
+# shared/testbox.ts RUNS_LOG_LINE to $REG/testbox-runs/<UTC date>.log as its
+# last act before it exits: `remote` with `-`, `fallback` with the row's id and
+# the local run's exit, or `refused` with the row's id. One printf builtin to a
+# file opened for append, so a line is never interleaved and the append forks
+# nothing; the directory is made 0700 on first use, and when the append made
+# today's file, the day files before yesterday are removed by name.
+#
+# EXIT. The command's own exit code, wherever it ran: the box's run's, and on
+# every fallback the local run's, so a counted exit reads a fallback as the run
+# it was. This wrapper refuses only a usage error, exit 2 (ccrc's house
+# convention), and a ccd/ccrc it cannot load beside it, exit 1, each with one
+# `ccrc test:` line on stderr; and exit 75 (`EX_TEMPFAIL`, D-7417) is reserved
+# for "refused, nothing ran", from exactly three refusals of the test box arm:
+# an explicit `--remote` over the budget, CCRC_TESTBOX_FALLBACK_INSTALL=refuse
+# on a fallback with no local node_modules, and CCRC_TESTBOX_LOST_RUN=fail when
+# the box was lost before any output came. The command never ran when any of
+# them is printed. A slice or a queue that
 # cannot be used degrades the run, with a WARN line, and never refuses it.
 set -uo pipefail
 
@@ -653,10 +687,99 @@ _tstatus() {
   echo "$line"; return "$rc"
 }
 
+# ── the test box arm (THE TEST BOX and THE RUNS LOG above) ──────────────
+REG="$HOME/.cc-sessions"
+TB_RUNS="$REG/testbox-runs"
+TB_CLIENT="${TEST_HERE%/*}/agent/dist/agent/src/testbox/client.js"   # the release tree's, beside ccd/ (no `..`: ccd/ may be a link)
+TB_LIVE=0 TB_LOG=0 TB_ID="" TB_REASON="" TB_CHILD="" TB_PKG="" TB_PKGDIR=""
+_tb_runs_log() {   # <outcome> <TestboxFallbackId or -> <exit>: the runs log's one line, once per call
+  [ "$TB_LOG" = 1 ] || return 0
+  TB_LOG=0
+  local now yday f old day new=0
+  TZ=UTC0 printf -v now '%(%Y-%m-%dT%H:%M:%SZ)T' -1
+  [ -d "$TB_RUNS" ] || mkdir -p -m 700 -- "$TB_RUNS" 2>/dev/null || return 0
+  f="$TB_RUNS/${now%%T*}.log"
+  [ -e "$f" ] || new=1
+  { printf '%s\t%s\t%s\t%s\n' "$now" "$1" "$2" "$3" >> "$f"; } 2>/dev/null || return 0
+  [ "$new" = 1 ] || return 0
+  # Today's file is new: the day files before yesterday go, by name (a glob over the dated names, no find).
+  TZ=UTC0 printf -v yday '%(%Y-%m-%d)T' "$(( ${EPOCHSECONDS:-$(date +%s)} - 86400 ))"
+  for old in "$TB_RUNS"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log; do
+    [ -e "$old" ] || continue
+    day="${old##*/}"; day="${day%.log}"
+    if [[ "$day" < "$yday" ]]; then rm -f -- "$old"; fi
+  done
+}
+_tb_refused() { _tb_runs_log refused "$1" 75; exit 75; }   # <TestboxFallbackId>: one of the three refusals (EXIT); nothing ran
+_tb_package() {   # -> TB_PKG and TB_PKGDIR: the first path segment of the cwd under the repository root (D-7417)
+  local out prefix=""
+  TB_PKG="" TB_PKGDIR=""
+  out=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    git rev-parse --show-toplevel --show-prefix 2>/dev/null) || return 0
+  [[ "$out" != *$'\n'* ]] || prefix="${out#*$'\n'}"
+  TB_PKG="${prefix%%/*}"
+  [ -z "$TB_PKG" ] || TB_PKGDIR="${out%%$'\n'*}/$TB_PKG"
+}
+_tb_fallback() {   # <TestboxFallbackId> <its `test box: …` line> [printed]: back to today's local path, or a refusal
+  TB_ID="$1" TB_REASON="${2#test box: }"
+  [ "${3:-}" = printed ] || printf '%s\n' "$2" >&2
+  _tb_package
+  [ -n "$TB_PKGDIR" ] && [ -f "$TB_PKGDIR/package.json" ] && [ ! -e "$TB_PKGDIR/node_modules" ] || return 0
+  if [ "${TBK[CCRC_TESTBOX_FALLBACK_INSTALL]:-}" = refuse ]; then
+    printf '%s; no local deps for %s\n' "$2" "$TB_PKG" >&2
+    _tb_refused "$1"
+  fi
+  printf '%s; installing %s locally\n' "$2" "$TB_PKG" >&2
+  ( cd "$TB_PKGDIR" && bash "$TEST_HERE/ccrc-test" --local --heavy -- npm ci ) \
+    || echo "$PROG: WARN: npm ci in $TB_PKG failed; the run goes ahead locally" >&2
+}
+_tb_end() {   # <exit status>: a fallback's summary line and its runs log line, the last acts before the exit
+  [ -n "$TB_ID" ] || return 0
+  printf 'ran on: local (fallback: %s)\n' "$TB_REASON" >&2
+  _tb_runs_log fallback "$TB_ID" "$1"
+}
+_tb_arm() {   # the remote decision: exits after a run on the box or a refusal; returns to today's local path
+  # shellcheck source=testbox-knobs
+  { . "$TEST_HERE/testbox-knobs" && _tb_load host; } 2>/dev/null || return 0
+  if [ -z "${TBK[CCRC_TESTBOX_URL]:-}" ]; then
+    [ "$where" != remote ] || _tb_fallback off "test box: off"
+    return 0
+  fi
+  TB_LOG=1
+  if [ "$TB_LIVE" != 1 ]; then _tb_fallback off "test box: off"; return 0; fi
+  command -v node >/dev/null 2>&1 || { _tb_fallback unreachable "test box: unreachable (no node on PATH)"; return 0; }
+  [ -f "$TB_CLIENT" ] || { _tb_fallback unreachable "test box: unreachable (no test box client beside this wrapper)"; return 0; }
+  local vdir v1="" v2="" v3="" rc=0
+  vdir=$(mktemp -d "${TMPDIR:-/tmp}/ccrc-test-box.XXXXXX" 2>/dev/null) \
+    || { _tb_fallback unreachable "test box: unreachable (no temporary directory)"; return 0; }
+  local -a cargs=(run --verdict "$vdir/verdict")
+  [ "$where" != remote ] || cargs+=(--explicit)
+  # A signal is passed to the client, which cancels the box's run (SIGNALS below holds for the local path).
+  node "$TB_CLIENT" "${cargs[@]}" -- "${cmd[@]}" <&0 &
+  TB_CHILD=$!
+  trap 'kill -INT "$TB_CHILD" 2>/dev/null' INT
+  trap 'kill -TERM "$TB_CHILD" 2>/dev/null' TERM
+  trap 'kill -HUP "$TB_CHILD" 2>/dev/null' HUP
+  while :; do
+    { wait "$TB_CHILD"; } 2>/dev/null; rc=$?
+    kill -0 "$TB_CHILD" 2>/dev/null || break
+  done
+  trap - INT TERM HUP
+  [ ! -f "$vdir/verdict" ] || IFS=$'\t' read -r v1 v2 v3 < "$vdir/verdict"
+  rm -rf -- "$vdir"
+  case "$v1" in
+    remote) [[ "$v2" =~ ^[0-9]+$ ]] && rc="$v2"; _tb_runs_log remote - "$rc"; exit "$rc" ;;
+    refused) _tb_refused "$v2" ;;
+    fallback) _tb_fallback "$v2" "$v3" printed ;;
+    *) _tb_fallback unreachable "test box: unreachable (the client ended with exit $rc and no verdict)" ;;
+  esac
+}
+
 # ── main ──────────────────────────────────────────────────────────────────
-mode=run force=""
+mode=run force="" where=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --local|--remote) [ -z "$where" ] || [ "$where" = "${1#--}" ] || _tusage "--local and --remote together"; where="${1#--}"; shift ;;
     --heavy) force=heavy; shift ;;
     --light) force=light; shift ;;
     --classify) mode=classify; shift ;;
@@ -699,6 +822,10 @@ fi
 if [ "$mode" = classify ]; then echo "$force"; exit 0; fi
 
 if _tinside; then exec "${cmd[@]}"; fi
+if [ "$where" != local ]; then
+  [ -e "$REG/testbox-remote-live" ] && TB_LIVE=1
+  if [ "$TB_LIVE" = 1 ] || [ "$where" = remote ]; then _tb_arm; fi
+fi
 summary="${cmd[*]}"; summary="${summary//$'\n'/ }"; summary="${summary:0:160}"
 contained=1
 if [ "${CCD_OS:-linux}" = darwin ]; then
@@ -728,7 +855,7 @@ _tonsig() {   # <exit code>
   _tstop_run
   [ -n "$child" ] || { _trelease; exit "$1"; }
 }
-trap '_tstop_run; _trelease' EXIT
+trap 'TB_RC=$?; _tstop_run; _trelease; _tb_end "$TB_RC"' EXIT
 trap '_tonsig 143' TERM
 trap '_tonsig 130' INT
 trap '_tonsig 129' HUP
