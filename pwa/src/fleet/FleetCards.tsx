@@ -95,8 +95,10 @@ export function FleetCards({ selectedId, onOpen }: {
   }, [fleetFrameSeen, pruneKey, updateRollup]);
   // D-6090: a card rolled up or out on its own must not move the one the operator is reading (`useHoldView`).
   const listRef = useRef<HTMLDivElement>(null);
-  // A folded card's height is its kept boxes (spec §2.3), which a stall boundary can change with no frame (Task G1b), so
-  // its part of the key counts them, by the composition the card itself draws (`cardBoxes`); an open card's is its rows.
+  // A stall boundary can change which boxes a folded card keeps (spec §2.3) with no frame (Task G1b), so its part of the
+  // key counts the kept boxes, by the composition the card itself draws (`cardBoxes`); an open card's is its rows. It counts
+  // what a BOUNDARY moves and nothing else: a frame that grows a kept box's tray, or the more-line from 0 to 1, with the
+  // same kept count grows the folded card with the key unchanged, as it did before G1b (review 1253 F1, left as it was).
   const holdKey = useMemo(() => {
     const groups = new Map(tree.map((g) => [g.project, g] as const));
     const kept = (p: string): number => {

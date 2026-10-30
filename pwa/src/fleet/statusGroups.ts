@@ -61,6 +61,7 @@ import {
 } from './programmeBoxes';
 import { coordinatorPresence } from './presence';
 import { operatorAsk } from './rollup';
+import { runLastMove } from './runWords';
 import { sortFleet } from './sortFleet';
 
 /** Why a Needs-you session needs you. `null` is "no field says", never a fifth reason. */
@@ -168,20 +169,33 @@ export interface StatusViewGroup {
   readonly held: boolean;
 }
 
+/** What a box's state reads besides the runs (Task G1c, D-7380; the same three inputs `cardBoxes` takes for a project card):
+ *  the instant it is read at, the stall watch's own quiet time (null when the runs frame carries none, so no box stalls,
+ *  D-7376) and the operator's pause (D-7373, the coord frame's). */
+export interface BoxClock {
+  readonly now: number;
+  readonly quietMs: number | null;
+  readonly paused: boolean;
+}
+
+/** No threshold and no pause: a view handed no clock reads every box moving. */
+const NO_CLOCK: BoxClock = { now: 0, quietMs: null, paused: false };
+
 const rowSession = (r: FleetRow): FleetSession | null => (r.kind === 'session' ? r.session : null);
 
 /** The Status view's groups, every one in the fixed order, an empty one kept with a count of 0 (the view decides
- *  whether to show it). `tree` is the fleet's cards (`fleetTree`); movement is not wired yet (Task G1), so no box reads
- *  stalled and Programmes is in the tree's order. `selectedId` is the session the operator has open: a member keeps its
+ *  whether to show it). `tree` is the fleet's cards (`fleetTree`). A box's move is its runs' (`runLastMove`) and its state
+ *  is `boxState`'s over `clock`, as on its project card (Task G1c, D-7380), so Programmes runs stalled first, then moving
+ *  and paused in the tree's card order, the longest quiet first; with no `clock` no box stalls or pauses. `selectedId` is the session the operator has open: a member keeps its
  *  place in its box's tray while open, by `foldChildren`'s own rule (G3's Step 0 ruling), and makes the box need nothing.
  *  `coordOf` and `frameSeen` are what the orphan marker reads (`orphanNote`): a coordinator they measure dead keeps none
  *  of its workers. */
 export function statusView(
   sessions: readonly FleetSession[], tree: readonly FleetTreeGroup[], acks: Acks, selectedId: string | null,
-  coordOf: (id: string) => FleetSession | null, frameSeen: boolean,
+  coordOf: (id: string) => FleetSession | null, frameSeen: boolean, clock: BoxClock = NO_CLOCK,
 ): StatusViewGroup[] {
   const cards = tree.map((g) => ({
-    project: g.project, runs: [...g.runs, ...g.claimed], prog: programmeBoxes(g.rows, g.runs, g.claimed, () => null, g.hues),
+    project: g.project, runs: [...g.runs, ...g.claimed], prog: programmeBoxes(g.rows, g.runs, g.claimed, runLastMove, g.hues),
   }));
   // Each box's members: its children on its own card, and its far workers, rows of other cards' `elsewhere`. Each is
   // read on the card that draws it, with the hue of the programme it works for. A spawn is no member: the Status view
@@ -213,7 +227,7 @@ export function statusView(
       hues: new Map(drawn.flatMap((m) => (m.hue === undefined ? [] : [[m.session.id, m.hue] as const]))),
       // A gone box's children are rows of their own, so only its coordinator's own ask makes it need you.
       state: boxState(view, gone.has(view.coordinatorId) ? operatorAsk(view.coordinator)
-        : boxNeeds(view) || mine.some((m) => operatorAsk(m.session)), 0, null, false),
+        : boxNeeds(view) || mine.some((m) => operatorAsk(m.session)), clock.now, clock.quietMs, clock.paused),
       gone: gone.has(view.coordinatorId),
     };
   })).sort(boxOrder);

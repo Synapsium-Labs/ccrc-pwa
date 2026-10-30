@@ -32,10 +32,23 @@
 // through `fleetTree`'s groups, the card the server placed it on, exactly as the project card reads them (D-5527), so
 // the two modes agree on them. Its orphan marker is the same `orphanNote`, given the card's runs too, but asked about
 // `keepers` (the coordinators of the boxes that keep their workers) where the project card passes its live rows. The
-// two modes differ there on purpose (D-7377 as amended): a dead claimant that is still a row of the worker's card leaves
-// the worker a lone row saying "coordinator gone" here, where project mode nests it under that coordinator and says
-// nothing; and a hibernated claimant's member carries no marker inside its box here (the box says hibernated), where
-// project mode marks one whose claimant is not on its card "coordinator hibernated".
+// two modes differ there on purpose (D-7377 as amended, R123): a dead claimant that is still a row of the worker's card
+// leaves the worker a lone row saying "coordinator gone" here, where project mode nests it under that coordinator and
+// says nothing; and NO row of this view carries "coordinator hibernated" for a claimant that heads a box here: the
+// hibernated box the view draws says it, so the marker is dropped from the members in its tray and, as ruled for review
+// 1239's C1, from the row outside any tray that `keepers` reaches too: a coordinator that is itself a worker of that
+// claimant's run on another card, drawn as its own box's head (pinned in status-programmes). An archived or released
+// worker of that run is a lone row whose line draws no coordinator marker either way. Project mode marks one whose
+// claimant is not on its card "coordinator hibernated". A row whose hibernated claimant is NOT drawn in this view still
+// gets the marker: that is a gap to raise, never a silent rule.
+//
+// MOVEMENT (Task G1c, D-7380): a box reads stalled or paused exactly as on its project card. `statusView` is handed the
+// card's own three inputs, the stall watch's quiet time (the store's `stallQuietMs`, null on an older server, D-7376), the
+// operator's pause (the coord frame's, D-7373) and a clock, and decides the state; this file only reads and passes them.
+// The clock is `useRollupClock`, `FleetCards`' own: its one timer wakes at the next instant a box crosses its threshold
+// (`nextStallBoundary`), so a box reads stalled at its boundary with no frame, and the view is handed the time read when
+// that boundary last moved (`boxNow`), so it is rebuilt only at a boundary or with a frame. No window is read here, so the
+// clock is given no sessions: the rollup's window ends would wake a view that has no rollup.
 //
 // PROJECT MODE places the shared `FleetCards`, the list Refined draws: its card heads hold the pool and add doors, its
 // Released fold holds archive-all, and the rollup's rules hold unchanged. A card mixes statuses, so there each row
@@ -62,6 +75,7 @@ import { FleetCards } from '../../fleet/FleetCards';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { useFleetFlows } from '../../fleet/FleetFlows';
 import { useFolded } from '../../fleet/foldState';
+import { markerState } from '../../fleet/coordWords';
 import { cardsOf, childRunContext, fleetTree, workingOn, type FleetTreeGroup } from '../../fleet/fleetTree';
 import { orphanNote } from '../../fleet/orphanWords';
 import { ProgrammeBox } from '../../fleet/ProgrammeBox';
@@ -71,8 +85,9 @@ import { SessionLine } from '../../fleet/SessionLine';
 import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
 import { OPEN_RUNS, openSession } from '../../fleet/openers';
 import {
-  statusGroupLabel, statusView, statusViewTotal, type StatusBox, type StatusGroupId, type StatusViewGroup,
+  statusGroupLabel, statusView, statusViewTotal, type BoxClock, type StatusBox, type StatusGroupId, type StatusViewGroup,
 } from '../../fleet/statusGroups';
+import { useRollupClock } from '../../fleet/useRollupClock';
 import { ackAll, acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
 import { useLocation } from '../../lib/router';
@@ -117,6 +132,9 @@ function rovingKey(e: KeyboardEvent<HTMLElement>, at: number, n: number, role: s
 
 /** The fold key of a status group. */
 const foldKey = (id: StatusGroupId): string => `status::${id}`;
+
+/** The view reads no rollup window, so its clock waits on no session. */
+const NO_SESSIONS: readonly FleetSession[] = [];
 
 export function FleetTable(): ReactNode {
   const [mode, setMode] = useState<GroupMode>(loadGroupMode);
@@ -192,6 +210,15 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const frameSeen = useStore((s) => s.fleetFrameSeen);
   const allRuns = useStore((s) => s.runs);
   const activeRuns = useMemo(() => allRuns.filter((r) => !isRunClosed(r)), [allRuns]);
+  // Task G1c (D-7380, D-7373, D-7376): the box clock, read as `FleetCards` reads it. `boxNow` is the time read when the
+  // clock's `next` last moved, so with the same runs, quiet time and pause no box crosses between two moves of it, and
+  // the groups below are rebuilt only at a boundary or with a frame.
+  const stallQuietMs = useStore((s) => s.stallQuietMs);
+  const coordPaused = useStore((s) => markerState(s.coord?.pause) === 'set');
+  const roll = useRollupClock(NO_SESSIONS, activeRuns, stallQuietMs, coordPaused);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
+  const boxNow = useMemo(() => roll.now, [roll.next, activeRuns, stallQuietMs, coordPaused]);
+  const clock = useMemo((): BoxClock => ({ now: boxNow, quietMs: stallQuietMs, paused: coordPaused }), [boxNow, stallQuietMs, coordPaused]);
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const flows = useFleetFlows();
   const [folded, toggleFold] = useFolded();
@@ -211,8 +238,8 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   // By id, once per fleet: what `sessions.find` answered, without a scan per row.
   const sessionById = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
   const lookup = useCallback((id: string): FleetSession | null => sessionById.get(id) ?? null, [sessionById]);
-  const groups = useMemo(() => statusView(sessions, treeGroups, acks, selectedId, lookup, frameSeen),
-    [sessions, treeGroups, acks, selectedId, lookup, frameSeen]);
+  const groups = useMemo(() => statusView(sessions, treeGroups, acks, selectedId, lookup, frameSeen, clock),
+    [sessions, treeGroups, acks, selectedId, lookup, frameSeen, clock]);
   // Read by key, never compared: the group a key names is the model's answer (instrument-shell's scan).
   const byId = new Map<StatusGroupId, StatusViewGroup>(groups.map((g) => [g.id, g] as const));
   // Where a worker's coordinator is drawn in this view: a box that keeps its workers. The orphan marker asks this in place
