@@ -87,7 +87,7 @@ const DOOR_ALLOWED: Record<string, readonly string[]> = {
   // D-5896: `NODE_ID_RE` from its L0 home, so the door imports nothing from `../coord/store.js`, and no entry allows it.
   '../../../shared/agent-protocol.js': ['NODE_ID_RE', 'isClaimCode'],
   '../../../shared/box-token.js': ['ClaimRefusal'],
-  '../coord/token.js': ['matchDigestSlots'],
+  './digestSlots.js': ['matchDigestSlots'],
   './policy.js': ['BURNED_CODES_KEPT', 'CLAIM_ALERT_EVERY_MS', 'MAX_PENDING', 'claimVerdict', 'codeExpiresAt', 'keepBurned',
     'ClaimDoorState', 'ClaimMatch'],
   // D-7505: the door takes nothing from `./files.js` (its mint comes through its options, `TokenStore#mintClaimCode`). The
@@ -509,7 +509,7 @@ describe('ClaimDoor', () => {
   it('door.ts imports an ALLOWLIST of names, so no import can persist a code (F6)', () => {
     const src = readFileSync(path.join(here, '..', 'src', 'token', 'door.ts'), 'utf8');
     expect(importsOf(src).map((i) => i.spec).sort(), 'the scan parsed the import statements of door.ts').toEqual(['../../../shared/agent-protocol.js',
-      '../../../shared/box-token.js', '../coord/token.js', './policy.js', 'node:crypto']);
+      '../../../shared/box-token.js', './digestSlots.js', './policy.js', 'node:crypto']);
     expect(doorImportViolations(src)).toEqual([]);
   });
 
