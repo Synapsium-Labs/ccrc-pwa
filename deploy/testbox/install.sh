@@ -56,7 +56,7 @@ refuse() { printf '%s: refused: %s; nothing was written\n' "$TBI_PROG" "$*" >&2;
 fail() { printf '%s: failed: %s\n' "$TBI_PROG" "$*" >&2; exit 1; }
 say() { printf '%s: %s\n' "$TBI_PROG" "$*" >&2; }
 _sys() { if [ -n "${TB_SYS:-}" ]; then "$TB_SYS" "$@"; else "$@"; fi; }
-_tbi_sha256() { local l; if command -v sha256sum >/dev/null 2>&1; then l=$(sha256sum -- "$1") || return 1; else l=$(shasum -a 256 -- "$1") || return 1; fi; printf '%s\n' "${l%% *}"; }
+_tbi_sha256() { local l; l=$(_plat_sha256 "$1") || return 1; printf '%s\n' "${l%% *}"; }   # ccd/ccrc's wrapper
 _tbi_git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY GIT_CONFIG_NOSYSTEM=1 git "$@"; }
 
 # ── the arguments ────────────────────────────────────────────────────────
@@ -94,8 +94,9 @@ if [ "${#TBK_WARN[@]}" -gt 0 ]; then
 fi
 k() { printf '%s' "${TBK[$1]}"; }
 
-( cd "$STAGING" && if command -v sha256sum >/dev/null 2>&1; then sha256sum -c --quiet MANIFEST; else shasum -a 256 -c --quiet MANIFEST; fi ) >/dev/null 2>&1 \
-  || refuse "the staging tree does not match its MANIFEST"
+# The staging tree's own per-file digests, through ccd/ccrc's platform wrapper (the check `_upd_fetch` makes after its
+# extraction): the first release is trusted on its transport checksum and this (D-7424).
+( cd "$STAGING" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"
 [[ $A_REL =~ $TBI_RE_TAG ]] || refuse "--release $A_REL is not a release tag"
 bj=$(cat -- "$STAGING/build.json" 2>/dev/null) || refuse "the staging tree has no build.json"
 [[ $bj =~ \"version\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] || refuse "build.json names no version"
@@ -139,7 +140,8 @@ done
 h=$(host_of "$(k CCRC_TESTBOX_REGISTRY_UPSTREAM)") || refuse "CCRC_TESTBOX_REGISTRY_UPSTREAM names no host"
 EGRESS+=("registry"$'\t'"$h")
 _tb_release_base || refuse "the release base: $TB_BOX_WHY"
-h=$(host_of "$CCRC_RELEASE_BASE_URL") || refuse "CCRC_RELEASE_BASE_URL names no host"
+# KNOB is the value `_tb_release_base` has just read from the box file in file mode (D-7457).
+h=$(host_of "$KNOB") || refuse "CCRC_RELEASE_BASE_URL names no host"
 EGRESS+=("release"$'\t'"$h")
 SYSROOT=${BOXFILE%/etc/*}
 ETC=${BOXFILE%/*}

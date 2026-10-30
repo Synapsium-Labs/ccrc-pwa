@@ -1675,9 +1675,14 @@ const envModeReads = (t: string): string[] =>
     || (/_ccrc_knob CCRC_RELEASE_BASE_URL\b/.test(l) && !/ file\b/.test(l)) || /\$\{?CCRC_RELEASE_BASE_URL\b/.test(l));
 const boxEnvAssignments = (t: string): string[] => shellCode(t).filter((l) => /\bBOX_ENV_FILE=/.test(l));
 
+/** D-7568, named exception: TB7's installer checks its staging tree's MANIFEST in phase 1, as plan task TB7 requires
+ *  (the first release is trusted on its transport checksum and its MANIFEST, D-7424), through ccd/ccrc's own
+ *  `_plat_sha256_check`. That one line, and no other, is not a copy of the tools sync's verification. */
+const INSTALLER_MANIFEST_CHECK = 'deploy/testbox/install.sh: ( cd "$STAGING" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"';
+
 describe('counted exits (D-7408, D-7457)', () => {
-  it('copies of the provenance verification logic outside ccd/ccrc and deploy/verify-provenance.mjs: 0', async () => {
-    expect(provenanceCopies(boxFiles())).toEqual([]);
+  it('copies of the provenance verification logic outside ccd/ccrc and deploy/verify-provenance.mjs: 0 (TB7\'s installer MANIFEST line the one named exception, D-7568)', async () => {
+    expect(provenanceCopies(boxFiles())).toEqual([INSTALLER_MANIFEST_CHECK]);
   });
   it('mutation: a sums check of its own in the tools script is counted', async () => {
     const t = read('deploy/testbox/bin/tools-sync').replace('_upd_fetch 0 >/dev/null', '( cd "$stage" && sha256sum -c SHA256SUMS )');
