@@ -17,5 +17,4 @@ export const OUTWARD_EDGE_EXEMPTIONS: EntrySet = {
   'server/src/token/door.ts -> server/src/coord/token.ts': { reason: "L1 -> L3: the token door matches digest slots through coord/token.ts (matchDigestSlots)", since: '2026-10-20' },
   'server/src/token/link.ts -> server/src/remote/client.ts': { reason: "L3 -> L4: the token link sends through FleetClient and matches its error classes", since: '2026-10-20' },
   'server/src/transcript/parse.ts -> server/src/accounts/mask.ts': { reason: "L1 -> L4: the transcript parse masks with the masker's shape-only instance (SHAPE_ONLY_MASKER)", since: '2026-10-20' },
-  'server/src/update/converge.ts -> server/src/remote/client.ts': { reason: "L3 -> L4: converge matches the client's error classes (AgentOpError, LinkNotSentError)", since: '2026-10-20' },
 };

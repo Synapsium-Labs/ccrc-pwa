@@ -28,7 +28,7 @@ import { resolveNodeIntent } from './resolve.js';
 import { resolveInputFor } from './project.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from './inventory.js';
 import { openPoolReadDeadline } from '../pools.js';
-import { AgentOpError, LinkNotSentError } from '../remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../remote/errors.js';
 import { boundedUpdateSpawn, type BoundedSpawnOpts } from './spawn.js';
 import type { FleetIO } from '../io.js';
 import type { FleetState } from '../fleetstate.js';
