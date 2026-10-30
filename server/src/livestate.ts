@@ -174,3 +174,13 @@ export async function readLiveState(io: FleetIO, configDir: string, pid: number)
   const read = await readLiveStateMeasured(io, configDir, pid);
   return read.ok ? read.state : null;
 }
+
+/**
+ * D-7512: `readLiveStateMeasured` bound to one box's io, as the reader `fleet.ts`'s `assembleFleet` is handed
+ * (`fleet.ts#LiveStateMeasuredReader`). `fleet.ts` is L1 and this file is L3 (the torn-body wait), so the assembly
+ * takes the read through a parameter instead of importing it. The return type is spelled structurally, so this file
+ * imports nothing from `fleet.ts`.
+ */
+export function liveStateReaderOver(io: FleetIO): (configDir: string, pid: number) => Promise<LiveStateRead> {
+  return (configDir, pid) => readLiveStateMeasured(io, configDir, pid);
+}
