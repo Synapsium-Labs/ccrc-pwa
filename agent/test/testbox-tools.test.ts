@@ -24,14 +24,18 @@ import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { StatusAnswer, ToolsSync, TestboxToolVersions } from '../../shared/testbox.js';
+import WebSocket from 'ws';
+import type { RunSubmit, StatusAnswer, TestboxRepoRow, ToolsSync, TestboxToolVersions } from '../../shared/testbox.js';
+import { serviceFor, startTestboxServer, timerWork } from '../src/testbox/main.js';
 import { FRAME_HANDLERS, type TestboxService } from '../src/testbox/service.js';
+import { buildInstallSpec, buildRunSpec, type SpecSettings } from '../src/testbox/spec.js';
+import type { TestboxConfig } from '../src/testbox/config.js';
 import type { SystemManager, UnitEnd } from '../src/testbox/systemd.js';
 import {
   ended, encodeToolsSpec, IDLE_TOOLS, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, sameAsBox, seenRuns,
   toolsSettings, withSync, type BoxTools, type ToolsSettings,
 } from '../src/testbox/tools.js';
-import { attachToolSync, statusOf, ToolSync, type ServedService } from '../src/testbox/toolsync.js';
+import { attachToolSync, HANDOVER_DIR, statusOf, ToolSync, type ServedService } from '../src/testbox/toolsync.js';
 import { durationMs } from '../src/testbox/config.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -55,6 +59,16 @@ const MADISON: Record<string, string> = {
   tmux: '      tmux | 3.4-1ubuntu0.1 | http://mirror.testbox.invalid noble-updates/main amd64 Packages\n      tmux | 3.3a-1 | http://mirror.testbox.invalid noble/main amd64 Packages\n',
 };
 const MEASURED_AT = '2026-10-29T12:00:00Z';
+const SPEC_ROW: TestboxRepoRow = {
+  name: 'project-a', fetchUrl: 'https://testbox.invalid/project-a.git', mirrorPath: '/nonexistent/project-a.git',
+  packages: [{ name: 'server', installInputs: ['server/package.json'], commands: ['./node_modules/.bin/vitest'] }], buildOutputs: [], systemTools: [],
+};
+const SPEC_SUBMIT: RunSubmit = {
+  t: 'run.submit', runId: 'a'.repeat(32), repository: 'project-a', package: 'server', branch: 'main', refs: ['head'], outputs: [],
+  argv: ['./node_modules/.bin/vitest', 'run'], forward: {}, ci: false, workers: 1, session: 'session-a',
+};
+/** A string as a RegExp source that matches only that string: every metacharacter escaped, the backslash included. */
+const reEscape = (s: string): string => s.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&');
 const frameOf = (release: string, versions: TestboxToolVersions = NEW): ToolsSync => ({ t: 'tools.sync', release, versions, measuredAt: MEASURED_AT });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -515,7 +529,7 @@ describe('tools-sync on a fixture box laid out as TB7\'s bootstrap leaves it (D-
     const [ranUnder, argv] = v[0]!.split('\t');
     expect(ranUnder).toBe(BOOT_NODE);
     expect(argv).toContain(`${path.join(b.tools, 'release', 'installed', 'ccd')}/../deploy/verify-provenance.mjs`);
-    expect(argv).toMatch(new RegExp(`--blob \\S+/ccrc-${NEW_TAG}\\.tar\\.gz --bundle \\S+\\.sigstore\\.json --tag ${NEW_TAG.replace(/\./g, '\\.')} --owner \\S+ --repo \\S+$`));
+    expect(argv).toMatch(new RegExp(`--blob \\S+/ccrc-${reEscape(NEW_TAG)}\\.tar\\.gz --bundle \\S+\\.sigstore\\.json --tag ${reEscape(NEW_TAG)} --owner \\S+ --repo \\S+$`));
     expect(argv).not.toContain('allow-unsigned');
     expect(builtSha(b)).toBe('a'.repeat(40));
     // 2. node, with the root-owned npmrc's three lines (spec §2.2).
@@ -579,6 +593,28 @@ describe('tools-sync on a fixture box laid out as TB7\'s bootstrap leaves it (D-
     expect(linkOf(path.join(b.tools, 'current'))).not.toBe('sets/s.bootstrap');
     expect(existsSync(path.join(b.tools, 'takeover'))).toBe(false);
     expect(report(b)).toMatchObject({ result: 'ok', takeover: false, nodeChanged: true });
+  });
+
+  it('a run\'s and a pristine install\'s PATH start at a directory holding the synced node, npm and npx (spec.ts reads <tools>/current/bin)', async () => {
+    const b = makeBox();
+    resetLogs();
+    const r = await sync(b, frameOf(BOOT_TAG));
+    expect(r.code, r.stderr).toBe(0);
+    const s: SpecSettings = {
+      root: path.join(path.dirname(b.root), 'svc'), workers: 1, runTmpdir: '/tmp', toolsDir: b.tools, envForward: [],
+      runUserPrefix: 'ccrc-tb-', reportMaxBytes: 1024, serviceUser: 'ccrc-tb-svc',
+    };
+    const built = buildRunSpec(SPEC_SUBMIT, SPEC_ROW, 1, s, path.join(b.tools, 'current', 'chrome'));
+    expect(built.ok).toBe(true);
+    const pre = path.join(b.tools, 'node', NEW.node);
+    for (const env of [built.ok ? built.spec.env : [], buildInstallSpec('k1', 'server', [], [], s).env]) {
+      const first = (env.find(([k]) => k === 'PATH')?.[1] ?? '').split(':')[0]!;
+      expect(realpathSync(path.join(first, 'node'))).toBe(realpathSync(path.join(pre, 'bin', 'node')));
+      expect(realpathSync(path.join(first, 'npm'))).toBe(realpathSync(path.join(pre, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')));
+      expect(realpathSync(path.join(first, 'npx'))).toBe(realpathSync(path.join(pre, 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js')));
+    }
+    // D-7424's verifier PATH and the set's Chrome stay where they were: `<tools>/current/node` and `<tools>/current/chrome`.
+    expect(realpathSync(path.join(b.tools, 'current', 'node'))).toBe(realpathSync(path.join(pre, 'bin', 'node')));
   });
 });
 
@@ -738,6 +774,17 @@ function fakeSys(b: Box, specFile: string, seen: string[]): SystemManager {
 const okStatus = (): StatusAnswer => ({ t: 'status', state: 'ok', reason: null, serviceVersion: '0.0.1', proto: 1, release: BOOT_TAG, tools: NEW,
   sync: IDLE_TOOLS.sync, runs: { inProgress: 1, limit: 2 }, queueDepth: 0, pristine: [], failedKeys: [], heldRunUsers: [], repositories: [] });
 
+const [Q1, Q2, Q3] = ['1'.repeat(32), '2'.repeat(32), '3'.repeat(32)];
+const submitOf = (runId: string): RunSubmit => ({ ...SPEC_SUBMIT, runId });
+const [CHROME_2, CHROME_3] = ['131.0.6778.86', '131.0.6778.87'];
+/** The entry point's settings for a service on a fixture box (no repository rows, nothing it would start). */
+const cfgFor = (b: Box): TestboxConfig => ({
+  runs: 1, sessionRuns: 1, workers: 1, runTmpdir: '/tmp', root: path.join(path.dirname(b.root), 'svc'), repos: path.join(path.dirname(b.root), 'no-repos'),
+  fetchEveryMs: 60_000, retentionMs: 3_600_000, reportMaxBytes: 1024, toolsDir: b.tools, envForward: [], runUserPrefix: 'ccrc-tb-', logTail: 5,
+  serviceUser: 'ccrc-tb-svc', listen: { host: '127.0.0.1', port: 0 }, tokenFile: path.join(b.root, 'no-token'), unitMaxMs: 60_000,
+  lines: new Map([...SETTINGS_LINES, ['CCRC_TESTBOX_PRISTINE_KEEP', { value: '7d' }]]) as unknown as TestboxConfig['lines'],
+});
+
 function driver(b: Box, o: { live?: string[]; now?: () => number } = {}) {
   const svcRoot = path.join(path.dirname(b.root), 'svc');
   const units: string[] = [];
@@ -746,19 +793,29 @@ function driver(b: Box, o: { live?: string[]; now?: () => number } = {}) {
   let release: () => void = () => undefined;
   const idle = new Promise<void>((r) => { release = r; });
   const live = o.live ?? [];
-  const served: ServedService = { status: okStatus, idle: () => idle, tick: async () => { ticks++; }, liveRuns: () => live };
+  const waiting: string[] = [];
+  const submitted: { f: RunSubmit; conn: { send(f: unknown): void; refuse(r: string): void } }[] = [];
+  const served: ServedService = {
+    status: okStatus, idle: () => idle, tick: async () => { ticks++; }, liveRuns: () => live, waiting: () => waiting,
+    submit: (f, conn) => { submitted.push({ f, conn }); },
+  };
   const t = new ToolSync({
     sys: fakeSys(b, path.join(svcRoot, 'specs', 'tools'), units), root: svcRoot, toolsDir: b.tools,
     settings: { ...TS, proxy: `127.0.0.1:${W.registry.port}` }, now: o.now ?? (() => 1_000), exit: (c) => { exits.push(c); },
   });
   t.serve(served);
-  return { t, units, exits, ticks: () => ticks, release: () => release(), live, svcRoot };
+  return { t, units, exits, ticks: () => ticks, release: () => release(), live, waiting, submitted, svcRoot };
 }
 
 describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
   it('a run started before the sync keeps its old paths; current is switched before the new service takes over, which waits for the run', async () => {
     const b = makeBox();
     const d = driver(b, { live: ['r1'] });
+    // One run waits in the queue when the sync starts (D-7426: queued runs wait for the new service); its log
+    // directory is the empty one a submission makes.
+    d.t.noteSubmit(submitOf(Q1));
+    d.waiting.push(Q1);
+    mkdirSync(path.join(d.svcRoot, 'logs', Q1), { recursive: true });
     // The run resolved the tool set when its prepare started.
     await d.t.tick();
     const oldNode = realpathSync(path.join(b.tools, 'current', 'node'));
@@ -775,10 +832,80 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     expect(realpathSync(path.join(b.tools, 'current', 'node'))).not.toBe(oldNode);
     expect(existsSync(oldNode), 'the run\'s node is kept while it runs').toBe(true);
     expect(readFileSync(path.join(d.svcRoot, 'specs', 'tools'), 'utf8').split('\0')).toContain('Ks.bootstrap');
+    // A submission during the takeover queues behind the first, since the run limit is 0.
+    d.t.noteSubmit(submitOf(Q2));
+    d.waiting.push(Q2);
+    expect(existsSync(path.join(d.svcRoot, HANDOVER_DIR)), 'nothing is handed over while a run is in progress').toBe(false);
     d.release();
     await p;
     expect(d.exits).toEqual([0]);
     expect(d.units).toEqual(['ccrc-testbox-tools.service']);
+    // The queued runs are handed to the next service in their queue order, and their empty log directories go, so the
+    // next service takes each id afresh.
+    const handed = readdirSync(path.join(d.svcRoot, HANDOVER_DIR)).sort();
+    expect(handed.map((n) => n.replace(/^[0-9]+-[0-9]+-/, ''))).toEqual([`${Q1}.json`, `${Q2}.json`]);
+    expect(existsSync(path.join(d.svcRoot, 'logs', Q1))).toBe(false);
+    // The next service (another driver on the same root) queues them at its start, in that order, and removes them.
+    const next = driver(b);
+    expect(next.t.resume()).toBe(2);
+    expect(next.submitted.map((x) => x.f)).toEqual([submitOf(Q1), submitOf(Q2)]);
+    expect(readdirSync(path.join(d.svcRoot, HANDOVER_DIR))).toEqual([]);
+    expect(next.t.resume(), 'a second start queues nothing again').toBe(0);
+  }, 180_000);
+
+  it('a handed-over file that does not read as a run.submit is dropped, never queued', async () => {
+    const b = makeBox();
+    const d = driver(b);
+    const dir = path.join(d.svcRoot, HANDOVER_DIR);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `000000000000001-000001-${Q1}.json`), '{"t":"run.cancel","runId":"' + Q1 + '"}\n');
+    writeFileSync(path.join(dir, `000000000000001-000002-${Q2}.json`), 'not json\n');
+    writeFileSync(path.join(dir, `000000000000001-000003-${Q3}.json`), `${JSON.stringify(submitOf(Q3))}\n`);
+    expect(d.t.resume()).toBe(1);
+    expect(d.submitted.map((x) => x.f.runId)).toEqual([Q3]);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('the WebSocket door notes each run.submit for the driver attached to the service, before the service takes it', async () => {
+    const b = makeBox();
+    const d = driver(b);
+    const svc = { status: okStatus, submit: (f: RunSubmit) => { d.waiting.push(f.runId); } } as unknown as TestboxService;
+    attachToolSync(svc, d.t);
+    const srv = await startTestboxServer({ host: '127.0.0.1', port: 0, token: 'tok', service: svc });
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${srv.port}`);
+      const frames: string[] = [];
+      ws.on('message', (m) => frames.push(m.toString()));
+      await new Promise<void>((r, j) => { ws.once('open', () => r()); ws.once('error', j); });
+      ws.send(JSON.stringify({ t: 'hello', token: 'tok' }));
+      await expect.poll(() => frames.length).toBe(1);
+      ws.send(JSON.stringify(submitOf(Q1)));
+      await expect.poll(() => d.waiting.length).toBe(1);
+      expect(d.t.queuedFrames()).toEqual([submitOf(Q1)]);
+      ws.close();
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('a run\'s Chrome is the current set\'s when its prepare starts: after two Chrome-only syncs it names the newest, which exists', async () => {
+    const b = makeBox();
+    for (const v of [CHROME_2, CHROME_3]) W.dl.files.set(`/chrome-for-testing-public/${v}/linux64/chrome-linux64.zip`, chromeZip(v));
+    const d = driver(b);
+    // The entry point's service, built before any sync: its Chrome is read for each prepare, not once at its start.
+    const svc = serviceFor(cfgFor(b), path.join(b.tools, 'release', 'installed'), () => undefined);
+    const chromeOf = (): string => (svc as unknown as { d: { chrome: string } }).d.chrome;
+    const chromeAt = (v: string): string => realpathSync(path.join(b.tools, 'chrome', v, 'chrome-linux64', 'chrome'));
+    await d.t.request(frameOf(BOOT_TAG));
+    expect(chromeOf()).toBe(chromeAt(NEW.chrome));
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_2 }));
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_3 }));
+    expect(d.units).toHaveLength(3);
+    expect(d.exits, 'a Chrome-only sync starts no takeover').toEqual([]);
+    expect(chromeOf()).toBe(chromeAt(CHROME_3));
+    expect(d.t.chrome()).toBe(chromeOf());
+    expect(existsSync(chromeOf())).toBe(true);
+    expect(existsSync(path.join(b.tools, 'chrome', NEW.chrome)), 'the first sync\'s Chrome is pruned, so a Chrome read once at start would be gone').toBe(false);
   }, 180_000);
 
   it('a node change queues the pristine rebuilds at once (one tick of the service\'s timer work); a sync with the same node does not', async () => {
@@ -830,6 +957,103 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     await FRAME_HANDLERS['tools.sync']!(svc, frameOf(BOOT_TAG), conn);
     expect(refused).toHaveLength(1);
     expect(d.units).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The timer: the service's work and the tool sync's retry, against a scripted tools unit.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** A tools unit whose every start does the next scripted thing: fail, wait until released, or pass with a node change. */
+function scriptedUnits(toolsDir: string, script: ('fail' | 'block' | 'node')[]) {
+  const seen: string[] = [];
+  const gates: (() => void)[] = [];
+  const sys: SystemManager = {
+    async run(unit: string): Promise<UnitEnd> {
+      seen.push(unit);
+      const step = script.shift() ?? 'fail';
+      if (step === 'block') await new Promise<void>((r) => gates.push(r));
+      if (step === 'node') {
+        writeFileSync(path.join(toolsDir, 'sync-report'), 'result\tok\nrelease\tv0.0.1\nset\ts.cccccccc\ntakeover\t0\nnode-changed\t1\n');
+        return { exit: 0, result: 'success' };
+      }
+      return step === 'block' ? { exit: 0, result: 'success' } : { exit: 1, result: 'exit-code' };
+    },
+    async stop() { /* no unit to stop */ },
+    async active() { return false; },
+  };
+  return { sys, seen, release: () => { for (const g of gates.splice(0)) g(); } };
+}
+
+/** A served service whose tick waits until released, counting how many run at once. */
+function slowService() {
+  const gates: (() => void)[] = [];
+  const c = { started: 0, inFlight: 0, most: 0 };
+  const served: ServedService = {
+    status: okStatus, idle: async () => undefined, liveRuns: () => [], waiting: () => [], submit: () => undefined,
+    tick: async () => {
+      c.started++; c.inFlight++; c.most = Math.max(c.most, c.inFlight);
+      await new Promise<void>((r) => gates.push(r));
+      c.inFlight--;
+    },
+  };
+  return { served, c, release: () => { for (const g of gates.splice(0)) g(); } };
+}
+
+const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
+
+describe('the timer (main.ts#timerWork): a sync never holds up the service\'s work, and that work never runs twice at once', () => {
+  it('a retried sync\'s unit, however long, does not hold up the service\'s timer work', async () => {
+    const fx = mkTmp('ccrc-tb-timer-');
+    const tools = path.join(fx, 'tools');
+    mkdirSync(tools);
+    const u = scriptedUnits(tools, ['fail', 'block']);
+    let now = 1_000;
+    let ticks = 0;
+    const t = new ToolSync({ sys: u.sys, root: path.join(fx, 'svc'), toolsDir: tools, settings: TS, now: () => now, exit: () => undefined });
+    const served: ServedService = {
+      status: okStatus, idle: async () => undefined, liveRuns: () => [], waiting: () => [], submit: () => undefined, tick: async () => { ticks++; },
+    };
+    t.serve(served);
+    const svc = { tick: served.tick } as unknown as TestboxService;
+    attachToolSync(svc, t);
+    await t.request(frameOf(NEW_TAG));
+    expect(t.sync().state).toBe('failed');
+    now = 1_000 + R1;
+    const stuck = (p: Promise<void>): Promise<string> => Promise.race([p.then(() => 'done'), new Promise<string>((r) => setTimeout(() => r('stuck'), 2_000))]);
+    expect(await stuck(timerWork(svc))).toBe('done');
+    expect(u.seen, 'the retry is running').toHaveLength(2);
+    expect(await stuck(timerWork(svc)), 'the next tick runs while the retry still does').toBe('done');
+    expect(ticks).toBe(2);
+    u.release();
+    await t.settled();
+    expect(t.sync().state).toBe('failed');
+  });
+
+  it('a node change\'s rebuild tick waits for the timer\'s tick in progress, then runs', async () => {
+    const fx = mkTmp('ccrc-tb-timer-');
+    const tools = path.join(fx, 'tools');
+    mkdirSync(tools);
+    const u = scriptedUnits(tools, ['node']);
+    const s = slowService();
+    const t = new ToolSync({ sys: u.sys, root: path.join(fx, 'svc'), toolsDir: tools, settings: TS, now: () => 1_000, exit: () => undefined });
+    t.serve(s.served);
+    const svc = { tick: s.served.tick } as unknown as TestboxService;
+    attachToolSync(svc, t);
+    const timer = timerWork(svc);
+    await settle();
+    expect(s.c.started).toBe(1);
+    const synced = t.request(frameOf(NEW_TAG));
+    await settle();
+    expect(u.seen).toHaveLength(1);
+    expect(s.c.started, 'the rebuild tick waits for the one in progress').toBe(1);
+    s.release();
+    await timer;
+    await settle();
+    expect(s.c.started, 'then it runs').toBe(2);
+    s.release();
+    await synced;
+    expect(s.c.most, 'never two at once').toBe(1);
   });
 });
 
