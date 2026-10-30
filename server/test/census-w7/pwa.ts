@@ -436,6 +436,22 @@ export const viewerWordsAsPresence = (): W7Site[] => [
   ...pwaSources(),
 ].flatMap((rel) => viewerWordsAsPresenceIn(parsedFile(rel), rel));
 
+/** The word OA-C18 (a) keeps (D-7193, Task C7o): every whole string expression whose value is exactly `presence` in
+ *  `server/src` and `shared/`, kind `presence`. It is the defer, feed and journal word a viewer's claim is answered
+ *  with (`coord/collectTempRoot.ts#CollectAnsweredWhy` says so at its definition), and the wire key of a session's
+ *  presence (`shared/api.ts`), and no rename may change it. KNOWN WIDTH: a value built by concatenation or a
+ *  substitution (`'pres' + x`), a property NAME written bare (`{ presence: … }`, `e.presence`) and a type-only
+ *  literal are read as the syntax tree has them: a bare property name is not a string expression and is not counted;
+ *  a literal in a union type is. */
+export function persistedPresenceWordsIn(p: ParsedFile, file: string): W7Site[] {
+  return stringExpressions(p.text, file).filter((e) => !e.partial && e.text === 'presence')
+    .map((e) => site(p, file, e.start, e.line, lineStart(p.text, e.line).trim().slice(0, 140), 'presence'));
+}
+export const persistedPresenceWords = (): W7Site[] => [
+  ...walkSrc({ roots: ['server/src'], min: 200, match: /\.ts$/ }),
+  ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
+].flatMap((rel) => persistedPresenceWordsIn(parsedFile(rel), rel));
+
 /** Each site as one printed line: `file#symbol:line  text` (kind in brackets when the query tags kinds). */
 export const showSite = (s: W7Site): string => `${s.file}#${s.symbol}:${s.line}${s.kind === '' ? '' : ` [${s.kind}]`}  ${s.text}`;
 

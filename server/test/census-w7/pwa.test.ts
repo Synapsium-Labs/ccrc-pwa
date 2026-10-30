@@ -16,7 +16,7 @@ import {
   dialogSheetStatesIn, ensureCallers, ensureCallersIn, fixture, inlineDeadChecks, inlineDeadChecksIn, pageClockSubscriptions,
   pageClockSubscriptionsIn, paneTextDecisions, paneTextDecisionsIn, placementCopies, placementCopiesIn, PUSH_SW, requestPolls,
   requestPollsIn, runMatchers, runMatchersIn, sessionPathLiterals, sessionPathLiteralsIn, showSite, singleReaders, singleReadersIn,
-  storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, type W7Site,
+  storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, persistedPresenceWords, persistedPresenceWordsIn, type W7Site,
 } from './pwa.js';
 import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
 import { ENSURE_OWNER, SESSION_PATH_OWNER } from './pwa.js';
@@ -260,6 +260,16 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
     ].join('\n'), 'server/src/fixture.ts');
     expect(got.map((s) => [s.kind, s.line])).toEqual([['PRESENCE_TTL_MS', 1], ['PRESENCE_TTL_MS', 3]]);
   });
+
+  it("persistedPresenceWords: a 'presence' literal counts, in a union type too; a bare property name, a longer word and a comment do not", () => {
+    const got = run(persistedPresenceWordsIn, [
+      "export type Why = 'caps' | 'presence';",
+      "if (s.why === 'presence') go();",
+      'const v = { presence: 1 }; // presence',
+      "const w = 'presence-last';",
+    ].join('\n'), 'server/src/fixture.ts');
+    expect(got.map((s) => [s.kind, s.line])).toEqual([['presence', 1], ['presence', 2]]);
+  });
 });
 
 describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3)', () => {
@@ -397,6 +407,18 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     console.log(`census-w7 viewerWordsAsPresence: ${sites.length} ${JSON.stringify(byName)}`);
     held('viewerWordsAsPresence', sites, 4);
     expect(byName).toEqual({ collectAfterPresence: 4 });
+  });
+
+  it("persistedPresenceWords(): the 'presence' word the wire, the feed, coord.db and the journals carry, by file (C7o keeps it)", () => {
+    const sites = persistedPresenceWords();
+    const byFile = countBy(sites, (s) => s.file);
+    console.log(`census-w7 persistedPresenceWords: ${sites.length} ${JSON.stringify(byFile)}`);
+    held('persistedPresenceWords', sites, 20);
+    expect(byFile).toEqual({
+      'server/src/archivedExpiry.ts': 1, 'server/src/childReclaimSweep.ts': 1, 'server/src/collectLane.ts': 5,
+      'server/src/coord/childReclaim.ts': 2, 'server/src/coord/collectTempRoot.ts': 4, 'server/src/coord/expireArchived.ts': 1,
+      'server/src/retire.ts': 1, 'server/src/watch.ts': 2, 'shared/api.ts': 3,
+    });
   });
 });
 

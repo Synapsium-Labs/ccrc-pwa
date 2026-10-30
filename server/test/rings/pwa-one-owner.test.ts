@@ -366,3 +366,17 @@ describe('the PWA reaches storage through one port (C7l, D-7190)', () => {
     expect(storageTypes().filter((s) => s.file !== PORT).map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
   });
 });
+
+// C7o (D-7193; the ARCH-53 follow-up, #1371; OA-C18 (a)): in TS, "presence" names SESSION presence only. The viewer
+// constants (`shared/api.ts#VIEWER_REFRESH_MS`, `#VIEWER_TTL_MS`, `#VIEWER_OPEN_TTL_MS`) and the defer-derived
+// identifiers take viewer words, read through W7's census (`census-w7/pwa.ts#viewerWordsAsPresence`, the plan's item 18
+// names), so a viewer fact named presence again reds. The persisted word `presence` is that row's known width: it stays
+// byte-identical on the wire, the feed, coord.db and the journals, listed by `census-w7/pwa.ts#persistedPresenceWords`.
+describe('viewer facts take viewer words; "presence" in TS is session presence (C7o, D-7193)', () => {
+  it('viewerWordsAsPresence() 62 -> 0 across server/src, shared/ and pwa/src; may only shrink', async () => {
+    const { viewerWordsAsPresence, showSite } = await import('../census-w7/pwa.js');
+    const sites = viewerWordsAsPresence();
+    expect(sites.filter((s) => s.kind !== 'collectAfterPresence').map(showSite)).toEqual([]);
+    expect(sites.length).toBeLessThanOrEqual(4);
+  });
+});
