@@ -565,3 +565,88 @@ describe('ccd/ccd-update-sync carries the log-line region (C5i)', () => {
     expect(at).toBeGreaterThan(lines.slice(0, first + 1).join('\n').length);
   });
 });
+
+// C5i: the CLI's identity check. `--write`, `--check` and `--restamp` compare the given file's basename with the
+// basename of the target row's `file` once, before any render or write; a mismatch exits 2 with one sentence and writes
+// nothing. By basename, because `_restamp_hook_note` passes a file it only knows is named `ccd`. Each row compares
+// the target's bytes before and after, so a check that runs after the write still reds.
+describe('the engine refuses a given file that is not the target row\'s (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-identity-');
+  const cli = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync('node', [MODULE, ...args], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const refusal = (target: string, label: string, file: string, given: string): string =>
+    `hook-helpers: ${target} carries the ${label} region, whose file is ${file}; ${given} is not that file\n`;
+  const at = (f: string): string => path.join(root, f);
+  /** The hook with one line added inside its generated region. */
+  const handEditedHook = (): string => {
+    const edited = hook.replace(`${HOOK_REGION_BEGIN}\n`, `${HOOK_REGION_BEGIN}\n# a hand edit\n`);
+    expect(edited).not.toBe(hook);
+    return edited;
+  };
+  const expectRefused = (r: { code: number; stdout: string; stderr: string }, sentence: string): void => {
+    expect(r.stderr).toBe(sentence);
+    expect(r.stdout).toBe('');
+    expect(r.code).toBe(2);
+  };
+
+  it('--check ccd/session-hook.sh ccd/ccrc is refused: the hook region is given ccd', () => {
+    const before = readFileSync(at('ccd/session-hook.sh'));
+    expectRefused(cli('--check', at('ccd/session-hook.sh'), at('ccd/ccrc')), refusal(at('ccd/session-hook.sh'), 'hook helpers', 'ccd/ccd', at('ccd/ccrc')));
+    expect(readFileSync(at('ccd/session-hook.sh'))).toEqual(before);
+  });
+
+  it('--check ccd/ccrc-api ccd/session-hook.sh is refused: the server-cap region is given ccd, not the hook', () => {
+    const before = readFileSync(at('ccd/ccrc-api'));
+    expectRefused(cli('--check', at('ccd/ccrc-api'), at('ccd/session-hook.sh')),
+      refusal(at('ccd/ccrc-api'), 'server-cap reader', 'ccd/ccd', at('ccd/session-hook.sh')));
+    expect(readFileSync(at('ccd/ccrc-api'))).toEqual(before);
+  });
+
+  it('--write <hand-edited hook copy> ccd/ccrc is refused and leaves the copy\'s bytes', () => {
+    const copy = join(mkTmp('hook-helpers-c5i-write-'), 'session-hook.sh');
+    writeFileSync(copy, handEditedHook());
+    const before = readFileSync(copy);
+    expectRefused(cli('--write', copy, at('ccd/ccrc')), refusal(copy, 'hook helpers', 'ccd/ccd', at('ccd/ccrc')));
+    expect(readFileSync(copy)).toEqual(before);
+  });
+
+  it('--restamp <log-line target> <a ccd that defines _upd_redact> is refused and leaves the target\'s bytes', () => {
+    const t = mkTmp('hook-helpers-c5i-restamp-');
+    mkdirSync(join(t, 'ccd'));
+    const sync = read('ccd/ccd-update-sync');
+    const inRegion = sync.indexOf(`\n${LL_BEGIN}\n`);
+    expect(inRegion, 'the shipped ccd-update-sync carries the log-line region').toBeGreaterThanOrEqual(0);
+    const edited = sync.slice(0, inRegion) + sync.slice(inRegion).replace('home="${home%/}"', 'home="${home}"');
+    expect(edited).not.toBe(sync);
+    const f = join(t, 'ccd/ccd-update-sync');
+    writeFileSync(f, edited);
+    writeFileSync(join(t, 'ccd/ccd'), `${ccd}${ccdFunctionDefinition(ccrc, '_upd_redact')!}\n`);
+    const before = readFileSync(f);
+    expectRefused(cli('--restamp', f, join(t, 'ccd/ccd')), refusal(f, 'log-line redactor', 'ccd/ccrc', join(t, 'ccd/ccd')));
+    expect(readFileSync(f)).toEqual(before);
+  });
+
+  it('the usage line names <file> and --region-files', () => {
+    const r = cli('--check');
+    expect(r.stderr).toBe('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <file> | --regions | --region-files\n');
+    expect(r.code).toBe(2);
+  });
+
+  it('keep-green: a given file of the row\'s basename passes, and --write over a hand-edited hook given ccd/ccd regenerates it', () => {
+    const a = cli('--check', at('ccd/ccrc-api'), at('ccd/ccd'));
+    expect(a.stdout.trim()).toBe('hook-helpers: current');
+    expect(a.code).toBe(0);
+    const b = cli('--check', at('ccd/ccd-update-sync'), at('ccd/ccrc'));
+    expect(b.stdout.trim()).toBe('hook-helpers: current');
+    expect(b.code).toBe(0);
+    const copy = join(mkTmp('hook-helpers-c5i-write-'), 'session-hook.sh');
+    writeFileSync(copy, handEditedHook());
+    const w = cli('--write', copy, at('ccd/ccd'));
+    expect(w.stdout.trim(), w.stderr).toBe('hook-helpers: regenerated');
+    expect(w.code).toBe(0);
+    expect(readFileSync(copy, 'utf8')).toBe(hook);
+  });
+});
