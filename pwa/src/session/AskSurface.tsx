@@ -83,7 +83,7 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
 
   // The pane's height, as `--ask-pane` on the card: the question region is at most 40% of it (Task T1d), and a percentage
   // in the card's own rules would be of the card. Measured where the card is seated (its parent, `.chat`) and again when
-  // that pane resizes; without a ResizeObserver (jsdom) the rule falls back to the window's height.
+  // that pane resizes; without a ResizeObserver (jsdom) the card keeps chat.css's default, the window's height.
   useLayoutEffect(() => {
     const card = section.current;
     const pane = card?.parentElement;

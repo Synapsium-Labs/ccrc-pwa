@@ -1985,6 +1985,9 @@ button.metachip:active {
    `min-height: 0`, and the floor below). Inside it the question gives way first, down to two lines, and only then the
    surface, which scrolls on its own; so a short question has no scrollbar and a 40-line one keeps its options in view. */
 .ask-inline {
+  /* The pane's height, which `InlineCard` measures onto the card's own style (a percentage in these rules would be of the
+     card); until it has, the window's. */
+  --ask-pane: 100dvh;
   flex: 0 1 auto;
   min-height: 0;
   display: flex;
@@ -2047,7 +2050,7 @@ button.metachip:active {
 .ask-inline-question-slot {
   flex: 0 1 content;
   height: var(--ask-question-floor);
-  max-height: max(var(--ask-question-floor), 0.4 * var(--ask-pane, 100dvh));
+  max-height: max(var(--ask-question-floor), 0.4 * var(--ask-pane));
   display: flex;
   flex-direction: column;
 }
