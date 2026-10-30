@@ -2254,7 +2254,8 @@ export function answerDialogText(
 export type DialogMultiResult = DialogAnswered | { ok: false; error: DialogMultiRefuseCode };
 
 /**
- * Answer a multiSelect AskUserQuestion question (D-5048, `POST /api/sessions/:id/dialog/multi`): leave exactly the
+ * Answer a multiSelect AskUserQuestion question (D-5048; `POST /api/questions/session-<id>/answer` with `multi: true`,
+ * `/api/sessions/:id/dialog/multi` until W7 C7p): leave exactly the
  * boxes `optionIndexes` names ticked, then commit the question. Measured on Claude Code 2.1.300 (2.1.280 agrees):
  *  - a digit k toggles box k, ticking or unticking it, and the cursor does not move;
  *  - Enter TOGGLES the cursor row and commits nothing, which is why `answerAsk` refuses this question;

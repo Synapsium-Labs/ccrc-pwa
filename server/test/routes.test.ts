@@ -317,9 +317,6 @@ describe('knownId route census', () => {
       // D-5047: the free-text row's own route, NOT a `text` field on `/dialog`. An older server that ignored such a
       // field would walk onto the empty row and press Enter, rejecting the whole ask; it answers 404 to a new route.
       { method: 'POST', routePath: '/api/sessions/:id/dialog/text', args: 'id' },
-      // D-5048: a multiSelect question's own route, for the same reason: an older server answers it 404, never with a
-      // keystroke into a menu whose Enter only toggles.
-      { method: 'POST', routePath: '/api/sessions/:id/dialog/multi', args: 'id' },
       // Decision `ask-dialog-tab-route`: moving the pane between an ask's tabs, arrows only, never Enter.
       { method: 'POST', routePath: '/api/sessions/:id/dialog/tab', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
@@ -339,10 +336,11 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    // W7 C7p (D-7194): 22 -> 21 and 18 -> 17 POST with `POST /api/sessions/:id/ask` retired; the operator's ask is
-    // gated by the same `knownId` inside the family's door (`coord/routes.ts`, through its wiring).
-    expect(requestGates).toHaveLength(21);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(17);
+    // W7 C7p (D-7194): 22 -> 21 and 18 -> 17 POST with `POST /api/sessions/:id/ask` retired, 20 and 16 with
+    // `/dialog/multi`; the operator's answers are gated by the same `knownId` inside the family's door
+    // (`coord/routes.ts`, through its wiring).
+    expect(requestGates).toHaveLength(20);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(16);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -694,8 +692,8 @@ describe('write routes', () => {
     ]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/multi`,
-      payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', multi: true, dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
     });
     expect(res.statusCode).toBe(200);
     // Decision `ask-answer-returns-next-screen`: the 200 carries the screen the commit moved to.
@@ -712,8 +710,8 @@ describe('write routes', () => {
     for (const optionIndexes of [[], [1, 1], [0], [10], [1.5]]) {
       const res = await app.inject({
         method: 'POST',
-        url: `/api/sessions/${ID}/dialog/multi`,
-        payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes },
+        url: answerDoor(ID),
+        payload: { kind: 'dialog', multi: true, dialogId: parseDialog(MULTI_1)!.id, optionIndexes },
       });
       expect(res.statusCode, JSON.stringify(optionIndexes)).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-indexes' });
@@ -732,7 +730,7 @@ describe('write routes', () => {
       { optionIndexes: [1] },
       { dialogId: id, optionIndex: 1 },
     ]) {
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/multi`, payload });
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', multi: true, ...payload } });
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     }
@@ -746,8 +744,8 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([onText]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/multi`,
-      payload: { dialogId: parseDialog(onText)!.id, optionIndexes: [1, 3] },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', multi: true, dialogId: parseDialog(onText)!.id, optionIndexes: [1, 3] },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'cursor-not-on-option' });
@@ -832,7 +830,8 @@ describe('write routes', () => {
       ['/api/sessions/nope/prompt', { text: 'hi' }],
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
       ['/api/sessions/nope/dialog/text', { dialogId: 'x', optionIndex: 1, text: 'hi' }],
-      ['/api/sessions/nope/dialog/multi', { dialogId: 'x', optionIndexes: [1] }],
+      // W7 C7p: a multiSelect set, through the family's door since `/dialog/multi` was retired.
+      [answerDoor('nope'), { kind: 'dialog', multi: true, dialogId: 'x', optionIndexes: [1] }],
       ['/api/sessions/nope/dialog/tab', { dialogId: 'x', to: 'next' }],
       ['/api/sessions/nope/interrupt', {}],
       // W7 C7p: the operator's ask, through the family's door since `/ask` was retired.

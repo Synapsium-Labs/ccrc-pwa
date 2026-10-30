@@ -1608,7 +1608,6 @@ describe('the question doors: one reader, one core per principal, the old doors 
     ['server/src/coord/routes.ts', '/api/approvals/:id/release', ['bad-request'], null],
     ['server/src/server.ts', '/api/sessions/:id/dialog', ['unknown-session', 'bad-request'], null],
     ['server/src/server.ts', '/api/sessions/:id/dialog/text', ['unknown-session', 'bad-request'], null],
-    ['server/src/server.ts', '/api/sessions/:id/dialog/multi', ['unknown-session', 'bad-request'], null],
   ];
 
   it.each(ALIASES.map((a) => [`POST ${a[1]}`, a] as const))('%s is an alias: its front ladder, then one call into a core', async (_n, [file, route, words, reader]) => {

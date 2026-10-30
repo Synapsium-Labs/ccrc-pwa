@@ -265,10 +265,6 @@ const PAIRS: Pair[] = [
   ['answer dialog text | bad-text is a 400', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' })],
   ['answer dialog text | another dialog id is a 409', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: 'not-this-one', optionIndex: 3, text: TEXT })],
   ['answer dialog text | success', () => dialogSide([SAME_LABELS_Q2, FOCUSED, TYPED]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT })],
-  ['answer dialog multi | a bad body', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: ['1'] })],
-  ['answer dialog multi | bad-indexes is a 400', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [1, 1] })],
-  ['answer dialog multi | another dialog id is a 409', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: 'not-this-one', optionIndexes: [3, 1] })],
-  ['answer dialog multi | success: the next screen back', () => dialogSide([TOOLS_OPEN, TOOLS_2_1, SIZES_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [3, 1] })],
 ];
 
 /** The pairs whose old door W7 C7p retired, each unchanged from its PAIRS row. */
@@ -287,6 +283,10 @@ const RETIRED_PAIRS: Pair[] = [
     (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
   ['answer ask | the take throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
     (s) => { vi.spyOn(s.f.coord, 'takeAskForAnswer').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
+  ['answer dialog multi | a bad body', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: ['1'] })],
+  ['answer dialog multi | bad-indexes is a 400', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [1, 1] })],
+  ['answer dialog multi | another dialog id is a 409', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: 'not-this-one', optionIndexes: [3, 1] })],
+  ['answer dialog multi | success: the next screen back', () => dialogSide([TOOLS_OPEN, TOOLS_2_1, SIZES_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [3, 1] })],
   // (a row moves here from PAIRS in the commit that retires its door)
 ];
 
@@ -313,6 +313,14 @@ const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
     {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": [], "pushes": []}},
   "answer ask | the take throws: pressed unrecorded":
     {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": [], "pushes": []}},
+  "answer dialog multi | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog multi | bad-indexes is a 400":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-indexes\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog multi | another dialog id is a 409":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog multi | success: the next screen back":
+    {"status": 200, "body": "sha256:05b4c2c9db0d95cfe1ffc97b1d14591aafb55d90788baec75d7cfbdafef72289", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 3", "project-a-quiet-basin 1", "project-a-quiet-basin Tab"], "feed": [], "pushes": []}},
   // (each row's old-door outcome, recorded on the base before the commit that retired its door)
 };
 

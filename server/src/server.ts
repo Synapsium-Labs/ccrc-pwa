@@ -2162,7 +2162,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 21 request-id routes (17 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 20 request-id routes (16 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's floor is 97 agent-WS operations [registry-read-census:fleet]
@@ -2470,27 +2470,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // W3 Q3f (D-7030): an ALIAS from here on, into the operator's core (`questions.answer`): the press, its answered
     // frame, and `bad-text` 400, every other refusal 409.
     const out = await questions.answer({ kind: 'dialog', form: 'text', sessionId: id, dialogId: body.dialogId, optionIndex: body.optionIndex, text: body.text }, operatorDoorDeps);
-    return reply.code(out.status).send(out.body);
-  });
-
-  /**
-   * D-5048: answer a multiSelect AskUserQuestion question, leaving exactly `optionIndexes` ticked and committing it
-   * with Tab, each step proved on a fresh capture (`answerDialogMulti`, `inject/send.ts`). A NEW route, like
-   * `/dialog/text`: an older server answers it 404, where a field on `/dialog` would have walked and pressed Enter,
-   * which on a multiSelect question toggles a box and commits nothing. `bad-indexes` (`isDialogMultiIndexes`,
-   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
-   */
-  app.post('/api/sessions/:id/dialog/multi', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndexes?: unknown };
-    if (typeof body.dialogId !== 'string' || !Array.isArray(body.optionIndexes) ||
-        !body.optionIndexes.every((n) => typeof n === 'number')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // W3 Q3f (D-7030): an ALIAS from here on, into the operator's core (`questions.answer`): the press, its answered
-    // frame, and `bad-indexes` 400, every other refusal 409.
-    const out = await questions.answer({ kind: 'dialog', form: 'multi', sessionId: id, dialogId: body.dialogId, optionIndexes: body.optionIndexes as number[] }, operatorDoorDeps);
     return reply.code(out.status).send(out.body);
   });
 

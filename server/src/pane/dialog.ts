@@ -308,7 +308,9 @@ export function editHintShown(pane: string): boolean {
  * Multi-select menus and menus without ≥2 consecutive numbered options come
  * back as `{ parsed: false, raw }` — terminal-drawer territory in v1. A
  * multiSelect AskUserQuestion question also carries `multi` (D-5048,
- * `multiMenu` below), which `POST /api/sessions/:id/dialog/multi` answers from.
+ * `multiMenu` below), which the operator's multiSelect answer reads
+ * (`POST /api/questions/session-<id>/answer`, `multi: true`; the retired
+ * `POST /api/sessions/:id/dialog/multi` until W7 C7p).
  */
 export function parseDialog(pane: string): Dialog | null {
   // hasMenu, not paneState(pane) !== 'menu': the busy check must not veto a
