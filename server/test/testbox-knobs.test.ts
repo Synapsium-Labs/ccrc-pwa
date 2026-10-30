@@ -436,9 +436,12 @@ describe('TB1: the owner seam (D-7456), runnable as a non-root user', () => {
     expect(censusLines(/\bTB_BOX_ENV_FILE=/)).toEqual(['ccd/testbox-knobs: TB_BOX_ENV_FILE="${TB_FIXTURE_ROOT:-}/etc/ccrc-testbox/ccrc.env"']);
   });
 
-  it('census: box mode binds BOX_ENV_FILE on one line, and no line of ccd/testbox-knobs names a home ccrc.env for the box', () => {
+  it('census: box mode and the tools unit\'s release base (D-7457) bind BOX_ENV_FILE on one line each, and no line of ccd/testbox-knobs names a home ccrc.env for the box', () => {
     const code = read('ccd/testbox-knobs').split('\n').filter((l) => !/^\s*#/.test(l));
-    expect(code.filter((l) => /\bBOX_ENV_FILE=/.test(l)).map((l) => l.trim())).toEqual(['BOX_ENV_FILE="$f" _tb_box_table ;;']);
+    expect(code.filter((l) => /\bBOX_ENV_FILE=/.test(l)).map((l) => l.trim())).toEqual([
+      'BOX_ENV_FILE="$f" _tb_box_table ;;',
+      'if ! BOX_ENV_FILE="$TB_BOX_ENV_FILE" _upd_release_base file >/dev/null 2>&1; then',
+    ]);
     expect(code.filter((l) => /\.ccrc\/ccrc\.env/.test(l))).toEqual([]);
   });
 });

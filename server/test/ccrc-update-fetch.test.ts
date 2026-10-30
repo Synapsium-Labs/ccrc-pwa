@@ -2533,6 +2533,31 @@ describe('ccrc update: the tarball name is bounded — no path separator (D-3148
   });
 });
 
+describe('_upd_release_base [file]: the release base in either reading (D-7457)', () => {
+  // The test box's tools unit reads the base the way box mode reads every box key (`ccd/testbox-knobs#_tb_release_base`):
+  // `file` mode, so the environment's value is not read. Every existing caller passes no mode and reads as before.
+  const ENV_BASE = 'http://env.testbox.invalid/releases';
+  const FILE_BASE = 'http://file.testbox.invalid/releases';
+  it('`_upd_release_base file` ignores an environment value and reads ccrc.env; `_upd_release_base` with no mode still prefers the environment', () => {
+    const home = freshUpdateBox('ccrc-update-relbase-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=${FILE_BASE}\n`);
+    const env = `CCRC_RELEASE_BASE_URL='${ENV_BASE}'; export CCRC_RELEASE_BASE_URL; `;
+    const file = sourcedCcrc(home, `${env}_upd_release_base file`);
+    expect(file.code, file.stderr).toBe(0);
+    expect(file.stdout).toBe(FILE_BASE);
+    const plain = sourcedCcrc(home, `${env}_upd_release_base`);
+    expect(plain.code, plain.stderr).toBe(0);
+    expect(plain.stdout).toBe(ENV_BASE);
+  });
+  it('`file` mode with no line in ccrc.env is the default host, never the environment\'s', () => {
+    const home = freshUpdateBox('ccrc-update-relbase-default-');
+    const r = sourcedCcrc(home, `CCRC_RELEASE_BASE_URL='${ENV_BASE}'; export CCRC_RELEASE_BASE_URL; _upd_release_base file`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases$/);
+  });
+});
+
 // R20a (centralised-update wave 13): each test's fixture homes go in a root `afterEach`, not all at once in the
 // file's `afterAll`. Measured at 9221416a: the three parts of this file leave 648 homes, about 99,700 entries and
 // 2.47 GB to that one hook, which overran vitest's 20 s hook timeout on CI shards at 670d25fd and 7b0a5454. It sits

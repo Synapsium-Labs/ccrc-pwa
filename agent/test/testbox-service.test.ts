@@ -668,8 +668,8 @@ describe('the WebSocket door: hello, the status answer, refusals', () => {
       await srv.close();
     }
   });
-  it('the dispatch table takes run.submit and run.cancel, nothing else yet', () => {
-    expect(Object.keys(FRAME_HANDLERS).sort()).toEqual(['run.cancel', 'run.submit']);
+  it('the dispatch table takes run.submit, run.cancel and (TB6, D-7408) tools.sync, nothing else yet', () => {
+    expect(Object.keys(FRAME_HANDLERS).sort()).toEqual(['run.cancel', 'run.submit', 'tools.sync']);
   });
 });
 
