@@ -114,7 +114,7 @@ Literal sizes, as the file's comment asks ("never the imported constant, so a mu
 | C6 | an unregistered name counts in the general sum only: `[nope 400000, ts 1, md 1]` | `[true, true, true]` | no |
 | C7 | both sub-budgets full fill the page exactly, and every later block is refused: `[ts 393216, md 131072, yaml 1, tsx 1, md 1]` | `[true, true, false, false, false]` | no |
 
-They go in one new `describe`, `'D-7574 characterization: highlight decisions across the three budgets, with the aliases ts, tsx and md'`. It has its own `block(className, n)` builder (a `pre > code` whose `className` is the given array, the given string, or absent), a `lang(name, n)` builder over it, and one `decisions` helper. That helper's `detachUrls` call is the 27th call site. The filler is `'x'.repeat(n)`, as in the file's other decision rows. Rows C1, C6 and C7 cannot see the port. They hold the decisions the exit says must not change. C2 to C5 hold the port's values directly.
+They go in one new `describe`, `'D-7574 characterization: highlight decisions across the three budgets, with the aliases ts, tsx and md'`. It has its own `block(className, n)` builder (a `pre > code` whose `className` is the given array, the given string, or absent), a `lang(name, n)` builder over it, and one `decisions` helper. That helper's `detachUrls` call is the 28th call site (the 27th in tests). The filler is `'x'.repeat(n)`, as in the file's other decision rows. Rows C1, C6 and C7 cannot see the port. They hold the decisions the exit says must not change. C2 to C5 hold the port's values directly.
 
 ## 4. Open problem 4: rule 6
 
