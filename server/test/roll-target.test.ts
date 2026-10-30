@@ -10,7 +10,7 @@ import {
   AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, rollTargetsOf,
   rollTargetVerdict, type AutoRollInput,
 } from '../src/coord/rollTarget.js';
-import { HIBERNATE_AFTER_MS_DEFAULT, type HibernateInput, type HibernateMark } from '../src/coord/hibernate.js';
+import { HIBERNATE_AFTER_MS_DEFAULT, hibernateVerdict, type HibernateInput, type HibernateMark } from '../src/coord/hibernate.js';
 
 const NONE: ChildMark = { kind: 'none' };
 const CHILD: ChildMark = { kind: 'child', runId: 7 };
@@ -26,13 +26,13 @@ const PANE_START = NOW - 3 * HOUR;
 const mark = (ageMs: number, o: Partial<HibernateMark> = {}): HibernateMark =>
   ({ ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - ageMs - MIN, stopAt: NOW - ageMs, restartAt: null, ...o }) as HibernateMark;
 
-const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?: boolean; viewer?: boolean } = {}): HibernateInput => ({
+const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?: boolean; viewer?: boolean; store?: HibernateInput['store'] } = {}): HibernateInput => ({
   row: {
     id: 'project-a', status: 'idle', archivedAt: null, bucket: 'idle', held: null, unmeasured: [], statusUnmeasured: false,
     dialogPending: false, background: null, subagents: null, stranded: null, swapBlocked: null, substrate: null,
   },
   optedOut: false,
-  store: { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
+  store: o.store ?? { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
   viewer: o.viewer ?? false,
   sinceStartMs: VIEWER_OPEN_TTL_MS + HOUR,
   live: o.unread ? { kind: 'unread' } : { kind: 'read', word: { ok: true, word: o.word ?? 'idle' }, mark: o.mark ?? mark(ageMs) },
@@ -196,6 +196,71 @@ describe('hibernation counts as the roll', () => {
 
   it('while hibernation is not armed, nothing is due, so a long-idle coordinator is rolled', () => {
     expect(autoRollVerdict(input(HIBERNATE_AFTER_MS_DEFAULT + HOUR)).act).toBe('roll');
+  });
+});
+
+describe('claimed runs and claims do not hold a roll (D-7562)', () => {
+  // The operator's ruling of 2026-10-30: every live coordinator claims at least one open run (stale planned runs count),
+  // so the shared idle gate's `run-claimant` and `claim` holds kept every coordinator from ever rolling. A roll comes
+  // straight back as the same session, and its runs and claims stay in the coordination store, so for the roll ONLY
+  // they do not hold; every other hold still does.
+  const claims = (o: Partial<{ openWorker: boolean; openClaimant: boolean; claim: boolean; mail: boolean }> = {}): HibernateInput['store'] =>
+    ({ ok: true, openWorker: false, openClaimant: true, claim: true, mail: false, ...o });
+  const past = ROLL_QUIET_MS + MIN;
+
+  it('a coordinator idle past 90 minutes that claims open runs (planned ones included) is rolled', () => {
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: claims({ claim: false }) }) })))
+      .toEqual({ act: 'roll', idleMs: past });
+  });
+
+  it('a coordinator holding a live claim is rolled', () => {
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: claims({ openClaimant: false }) }) })))
+      .toEqual({ act: 'roll', idleMs: past });
+  });
+
+  it('a coordinator that claims a dispatched run and holds a claim (its child works it) is rolled', () => {
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: claims() }) }))).toEqual({ act: 'roll', idleMs: past });
+  });
+
+  it('with claims, a busy coordinator, one somebody has open, or one not yet quiet for 90 minutes is still not rolled', () => {
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: claims(), word: 'busy' }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'live-word' });
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: claims(), viewer: true }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'viewer' });
+    expect(autoRollVerdict(input(ROLL_QUIET_MS - MIN, { sleep: sleep(ROLL_QUIET_MS - MIN, { store: claims() }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'recent' });
+  });
+
+  it('with claims, a hold, an open run naming it as worker, outstanding mail or an unreadable store still holds', () => {
+    const held = { ...sleep(past, { store: claims() }), row: { ...sleep(past).row, held: 'program mid-flight' } };
+    expect(autoRollVerdict(input(past, { sleep: held }))).toEqual({ act: 'skip', reason: 'idle-gate', hold: 'held' });
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: claims({ openWorker: true }) }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'run-worker' });
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: claims({ mail: true }) }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'mail' });
+    expect(autoRollVerdict(input(past, { sleep: sleep(past, { store: { ok: false, detail: 'locked' } }) })))
+      .toEqual({ act: 'skip', reason: 'idle-gate', hold: 'runs-unreadable' });
+  });
+
+  it('with claims, .no-roll still opts it out, and a non-coordinator is still never rolled', () => {
+    expect(autoRollVerdict(input(past, { optedOut: { roll: true, hibernate: false }, sleep: sleep(past, { store: claims() }) })))
+      .toEqual({ act: 'skip', reason: 'no-roll' });
+    expect(autoRollVerdict(input(30 * HOUR, { role: sessionRoleOf(CHILD), sleep: sleep(30 * HOUR, { store: claims() }) })))
+      .toEqual({ act: 'skip', reason: 'not-coordinator' });
+  });
+
+  it('hibernation never takes a claimant, so hibernation-due never holds one: it is rolled', () => {
+    const armed = { armed: true, afterMs: HIBERNATE_AFTER_MS_DEFAULT };
+    const age = HIBERNATE_AFTER_MS_DEFAULT - ROLL_HIBERNATION_LEAD_MS + MIN;
+    expect(autoRollVerdict(input(age, { hibernation: armed })), 'control: due with no claims').toEqual({ act: 'skip', reason: 'hibernation-due' });
+    expect(autoRollVerdict(input(age, { hibernation: armed, sleep: sleep(age, { store: claims() }) }))).toEqual({ act: 'roll', idleMs: age });
+  });
+
+  it('hibernation keeps its run gate (pin): its verdict still holds a run claimant and a claim', () => {
+    const at = (store: HibernateInput['store']) => hibernateVerdict(sleep(HIBERNATE_AFTER_MS_DEFAULT + HOUR, { store }), NOW, HIBERNATE_AFTER_MS_DEFAULT);
+    expect(at(claims({ claim: false }))).toEqual({ act: 'hold', reason: 'run-claimant' });
+    expect(at(claims({ openClaimant: false }))).toEqual({ act: 'hold', reason: 'claim' });
+    expect(at(claims({ openClaimant: false, claim: false })).act, 'control: no claims hibernates').toBe('hibernate');
   });
 });
 
