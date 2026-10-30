@@ -1,5 +1,5 @@
 {
-  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string or a path (https://h/x?proxy=user:secret@host, GET /p?u=user:secret@host:8443, dir/user:secret@host) and a raw '#', '?' or '/' inside a password. A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
+  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string or a path (https://h/x?proxy=user:secret@host, GET /p?u=user:secret@host:8443, dir/user:secret@host) a raw '#', '?' or '/' inside a password (user:pa#ss@host refused), a token-only userinfo before a host that no port and no path follows, which neither mode masks while more text follows the host (--proxy=tok@host refused, --proxy tok@host refused), and a port followed by a non-ASCII punctuation mark such as an ellipsis or a curly quote (tok@host:8443… x, tok@host:8443” x). A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
   "rows": [
     {
       "rule": "R5",
@@ -1433,6 +1433,87 @@
       "updateSync": "x.service:12"
     },
     {
+      "rule": "R8",
+      "input": "https://@tok@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://host/x",
+      "bareHost": "https://host/x",
+      "updateSync": "https://host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "https://@tok@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://host",
+      "bareHost": "https://host",
+      "updateSync": "https://host"
+    },
+    {
+      "rule": "R8",
+      "input": "http://@tok@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://host/x",
+      "bareHost": "http://host/x",
+      "updateSync": "http://host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "http://@tok@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://host",
+      "bareHost": "http://host",
+      "updateSync": "http://host"
+    },
+    {
+      "rule": "R8",
+      "input": "https://@@tok@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://host/x",
+      "bareHost": "https://host/x",
+      "updateSync": "https://host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[fe80::1%25en0]:80 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[fe80::1%25en0]:80 refused",
+      "bareHost": "[fe80::1%25en0]:80 refused",
+      "updateSync": "[fe80::1%25en0]:80 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[v1.fe80::1]:80 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[v1.fe80::1]:80 refused",
+      "bareHost": "[v1.fe80::1]:80 refused",
+      "updateSync": "[v1.fe80::1]:80 refused"
+    },
+    {
+      "rule": "blast",
+      "input": "ref@[main]:2 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[main]:2 ok",
+      "bareHost": "[main]:2 ok",
+      "updateSync": "[main]:2 ok"
+    },
+    {
+      "rule": "blast",
+      "input": "log@[core:io]:2 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[core:io]:2 ok",
+      "bareHost": "[core:io]:2 ok",
+      "updateSync": "[core:io]:2 ok"
+    },
+    {
       "rule": "known-limit",
       "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
       "input": "https://h/x?proxy=user:secret@host",
@@ -1493,6 +1574,46 @@
       "updateSync": "user:pa/ss@host refused"
     },
     {
+      "rule": "known-limit",
+      "note": "known limit: a token-only userinfo (no ':') before a host that no port and no path follows reads as prose's user@host, so neither mode masks it while more text follows the host",
+      "input": "--proxy=tok@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "--proxy=tok@host refused",
+      "bareHost": "--proxy=tok@host refused",
+      "updateSync": "--proxy=tok@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a token-only userinfo (no ':') before a host that no port and no path follows reads as prose's user@host, so neither mode masks it while more text follows the host",
+      "input": "--proxy tok@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "--proxy tok@host refused",
+      "bareHost": "--proxy tok@host refused",
+      "updateSync": "--proxy tok@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a non-ASCII punctuation mark (an ellipsis, a curly quote) does not end the port, so a token-only userinfo before it is not masked",
+      "input": "tok@host:8443… x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443… x",
+      "bareHost": "tok@host:8443… x",
+      "updateSync": "tok@host:8443… x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a non-ASCII punctuation mark (an ellipsis, a curly quote) does not end the port, so a token-only userinfo before it is not masked",
+      "input": "tok@host:8443” x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443” x",
+      "bareHost": "tok@host:8443” x",
+      "updateSync": "tok@host:8443” x"
+    },
+    {
       "rule": "bound",
       "inputRuns": [
         {
@@ -1513,6 +1634,24 @@
       "ccrc": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]",
       "bareHost": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]",
       "updateSync": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]"
+    },
+    {
+      "rule": "bound",
+      "inputRuns": [
+        {
+          "text": "fetch failed:",
+          "times": 1
+        },
+        {
+          "text": " u:secret@h:1 u:secret@h:1 u:secret@h:1 /home/u/x",
+          "times": 2000
+        }
+      ],
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]",
+      "bareHost": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]",
+      "updateSync": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]"
     }
   ]
 }

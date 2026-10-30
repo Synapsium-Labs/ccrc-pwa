@@ -35,6 +35,17 @@
 // token (`` reach `tok@host:8443` ``, which keeps its backticks), and a leading '@' before a userinfo whose host a '/'
 // ends, or (bare-host) the text's end: `@tok@host/x refused` reads `host/x refused`.
 //
+// D-7564's fourth round closed two more under R8: a scheme URL whose userinfo starts with '@' (`https://@tok@host/x`,
+// `https://@tok@host`, `https://@@tok@host/x` read `https://host/x` and `https://host`), and a bracketed host that holds
+// an IPv6 zone id or is an IPvFuture literal (`tok@[fe80::1%25en0]:80 refused`, `tok@[v1.fe80::1]:80 refused`). Two
+// `blast` rows record the bracket's cost: `log@[core:io]:2 ok` reads `[core:io]:2 ok` since the bracket widened, and
+// `ref@[main]:2 ok` read `[main]:2 ok` before it (a bracket with no ':' is an ordinary host). The round recorded four
+// more known limits, each printed whole in every column: a token-only userinfo before a host that no port and no path
+// follows, while more text follows it (`--proxy=tok@host refused`, `--proxy tok@host refused`; prose's `user@host` has
+// the same shape), and a port followed by a non-ASCII punctuation mark (`tok@host:8443… x`, `tok@host:8443” x`). A
+// second `bound` row holds a head dense with masks (about 4000 bytes of `u:secret@h:1`, a `/home/u/x` after every
+// third), so the 3 s limit is measured where every loop does the most work.
+//
 // Every call goes through ONE fixed driver: the definitions are written to a temporary file and the input to
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
 // one of the literal calls in `SCRIPTS`. No path and no environment value ever reaches a script's text. The input
@@ -158,8 +169,8 @@ describe('the log-line redaction corpus (D-7078)', () => {
   });
 
   // D-7564: the eight shapes once recorded as `known-limit` are R8 rows now, and in every column their output no longer
-  // carries the secret. The known limits left are exactly the six lines below, each with a note, each printed whole.
-  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and only the six recorded known limits are left', () => {
+  // carries the secret. The known limits left are exactly the ten lines below, each with a note, each printed whole.
+  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and only the ten recorded known limits are left', () => {
     const former = [
       'server user:secret@host:8443 refused', 'user:secret@host: refused', "user:secret@host' failed",
       'user:secret@host" failed', 'user:secret@host\tfailed', 'user:secret@host\rfailed', 'user:secret@@host/x',
@@ -173,6 +184,7 @@ describe('the log-line redaction corpus (D-7078)', () => {
     const limits = [
       'https://h/x?proxy=user:secret@host', 'GET /p?u=user:secret@host:8443', 'dir/user:secret@host',
       'user:pa#ss@host refused', 'user:pa?ss@host refused', 'user:pa/ss@host refused',
+      '--proxy=tok@host refused', '--proxy tok@host refused', 'tok@host:8443… x', 'tok@host:8443” x',
     ];
     expect(ROWS.filter((r) => r.rule === 'known-limit').map((r) => r.input)).toEqual(limits);
     for (const r of ROWS.filter((x) => x.rule === 'known-limit')) {
@@ -195,22 +207,31 @@ describe('the log-line redaction corpus (D-7078)', () => {
       }
     });
 
-  // D-7564, the bound: each loop rescans the whole text once per credential it masks, so the `bound` row's line (about
-  // 85 KB, 4000 credentials and homes past one long token) took seconds a call. Capped at 4096 bytes it returns at once,
-  // in every column, with no secret and no more than 4096 bytes.
-  it('BOUND: the bound row returns within 3 s in each column, with no secret and at most 4096 bytes', () => {
-    const r = ROWS.find((x) => x.rule === 'bound');
-    expect(r?.inputRuns, 'the corpus has a bound row').toBeDefined();
-    expect(inputOf(r!).length).toBeGreaterThan(80_000);
+  // D-7564, the bound: each loop rescans the whole text once per credential it masks, so the first `bound` row's line
+  // (about 85 KB, 4000 credentials and homes past one long token) took seconds a call. Capped at 4096 bytes it returns at
+  // once, in every column, with no secret and no more than 4096 bytes. The second row's kept head is dense with masks
+  // (about 4000 bytes of `u:secret@h:1` and `/home/u/x`), the most work the cap leaves each loop, so a slow runner's legs
+  // measure the worst case against the same limit.
+  it('BOUND: both bound rows return within 3 s in each column, with no secret and at most 4096 bytes', () => {
+    const bounds = ROWS.filter((x) => x.rule === 'bound');
+    expect(bounds.length, 'the corpus has two bound rows').toBe(2);
     const defs = definitions();
-    for (const c of COLUMNS) {
-      const t0 = performance.now();
-      const out = run(defs, c, inputOf(r!), r!.home, r!.locale);
-      const ms = performance.now() - t0;
-      expect(ms, `${c} took ${Math.round(ms)} ms`).toBeLessThan(3000);
-      expect(out.toString('utf8'), c).not.toContain('secret');
-      expect(out.length, c).toBeLessThanOrEqual(4096);
+    for (const r of bounds) {
+      expect(r.inputRuns, 'a bound row is written as inputRuns').toBeDefined();
+      expect(inputOf(r).length).toBeGreaterThan(80_000);
+      for (const c of COLUMNS) {
+        const t0 = performance.now();
+        const out = run(defs, c, inputOf(r), r.home, r.locale);
+        const ms = performance.now() - t0;
+        expect(ms, `${c} took ${Math.round(ms)} ms`).toBeLessThan(3000);
+        expect(out.toString('utf8'), c).not.toContain('secret');
+        expect(out.length, c).toBeLessThanOrEqual(4096);
+      }
     }
+    // The dense row is dense: its kept head masks at least 200 credentials and 50 homes in every column.
+    const dense = bounds.map((r) => COLUMNS.map((c) => want(r, c).toString('utf8')))
+      .find((cols) => cols.every((o) => o.split('h:1').length - 1 >= 200 && o.split('~/x').length - 1 >= 50));
+    expect(dense, 'a bound row whose head is dense with masks').toBeDefined();
   });
 
   // MUTANT: bash runs a function's LAST definition, and `ccdFunctionDefinition` returns the FIRST. A second, hand-written
