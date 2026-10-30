@@ -23,7 +23,8 @@ import { sessionDocsHref } from '../docs/docsLinks';
 import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { substrateFaultText } from '../fleet/substrateWords';
 import { PrSheet } from './PrSheet';
-import { UNCHECKED_PR, hasPrCap, prDoorWord } from './PrKeycap';
+import { UNCHECKED_PR } from './PrKeycap';
+import { hasPrCap, prDoorWord } from './prCap';
 
 /** What the session screen does for each flow the menu or a door opens. */
 export interface SessionActions {

@@ -16,7 +16,7 @@ import { hibernatedSince } from '../fleet/hibernated';
 import { headerStatusWord } from '../fleet/sessionFacts';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
-import { hasPrCap } from './PrKeycap';
+import { hasPrCap } from './prCap';
 import { liveStatus } from './liveStatus';
 import { sessionMenu, type SessionMenuEntry } from './SessionFlows';
 
