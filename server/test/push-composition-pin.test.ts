@@ -46,4 +46,16 @@ describe("the composition root builds the push service masked (D-7510)", () => {
     const innermost = inScope.reduce((a, b) => (b.scopeStart >= a.scopeStart ? b : a));
     expect(innermost.init.startsWith('new SecretMasker(')).toBe(true);
   });
+
+  it("the construction's third argument is SHAPE_ONLY_MASKER, imported from ./accounts/mask.js and bound nowhere in index.ts", () => {
+    const [ctor] = constructions();
+    expect(ctor!.args).toHaveLength(3);
+    expect(ctor!.args[2]).toEqual({ kind: 'other', text: 'SHAPE_ONLY_MASKER' });
+    const edges = index.imports.filter((i) => i.specifier === './accounts/mask.js');
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.typeOnly).toBe(false);
+    expect(edges[0]!.names).toContain('SHAPE_ONLY_MASKER');
+    expect(edges[0]!.typeNames ?? []).not.toContain('SHAPE_ONLY_MASKER');
+    expect(index.bindings.filter((b) => b.name === 'SHAPE_ONLY_MASKER')).toEqual([]);
+  });
 });
