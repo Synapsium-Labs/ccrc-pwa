@@ -22,7 +22,9 @@ import type { Element as HastElement, Root as HastRoot } from 'hast';
 import { PROSE, cn } from '@ccrc/ui';
 import type { DocsShowOk } from '../../../shared/docs';
 import { RenderBoundary } from '../components/RenderBoundary';
-import { PreHighlightContext, SHARED_COMPONENTS } from '../lib/markdown';
+import {
+  PreHighlightContext, SHARED_COMPONENTS, codeLanguage, inMarkdownPageBudget, inScanPageBudget,
+} from '../lib/markdown';
 import { utf8ByteLength } from '../lib/markdownGuard';
 import {
   CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_PARSE_BUDGET_MS,
@@ -34,8 +36,13 @@ import { renderHast } from '../lib/renderHast';
 import { useParsedMarkdown } from '../lib/useParsedMarkdown';
 import { DocImage } from './DocImage';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from './DocLink';
-import { detachUrls } from './docsLinks';
+import { detachUrls, type DocsHighlightLanguages } from './docsLinks';
 import { showBytes } from './objectUrls';
+
+/** The composition root's one copy of the renderer's three grammar facts, which `detachUrls` reads for the page highlight
+ *  budget (D-7574); `docs-highlight-budget.test.tsx`'s "the Docs page hands detachUrls the real highlight-budget
+ *  languages" row renders through this file and pins it. */
+const DOCS_HIGHLIGHT_LANGUAGES: DocsHighlightLanguages = { codeLanguage, inScanPageBudget, inMarkdownPageBudget };
 
 /** The components a Docs body renders with (spec 4.10): the shared code, pre and table, and the Docs `a` and `img`,
  *  which are the only way a URL from the document reaches the DOM. */
@@ -146,7 +153,7 @@ export interface DocMarkdownProps {
  *  `DOC_COMPONENTS` and no url transform, under the page's link context and highlight budget. Lives inside the
  *  doc-body boundary, so a throw from `renderHast` or from any component it draws is the boundary's. */
 function DocTree(p: { readonly tree: HastRoot; readonly link: Omit<DocLinkContextValue, 'urls'> }): ReactNode {
-  const detached = useMemo(() => detachUrls(p.tree), [p.tree]);
+  const detached = useMemo(() => detachUrls(p.tree, DOCS_HIGHLIGHT_LANGUAGES), [p.tree]);
   const ctx = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: detached.urls }), [p.link, detached]);
   const budget = useMemo(() => (pre: HastElement): boolean => detached.urls.get(pre)?.highlight !== false, [detached]);
   return (

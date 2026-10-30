@@ -4,19 +4,27 @@
 // the `node` it is given, so a Docs page that provides the decision gives `CodeBlock` `highlight={false}` for those
 // blocks, and chat, which provides nothing, is decided by the block rule alone, as before. The trees are built by
 // hand, exactly as the parse emits a fenced block, so no case parses half a megabyte.
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, waitFor } from '@testing-library/react';
 import type { Element as HastElement, Root as HastRoot } from 'hast';
 import hljs from 'highlight.js/lib/core';
 import { clearEveryLru } from '../src/lib/highlightCache';
-import { PreHighlightContext, SHARED_COMPONENTS } from '../src/lib/markdown';
+import {
+  PreHighlightContext, SHARED_COMPONENTS, codeLanguage, inMarkdownPageBudget, inScanPageBudget,
+} from '../src/lib/markdown';
 import {
   DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
   MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS,
 } from '../src/lib/markdownLimits';
+import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { renderHast } from '../src/lib/renderHast';
-import { DocLink } from '../src/docs/DocLink';
-import { detachUrls } from '../src/docs/docsLinks';
+import { DocLink, type DocLinkContextValue } from '../src/docs/DocLink';
+import { DocMarkdown } from '../src/docs/DocMarkdown';
+import { detachUrls, type DocsHighlightLanguages } from '../src/docs/docsLinks';
+import { treeOk } from './docsFixtures';
+
+/** The renderer's three grammar facts, as the Docs page hands them to `detachUrls` (D-7574). */
+const LANGS: DocsHighlightLanguages = { codeLanguage, inScanPageBudget, inMarkdownPageBudget };
 
 afterEach(cleanup);
 
@@ -43,7 +51,7 @@ const BLOCK = 60000;
 
 describe('detachUrls records each pre\'s decision in document order (spec 4.10; refinement (n))', () => {
   it('true while the running sum is within the budget, false from the block that passes it, for every later block', () => {
-    const d = detachUrls(page([DOCS_HIGHLIGHT_PAGE_MAX_CHARS - 20, 20, 13, 13]));
+    const d = detachUrls(page([DOCS_HIGHLIGHT_PAGE_MAX_CHARS - 20, 20, 13, 13]), LANGS);
     expect(pres(d.tree).map((p) => d.urls.get(p)?.highlight)).toEqual([true, true, false, false]);
     expect(pres(d.tree).map((p) => d.urls.get(p)?.imageIndex)).toEqual([null, null, null, null]);
   });
@@ -51,7 +59,7 @@ describe('detachUrls records each pre\'s decision in document order (spec 4.10; 
   it('counts only the text under the pre\'s code children', () => {
     const lead: HastElement = { type: 'element', tagName: 'pre', properties: {},
       children: [{ type: 'text', value: 'x'.repeat(DOCS_HIGHLIGHT_PAGE_MAX_CHARS + 1) }] };
-    const d = detachUrls({ type: 'root', children: [lead, fence(body(13))] });
+    const d = detachUrls({ type: 'root', children: [lead, fence(body(13))] }, LANGS);
     expect(pres(d.tree).map((p) => d.urls.get(p)?.highlight)).toEqual([true, true]);
   });
 });
@@ -68,7 +76,7 @@ describe('M4.H2: the page budget reaches CodeBlock through PreHighlightContext (
     [...c.querySelectorAll('.code-block')].map((b) => b.querySelectorAll('.hljs-keyword').length);
 
   it('nine 60 000-character python blocks: the first eight are highlighted and the ninth is not', () => {
-    const d = detachUrls(page(Array.from({ length: 9 }, () => BLOCK)));
+    const d = detachUrls(page(Array.from({ length: 9 }, () => BLOCK)), LANGS);
     const { container } = render(
       <PreHighlightContext value={(pre) => d.urls.get(pre)?.highlight !== false}>
         {renderHast(d.tree, { components: { ...SHARED_COMPONENTS, a: DocLink } })}
@@ -79,13 +87,13 @@ describe('M4.H2: the page budget reaches CodeBlock through PreHighlightContext (
   });
 
   it('with no provider (chat) all nine are highlighted: the block rule alone decides', () => {
-    const d = detachUrls(page(Array.from({ length: 9 }, () => BLOCK)));
+    const d = detachUrls(page(Array.from({ length: 9 }, () => BLOCK)), LANGS);
     const { container } = render(renderHast(d.tree, { components: SHARED_COMPONENTS }));
     expect(keywordsPerBlock(container)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1]);
   });
 
   it('pre passes the decision the node it renders: the provider is asked about that element and no other', () => {
-    const d = detachUrls(page([13, 13, 13]));
+    const d = detachUrls(page([13, 13, 13]), LANGS);
     const second = pres(d.tree)[1];
     const asked: HastElement[] = [];
     const { container } = render(
@@ -106,7 +114,7 @@ describe('review 450 F1: the scan budget, a page\'s code of typescript, javascri
   });
   const filler = (n: number): string => 'x'.repeat(n);
   const decisions = (blocks: readonly HastElement[]): (boolean | null | undefined)[] => {
-    const d = detachUrls({ type: 'root', children: [...blocks] });
+    const d = detachUrls({ type: 'root', children: [...blocks] }, LANGS);
     return pres(d.tree).map((p) => d.urls.get(p)?.highlight);
   };
 
@@ -165,7 +173,7 @@ describe('review 450 F1: the markdown budget, a page\'s markdown code (131 072 c
    *  characters (under the line bound). */
   const worst = (n: number): string => ('</a>'.repeat(449) + '\n').repeat(Math.ceil(n / 1797)).slice(0, n);
   const decisions = (blocks: readonly HastElement[]): (boolean | null | undefined)[] => {
-    const d = detachUrls({ type: 'root', children: [...blocks] });
+    const d = detachUrls({ type: 'root', children: [...blocks] }, LANGS);
     return pres(d.tree).map((p) => d.urls.get(p)?.highlight);
   };
 
@@ -210,7 +218,7 @@ describe('review 450 F1: the markdown budget, a page\'s markdown code (131 072 c
 
   it('(f) rendered: a third 64 KiB markdown block renders unhighlighted through PreHighlightContext, the first two highlighted', () => {
     const md = (): HastElement => lang('markdown', worst(65536));
-    const d = detachUrls({ type: 'root', children: [md(), md(), md()] });
+    const d = detachUrls({ type: 'root', children: [md(), md(), md()] }, LANGS);
     expect(pres(d.tree).map((p) => d.urls.get(p)?.highlight)).toEqual([true, true, false]);
     const { container } = render(
       <PreHighlightContext value={(pre) => d.urls.get(pre)?.highlight !== false}>
@@ -261,7 +269,7 @@ describe('review 460 F10: which blocks of a mixed crafted page are highlighted, 
       return (real as (...a: unknown[]) => unknown)(code, ...rest);
     }) as typeof hljs.highlight;
     try {
-      const d = detachUrls({ type: 'root', children: blocks.map((b) => lang(b.name, b.text)) });
+      const d = detachUrls({ type: 'root', children: blocks.map((b) => lang(b.name, b.text)) }, LANGS);
       const { container } = render(
         <PreHighlightContext value={(pre) => d.urls.get(pre)?.highlight !== false}>
           {renderHast(d.tree, { components: { ...SHARED_COMPONENTS, a: DocLink } })}
@@ -309,5 +317,93 @@ describe('review 460 F10: which blocks of a mixed crafted page are highlighted, 
       ...tsFill(), block('markdown', 'g-1', mdChars), block('markdown', 'g-2', mdChars), block('yaml', 'g-yaml', 100),
     ]);
     expect(g.highlighted).toEqual([...Array.from({ length: tsCount + mdCount }, () => true), false]);
+  }, 60000);
+});
+
+// D-7574 (ARCH-05): `detachUrls` reads the renderer's three grammar facts (`codeLanguage`, `inScanPageBudget`,
+// `inMarkdownPageBudget`) for every `pre`. These rows hold its decisions across the three budgets with the aliases
+// `ts`, `tsx` and `md`, the class shapes the reader takes, and a name no grammar registers. Literal sizes, never the
+// imported constants, so a mutated constant reds a behaviour case.
+describe('D-7574 characterization: highlight decisions across the three budgets, with the aliases ts, tsx and md', () => {
+  /** A `pre > code` holding `n` characters, whose `className` is the given array, the given string, or absent. A string
+   *  is outside hast's declared type (the parse emits an array), but `detachUrls` reads either shape. */
+  const block = (className: readonly string[] | string | undefined, n: number): HastElement => {
+    const properties = (className === undefined ? {}
+      : { className: typeof className === 'string' ? className : [...className] }) as HastElement['properties'];
+    return {
+      type: 'element', tagName: 'pre', properties: {},
+      children: [{ type: 'element', tagName: 'code', properties, children: [{ type: 'text', value: 'x'.repeat(n) }] }],
+    };
+  };
+  const lang = (name: string, n: number): HastElement => block([`language-${name}`], n);
+  const decisions = (blocks: readonly HastElement[]): (boolean | null | undefined)[] => {
+    const d = detachUrls({ type: 'root', children: [...blocks] }, LANGS);
+    return pres(d.tree).map((p) => d.urls.get(p)?.highlight);
+  };
+
+  it('C1 the general budget refuses every alias past it: python 524 288, then tsx, md and ts of one character each', () => {
+    expect(decisions([lang('python', 524288), lang('tsx', 1), lang('md', 1), lang('ts', 1)])).toEqual([true, false, false, false]);
+  });
+
+  it('C2 a tsx block fills the scan sum, at and past the boundary', () => {
+    expect(decisions([lang('tsx', 393216), lang('ts', 1)])).toEqual([true, false]);
+    expect(decisions([lang('tsx', 393215), lang('ts', 1), lang('tsx', 1)])).toEqual([true, true, false]);
+  });
+
+  it('C3 the canonical names and js count in the scan sum, json does not', () => {
+    expect(decisions([lang('typescript', 196608), lang('javascript', 196608), lang('js', 1), lang('json', 1)]))
+      .toEqual([true, true, false, true]);
+  });
+
+  it('C4 the language is read from the code class: case-folded, from a string className, and the first language- wins', () => {
+    expect(decisions([block(['hljs', 'language-TSX'], 393216), lang('ts', 1)])).toEqual([true, false]);
+    expect(decisions([block('language-ts', 393216), lang('tsx', 1)])).toEqual([true, false]);
+    expect(decisions([block(['language-md', 'language-ts'], 131072), lang('md', 1), lang('ts', 1)])).toEqual([true, false, true]);
+  });
+
+  it('C5 an md block fills the markdown sum, and ts and tsx are untouched by it', () => {
+    expect(decisions([lang('md', 131072), lang('tsx', 1), lang('ts', 1), lang('md', 1)])).toEqual([true, true, true, false]);
+  });
+
+  it('C6 a name no grammar registers counts in the general sum only', () => {
+    expect(decisions([lang('nope', 400000), lang('ts', 1), lang('md', 1)])).toEqual([true, true, true]);
+  });
+
+  it('C7 both sub-budgets full fill the page exactly, and every later block is refused', () => {
+    expect(decisions([lang('ts', 393216), lang('md', 131072), lang('yaml', 1), lang('tsx', 1), lang('md', 1)]))
+      .toEqual([true, true, false, false, false]);
+  });
+});
+
+// D-7574 (ARCH-05): the Docs page's composition root (`DocMarkdown`) decides which grammar facts the page highlight
+// budget counts with. Every other row of this file calls `detachUrls` itself, so none can see the root; this one
+// renders through `DocMarkdown`, and a root that passes anything but the renderer's three real functions reds it.
+describe('D-7574: the Docs page hands detachUrls the real highlight-budget languages', () => {
+  const lang = (name: string, text: string): HastElement => ({
+    type: 'element', tagName: 'pre', properties: {},
+    children: [{ type: 'element', tagName: 'code', properties: { className: [`language-${name}`] }, children: [{ type: 'text', value: text }] }],
+  });
+  const LINK: Omit<DocLinkContextValue, 'urls'> = {
+    project: 'project-a', pageRef: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+    pageSource: 'committed', onFragment: () => {},
+  };
+  /** Render `blocks` as one Docs page through `DocMarkdown`; return, per block, how many elements match `selector`. */
+  const marks = async (blocks: readonly HastElement[], selector: string): Promise<number[]> => {
+    const tree: HastRoot = { type: 'root', children: [...blocks] };
+    const parser = vi.fn<MarkdownParser>(async () => ({ kind: 'tree', tree, depth: 3 }));
+    try {
+      const { container } = render(<DocMarkdown text="budget page" pinKey="p" parser={parser} link={LINK} />);
+      await waitFor(() => expect(container.querySelectorAll('.code-block')).toHaveLength(blocks.length));
+      return [...container.querySelectorAll('.code-block')].map((b) => b.querySelectorAll(selector).length);
+    } finally {
+      cleanup();
+    }
+  };
+
+  it('through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are not highlighted', async () => {
+    expect(await marks([lang('ts', 'x'.repeat(393216)), lang('tsx', 'const a = 1\n'), lang('python', 'import a\n')], '.hljs-keyword'))
+      .toEqual([0, 0, 1]);
+    expect(await marks([lang('md', 'x'.repeat(131072)), lang('md', '# h\n'), lang('yaml', '# c\n')], '.hljs-section, .hljs-comment'))
+      .toEqual([0, 0, 1]);
   }, 60000);
 });
