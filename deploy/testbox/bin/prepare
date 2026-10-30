@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# The test box's prepare units' fixed ExecStart, `prepare <spec file>`, as the run user, reaching loopback and the
+# registry proxy only (D-7409, D-7568; plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB7; spec §2.2
+# "Prepare"). The privileged first step (prestart) has made the run directory; this runs the prepare's three steps:
+#   1. the checkout (TB3's `checkout`, beside this script) into `<run>/checkout`, from the spec's mirror, run id,
+#      fetch URL and branch;
+#   2. each install step the spec names (`N` package, `W` directory, `J` argv words: a clone of the key's pristine
+#      install, or `npm ci --prefer-offline` in the run's copy, runs.ts#installStep), in order;
+#   3. each build output the spec names (`X`). The spec carries the output's path and not its build command, so an
+#      output is refused as a build failure until it does (D-7568), and the run falls back to local.
+# Each step runs with exactly the spec's environment (`E` records, `env -i`), as the runner runs the command, after
+# making the spec's TMPDIR inside the unit's private /tmp. The last stderr line of a failure is the prepare's reason
+# in TESTBOX_FALLBACK's words (D-7501): `test box: prepare failed (git <step>: <detail>)`, `test box: install failed
+# (<package>, exit <n>)` or `test box: build failed (<output>, exit <n>)`. It reads no config file and no test box
+# variable; every value comes from the spec the service wrote.
+set -uo pipefail
+
+die() { printf 'ccrc-testbox-prepare: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -eq 1 ] || die "usage: prepare <spec file>"
+spec=$1
+[ -f "$spec" ] && [ ! -L "$spec" ] || die "no spec file: $spec"
+here=${BASH_SOURCE[0]}
+[[ $here == */* ]] || here=./$here
+here=$(cd "${here%/*}" && pwd) || die "cannot find the script's directory"
+
+header=
+run='' runid='' mirror='' url='' branch='' have_branch=0
+envs=() outputs=() pkgs=() dirs=() words=()
+while IFS= read -r -d '' rec; do
+  if [ -z "$header" ]; then
+    [ "$rec" = ccrc-testbox-spec ] || die "not a test box spec: $spec"
+    header=1
+    continue
+  fi
+  case $rec in
+    D*) run=${rec:1} ;;
+    R*) runid=${rec:1} ;;
+    G*) mirror=${rec:1} ;;
+    F*) url=${rec:1} ;;
+    B*) branch=${rec:1}; have_branch=1 ;;
+    E*) case ${rec:1} in [A-Za-z_]*=*) envs+=("${rec:1}") ;; *) die "a bad environment record" ;; esac ;;
+    X*) outputs+=("${rec:1}") ;;
+    N*) pkgs+=("${rec:1}"); dirs+=(""); words+=("") ;;
+    W*) [ "${#pkgs[@]}" -gt 0 ] || die "an install directory before its package"; dirs[${#pkgs[@]}-1]=${rec:1} ;;
+    J*) [ "${#pkgs[@]}" -gt 0 ] || die "an install word before its package"; words[${#pkgs[@]}-1]+="${rec:1}"$'\037' ;;
+    *) ;;
+  esac
+done < "$spec"
+
+[ -n "$header" ] || die "empty spec: $spec"
+[ -n "$run" ] && [ -n "$runid" ] && [ -n "$mirror" ] && [ -n "$url" ] || die "the spec names no run directory, run id, mirror or fetch URL"
+case $run in /*/run) ;; *) die "not a run directory: $run" ;; esac
+
+# The spec's TMPDIR, made inside the unit's private /tmp (the steps' temporary files go there).
+for e in ${envs[@]+"${envs[@]}"}; do
+  case $e in TMPDIR=/*) mkdir -p -- "${e#TMPDIR=}" 2>/dev/null || die "cannot make ${e#TMPDIR=}" ;; esac
+done
+
+# 1. the checkout. checkout says its failure on stdout; the prepare's reason is its last stderr line.
+args=(--mirror "$mirror" --run-id "$runid" --fetch-url "$url" --dest "$run/checkout")
+((have_branch)) && args+=(--branch "$branch")
+env -i ${envs[@]+"${envs[@]}"} "$here/checkout" "${args[@]}" 1>&2
+rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+
+# 2. the install steps, in the row's install order.
+for i in "${!pkgs[@]}"; do
+  argv=()
+  IFS=$'\037' read -r -a argv <<< "${words[$i]%$'\037'}"
+  [ "${#argv[@]}" -gt 0 ] && [ -n "${dirs[$i]}" ] || die "install step ${pkgs[$i]} names no directory or command"
+  ( cd -- "${dirs[$i]}" && exec env -i ${envs[@]+"${envs[@]}"} "${argv[@]}" ) 1>&2
+  rc=$?
+  if [ "$rc" -ne 0 ]; then printf 'test box: install failed (%s, exit %s)\n' "${pkgs[$i]}" "$rc" >&2; exit 4; fi
+done
+
+# 3. the build outputs: the spec names no build command (D-7568), so each is refused by name.
+for o in ${outputs[@]+"${outputs[@]}"}; do
+  printf 'ccrc-testbox-prepare: the spec names no build command for %s\n' "$o" >&2
+  printf 'test box: build failed (%s, exit 2)\n' "$o" >&2
+  exit 5
+done
+exit 0

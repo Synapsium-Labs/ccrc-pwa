@@ -1,0 +1,64 @@
+#!/usr/sbin/nft -f
+# The test box's firewall (D-7409, D-7568; spec §2.0, §2.3 "Network"). Installed by deploy/testbox/install.sh, which
+# writes the match of the tailnet listen address (`ip daddr <v4>` or `ip6 daddr <v6>`) and the service port for @@LISTEN_MATCH@@ and @@LISTEN_PORT@@ (CCRC_TESTBOX_LISTEN)
+# and loads it in its last phase. Egress is one named address set per row of spec §2.0's table, each reachable only
+# from the unit the table names: the service (the mirror fetch, the registry proxy's upstream) and the tools unit (the
+# release, node, Chrome for Testing, the OS mirror), matched by the cgroup set each unit adds itself to (NFTSet=). The
+# address sets are filled by ccrc-testbox-egress.service from the names the installer wrote, never by this file. The
+# tailnet client's own coordination traffic is let out by its cgroup. The rest is the box's own infrastructure (D-7568):
+# loopback, replies, ICMP, the DHCP lease, DNS and NTP. Inbound, only ssh and the service port on the tailnet address.
+table inet ccrc_testbox
+delete table inet ccrc_testbox
+
+table inet ccrc_testbox {
+  set service_cg { type cgroupsv2; }
+  set tools_cg { type cgroupsv2; }
+
+  # spec §2.0's table: one v4 and one v6 set per row.
+  set github_v4 { type ipv4_addr; flags interval; }
+  set github_v6 { type ipv6_addr; flags interval; }
+  set registry_v4 { type ipv4_addr; flags interval; }
+  set registry_v6 { type ipv6_addr; flags interval; }
+  set release_v4 { type ipv4_addr; flags interval; }
+  set release_v6 { type ipv6_addr; flags interval; }
+  set nodejs_v4 { type ipv4_addr; flags interval; }
+  set nodejs_v6 { type ipv6_addr; flags interval; }
+  set chrome_v4 { type ipv4_addr; flags interval; }
+  set chrome_v6 { type ipv6_addr; flags interval; }
+  set osmirror_v4 { type ipv4_addr; flags interval; }
+  set osmirror_v6 { type ipv6_addr; flags interval; }
+
+  chain output {
+    type filter hook output priority filter; policy drop;
+    oifname "lo" accept
+    ct state established,related accept
+    meta l4proto { icmp, ipv6-icmp } accept
+    udp sport 68 udp dport 67 accept
+    udp dport 53 accept
+    tcp dport 53 accept
+    udp dport 123 accept
+    socket cgroupv2 level 2 "system.slice/tailscaled.service" accept
+    socket cgroupv2 level 2 @service_cg ip daddr @github_v4 tcp dport 443 accept
+    socket cgroupv2 level 2 @service_cg ip6 daddr @github_v6 tcp dport 443 accept
+    socket cgroupv2 level 2 @service_cg ip daddr @registry_v4 tcp dport 443 accept
+    socket cgroupv2 level 2 @service_cg ip6 daddr @registry_v6 tcp dport 443 accept
+    socket cgroupv2 level 2 @tools_cg ip daddr @release_v4 tcp dport 443 accept
+    socket cgroupv2 level 2 @tools_cg ip6 daddr @release_v6 tcp dport 443 accept
+    socket cgroupv2 level 2 @tools_cg ip daddr @nodejs_v4 tcp dport 443 accept
+    socket cgroupv2 level 2 @tools_cg ip6 daddr @nodejs_v6 tcp dport 443 accept
+    socket cgroupv2 level 2 @tools_cg ip daddr @chrome_v4 tcp dport 443 accept
+    socket cgroupv2 level 2 @tools_cg ip6 daddr @chrome_v6 tcp dport 443 accept
+    socket cgroupv2 level 2 @tools_cg ip daddr @osmirror_v4 tcp dport { 80, 443 } accept
+    socket cgroupv2 level 2 @tools_cg ip6 daddr @osmirror_v6 tcp dport { 80, 443 } accept
+  }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iifname "lo" accept
+    ct state established,related accept
+    meta l4proto { icmp, ipv6-icmp } accept
+    udp sport 67 udp dport 68 accept
+    socket cgroupv2 level 2 "system.slice/tailscaled.service" accept
+    @@LISTEN_MATCH@@ tcp dport { 22, @@LISTEN_PORT@@ } accept
+  }
+}

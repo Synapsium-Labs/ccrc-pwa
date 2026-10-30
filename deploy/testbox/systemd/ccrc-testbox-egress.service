@@ -1,0 +1,11 @@
+# The egress allowlist's names resolved into the firewall's address sets (D-7409, D-7568; spec §2.0). The installer
+# writes the names, one `<set><TAB><host>` line each, to @@ETC@@/egress; this replaces each set's addresses in one nft
+# transaction and touches no rule and no cgroup set. Started by ccrc-testbox-egress.timer. No environment file.
+[Unit]
+Description=ccrc test box: resolve the egress allowlist
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@@TREE@@/deploy/testbox/bin/egress @@ETC@@/egress

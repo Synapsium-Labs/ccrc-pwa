@@ -1,0 +1,24 @@
+# The test service (D-7406, D-7409, D-7426; spec §2.0, §2.9). Installed by deploy/testbox/install.sh, which writes
+# @@TREE@@ (the installed release, `<tools>/release/installed`) and @@TOOLS@@ into this file and the service user into
+# ccrc-testbox.service.d/50-ccrc-testbox.conf. It reads its settings once, at start, through the release's own
+# `ccd/ccrc-test --testbox-knobs box` (agent/src/testbox/config.ts), never from an environment file (D-7451). Before
+# it starts, the release a tool-sync takeover replaced is removed (tools-sync --takeover-ended, D-7426). The firewall
+# lets it out only to its own rows of spec §2.0's table, matched through the cgroup set NFTSet= adds it to (D-7568).
+[Unit]
+Description=ccrc test box: the test service
+Wants=network-online.target
+After=network-online.target nftables.service
+
+[Service]
+Type=exec
+User=ccrc-tb-svc
+ExecStartPre=+@@TREE@@/deploy/testbox/bin/tools-sync --takeover-ended
+ExecStart=@@TOOLS@@/current/node @@TREE@@/agent/dist/agent/src/testbox/main.js
+Restart=always
+RestartSec=5s
+NFTSet=cgroup:inet:ccrc_testbox:service_cg
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
