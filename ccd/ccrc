@@ -2719,7 +2719,7 @@ EOF
 }
 
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
-# `_upd_redact <text>` — what NO die sentence, report detail, WARN or
+# `_upd_redact <text> [bare-host]` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
 # 11 and M1): a URL's userinfo (`[scheme:/…]user:pass@host` -> `[scheme:/…]host`;
 # a scheme's one or more '/' stay as written, D-6748) and this box's own absolute
@@ -2749,7 +2749,7 @@ EOF
 # echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
 # with its own copy of all three rules (wave 29, R45, D-6984; its header says how).
 _upd_redact() {
-  local s="${1:-}" LC_ALL=C
+  local s="${1:-}" mode="${2:-}" LC_ALL=C
   # The userinfo strip is bounded to characters a URL authority allows
   # before an '@' — never '/' or whitespace — so an UNRELATED '@' past the
   # authority (a query's `?email=a@example.com`) is left alone. Review fix
@@ -2763,6 +2763,13 @@ _upd_redact() {
   # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
   local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
+  # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
+  # text's end is masked too, prose's `user@host` included, which is why no ccd/ccrc caller passes it: a systemd
+  # instance unit's `claude-session@x.service` would lose its prefix (D-7289).
+  if [ "$mode" = bare-host ]; then
+    local bre='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:])]+([/?#)]|$))'
+    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
+  fi
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
   # `~ser2/f` (a PREFIX match with no boundary check at all), and a
