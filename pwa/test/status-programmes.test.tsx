@@ -11,8 +11,9 @@
 //
 // MUTATION TABLE (plan Task G3 Step 3; RUN, each mutant on the working tree, one at a time, with this suite,
 // status-groups.test.ts and instrument-list.test.tsx (the browser rows: instrument-desk.browser.test.ts -t "programmes"),
-// then restored from a saved copy with its sha256 checked: the task's 26 rows, fix round 1's four and fix round 2's five,
-// 35 in all, each run red; instrument-shell holds one more):
+// then restored from a saved copy with its sha256 checked: the task's 26 rows, fix round 1's four, fix round 2's five and
+// fix round 3's one, 36 in all, each run red; instrument-shell holds one more. Fix round 3 re-ran every jsdom row on the
+// merge of main c69ad8807, each red, and the red lists of fix rounds 1 and 2 below are that run's):
 //   a child row drawn outside its box (members not hidden) ..... 15 cases, here, status-groups and instrument-list
 //   counts taken from sessions (a box as its coordinator and
 //     children) instead of drawn rows ......................... 9 cases, "every group counts what it draws…" among them
@@ -20,7 +21,7 @@
 //   the tray dropping the session the operator has open ......... "the session the operator has open stays in its box's tray…", here and in status-groups
 //   the open session making its box need you .................... status-groups' open-session case
 //   Programmes taking the needing boxes too ..................... 13 cases, "the groups are Needs you…" among them
-//   Programmes after Done (its order 1.5) ....................... 6 cases, statusGroups' order case among them
+//   Programmes after Done (placed after `done` in BUCKET_ORDER) . 6 cases, statusGroups' order case among them
 //   far workers not members ..................................... "a far worker that asks is drawn in its coordinator's box…", and 4 in status-groups
 //   a box's needs ignoring its far workers' asks ................ status-groups' "a box that needs you only through a far worker…"
 //   Needs you never held ........................................ instrument-list's held case, status-groups' held case
@@ -49,7 +50,8 @@
 //   the scroll into view on first paint only (the effect's deps `[]`)
 //                                                                  browser: the 360 case that chooses Needs you off screen
 //   the orphan marker dropped in status mode (`coordinator={null}`)
-//                                                                  "a lone worker keeps its orphan marker in status mode…"
+//                                                                  "a lone worker keeps its orphan marker in status mode…", the Released-fold
+//                                                                  case and the four "…a dead claimant is gone…" card cases (6)
 //   `.pg-project` without `.pg-title`'s cut (programmeBox.css) .. browser: both 390 cases (`the long project name is cut…`)
 // Fix round 2 (review 1177, a dead claimant is gone) added five rows, each RUN red on its new cases and green restored:
 //   a dead claimant still heads its workers (no `gone` in the member loop)
@@ -58,10 +60,18 @@
 //                                                                  "on the same card, an asking worker…", status-groups' dead-claimant case
 //                                                                  (on another card the far worker is none of the box's own children)
 //   the orphan marker asking the card's live rows, not the boxes that keep their workers (FleetTable)
-//                                                                  "on the same card, …" cases (no marker: the dead coordinator is a row of its card)
-//   a hibernated claimant counted gone (`!== 'alive'`) ........... "a hibernated claimant is not gone…"
+//                                                                  "on the same card, …" cases (no marker: the dead coordinator is a row of its card),
+//                                                                  and the hibernated claimant's open worker (it draws `coordinator-hibernated`)
+//   a hibernated claimant counted gone (`=== 'dead' || === 'hibernated'`)
+//                                                                  "a hibernated claimant is not gone…", "a hibernated claimant's worker the
+//                                                                  operator has open…" (as `!== 'alive'`, also the unmeasured case and
+//                                                                  status-groups' dead-claimant case, 4)
 //   an unmeasured presence counted gone (`=== 'dead' || === 'unknown'`)
 //                                                                  "a claimant whose presence was not measured is not gone…", status-groups' frame case
+// Fix round 3 (review 1183, F1) added one row, RUN red on its new case and green restored:
+//   the orphan marker asking no box at all (`keepers` an empty list, FleetTable)
+//                                                                  "a hibernated claimant's worker the operator has open…" (it draws
+//                                                                  `coordinator-hibernated`; D-7377 as amended rules no marker there)
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -426,6 +436,18 @@ describe('a dead claimant is gone: its workers are lone orphan rows (G3 fix roun
     mount(sessions, runs);
     expect(rowIds(table())).not.toContain('w');
     expect(boxOf(groupOf('programmes'), 'dc')).toBeDefined();
+  });
+
+  // D-7377 as amended (the operator's ruling of 2026-10-30): the box already says hibernated, so a member drawn in its
+  // tray carries no coordinator marker of its own, selected or not. Project mode is not this case's.
+  it('a hibernated claimant\'s worker the operator has open is drawn in its tray with no coordinator marker', () => {
+    const { sessions, runs } = fleet(sess('dc', 'project-b', { ...dead, lifecycle: 'stopped', hibernatedAt: Date.now() - 3_600_000 }));
+    mount(sessions, runs);
+    act(() => navigate('/s/w'));
+    const tray = boxOf(groupOf('programmes'), 'dc').querySelector<HTMLElement>('.pg-tray')!;
+    expect(rowIds(tray)).toEqual(['w']);
+    expect(marker(tray.querySelector('[data-row="w"]')!)).toBeNull();
+    drawnOnce();
   });
 
   it('a claimant whose presence was not measured is not gone: its worker stays a member', () => {

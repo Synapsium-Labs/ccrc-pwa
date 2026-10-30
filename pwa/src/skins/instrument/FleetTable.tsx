@@ -28,9 +28,14 @@
 // `needs-only` mode (no fold, no footer, the project in its kicker), and a child never draws as a row of its own: it is
 // in its box's tray while it asks the operator, and nowhere otherwise. Needs you holds the boxes that need the operator,
 // then the rows in no programme that do; Programmes the other boxes; the rest are today's groups over the rows in no
-// programme. Every head counts what its group draws, a box as one. A row's run, its cross-project chip and its orphan
-// marker are read through `fleetTree`'s groups, the card the server placed it on, exactly as the project card reads
-// them (D-5527), so the two modes cannot disagree.
+// programme. Every head counts what its group draws, a box as one. A row's run and its cross-project chip are read
+// through `fleetTree`'s groups, the card the server placed it on, exactly as the project card reads them (D-5527), so
+// the two modes agree on them. Its orphan marker is the same `orphanNote`, given the card's runs too, but asked about
+// `keepers` (the coordinators of the boxes that keep their workers) where the project card passes its live rows. The
+// two modes differ there on purpose (D-7377 as amended): a dead claimant that is still a row of the worker's card leaves
+// the worker a lone row saying "coordinator gone" here, where project mode nests it under that coordinator and says
+// nothing; and a hibernated claimant's member carries no marker inside its box here (the box says hibernated), where
+// project mode marks one whose claimant is not on its card "coordinator hibernated".
 //
 // PROJECT MODE places the shared `FleetCards`, the list Refined draws: its card heads hold the pool and add doors, its
 // Released fold holds archive-all, and the rollup's rules hold unchanged. A card mixes statuses, so there each row
@@ -196,8 +201,9 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
 
   // Memoised on what each reads (C9, D-6441), and every prop a row is handed is stable, so a one-row frame re-renders
   // that row's `SessionLine` only (`memo`, `lineProps.ts`).
-  // The cards the server placed each row on, and their runs and live rows: what the project card reads for the same
-  // row (its run door, its cross-project chip, its orphan marker), so a row says the same thing in either mode.
+  // The cards the server placed each row on, and their runs: what the project card reads for the same row (its run
+  // door, its cross-project chip), so those say the same thing in either mode. The orphan marker asks `keepers` below,
+  // not the card's live rows, so it differs from project mode where the header says.
   const cards = useMemo(() => cardsOf(sessions), [sessions]);
   const treeGroups = useMemo(() => fleetTree(sessions, chrome.projects.knownProjects, activeRuns, acks),
     [sessions, chrome.projects.knownProjects, activeRuns, acks]);

@@ -84,6 +84,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type DistServer } from './app';
+import { withRunBinding } from '../test/runBindingFixture';
 
 const THEMES = [PHOSPHOR, 'light'] as const;
 
@@ -593,7 +594,8 @@ describe('the Status view shows programmes, not children (G3)', () => {
   const CHILDREN = ['billing-w1', 'billing-w2', 'billing-w3', 'port-w1', 'port-w2'];
   const PFIXTURE: AppFixture = {
     api: { ...FIXTURE.api, '/api/runs': PRUNS },
-    fleetFrames: [{ type: 'fleet', sessions: PSESSIONS }, { type: 'runs', runs: PRUNS }],
+    // A current server's frame: each session carries its run binding over the runs (D-7461), which C7d reads.
+    fleetFrames: [{ type: 'fleet', sessions: withRunBinding(PSESSIONS as never[], PRUNS as never[]) }, { type: 'runs', runs: PRUNS }],
   };
 
   async function openStatus(theme: string, width: number, touch = false) {

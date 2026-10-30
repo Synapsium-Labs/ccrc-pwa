@@ -148,12 +148,12 @@ const CENSUS: readonly Row[] = [
     why: 'that read: `coordinatorPresence` (D-7181) spells the server\'s `asleep` `hibernated`, never `dead`' },
   { source: 'dead-compare', file: 'pwa/src/fleet/statusGroups.ts', hits: 1, stances: ['consults'],
     why: '`statusView` (desktop-polish G3) makes a claimant\'s workers lone rows with the orphan marker, not members of its '
-      + 'box, only when `coordinatorPresence` answers `dead`: G3\'s orphan ruling as amended on review 1177\'s N1 (ruling '
-      + '12287), these rows by the ruling on ask 191. Safe across a sleep: a sleeper reads `hibernated`, so its workers '
+      + 'box, only when `coordinatorPresence` answers `dead`: D-7377 as amended (review 1177\'s N1, ruling 12287), these '
+      + 'rows by the ruling on ask 191. Safe across a sleep: a sleeper reads `hibernated`, so its workers '
       + 'stay its box\'s members' },
   { source: 'presence-reader', file: 'pwa/src/fleet/statusGroups.ts', hits: 1, stances: ['consults'],
-    why: 'that read: the orphan marker\'s own `coordinatorPresence` (D-7181), through the same lookup, which spells the '
-      + 'server\'s `asleep` `hibernated`, never `dead`' },
+    why: 'that read (D-7377 as amended): the orphan marker\'s own `coordinatorPresence` (D-7181), through the same lookup, '
+      + 'which spells the server\'s `asleep` `hibernated`, never `dead`' },
   { source: 'dead-compare', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
     why: 'the Resume button reads `coordinatorPresence` (D-7181), which answers a sleeper `hibernated`, never `dead`' },
   { source: 'presence-reader', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
