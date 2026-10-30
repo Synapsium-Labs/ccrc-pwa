@@ -20,6 +20,15 @@ import {
 import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
+import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+
+/** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
+export interface RollIdleView {
+  readonly ok: true;
+  readonly targets: ClaudeRollTargets | null;
+  readonly default: ClaudeRollTargets;
+  readonly choices: readonly ClaudeRollTargets[];
+}
 
 
 // `ApiError` lives in `./apiError` (D-5897, ARCH-05), a leaf that imports nothing, so a pure word module can name
@@ -772,6 +781,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>
       postJsonOr<DispatchAbandonView | 'unreadable'>('/api/coord/dispatch-abandon', 'unreadable', body),
+    /** `GET /api/coord/roll-idle` (D-7453): Settings › Automation › Roll idle sessions, `coordinators` or `off`
+     *  (`targets` null when the server could not read its row). Session-gated when armed, open dark; no box token. */
+    rollIdle: () => getJson<RollIdleView>('/api/coord/roll-idle'),
+    /** `POST /api/coord/roll-idle`: `{targets}`. `postJsonOr`, for `setCoordCaps`' reason: after a write, "the answer
+     *  could not be read" may well have stored the choice. */
+    setRollIdle: (targets: ClaudeRollTargets) =>
+      postJsonOr<RollIdleView | 'unreadable'>('/api/coord/roll-idle', 'unreadable', { targets }),
     /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
      *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
      *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */

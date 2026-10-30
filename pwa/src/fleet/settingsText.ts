@@ -310,6 +310,11 @@ export const SETTINGS_CARDS = {
     pause: {
       scope: SETTINGS_SCOPE.fleet, title: COLLECT_PAUSE_TEXT.title, purpose: COLLECT_PAUSE_TEXT.stops,
     },
+    roll: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',
+      purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
+        + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
+    },
   },
   security: {
     gate: {
