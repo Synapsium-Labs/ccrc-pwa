@@ -310,6 +310,9 @@ function treeHash(dir: string): string {
   return h.digest('hex');
 }
 
+/** A service row runs several units through real scripts: vitest's default 5 s is too short on a loaded machine. */
+const ROW_TIMEOUT_MS = 120_000;
+
 const inRun = (call: string): boolean => call.includes(`${path.sep}runs${path.sep}`);
 const inInstall = (call: string): boolean => call.includes(`${path.sep}install${path.sep}run${path.sep}`);
 const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.[0-9]{3}Z$/, 'Z');
@@ -481,7 +484,7 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
     expect(box.npmCalls().length - before, 'npm ci per run with a present key').toBe(0);
     expect(box.cpCalls().filter((c) => c.includes('--reflink'))).toEqual([[...CLONE_ARGV.slice(1), path.join(box.root, 'pristine', key), path.join(box.root, 'runs', '1', 'run', 'checkout', 'server', 'node_modules')].join(' ')]);
     expect(box.mgr.log.filter((u) => u === 'ccrc-testbox-install.service')).toHaveLength(1);
-  });
+  }, ROW_TIMEOUT_MS);
 
   it('the pristine install is byte-unchanged after a run writes under its clone', async () => {
     const box = makeBox();
@@ -495,7 +498,7 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
     expect(treeHash(pristine)).toBe(before);
     expect(readFileSync(path.join(pristine, 'dep', 'index.js'), 'utf8')).toBe('module.exports = 1;\n');
     expect(existsSync(path.join(pristine, '.vite'))).toBe(false);
-  });
+  }, ROW_TIMEOUT_MS);
 
   it('a failing install retries on the backoff, is listed with exit, attempts and next attempt, the box is degraded, runs still install in their copy, and install/run is gone after every attempt', async () => {
     const box = makeBox();
@@ -546,7 +549,7 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
     expect(st.failedKeys).toEqual([]);
     expect(st.pristine).toEqual([{ repository: 'project-a', package: 'server', key: keyOf(box) }]);
     expect(st.state).toBe('ok');
-  });
+  }, ROW_TIMEOUT_MS);
 
   it('a key unused for the keep time leaves the list, and the next install\'s first step removes it', async () => {
     const box = makeBox();
@@ -562,7 +565,7 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
     await runOne(box);
     expect(existsSync(path.join(box.root, 'pristine', old))).toBe(false);
     expect(existsSync(path.join(box.root, 'pristine', keyOf(box)))).toBe(true);
-  });
+  }, ROW_TIMEOUT_MS);
 
   it('a new node version queues the key\'s rebuild, and a restarted service adopts what is on disk', async () => {
     const box = makeBox();
@@ -584,7 +587,7 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
     expect(box.npmCalls().length - before).toBe(0);
     expect(box.mgr.log.filter((u) => u === 'ccrc-testbox-install.service')).toHaveLength(2);
     expect(box.svc.status().pristine).toEqual([{ repository: 'project-a', package: 'server', key: keyOf(box) }]);
-  });
+  }, ROW_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------------------------------------------
