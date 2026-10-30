@@ -11,7 +11,7 @@ import { configDirFor } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Deps } from './deps.js';
 import { assembleFleet, dropStaleLandings } from './fleet.js';
-import { liveStateReaderOver } from './livestate.js';
+import { liveStateReaderOver, readLiveState } from './livestate.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
@@ -2561,7 +2561,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/api/sessions/:id/commands', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return sessionCommands(deps, id);
+    return sessionCommands(deps, id, (dir, pid) => readLiveState(deps.io, dir, pid));
   });
 
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
