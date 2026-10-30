@@ -23,8 +23,8 @@ import { recordNestedRescueShadow } from './nestedRescueShadow.js';
 import { journalShadowVerdict } from './shadowJournal.js';
 import { SHADOW_LANE, SHADOW_RUNG } from '../../../shared/shadowJournal.js';
 import {
-  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, capabilityJudge,
-  presenceJudge, type RetireNoRead, type RetireReason,
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_VIEWER_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, capabilityJudge,
+  viewerJudge, type RetireNoRead, type RetireReason,
 } from '../retire.js';
 import { retireAct, type RetireActPort } from '../retireLane.js';
 
@@ -310,7 +310,7 @@ export interface ArchiveExpiredFacts {
   readonly [RETIRE_STEPS.capability]?: readonly boolean[];
   readonly [RETIRE_STEPS.switches]?: ExpirySwitchesRead;
   readonly [RETIRE_STEPS.store]?: ExpiryStoreRead;
-  readonly [RETIRE_STEPS.presence]?: boolean;
+  readonly [RETIRE_STEPS.viewer]?: boolean;
   readonly [RETIRE_STEPS.audit]?: ExpireAuditRead;
   readonly [RETIRE_STEPS.archiveMatch]?: RetireNoRead;
   readonly [RETIRE_STEPS.auditVerdict]?: RetireNoRead;
@@ -355,7 +355,7 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
     { step: RETIRE_STEPS.capability, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.switches, sync: false, onReject: 'propagate', markers: EXPIRY_SWITCH_MARKERS },
     { step: RETIRE_STEPS.store, sync: true, onReject: 'propagate' },
-    { step: RETIRE_STEPS.presence, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.viewer, sync: true, onReject: 'propagate' },
   ],
   audit: { step: RETIRE_STEPS.audit, sync: false, onReject: 'propagate' },
   act: [
@@ -365,7 +365,7 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
     { step: RETIRE_STEPS.live, sync: true, onReject: 'propagate' },
   ],
   listing: RETIRE_LISTING_MODES.measuredOnce,
-  presence: RETIRE_PRESENCE_RULES.noCeiling,
+  viewer: RETIRE_VIEWER_RULES.noCeiling,
   notice: RETIRE_NOTICE_HOMES.lane,
   judge: {
     [RETIRE_STEPS.id]: (sessionId, _f, req) => expiryIdJudge(sessionId, req),
@@ -379,8 +379,8 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
       return kept !== null ? expiryAnswerOf(req)({ kind: 'deferred', why: kept,
         detail: `the coordination store, re-read at the act, keeps ${req.sessionId} (${kept})` }) : null;
     },
-    [RETIRE_STEPS.presence]: presenceJudge<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult>(
-      RETIRE_PRESENCE_RULES.noCeiling,
+    [RETIRE_STEPS.viewer]: viewerJudge<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult>(
+      RETIRE_VIEWER_RULES.noCeiling,
       (req) => expiryAnswerOf(req)({ kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' })),
     [RETIRE_STEPS.audit]: (audit, _f, req) => {
       const answer = expiryAnswerOf(req);
@@ -444,7 +444,7 @@ export function expireRetirePort(
         childOf === undefined || capSupported(deps.fleetState, EXPIRE_CHILD_CAP)],
       [RETIRE_STEPS.switches]: () => expirySwitches(deps),
       [RETIRE_STEPS.store]: () => readExpiryStore(deps.coord, sessionId, childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null }),
-      [RETIRE_STEPS.presence]: () => deps.viewers?.isVisible(sessionId) === true,
+      [RETIRE_STEPS.viewer]: () => deps.viewers?.isVisible(sessionId) === true,
       [RETIRE_STEPS.audit]: () => expireAudit(deps, sessionId, childOf),
       [RETIRE_STEPS.archiveMatch]: () => true,
       [RETIRE_STEPS.auditVerdict]: () => true,

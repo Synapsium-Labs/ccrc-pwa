@@ -46,8 +46,8 @@ import { SHADOW_RUNG } from '../../../shared/shadowJournal.js';
 import { childReclaimSweepVerdict } from '../childReclaimSweep.js';
 import { retireAct, type RetireActPort } from '../retireLane.js';
 import {
-  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
-  capabilityJudge, presenceJudge, type RetireNoRead, type RetireReason,
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_VIEWER_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
+  capabilityJudge, viewerJudge, type RetireNoRead, type RetireReason,
 } from '../retire.js';
 
 /**
@@ -2195,7 +2195,7 @@ export interface ChildSpentFacts {
   readonly [RETIRE_STEPS.offSwitch]?: string | null;
   /** `childReclaimGenerationRead`, its rejection (step 2c's try), or null when the request carries no licence. */
   readonly [RETIRE_STEPS.generation]?: ChildReclaimGeneration | RetireRejected | null;
-  readonly [RETIRE_STEPS.presence]?: boolean;
+  readonly [RETIRE_STEPS.viewer]?: boolean;
   /** `reclaim-v1`, then the stale arm's `reclaim-stale-v1` (true for a request that is not stale). */
   readonly [RETIRE_STEPS.capability]?: readonly boolean[];
   readonly [RETIRE_STEPS.audit]?: ChildReclaimAuditRead | ChildReclaimAuditUnmeasured;
@@ -2282,7 +2282,7 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
     // reads it (and the pause) off the act's one listing.
     { step: RETIRE_STEPS.offSwitch, sync: false, onReject: 'propagate' },
     { step: RETIRE_STEPS.generation, sync: false, onReject: 'judged' },
-    { step: RETIRE_STEPS.presence, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.viewer, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.capability, sync: true, onReject: 'propagate' },
   ],
   audit: { step: RETIRE_STEPS.audit, sync: false, onReject: 'propagate' },
@@ -2293,7 +2293,7 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
     { step: RETIRE_STEPS.offSwitchLast, sync: false, onReject: 'propagate' },
   ],
   listing: RETIRE_LISTING_MODES.plainPerMarker,
-  presence: RETIRE_PRESENCE_RULES.untilCeiling,
+  viewer: RETIRE_VIEWER_RULES.untilCeiling,
   notice: RETIRE_NOTICE_HOMES.executor,
   judge: {
     [RETIRE_STEPS.record]: (record, _f, req) => childSpentRecordJudge(record, req),
@@ -2332,8 +2332,8 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
       }
       return null;
     },
-    [RETIRE_STEPS.presence]: presenceJudge<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome>(
-      RETIRE_PRESENCE_RULES.untilCeiling,
+    [RETIRE_STEPS.viewer]: viewerJudge<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome>(
+      RETIRE_VIEWER_RULES.untilCeiling,
       (req) => childSpentDeferredOf(req, 'presence', 'someone is viewing this session'), (req) => req.deferExpired),
     [RETIRE_STEPS.capability]: capabilityJudge<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome>([
       (req) => childSpentDeferredOf(req, 'unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`),
@@ -2429,7 +2429,7 @@ export function childReclaimRetirePort(
       [RETIRE_STEPS.offSwitch]: () => childReclaimDisabledDetail(deps, ''),
       [RETIRE_STEPS.generation]: () => (req.licenceGeneration.kind === 'none' ? null
         : childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId)),
-      [RETIRE_STEPS.presence]: () => !req.deferExpired && deps.viewers?.isVisible(sessionId) === true,
+      [RETIRE_STEPS.viewer]: () => !req.deferExpired && deps.viewers?.isVisible(sessionId) === true,
       [RETIRE_STEPS.capability]: () => (!ccdCan(deps.fleetState, 'wsReclaim') ? [false]
         : [true, req.stale === undefined || capSupported(deps.fleetState, RECLAIM_STALE_CAP)]),
       [RETIRE_STEPS.audit]: () => childReclaimAudit(deps, req),

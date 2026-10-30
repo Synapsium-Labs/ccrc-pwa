@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createSessionStore } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { saveMark, loadMark } from '../src/lib/notifymark';
-import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS, type CatchUp } from '../../shared/api';
+import { VIEWER_REFRESH_MS, VIEWER_TTL_MS, type CatchUp } from '../../shared/api';
 
 /** A WebSocket fake that records what was sent and can be opened at will. */
 function fakeSocket(): { ws: WebSocket; sent: unknown[]; open: () => void } {
@@ -103,7 +103,7 @@ describe('reporting which session is on screen', () => {
       store.getState().connect();
       f.open();
       expect(f.sent).toHaveLength(1);
-      vi.advanceTimersByTime(PRESENCE_TTL_MS);
+      vi.advanceTimersByTime(VIEWER_TTL_MS);
       // Strictly more than one refresh inside a TTL — that ratio is the whole
       // point: a claim survives a lost frame, but not a dead client.
       expect(f.sent.length).toBeGreaterThan(2);
@@ -112,7 +112,7 @@ describe('reporting which session is on screen', () => {
       // closed session would keep claiming presence through a pooled socket.
       store.getState().disconnect();
       const after = f.sent.length;
-      vi.advanceTimersByTime(PRESENCE_TTL_MS * 3);
+      vi.advanceTimersByTime(VIEWER_TTL_MS * 3);
       expect(f.sent).toHaveLength(after);
     } finally {
       vi.useRealTimers();
@@ -120,7 +120,7 @@ describe('reporting which session is on screen', () => {
   });
 
   // D-5242 (plan Task 17a): the beat re-states the claim WHATEVER the visibility. The server keeps an OPEN claim per
-  // connection, re-stamped by every frame, that holds the session awake for `PRESENCE_OPEN_TTL_MS`; a hidden tab that
+  // connection, re-stamped by every frame, that holds the session awake for `VIEWER_OPEN_TTL_MS`; a hidden tab that
   // went silent would let it lapse while the screen is still open. A hidden frame still deletes only the VISIBLE claim,
   // so notifications behave exactly as before.
   it('keeps beating while the tab is in the background, saying hidden every time', () => {
@@ -133,7 +133,7 @@ describe('reporting which session is on screen', () => {
       setVisibility('hidden');
       document.dispatchEvent(new Event('visibilitychange'));
       const after = f.sent.length;
-      vi.advanceTimersByTime(PRESENCE_REFRESH_MS * 3);
+      vi.advanceTimersByTime(VIEWER_REFRESH_MS * 3);
       expect(f.sent.slice(after)).toEqual([
         { type: 'visible', visible: false }, { type: 'visible', visible: false }, { type: 'visible', visible: false },
       ]);
@@ -151,7 +151,7 @@ describe('reporting which session is on screen', () => {
       store.getState().connect();
       f.open();
       const after = f.sent.length;
-      vi.advanceTimersByTime(PRESENCE_REFRESH_MS * 2);
+      vi.advanceTimersByTime(VIEWER_REFRESH_MS * 2);
       expect(f.sent.slice(after)).toEqual([{ type: 'visible', visible: true }, { type: 'visible', visible: true }]);
       store.getState().disconnect();
     } finally {

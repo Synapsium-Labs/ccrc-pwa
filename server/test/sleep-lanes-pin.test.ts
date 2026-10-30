@@ -28,7 +28,7 @@ import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps }
 import { hibernatePass, type HibernateActPort, type HibernateSweepDeps, type HibernateSweepMemory } from '../src/sleepLane.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { ACTOR_FLAGS_CAP, HIBERNATE_HOLD_OK_CAP } from '../src/ccdargv.js';
-import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { CcdResult } from '../src/lifecycle.js';
@@ -47,7 +47,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const GRACE = STOP_DONE_GRACE_MS;
 const N = HIBERNATE_AFTER_MS_DEFAULT;
-const STARTED = NOW - PRESENCE_OPEN_TTL_MS - MIN;
+const STARTED = NOW - VIEWER_OPEN_TTL_MS - MIN;
 const ID = 'project-a-quiet-basin';
 const PROGRAMME_HOLD = 'program:programme-a wave:2';
 
@@ -78,7 +78,7 @@ const word = (v: StopDoneVerdict | HibernateVerdict): string => (v.act === 'hold
 const SD: StopDoneInput = {
   row: row(ID) as unknown as StopDoneInput['row'], heldKind: 'none', holdOkVerb: true,
   store: { ok: true, last: { runId: 7, state: 'done', closedAt: NOW - GRACE - MIN }, openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false },
-  viewer: false, sinceStartMs: PRESENCE_OPEN_TTL_MS + 1, viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS, verb: true, optedOut: false,
+  viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS, verb: true, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK(7 * HOUR) },
   now: NOW, graceMs: GRACE,
 };
@@ -130,7 +130,7 @@ const RUN_DONE: readonly Rung<StopDoneInput, StopDoneHold>[] = [
 /** The other ways run-done reaches a word its ladder already holds. */
 const RUN_DONE_ALSO: readonly Rung<StopDoneInput, StopDoneHold>[] = [
   { name: 'unmeasured (status)', word: 'unmeasured', touches: [], set: sdRow({ statusUnmeasured: true }) },
-  { name: 'viewer (after a start)', word: 'viewer', touches: [], set: sdIn({ sinceStartMs: PRESENCE_OPEN_TTL_MS - 1 }) },
+  { name: 'viewer (after a start)', word: 'viewer', touches: [], set: sdIn({ sinceStartMs: VIEWER_OPEN_TTL_MS - 1 }) },
   { name: 'unmeasured (live word)', word: 'unmeasured', touches: [], set: sdLive({ word: { ok: false, reason: 'unmeasured' } }) },
   { name: 'pane (no config dir)', word: 'pane', touches: [], set: sdLive({ word: { ok: false, reason: 'no-config-dir' } }) },
   { name: 'unmeasured (turn verdict)', word: 'unmeasured', touches: [], set: sdLive({ turn: 'unmeasured' }) },
@@ -144,7 +144,7 @@ const RUN_DONE_ALSO: readonly Rung<StopDoneInput, StopDoneHold>[] = [
 const HB: HibernateInput = {
   row: row(ID) as unknown as HibernateInput['row'], optedOut: false,
   store: { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
-  viewer: false, sinceStartMs: PRESENCE_OPEN_TTL_MS + 1,
+  viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, mark: MARK(7 * HOUR) },
 };
 const hbRow = (o: Record<string, unknown>): Mut<HibernateInput> => (i) => ({ ...i, row: { ...i.row, ...o } as HibernateInput['row'] });
@@ -185,7 +185,7 @@ const IDLE_HOURS: readonly Rung<HibernateInput, HibernateHold>[] = [
 const IDLE_HOURS_ALSO: readonly Rung<HibernateInput, HibernateHold>[] = [
   { name: 'archived (bucket)', word: 'archived', touches: [], set: hbRow({ bucket: 'archived' }) },
   { name: 'unmeasured (status)', word: 'unmeasured', touches: [], set: hbRow({ statusUnmeasured: true }) },
-  { name: 'viewer (after a start)', word: 'viewer', touches: [], set: hbIn({ sinceStartMs: PRESENCE_OPEN_TTL_MS - 1 }) },
+  { name: 'viewer (after a start)', word: 'viewer', touches: [], set: hbIn({ sinceStartMs: VIEWER_OPEN_TTL_MS - 1 }) },
   { name: 'unmeasured (live word)', word: 'unmeasured', touches: [], set: hbLive({ word: { ok: false, reason: 'unmeasured' } }) },
   { name: 'pane (no config dir)', word: 'pane', touches: [], set: hbLive({ word: { ok: false, reason: 'no-config-dir' } }) },
   { name: 'marker (unreadable)', word: 'marker', touches: [], set: hbLive({ mark: { ok: false, reason: 'foreign' } }) },

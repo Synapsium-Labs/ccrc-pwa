@@ -13,13 +13,13 @@ import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { HIBERNATE_DISABLED_MARKER } from '../src/coord/hibernate.js';
 import { DEPS_SHED_LIVE_MARKER } from '../../shared/switches.js';
-import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
-const STARTED = NOW - PRESENCE_OPEN_TTL_MS - 60_000;
+const STARTED = NOW - VIEWER_OPEN_TTL_MS - 60_000;
 const W = 'project-a-quiet-basin';
 const C = 'lane-a-project-a';
 

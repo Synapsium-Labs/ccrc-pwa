@@ -9,7 +9,7 @@ import {
   type HibernateHold, type HibernateInput, type HibernateLive, type HibernateMark, type HibernateRow,
   type HibernateStoreRead,
 } from '../src/coord/hibernate.js';
-import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, VIEWER_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES } from '../../shared/api.js';
 import { TURN_MARK_STATES } from '../src/coord/stall.js';
 
 const NOW = 1_800_000_000_000;
@@ -32,7 +32,7 @@ const live = (over: { word?: string; mark?: Partial<HibernateMark> | HibernateMa
   mark: { ...MARK, ...(over.mark ?? {}) } as HibernateMark,
 });
 const base = (over: Partial<HibernateInput> = {}): HibernateInput => ({
-  row: row(), optedOut: false, store: STORE, viewer: false, sinceStartMs: PRESENCE_OPEN_TTL_MS + 1, live: live(),
+  row: row(), optedOut: false, store: STORE, viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1, live: live(),
   ...over,
 });
 const verdict = (over: Partial<HibernateInput> = {}) => hibernateVerdict(base(over), NOW, HIBERNATE_AFTER_MS_DEFAULT);
@@ -151,14 +151,14 @@ describe('hibernateVerdict: the clock', () => {
 });
 
 describe('hibernateVerdict: the post-start presence hold', () => {
-  it('every candidate holds viewer for PRESENCE_OPEN_TTL_MS after the server starts (presence is never persisted)', () => {
+  it('every candidate holds viewer for VIEWER_OPEN_TTL_MS after the server starts (presence is never persisted)', () => {
     expect(verdict({ sinceStartMs: 0 })).toEqual(held('viewer'));
-    expect(verdict({ sinceStartMs: PRESENCE_OPEN_TTL_MS - 1 })).toEqual(held('viewer'));
-    expect(verdict({ sinceStartMs: PRESENCE_OPEN_TTL_MS })).toEqual({ act: 'hibernate', idleMs: 7 * HOUR });
+    expect(verdict({ sinceStartMs: VIEWER_OPEN_TTL_MS - 1 })).toEqual(held('viewer'));
+    expect(verdict({ sinceStartMs: VIEWER_OPEN_TTL_MS })).toEqual({ act: 'hibernate', idleMs: 7 * HOUR });
   });
-  it('the window is the open TTL, not the visible one: at PRESENCE_TTL_MS + 1 it still holds', () => {
-    expect(PRESENCE_OPEN_TTL_MS).toBeGreaterThan(PRESENCE_TTL_MS);
-    expect(verdict({ sinceStartMs: PRESENCE_TTL_MS + 1 })).toEqual(held('viewer'));
+  it('the window is the open TTL, not the visible one: at VIEWER_TTL_MS + 1 it still holds', () => {
+    expect(VIEWER_OPEN_TTL_MS).toBeGreaterThan(VIEWER_TTL_MS);
+    expect(verdict({ sinceStartMs: VIEWER_TTL_MS + 1 })).toEqual(held('viewer'));
   });
 });
 

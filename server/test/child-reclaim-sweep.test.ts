@@ -996,8 +996,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     // than silently keeping the ceiling exhausted forever — a licensed
     // attempt that finds someone still there must get a fresh 15 minutes,
     // not an immediate second bypass.
-    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstPresenceDeferredAt: f.mono(),
-      lastPresenceDeferredAt: f.mono() });
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstViewerDeferredAt: f.mono(),
+      lastViewerDeferredAt: f.mono() });
   });
 
   it('a non-presence defer starts the any-kind clock, which the request carries, and never the ceiling', async () => {
@@ -1007,7 +1007,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     const deferredAt = f.now();
     f.advance(CHILD_RECLAIM_DEFER_CEILING_MS + 1); await f.pass();   // request 2, a ceiling later
     expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs])).toEqual([[false, null], [false, deferredAt]]);
-    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstPresenceDeferredAt: null });
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstViewerDeferredAt: null });
   });
 
   it('keeps TWO clocks: deferredSinceMs is the first deferral of ANY kind, the ceiling counts PRESENCE alone', async () => {
@@ -1031,8 +1031,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     // The licensed request still came back presence-class:
     // `childReclaimNextEntry`'s rule (spec §5.7) restarts the episode at
     // that answer's arrival (the request's own instant here).
-    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: firstDefer, firstPresenceDeferredAt: f.mono(),
-      lastPresenceDeferredAt: f.mono() });
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: firstDefer, firstViewerDeferredAt: f.mono(),
+      lastViewerDeferredAt: f.mono() });
   });
 
   it('never dispatches a child twice while its reclaim is still in flight', async () => {
@@ -1147,7 +1147,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     const licensed = f.requests.length;
     expect(f.requests.map((q) => q.deferExpired)).toEqual([...Array.from({ length: licensed - 1 }, () => false), true]);
     expect(f.entryOf('demo-a'), 'the refusal ended the presence episode')
-      .toMatchObject({ firstPresenceDeferredAt: null, lastPresenceDeferredAt: null });
+      .toMatchObject({ firstViewerDeferredAt: null, lastViewerDeferredAt: null });
     f.advance(CHILD_RECLAIM_DEFER_CEILING_MS + 1); await f.pass();  // due again on the terminal-refusal wait
     expect(f.requests).toHaveLength(licensed + 1);
     expect(f.requests[licensed]?.deferExpired, 'the refusal ended the presence episode; nothing is licensed again').toBe(false);
@@ -1720,7 +1720,7 @@ describe('R254 SAFETY probe: how continuous is a presence episode under the in-f
     expect(asksOf(f, 'demo-a'), 'its episode spans the ceiling, but its latest request is 17 passes old: UNLICENSED')
       .toEqual([...licensedAt(16), false]);
     expect(f.entryOf('demo-a'), 'its answer restarts the episode at the arrival')
-      .toMatchObject({ firstPresenceDeferredAt: f.mono(), lastPresenceDeferredAt: f.mono() });
+      .toMatchObject({ firstViewerDeferredAt: f.mono(), lastViewerDeferredAt: f.mono() });
     while (asksOf(f, 'demo-a').length < 32 && f.requests.length < 80) { f.next(); await f.pass(); }
     expect(asksOf(f, 'demo-a'), 'licensed again only at its own 32nd ask, never earlier')
       .toEqual([...licensedAt(16), ...licensedAt(16)]);
@@ -1807,7 +1807,7 @@ describe('the lane\'s two clocks: the throttle, the slot and the entry\'s instan
     const f = fixture({ outcome: (req) => deferredAs('presence', req) });
     await fiveAnswers(f);
     f.wallStep(-150_000); f.advance(200_000); await f.pass();  // the 6th answer, across the hole
-    expect(f.entryOf('demo-a'), 'the episode restarts at the 6th answer').toMatchObject({ firstPresenceDeferredAt: f.mono() });
+    expect(f.entryOf('demo-a'), 'the episode restarts at the 6th answer').toMatchObject({ firstViewerDeferredAt: f.mono() });
     while (f.requests.length < 21) { f.next(); await f.pass(); }
     expect(asksOf(f, 'demo-a'), 'licensed at the 21st ask').toEqual(licensedAt(21));
   });
@@ -1816,7 +1816,7 @@ describe('the lane\'s two clocks: the throttle, the slot and the entry\'s instan
     const f = fixture({ outcome: (req) => deferredAs('presence', req) });
     await fiveAnswers(f);
     f.suspend(400_000); f.next(); await f.pass();             // the 6th answer, after the box slept
-    expect(f.entryOf('demo-a'), 'the episode restarts at the 6th answer').toMatchObject({ firstPresenceDeferredAt: f.mono() });
+    expect(f.entryOf('demo-a'), 'the episode restarts at the 6th answer').toMatchObject({ firstViewerDeferredAt: f.mono() });
     while (f.requests.length < 21) { f.next(); await f.pass(); }
     expect(asksOf(f, 'demo-a'), 'licensed at the 21st ask').toEqual(licensedAt(21));
   });
@@ -1869,7 +1869,7 @@ describe('the lane\'s two clocks: the throttle, the slot and the entry\'s instan
     f.advance(30_000);                                        // the answer arrives 30 s after its request
     answer(deferredAs('presence', f.requests[0]!));
     await dispatching;
-    expect(f.entryOf('demo-a')).toMatchObject({ firstPresenceDeferredAt: askedMono + 30_000, lastPresenceDeferredAt: askedMono });
+    expect(f.entryOf('demo-a')).toMatchObject({ firstViewerDeferredAt: askedMono + 30_000, lastViewerDeferredAt: askedMono });
   });
 
   it('L12: the display clock stays WALL while the entry\'s own instants are monotonic', async () => {
@@ -1914,7 +1914,7 @@ describe('the lease\'s tenure: a holder that cannot keep its episode continuous 
     for (let pass = 2; pass <= 6; pass += 1) {
       f.next(); await f.pass();
       while (passOf.length < f.requests.length) passOf.push(pass);
-      heldAfter.push(f.entryOf('demo-a')?.presenceHeldSince ?? null);
+      heldAfter.push(f.entryOf('demo-a')?.viewerHeldSince ?? null);
     }
     expect(f.requests.slice(0, 3).map((q) => q.sessionId)).toEqual(['demo-a', 'demo-a', 'demo-b']);
     expect(passOf.slice(0, 3), 'demo-b\'s first request is the third overall, at pass 4').toEqual([2, 3, 4]);
@@ -1931,7 +1931,7 @@ describe('the lease\'s tenure: a holder that cannot keep its episode continuous 
     await f.pass();
     while (f.requests.length < 16) { f.next(); await f.pass(); }
     expect(asksOf(f, 'demo-a'), 'licensed at its 16th ask, which rejects').toEqual(licensedAt(16));
-    expect(f.entryOf('demo-a')).toMatchObject({ consecutiveFailures: 1, firstPresenceDeferredAt: null, presenceHeldSince: null });
+    expect(f.entryOf('demo-a')).toMatchObject({ consecutiveFailures: 1, firstViewerDeferredAt: null, viewerHeldSince: null });
     expect(warn.mock.calls.map((c) => String(c[0]))
       .filter((l) => l.endsWith('— recorded as a failed attempt; the sweep retries after its backoff'))).toHaveLength(1);
     expect(childReclaimBackoffMs(1, CHILD_RECLAIM_SWEEP_MS)).toBe(2 * CHILD_RECLAIM_SWEEP_MS);
@@ -1955,7 +1955,7 @@ describe('the lease\'s tenure: a holder that cannot keep its episode continuous 
     finishedChild(f, 'demo-a'); finishedChild(f, 'demo-b');
     await f.pass();                                           // pass 1: both sighted
     f.next(); await f.pass();                                 // pass 2: demo-a joins the line
-    expect(f.entryOf('demo-a')?.presenceHeldSince).not.toBeNull();
+    expect(f.entryOf('demo-a')?.viewerHeldSince).not.toBeNull();
     f.next();
     const held = await f.passDispatched();                    // pass 3: demo-a asked as HOLDER; its answer is held
     await vi.waitFor(() => expect(f.requests).toHaveLength(2));
@@ -1964,7 +1964,7 @@ describe('the lease\'s tenure: a holder that cannot keep its episode continuous 
     expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a', 'demo-a', 'demo-b', 'demo-b']);
     answerA(deferredAs('presence', f.requests[1]!));          // the stalled answer arrives, presence
     await held.settle;
-    expect(f.entryOf('demo-a')?.presenceHeldSince, 'its late answer forfeits the senior\'s lease').toBeNull();
+    expect(f.entryOf('demo-a')?.viewerHeldSince, 'its late answer forfeits the senior\'s lease').toBeNull();
     f.next(); await f.pass();
     expect(f.requests.map((q) => q.sessionId), 'demo-b is asked, and demo-a is not')
       .toEqual(['demo-a', 'demo-a', 'demo-b', 'demo-b', 'demo-b']);
@@ -2159,12 +2159,12 @@ describe('S2: seeded rows at the lane — every licence rests on a continuous ep
       passN += 1;
       if (passN === 2) t2 = f.trueNow();
       const before = f.requests.length;
-      const heldBefore = new Map(ps.map((p) => [p, (f.entryOf(p)?.presenceHeldSince ?? null) !== null]));
+      const heldBefore = new Map(ps.map((p) => [p, (f.entryOf(p)?.viewerHeldSince ?? null) !== null]));
       await f.pass();
       for (const q of f.requests.slice(before)) {
         asks.push({ id: q.sessionId, q: f.trueNow(), licensed: q.deferExpired, pass: passN });
         if (heldBefore.get(q.sessionId) === true && !q.deferExpired
-            && (f.entryOf(q.sessionId)?.presenceHeldSince ?? null) === null) forfeited.add(q.sessionId);
+            && (f.entryOf(q.sessionId)?.viewerHeldSince ?? null) === null) forfeited.add(q.sessionId);
       }
     };
     const gone = (id: string): boolean => !existsSync(path.join(reg, `${id}.uuid`));
