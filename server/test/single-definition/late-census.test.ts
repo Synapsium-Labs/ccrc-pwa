@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
 import { identifierReferences, parseSource, stringExpressions } from '../scan/parse.js';
 import { hibernateActSites, sleepVerdictLadders } from '../census-w4/sleep.js';
 import { retirePortReaders, retireRowSteps } from '../census-w4/retire.js';
@@ -64,17 +64,31 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     }
   });
   it('the mask lives in its one file', () => {
-    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers',
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration',
       'fingerprintRow', 'fingerprintAnswerOf']) {   // the last two: D-5996
       expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
     }
+    expect(holders(decl('shapeMatchers')), 'shapeMatchers').toEqual(['server/src/accounts/shapes.ts']);   // D-7513
   });
   it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
     expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
     expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
-    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/shapes.ts']);   // D-7513
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+  it('the shape half has one owner: SecretMasker splices and walks through shapes.ts, and keeps no copy (D-7513)', () => {
+    const mask = 'server/src/accounts/mask.ts';
+    const named = (sym: string): string[] => callsIn(symbolOf(mask, sym)).map((c) => c.name ?? '');
+    expect(named('SecretMasker.maskWithCarry')).toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
+    expect(named('SecretMasker.maskDeep')).toEqual(expect.arrayContaining(['walkStrings']));
+    expect(parsedFile(mask).symbols.map((x) => x.name)).not.toContain('SecretMasker.walk');
+    // and the shape-only mask splices the same spans: no private copy of shapeSpans behind SHAPE_MASK
+    expect(callsIn(symbolOf('server/src/accounts/shapes.ts', 'maskShapes')).map((c) => c.name ?? ''))
+      .toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
+    for (const c of ['shapeSpans', 'spliceMasked', 'walkStrings', 'SHAPE_MASK']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/shapes.ts']);
+    }
   });
 });
 
@@ -615,8 +629,14 @@ describe('the sleep lanes share one ladder, which never asks which policy it run
     ...stringExpressions(body, 'decideSleep.ts').filter((e) => (SLEEP_POLICY_NAMES as readonly string[]).includes(e.text)).map((e) => e.text),
   ];
 
+  // D-7278: `depsShedVerdict` is NOT a sleep ladder, legitimately different: it decides another act (`ws-shed-deps`, never
+  // `ccd hibernate`) over the population this ladder skips (a row with a stop stamp answers `stopped` here), and its
+  // `viewer` hold is the same presence fact read again. It is named by symbol, so a second SLEEP ladder is still red.
+  const NOT_SLEEP_LADDERS: readonly string[] = ['server/src/depsShed.ts#depsShedVerdict'];
   it('the sleep verdict ladders are one, decideSleep in sleep.ts (2 -> 1 at C4b; may only shrink)', () => {
-    expect(sleepVerdictLadders().map((s) => s.symbol)).toEqual([`${HOME}#decideSleep`]);
+    const all = sleepVerdictLadders().map((s) => s.symbol);
+    expect(all.filter((s) => !NOT_SLEEP_LADDERS.includes(s))).toEqual([`${HOME}#decideSleep`]);
+    expect(all.filter((s) => NOT_SLEEP_LADDERS.includes(s)), 'each named exception is still a ladder the census sees').toEqual(NOT_SLEEP_LADDERS);
   });
 
   it('CONTROL: the name scan sees a comparison, a switch, a destructure, the name list and a quoted name, and passes a field read', () => {
@@ -825,5 +845,89 @@ describe('child-spent runs through retireAct, and no retire executor keeps a gat
     const { retireGateLadders } = await import('../census-w4/retire.js');
     const sites = retireGateLadders().map((s) => s.symbol);
     expect(sites, sites.join(', ')).toEqual([]);
+  });
+});
+
+// D-7171 (ARCH-44, consolidation plan 2026-10-27 Task C4n; spec K1 "Consumers move"). APPENDED. The four retire entries'
+// queue calls (`watch.ts#execChildReclaim`, `#collectAct`, `#archivedExpiryPass` and the close route's
+// `coord/routes.ts#childReclaimPort`) run through ONE owner, `retireExecutor.ts#retireExecutor` (L4, D-7198), whose body
+// is the `KeyedQueue` call. `retireQueueOwners()` read 4 at C4n's base (each by (a), its own `queue.run` site) and is
+// exact at 1 here; `retireQueueSites()` read 4 `via: queue.run` and 0 `via: retireExecutor`, and reads 0 and 4 here.
+describe('a retire entry reaches the session queue through one owner, retireExecutor (D-7171; ARCH-44 C4n)', () => {
+  it('retireQueueOwners() is exactly 1, retireExecutor.ts#retireExecutor (4 -> 1 at C4n)', async () => {
+    const { retireQueueOwners } = await import('../census-w4/retire.js');
+    const owners = retireQueueOwners().map((s) => s.symbol);
+    expect(owners, owners.join(', ')).toEqual(['server/src/retireExecutor.ts#retireExecutor']);
+  });
+
+  it('no retire entry is queued through queue.run (4 -> 0 at C4n), and exactly 4 through retireExecutor (0 -> 4 at C4n)', async () => {
+    const { retireQueueSites } = await import('../census-w4/retire.js');
+    const sites = retireQueueSites();
+    const via = (v: string): string[] => sites.filter((s) => s.via === v).map((s) => s.symbol);
+    expect(via('queue.run'), via('queue.run').join(', ')).toEqual([]);
+    expect(via('retireExecutor'), via('retireExecutor').join(', ')).toHaveLength(4);
+  });
+});
+
+// D-7304 (ARCH-72, plan 2026-10-29-consolidation-k16-panescope-reader.md Task C5m; OA-C21 ruled (a) under D-7401).
+// APPENDED. Spec K16's last bullet ("they share one reader of `$REG/<id>.panescope`") is met in ANOTHER FORM: the
+// marker has one writer (`_panescope_record`) and one reader (`_end_cause`, the restart-cause classifier), both in
+// ccd, and the two acts read no marker at all. The cap (`ccd-cap-scopes`) and the stop (`ccd-scope-sweep`) each read
+// systemd's list of `tmux-spawn-*.scope` units, and those two reads stay two, pinned by name as legitimately
+// different: the cap over-includes and fails toward capping, the stop under-includes and fails toward not stopping.
+// Every name comes from the census (`census-w5/paneScopes.ts`, D-7303), never a source pin here; the marker check
+// reads the two acts' parsed code lines (`census-w5/accountMarkers.ts#bashBodies`, comments stripped). The doctor's
+// two read-only listers act on nothing and are reported, not pinned. The census modules are loaded inside the rows.
+describe('the pane scope marker keeps one reader and one writer, and the two acts read no marker (D-7304; spec K16\'s last bullet met in another form, OA-C21 (a), D-7401)', () => {
+  const CAP = 'ccd/ccd-cap-scopes';
+  const SWEEP = 'ccd/ccd-scope-sweep';
+  /** The marker's field token or path, as a whole word: `panescope`, not `_panescope_record`. */
+  const MARKER_TOKEN = /(?<![A-Za-z0-9_])panescope(?![A-Za-z0-9_])/;
+
+  it('panescopeReaders() is exactly ccd/ccd#_end_cause (1 at C5m\'s base; may only shrink)', async () => {
+    const { panescopeReaders } = await import('../census-w5/paneScopes.js');
+    expect(panescopeReaders().map((s) => s.name)).toEqual(['ccd/ccd#_end_cause']);
+  });
+
+  it('panescopeWriters() is exactly ccd/ccd#_panescope_record (1 at C5m\'s base; may only shrink); _reg_purge\'s suffix glob is reported apart, not counted', async () => {
+    const { panescopeSuffixPurgers, panescopeWriterLines, panescopeWriters } = await import('../census-w5/paneScopes.js');
+    const purgers = panescopeSuffixPurgers().map((s) => s.name);
+    console.log(`D-7304 apart: panescopeSuffixPurgers ${purgers.join(', ')}; panescopeWriterLines ${panescopeWriterLines().length}`);
+    expect(panescopeWriters().map((s) => s.name)).toEqual(['ccd/ccd#_panescope_record']);
+  });
+
+  it('neither act names the marker on a code line: ccd/ccd-cap-scopes and ccd/ccd-scope-sweep, 0 (pinned)', async () => {
+    const { bashBodies, shippedBashPrograms } = await import('../census-w5/accountMarkers.js');
+    const { panescopeReaders, panescopeWriters } = await import('../census-w5/paneScopes.js');
+    expect(shippedBashPrograms(), 'both acts are shipped bash programs the census reads').toEqual(expect.arrayContaining([CAP, SWEEP]));
+    const hits = [CAP, SWEEP].flatMap((file) => bashBodies(readFileSync(path.join(ccrcRoot, file), 'utf8'))
+      .flatMap((b) => b.lines.filter((r) => MARKER_TOKEN.test(r.code)).map((r) => `${file}#${b.name}:${r.line}  ${r.raw.trim()}`)));
+    expect(hits, 'a code line of an act that names the marker').toEqual([]);
+    const sites = [...panescopeReaders(), ...panescopeWriters()].filter((s) => s.file === CAP || s.file === SWEEP);
+    expect(sites.map((s) => s.name), 'a census reader or writer inside an act').toEqual([]);
+  });
+
+  it('the acting pane-scope listers are exactly the cap and the stop, two and legitimately different; the doctor\'s two read-only listers are reported apart, not pinned', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const all = paneScopeListers();
+    console.log(`D-7304 apart (read-only, act on nothing): ${all.filter((s) => !s.acts).map((s) => s.name).join(', ')}`);
+    expect(all.filter((s) => s.acts).map((s) => s.name)).toEqual([`${CAP}#<top-level>`, `${SWEEP}#<top-level>`]);
+  });
+
+  it('the cap\'s list over-includes (no --plain, every slice, the first column), failing toward capping', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const cap = paneScopeListers().filter((s) => s.acts && s.name === `${CAP}#<top-level>`);
+    expect(cap.map((s) => ({ name: s.name, plain: s.plain }))).toEqual([{ name: `${CAP}#<top-level>`, plain: false }]);
+  });
+
+  it('the stop\'s list under-includes (--plain, then its own filters), failing toward not stopping: the opposite safety direction', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const stop = paneScopeListers().filter((s) => s.acts && s.name === `${SWEEP}#<top-level>`);
+    expect(stop.map((s) => ({ name: s.name, plain: s.plain }))).toEqual([{ name: `${SWEEP}#<top-level>`, plain: true }]);
+  });
+
+  it('paneScopeActs() is exactly the cap\'s set-property and the stop\'s stop (2 at C5m\'s base; may only shrink)', async () => {
+    const { paneScopeActs } = await import('../census-w5/paneScopes.js');
+    expect(paneScopeActs().map((s) => s.name)).toEqual([`${CAP}#<top-level>:set-property`, `${SWEEP}#<top-level>:stop`]);
   });
 });

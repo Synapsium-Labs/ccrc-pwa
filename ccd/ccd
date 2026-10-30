@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect` or `ws-orphan`, or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue` or `ws-shed-deps`, or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -3238,10 +3238,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 208
-# invocations across 177 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 209
+# invocations across 178 non-comment lines.
 #
-# THE LAST MOVE WAS `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -4303,8 +4303,12 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # (the message this replaced); routing all five call sites through one
   # choke point must not mean the warning stops firing for any of them. Mirrors
   # _ws_supervise's own warning on the same failure, one function up.
+  # The status stays 0 (the intent is recorded either way). The refusal is ALSO left in `_WS_UNSUPERVISE_DISABLED`
+  # (1 the unit was disabled, 0 it was not) for the one caller that must not claim a stopped unit it did not get: the
+  # roll's put-back-to-sleep (`cmd_hibernate --roll`). Every other caller ignores it.
+  _WS_UNSUPERVISE_DISABLED=1
   _svc_disable_now "claude-session@$id" 2>/dev/null \
-    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
+    || { _WS_UNSUPERVISE_DISABLED=0; echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2; }
 }
 
 _session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started
@@ -5546,7 +5550,18 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # PRs cannot be read inside the bound loses its check glyphs for that sweep and
 # nothing else — which is the whole point of the split.
 PR_GH_CHECKS_TIMEOUT=5
-PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt
+PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,labels,closedAt
+# THE TRAIN LABEL. A merge train lands a PR's work through a train PR and then
+# CLOSES the member with this label, so GitHub never says MERGED for it — and
+# the archive trigger and the cleanup offer both hang off `merged`. A CLOSED PR
+# carrying this label (exact name) reads as merged in `pr-state` and as a
+# merged departure in `pr-landing`; every binding conjunct still applies, and
+# no other state is touched. Deployment config: `CCD_LANDED_LABEL` names it,
+# read at each call; unset is this default, and SET-BUT-EMPTY reads no label at
+# all. It meets the rule `CCD_DISK_FLOOR_GB` states for an override: it names a
+# GitHub label, never a path, so it cannot aim a command at another tree.
+# `labels`/`closedAt` above are what it is read from (and when the PR landed).
+PR_LANDED_LABEL_DEFAULT=landed-in-train
 # NAMED ONCE, spent in two places — the head-filtered row window that carries it
 # in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
 # spelling of the token is a second thing to keep in step with `checksFor`'s
@@ -5806,7 +5821,9 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. One of ccd's embedded h
   # `python3 - "$@" <<PY` gives stdin='', `python3 /dev/fd/3 "$@" 3<<PY` gives
   # the rows, with sys.argv identical. The rows cannot move to argv instead —
   # spec §7 is that no GitHub-sourced string is ever placed in an argv.
-  python3 /dev/fd/3 "$@" 3<<'PY'
+  # The train record's two modes are their own program, `_pr_train_py` (ccd/lib/train-proof.sh): same argv, same stdin.
+  case "${1-}" in train-refs|train-check) _pr_train_py "$@"; return ;; esac
+  PR_TRAIN_PROOFS="${_PR_TRAIN_PROOFS-}" PR_TRAIN_REFUSED="${_PR_TRAIN_REFUSED-}" PR_LANDED_LABEL="${CCD_LANDED_LABEL-$PR_LANDED_LABEL_DEFAULT}" python3 /dev/fd/3 "$@" 3<<'PY'
 import fcntl, json, os, re, stat, subprocess, sys, time
 
 mode = sys.argv[1]
@@ -5819,6 +5836,9 @@ mode = sys.argv[1]
 # like `abc` do the same. `is_merged` reads `mergeCommit.oid` through it as a
 # SHAPE check only — a merge commit is never an identity, two PRs can share one.
 OID = re.compile(r'^[0-9a-f]{7,40}$')
+# A PR number: the run id's grammar (`_child_runid_valid`, a positive decimal of at most ten
+# digits), spelled once in this program because python cannot call the bash helper.
+PR_NUM = r'[1-9][0-9]{0,9}'
 
 def rows_in():
     """The rows, or None for A BODY WE COULD NOT READ — which is NOT `[]`.
@@ -5880,10 +5900,70 @@ def one_ours(main, tip, oid):
         return False
     return tip is None or git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
 
+# The deployment's train label, handed down by `_pr_py`; "" (also when nothing
+# was handed down) reads no label at all, so a missing value can only keep a PR
+# `closed`, never make one `merged`.
+LANDED_LABEL = os.environ.get('PR_LANDED_LABEL', '')
+
+# THE TRAIN PROOFS (D-7362), handed down by `_pr_py` from `_pr_train_proofs`:
+# one `<member> <head sha> <train> <train merge commit>` line per member whose
+# train record `_ws_train_record` PROVED. The label is GitHub's claim and this
+# is the proof: a labelled PR is `landedInTrain` only when its number and its
+# exact head are listed here. Nothing handed down proves nothing, so a missing
+# value can only keep a PR out of `merged`, never put one in it.
+def train_proofs():
+    got = {}
+    for l in os.environ.get('PR_TRAIN_PROOFS', '').splitlines():
+        m = re.fullmatch(rf'({PR_NUM}) ([0-9a-f]{{40}}) ({PR_NUM}) ([0-9a-f]{{40}})', l)
+        if m:
+            got[(m.group(1), m.group(2))] = (m.group(3), m.group(4))
+    return got
+
+# THE READ-AND-FAILED PROOFS (D-7378): one `<member> <head sha>` line per
+# member whose train record was READ and did not prove it (`_ws_train_record`'s
+# 1: the train is CLOSED unmerged, lists another sha, or no train names it).
+# Only these are `trainUnproven`. A labelled member in neither list was not
+# read at all — no budget, the sweep's zero budget, a timeout, GitHub
+# unreachable — and is `trainUnread`: unmeasured, never `closed`.
+def train_refused():
+    got = set()
+    for l in os.environ.get('PR_TRAIN_REFUSED', '').splitlines():
+        m = re.fullmatch(rf'({PR_NUM}) ([0-9a-f]{{40}})', l)
+        if m:
+            got.add((m.group(1), m.group(2)))
+    return got
+
+TRAIN_PROOFS = train_proofs()
+TRAIN_REFUSED = train_refused()
+
+def labelled(r):
+    """CLOSED and carrying the deployment's train label: a CLAIM of a train landing, never its proof."""
+    return LANDED_LABEL != '' and r.get('state') == 'CLOSED' and LANDED_LABEL in label_names(r)
+
+def label_names(r):
+    """gh pr list's `labels: [{name}]` or GraphQL's `labels: {nodes: [{name}]}`; anything else is no labels."""
+    ls = r.get('labels')
+    if isinstance(ls, dict):
+        ls = ls.get('nodes')
+    return [l.get('name') for l in ls if isinstance(l, dict)] if isinstance(ls, list) else []
+
 def annotate(rows, main, tip, branch, base_short):
     out = [r for r in rows if isinstance(r, dict)]
     for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
         r['ours'] = ours
+        # Annotated here, beside `ours`, so this box is the ONE reader of the
+        # label and the ONE judge of the train record: prstate.ts, the landing
+        # lane, the queue word and the reap read these two booleans and never a
+        # label. `landedInTrain` is the PROOF (the train PR is MERGED and its
+        # record lists this member at exactly this head). A label whose record
+        # was read and failed is `trainUnproven`, which reads as closed; one
+        # whose record was NOT read is `trainUnread`, which reads as
+        # unmeasured (D-7378) — never closed, so nothing ends on it.
+        claim = labelled(r)
+        key = (str(r.get('number')), r.get('headRefOid'))
+        r['landedInTrain'] = claim and key in TRAIN_PROOFS
+        r['trainUnproven'] = claim and not r['landedInTrain'] and key in TRAIN_REFUSED
+        r['trainUnread'] = claim and not r['landedInTrain'] and not r['trainUnproven']
     return out
 
 def bound(r, branch, base_short):
@@ -5904,6 +5984,15 @@ def is_merged(r, branch, base_short):
             and isinstance(r.get('mergedAt'), str)
             and isinstance(oid, str) and OID.match(oid) is not None
             and bound(r, branch, base_short))
+
+def is_landed(r, branch, base_short):
+    # A PR closed as landed in a merge train: `merged` for the phase, with no
+    # merge commit behind it. Kept OUT of `is_merged`, whose other caller is the
+    # reap's `pick`, which proves the tree against `mergeCommit.oid` — a landed
+    # member has none, so `pick` answers it on its own arm (`landed` where the
+    # oid would be) and `_ws_reap_eval` proves it by the train record instead
+    # (`_ws_train_record`), pinned to the train PR's merge commit.
+    return r.get('landedInTrain') is True and bound(r, branch, base_short)
 
 def pick(rows, branch, base_short):
     """Highest number AFTER the binding check, never before."""
@@ -5959,7 +6048,7 @@ if mode == 'state':
         # workspace", which is what was actually observed — instead of
         # `no-commits`, which asserts that the branch is level with base.
         phase, number = ('no-commits' if ahead == 0 else 'none'), None
-    elif is_merged(chosen, branch, base_short):
+    elif is_merged(chosen, branch, base_short) or is_landed(chosen, branch, base_short):
         phase, number = 'merged', chosen.get('number')
     elif chosen.get('state') == 'MERGED':
         # gh says MERGED but a conjunct failed. Never claim merged on a partial
@@ -5968,8 +6057,19 @@ if mode == 'state':
         # `error` puts "GitHub could not be read" on a phone about a read that
         # worked. phaseFor answers the same token for the same row.
         phase, number, reason = 'unknown', chosen.get('number'), 'merge-unproven'
+    elif chosen.get('trainUnread') is True and bound(chosen, branch, base_short):
+        # Labelled, and the train record was NOT READ (D-7378): no budget (the
+        # `--project` sweep has none), a timeout, GitHub unreachable. Neither
+        # merged nor closed — `train-unread`, which phaseFor answers for the
+        # same row; `ccd pr-train-prove` reads it and keeps the proof, and the
+        # next sweep reads `merged`.
+        phase, number, reason = 'unknown', chosen.get('number'), 'train-unread'
     elif chosen.get('state') == 'CLOSED':
+        # A train label with no train record behind it is CLOSED and unmerged,
+        # and says why: `train-unproven`, which phaseFor answers for the same row.
         phase, number = 'closed', chosen.get('number')
+        if chosen.get('trainUnproven') is True:
+            reason = 'train-unproven'
     elif chosen.get('isDraft') is True:
         phase, number = 'draft', chosen.get('number')
     else:
@@ -6517,6 +6617,21 @@ elif mode == 'pick':
     chosen = pick(rows, branch, base_short)
     if chosen is None:
         sys.stdout.write('!pr-head-not-ours\n' if near else '')
+    elif is_landed(chosen, branch, base_short):
+        # A PR a merge train landed and closed: merged for the cleanup offer as
+        # for the phase, with NO merge commit to prove against. The literal
+        # word `landed` stands where the oid would be — never an empty field,
+        # which `IFS=$'\t' read` would collapse — and `_ws_reap_eval` swaps it
+        # for the train PR's merge commit before any git command sees it.
+        sys.stdout.write('\t'.join([
+            str(chosen.get('number') or ''), str(chosen.get('url') or ''), 'landed',
+            str(chosen.get('headRefOid') or ''),
+        ]) + '\n')
+    elif chosen.get('trainUnproven') is True or chosen.get('trainUnread') is True:
+        # Labelled, and the train record did not prove it (read and failed, or
+        # not read): the reap names the number so `_ws_reap_eval` can say
+        # which read failed and how.
+        sys.stdout.write('!not-merged train %s\n' % str(chosen.get('number') or ''))
     elif not is_merged(chosen, branch, base_short):
         sys.stdout.write('!not-merged\n')
     else:
@@ -6526,12 +6641,28 @@ elif mode == 'pick':
             str(chosen.get('headRefOid') or ''),
         ]) + '\n')
 
+elif mode == 'train-cands':
+    # The rows `_pr_train_proofs` must prove: CLOSED with the train label, on
+    # this branch and base, from this repository, with a number and a full
+    # head sha. Only digits and hex leave here, `<n>\t<head>` per row, so the
+    # shell can anchor both before either reaches an argv. Never a proof.
+    (branch, base_short) = sys.argv[2:4]
+    for r in rows_in() or []:
+        if not isinstance(r, dict) or not labelled(r):
+            continue
+        n, head = r.get('number'), r.get('headRefOid')
+        if (isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10 ** 10
+                and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)
+                and r.get('headRefName') == branch and r.get('baseRefName') == base_short
+                and r.get('isCrossRepository') is False):
+            sys.stdout.write('%d\t%s\n' % (n, head))
+
 elif mode == 'bind':
     # `pr-landing`'s binding (spec 3.3): `annotate` then `pick` over the ONE row a GraphQL alias answered, in a
     # `gh pr list` row's shape, through the same `bound()` `state` uses. It WRITES NOTHING: no `put`, no
     # `.prstate-<id>.lock`, no `.prhistory`. stdin is the list of alias rows (null where GitHub answered no object).
     # Prints `unreadable-alias` for an alias with no object, nothing for a row that does not bind, and otherwise one JSON
-    # object of the five facts the lane reads.
+    # object of the seven facts the lane reads (the last two, `landedInTrain` and `trainUnread`, are `annotate`'s).
     (main, branch, base_short, tip, idx) = sys.argv[2:7]
     tip = tip or None
     rows = rows_in()
@@ -6544,10 +6675,13 @@ elif mode == 'bind':
             sys.stdout.write(json.dumps({
                 'number': chosen.get('number'), 'headRefOid': chosen.get('headRefOid'),
                 'baseRefName': chosen.get('baseRefName'), 'state': chosen.get('state'),
-                'isDraft': chosen.get('isDraft'),
+                'isDraft': chosen.get('isDraft'), 'landedInTrain': chosen.get('landedInTrain') is True,
+                'trainUnread': chosen.get('trainUnread') is True,
             }) + '\n')
 PY
 }
+
+# @ccd-lib:trainpy — `_pr_train_py`, the train record's python (`train-refs`, `train-check`; D-7335, D-7381), lives in ccd/lib/train-proof.sh; `_pr_py` hands those two modes to it
 
 # ── workspace slugs ────────────────────────────────────────────────
 # No dots: tmux -t parses `session:window.pane`. No slashes: systemd
@@ -6558,49 +6692,53 @@ WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove 
 
 _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 
-# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks
-# `"$REG/$id".*` for every dot-free suffix — so a PROJECT with a LEADING DOT
-# mints an id that ALIASES one of ccd's own hidden, dot-prefixed registry
-# files for an unrelated session. THE RULE, not a fixed list: a dot-leading
-# project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd owns. Four
-# known instances illustrate it, all verified: project `.prstate-demo` +
-# slug `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob
-# matches `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the
-# unrelated session `demo-quiet-basin` (new this wave, the lock `_pr_py`'s
-# migration off `.uuid` introduced); project `.reap-demo` + slug
-# `quiet-basin` aliases that same session's REAP LOCK,
-# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project
-# `.ws-add` + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for
-# project `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave);
-# project `.tmux` + slug `server` -> id `.tmux-server`, aliasing the
-# TMUX-SERVER LOCK `$REG/.tmux-server.lock` that `_tmux_new_session` takes
-# (pre-dates this wave); and project `.account` + slug `placement` -> id
-# `.account-placement`, aliasing the ACCOUNT-PLACEMENT LOCK
-# `$REG/.account-placement.lock` that all five `ccrc account` writing verbs
-# serialise on (new with that verb, and NOT amended here when it landed — see
-# the census note below) — `server` and `placement` pass `_ws_slug_valid`
-# exactly as the other three slugs do, no more contrived. Unlinking a lock file while
-# another process holds it is exactly how two processes come to hold "the
-# lock" on two different inodes — reopening the double compare-and-set this
-# branch's lock migration closed. A sixth, D-5884 (#128): project `.ignored`
-# + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
-# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before
-# its one retry. Unlinking that one costs nothing a lock protects: it only
-# lowers contention and is never a gate, so two retries holding two inodes is
-# two retries running at once, each with every refusal intact. A seventh,
-# D-6625: project `.collect` + slug `loose` -> id `.collect-loose`, aliasing
-# the COLLECT-LOOSE LOCK `$REG/.collect-loose.lock` that ws-collect's loose arm
-# holds over its census, audit and verb; it has no reap lock, since a loose
-# entry has no id.
+# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks `"$REG/$id".*` for
+# every dot-free suffix — so a PROJECT with a LEADING DOT mints an id that ALIASES one of
+# ccd's own hidden, dot-prefixed registry files for an unrelated session. THE RULE, not a
+# fixed list: a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd
+# owns. Four known instances illustrate it, all verified: project `.prstate-demo` + slug
+# `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob matches
+# `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the unrelated session
+# `demo-quiet-basin` (new this wave, the lock `_pr_py`'s migration off `.uuid` introduced);
+# project `.reap-demo` + slug `quiet-basin` aliases that same session's REAP LOCK,
+# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project `.ws-add` + slug `demo`
+# -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for project `demo`,
+# `$REG/.ws-add-demo.lock` (pre-dates this wave); project `.tmux` + slug `server` -> id
+# `.tmux-server`, aliasing the TMUX-SERVER LOCK `$REG/.tmux-server.lock` that
+# `_tmux_new_session` takes (pre-dates this wave); and project `.account` + slug `placement`
+# -> id `.account-placement`, aliasing the ACCOUNT-PLACEMENT LOCK
+# `$REG/.account-placement.lock` that all five `ccrc account` writing verbs serialise on
+# (new with that verb, and NOT amended here when it landed — see the census note below) —
+# `server` and `placement` pass `_ws_slug_valid` exactly as the other three slugs do, no
+# more contrived. Unlinking a lock file while another process holds it is exactly how two
+# processes come to hold "the lock" on two different inodes — reopening the double
+# compare-and-set this branch's lock migration closed. A sixth, D-5884 (#128): project
+# `.ignored` + slug `scan` -> id `.ignored-scan`, aliasing the IGNORED-SCAN LOCK
+# `$REG/.ignored-scan.lock` that `_ws_collect_ignored_settled` takes before its one retry.
+# Unlinking that one costs nothing a lock protects: it only lowers contention and is never a
+# gate, so two retries holding two inodes is two retries running at once, each with every
+# refusal intact. A seventh, D-6625: project `.collect` + slug `loose` -> id
+# `.collect-loose`, aliasing the COLLECT-LOOSE LOCK `$REG/.collect-loose.lock` that
+# ws-collect's loose arm holds over its census, audit and verb; it has no reap lock, since a
+# loose entry has no id. An eighth, D-7278: project `.shed-demo` + slug `quiet-basin` -> id
+# `.shed-demo-quiet-basin`, aliasing the SHED LOCK `$REG/.shed-demo-quiet-basin.lock` of the
+# unrelated session `demo-quiet-basin`, which `ws-shed-deps` holds across a real removal and
+# the spawn gate asks; a wake would read it unlinked as free, so the shed also holds the row
+# marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
+# (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — FIFTEEN dot-prefixed
-# artifacts live under `$REG`; the seven above are reachable, these eight are
+# NOT reachable this way, and this set IS the boundary — EIGHTEEN dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these ten are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The eight: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The ten: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
+# records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
+# `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
+# carry the second dot the `*.*` skip below excludes);
 # `$REG/.orphan-<sha16>.lock` (DR-17, D-6629: `ccd ws-orphan`'s per-tree lock; its suffix is the sha16 of a PATH, not
 # a `<project>-<slug>` id, so no `_reg_purge` glob can match it);
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
@@ -8827,6 +8965,7 @@ pick
 pr-landing
 pr-open
 pr-state
+pr-train-prove
 prefer
 project-pool
 reclaim-pause
@@ -8879,6 +9018,7 @@ EOF
   # rotted, and nothing reds when they do.)
   echo stop-surface
   echo hibernate-hold-ok   # D-6091: `cmd_hibernate --hold-ok <text>`; the server passes it only on this token (`capSupported`)
+  echo hibernate-roll      # D-7458: `cmd_hibernate --roll`, the automatic roll's one act; the server sends it only on this token (`capSupported`)
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
@@ -9002,6 +9142,7 @@ EOF
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
   echo reclaim-stale-v1   # `ws-reclaim`/`ws-audit --reclaim` take `--stale <word> [--hold-digest <sha256>]` (DR-26, D-6638); sent only behind this word
+  echo shed-deps-v1; echo ws-shed-deps   # D-7278: the deps-shed arm's verb, one inode; see SHED-DEPS-V1 in ccd/lib/disk-retention.sh
   echo nested-rescue-v1; echo scratch-rescue   # D-6632: rung 9's rescue and the box-local `scratch-rescue` entry, one inode; see NESTED-RESCUE-V1
   echo reclaim-pause-v1; echo expire-v1; echo expire-child-v1; echo ws-expire; echo collect-v1; echo ws-collect; echo collect-loose-v1; echo orphan-v1; echo ws-orphan; echo archive-if-no-pane-v1   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
@@ -11173,6 +11314,9 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
   fi
   tmpl=""
   [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
+  # The train proof (D-7362) under the verb's budget (`_PR_TRAIN_DEADLINE`,
+  # none when this is called on its own), keeping what it proves.
+  _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
     "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
 }
@@ -11303,6 +11447,13 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # a refusal that stops a phase from ever updating.
   answeredAt=$(_plat_epoch_ms 2>/dev/null)
   [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
+  # THE TRAIN PROOF'S BUDGET (D-7362): `--session` may read train records for
+  # its one branch; the `--project` sweep has no room left inside its bound and
+  # reads only the proofs already kept (see PR_STATE_TRAIN_TIMEOUT).
+  local _PR_TRAIN_DEADLINE=$SECONDS
+  [[ $mode == --session ]] && _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))
+  # This call's train answers only (D-7378): `_pr_train_proofs` refills them per workspace.
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""
 
   # ── THE ROLLUPS, WHICH THE WIDE WINDOW CANNOT CARRY ────────────────
   # `_gh_pr_list` sends `statusCheckRollup` only with a head filter, because a
@@ -11376,6 +11527,8 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   { for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done; } | _pr_queue_stamp "$mode" "$repo"
 }
 
+# @ccd-lib:trainprove — the bounded prover, `ccd pr-train-prove` (D-7378, D-7381), lives in ccd/lib/train-proof.sh
+
 # ── pr-landing: the checks lane's read (PR-landing stage 1, spec 3.3) ───────────────────────────
 # READ-ONLY, of gh and of $REG. One `gh api graphql` query (a `query`, never a mutation) reads every named PR by
 # NUMBER, so a landing PR older than `gh pr list`'s newest-100 window still binds; two `gh api` GETs read the base's
@@ -11389,7 +11542,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 # `pullRequest(number:)`: either way every real call would fail. No datum from a session, a PR or GitHub enters the
 # text. The owner and name travel as `$o` and `$r`, the numbers as `-F n<i>=<int>`.
 PR_LANDING_RULES_TTL=600
-PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
+PR_LANDING_ALIAS='    p@I@: pullRequest(number: $n@I@) { number state isDraft isCrossRepository headRefName baseRefName headRefOid labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion databaseId checkSuite { app { databaseId } workflowRun { databaseId } } isRequired(pullRequestNumber: $n@I@) } ... on StatusContext { context state isRequired(pullRequestNumber: $n@I@) } } } } } } } }'
 
 _gh_pr_landing_query() {   # K -> the GraphQL document for K aliased pull requests, on stdout
   local k="$1" i decl='$o: String!, $r: String!' body=""
@@ -11616,6 +11769,11 @@ elif mode == 'final':
                 prot = None
                 unm.append('protection')
             pins = sorted(set(pinned_of(rules)) | set(pinned_of(prot)))
+            # A labelled member whose train record was not read inside this
+            # call's budget (D-7378): unmeasured, so the lane neither wakes the
+            # run as merged nor ends it as closed.
+            if b.get('trainUnread') is True:
+                unm.append('train')
             req = required_of(row, frozenset(pins)) if isinstance(row, dict) else []
             cut = len(req) > LIST_MAX
             cut = cut or bool(rules and rules['cut']) or bool(prot and prot['cut'])
@@ -11624,6 +11782,7 @@ elif mode == 'final':
             except Exception:
                 pass
             line.update({'bound': True, 'number': b.get('number'), 'state': b.get('state'),
+                         'landedInTrain': b.get('landedInTrain') is True,
                          'isDraft': b.get('isDraft') is True, 'base': b.get('baseRefName'), 'head': b.get('headRefOid'),
                          'required': req[:LIST_MAX], 'requiredCut': cut,
                          'rulesNamed': rules['names'] if rules else [],
@@ -11698,6 +11857,9 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
 
   # THE BINDING, per session, through the code `pr-state` binds with and persisting nothing.
   local branch base baseShort tip ahead workdir wthead registered BIND_REFUSAL facts="" bind bases=$'\n'
+  # The train proof's budget for the whole call (D-7362); this read keeps nothing.
+  local _PR_TRAIN_DEADLINE=$(( SECONDS + $PR_LANDING_TRAIN_TIMEOUT ))
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""   # this call's train answers only (D-7378)
   for (( i = 0; i < k; i++ )); do
     id="${ids[$i]}"
     if ! _pr_bind_facts "$id" "$main" ""; then
@@ -11705,6 +11867,7 @@ cmd_pr_landing() {   # ccd pr-landing --project <p> --sessions <id>:<pr>[,<id>:<
     elif (( gqlok == 0 )); then
       facts+="$(printf '{"id":"%s","gql":true}' "$id")"$'\n'
     else
+      _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 0 "$rows"
       bind=$(printf '%s' "$rows" | _pr_py bind "$main" "$branch" "$baseShort" "$tip" "$i" 2>/dev/null) || bind="unreadable-alias"
       case "$bind" in
         unreadable-alias) facts+="$(printf '{"id":"%s","unreadable":true}' "$id")"$'\n' ;;
@@ -12656,6 +12819,8 @@ _ws_merge_proof() {   # main M tip -> 0, with the passing rung in _WS_PROOF
   return 1
 }
 
+# @ccd-lib:trainrecord — the train proof's budgets, kept proofs and tried records, `_ws_train_record` and `_pr_train_proofs` (D-7362, D-7378, D-7381) live in ccd/lib/train-proof.sh
+
 _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sensdigest stashes wthead baseOid clipsDigest childrenDigest
   # FOURTEEN facts, and the thirteenth is the clips. `~/.cc-clips/<id>` is
   # `rm -rf`'d at (h) — 3.8 MB full-resolution screenshots per the spec — and
@@ -12722,6 +12887,9 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
   local children strays contained=0 obase ourl ancwhy regbranch tombbranch uplive upremote upmerge uprc   # the last four: C1's live-head probe (D-5882)
+  local landed=0   # rung 2's train arm: `pick` answered `landed` (a PR a merge train landed and closed)
+  # This workspace's train answers only, never the last workspace's (D-7378).
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_FAILS="" _PR_TRAIN_REFUSED=""
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _ws_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -13522,6 +13690,11 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # this function (C2), where the sentence is true.
   if repo=$(_gh_repo_slug "$main"); then
     rows=$(_gh_pr_list "$repo")   || { _ws_refuse gh-unreadable "$rows"; return 1; }
+    # The train proof first (D-7362): `pick` reads `landedInTrain` off the
+    # same `_pr_train_proofs` every other reader uses, with this workspace's
+    # own budget, and keeps what it proves.
+    local _PR_TRAIN_DEADLINE=$(( SECONDS + WS_TRAIN_TIMEOUT ))
+    _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
     row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
   else
     row=''
@@ -13561,9 +13734,44 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       fi
       return 1 ;;
     '!pr-head-not-ours')  _ws_refuse pr-head-not-ours "the PR head commit is not reachable from $branch"; return 1 ;;
+    '!not-merged train '*)
+      # Labelled as landed in a merge train, and the train record did not
+      # prove it: `not-merged` only when the record was READ and failed
+      # (`_ws_train_record`'s 1), with the sentence; otherwise — GitHub did
+      # not answer, the budget ran out, or no read was made — `gh-unreadable`
+      # (D-7378).
+      local tn="${row#!not-merged train }" tf
+      tf=$(awk -v n="$tn" '$1 == n { $1 = ""; print substr($0, 2); exit }' <<< "$_PR_TRAIN_FAILS")
+      if [[ "$tf" == 1\ * ]]; then
+        _ws_refuse not-merged "the PR was closed as landed in a merge train, but ${tf#1 }"
+      elif [[ "$tf" == 2\ * ]]; then
+        _ws_refuse gh-unreadable "the PR was closed as landed in a merge train, but ${tf#2 }"
+      else
+        _ws_refuse gh-unreadable "the PR was closed as landed in a merge train, and its train record was not read"
+      fi
+      return 1 ;;
     '!'*)                 _ws_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
   esac
   IFS=$'\t' read -r REAP_PRNUM REAP_PRURL REAP_MERGE REAP_HEADOID <<< "$row"
+  # A PR CLOSED AS LANDED IN A MERGE TRAIN (`pick`'s `landed`). The train
+  # landed this member's work through a train PR, squashed and resolved beside
+  # other members', and closed the member, so GitHub names no merge commit and
+  # no tree comparison can tell this member's work from the rest. The proof is
+  # the TRAIN RECORD (`_ws_train_record`): the train PR the member names is
+  # MERGED and lists it at exactly its head sha. REAP_MERGE becomes the train
+  # PR's merge commit, so the token, the audit and the tombstone are pinned to
+  # it, never to origin's current head: main later editing the same lines, or
+  # reverting them, does not un-land it, exactly as for a MERGED PR. The label
+  # is GitHub's claim; this rung is what stops a label on unlanded work from
+  # deleting anything, and the tip check below what stops a commit the train
+  # never saw.
+  if [[ "$REAP_MERGE" == landed ]]; then
+    landed=1
+    # `pick` says `landed` only for a member `_pr_train_proofs` proved, so
+    # its proof line is there; the train PR's merge commit stands in for the
+    # oid gh did not name.
+    REAP_MERGE=$(awk -v n="$REAP_PRNUM" -v h="$REAP_HEADOID" '$1 == n && $2 == h { print $4; exit }' <<< "$_PR_TRAIN_PROOFS")
+  fi
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one
   # that was not. `_pr_py pick` checks `mergeCommit.oid` and `headRefOid`
@@ -13601,7 +13809,18 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     || { _ws_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
   git -C "$main" cat-file -e "${REAP_MERGE}^{commit}" 2>/dev/null \
     || { _ws_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
-  if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
+  if (( landed )); then
+    # The train record lists the member at its head, and `pick` bound a head
+    # reachable from our tip, so the tip being an ancestor of that head means
+    # the two are the same commit: nothing on the branch is beyond what the
+    # train landed.
+    if git -C "$main" merge-base --is-ancestor -- "$REAP_TIP" "$REAP_HEADOID" 2>/dev/null; then
+      REAP_PROOF=train
+    else
+      _ws_refuse tree-differs "the branch carries commits beyond the head the train landed: $(git -C "$main" diff --stat "$REAP_HEADOID" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_HEADOID".."$REAP_TIP" | head -5)"
+      return 1
+    fi
+  elif _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
     REAP_PROOF="$_WS_PROOF"
   else
     _ws_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
@@ -29629,7 +29848,7 @@ _hib_hold_ok() {   # id text -> 0 iff `$REG/<id>.hold` may be passed for the run
   cmp -s -- "$f" <(printf '%s' "$2")
 }
 
-cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
+cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
   # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
   # are stripped BEFORE it, as `cmd_stop`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`), and land on the
@@ -29637,10 +29856,29 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   # (`hibernate-refuses-a-dash-leading-id`): the server composes the id FIRST, so an id `--actor` would take `--surface`
   # as its value, leaving the surface word as the id. A dash-led value gets the usage line; the id passes `_reg_id_ok`.
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  #
+  # `--roll` (D-7458, the automatic coordinator roll's ONE act): the same re-measure and the same act, then the wake
+  # (`cmd_ensure`) in the same verb, so the session resumes its conversation on the release the node now runs. It
+  # differs from a plain hibernate in exactly three places: `.no-roll` refuses `opted-out` and `.no-hibernate` does
+  # NOT (the operator's opt-out of sleep is not an opt-out of the roll, U4); a row already hibernated is not taken as
+  # done (a roll needs a live pane to measure, so the re-measure below refuses it); and a failed wake exits 4 with
+  # `ccd: roll-wake-failed — …` AFTER putting the row back to sleep: `cmd_ensure` clears `.hibernated` and enables the
+  # unit before its spawn can fail, which would leave a row neither hibernated nor running with a Restart=always unit
+  # retrying it, so the act is repeated (the marker re-stamped, the unit stopped, any late pane killed, the `.woke`
+  # stamp the wake wrote put back) and the row is the sanctioned hibernated one that mail, an open screen or a
+  # re-dispatch wakes. When the marker cannot be written again the row is NOT restored: exit 5,
+  # `ccd: roll-wake-unrestored — …`, a phrase of its own, since that row may be neither running nor hibernated. The same exit
+  # when the unit cannot be stopped again, or when a pane is still live after the put-back's kill. A pane kill that fails on a pane still live exits 6, `ccd: roll-kill-failed — …`:
+  # nothing was rolled and no wake is tried. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
+  # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
+  # line, which is pinned. `ccd caps` says `hibernate-roll`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
+  local lc_roll=0
   while (( $# )); do
     case "$1" in
+      --roll)      lc_roll=1; shift ;;
+      --roll=*)    die "$usage" ;;
       --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) [[ ${1#--surface=} != -* ]] || die "$usage"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
       --actor)     [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
@@ -29667,12 +29905,15 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
     [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
     _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
   fi
+  (( lc_roll && ! lc_gr )) && lc_reason=roll   # the roll names itself on its one journal row
   [[ $# -eq 1 ]] || die "$usage"
   local id="$1"
   _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
   # Idempotent on a row already asleep: no pane, the marker standing (D-5424: a sweep may retry a lost answer).
-  if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
+  # Not for a roll: a sleeping row is not on the release a wake brings until it wakes, and that is mail's or an
+  # open screen's act, so a roll on it falls through to the re-measure, which finds no pane and refuses.
+  if (( ! lc_roll )) && [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
   # ── the re-measure, cheapest first ──
   # `-e` not `-f`, the hold readers' polarity: a hold or an opt-out that cannot be read still holds.
   # D-6091: `--hold-ok <text>` lets ONE kind of hold pass — a programme hold the server read, classified and named
@@ -29681,7 +29922,11 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
     (( lc_gh )) && _hib_hold_ok "$id" "$lc_holdok" \
       || _hib_refuse held "$id is held: a program has declared it is mid-flight here"
   fi
-  [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
+  if (( lc_roll )); then
+    [[ -e "$REG/$id.no-roll" ]] && _hib_refuse opted-out "$id carries a no-roll marker"
+  else
+    [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
+  fi
   local now last
   _now_s_to now; _reg_get_to last "$id" lastswap
   # A `.lastswap` that stands but does not read as an epoch is unmeasured, and an unmeasured read holds (`-e`/`-L`, the hold polarity; D-5242).
@@ -29735,8 +29980,54 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
   _ws_unsupervise "$id" ccd
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
-  echo "$(date '+%F %T') hibernate $id: idle ${hours}h" >> "$REG/swap.log"
+  # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
+  # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.
+  if (( lc_roll )) && _alive "$id"; then
+    echo "$(date '+%F %T') hibernate $id: roll kill failed, pane still live" >> "$REG/swap.log"
+    echo "ccd: roll-kill-failed — $id's pane could not be killed and is still live, so it was not rolled: it still runs the release it started on, with $REG/$id.hibernated written and its unit stopped; check it" >&2
+    exit 6
+  fi
+  local lc_tag=''; (( lc_roll )) && lc_tag=' (roll)'
+  echo "$(date '+%F %T') hibernate $id: idle ${hours}h$lc_tag" >> "$REG/swap.log"
   echo "hibernated $id"
+  (( lc_roll )) || return 0
+  # 3. The roll's wake (D-7458): `cmd_ensure` clears `.hibernated`, writes `.woke` and starts the unit, whose spawn
+  #    resumes the conversation. In a subshell, so its `die` ends the wake and not this verb's answer.
+  #    `.woke` is read first: the wake stamps it, and a wake that failed did not wake anything (below).
+  local wrc=0 lc_woke='' lc_had_woke=0
+  if [[ -e "$REG/$id.woke" || -L "$REG/$id.woke" ]]; then lc_had_woke=1; IFS= read -r lc_woke < "$REG/$id.woke" 2>/dev/null || true; fi
+  ( cmd_ensure "$id" ) || wrc=$?
+  if (( wrc != 0 )); then
+    # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
+    # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
+    # it takes the unrestored branch below, never "put back to sleep".
+    local lc_unrestored=''
+    if ! _reg_set "$id" hibernated "$now $hours"; then
+      lc_unrestored="$REG/$id.hibernated could not be written again"
+    elif _ws_unsupervise "$id" ccd; (( ! _WS_UNSUPERVISE_DISABLED )); then
+      lc_unrestored="its unit claude-session@$id could not be stopped again"
+      tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+    elif tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true; _alive "$id"; then
+      # A pane the failed wake raised (a spawn that timed out after tmux made the session) that outlives this kill is
+      # not the sanctioned hibernated row either, as the act's own kill check (exit 6) says of a pane that survives it.
+      lc_unrestored="a pane is still live after the put-back"
+    else
+      # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
+      # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
+      if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
+      echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
+      echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
+      exit 4
+    fi
+    # NOT RESTORED: the marker could not be written again, or the unit could not be stopped again, so the row is not
+    # the sanctioned hibernated one. Its own exit (5) and its own phrase, never `roll-wake-failed`: a caller that reads
+    # exit 4 as "stays hibernated" must not read this as that. `.woke` is left as the wake wrote it (a registry that
+    # refused the marker is not trusted with a second write here).
+    echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), NOT restored: $lc_unrestored" 2>/dev/null >> "$REG/swap.log" || true
+    echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $lc_unrestored: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
+    exit 5
+  fi
+  echo "rolled $id"
 }
 
 cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry.
@@ -37827,8 +38118,9 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
   # `.archived` stamp still stands: so a spawn that is about to clear that
   # stamp takes the same lock first, `-n`, and refuses if anyone holds it — a
   # refusal, never a wait, because the holder may be minutes into a teardown.
-  # No breadcrumb and no stamp: nothing to ask, no lock taken, and a box with
-  # no flock cannot be running an expiry (`cmd_ws_expire` refuses there).
+  # No breadcrumb and no stamp: nothing to ask, no reap lock taken or asked,
+  # and a box with no flock cannot be running an expiry (`cmd_ws_expire`
+  # refuses there). Only ws-shed-deps's OWN lock is asked there (below).
   local id="$1" rbc
   _WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
   rbc=$(_reg_get "$id" reaping)
@@ -37837,7 +38129,16 @@ _ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 wi
     _WS_EXPIRE_SPAWN_WHY="$id is being expired — an interrupted ws-expire stopped at its '$_CRUMB_PHASE' step, and a pane is never created for a workspace whose teardown has begun"
     return 1
   fi
-  [[ -f "$REG/$id.archived" ]] || return 0
+  # NOT ARCHIVED: ws-shed-deps (DEPSSHED region) holds its OWN lock, `$REG/.shed-<id>.lock`, and its row marker
+  # `$REG/<id>.shedding` across a real removal (a dry run takes neither), so a wake asks those and nothing else, creating
+  # neither (`_ws_shed_spawn_held`; the marker fails closed if an alias purge unlinks the lock) and refuses while held. The reap lock
+  # is NOT asked here: ws-restore holds it on its own descriptor across its `_spawn_start`, and a reclaim of a kept
+  # child or a collect hold it too, none of which ever refused a spawn of a row that is not archived.
+  if [[ ! -f "$REG/$id.archived" ]]; then
+    _ws_shed_spawn_held "$id" || return 0
+    _WS_EXPIRE_SPAWN_WHY=$_WS_SHED_HELD_WHY   # the held lock's sentence, or the stranded marker's (DEPSSHED region)
+    return 1
+  fi
   # A BREADCRUMB THAT STANDS BUT READS AS NOTHING, ON AN ARCHIVED ROW, IS NOT
   # "NONE": an interrupted expiry leaves `.archived` standing (its purge takes
   # the breadcrumb first), so it may be one — which verb left it, and where, is
@@ -40255,6 +40556,8 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 
 # @ccd-lib:loose — the loose arm of ws-collect (DR-13, D-6625; fleet disk retention spec 2026-10-23 §2.4) moved to ccd/lib/disk-retention.sh (D-6913)
 
+# @ccd-lib:depsshed — the deps-shed verb, `ws-shed-deps` (D-7278), lives in ccd/lib/disk-retention.sh
+
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _ws_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or an `expire:` breadcrumb, on stdout
@@ -40521,7 +40824,9 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 #               no bound PR", a PR that never met the queue, a MERGED PR whose
 #               last removal had another reason (merged by hand after it), and a
 #               CLOSED PR that never merged: it is in neither window, but its own
-#               line already says `phase: closed`, and a closed PR is in no queue
+#               line already says `phase: closed`, and a closed PR is in no queue;
+#               and a PR a merge train landed and closed (`landedInTrain` on its
+#               bound row, `phase: merged`), CLOSED to GitHub and so in no window
 #   unmeasured  the call did not answer, or the bound PR is outside both windows
 #               and is not closed
 # plus `queueAt`, the ISO timestamp of that last act, only when it has one and
@@ -40636,7 +40941,13 @@ def word(line):
         return 'none', None
     f = FACTS.get(num)
     if f is None:
-        if line.get('phase') == 'closed':
+        # A closed PR is in no queue, and neither window holds it. That covers
+        # a PR a merge train landed and CLOSED, whose phase reads `merged` (its
+        # bound row carries ccd's own `landedInTrain`): GitHub still says
+        # CLOSED, so it is in no window either, and `unmeasured` would be false.
+        if line.get('phase') == 'closed' or (line.get('phase') == 'merged' and any(
+                isinstance(r, dict) and r.get('number') == num and r.get('landedInTrain') is True
+                for r in line.get('rows') or [])):
             return 'none', None
         return 'unmeasured', None
     state, entry, act, at, why = f
@@ -44487,9 +44798,10 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
   fi
 }
 
-# ── THE DISK-RETENTION LIBRARY (D-6913; GitHub #1279) ──
-# The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, installed beside this body and loaded HERE, once every
-# function and variable they call exists. The pin below names that file's SHA-256, and like the stamp on line 2 it is written AT
+# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279) AND THE TRAIN PROOF (D-7463) ──
+# The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, and the train proof in ccd/lib/train-proof.sh, both
+# installed beside this body and loaded HERE, once every function and variable they call exists; each pin below works as
+# this paragraph tells for the first. The first pin below names disk-retention.sh's SHA-256, and like the stamp on line 2 it is written AT
 # INSTALL TIME (D-6913, the ruling that gave the pin #1525's treatment): the committed line is the fixed placeholder
 # `stamp-at-install`, so no PR ever conflicts on it, and ccd/ccd-entry-install.py renders the digest of the library it publishes
 # into the installed body BEFORE it stamps that body, so the stamp (and the launcher's digest of the stamped bytes) covers the
@@ -44506,6 +44818,10 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
 # from the environment: these are the platforms' standard locations (GNU coreutils, perl's shasum, BSD/macOS sha256).
 __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)
 __CCD_LIB_SHA256=stamp-at-install
+# THE TRAIN-PROOF LIBRARY'S PIN (D-7463): the SHA-256 of ccd/lib/train-proof.sh, the second library the load reads, checks
+# and evaluates (after disk-retention.sh). A placeholder here, rendered by ccd/ccd-entry-install.py from exactly one line, as
+# the pin above is.
+__CCD_LIB_TRAIN_SHA256=stamp-at-install
 # THE DOCS REDACTOR'S PINS (D-7077, OA-C11 (a)): the SHA-256 of `shared/redact.mjs` and `shared/redact-cli.mjs`, installed beside
 # this body. Placeholders here, rendered by ccd/ccd-entry-install.py from exactly one line each, as the library pin is. Read only by
 # `_docs_redact_cli` and `_docs_front`; written only here (the census in ccd-lib-load.test.ts).
@@ -44517,29 +44833,39 @@ __CCD_REDACT_CLI_SHA256=stamp-at-install
 # installed layout. A census in ccd-lib-load.test.ts pins the single writer over ccd/ccd and ccd/lib/*.sh.
 __CCD_LAYOUT=
 __CCD_HASH_CMD=()
-_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
-  local self="${BASH_SOURCE[0]}" dir=. f src sum
+_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's and ccd/lib/train-proof.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
+  local self="${BASH_SOURCE[0]}" dir=. f src sum __ccd_i
   [[ "$self" == */* ]] && dir="${self%/*}"
-  f="$dir/lib/disk-retention.sh"
-  if [[ -L "$f" || ! -f "$f" || ! -r "$f" ]]; then
-    printf 'ccd: refused (lib-missing): %s is not a readable regular file — ccd and its library install together (re-run: ccrc update); nothing was run\n' "$f" >&2
-    return 1
-  fi
-  src=$(<"$f") || { printf 'ccd: refused (lib-unreadable): %s could not be read; nothing was run\n' "$f" >&2; return 1; }
-  # INSTALLED OR SOURCE CHECKOUT (D-6913). The installer renders the pin and stamps line 2 together, so a pin still at its
-  # placeholder is either a source checkout (line 2 still the placeholder too: nothing was installed, nothing to check against)
+  # THE LIBRARIES, in load order, each beside its pin (D-7463): every file is read, and every digest checked, before ANY
+  # file is evaluated, so one library that is not what was shipped refuses the start with none of the others run.
+  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256") __ccd_lib_srcs=()
+  for f in "${__ccd_lib_files[@]}"; do
+    if [[ -L "$f" || ! -f "$f" || ! -r "$f" ]]; then
+      printf 'ccd: refused (lib-missing): %s is not a readable regular file — ccd and its library install together (re-run: ccrc update); nothing was run\n' "$f" >&2
+      return 1
+    fi
+    src=$(<"$f") || { printf 'ccd: refused (lib-unreadable): %s could not be read; nothing was run\n' "$f" >&2; return 1; }
+    __ccd_lib_srcs+=("$src")
+  done
+  # INSTALLED OR SOURCE CHECKOUT (D-6913). The installer renders the pins and stamps line 2 together, so pins still at their
+  # placeholder are either a source checkout (line 2 still the placeholder too: nothing was installed, nothing to check against)
   # or a broken install (line 2 really stamped): the second refuses. Line 2 is read from this file, as bash already read it.
-  if [[ "$__CCD_LIB_SHA256" == stamp-at-install ]]; then
+  # Only a body with EVERY pin a placeholder is a source checkout; any one pin left a placeholder beside a rendered one is a
+  # broken install too.
+  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install ]]; then
     local l1='' l2=''
     { IFS= read -r l1 && IFS= read -r l2; } < "$self" 2>/dev/null || :
     if [[ "$l2" == '# ccrc:stamp-at-install'* ]]; then
       __CCD_LAYOUT=source
-      eval "$src"
+      for __ccd_i in "${!__ccd_lib_srcs[@]}"; do eval "${__ccd_lib_srcs[$__ccd_i]}"; done
       return
     fi
-    printf 'ccd: refused (lib-digest): this ccd is stamped as installed but its library pin was never rendered, so %s cannot be checked — a broken install (re-run: ccrc update); nothing was run\n' "$f" >&2
-    return 1
   fi
+  for __ccd_i in "${!__ccd_lib_files[@]}"; do
+    [[ "${__ccd_lib_pins[$__ccd_i]}" == stamp-at-install ]] || continue
+    printf 'ccd: refused (lib-digest): this ccd is stamped as installed but its library pin was never rendered, so %s cannot be checked — a broken install (re-run: ccrc update); nothing was run\n' "${__ccd_lib_files[$__ccd_i]}" >&2
+    return 1
+  done
   # THE HASHING TOOL FAILS CLOSED. The one `_plat_sha256` selects is used when it is on PATH; when it is not (a stripped PATH, as
   # `ccd version`'s python3-absent case runs under), the standard absolute locations are tried, so a PATH without the tool still
   # hashes and the verb still reaches the fault it really has. Only when no hashing tool exists anywhere does the load refuse
@@ -44562,23 +44888,26 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's functions defined; e
     done
   fi
   if (( ${#hash[@]} == 0 )); then
-    printf 'ccd: refused (lib-hash): no hashing tool was found (on PATH or at %s), so the digest of %s cannot be checked; nothing was run\n' "${__CCD_HASH_TOOLS[*]}" "$f" >&2
+    printf 'ccd: refused (lib-hash): no hashing tool was found (on PATH or at %s), so the digest of %s cannot be checked; nothing was run\n' "${__CCD_HASH_TOOLS[*]}" "${__ccd_lib_files[0]}" >&2
     return 1
   fi
   # Hashed through a PIPE, never a here-string: bash backs a here-string larger than a pipe buffer with a temp file, and on a full
   # temp or root filesystem (the incident class the retention verbs exist for) that write fails and would refuse every verb.
-  sum=$(printf '%s\n' "$src" | "${hash[@]}" 2>/dev/null) || sum=''
-  if [[ -z "${sum%% *}" ]]; then
-    printf 'ccd: refused (lib-hash): the digest of %s could not be computed (no hashing tool, or it failed); nothing was run\n' "$f" >&2
-    return 1
-  fi
-  if [[ "${sum%% *}" != "$__CCD_LIB_SHA256" ]]; then
-    printf 'ccd: refused (lib-digest): %s is not the library this ccd pins (%s) — a half-published install or an edited file (re-run: ccrc update); nothing was run\n' "$f" "$__CCD_LIB_SHA256" >&2
-    return 1
-  fi
+  for __ccd_i in "${!__ccd_lib_files[@]}"; do
+    f="${__ccd_lib_files[$__ccd_i]}"
+    sum=$(printf '%s\n' "${__ccd_lib_srcs[$__ccd_i]}" | "${hash[@]}" 2>/dev/null) || sum=''
+    if [[ -z "${sum%% *}" ]]; then
+      printf 'ccd: refused (lib-hash): the digest of %s could not be computed (no hashing tool, or it failed); nothing was run\n' "$f" >&2
+      return 1
+    fi
+    if [[ "${sum%% *}" != "${__ccd_lib_pins[$__ccd_i]}" ]]; then
+      printf 'ccd: refused (lib-digest): %s is not the library this ccd pins (%s) — a half-published install or an edited file (re-run: ccrc update); nothing was run\n' "$f" "${__ccd_lib_pins[$__ccd_i]}" >&2
+      return 1
+    fi
+  done
   __CCD_LAYOUT=installed
   __CCD_HASH_CMD=("${hash[@]}")
-  eval "$src"
+  for __ccd_i in "${!__ccd_lib_srcs[@]}"; do eval "${__ccd_lib_srcs[$__ccd_i]}"; done
 }
 _ccd_lib_load || { [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 125; return 125; }
 
@@ -44616,6 +44945,7 @@ case "${1:-}" in
   ws-collect) shift; cmd_ws_collect "$@" ;;
   ws-orphan)  shift; cmd_ws_orphan "$@" ;;
   scratch-rescue) shift; cmd_scratch_rescue "$@" ;;
+  ws-shed-deps) shift; cmd_ws_shed_deps "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
@@ -44628,11 +44958,12 @@ case "${1:-}" in
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   pr-landing) shift; cmd_pr_landing "$@" ;;
+  pr-train-prove) shift; cmd_pr_train_prove "$@" ;;
   docs-index) shift; cmd_docs_index "$@" ;;
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

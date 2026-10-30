@@ -1,23 +1,28 @@
 // ARCH-30 (#544): the PWA's poll primitive and wire-guard kit have ONE owner each.
 //  (1) `isRecord`, `isNum`, `isCount`, `isOneOf` (and the old `isObject`) are defined only in `pwa/src/lib/wire.ts`.
 //      Five copies had disagreed on what a count is, and 2^53 + 1 passed the loosest.
-//  (2) No `pwa/src/fleet/` file subscribes to `visibilitychange`: a fleet view re-polls through `lib/usePoll.ts`, the
-//      one file that holds that subscription for the fleet views.
+//  (2) No `pwa/src` file but the page clock, `lib/pageClock.ts`, subscribes to `visibilitychange` or `online` (D-7191,
+//      W7 C7m): a view, hook or store that acts on the page turning visible or hidden, or coming back online, goes
+//      through the clock (a fleet view through `lib/usePoll.ts`, which re-imports it).
 //  (3) ARCH-49: no `status === 'dead'` outside `pwa/src/fleet/presence.ts`, and no `coordPresence` (the block at the end).
 import { describe, expect, it } from 'vitest';
-import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
+import { identifierReferences, parseFile, parseSource, stringPieces, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
 import { DEAD_CHECK_OWNER, accountsReaders, answerPaths, coordPresenceSites, dialogSheetStates, inlineDeadChecks, inlineDeadChecksIn, requestPolls, transcriptCopyRules } from '../census-w7/pwa.js';
 import path from 'node:path';
 import { fixture, singleReaders, singleReadersIn } from '../census-w7/pwa.js';
+import { storageOwners, storageTypes } from '../census-w7/pwa.js';
 
 const GUARDS = new Set(['isRecord', 'isObject', 'isNum', 'isCount', 'isOneOf']);
 const WIRE = 'pwa/src/lib/wire.ts';
-const POLL = 'pwa/src/lib/usePoll.ts';
+const POLL = 'pwa/src/lib/pageClock.ts';
 
 const guardDefinitions = (p: ParsedFile): string[] => p.symbols.filter((s) => GUARDS.has(s.name)).map((s) => s.name);
 const visibilitySubscriptions = (p: ParsedFile): number =>
   p.calls.filter((c) => c.name === 'addEventListener' && c.args[0]?.kind === 'string' && c.args[0].text === 'visibilitychange').length;
+const PAGE_CLOCK_EVENTS = new Set(['visibilitychange', 'online']);
+const pageClockSubscriptions = (p: ParsedFile): number =>
+  p.calls.filter((c) => c.name === 'addEventListener' && c.args[0]?.kind === 'string' && PAGE_CLOCK_EVENTS.has(c.args[0].text)).length;
 
 const parse = (file: string): ParsedFile => parseFile(path.join(REPO, file));
 const files = (): string[] => walkSrc({ roots: ['pwa/src'], min: 200 });
@@ -29,6 +34,8 @@ describe('the PWA poll primitive and wire-guard kit have one owner (ARCH-30, #54
     expect(guardDefinitions(parseSource('const isOther = (v: unknown): boolean => !!v;'))).toEqual([]);
     expect(visibilitySubscriptions(parseSource("document.addEventListener('visibilitychange', f);"))).toBe(1);
     expect(visibilitySubscriptions(parseSource("document.addEventListener('click', f);"))).toBe(0);
+    expect(pageClockSubscriptions(parseSource("window.addEventListener('online', f); document.addEventListener('visibilitychange', g);"))).toBe(2);
+    expect(pageClockSubscriptions(parseSource("window.addEventListener('pagehide', f);"))).toBe(0);
   });
 
   it('the guard kit is defined in lib/wire.ts and nowhere else in pwa/src', () => {
@@ -41,10 +48,15 @@ describe('the PWA poll primitive and wire-guard kit have one owner (ARCH-30, #54
     expect(where[WIRE]?.sort()).toEqual(['isCount', 'isNum', 'isOneOf', 'isRecord']);
   });
 
-  it('no pwa/src/fleet file subscribes to visibilitychange, and usePoll holds that subscription', () => {
-    const fleet = files().filter((f) => f.startsWith('pwa/src/fleet/'));
-    expect(fleet.length).toBeGreaterThan(20);
-    expect(fleet.filter((f) => visibilitySubscriptions(parse(f)) > 0)).toEqual([]);
+  it('no pwa/src file but lib/pageClock.ts subscribes to visibilitychange or online', () => {
+    const all = files();
+    expect(all.filter((f) => f.startsWith('pwa/src/fleet/')).length).toBeGreaterThan(20);
+    const where: Record<string, number> = {};
+    for (const f of all) {
+      const n = pageClockSubscriptions(parse(f));
+      if (n > 0) where[f] = n;
+    }
+    expect(where).toEqual({ [POLL]: 2 });
     expect(visibilitySubscriptions(parse(POLL))).toBe(1);
   });
 });
@@ -158,5 +170,286 @@ describe('the envelope pairing has one owner, the server (C7f, D-7184)', () => {
     const ported = CLIENT_PAIRING_NAMES.filter((n) => n !== 'prefixMatches' && n !== 'norm');
     expect(ported.filter((n) => !names.has(n))).toEqual([]);
     expect(names.has('framePairing')).toBe(true);
+  });
+});
+
+// ─── C7m (D-7191; ARCH-75 #810): one page clock, and no hand-written request poll ─────────────────────────────────
+// Read through W7's census (`census-w7/pwa.ts#pageClockSubscriptions` and `#requestPolls`), so the sites are the
+// syntax tree's: `visibilitychange` 10 → 1 and `online` 2 → 1, both in `lib/pageClock.ts`; hand-written request polls
+// 2 → 0 (`HotFilesStrip` and `useFleetHealth` poll through `usePoll`). Each may only go down (spec §5.1 rule 3).
+describe('the PWA has one page clock and no hand-written request poll (C7m, D-7191)', () => {
+  it('pageClockSubscriptions(): one visibilitychange and one online subscription, both in lib/pageClock.ts', async () => {
+    const { pageClockSubscriptions: clockSites } = await import('../census-w7/pwa.js');
+    expect(clockSites().map((s) => [s.file, s.kind])).toEqual([
+      ['pwa/src/lib/pageClock.ts', 'visibilitychange'],
+      ['pwa/src/lib/pageClock.ts', 'online'],
+    ]);
+  });
+
+  it('requestPolls(): no hand-written request poll is left in pwa/src', () => {
+    expect(requestPolls()).toEqual([]);
+  });
+});
+
+// ─── C7i (D-7187; ARCH-64 #799, the PWA half; OA-C16 (a), D-7265) ─────────────────────────────────────────────────
+// The PWA makes one pane-text decision of its own, `showsPrompt`, and it is LEGITIMATELY DIFFERENT: it renders the PTY
+// the drawer shows (the wrapped view offers the grid when no prompt glyph shows), it decides nothing sent, and the
+// server has no fact for it. The compaction fold is the server's flag (`foldsAway` reads `ChatEvent`'s `compaction`,
+// `COMPACTION_RE` is gone). Claude Code's prompt glyph has one spelling, `shared/pane-glyph.ts`, which the drawer's view
+// and the server's dialog parser import. Read through W7's census (`census-w7/pwa.ts#paneTextDecisions`,
+// `#promptGlyphSpellings`, whose FIXTURE rows red a definition or a spelling), imported in the block so the file's
+// header imports stay as other tasks append to them. Each may only go down (spec §5.1 rule 3).
+describe('the PWA folds on the server\'s compaction flag, and the prompt glyph has one spelling (C7i, D-7187)', () => {
+  const GLYPH = 'shared/pane-glyph.ts';
+
+  it('paneTextDecisions() 2 -> 1: only showsPrompt, named, in session/drawerView.ts', async () => {
+    const { paneTextDecisions } = await import('../census-w7/pwa.js');
+    expect(paneTextDecisions().map((s) => `${s.file}#${s.symbol}`)).toEqual(['pwa/src/session/drawerView.ts#showsPrompt']);
+  });
+
+  it('promptGlyphSpellings() 2 -> 1: the glyph is spelled once, in shared/pane-glyph.ts', async () => {
+    const { promptGlyphSpellings } = await import('../census-w7/pwa.js');
+    expect(promptGlyphSpellings().map((s) => s.file)).toEqual([GLYPH]);
+  });
+
+  it('the drawer\'s view and the dialog parser both import PROMPT_GLYPH from shared/pane-glyph.ts', () => {
+    for (const file of ['pwa/src/session/drawerView.ts', 'server/src/pane/dialog.ts']) {
+      const from = parse(file).imports
+        .filter((i) => i.kind === 'import' && !i.typeOnly && i.names.includes('PROMPT_GLYPH'))
+        .map((i) => path.posix.normalize(path.posix.join(path.posix.dirname(file), i.specifier)).replace(/\.js$/, '.ts').replace(/^(?!.*\.ts$)(.*)$/, '$1.ts'));
+      expect(from, file).toEqual([GLYPH]);
+    }
+  });
+});
+
+// ─── C7d (D-7182, D-7205, D-7207, D-7214; ARCH-61 #796, the PWA half; spec K10) ──────────────────────────────────
+// The PWA reads which run is a session's from the wire (`FleetSession.run`, `.openRun`, through `sessionRunOf`): no
+// `pwa/src` file compares a run's `sessionId` or `claimedBy` with a session id, or keys a session map on one, outside
+// the named readers in `fleet/runWords.ts` (`workerOf`, `coordinatorOf`, `claimedRunsOf`, `boundOpenRun`, and `runCard`,
+// the card lookup). Inside them the by-id lookups are named and counted: `workerOf`'s one (its closed-run arm, D-7205),
+// `runCard`'s two (D-7205) and `coordinatorOf`'s one (D-7207). `childRunsSeen` stays a named reader of the `.child` mark
+// (D-7214). The guess (`runForSession`, `runBelongsTo`) is gone, and the palette's order is the fleet tree's. Read
+// through W7's census (`census-w7/pwa.ts#runMatchers`, whose FIXTURE rows red a matcher and a named lookup), imported in
+// the block so the file's header imports stay as other tasks append to them. Each count may only go down.
+describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
+  const site = (s: { file: string; symbol: string }): string => `${s.file}#${s.symbol}`;
+
+  it('runMatchers(): 0 inline comparisons, 0 map lookups and 0 runForSession calls outside the named readers', async () => {
+    const { runMatchers } = await import('../census-w7/pwa.js');
+    const inline = runMatchers().filter((s) => s.kind === 'comparison' || s.kind === 'lookup' || s.kind === 'runForSession');
+    expect(inline.map((s) => `${site(s)} ${s.text}`)).toEqual([]);
+  });
+
+  it('the named by-id lookups: 4, workerOf\'s closed-run arm and runCard\'s two (D-7205), coordinatorOf\'s one (D-7207); may only shrink', async () => {
+    const { runMatchers } = await import('../census-w7/pwa.js');
+    const named = runMatchers().filter((s) => s.kind === 'named').map(site);
+    expect(named.length).toBeLessThanOrEqual(4);
+    expect(named.sort()).toEqual([
+      'pwa/src/fleet/runWords.ts#coordinatorOf', 'pwa/src/fleet/runWords.ts#runCard', 'pwa/src/fleet/runWords.ts#runCard',
+      'pwa/src/fleet/runWords.ts#workerOf',
+    ]);
+  });
+
+  it('childRunsSeen: 1 call, a named reader of the .child mark (D-7214), in useColdRuns; may only shrink', async () => {
+    const { runMatchers } = await import('../census-w7/pwa.js');
+    const calls = runMatchers().filter((s) => s.kind === 'childRunsSeen').map(site);
+    expect(calls.length).toBeLessThanOrEqual(1);
+    expect(calls).toEqual(['pwa/src/screens/useColdRuns.ts#useColdRuns']);
+  });
+
+  it('runForSession and runBelongsTo: 0 definitions in pwa/src', () => {
+    const defs = files().flatMap((f) => parse(f).symbols.filter((s) => ['runForSession', 'runBelongsTo'].includes(s.name.split('.').pop()!)).map((s) => `${f}#${s.name}`));
+    expect(defs).toEqual([]);
+  });
+
+  it('fleetOrder calls fleetTree, and composes no order of its own (no groupFleet or nestFleet call)', async () => {
+    const { enclosingSymbol } = await import('../census-w7/pwa.js');
+    const p = parse('pwa/src/command/commands.ts');
+    const inOrder = p.calls.filter((c) => enclosingSymbol(p, c.start).split('.')[0] === 'fleetOrder').map((c) => c.name);
+    expect(inOrder).toContain('fleetTree');
+    expect(inOrder.filter((n) => n === 'groupFleet' || n === 'nestFleet')).toEqual([]);
+  });
+
+  it('CONTROL: the census reports an inline matcher, a named lookup and a runForSession call where it sees one', async () => {
+    const { fixture, runMatchersIn } = await import('../census-w7/pwa.js');
+    const kinds = (text: string, file: string): string[] => runMatchersIn(fixture(text, file), file).map((s) => s.kind);
+    expect(kinds('export const f = (r: R, s: S) => r.claimedBy === s.id;', 'pwa/src/command/sessionEntries.ts')).toEqual(['comparison']);
+    expect(kinds('export function workerOf(run: R, m: M) { return m.get(run.sessionId); }', 'pwa/src/fleet/runWords.ts')).toEqual(['named']);
+    expect(kinds('export const g = (runs: R[], s: S) => runForSession(runs, s);', 'pwa/src/fleet/x.ts')).toEqual(['runForSession']);
+  });
+});
+
+// C7j (D-7188, OA-C14 (a), D-7265): one bucket order, `shared/api.ts#BUCKET_RANK` (and `BUCKET_ORDER`, computed from
+// it), which every surface that orders buckets reads: `sortFleet.ts#RANK`, `BucketBar` and `statusGroups.ts`'s status
+// table. Read through W7's census (`census-w7/pwa.ts#bucketOrders`, whose FIXTURE row reds a numeric rank and an
+// `order:` table), imported in the block.
+describe('the buckets read in one order, shared/api.ts#BUCKET_RANK (C7j, D-7188)', () => {
+  it('bucketOrders(): 1 (from 2), BUCKET_RANK in shared/api.ts; may only shrink', async () => {
+    const { bucketOrders } = await import('../census-w7/pwa.js');
+    const sites = bucketOrders().map((s) => `${s.file}#${s.symbol}`);
+    expect(sites.length).toBeLessThanOrEqual(1);
+    expect(sites).toEqual(['shared/api.ts#BUCKET_RANK']);
+  });
+});
+
+// C7j Step 5 (D-7188, OA-C15 (a), D-7265): "is it archived" is read from the server's bucket through
+// `shared/api.ts#isArchivedRow` (archived or cleanup), never an absence check on `archivedAt`. Read through W7's census
+// (`census-w7/pwa.ts#archivedChecks`, whose FIXTURE row reds `archivedAt !== null` and `!= null`), imported in the block.
+describe('the PWA reads "archived" from the bucket, through isArchivedRow (C7j, D-7188)', () => {
+  it('archivedChecks(): 0 (from 8) absence checks on archivedAt in pwa/src; may only shrink', async () => {
+    const { archivedChecks } = await import('../census-w7/pwa.js');
+    expect(archivedChecks().map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
+  });
+});
+
+// C7k (D-7189; ARCH-75 #810, PR 2): a session's path has one builder, `lib/routes.ts#sessionPath`, beside the route
+// table row that parses it, and `POST /api/sessions/:id/ensure` has one owner, `session/useEnsure.ts#ensureSession`,
+// which the two Restart buttons (through `useEnsure`), the wake on open, the swap sheet's toast Wake, a main checkout's
+// Restore and the Resume sheet's default read. Read through W7's census (`census-w7/pwa.ts#sessionPathLiterals` and
+// `#ensureCallers`, whose FIXTURE rows red an inline template and a default parameter `ensure = api.ensure`), imported
+// in the block. Each count may only go down.
+describe('one session path and one ensure (C7k, D-7189)', () => {
+  const site = (s: { file: string; symbol: string }): string => `${s.file}#${s.symbol}`;
+
+  it('sessionPathLiterals(): 0 (from 13) string expressions starting /s/ outside sessionPath; may only shrink', async () => {
+    const { SESSION_PATH_OWNER, sessionPathLiterals } = await import('../census-w7/pwa.js');
+    const sites = sessionPathLiterals();
+    expect(sites.filter((s) => site(s) !== SESSION_PATH_OWNER).map((s) => `${site(s)} ${s.text}`)).toEqual([]);
+    expect(sites.map(site)).toEqual([SESSION_PATH_OWNER]);
+  });
+
+  it('ensureCallers(): 1 (from 6) owner of api.ensure, calls and member references, useEnsure.ts#ensureSession; may only shrink', async () => {
+    const { ENSURE_OWNER, ensureCallers } = await import('../census-w7/pwa.js');
+    const sites = ensureCallers();
+    expect(sites.length).toBeLessThanOrEqual(1);
+    expect(sites.map((s) => `${site(s)} [${s.kind}]`)).toEqual([`${ENSURE_OWNER} [call]`]);
+  });
+});
+
+// C7g (D-7185, D-7485; ARCH-57 #792, PWA half): the PWA answers every operator question through one writer,
+// `lib/api.ts#answerQuestion`, on W3 Q3f's `POST /api/questions/session-<id>/answer`. The four writers the family replaces
+// (`answerDialog`, `answerDialogText`, `answerDialogMulti`, `answerAsk`) are gone, and no `pwa/src` code names them
+// (`census-w7/pwa.ts#oldAnswerWriters`). The old doors' paths live in ONE place, the skew row's table
+// (`answerLifecycle.ts#LEGACY_ANSWER_DOORS`, a server without `questions-v1`) and push-sw.js's render of it; C7p deletes
+// both with the aliases. RECORDED MUTANT (run at C7g's tip): putting `answerAsk` back on `createApi` as it stood
+// (`answerAsk: (id, askKey, optionIndexes) => post(`${sid(id)}/ask`, …)`) reds both rows below: oldAnswerWriters()
+// finds `pwa/src/lib/api.ts#createApi [reference]`, and oldAnswerDoorPaths() finds its `${sid(id)}/ask` as a `door`.
+describe('the PWA answers operator questions through one writer on Q3f\'s door (C7g, D-7185, D-7485)', () => {
+  it('oldAnswerWriters(): 0 (from 10); may only shrink', async () => {
+    const { oldAnswerWriters, showSite } = await import('../census-w7/pwa.js');
+    expect(oldAnswerWriters().map(showSite)).toEqual([]);
+  });
+
+  it('oldAnswerDoorPaths(): no door outside the skew table and its push-sw render (from 8 doors); may only shrink', async () => {
+    const { oldAnswerDoorPaths } = await import('../census-w7/pwa.js');
+    const sites = oldAnswerDoorPaths();
+    expect(sites.filter((s) => s.kind === 'door').map((s) => `${s.file}#${s.symbol}:${s.line} ${s.text}`)).toEqual([]);
+    expect(sites.filter((s) => s.kind === 'skew-table').every((s) => s.file === 'pwa/src/session/answerLifecycle.ts')).toBe(true);
+    expect(sites.length).toBeLessThanOrEqual(5);
+  });
+});
+
+// C7l (D-7190; ARCH-75 #810): the PWA's storage has one port, `pwa/src/lib/storage.ts`. Every per-device value is read,
+// written and removed through its `readKey`, `writeKey` and `removeKey`, and `StoragePort` is the one storage type. Read
+// through W7's census (`census-w7/pwa.ts#storageOwners`, `#storageTypes`), so the sites are the syntax tree's. The counts
+// outside the port may only stay at 0: an owner left on bare `localStorage`, or a second local storage type, reds.
+describe('the PWA reaches storage through one port (C7l, D-7190)', () => {
+  const PORT = 'pwa/src/lib/storage.ts';
+
+  it('storageOwners() 12 -> 0 outside lib/storage.ts, which holds the one window.localStorage', () => {
+    const sites = storageOwners();
+    expect(sites.filter((s) => s.file !== PORT).map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
+    expect(sites.map((s) => s.file)).toEqual([PORT]);
+  });
+
+  it('storageTypes() 1 -> 0 outside lib/storage.ts', () => {
+    expect(storageTypes().filter((s) => s.file !== PORT).map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
+  });
+});
+
+// Landing order wave 5a (4b review F4 d; D-7481): `landingOf` in conflictWords.ts is the PWA's one reader of
+// FleetSession.landing. Outside it, the one allowance is ConflictChip's clock gate, `s.landing !== undefined`, a presence
+// test that reads no content. Any identifier named `landing` and any string 'landing' counts: the owner itself reads the
+// key as a string through `reviveSessionLanding`, and a destructure or an element access is a read too.
+const LANDING_OWNER = 'pwa/src/fleet/conflictWords.ts';
+interface LandingSite { file: string; line: number; context: string }
+const landingSitesIn = (text: string, file: string): LandingSite[] => [
+  ...identifierReferences(text, file, new Set(['landing'])).map((r) => ({ file, line: r.line, context: r.context })),
+  ...stringPieces(text, file).filter((s) => s.text === 'landing').map((s) => ({ file, line: s.line, context: "'landing'" })),
+].sort((a, b) => a.line - b.line);
+const CHIP_NAMES = new Set(['CHIP_PATHS_MAX', 'CHIP_LINES_MAX']);
+const chipDefinitionsIn = (text: string, file: string): string[] => identifierReferences(text, file, CHIP_NAMES)
+  .filter((r) => r.role === 'other' && new RegExp(`^${r.name}\\s*(?:=(?!=)|:)`).test(r.context)).map((r) => r.name);
+
+describe('landingOf is the PWA\'s one reader of FleetSession.landing; the chip caps are defined once (wave 5a)', () => {
+  it('CONTROL: the scans see each shape of a read and a definition, and not a comment, a longer name or a use', () => {
+    expect(landingSitesIn('const a = s.landing;', 'x.ts').map((x) => x.context)).toEqual(['s.landing']);
+    expect(landingSitesIn("const a = s['landing'];", 'x.ts').map((x) => x.context)).toEqual(["'landing'"]);
+    expect(landingSitesIn('const { landing } = s;', 'x.ts')).toHaveLength(1);
+    expect(landingSitesIn("reviveSessionLanding(s, 'landing');", 'x.ts').map((x) => x.context)).toEqual(["'landing'"]);
+    expect(landingSitesIn('// s.landing\nconst a = landingOf(s, 1); type T = SessionLanding;', 'x.ts')).toEqual([]);
+    expect(chipDefinitionsIn('export const CHIP_LINES_MAX = 5;', 'x.ts')).toEqual(['CHIP_LINES_MAX']);
+    expect(chipDefinitionsIn("import { CHIP_LINES_MAX } from './w'; const n = CHIP_LINES_MAX + 1;", 'x.ts')).toEqual([]);
+    expect(chipDefinitionsIn('if (CHIP_LINES_MAX === 5) {}', 'x.ts')).toEqual([]);
+  });
+
+  it('no pwa/src file but conflictWords.ts reads a landing; the chip\'s clock gate is the one allowance', () => {
+    const owner = landingSitesIn(parse(LANDING_OWNER).text, LANDING_OWNER);
+    expect(owner.map((s) => s.context), 'the owner reads the key through the wire revive').toContain("'landing'");
+    const outside = files().filter((f) => f !== LANDING_OWNER).flatMap((f) => landingSitesIn(parse(f).text, f));
+    expect(outside.map(({ file, context }) => ({ file, context })))
+      .toEqual([{ file: 'pwa/src/fleet/ConflictChip.tsx', context: 's.landing' }]);
+    const gate = outside[0]!;
+    expect(parse(gate.file).text.split('\n')[gate.line - 1], 'the allowance is a presence test only')
+      .toContain('s.landing !== undefined');
+  });
+
+  it('defines CHIP_PATHS_MAX and CHIP_LINES_MAX once each, in conflictWords.ts', () => {
+    const where: Record<string, string[]> = {};
+    for (const f of walkSrc({ roots: ['pwa/src', 'ui/src', 'shared'], min: 200 })) {
+      for (const n of chipDefinitionsIn(parse(f).text, f)) (where[n] ??= []).push(f);
+    }
+    expect(where).toEqual({ CHIP_PATHS_MAX: [LANDING_OWNER], CHIP_LINES_MAX: [LANDING_OWNER] });
+  });
+});
+
+// C7o (D-7193; the ARCH-53 follow-up, #1371; OA-C18 (a)): in TS, "presence" names SESSION presence only. The viewer
+// constants (`shared/api.ts#VIEWER_REFRESH_MS`, `#VIEWER_TTL_MS`, `#VIEWER_OPEN_TTL_MS`) and the defer-derived
+// identifiers take viewer words, read through W7's census (`census-w7/pwa.ts#viewerWordsAsPresence`, the plan's item 18
+// names), so a viewer fact named presence again reds. The persisted word `presence` is that row's known width: it stays
+// byte-identical on the wire, the feed, coord.db and the journals, listed by `census-w7/pwa.ts#persistedPresenceWords`.
+describe('viewer facts take viewer words; "presence" in TS is session presence (C7o, D-7193)', () => {
+  it('viewerWordsAsPresence() 92 -> 0 across server/src, shared/ and pwa/src; may only shrink', async () => {
+    const { viewerWordsAsPresence, showSite } = await import('../census-w7/pwa.js');
+    expect(viewerWordsAsPresence().map(showSite)).toEqual([]);
+  });
+
+  // A bare `presence` name is session presence's too, so it is read only in the files where it can mean a viewer
+  // (`census-w7/pwa.ts#VIEWER_ONLY_FILES`). What stays is a map keyed BY the persisted word, each listed: a new field,
+  // key, read or local named presence there reds.
+  it('viewerNamesAsPresence() 44 -> 5 in the viewer-only files: only the maps keyed by the persisted word', async () => {
+    const { viewerNamesAsPresence } = await import('../census-w7/pwa.js');
+    expect(viewerNamesAsPresence().map((s) => `${s.file}#${s.symbol}  ${s.text}`)).toEqual([
+      "server/src/collectLane.ts#(module)  presence: 'its id has been open on a screen for a long time, so the temp-root collector leaves its temp root alone.',",
+      "server/src/collectLane.ts#collectItemOf  return { word: 'presence', many: COLLECT_ITEM_MANY.presence,",
+      "server/src/coord/collectTempRoot.ts#(module)  caps: true, 'id-refused': true, paused: true, presence: true,",
+      "server/src/coord/collectTempRoot.ts#(module)  'unknown-fleet': true, 'safety-stopped': true, 'pair-cleared': true, presence: true, caps: true,",
+      "server/src/coord/childReclaim.ts#(module)  presence: true, 'siblings-open': true, 'siblings-unreadable': true, 'marker-unreadable': true,",
+    ]);
+  });
+});
+
+// C7p (D-7194, D-7540; ARCH-57 #792, W7's tail): the four operator answer doors W3 Q3f's family replaced (`/ask`,
+// `/dialog`, `/dialog/text`, `/dialog/multi`) leave the server in C7p's server half, which lands after this ratchet,
+// and the PWA bundle names none of them: no skew table, no fallback, no generated render in `push-sw.js`. Read through
+// W7's census (`census-w7/pwa.ts#retiredAnswerPathRefs`), so the sites are the syntax tree's. 5 at C7g's tip (the skew
+// table's 4 and push-sw's rendered `/ask`), 0 here, and it may only stay 0. RECORDED MUTANT (run at C7p's PWA-half
+// tip): putting C7g's skew door back into `lib/api.ts`'s `createApi`
+// (`answerAsk: (id, askKey, optionIndexes) => post(`${sid(id)}/ask`, …)`) reds this row with
+// `pwa/src/lib/api.ts#createApi:<line> [reference]  `${sid(id)}/ask``.
+describe('the PWA bundle names no retired operator answer door (C7p, D-7194, D-7540)', () => {
+  it('retiredAnswerPathRefs(): 0 (from 5 at C7g); may only stay 0', async () => {
+    const { retiredAnswerPathRefs, showSite } = await import('../census-w7/pwa.js');
+    expect(retiredAnswerPathRefs().map(showSite)).toEqual([]);
   });
 });

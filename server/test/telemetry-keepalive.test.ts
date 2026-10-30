@@ -48,11 +48,20 @@ beforeEach(() => {
   plantTmux(TMUX_GONE);
 });
 
+/** The sweep settings `_ccrc_knob` reads (wave 29): a shell export of one must not move a row, so none is inherited. */
+const SWEEP_SETTINGS = ['CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT',
+  'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS'];
+const inherited = (): NodeJS.ProcessEnv => {
+  const env = { ...process.env };
+  for (const k of SWEEP_SETTINGS) delete env[k];
+  return env;
+};
+
 function run(env: Record<string, string> = {}) {
   return spawnSync('bash', [KEEPALIVE], {
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...inherited(),
       HOME: home,
       CCRC_KEEPALIVE_TURN_TIMEOUT: '20',
       PATH: `${j('fixture-bin')}:${process.env.PATH}`,
@@ -753,5 +762,136 @@ describe('the credential reaches the child and nowhere else', () => {
       'the credential was persisted to $HOME/.ccrc/keepalive.log').not.toContain(SENTINEL);
     expect(fs.readFileSync(j('.ccrc', 'keepalive.json'), 'utf8'),
       'the credential reached the census').not.toContain(SENTINEL);
+  });
+});
+
+// ── wave 29 (D-6981): the keepalive reads its settings from ~/.ccrc/ccrc.env through ccrc's reader ─────────────
+// `env -i` models the user manager after a reboot: no CCRC_ name, so a value can only arrive from the file.
+describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through ccrc\'s reader', () => {
+  const ccrcEnv = (text: string): void => fs.writeFileSync(j('.ccrc', 'ccrc.env'), text, { mode: 0o600 });
+  const reboot = (extra: Record<string, string> = {}) => {
+    fs.mkdirSync(j('tmp'), { recursive: true });
+    return spawnSync('bash', [KEEPALIVE], { encoding: 'utf8',
+      env: { HOME: home, PATH: `${j('fixture-bin')}:${process.env.PATH}`, TMPDIR: j('tmp'), ...extra } });
+  };
+  /** A wrapper that records each argv word on a line of its own, so one word with spaces is told from several. */
+  const plantArgvWrapper = (id: string): void => {
+    plantWrapper(id, `${renders(id)}\nprintf '%s\\n' "$@" > "$HOME/argv-${id}"`);
+  };
+  const argvOf = (id: string): string[] => fs.readFileSync(j(`argv-${id}`), 'utf8').split('\n').slice(0, -1);
+  const after = (argv: string[], flag: string): string | undefined => argv[argv.indexOf(flag) + 1];
+
+  it('W29-K1: the model and a prompt with spaces, written only in ccrc.env, reach the turn as one argv word each (reboot)', () => {
+    plantArgvWrapper('claude-a');
+    plantLimits('claude-a', 9, 9999);
+    ccrcEnv('CCRC_KEEPALIVE_MODEL=sonnet\nCCRC_KEEPALIVE_PROMPT=Say ok please\n');
+    const r = reboot();
+    expect(r.status, r.stderr).toBe(0);
+    const argv = argvOf('claude-a');
+    expect(after(argv, '--model')).toBe('sonnet');
+    expect(after(argv, '-p')).toBe('Say ok please');
+  });
+
+  it('W29-K2: a prompt in one whole pair of quotes, with a colon, reaches -p unquoted', () => {
+    plantArgvWrapper('claude-a');
+    plantLimits('claude-a', 9, 9999);
+    ccrcEnv('CCRC_KEEPALIVE_PROMPT="Reply: ok"\n');
+    expect(reboot().status).toBe(0);
+    expect(after(argvOf('claude-a'), '-p')).toBe('Reply: ok');
+  });
+
+  it('W29-K3: the freshness written in ccrc.env decides the skip, and a set environment still wins', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 3600);
+    ccrcEnv('CCRC_KEEPALIVE_FRESH=7200\n');
+    expect(reboot().status).toBe(0);
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(row('claude-a').reason).toContain('under CCRC_KEEPALIVE_FRESH=7200');
+    expect(turns()).toEqual([]);
+    expect(reboot({ CCRC_KEEPALIVE_FRESH: '1800' }).status).toBe(0);
+    expect(turns().filter((l) => l.startsWith('turn claude-a '))).toHaveLength(1);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('W29-K4: a ccrc.env that cannot be read stops the pass before any turn or census', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    ccrcEnv('CCRC_KEEPALIVE_FRESH=7200\n');
+    fs.chmodSync(j('.ccrc', 'ccrc.env'), 0o000);
+    try {
+      const r = reboot();
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('keepalive: CCRC_KEEPALIVE_FRESH cannot be measured: ~/.ccrc/ccrc.env is there but cannot be read');
+      expect(r.stderr).toMatch(/^keepalive: .* — nothing was measured$/m);
+      expect(turns()).toEqual([]);
+      expect(fs.existsSync(j('.ccrc', 'keepalive.json'))).toBe(false);
+    } finally { fs.chmodSync(j('.ccrc', 'ccrc.env'), 0o600); }
+  });
+
+  it('W29-K5: a freshness that is not a whole number stops the pass with the existing sentence, naming the file', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    ccrcEnv('CCRC_KEEPALIVE_FRESH=30m\n');
+    const r = reboot();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("CCRC_KEEPALIVE_FRESH must be a whole number — got '30m', as set in ~/.ccrc/ccrc.env; nothing was measured");
+    expect(turns()).toEqual([]);
+  });
+
+  it.each([
+    ['9223372036854775808', 'file'], ['9223372036854775808', 'environment'],
+    ['99999999999999999999', 'file'], ['99999999999999999999', 'environment'],
+  ])('W29-K7: unrepresentable freshness %s from %s refuses before a turn or work lock', (value, source) => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    ccrcEnv(`CCRC_KEEPALIVE_FRESH=${source === 'file' ? value : '1800'}\n`);
+    const r = reboot(source === 'environment' ? { CCRC_KEEPALIVE_FRESH: value } : {});
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`CCRC_KEEPALIVE_FRESH must be a representable whole number — got '${value}', as set in ${source === 'file' ? '~/.ccrc/ccrc.env' : 'the environment'}; nothing was measured`);
+    expect(r.stderr).not.toContain('integer expression expected');
+    expect(turns()).toEqual([]);
+    expect(fs.existsSync(j('.ccrc', 'keepalive.lock'))).toBe(false);
+    expect(fs.existsSync(j('.ccrc', 'keepalive.json'))).toBe(false);
+  });
+
+  it.each([
+    ['0', true], ['00', true], ['08', false], ['01800', false],
+    ['0000000000000000000000000000000008', false],
+    ['9223372036854775807', false], ['09223372036854775807', false],
+  ] as const)('W29-K8: representable freshness %s preserves decimal leading zeros and zero semantics', (value, spends) => {
+    const date = spawnSync('bash', ['-c', 'command -v date'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(j('fixture-bin', 'date'), `#!/usr/bin/env bash
+case "$1" in +%s) printf '1700000000\\n' ;; *) exec '${date}' "$@" ;; esac
+`, { mode: 0o755 });
+    plantWrapper('claude-a', renders('claude-a'));
+    fs.mkdirSync(j('.cc-limits'), { recursive: true });
+    fs.writeFileSync(j('.cc-limits', 'claude-a.json'), JSON.stringify({ five: 9, seven: 3, ts: 1699999997 }));
+    ccrcEnv(`CCRC_KEEPALIVE_FRESH=${value}\n`);
+    const r = reboot();
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('integer expression expected');
+    expect(row('claude-a').outcome).toBe(spends ? 'refreshed' : 'skipped');
+    expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(spends);
+  });
+
+  it('W29-K9: the largest representable freshness still throttles a previous attempt without telemetry', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    fs.mkdirSync(j('.ccrc', 'keepalive-state'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'keepalive-state', 'claude-a.json'),
+      JSON.stringify({ lastAttempt: Math.floor(Date.now() / 1000) - 3600, fails: 1 }));
+    ccrcEnv('CCRC_KEEPALIVE_FRESH=9223372036854775807\n');
+    const r = reboot();
+    expect(r.status, r.stderr).toBe(0);
+    expect(row('claude-a').reason).toContain('under CCRC_KEEPALIVE_FRESH=9223372036854775807');
+    expect(turns()).toEqual([]);
+  });
+
+  it('W29-K6: a prompt with a quote inside it stops the pass, and no turn is taken', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    ccrcEnv('CCRC_KEEPALIVE_PROMPT=say "ok"\n');
+    const r = reboot();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^keepalive: CCRC_KEEPALIVE_PROMPT cannot be measured: .* — nothing was measured$/m);
+    expect(turns()).toEqual([]);
   });
 });

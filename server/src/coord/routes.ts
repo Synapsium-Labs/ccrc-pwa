@@ -32,11 +32,13 @@ import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { childReclaimUnlessDisabled } from './childReclaimDisabled.js';
+import { retireExecutor } from '../retireExecutor.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
-import { verifyDone, type DoneClaim } from './fingerprint.js';
+import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
@@ -53,6 +55,8 @@ import {
   stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts, stallSettingsAfter, stallSettingsChange,
   stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
 } from './stallsettings.js';
+import { dispatchAbandonViewOf } from './deadDispatch.js';
+import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { childBindGate } from './childBind.js';
 import {
   openRunPreconditions, type AttributionRead, type HomeProjectVerdict, type OpenRunRefusal, type SessionMarkRead,
@@ -84,7 +88,7 @@ import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../ref
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
-import { readLiveStateMeasured } from '../livestate.js';
+import { liveStateReaderOver, readLiveStateMeasured } from '../livestate.js';
 import { heldFor } from './heldFor.js';
 import {
   approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
@@ -99,6 +103,8 @@ import {
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalView,
 } from '../../../shared/api.js';
+import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import { rollTargetsOf } from './rollTarget.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -355,7 +361,7 @@ async function composeReviewCapAsk(coord: CoordStore, io: Deps['io'], work: numb
  */
 function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
   return (req) => {
-    void deps.queue.run(req.sessionId, () => childReclaimUnlessDisabled(
+    void retireExecutor(deps.queue, req.sessionId, () => childReclaimUnlessDisabled(
       { io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
       () => reclaimChild({
         coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
@@ -1856,7 +1862,7 @@ export function registerCoordRoutes(
       if (!measured.ok) {
         coord.recordRejection({ code: measured.code, runId: id, toId: run.sessionId, detail: measured.detail });
         queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-          kind: 'status', subject: 'wave-advance-rejected', body: `${measured.code}: ${measured.detail}` });
+          kind: 'status', ...doneRejectionMail('advance', measured) });
         return reply.code(409).send({ ok: false, reject: { code: measured.code, detail: measured.detail } });
       }
       verdict = measured;
@@ -1870,7 +1876,9 @@ export function registerCoordRoutes(
     if (to === 'merging' && verdict !== null) {
       const listing = await deps.io.readdir(deps.cfg.registryDir);
       episodeMode = checksModeAt(readSwitches(listing), ccdCan(deps.fleetState, 'prLanding'), verdict.measured);
-      detail = mergingAtDetail(claim.handoffCommit, verdict.measured.prNumber ?? null, episodeMode);
+      // The head the server VERIFIED (D-7102): the claim's own on an ordinary advance, the live tip on one accepted
+      // through the radar's lineage. The landing compares a PR head to this, and a brief prints it.
+      detail = mergingAtDetail(verdict.measured.branchTip, verdict.measured.prNumber ?? null, episodeMode);
     }
     const adv = detail === undefined ? coord.advance(id, to, 'coordinator') : coord.advance(id, to, 'coordinator', detail);
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
@@ -1880,9 +1888,12 @@ export function registerCoordRoutes(
     const after = coord.run(id);
     if (!after.ok) return refuseRoute(reply, 'run-unreadable', { detail: after.detail });
     if (after.run === null) return refuseAdvance(reply, { reject: { code: 'unknown-run' } });
-    return reply.code(200).send(episodeMode === 'live'
-      ? { ok: true, run: toRunSummary(after.run), checksMail: CHECKS_MAIL_TOKEN } satisfies AdvanceOk
-      : { ok: true, run: toRunSummary(after.run) } satisfies AdvanceOk);
+    return reply.code(200).send({
+      ok: true, run: toRunSummary(after.run),
+      ...(episodeMode === 'live' ? { checksMail: CHECKS_MAIL_TOKEN } : {}),
+      // Only an advance accepted through the lineage names its head: absent means the claim was the head.
+      ...(verdict?.measured.via === BASE_ONLY_MERGE ? { verifiedHead: verdict.measured.branchTip } : {}),
+    } satisfies AdvanceOk);
   };
 
   /**
@@ -2672,6 +2683,68 @@ export function registerCoordRoutes(
     }) });
   });
 
+  /** `GET`/`POST /api/coord/dispatch-abandon` (D-7319): the Settings switch of the act that abandons a dispatch that
+   *  never came back (`abandonDeadDispatch.ts`). One path for both verbs, the stall-watch door's shape, so one gate entry
+   *  covers it: session-gated when `CCRC_AUTH` is armed, open dark, no box token (no machine lane calls it). The view is
+   *  `dispatchAbandonViewOf`'s (L1): only an exact `on` reads armed. The POST takes `{choice:'on'|'off'}` and nothing
+   *  else, writes the one row, and records the change in the feed (`record-only`), as the stall watch's door does. */
+  app.get('/api/coord/dispatch-abandon', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...dispatchAbandonViewOf(deps.coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs) });
+  });
+
+  app.post('/api/coord/dispatch-abandon', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const body = req.body;
+    const keys = body !== null && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : null;
+    const choice = keys !== null && keys.length === 1 && keys[0] === 'choice' ? (body as { choice: unknown }).choice : undefined;
+    if (!isDispatchAbandonChoice(choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: "the body is {choice:'on'|'off'} and nothing else" });
+    }
+    const before = dispatchAbandonViewOf(coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs);
+    if (before.stored === 'unreadable') {
+      return refuseRoute(reply, 'state-unreadable', { detail: before.detail ?? 'the switch could not be read' });
+    }
+    const after = dispatchAbandonViewOf(coord.setDispatchAbandon(choice, Date.now()), deps.cfg.dispatchAbandonMs);
+    if (before.stored !== after.stored && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'dispatch abandon changed', runId: null,
+        body: `abandoning dispatches that never came back: ${before.stored} -> ${after.stored}; by ${actor}` },
+      'record-only', { degraded: 'dispatch abandon switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/roll-idle` — Settings › Automation › "Roll idle sessions" (D-7453, the operator's rulings of
+   *  2026-10-29): `coordinators` (the default, ON) or `off`. Session-gated when sign-in is armed, open dark, as the
+   *  stall-watch door is: no machine lane calls it, and turning it on releases nothing a signed-in operator has not
+   *  already ruled. The one writer is `CoordStore.setRollTargets`; a change is a record-only feed row naming the actor. */
+  const rollIdleView = (coord: NonNullable<typeof deps.coord>): { targets: ClaudeRollTargets | null; default: ClaudeRollTargets; choices: readonly ClaudeRollTargets[] } =>
+    ({ targets: rollTargetsOf(coord.rollSettings()), default: CLAUDE_ROLL_TARGETS_DEFAULT, choices: CLAUDE_ROLL_TARGETS });
+
+  app.get('/api/coord/roll-idle', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
+  });
+
+  app.post('/api/coord/roll-idle', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { targets?: unknown } | null | undefined;
+    const targets = body !== null && typeof body === 'object' ? body.targets : undefined;
+    if (!isClaudeRollTargets(targets)) {
+      return refuseRoute(reply, 'bad-request', { detail: `targets must be one of ${CLAUDE_ROLL_TARGETS.join(', ')}` });
+    }
+    const w = deps.coord.setRollTargets(targets, Date.now());
+    const before = rollTargetsOf(w.before);
+    if (before !== targets && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'roll idle sessions changed', body: `roll idle sessions: ${before ?? 'unreadable'} -> ${targets}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'roll idle sessions written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
+  });
+
   /**
    * Child-reclamation wave 5 (spec §5.9): each row's `childReclaim`, composed
    * over the rows `GET /api/runs` already read. The DECISION is
@@ -3137,7 +3210,7 @@ export function registerCoordRoutes(
     }
     const names = reg.names;
     const recById = new Map(reg.records.map((r) => [r.id, r]));
-    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
       undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
 
     let project: string;
@@ -3336,7 +3409,7 @@ export function registerCoordRoutes(
         // [registry-refused:reports]
         const reg = await readRegistryMeasured(deps.io, deps.cfg);
         const names = reg.listed ? reg.names : null;
-        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
           undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);

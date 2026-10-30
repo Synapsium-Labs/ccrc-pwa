@@ -175,7 +175,12 @@ describe('readPrLandingLine, the one reader of pr-landing', () => {
     requiredCut: false, rulesNamed: ['build'], protectionNamed: [], unmeasured: [],
   };
   it('reads a bound line whole', () => {
-    expect(readPrLandingLine(good)).toEqual({ ...good, pinnedNames: [] });
+    expect(readPrLandingLine(good)).toEqual({ ...good, pinnedNames: [], landedInTrain: false });
+  });
+  it('reads landedInTrain only as a literal true', () => {
+    expect(readPrLandingLine({ ...good, state: 'CLOSED', landedInTrain: true })?.landedInTrain).toBe(true);
+    expect(readPrLandingLine({ ...good, state: 'CLOSED', landedInTrain: 'true' })?.landedInTrain).toBe(false);
+    expect(readPrLandingLine({ ...good, state: 'CLOSED' })?.landedInTrain).toBe(false);
   });
   it('an alias with no object and a refusal keep their reasons and are unbound', () => {
     expect(readPrLandingLine({ id: 'ws-a', unmeasured: ['pr-unreadable'] }))

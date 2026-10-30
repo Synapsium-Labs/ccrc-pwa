@@ -22,6 +22,8 @@ import { isApprovalKebab } from '../src/coord/approvalsign.js';
 import { isDigestKebab } from '../src/coord/digest.js';
 import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
 import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
+import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
+import { isAutoRollKebab } from '../src/coord/rollTarget.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -671,6 +673,13 @@ describe('the rejection table is total, in both directions', () => {
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
       'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
+      // LANDING ORDER WAVE 4, Task 2: the radar-timing answer's three mail SUBJECTS (`closeDecide.ts`'s
+      // `doneRejectionMail`), beside the three refusal subjects above, and `measured.via`'s one word. Subjects are
+      // mail text, never a wire code; the code they carry, `lineage-unmeasured`, is a `MAIL_REJECT_CODES` member.
+      'wave-done-unmeasured',
+      'wave-advance-unmeasured',
+      'review-done-unmeasured',
+      'base-only-merge',      // `fingerprint.ts`'s `measured.via`: a server-internal verdict word, answered on the wire as `verifiedHead`
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
       'enter-ignored',        // a `SendResult` error (`inject/send.ts`), reached here as
                               // half of `rundefs.ts`'s `CLEAR_REFUSED_STRANDS_TEXT` — the
@@ -784,6 +793,24 @@ describe('the rejection table is total, in both directions', () => {
       'stash-failed',
       'stash-occupied',
       'enter-ignored',
+      // LANDING ORDER WAVE 4 (plan docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md, Task 1):
+      // `coord/lineage.ts` spells wave 3b's walk-stop words (`LINEAGE_STOPS`, the radar's vocabulary, written into a
+      // lineage file and only read here) and the DETAIL words of `decideLineage`'s answers. A detail is free text
+      // appended to a refusal's own body (` (<detail>)`) or to `lineage-unmeasured`'s, never a code of its own: no
+      // route, no `error`/`refused`/`reject.code` field and no wire union carries one by itself.
+      'not-a-merge',
+      'second-parent-not-on-base',
+      'tree-differs',
+      'landing-marker-unreadable',
+      'landing-marker-stale',
+      'lineage-not-expected',
+      'not-yet-measured',
+      'lineage-unreadable',
+      'lineage-stale',
+      'tip-unmeasured',
+      'older-than-the-live-tip',
+      'partly-measured',
+      'land-probe-paused',    // `coord/lineageRead.ts`: the global pause marker's FILE NAME under `$REG`, wave 3b's; a path segment
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -995,8 +1022,16 @@ describe('the rejection table is total, in both directions', () => {
         // THE QUESTION SWEEP'S DECIDERS (W3 Q3c, D-7027): `coord/questionPolicy.ts` names its answer words and the ask
         // read's stages as literals (`'push-and-drop'`, `'row-refused'`). A word decides the sweep's act, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from that file's tables, never NOT_CODES.
-        || isQuestionPolicyKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason or question-sweep word`).toBe(true);
+        || isQuestionPolicyKebab(tok)
+        // THE DEAD-DISPATCH ACT (D-7319): `coord/deadDispatch.ts` and `coord/abandonDeadDispatch.ts` name why a run is kept
+        // (`'in-flight'`, `'child-workspace'`) and the switch door's refusals (`'state-unreadable'`) as literals. A keep
+        // reason rides a log line and the arm's re-measure, never a mail rejection or a run refusal. Admitted through the
+        // exported guard, derived from `DEAD_DISPATCH_KEEPS` and `DISPATCH_ABANDON_REFUSALS`, never NOT_CODES.
+        || isDeadDispatchKebab(tok)
+        // THE AUTOMATIC ROLL'S VERDICT (D-7452): `coord/rollTarget.ts` names its skip words, its opt-out suffix and its
+        // actor as literals. A word names a skip in the lane's journal, never a `refused` or `reject.code`.
+        || isAutoRollKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word or automatic-roll word`).toBe(true);
     }
   });
 });

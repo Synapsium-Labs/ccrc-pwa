@@ -14,6 +14,7 @@ import {
   type DocsRefreshFetch, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
+import { onPageVisible } from '../lib/pageClock';
 import {
   docsRetryPlan, type DocsClientSlot, type DocsFileAnswer, type DocsLoaders, type DocsNotOk,
   type DocsRefreshLoaderAnswer, type DocsTreeAnswer,
@@ -560,11 +561,11 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       // A GET, never a POST (spec 4.3, M4.A3).
       if (slot?.s === 'ok' && Date.now() - slot.receivedAt > DOCS_STALE_MS) listTree(target);
     };
-    document.addEventListener('visibilitychange', onVisibility);
+    const stopVisible = onPageVisible(onVisibility);
     return () => {
       st.alive = false;
       unsubscribe();
-      document.removeEventListener('visibilitychange', onVisibility);
+      stopVisible();
       for (const t of st.timers) clearTimeout(t);
       st.timers.clear();
       for (const [c, fKey] of st.aborts) {

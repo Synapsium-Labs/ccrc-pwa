@@ -359,7 +359,7 @@ const CHAT_DECLINES = 'Declines this ask so you can talk it over in the chat.';
  * Answer in your own words (D-5090), as the question's last option, `Other` (D-6325, R5): an `OptionRow` labelled `Other`,
  * saying `Type your own answer`, at the free-text row's printed index, where the pane paints that row. Choosing it (a tap,
  * Enter, or its digit) opens the field and Send in place under the row, with no request, and puts the cursor in the field.
- *  - `empty`: the row, and once chosen the field and Send, which type the text into that row (`api.answerDialogText`,
+ *  - `empty`: the row, and once chosen the field and Send, which type the text into that row (`api.answerQuestion`'s own words,
  *    through `onSend`);
  *  - `held` with exactly the kept text: the stranded-text retry. The field keeps the text, read-only (the row holds
  *    that text and no other would be accepted), and Send submits what the terminal holds without typing it again;
@@ -601,7 +601,7 @@ export interface Picks {
   readonly call: PickCall | null;
   /** Tick or untick the box printed `index`. */
   readonly onToggle: (index: number) => void;
-  /** Commit `wanted`, the WHOLE set to leave ticked (`api.answerDialogMulti`). */
+  /** Commit `wanted`, the WHOLE set to leave ticked (`api.answerQuestion`'s multiSelect set). */
   readonly onCommit: (wanted: readonly number[]) => void;
 }
 
@@ -614,7 +614,7 @@ const MULTI_OWN_WORDS = 'To add your own answer, use the terminal';
 
 /**
  * A multiSelect question's boxes (D-5091), where the pane carries `Dialog.multi`: one checkbox row per box, then the
- * commit. A tap on a box changes only the sheet; the commit sends the WHOLE set at once (`api.answerDialogMulti`,
+ * commit. A tap on a box changes only the sheet; the commit sends the WHOLE set at once (`api.answerQuestion`'s multiSelect set,
  * D-5048), which ticks and unticks on the pane only the boxes that differ, proves the ticks, and commits.
  *  - The boxes follow the pane's ticks until the operator touches one here (`Picks.picked`); from then the sheet's set
  *    stands until the question changes. While a commit is under way they show the set it sent.

@@ -1,8 +1,9 @@
 // The two bucket orders and the row order of every surface that reads each, pinned before C7j makes one (D-7179;
 // Task C7a Step 5; plan docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 9; ARCH-75; OA-C14 decides).
-// `fleet/sortFleet.ts#RANK` (and `BUCKET_ORDER`, computed from it) orders attention, done, idle, working, cleanup,
+// `fleet/sortFleet.ts#RANK` (and `BUCKET_ORDER`, computed from it) ordered attention, done, idle, working, cleanup,
 // archived, dead; `fleet/statusGroups.ts#STATUS_GROUPS` orders attention, done, working, idle, cleanup, archived, dead.
-// They differ only in Working and Idle. Written on the tree #1715 (one bucket vocabulary) merged into, which draws the
+// They differed only in Working and Idle. OA-C14 (a) (D-7265) rules the status table's order the one order: C7j
+// (D-7188) moves `RANK` onto `shared/api.ts#BUCKET_RANK`, so every surface row below reads Working above Idle. Written on the tree #1715 (one bucket vocabulary) merged into, which draws the
 // bucket bar in Refined and in Instrument's project mode and no chips in Instrument's status mode (coordinator call 3,
 // D-7221): so the bar's rows are Refined's and Instrument project mode's, and the status table's row is its group heads.
 // Every surface reads one mixed-bucket fixture: one session per bucket, on one card, titled by its bucket.
@@ -11,7 +12,8 @@ import { createElement } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import type { FleetSession, SessionBucket } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { BUCKET_ORDER, RANK, sortFleet } from '../src/fleet/sortFleet';
+import { RANK, sortFleet } from '../src/fleet/sortFleet';
+import { BUCKET_ORDER } from '../../shared/api';
 import { STATUS_GROUPS, groupByStatus } from '../src/fleet/statusGroups';
 import { BucketBar } from '../src/fleet/BucketBar';
 import { fleetTree } from '../src/fleet/fleetTree';
@@ -57,34 +59,36 @@ afterEach(() => {
 });
 
 describe('the two orders, as literal lists', () => {
-  it('RANK (and BUCKET_ORDER, computed from it)', () => {
-    expect(BUCKET_ORDER).toEqual(['attention', 'done', 'idle', 'working', 'cleanup', 'archived', 'dead']);
+  it('RANK (and BUCKET_ORDER, computed from it): the ruled order, Working above Idle', () => {
+    expect(BUCKET_ORDER).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect((Object.keys(RANK) as SessionBucket[]).sort((a, b) => RANK[a] - RANK[b])).toEqual(BUCKET_ORDER);
   });
-  it('STATUS_GROUPS (its order field, ascending)', () => {
-    expect((Object.keys(STATUS_GROUPS) as SessionBucket[]).sort((a, b) => STATUS_GROUPS[a].order - STATUS_GROUPS[b].order))
-      .toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+  // C7j Step 4 (D-7188): STATUS_GROUPS keeps its labels and folds and loses its `order`; the status table reads the one
+  // BUCKET_ORDER, which holds the order STATUS_GROUPS held, so the table's order is the same list.
+  it('the status table (groupByStatus, over BUCKET_ORDER; STATUS_GROUPS holds labels and folds, no order)', () => {
+    expect(groupByStatus([], {}).map((g) => g.bucket)).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+    expect((Object.keys(STATUS_GROUPS) as SessionBucket[]).map((b) => Object.keys(STATUS_GROUPS[b]).sort().join(','))).toEqual(Array(7).fill('folds,label'));
   });
 });
 
 describe('every surface over the mixed fixture', () => {
   it('sortFleet, the list order RANK drives', () => {
-    expect(sortFleet([...MIXED]).map((s) => s.bucket)).toEqual(['attention', 'done', 'idle', 'working', 'cleanup', 'archived', 'dead']);
+    expect(sortFleet([...MIXED]).map((s) => s.bucket)).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
   });
 
-  it('BucketBar (Refined, and Instrument\'s project mode): its chips in RANK order', () => {
+  it('BucketBar (Refined, and Instrument\'s project mode): its chips in BUCKET_ORDER', () => {
     render(createElement(BucketBar, { sessions: [...MIXED], acks: {}, ackAll: () => {} }));
-    expect(barOrder()).toEqual(['Needs you', 'Done', 'Idle', 'Working', 'Cleanup', 'Archived', 'Exited']);
+    expect(barOrder()).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited']);
   });
 
   it('the project cards through fleetTree: each card\'s rows', () => {
     const tree = fleetTree([...MIXED], ['project-a'], [], {});
-    expect(tree.map((g) => g.rows.map((r) => (r.kind === 'session' ? r.session.bucket : 'pending')))).toEqual([['attention', 'done', 'idle', 'working', 'cleanup', 'dead']]);
+    expect(tree.map((g) => g.rows.map((r) => (r.kind === 'session' ? r.session.bucket : 'pending')))).toEqual([['attention', 'done', 'working', 'idle', 'cleanup', 'dead']]);
     expect(tree.map((g) => g.archived.map((s) => s.bucket))).toEqual([['archived']]);
   });
 
   it('command/commands.ts#fleetOrder (the palette\'s ] and [ stepping and its Open session order)', () => {
-    expect(fleetOrder(MIXED, []).map((s) => s.bucket)).toEqual(['attention', 'done', 'idle', 'working', 'cleanup', 'dead']);
+    expect(fleetOrder(MIXED, []).map((s) => s.bucket)).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'dead']);
   });
 
   it('Instrument status mode: its group heads only, in STATUS_GROUPS order (no chips)', () => {
@@ -96,25 +100,68 @@ describe('every surface over the mixed fixture', () => {
     expect([...document.querySelectorAll('.ins-group')].map((e) => e.getAttribute('data-status-group'))).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
   });
 
-  it('Instrument project mode: the bucket bar in RANK order, then the card', () => {
+  it('Instrument project mode: the bucket bar in BUCKET_ORDER, then the card', () => {
     window.localStorage.setItem(GROUP_MODE_KEY, 'project');
     chromeApis();
     act(() => { useFleetStore.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
     render(createElement(FleetChromeProvider, { store: useFleetStore }, createElement(FleetTable)));
-    expect(barOrder()).toEqual(['Needs you', 'Done', 'Idle', 'Working', 'Cleanup', 'Archived', 'Exited']);
+    expect(barOrder()).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited']);
     expect(lineOrder()).toEqual(LINES_PROJECT_MODE);
   });
 
-  it('Refined: the bucket bar in RANK order, and the list', () => {
+  it('Refined: the bucket bar in BUCKET_ORDER, and the list', () => {
     chromeApis();
     const store = fleetStore();
     act(() => { store.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
     render(createElement(FleetChromeProvider, { store }, createElement(FleetScreen, { store })));
-    expect(barOrder()).toEqual(['Needs you', 'Done', 'Idle', 'Working', 'Cleanup', 'Archived', 'Exited']);
+    expect(barOrder()).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited']);
     expect(lineOrder()).toEqual(LINES_REFINED);
   });
 });
 
+/** A desk (laptop 1280, wide 1920: `DESK_QUERY` matches) or a phone (360, 390: it does not). jsdom has no `matchMedia`,
+ *  so the rows above read the phone; the desk rows below stub it (C7j Step 0, after #1715). */
+function stubDesk(desk: boolean): void {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('min-width: 900px') ? desk : false,
+    media: q, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }));
+}
+
+describe('the board surfaces at each width (C7j Step 0: the rows C7a left for after #1715, D-7221)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  for (const desk of [false, true]) {
+    const width = desk ? 'laptop and wide' : 'phone';
+    it(`Instrument project mode at ${width}: the bucket bar in BUCKET_ORDER, then the card`, () => {
+      stubDesk(desk);
+      window.localStorage.setItem(GROUP_MODE_KEY, 'project');
+      chromeApis();
+      act(() => { useFleetStore.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
+      render(createElement(FleetChromeProvider, { store: useFleetStore }, createElement(FleetTable)));
+      expect(barOrder()).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited']);
+      expect(lineOrder()).toEqual(LINES_PROJECT_MODE);
+    });
+    it(`Instrument status mode at ${width}: no chips, and the group heads in STATUS_GROUPS order`, () => {
+      stubDesk(desk);
+      chromeApis();
+      act(() => { useFleetStore.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
+      render(createElement(FleetChromeProvider, { store: useFleetStore }, createElement(FleetTable)));
+      expect(barOrder()).toEqual([]);
+      expect([...document.querySelectorAll('.ins-group')].map((e) => e.getAttribute('data-status-group'))).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+    });
+    it(`Refined at ${width}: the bucket bar in BUCKET_ORDER, and the list`, () => {
+      stubDesk(desk);
+      chromeApis();
+      const store = fleetStore();
+      act(() => { store.setState({ conn: 'open', sessions: [...MIXED], fleetFrameSeen: true }); });
+      render(createElement(FleetChromeProvider, { store }, createElement(FleetScreen, { store })));
+      expect(barOrder()).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited']);
+      expect(lineOrder()).toEqual(LINES_REFINED);
+    });
+  }
+});
+
 /** The lines each board draws, the card's order (fleetTree's): the archived row sits in its card's closed Archived fold. */
-const LINES_PROJECT_MODE: readonly string[] = ['attention', 'done', 'idle', 'working', 'cleanup', 'dead'];
-const LINES_REFINED: readonly string[] = ['attention', 'done', 'idle', 'working', 'cleanup', 'dead'];
+const LINES_PROJECT_MODE: readonly string[] = ['attention', 'done', 'working', 'idle', 'cleanup', 'dead'];
+const LINES_REFINED: readonly string[] = ['attention', 'done', 'working', 'idle', 'cleanup', 'dead'];

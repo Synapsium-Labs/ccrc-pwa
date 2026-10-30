@@ -1,13 +1,15 @@
 // The session path, pinned before C7k builds one `sessionPath` (D-7179; Task C7a Step 5; plan
 // docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 11; ARCH-75). `sessionPathLiterals()` (census-w7)
-// counts 13 string expressions starting `/s/` in 11 files; two of them (`app.tsx#ArchiveRoute`,
-// `AccountsScreen.tsx#AccountsScreen`) do not `encodeURIComponent` the id. Every id the server sends passes
+// counted 13 string expressions starting `/s/` in 11 files on C7k's base; two of them (`app.tsx#ArchiveRoute`,
+// `AccountsScreen.tsx#AccountsScreen`) did not `encodeURIComponent` the id. C7k (D-7189) moved all 13 onto
+// `lib/routes.ts#sessionPath`, which encodes every id. Every id the server sends passes
 // `shared/api.ts#isSessionIdShape`, and over that charset `encodeURIComponent` is the identity, so one helper that
 // encodes every id changes no byte of any path the wire can produce.
 //
 // Each site is driven through its own door (a click, a command, a returned target) and read from where it lands, for
 // a fixed id inside the charset (every site: `/s/session-a`) and for one built OUTSIDE it (a space and a slash, which no
-// wire id carries), where the encoding sites and the two that do not encode part ways. The four create-flow doors
+// wire id carries), where, before C7k, the encoding sites and the two that did not encode parted ways; since C7k every
+// site encodes it, and the inside row is unchanged for all ten. The four create-flow doors
 // (`NewSessionSheet`'s two, `useProgramAttempt`'s `finish` and `retry`) navigate only after a create or a kickoff
 // answers; their paths are held by `new-session-sheet.test.tsx`, `new-session-name.test.tsx` and
 // `start-program.test.tsx` (slug session-path-create-flows, in the C7a note).
@@ -146,15 +148,16 @@ describe('encodeURIComponent is the identity over isSessionIdShape\'s charset', 
 });
 
 describe('each driveable site\'s path, for an id inside the charset and one outside it', () => {
-  // Where `location.pathname` is read, the router has stored the href as given, so an unencoded space reads back as
-  // `%20` (the URL parser's own encoding) and a slash stays a slash: the two sites that do not encode part ways there.
+  // Where `location.pathname` is read, the router has stored the href as given, so an unencoded space would read back
+  // as `%20` (the URL parser's own encoding) and a slash would stay a slash. Before C7k the two sites that did not
+  // encode read `/s/session%20a/1` here; through `sessionPath` (D-7189) they read the encoded path, as the rest do.
   const PATHS: Record<string, [string, string]> = {
-    'app.tsx#ArchiveRoute': ['/s/session-a', '/s/session%20a/1'],
+    'app.tsx#ArchiveRoute': ['/s/session-a', '/s/session%20a%2F1'],
     'command/commands.ts#stepSession': ['/s/session-a', '/s/session%20a%2F1'],
     'command/sessionEntries.ts#sessionEntries': ['/s/session-a', '/s/session%20a%2F1'],
     'fleet/KickoffRecovery.tsx#KickoffRecovery': ['/s/session-a', '/s/session%20a%2F1'],
     'fleet/inboxTarget.ts#inboxTarget': ['/s/session-a', '/s/session%20a%2F1'],
-    'screens/AccountsScreen.tsx#AccountsScreen': ['/s/session-a', '/s/session%20a/1'],
+    'screens/AccountsScreen.tsx#AccountsScreen': ['/s/session-a', '/s/session%20a%2F1'],
     'screens/RunRow.tsx': ['/s/session-a', '/s/session%20a%2F1'],
     'screens/FleetScreen.tsx#FleetScreen': ['/s/session-a', '/s/session%20a%2F1'],
     'fleet/openers.ts#openSession': ['/s/session-a', '/s/session%20a%2F1'],

@@ -24,7 +24,9 @@ import {
 } from '../src/fleet/statusGroups';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { asking, run, sess } from './rollupFixture';
-import { BUCKET_ORDER, sortFleet } from '../src/fleet/sortFleet';
+import { withRunBinding } from './runBindingFixture';
+import { sortFleet } from '../src/fleet/sortFleet';
+import { BUCKET_ORDER } from '../../shared/api';
 import { BucketBar } from '../src/fleet/BucketBar';
 import type { Acks } from '../src/lib/seen';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
@@ -131,7 +133,12 @@ describe('statusView (Task G3, D-7333)', () => {
     run(3, 'c2', 'k3', { program: 'prog-b', project: 'project-b' }), run(4, 'c1', 'far', { program: 'prog-a', project: 'project-b' }),
   ];
   const lookupIn = (s: readonly FleetSession[]) => (id: string): FleetSession | null => s.find((x) => x.id === id) ?? null;
-  const view = (s: FleetSession[] = fleet, r = runs) => statusView(s, fleetTree(s, ['project-a', 'project-b'], r), {}, null, lookupIn(s), true);
+  /** A current server's frame: each session carries its run binding over the runs (D-7461). */
+  const statusOf = (s: FleetSession[], r: typeof runs, selectedId: string | null, frameSeen: boolean) => {
+    const b = withRunBinding(s, r);
+    return statusView(b, fleetTree(b, ['project-a', 'project-b'], r), {}, selectedId, lookupIn(b), frameSeen);
+  };
+  const view = (s: FleetSession[] = fleet, r = runs) => statusOf(s, r, null, true);
   const ids = (xs: readonly FleetSession[]): string[] => xs.map((x) => x.id);
 
   it('the groups are Needs you, Programmes, then the buckets, Programmes labelled and open', () => {
@@ -182,7 +189,7 @@ describe('statusView (Task G3, D-7333)', () => {
   });
 
   it('the session the operator has open stays in its box\'s tray (G3\'s Step 0 ruling), and makes no box need anything', () => {
-    const g = statusView(fleet, fleetTree(fleet, ['project-a', 'project-b'], runs), {}, 'k3', lookupIn(fleet), true);
+    const g = statusOf(fleet, runs, 'k3', true);
     expect(g[1]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k3']);
     expect(g[1]!.boxes[0]!.state).toBe('moving');
     expect(g[1]!.count).toBe(1);
@@ -205,7 +212,7 @@ describe('statusView (Task G3, D-7333)', () => {
     expect(ids(g.find((x) => x.id === 'attention')!.sessions)).toEqual(expect.arrayContaining(['k1', 'lone-a']));
     expect(ids(g.find((x) => x.id === 'done')!.sessions)).toEqual(expect.arrayContaining(['k2', 'far']));
     // The frame unseen measures nothing, so nothing is gone.
-    const unseen = statusView(s, fleetTree(s, ['project-a', 'project-b'], runs), {}, null, lookupIn(s), false);
+    const unseen = statusOf(s, runs, null, false);
     expect(unseen.flatMap((x) => x.boxes).every((b) => !b.gone)).toBe(true);
   });
 

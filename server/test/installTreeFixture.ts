@@ -165,6 +165,8 @@ export const TREE_FILES = [
   // The library the body pins and loads (D-6913): the publisher reads it from the tree and refuses a tree
   // without it, or with one the body does not pin, so it is COPIED beside the body it belongs to.
   'ccd/lib/disk-retention.sh',
+  // Its second library (D-7463), the train proof: read, pinned and published exactly as the first.
+  'ccd/lib/train-proof.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -230,6 +232,9 @@ export const TREE_FILES = [
   'ccd/lib/transcript.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
+  // The settings reader the ccd-* sweeps source (wave 29): `_inst_bins` places it under ~/.local/libexec/ccrc on every
+  // OS and role, so a tree without it dies in `_inst_atomic` naming the missing source.
+  'ccd/lib/ccrc-settings.sh',
   // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
   // and before it, as the card's helper above, so a tree without it dies the same way.
   'ccd/approval-verify.mjs',

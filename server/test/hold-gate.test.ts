@@ -248,7 +248,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const degraded: SessionRecord = {
       hibernatedAt: null,
       namedByOperator: false, title: null,
-      id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
+      id: 'demo-quiet-basin', wrapper: '', project: 'demo', projectEvidence: 'measured', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,

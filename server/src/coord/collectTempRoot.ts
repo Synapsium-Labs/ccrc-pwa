@@ -24,8 +24,8 @@ import {
 } from '../collectLane.js';
 import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState } from '../../../shared/api.js';
 import {
-  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, capabilityJudge,
-  presenceJudge, type RetireNoRead, type RetireReason,
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_VIEWER_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, capabilityJudge,
+  viewerJudge, type RetireNoRead, type RetireReason,
 } from '../retire.js';
 import { retireAct, type RetireActPort } from '../retireLane.js';
 
@@ -181,7 +181,9 @@ export interface CollectJob { readonly id: string; readonly epoch: number }
 export interface CollectHeld { readonly kind: 'held'; readonly why: CollectHoldWhy; readonly detail: string }
 export type CollectHoldRead = { readonly kind: 'clear' } | CollectHeld;
 
-/** Why a job that asked the box for observation 2 composed nothing. */
+/** Why a job that asked the box for observation 2 composed nothing.
+ *  `presence` (here and in `CollectJobOutcome`'s `not-asked` arm) means a VIEWER: the id is open on a screen
+ *  (`server/src/viewer.ts`). The persisted word stays `presence`; the TS identifiers that read it say viewer. */
 export type CollectAnsweredWhy =
   | 'stale' | 'not-collectable' | 'not-licensed' | 'paused' | 'switch-flip' | 'epoch-changed' | 'unknown-fleet'
   | 'safety-stopped' | 'pair-cleared' | 'presence' | 'caps';
@@ -559,7 +561,7 @@ export function collectRetirePort(
       // 2 — THE SWITCH, from one listing. A registry that did not list cannot rule a raised pause out, so it is a pause.
       [RETIRE_STEPS.switches]: () => collectSwitches(deps.io, deps.cfg.registryDir),
       // 3 — a person at the session. No ceiling, and no licence past it.
-      [RETIRE_STEPS.presence]: () => deps.viewers?.isVisible(job.id) === true,
+      [RETIRE_STEPS.viewer]: () => deps.viewers?.isVisible(job.id) === true,
       // 4 — OBSERVATION 2, through the one audit site. It is stale if a clear landed while it was in flight. Then the
       // licence against observation 1, read from the lane's memory and never carried. Then the open-run hold, judged on
       // THIS document, licensed or not.
@@ -611,7 +613,7 @@ export function collectRetirePort(
       },
       [RETIRE_STEPS.safety]: () => true,
       [RETIRE_STEPS.licenceStands]: () => ({ generations: deps.lane.generations(job.id), observation: deps.lane.observation(job.id) }),
-      [RETIRE_STEPS.presenceLast]: () => deps.viewers?.isVisible(job.id) === true,
+      [RETIRE_STEPS.viewerLast]: () => deps.viewers?.isVisible(job.id) === true,
       [RETIRE_STEPS.holdLast]: (f) => collectOpenRunHold(deps.coord, job.id, collectObservedOf(f).value),
       [RETIRE_STEPS.live]: () => true,
       // D-6627: the loose arm's own marker, from the SAME final listing the lane was resolved under, and its capability,
@@ -750,7 +752,7 @@ export interface TempOrphanFacts {
   /** The loose entry's hex, or null: the id predicate's input. */
   readonly [RETIRE_STEPS.id]?: string | null;
   readonly [RETIRE_STEPS.switches]?: CollectSwitches;
-  readonly [RETIRE_STEPS.presence]?: boolean;
+  readonly [RETIRE_STEPS.viewer]?: boolean;
   readonly [RETIRE_STEPS.audit]?: CollectAnswer<CollectAudit> | CollectAuditRefused;
   /** Both clear generations, read after the audit settled. */
   readonly [RETIRE_STEPS.staleGeneration]?: CollectGenerations;
@@ -767,7 +769,7 @@ export interface TempOrphanFacts {
   readonly [RETIRE_STEPS.flip]?: boolean;
   readonly [RETIRE_STEPS.safety]?: RetireNoRead;
   readonly [RETIRE_STEPS.licenceStands]?: { readonly generations: CollectGenerations; readonly observation: CollectObservation | null };
-  readonly [RETIRE_STEPS.presenceLast]?: boolean;
+  readonly [RETIRE_STEPS.viewerLast]?: boolean;
   readonly [RETIRE_STEPS.holdLast]?: CollectHoldRead;
   readonly [RETIRE_STEPS.live]?: RetireNoRead;
   /** `ccdCan(…, 'wsCollectLoose')`, asked again nearest the argv. */
@@ -834,7 +836,7 @@ export const TEMP_ORPHAN_RETIRE: RetireReason<CollectJob, TempOrphanFacts, Colle
     { step: RETIRE_STEPS.capability, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.id, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.switches, sync: false, onReject: 'propagate', markers: COLLECT_SWITCH_MARKERS },
-    { step: RETIRE_STEPS.presence, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.viewer, sync: true, onReject: 'propagate' },
   ],
   audit: { step: RETIRE_STEPS.audit, sync: false, onReject: 'propagate' },
   act: [
@@ -848,13 +850,13 @@ export const TEMP_ORPHAN_RETIRE: RetireReason<CollectJob, TempOrphanFacts, Colle
     { step: RETIRE_STEPS.flip, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.safety, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.licenceStands, sync: true, onReject: 'propagate' },
-    { step: RETIRE_STEPS.presenceLast, sync: true, onReject: 'propagate' },
+    { step: RETIRE_STEPS.viewerLast, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.holdLast, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.live, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.looseMarker, sync: true, onReject: 'propagate' },
   ],
   listing: RETIRE_LISTING_MODES.measuredOnce,
-  presence: RETIRE_PRESENCE_RULES.noCeiling,
+  viewer: RETIRE_VIEWER_RULES.noCeiling,
   notice: RETIRE_NOTICE_HOMES.lane,
   judge: {
     [RETIRE_STEPS.capability]: capabilityJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>([
@@ -864,7 +866,7 @@ export const TEMP_ORPHAN_RETIRE: RetireReason<CollectJob, TempOrphanFacts, Colle
     ]),
     [RETIRE_STEPS.id]: (looseHex, _f, job) => collectIdJudge(looseHex, job),
     [RETIRE_STEPS.switches]: (first) => collectSwitchesJudge(first),
-    [RETIRE_STEPS.presence]: presenceJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>(RETIRE_PRESENCE_RULES.noCeiling,
+    [RETIRE_STEPS.viewer]: viewerJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>(RETIRE_VIEWER_RULES.noCeiling,
       () => ({ kind: 'not-asked', step: 3, why: 'presence', detail: COLLECT_SEEN })),
     [RETIRE_STEPS.audit]: (asked) =>
       ('notAsked' in asked ? { kind: 'not-asked', step: 4, why: 'caps', detail: COLLECT_AUDIT_REFUSED[asked.notAsked] } : null),
@@ -895,7 +897,7 @@ export const TEMP_ORPHAN_RETIRE: RetireReason<CollectJob, TempOrphanFacts, Colle
       return !collectLicenceStands(licence.first, collectAskedOf(f).composed, now.generations, now.observation)
         ? collectAnsweredOf(f, 6, 'pair-cleared', COLLECT_PAIR_CLEARED) : null;
     },
-    [RETIRE_STEPS.presenceLast]: presenceJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>(RETIRE_PRESENCE_RULES.noCeiling,
+    [RETIRE_STEPS.viewerLast]: viewerJudge<CollectJob, TempOrphanFacts, CollectJobOutcome>(RETIRE_VIEWER_RULES.noCeiling,
       (_job, f) => collectAnsweredOf(f, 6, 'presence', COLLECT_SEEN)),
     [RETIRE_STEPS.holdLast]: (hold, f) => (hold.kind === 'held' ? { kind: 'held', step: 6, hold, audit: collectObservedOf(f) } : null),
     [RETIRE_STEPS.live]: (_n, f) => {

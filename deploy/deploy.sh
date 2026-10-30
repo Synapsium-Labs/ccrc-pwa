@@ -569,7 +569,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
     && { [ ! -f ~/.local/libexec/ccrc/shared/redact.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs; } && { [ ! -f ~/.local/libexec/ccrc/shared/redact-cli.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs; } \
-    && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
+    && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/train-proof.sh ] || cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } && { [ ! -f ~/.cc-sessions/lib/carry-dedupe.py ] || cp -a ~/.cc-sessions/lib/carry-dedupe.py ~/ccrc-backups/$TS/carry-dedupe.py; } \
@@ -638,6 +638,9 @@ if [ "$TARGET" = "agent" ]; then
   # `ccd carry-dedupe`'s program (#317), 644: a script python3 runs, never executed directly.
   install_atomic ccd/lib/carry-dedupe.py .cc-sessions/lib/carry-dedupe.py 644
   install_ccd_pair
+  # The settings reader the ccd-* sweeps source (wave 29, D-6980), beside ccd's body: after the pair, whose
+  # installer creates ~/.local/libexec/ccrc, and before the sweeps below.
+  install_atomic ccd/lib/ccrc-settings.sh .local/libexec/ccrc/ccrc-settings.sh 644
   # The coordination client, beside ccd because the fleet host is where sessions
   # run and a session-side client on the server box is a copy nobody invokes. A
   # plain install_atomic and NOT a shim: it sources nothing, so one file is the

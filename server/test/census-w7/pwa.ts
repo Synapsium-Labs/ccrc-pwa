@@ -9,7 +9,7 @@
 // destructured binding or a re-export is not seen; a site is attributed to its innermost enclosing symbol as
 // `scan/parse.ts` keys symbols (an object-literal method or an arrow passed straight to a call is not a symbol, so its
 // sites belong to the symbol around it); a file that does not parse yields what the parser recovered.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { identifierReferences, parseSource, stringExpressions, type CallSite, type Comparison, type ParsedFile } from '../scan/parse.js';
 import { parsedFile } from '../scan/symbols.js';
@@ -113,6 +113,13 @@ export const coordPresenceSites = (): W7Site[] => overPwa(coordPresenceSitesIn);
 const RUN_SIDE = new Set(['sessionId', 'claimedBy']);
 const RUN_KEY = /\.(?:sessionId|claimedBy)$/;
 
+/** Where the run binding's named readers live (D-7182, Task C7d), and the readers themselves: `workerOf`'s by-id arm and
+ *  `runCard`'s two card lookups (D-7205), `coordinatorOf`'s one (D-7207), `claimedRunsOf` (the coordinator side) and
+ *  `boundOpenRun` (the session's open bound run). A comparison or lookup inside one of them is reported as kind
+ *  `named`, never as an inline matcher; the may-only-shrink pins are `rings/pwa-one-owner.test.ts`'s run-binding block. */
+export const RUN_READER_FILE = 'pwa/src/fleet/runWords.ts';
+export const RUN_READERS: ReadonlySet<string> = new Set(['workerOf', 'coordinatorOf', 'claimedRunsOf', 'boundOpenRun', 'runCard']);
+
 /** The run-to-session matchers (plan item 3), by kind:
  *  - `comparison`: an equality comparison between a `sessionId` or `claimedBy` leaf and an `id` leaf, neither operand
  *    absent (4 on the base). `ev.sessionId !== ''` (no `id` leaf) and `r.claimedBy !== r.sessionId` (a run compared with
@@ -120,18 +127,20 @@ const RUN_KEY = /\.(?:sessionId|claimedBy)$/;
  *  - `lookup`: a `.get(…)` call (any receiver) whose one argument is a member expression ending in `.sessionId` or
  *    `.claimedBy`, the run-to-session map lookup where #746's recycled-id hazard lives (7 on the base); a `get` keyed on a
  *    session's own `id` is not one;
- *  - `runForSession` and `childRunsSeen`: each call of the two named readers (7 and 1 on the base).
+ *  - `runForSession` and `childRunsSeen`: each call of the two named readers (7 and 1 on the base);
+ *  - `named`: a comparison or lookup inside one of `RUN_READERS` in `RUN_READER_FILE` (D-7182, D-7205, D-7207, C7d).
  *  KNOWN WIDTH: the receiver of a lookup is not typed, so a `.get(ev.sessionId)` on a non-run event would count (none
  *  on the base); a comparison through a renamed local is not seen. */
 export function runMatchersIn(p: ParsedFile, file: string): W7Site[] {
   const out: W7Site[] = [];
+  const named = (start: number): boolean => file === RUN_READER_FILE && RUN_READERS.has(topSymbol(p, start));
   for (const c of p.comparisons) {
     if (c.absent) continue;
     const l = c.leftLeaf, r = c.rightLeaf;
-    if ((l !== null && RUN_SIDE.has(l) && r === 'id') || (r !== null && RUN_SIDE.has(r) && l === 'id')) out.push(cmpSite(p, file, c, 'comparison'));
+    if ((l !== null && RUN_SIDE.has(l) && r === 'id') || (r !== null && RUN_SIDE.has(r) && l === 'id')) out.push(cmpSite(p, file, c, named(c.start) ? 'named' : 'comparison'));
   }
   for (const c of p.calls) {
-    if (c.name === 'get' && c.callee.endsWith('.get') && c.args.length === 1 && c.args[0]!.kind === 'other' && RUN_KEY.test(c.args[0]!.text)) out.push(callSite(p, file, c, 'lookup'));
+    if (c.name === 'get' && c.callee.endsWith('.get') && c.args.length === 1 && c.args[0]!.kind === 'other' && RUN_KEY.test(c.args[0]!.text)) out.push(callSite(p, file, c, named(c.start) ? 'named' : 'lookup'));
     else if (c.name === 'runForSession' || c.name === 'childRunsSeen') out.push(callSite(p, file, c, c.name));
   }
   return out.sort((a, b) => a.line - b.line);
@@ -255,11 +264,27 @@ const moduleDefinitions = (p: ParsedFile, file: string, names: readonly string[]
 export const clientPairingDefinitionsIn = (p: ParsedFile, file: string): W7Site[] => moduleDefinitions(p, file, CLIENT_PAIRING_NAMES);
 export const clientPairingDefinitions = (): W7Site[] => overPwa(clientPairingDefinitionsIn);
 
-/** The pane-text decisions the PWA makes on its own (plan items 7 and 8): `COMPACTION_RE` (which decides `foldsAway`) and
- *  `showsPrompt` (the drawer's prompt judgement). 2 on the base. KNOWN WIDTH: a closed name list. */
+/** The pane-text decisions the PWA makes on its own (plan items 7 and 8): `COMPACTION_RE` (which decided `foldsAway`) and
+ *  `showsPrompt` (the drawer's prompt judgement). 2 on the base; 1 since C7i (D-7187): `foldsAway` reads the server's
+ *  compaction flag, and `showsPrompt` stays, named (it renders the PTY the drawer shows). `COMPACTION_RE` stays on the
+ *  list so a pattern put back reds. KNOWN WIDTH: a closed name list. */
 export const PANE_TEXT_DECISION_NAMES: readonly string[] = ['COMPACTION_RE', 'showsPrompt'];
 export const paneTextDecisionsIn = (p: ParsedFile, file: string): W7Site[] => moduleDefinitions(p, file, PANE_TEXT_DECISION_NAMES);
 export const paneTextDecisions = (): W7Site[] => overPwa(paneTextDecisionsIn);
+
+/** Claude Code's prompt glyph, U+276F, as one string expression whose whole value is the glyph (`'❯'`), in the files
+ *  that read pane text for it: the drawer's view (`pwa/src/session/drawerView.ts#PROMPT_GLYPH`, which `showsPrompt` and
+ *  `anchorRow` read), the server's dialog parser (`server/src/pane/dialog.ts#startsWithPromptGlyph`), and the one
+ *  spelling C7i adds under OA-C16 (a) (`shared/pane-glyph.ts`, D-7187). 2 on the base (one per reader); 1 since C7i,
+ *  the shared spelling, which both readers import. KNOWN WIDTH: string expressions only, in the listed files: the
+ *  glyph inside a regular expression (`dialog.ts`'s option and busy patterns, the parser's verdicts) and the PWA's
+ *  rendered `❯` glyphs (a menu's cursor drawn in JSX) are not pane-text spellings and are not read. */
+export const PROMPT_GLYPH_FILES: readonly string[] = ['shared/pane-glyph.ts', 'pwa/src/session/drawerView.ts', 'server/src/pane/dialog.ts'];
+export const promptGlyphSpellingsIn = (p: ParsedFile, file: string): W7Site[] =>
+  stringExpressions(p.text, file).filter((e) => e.text === '\u276f').map((e) => site(p, file, e.start, e.line, p.text.slice(e.start, e.end)));
+export const promptGlyphSpellings = (): W7Site[] => PROMPT_GLYPH_FILES
+  .filter((rel) => existsSync(path.join(REPO, rel)))
+  .flatMap((rel) => promptGlyphSpellingsIn(parsedFile(rel), rel));
 
 // ─── 9, 10. bucket orders and "archived" (ARCH-75, C7j) ────────────────────────────────────────────────────────────
 
@@ -269,13 +294,17 @@ export const BUCKETS: readonly string[] = ['attention', 'done', 'idle', 'working
 /** A bucket order: a module-scope binding whose initialiser is an object literal giving EVERY bucket a numeric rank, as a
  *  bare number (`attention: 0`) or an `order:` field (`attention: { order: 0, … }`). 2 on the base (`sortFleet.ts#RANK`,
  *  `statusGroups.ts#STATUS_GROUPS`). A label-only table (`BUCKET_WORD`) and a derived list (`BUCKET_ORDER`, computed
- *  from `RANK`) are not orders. KNOWN WIDTH: an order written as an array literal of the words is not seen. */
+ *  from `RANK`) are not orders. KNOWN WIDTH: an order written as an array literal of the words is not seen.
+ *  Read over the PWA's sources AND `shared/api.ts` (C7j, D-7188), where the one order `BUCKET_RANK` lives, so the
+ *  count is every definition the PWA reads, not only the ones under `pwa/src`. */
 export function bucketOrdersIn(p: ParsedFile, file: string): W7Site[] {
   return p.bindings.filter((b) => atModuleScope(p, b) && /^\s*\{/.test(b.init)
     && BUCKETS.every((w) => new RegExp(`\\b${w}\\s*:\\s*(?:\\d|\\{[^}]*\\border\\s*:\\s*\\d)`).test(b.init)))
     .map((b) => ({ file, symbol: b.name, line: b.line, text: lineStart(p.text, b.line).trim().slice(0, 140), kind: '' }));
 }
-export const bucketOrders = (): W7Site[] => overPwa(bucketOrdersIn);
+/** `shared/api.ts`, the one file outside `pwa/src` the bucket-order query also reads. */
+export const BUCKET_ORDER_SHARED = 'shared/api.ts';
+export const bucketOrders = (): W7Site[] => [...overPwa(bucketOrdersIn), ...bucketOrdersIn(parsedFile(BUCKET_ORDER_SHARED), BUCKET_ORDER_SHARED)];
 
 /** An absence check on `archivedAt`: an equality comparison with an `archivedAt` leaf and an absent operand (`null`,
  *  `undefined`), either operator. 8 on the base (plan item 10). KNOWN WIDTH: a truthiness test (`if (s.archivedAt)`) is
@@ -294,6 +323,9 @@ export function sessionPathLiteralsIn(p: ParsedFile, file: string): W7Site[] {
     .map((e) => site(p, file, e.start, e.line, p.text.slice(e.start, e.end).slice(0, 140)));
 }
 export const sessionPathLiterals = (): W7Site[] => overPwa(sessionPathLiteralsIn);
+/** The one session path builder (C7k, D-7189), as `file#symbol`: the query still sees its template, and every other
+ *  site is the count `rings/pwa-one-owner.test.ts` holds at 0. */
+export const SESSION_PATH_OWNER = 'pwa/src/lib/routes.ts#sessionPath';
 
 /** Every reference to the member `api.<member>`, called or not (an `identifierReferences` hit on `<member>` whose parent
  *  is the member expression `api.<member>`), kind `call` or `reference`. */
@@ -316,6 +348,8 @@ const lineOffset = (text: string, line: number, needle: string): number => {
  *  (plan item 12). A comment naming `api.ensure` is not code. */
 export const ensureCallersIn = (p: ParsedFile, file: string): W7Site[] => apiMemberRefs(p, file, 'ensure');
 export const ensureCallers = (): W7Site[] => overPwa(ensureCallersIn);
+/** The one ensure (C7k, D-7189), as `file#symbol`: since C7k the only owner of `api.ensure` in `pwa/src`. */
+export const ENSURE_OWNER = 'pwa/src/session/useEnsure.ts#ensureSession';
 
 // ─── 13. storage (ARCH-75, C7l) ────────────────────────────────────────────────────────────────────────────────────
 
@@ -388,6 +422,8 @@ export const VIEWER_PRESENCE_NAMES: readonly string[] = [
   'PRESENCE_REFRESH_MS', 'PRESENCE_TTL_MS', 'PRESENCE_OPEN_TTL_MS',
   'presenceHeldSince', 'lastPresenceWallAt', 'lastPresenceDeferredAt', 'firstPresenceDeferredAt', 'collectAfterPresence',
   'presenceSince', 'childReclaimPresenceWithin', 'CollectPresence', 'CHILD_RECLAIM_PRESENCE_GAP_PASSES', 'CHILD_RECLAIM_PRESENCE_DEFERS',
+  // the retire rows' viewer rule, its judge and the viewer steps' keys (`server/src/retire.ts`, C4i's, after item 18 was counted)
+  'RETIRE_PRESENCE_RULES', 'RetirePresenceRule', 'presenceJudge', 'presenceLast',
 ];
 
 /** Every identifier occurrence of a `VIEWER_PRESENCE_NAMES` name in a source (imports included; comments are not code),
@@ -401,6 +437,40 @@ export const viewerWordsAsPresence = (): W7Site[] => [
   ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
   ...pwaSources(),
 ].flatMap((rel) => viewerWordsAsPresenceIn(parsedFile(rel), rel));
+
+/** The files where a bare `presence` NAME can only mean a viewer: the collector's and the child reclaim's memory, the
+ *  retire rows and the three reasons' executors. A session's presence is not read in any of them. */
+export const VIEWER_ONLY_FILES: readonly string[] = [
+  'server/src/collectLane.ts', 'server/src/childReclaimSweep.ts', 'server/src/retire.ts',
+  'server/src/coord/collectTempRoot.ts', 'server/src/coord/expireArchived.ts', 'server/src/coord/childReclaim.ts',
+];
+
+/** Every identifier `presence` in a `VIEWER_ONLY_FILES` source (a field, a key, a property read, a local), kind
+ *  `presence`. `presence` is also SESSION presence's name, so `viewerWordsAsPresence` cannot list it by name; this
+ *  row reads it only where it can mean a viewer. KNOWN WIDTH: a member keyed BY the persisted word (a map from each
+ *  defer, item or why word, such as `collectLane.ts#COLLECT_ITEM_MANY`) keeps the word as its key and is listed. */
+export function viewerNamesAsPresenceIn(p: ParsedFile, file: string): W7Site[] {
+  return identifierReferences(p.text, file, new Set(['presence']))
+    .map((r) => ({ file, symbol: enclosingSymbol(p, lineOffset(p.text, r.line, r.name)), line: r.line, text: lineStart(p.text, r.line).trim().slice(0, 140), kind: r.name }));
+}
+export const viewerNamesAsPresence = (): W7Site[] =>
+  VIEWER_ONLY_FILES.flatMap((rel) => viewerNamesAsPresenceIn(parsedFile(rel), rel));
+
+/** The word OA-C18 (a) keeps (D-7193, Task C7o): every whole string expression whose value is exactly `presence` in
+ *  `server/src` and `shared/`, kind `presence`. It is the defer, feed and journal word a viewer's claim is answered
+ *  with (`coord/collectTempRoot.ts#CollectAnsweredWhy` says so at its definition), and the wire key of a session's
+ *  presence (`shared/api.ts`), and no rename may change it. KNOWN WIDTH: a value built by concatenation or a
+ *  substitution (`'pres' + x`), a property NAME written bare (`{ presence: … }`, `e.presence`) and a type-only
+ *  literal are read as the syntax tree has them: a bare property name is not a string expression and is not counted;
+ *  a literal in a union type is. */
+export function persistedPresenceWordsIn(p: ParsedFile, file: string): W7Site[] {
+  return stringExpressions(p.text, file).filter((e) => !e.partial && e.text === 'presence')
+    .map((e) => site(p, file, e.start, e.line, lineStart(p.text, e.line).trim().slice(0, 140), 'presence'));
+}
+export const persistedPresenceWords = (): W7Site[] => [
+  ...walkSrc({ roots: ['server/src'], min: 200, match: /\.ts$/ }),
+  ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
+].flatMap((rel) => persistedPresenceWordsIn(parsedFile(rel), rel));
 
 /** Each site as one printed line: `file#symbol:line  text` (kind in brackets when the query tags kinds). */
 export const showSite = (s: W7Site): string => `${s.file}#${s.symbol}:${s.line}${s.kind === '' ? '' : ` [${s.kind}]`}  ${s.text}`;
@@ -449,3 +519,77 @@ export const transcriptCopyRules = (): W7Site[] => [
   ...walkSrc({ roots: ['server/src'], min: 200, match: /\.ts$/ }),
   ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
 ].flatMap((rel) => transcriptCopyRulesIn(parsedFile(rel), rel));
+
+// ─── C7g. the operator answer doors (ARCH-57's PWA half, D-7185, D-7485) ─────────────────────────────────────────────
+
+/** The four `lib/api.ts` writers W3 Q3f's family replaces (`/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`). */
+export const OLD_ANSWER_WRITERS: readonly string[] = ['answerDialog', 'answerDialogText', 'answerDialogMulti', 'answerAsk'];
+
+/** Every place a `pwa/src` file names one of the four old writers as code, by kind: `reference`, a definition or a
+ *  member reference (`answerDialog: async (…) => …` in `createApi`, `seam.answerDialog` not called); `call`, a call
+ *  (`api.answerDialog(…)`, `seam.answerDialogMulti(…)`); `name`, the name as a whole string literal (a
+ *  `Pick<Api, 'answerDialog'>` key). A comment is not code, and a longer name (`answerDialogTab`) is another name. The
+ *  base (`origin/main` before C7g) counts 10: `createApi`'s four definitions, `AnswerSeam`'s three `Pick` keys and
+ *  `performAnswer`'s three calls. C7g's tip counts 0. KNOWN WIDTH: a name built from parts, or reached through a
+ *  computed member, is not seen. */
+export function oldAnswerWritersIn(p: ParsedFile, file: string): W7Site[] {
+  const names = new Set(OLD_ANSWER_WRITERS);
+  const lines = p.text.split('\n');
+  const refs = identifierReferences(p.text, file, names).filter((r) => r.role !== 'import').map((r): W7Site => ({
+    file, symbol: enclosingSymbol(p, lineOffset(p.text, r.line, r.name)), line: r.line,
+    text: (lines[r.line - 1] ?? '').trim().slice(0, 140), kind: r.role === 'call' ? 'call' : 'reference',
+  }));
+  const strings = stringExpressions(p.text, file).filter((e) => !e.partial && names.has(e.text))
+    .map((e) => site(p, file, e.start, e.line, p.text.slice(e.start, e.end), 'name'));
+  return [...refs, ...strings].sort((a, b) => a.line - b.line);
+}
+export const oldAnswerWriters = (): W7Site[] => overPwa(oldAnswerWritersIn);
+
+/** The old operator answer doors' path endings. `/dialog/tab` is not one: Q3f keeps it a session door (D-7485). */
+const OLD_ANSWER_DOOR = /\/(?:ask|dialog|dialog\/text|dialog\/multi)$/;
+/** The one place C7g kept the old doors' paths: the skew row's table, deleted by C7p (D-7194, D-7540) with the aliases.
+ *  The census still names it, so a table of that name brought back counts as `skew-table`. */
+export const LEGACY_ANSWER_DOORS_NAME = 'LEGACY_ANSWER_DOORS';
+
+/** Every string expression in `pwa/src`, and in `pwa/public/push-sw.js`, whose text ends with an old operator answer
+ *  door (`/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`; a template's static part counts, so `${sid(id)}/dialog`
+ *  is one), by kind: `skew-table`, a string inside `answerLifecycle.ts#LEGACY_ANSWER_DOORS`'s initialiser (the doors a
+ *  server without `questions-v1` is answered through); `region`, a string between push-sw.js's generated markers (its
+ *  render of that table's `/ask`); `door`, any other. The base counts 9 (`lib/api.ts`'s four writers,
+ *  `answerLifecycle.ts#answerRequest`'s three and `ASK_REQUEST`'s `/ask`, and the region's render); C7g's tip counts
+ *  the table's 4 and the region's 1, and no `door`; C7p's tip counts 0 (the table and the region's render are gone). KNOWN
+ *  WIDTH: a path assembled from a variable suffix is not seen. */
+export function oldAnswerDoorPathsIn(p: ParsedFile, file: string): W7Site[] {
+  const table = p.bindings.find((b) => b.name === LEGACY_ANSWER_DOORS_NAME);
+  const b = p.text.indexOf(GEN_BEGIN);
+  const e = b < 0 ? -1 : p.text.indexOf(GEN_END, b);
+  return stringExpressions(p.text, file).filter((x) => OLD_ANSWER_DOOR.test(x.text)).map((x) => {
+    const kind = table !== undefined && table.start <= x.start && x.end <= table.end ? 'skew-table'
+      : b >= 0 && e >= 0 && x.start > b && x.start < e ? 'region' : 'door';
+    return site(p, file, x.start, x.line, p.text.slice(x.start, x.end).slice(0, 140), kind);
+  });
+}
+export const oldAnswerDoorPaths = (): W7Site[] =>
+  [...overPwa(oldAnswerDoorPathsIn), ...oldAnswerDoorPathsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];
+
+// ─── C7p. the retired operator answer doors (D-7194, D-7540) ────────────────────────────────────────────────────────
+
+/** The four old operator answer doors W3 Q3f's family replaced, which W7 C7p's server half retires after its PWA half
+ *  (D-7540). `/dialog/tab` is not one: it answers nothing and stays a session door. */
+export const RETIRED_ANSWER_DOORS: readonly string[] = ['/ask', '/dialog', '/dialog/text', '/dialog/multi'];
+
+/** A retired door's path: one of the four at the end of a string's text, or before its query or fragment. */
+const RETIRED_ANSWER_DOOR = /\/(?:ask|dialog|dialog\/text|dialog\/multi)(?=$|[?#])/;
+
+/** Every string expression in the PWA bundle's sources (`pwa/src`, and `pwa/public/push-sw.js`, generated region
+ *  included) that names a retired operator answer door, whatever surrounds it: a whole path, a template's static part
+ *  (`${sid(id)}/dialog` is one), a bare suffix (`'/ask'`, the shape C7g's skew table held), or a path with a query.
+ *  Wider than `oldAnswerDoorPaths`, which matched only a string ENDING with a door, and classes nothing: C7p's tip
+ *  counts 0, and any site is a reference to a path C7p's server half retires. KNOWN WIDTH: a path assembled from a
+ *  variable suffix is not seen, and a comment is not code. */
+export function retiredAnswerPathRefsIn(p: ParsedFile, file: string): W7Site[] {
+  return stringExpressions(p.text, file).filter((x) => RETIRED_ANSWER_DOOR.test(x.text))
+    .map((x) => site(p, file, x.start, x.line, p.text.slice(x.start, x.end).slice(0, 140), 'reference'));
+}
+export const retiredAnswerPathRefs = (): W7Site[] =>
+  [...overPwa(retiredAnswerPathRefsIn), ...retiredAnswerPathRefsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];

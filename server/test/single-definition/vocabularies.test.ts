@@ -515,6 +515,15 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
   });
 
+  it('is what registry.ts derives ProjectEvidence from, not a second copy (4b F5)', () => {
+    const registry = readFileSync(path.join(ccrcRoot, 'server/src/registry.ts'), 'utf8');
+    expect(registry).not.toMatch(PAIR);
+    // A census over every scanned file, not a literal pin over registry.ts: a type alias is no symbol of scan/symbols.ts,
+    // and a pin would raise the D-6114 ratchet's row for that file.
+    const DERIVED = /export type ProjectEvidence = 'measured' \| ReadFailure;/;
+    expect(ALL.filter((f) => DERIVED.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/registry.ts']);
+  });
+
   it('is what delegation-model.ts derives a census record\'s state from, not a third copy (ruling R43)', () => {
     const model = readFileSync(path.join(ccrcRoot, 'server/src/coord/delegation-model.ts'), 'utf8');
     expect(model).not.toMatch(PAIR);
@@ -973,7 +982,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // A `LIFECYCLE_ACTS` that had gone empty would make `every` vacuously true
     // for EVERY file, turning the assertion above into a list of all 200-odd
     // sources — loud, but for the wrong reason. This fails first, and
-    // specifically. Re-measured at 30 acts (#1772's `shed-deps`): the
+    // specifically. Re-measured at 30 acts (D-7278's `shed-deps`): the
     // highest-scoring NON-holder is `server/src/deadCoordinator.ts` at 14 of
     // 30, so the margin is 16 tokens.
     const enumerates = (src: string): boolean =>

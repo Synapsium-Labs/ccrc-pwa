@@ -9,7 +9,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ReactNode } from 'react';
 import type { ChatEvent, FleetSession, RosterWire, SessionLifecycle, SessionStreamMsg } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
-import { BUCKET_ORDER, RANK, sortFleet } from '../src/fleet/sortFleet';
+import { RANK, sortFleet } from '../src/fleet/sortFleet';
+import { BUCKET_ORDER } from '../../shared/api';
 import { lifecycleQualifier } from '../src/fleet/lifecycleWords';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { markers, sessionFacts } from '../src/fleet/sessionFacts';

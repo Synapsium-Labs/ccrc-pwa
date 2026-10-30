@@ -16,11 +16,14 @@ import {
   dialogSheetStatesIn, ensureCallers, ensureCallersIn, fixture, inlineDeadChecks, inlineDeadChecksIn, pageClockSubscriptions,
   pageClockSubscriptionsIn, paneTextDecisions, paneTextDecisionsIn, placementCopies, placementCopiesIn, PUSH_SW, requestPolls,
   requestPollsIn, runMatchers, runMatchersIn, sessionPathLiterals, sessionPathLiteralsIn, showSite, singleReaders, singleReadersIn,
-  storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, type W7Site,
+  storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, viewerNamesAsPresence, viewerNamesAsPresenceIn, persistedPresenceWords, persistedPresenceWordsIn, type W7Site,
 } from './pwa.js';
 import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
+import { ENSURE_OWNER, SESSION_PATH_OWNER } from './pwa.js';
 
 const F = 'pwa/src/fixture.tsx';
+/** The one storage port (C7l, D-7190): the storage census counts the owners and types outside it. */
+const STORAGE_PORT = 'pwa/src/lib/storage.ts';
 const run = (q: (p: ReturnType<typeof fixture>, file: string) => W7Site[], src: string, file = F): W7Site[] => q(fixture(src, file), file);
 const lines = (sites: readonly W7Site[]): string[] => sites.map((s) => s.text);
 
@@ -86,6 +89,15 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
       ['comparison', 'r.claimedBy === s.id'], ['lookup', 'sessionById.get(run.claimedBy)'],
       ['runForSession', 'runForSession(runs, s)'], ['childRunsSeen', 'childRunsSeen(new Set(), [s], runs)'],
     ]);
+  });
+
+  it('runMatchers: a lookup inside a named run reader in runWords.ts reports as named; the same text elsewhere, or in another symbol, is a lookup (C7d, D-7182)', () => {
+    const text = [
+      'export function workerOf(run: R, sessionsById: Map<string, S>) { return sessionsById.get(run.sessionId) ?? null; }',
+      'export function other(run: R, sessionsById: Map<string, S>) { return sessionsById.get(run.claimedBy) ?? null; }',
+    ].join('\n');
+    expect(run(runMatchersIn, text, 'pwa/src/fleet/runWords.ts').map((s) => [s.kind, s.symbol])).toEqual([['named', 'workerOf'], ['lookup', 'other']]);
+    expect(run(runMatchersIn, text, 'pwa/src/fleet/other.ts').map((s) => [s.kind, s.symbol])).toEqual([['lookup', 'workerOf'], ['lookup', 'other']]);
   });
 
   it('requestPolls: a setInterval whose handler calls api.* counts; a clock tick beside a request, usePoll and the stores do not', () => {
@@ -248,6 +260,26 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
     ].join('\n'), 'server/src/fixture.ts');
     expect(got.map((s) => [s.kind, s.line])).toEqual([['PRESENCE_TTL_MS', 1], ['PRESENCE_TTL_MS', 3]]);
   });
+
+  it('viewerNamesAsPresence: a bare presence name counts as a field, a key, a read and a local; a string, a longer name and a comment do not', () => {
+    const got = run(viewerNamesAsPresenceIn, [
+      'interface E { readonly presence: V | null }',
+      "const e = { presence: null, kind: 'presence' }; // presence",
+      'const n = e.presence?.count;',
+      'const presence = true; const presenceOf = 1;',
+    ].join('\n'), 'server/src/collectLane.ts');
+    expect(got.map((s) => [s.kind, s.line])).toEqual([['presence', 1], ['presence', 2], ['presence', 3], ['presence', 4]]);
+  });
+
+  it("persistedPresenceWords: a 'presence' literal counts, in a union type too; a bare property name, a longer word and a comment do not", () => {
+    const got = run(persistedPresenceWordsIn, [
+      "export type Why = 'caps' | 'presence';",
+      "if (s.why === 'presence') go();",
+      'const v = { presence: 1 }; // presence',
+      "const w = 'presence-last';",
+    ].join('\n'), 'server/src/fixture.ts');
+    expect(got.map((s) => [s.kind, s.line])).toEqual([['presence', 1], ['presence', 2]]);
+  });
 });
 
 describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3)', () => {
@@ -271,18 +303,20 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
 
   // Desktop-polish Task G2 added three: the programme box's own matches (fleetTree's `claimed` index, programmeBoxes'
   // claim map, and rowRun's call of runForSession).
-  it('runMatchers(): 4 inline comparisons, 9 map lookups, runForSession 8 calls, childRunsSeen 1', () => {
+  // C7d (D-7182): `runCard`'s two card lookups (D-7205) report as named, beside the new readers' by-id lookups,
+  // `workerOf`'s one (D-7205) and `coordinatorOf`'s one (D-7207).
+  it('runMatchers(): 0 inline comparisons, 0 map lookups, runForSession 0 calls, childRunsSeen 1; 4 named by-id lookups in the readers', () => {
     const sites = runMatchers();
-    held('runMatchers', sites, 22);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ comparison: 4, lookup: 9, runForSession: 8, childRunsSeen: 1 });
+    held('runMatchers', sites.filter((s) => s.kind !== 'named'), 1);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ childRunsSeen: 1, named: 4 });
   });
 
   // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which
   // C7m takes. The ratchet is `rings/pwa-one-owner.test.ts`'s one-owner block.
-  it('requestPolls(): 2 hand-written request polls, HotFilesStrip and useFleetHealth', () => {
+  it('requestPolls(): 0 hand-written request polls (HotFilesStrip and useFleetHealth are on usePoll, C7m)', () => {
     const sites = requestPolls();
-    held('requestPolls', sites, 2);
-    expect(sites.map((s) => s.file)).toEqual(['pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/useFleetHealth.ts']);
+    held('requestPolls', sites, 0);
+    expect(sites.map((s) => s.file)).toEqual([]);
   });
 
   // C7e (D-7183): EnvelopeSheet's busy comes from the answer lifecycle (Step 4), DialogSheet's writes are the
@@ -304,47 +338,66 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('clientPairingDefinitions', clientPairingDefinitions(), 0);
   });
 
-  it('paneTextDecisions(): 2 (COMPACTION_RE, showsPrompt)', () => {
-    held('paneTextDecisions', paneTextDecisions(), 2);
+  it('paneTextDecisions(): 1 (from 2: COMPACTION_RE deleted by C7i, D-7187; showsPrompt stays)', () => {
+    held('paneTextDecisions', paneTextDecisions(), 1);
   });
 
   // Exact on the merged tree: #1715 (one bucket vocabulary) landed before this task, so no band.
-  it('bucketOrders(): 2 (RANK, STATUS_GROUPS)', () => {
-    held('bucketOrders', bucketOrders(), 2);
+  // C7j (D-7188): `RANK` reads `shared/api.ts#BUCKET_RANK`, which the query reads too, and `STATUS_GROUPS` lost its
+  // `order` (the status table reads `BUCKET_ORDER`): 2 -> 1.
+  it('bucketOrders(): 1 (from 2: shared/api.ts#BUCKET_RANK, the one order)', () => {
+    const sites = bucketOrders();
+    held('bucketOrders', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/api.ts#BUCKET_RANK']);
   });
 
-  it('archivedChecks(): 8 absence checks on archivedAt', () => {
-    held('archivedChecks', archivedChecks(), 8);
+  // C7j Step 5 (D-7188, OA-C15 (a)): the 8 sites read `shared/api.ts#isArchivedRow`, the archived bucket or cleanup.
+  it('archivedChecks(): 0 (from 8: every site reads isArchivedRow)', () => {
+    held('archivedChecks', archivedChecks(), 0);
   });
 
   // C9 (D-6441) gave FleetScreen and Instrument's FleetTable one session opener (`fleet/openers.ts`): their two
-  // literals became one, 14 in 12 files to 13 in 11.
-  it('sessionPathLiterals(): 13 string expressions starting /s/, in 11 files', () => {
+  // literals became one, 14 in 12 files to 13 in 11. C7k (D-7189) moved the 13 onto `lib/routes.ts#sessionPath`, whose
+  // own template is the one the query still sees.
+  it('sessionPathLiterals(): 1, sessionPath\'s own template, and 0 (from 13) outside it', () => {
     const sites = sessionPathLiterals();
-    held('sessionPathLiterals', sites, 13);
-    expect(Object.keys(countBy(sites, (s) => s.file)).length).toBe(11);
+    show('sessionPathLiterals', sites);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual([SESSION_PATH_OWNER]);
+    held('sessionPathLiterals outside sessionPath', sites.filter((s) => `${s.file}#${s.symbol}` !== SESSION_PATH_OWNER), 0);
   });
 
-  it('ensureCallers(): 6 owners of api.ensure (5 calls, 1 member reference)', () => {
+  // C7k (D-7189): the six owners (five calls and ResumeSheet's default) read `session/useEnsure.ts`, whose
+  // `ensureSession` is the one call.
+  it('ensureCallers(): 1 (from 6) owner of api.ensure, useEnsure.ts#ensureSession\'s call', () => {
     const sites = ensureCallers();
-    held('ensureCallers', sites, 6);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ call: 5, reference: 1 });
+    held('ensureCallers', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual([ENSURE_OWNER]);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ call: 1 });
   });
 
-  it('storageOwners(): 12 files naming localStorage, none sessionStorage', () => {
+  // C7l (D-7190) adds the one storage port, `lib/storage.ts`, which names `window.localStorage` and declares the one
+  // storage type (and its in-memory instance's `getItem`); its own sites are held exactly, and the owners and types
+  // outside it are the count each owner's move lowers.
+  it('storageOwners(): the port, and 0 files outside it naming localStorage, none sessionStorage', () => {
     const sites = storageOwners();
-    held('storageOwners', sites, 12);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ localStorage: 12 });
+    show('storageOwners', sites);
+    expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['pageStorage']);
+    const outside = sites.filter((s) => s.file !== STORAGE_PORT);
+    held('storageOwners outside lib/storage.ts', outside, 0);
+    expect(countBy(outside, (s) => s.kind)).toEqual({});
   });
 
-  it('storageTypes(): 1 local storage type', () => {
-    held('storageTypes', storageTypes(), 1);
+  it('storageTypes(): the port\'s StoragePort and its in-memory instance, and 0 local storage types outside it', () => {
+    const sites = storageTypes();
+    show('storageTypes', sites);
+    expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['(module)', 'memoryStorage']);
+    held('storageTypes outside lib/storage.ts', sites.filter((s) => s.file !== STORAGE_PORT), 0);
   });
 
-  it('pageClockSubscriptions(): 10 visibilitychange, 2 online', () => {
+  it('pageClockSubscriptions(): 1 visibilitychange, 1 online', () => {
     const sites = pageClockSubscriptions();
-    held('pageClockSubscriptions', sites, 12);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 10, online: 2 });
+    held('pageClockSubscriptions', sites, 2);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ visibilitychange: 1, online: 1 });
   });
 
   it('singleReaders(): api.feed 1, api.runs 1, api.projects 1 (calls and member references)', () => {
@@ -358,15 +411,31 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('placementCopies', placementCopies(), 0);
   });
 
-  it('viewerWordsAsPresence(): the viewer constants and the defer-derived identifiers, by name', () => {
+  it('viewerWordsAsPresence(): 0 (from 92: item 18\'s 62 and the retire rows\' 30): no viewer constant or defer-derived identifier says presence (C7o, D-7193)', () => {
     const sites = viewerWordsAsPresence();
     const byName = countBy(sites, (s) => s.kind);
     console.log(`census-w7 viewerWordsAsPresence: ${sites.length} ${JSON.stringify(byName)}`);
-    held('viewerWordsAsPresence', sites, 62);
-    expect(byName).toEqual({
-      PRESENCE_REFRESH_MS: 3, PRESENCE_TTL_MS: 3, PRESENCE_OPEN_TTL_MS: 7,
-      presenceHeldSince: 7, lastPresenceWallAt: 7, lastPresenceDeferredAt: 7, firstPresenceDeferredAt: 9, collectAfterPresence: 4,
-      presenceSince: 5, childReclaimPresenceWithin: 3, CollectPresence: 2, CHILD_RECLAIM_PRESENCE_GAP_PASSES: 2, CHILD_RECLAIM_PRESENCE_DEFERS: 3,
+    held('viewerWordsAsPresence', sites, 0);
+    expect(byName).toEqual({});
+  });
+
+  it('viewerNamesAsPresence(): 5 (from 44): only the maps keyed BY the persisted word keep a bare presence name (C7o, D-7193)', () => {
+    const sites = viewerNamesAsPresence();
+    const byFile = countBy(sites, (s) => s.file);
+    console.log(`census-w7 viewerNamesAsPresence: ${sites.length} ${JSON.stringify(byFile)}`);
+    held('viewerNamesAsPresence', sites, 5);
+    expect(byFile).toEqual({ 'server/src/collectLane.ts': 2, 'server/src/coord/collectTempRoot.ts': 2, 'server/src/coord/childReclaim.ts': 1 });
+  });
+
+  it("persistedPresenceWords(): the 'presence' word the wire, the feed, coord.db and the journals carry, by file (C7o keeps it)", () => {
+    const sites = persistedPresenceWords();
+    const byFile = countBy(sites, (s) => s.file);
+    console.log(`census-w7 persistedPresenceWords: ${sites.length} ${JSON.stringify(byFile)}`);
+    held('persistedPresenceWords', sites, 20);
+    expect(byFile).toEqual({
+      'server/src/archivedExpiry.ts': 1, 'server/src/childReclaimSweep.ts': 1, 'server/src/collectLane.ts': 5,
+      'server/src/coord/childReclaim.ts': 2, 'server/src/coord/collectTempRoot.ts': 4, 'server/src/coord/expireArchived.ts': 1,
+      'server/src/retire.ts': 1, 'server/src/watch.ts': 2, 'shared/api.ts': 3,
     });
   });
 });
@@ -396,5 +465,109 @@ describe('W7 PWA census, C7q: transcriptCopyRules (D-7212)', () => {
     expect(sites.map((s) => [s.kind, `${s.file}#${s.symbol}`])).toEqual([
       ['copy', 'shared/ask-menu.ts#transcriptQuestion'], ['usable', 'shared/ask-menu.ts#usableQuestions'],
     ]);
+  });
+});
+
+// C7i (D-7187; OA-C16 (a)): Claude Code's prompt glyph has one pane-text spelling. Imported in the block, so the file's
+// header imports stay as other tasks append to them.
+describe('W7 PWA census: the prompt glyph\'s pane-text spellings (C7i, D-7187)', () => {
+  it('FIXTURE promptGlyphSpellings: a string that is the glyph counts; the glyph in a regex, a longer string and JSX text do not', async () => {
+    const { promptGlyphSpellingsIn } = await import('./pwa.js');
+    const got = run(promptGlyphSpellingsIn, [
+      "export const PROMPT_GLYPH = '❯';",
+      "export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }",
+      'const OPTION_RE = /^\\s*(❯)?\\s*(\\d+)\\.\\s+(.+)$/;',
+      "const hint = '❯ 1. Yes';",
+      'export const Row = () => <span>❯</span>;',
+    ].join('\n'));
+    // A module-scope binding is not a symbol (`scan/parse.ts`), so the constant's site is `(module)`.
+    expect(got.map((s) => [s.symbol, s.text, s.line])).toEqual([['(module)', "'❯'", 1], ['startsWithPromptGlyph', "'❯'", 2]]);
+  });
+
+  it('REAL promptGlyphSpellings(): 1 (from 2: drawerView.ts\'s PROMPT_GLYPH and dialog.ts#startsWithPromptGlyph import shared/pane-glyph.ts)', async () => {
+    const { promptGlyphSpellings } = await import('./pwa.js');
+    const sites = promptGlyphSpellings();
+    held('promptGlyphSpellings', sites, 1);
+    expect(sites.map((s) => `${s.file}#${s.symbol}`)).toEqual(['shared/pane-glyph.ts#(module)']);
+  });
+});
+
+// C7g (D-7185, D-7485; ARCH-57 #792, PWA half): the PWA answers operator questions through one writer,
+// `lib/api.ts#answerQuestion`, on W3 Q3f's door. Its counted exit is the old writers' names in code (10 on the base, 0
+// at the tip) and the old doors' paths, which survive only in the skew table a server without `questions-v1` is
+// answered through, and in push-sw.js's render of it. Imported in the block, so the file's header imports stay as other
+// tasks append to them.
+describe('W7 PWA census: the operator answer doors (C7g, D-7185, D-7485)', () => {
+  it('FIXTURE oldAnswerWriters: a definition, a call, a member reference and a Pick key count; answerDialogTab, a comment and an import do not', async () => {
+    const { oldAnswerWritersIn } = await import('./pwa.js');
+    const got = run(oldAnswerWritersIn, [
+      "import { answerAsk } from './x';",
+      'export const api = { answerDialog: async (id: string) => post(id), answerDialogTab: async (id: string) => post(id) };',
+      '// api.answerDialogMulti(id, d, [1]) in a comment',
+      'export function Sheet() { void api.answerDialogText(id, d, 1, t); const f = seam.answerDialogMulti; void api.answerDialogTab(id, r); }',
+      "export type Seam = Pick<Api, 'answerDialog' | 'answerQuestion'>;",
+    ].join('\n'), 'pwa/src/fixture.ts');
+    expect(got.map((s) => [s.kind, s.line])).toEqual([['reference', 2], ['call', 4], ['reference', 4], ['name', 5]]);
+  });
+
+  it('FIXTURE oldAnswerDoorPaths: an old door in a template counts as a door, in the skew table and the region by their kinds; /dialog/tab and the family do not', async () => {
+    const { oldAnswerDoorPathsIn } = await import('./pwa.js');
+    const ts = [
+      'export const writer = (id: string) => post(`${sid(id)}/dialog/multi`, {});',
+      "export const LEGACY_ANSWER_DOORS = { ask: '/ask', row: '/dialog' } as const;",
+      'export const tab = (id: string) => post(`${sid(id)}/dialog/tab`, {});',
+      "export const family = (id: string) => post('/api/questions/session-' + id + '/answer', {});",
+    ].join('\n');
+    expect(run(oldAnswerDoorPathsIn, ts, 'pwa/src/fixture.ts').map((s) => [s.kind, s.line])).toEqual([['door', 1], ['skew-table', 2], ['skew-table', 2]]);
+    const sw = [
+      "const a = fetch('/api/sessions/' + sid + '/ask');",
+      '// ccrc:generated answer-lifecycle BEGIN',
+      "const b = '/api/sessions/' + encodeURIComponent(sid) + '/ask';",
+      '// ccrc:generated answer-lifecycle END',
+    ].join('\n');
+    expect(run(oldAnswerDoorPathsIn, sw, PUSH_SW).map((s) => [s.kind, s.line])).toEqual([['door', 1], ['region', 3]]);
+  });
+
+  it('REAL oldAnswerWriters(): 0 (from 10): no pwa/src code names answerDialog, answerDialogText, answerDialogMulti or answerAsk', async () => {
+    const { oldAnswerWriters } = await import('./pwa.js');
+    held('oldAnswerWriters', oldAnswerWriters(), 0);
+  });
+
+  // C7p (D-7194, D-7540; slug c7p-pwa-fallback-retired): the skew table and the region's render went with the old doors.
+  // Held 5 at C7g's tip (the table's 4 and the region's 1); 9 on the base before C7g.
+  it('REAL oldAnswerDoorPaths(): 0 (from 5 at C7g, 9 before it): no old door in the skew table, the region or anywhere else', async () => {
+    const { oldAnswerDoorPaths } = await import('./pwa.js');
+    const sites = oldAnswerDoorPaths();
+    held('oldAnswerDoorPaths', sites, 0);
+    expect(sites.map((s) => [s.kind, s.file])).toEqual([]);
+  });
+});
+
+// C7p (D-7194, D-7540; slug c7p-pwa-fallback-retired): the PWA bundle (`pwa/src` and `push-sw.js`) names none of the
+// four old operator answer doors, which C7p's server half retires after its PWA half lands. Its counted exit: 0
+// references. Imported in the block, as C7g's are.
+describe('W7 PWA census: the retired operator answer doors (C7p, D-7194, D-7540)', () => {
+  it('FIXTURE retiredAnswerPathRefs: a door at a string\'s end, before a query, in a template or as a bare suffix counts; /dialog/tab, /asks, the family and a comment do not', async () => {
+    const { retiredAnswerPathRefsIn } = await import('./pwa.js');
+    const ts = [
+      'export const a = (id: string) => post(`${sid(id)}/dialog`, {});',
+      "export const b = '/api/sessions/x/ask?y=1';",
+      "export const c = { multi: '/dialog/multi', text: '/dialog/text' } as const;",
+      'export const tab = (id: string) => post(`${sid(id)}/dialog/tab`, {});',
+      "export const asks = '/api/asks'; export const family = '/api/questions/session-x/answer';",
+      "// post(`/api/sessions/${id}/ask`) in a comment",
+    ].join('\n');
+    expect(run(retiredAnswerPathRefsIn, ts, 'pwa/src/fixture.ts').map((s) => s.line)).toEqual([1, 2, 3, 3]);
+    const sw = [
+      '// ccrc:generated answer-lifecycle BEGIN',
+      "const r = '/api/sessions/' + encodeURIComponent(sid) + '/ask';",
+      '// ccrc:generated answer-lifecycle END',
+    ].join('\n');
+    expect(run(retiredAnswerPathRefsIn, sw, PUSH_SW).length).toBeGreaterThan(0);
+  });
+
+  it('REAL retiredAnswerPathRefs(): 0 (from 5 at C7g\'s tip): the PWA bundle names no retired door', async () => {
+    const { retiredAnswerPathRefs } = await import('./pwa.js');
+    held('retiredAnswerPathRefs', retiredAnswerPathRefs(), 0);
   });
 });

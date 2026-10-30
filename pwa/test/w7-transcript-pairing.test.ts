@@ -9,7 +9,7 @@
 // the transcript's copy on every recorded parsed screen, with no hook envelope (the stream said `ask_cleared`); and
 // `askFixtures.ts`' rows. For every row where `askSource` answers `structured` `from: 'transcript'`, the pin is the
 // sheet's pairing (`live`, `named`, `placed`; `shown` is always 0, the copy is one question), whether the sheet renders
-// the copy's question, and the option index a tap on its first row sends (`api.answerDialog`), rendered through
+// the copy's question, and the option index a tap on its first row sends (`api.answerQuestion`'s row, `answerSeam.ts#spyApiAnswer`), rendered through
 // `DialogSheet` itself.
 //
 // C7f (D-7184): the client pairs nothing now, so each row's input gains the wire's `pairing`, on its `dialog` frame as
@@ -24,7 +24,7 @@ import type { AskPairing } from '../../shared/api';
 import { askSource } from '../src/session/askLive';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
-import { api } from '../src/lib/api';
+import { spyApiAnswer } from './answerSeam';
 import {
   CACHING_TRACING, CC296_LONG, COLOUR_FEATURES, COLOUR_ONE, DRINK_FEATURES_TOOLS, FOUR_Q, FRUIT_DRINK, PETS_SIZE_MODE, pane, type AskEnvelope,
 } from './askPanes';
@@ -78,7 +78,7 @@ function sheet(dialog: Dialog, pairing: AskPairing | null): { question: boolean;
     store.getState().apply({ type: 'ask_cleared' });
     store.getState().apply(pairing === null ? { type: 'dialog', dialog } : { type: 'dialog', dialog, pairing });
   });
-  const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+  const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
   render(createElement(DialogSheet, { id: SESSION_ID, store }));
   // The copy's first line, as written or with its Markdown marks rendered away (the sheet may render either).
   const line = dialog.ask!.question.split('\n')[0]!;

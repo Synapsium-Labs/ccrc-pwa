@@ -108,7 +108,7 @@ export function ccdLauncherIn(root: string = REPO): string {
 /** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
  *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
  *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
-export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh'];
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh'];
 
 /** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
 export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
@@ -653,6 +653,8 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
  */
 export const ACT_LISTING_METHODS: readonly string[] = [
   'FleetWatcher.mailPass', 'FleetWatcher.divergencesPass', 'FleetWatcher.sleepRunDone', 'FleetWatcher.sleepIdleHours',
+  // D-7452: the automatic roll's act-time switch read (D-7047's), a row of the same sleep executor.
+  'FleetWatcher.sweepRoll',
 ];
 export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
 export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';

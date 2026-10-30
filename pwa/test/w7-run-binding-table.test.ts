@@ -2,7 +2,8 @@
 // docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 3 and its lookup table; ARCH-61, D-7205, D-7207).
 // Written green on the old code, before C7d moves any reader: a closed-run row's verdict is pinned before C7d moves it.
 //
-// THE READERS, each through its own code: `runForSession` and `runBelongsTo` (the fleet's), the four inline matchers
+// THE READERS, each through its own code: `runForSession` and `runBelongsTo` (the fleet's, retired by C7d and kept
+// below as the record of the guess), the four inline matchers
 // (`sessionEntries`' claimed programmes, `ArchiveSheet`'s claimed open runs, `runBelongsTo`'s id rule, `PrSheet`'s open
 // run on the workspace), and the seven run-to-session map lookups: `RunsScreen`'s three (the abandon sheet's
 // `sessionById.get(abandonTarget.sessionId)`, read through the child word the sheet is handed, and each row's worker and
@@ -22,7 +23,23 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { childIdsOf, sessionRunOf, UNCHECKED_PR, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary, type SessionRun } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { runBelongsTo, runCard, runForSession } from '../src/fleet/runWords';
+import { childMarkOf, runCard } from '../src/fleet/runWords';
+
+/** THE RETIRED GUESS, kept as the record this table was judged against (C7d deletes `runForSession` and
+ *  `runBelongsTo` from `pwa/src`, D-7182). Before ARCH-61 the PWA guessed which run was a session's from the run's id
+ *  and the session's `.child` mark; the `runForSession` and `runBelongsTo` columns below keep what that guess answered,
+ *  byte for byte, beside the wire's own facts, so every C7d behaviour row stays readable as "the guess said X, the
+ *  wire says Y". No `pwa/src` file reads it. */
+const runBelongsTo = (run: { id: number; sessionId: string | null }, session: { id: string; child?: FleetSession['child'] }): boolean => {
+  if (run.sessionId !== session.id) return false;
+  const mark = childMarkOf(session);
+  return mark.kind !== 'child' || run.id >= mark.runId;
+};
+const runForSession = (runs: readonly RunSummary[], session: { id: string; child?: FleetSession['child'] }): RunSummary | null => {
+  let current: RunSummary | null = null;
+  for (const r of runs) if (runBelongsTo(r, session) && (current === null || r.id > current.id)) current = r;
+  return current;
+};
 import { cardsOf, fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
 import { coordinatorPresence } from '../src/fleet/presence';
@@ -213,13 +230,18 @@ async function rowFacts(sc: Scenario): Promise<Record<number, Record<string, unk
 }
 
 describe('the run binding table (#746 fixture): today\'s readers, row by row', () => {
+  // C7d's behaviour rows, OA-C15 (a) (D-7265), each marked where it differs from the pins C7a wrote green on the old
+  // code: an OPEN run's worker is the session the wire binds to it, so the run row (`worker`: W before) and the abandon
+  // sheet find no worker for run 10 of "two runs naming one worker" (the worker's binding names 11), for the recycled
+  // id (83) and for the undecidable binding (51), and the sheet hedges ('unknown'; 'child' before). Every closed run's
+  // row, every coordinator, `coordPresence` and every Resume door is today's.
   const PINS: Record<string, unknown> = {
     'two runs naming one worker': {
-      10: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 11, openRunOf: 11, childIds: 'absent' }, runForSession: 11, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
+      10: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 11, openRunOf: 11, childIds: 'absent' }, runForSession: 11, runBelongsTo: true, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
       11: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 11, openRunOf: 11, childIds: 'absent' }, runForSession: 11, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
     },
     'a recycled id, as a worker (#746: a run opened before the workspace\'s own run)': {
-      83: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: null, runBelongsTo: false, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
+      83: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: null, runBelongsTo: false, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
     },
     'a recycled id, as a coordinator (no wire fact binds the claimant\'s incarnation)': {
       12: { question: 'which listed session carries the claimant id', wire: { sessionRunOf: 12, openRunOf: 12, childIds: [] }, runForSession: 12, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'alive', resumeDoor: false, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
@@ -241,8 +263,10 @@ describe('the run binding table (#746 fixture): today\'s readers, row by row', (
     'an open planned run with sessionId null': {
       50: { question: 'which listed session carries the claimant id', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: null, runBelongsTo: false, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
     },
+    // C7d's behaviour rows, OA-C15 (a) (D-7265): an open run's worker is the session the wire binds to it, so a worker
+    // the wire does not bind is not bracketed under the run's claimant (fleetTree, `treeRow`: depth1 before).
     'an open run whose worker binding is undecidable (no run key on the worker)': {
-      51: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: 51, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
+      51: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: null, openRunOf: null, childIds: 'absent' }, runForSession: 51, runBelongsTo: true, worker: null, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'unknown', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth0' },
     },
     'an open run on a tick whose childIds are empty (the registry was unlistable)': {
       52: { question: 'which live session is this open run\'s worker', wire: { sessionRunOf: 52, openRunOf: 52, childIds: [] }, runForSession: 52, runBelongsTo: true, worker: W, coordSession: C, coordPresence: 'dead', resumeDoor: true, abandonChild: 'child', runCard: 'project-a', paletteClaims: true, treeRow: 'project-a:depth1' },
@@ -264,15 +288,18 @@ describe('the matchers that ask the coordinator side (ArchiveSheet, PrSheet)', (
   // `ArchiveSheet`'s claimed open runs of the claimant (`r.claimedBy === session.id`), and `PrSheet`'s open run on the
   // worker's workspace (`r.sessionId === id`): both match by id, so the recycled-id rows count today.
   const MATCHERS: Record<string, unknown> = {
-    'two runs naming one worker': { archiveAsksClaimant: 2, prOpenRunOnWorker: 10 },
-    'a recycled id, as a worker (#746: a run opened before the workspace\'s own run)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 83 },
+    // C7d's behaviour rows, OA-C15 (a) (D-7265): the PR sheet's open run is the one the wire binds to the workspace
+    // (`sessionRunOf(s, 'open')`), so the note names run 11, not the older run 10 that names the id (10 before), and
+    // names no run for the recycled id (83 before) or the undecidable binding (51 before).
+    'two runs naming one worker': { archiveAsksClaimant: 2, prOpenRunOnWorker: 11 },
+    'a recycled id, as a worker (#746: a run opened before the workspace\'s own run)': { archiveAsksClaimant: 1, prOpenRunOnWorker: null },
     'a recycled id, as a coordinator (no wire fact binds the claimant\'s incarnation)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 12 },
     'the open-vs-newest pair (a newer run closed while an older one is open)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 20 },
     'a closed run of a live session, as its worker': { archiveAsksClaimant: 0, prOpenRunOnWorker: null },
     'a closed run of a live session, as its coordinator': { archiveAsksClaimant: 0, prOpenRunOnWorker: null },
     'an older closed run of a live session, beside its newer bound run': { archiveAsksClaimant: 1, prOpenRunOnWorker: 41 },
     'an open planned run with sessionId null': { archiveAsksClaimant: 1, prOpenRunOnWorker: null },
-    'an open run whose worker binding is undecidable (no run key on the worker)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 51 },
+    'an open run whose worker binding is undecidable (no run key on the worker)': { archiveAsksClaimant: 1, prOpenRunOnWorker: null },
     'an open run on a tick whose childIds are empty (the registry was unlistable)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 52 },
     'an open run with no childIds key (an emitter that does not compute it)': { archiveAsksClaimant: 1, prOpenRunOnWorker: 53 },
   };
@@ -292,7 +319,7 @@ describe('nestFleet\'s attentionFirst lookup: the child order under one coordina
   // worker is in `attention`. Today a waiting worker's run sorts first whatever its binding, so the wave-2 row reads
   // above the wave-1 row. Item 3's table moves this lookup to `workerOf` by binding (an unbound worker does not sort its
   // run first), so the unbound and recycled rows are the ones C7d must name; the bound row is the control that keeps
-  // its order. Pinned twice: `fleetTree`'s rows (the fleet's own path, after its `runForSession` filter) and `nestFleet`
+  // its order. Pinned twice: `fleetTree`'s rows (the fleet's own path, after its binding filter, `workerOf`) and `nestFleet`
   // handed the runs directly (the comparator alone, no filter in front of it).
   const O = 'worker-o';
   const r60 = run(60, { sessionId: O, workspace: 'ws-o', branch: 'ws/ws-o', wave: 1 });
@@ -301,9 +328,14 @@ describe('nestFleet\'s attentionFirst lookup: the child order under one coordina
   const waiting = (over: Partial<FleetSession>): FleetSession => worker({ child: { kind: 'child', runId: 61 }, status: 'idle', bucket: 'attention', ...over });
   const ORDERS: ReadonlyArray<{ name: string; sessions: readonly FleetSession[]; tree: readonly string[]; nest: readonly string[] }> = [
     { name: 'the waiting worker is unbound (no run on the wire), the stale run names it by id',
-      sessions: [coord(), ordinary(), waiting({ run: null, openRun: null })], tree: [W, O], nest: [W, O] },
+      // C7d's behaviour rows, OA-C15 (a): the tree brackets only the run the wire binds, so the unbound waiting worker is
+      // not this coordinator's child on the card (tree: [W, O] before); and `attentionFirst` asks the run's bound worker
+      // (`workerOf`), so the unbound worker's run does not sort first (nest: [W, O] before).
+      sessions: [coord(), ordinary(), waiting({ run: null, openRun: null })], tree: [O], nest: [O, W] },
     { name: 'the waiting worker is a recycled id (its binding names another run), the stale run names it by id',
-      sessions: [coord(), ordinary(), waiting({ run: bound(closed(90)), openRun: null })], tree: [W, O], nest: [W, O] },
+      // C7d's behaviour rows, OA-C15 (a): the recycled id's binding names another run (tree: [W, O] and nest: [W, O]
+      // before).
+      sessions: [coord(), ordinary(), waiting({ run: bound(closed(90)), openRun: null })], tree: [O], nest: [O, W] },
     { name: 'the control: the waiting worker is bound to the wave-2 run',
       sessions: [coord(), ordinary(), waiting({ run: bound(r61), openRun: bound(r61) })], tree: [W, O], nest: [W, O] },
   ];

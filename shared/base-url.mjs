@@ -1,35 +1,74 @@
-// shared/base-url.mjs — the endpoint gate (spec §4.1), for the callers that run
-// under a BARE `node`: `deploy/account-op.mjs` and `shared/roster-json.mjs`,
-// neither of which can import `shared/base-url.ts` (no build step, no `tsx`, no
-// compiled `dist/` — `deploy/gen-accounts.mjs`'s header, :4-11).
+// shared/base-url.mjs — the endpoint gate (spec §4.1), the one implementation,
+// for every caller (D-7306, the D-5867 pattern). The bare-`node` callers,
+// `deploy/account-op.mjs` and `shared/roster-json.mjs`, import it directly
+// (no build step, no `tsx`, no compiled `dist/` — `deploy/gen-accounts.mjs`'s
+// header); TypeScript callers import it through `shared/base-url.ts`, its typed
+// re-export, which also holds the verdict types (D-7307); and the PWA bundle
+// resolves its extension-less specifier to this file directly.
 //
-// WHY A TWIN AND NOT A COPY WITH A COMMENT. `shared/roster-json.mjs` already
-// carries five hand-kept copies of `shared/roster.ts` rules and its header
-// (:49-52) states the asymmetry that makes them survivable: it may be STRICTER
-// than the parser, never laxer. That argument does not extend to a URL gate.
-// A stricter endpoint gate in one of the two files refuses a roster the server
-// boots on — the split verdict D-1854 is about, pointing the other way. So the
-// two are compared to the SAME case table row for row and to EACH OTHER
-// (`server/test/base-url.test.ts`), and the file with the second copy of the
-// LOOPBACK SET is this one and no other.
+// L0 and import-free, `shared/providers.ts` included: the TABLE is data and
+// this is a DECISION, and they are separate files so
+// `single-definition.test.ts` can fingerprint them separately and so this gate
+// can never start branching on which provider is asking. Whether an ABSENT
+// endpoint is legal is the caller's question, answered against the provider
+// table's `baseUrlRequired` column in `parseExec`; this file answers only what
+// a PRESENT one is.
+//
+// The table's identifier is deliberately not spelled anywhere in this file, in
+// code or in prose, and `base-url.test.ts` asserts that as a substring ban. It
+// is not pedantry: naming it in a comment is how a branch on it starts, and the
+// ban is the cheapest possible statement of "this decision does not know who is
+// asking".
 //
 // It imports nothing — not even `node:*`. It does not need to, and a
 // dependency here would be inherited by every bare-`node` caller and by the
 // fixture trees that copy them (`ccrc-installFixture.ts`'s TREE_FILES).
 //
-// The three behaviours the implementation turns on are argued in
-// `shared/base-url.ts`'s header and measured in the suite: `?` and `#` are
-// tested on the RAW string (a bare one of either leaves `search`/`hash` empty
-// while surviving into `href`), userinfo is tested BEFORE the scheme, and the
-// admitted verdict carries `u.href` — the NORMALISED endpoint — because the
-// value stored has to be the value the lane resolves.
+// FIVE REFUSALS, NOT A BOOLEAN. Two of the five have their own codes in the
+// verb's refusal table (`base-url-insecure`, `base-url-credentials`, spec §5)
+// and the add sheet has to say which happened. Collapsing them would be the
+// overloaded-null-at-a-seam defect this repo bans by name: a caller that has to
+// re-derive "which one" from the input it just handed over is a caller the
+// answer was withheld from.
+//
+// WHY `?` AND `#` ARE TESTED ON THE RAW STRING. Measured 2026-09-07 (node 22):
+// `new URL('https://orchard-api/v1?').search` is `''` and its `.href` is
+// `'https://orchard-api/v1?'` — the character survives into the stored value
+// while the parsed component reads empty. The same holds for a bare `#`. A gate
+// written as `u.search !== '' || u.hash !== ''` therefore admits both and
+// stores an endpoint ending in a stray delimiter. Percent-encoded `%3F`/`%23`
+// are path bytes and are unaffected, which is the behaviour that makes the raw
+// test safe rather than merely blunt.
+//
+// WHY THE VERDICT CARRIES `href` AND NOT THE OPERATOR'S INPUT. `URL`
+// lower-cases the scheme and the host and leaves the path alone, so
+// `HTTPS://Orchard-API/V1` resolves as `https://orchard-api/V1`. §4.1 says the
+// endpoint is SHOWN, never hidden — the card renders it, doctor checks it and
+// `settings.json` carries it — so the value stored has to be the value the lane
+// will actually resolve. Storing the input verbatim would put two different
+// answers to one question on two different screens.
 
-/** Mirrors `shared/base-url.ts`'s `LOOPBACK_HOSTS`, and is the only other copy
- *  of that set in the tree. */
+/** The three hosts a plain-`http:` endpoint may name. A CLOSED literal set, not
+ *  a `127.0.0.0/8` range test: `URL` has already normalised the spellings that
+ *  differ (`http://127.0.0.1./v1` parses with hostname `127.0.0.1`,
+ *  `http://LOCALHOST:8642` with `localhost`), and a range test in L0 means
+ *  hand-parsing dotted quads for a set of three.
+ *
+ *  The exception is not a courtesy: two wrapper scripts on the fleet box
+ *  already point `ANTHROPIC_BASE_URL` at `http://127.0.0.1:8642` (spec §4.3,
+ *  measured 2026-09-07), and the whole argument for a general `baseUrl` is that
+ *  the ownership-whitelist proxy IS an Anthropic-compatible endpoint. Refusing
+ *  plain http outright would refuse the configuration this fleet runs today. */
 export const LOOPBACK_HOSTS = ['127.0.0.1', '[::1]', 'localhost'];
 
-/** `(raw: unknown) => { ok: true, url } | { ok: false, reason }` — the same
- *  verdicts, the same order of checks, the same normalised value. */
+/** `(raw: unknown) => { ok: true, url } | { ok: false, reason }` — typed as
+ *  `shared/base-url.ts`'s `BaseUrlVerdict`; `url` on the `ok` arm is the
+ *  NORMALISED endpoint (see the header). Order of checks is deliberate and is
+ *  asserted by the case table: userinfo is tested BEFORE the scheme, so
+ *  `http://user:pass@orchard-api/v1` answers `base-url-credentials` rather than
+ *  `base-url-insecure`. Both are true of it; only one of them names a secret
+ *  the operator has just pasted somewhere it will be stored in clear, and that
+ *  is the one to say out loud. */
 export const BASE_URL_OK = (raw) => {
   if (typeof raw !== 'string') return { ok: false, reason: 'base-url-unparseable' };
   const text = raw.trim();

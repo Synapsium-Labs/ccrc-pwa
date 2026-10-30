@@ -138,10 +138,20 @@ describe('the run-id grammar is ASCII in every locale (D-2522\'s shape)', () => 
     // A second spelling would be a second grammar free to drift — and the
     // first place it would drift is the `LC_ALL=C` shadow above.
     // What passes it: a differently spelled grammar (a literal-absence pin; wave 3's review checks its parses by reading).
+    // A PR number shares the grammar: bash asks `_pr_num_valid`, which calls this helper, and `_pr_py`'s embedded
+    // python, which cannot call bash, spells it once as its `PR_NUM` constant (D-7362) — the one other line allowed —
+    // and so does `_pr_train_py`'s, the train record's own program since it moved to ccd/lib/train-proof.sh (D-7463).
     const code = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l));
     const spelled = code.filter((l) => l.includes('[0-9]{0,9}'));
-    expect(spelled, 'the run-id pattern must be spelled exactly once — in _child_runid_valid').toHaveLength(1);
-    expect(spelled[0]).toMatch(/^_child_runid_valid\(\) \{/);
+    expect(spelled, 'the run-id pattern must be spelled exactly once in bash — in _child_runid_valid — and once in each embedded python as PR_NUM').toHaveLength(3);
+    expect(spelled[0]).toBe("PR_NUM = r'[1-9][0-9]{0,9}'");
+    expect(spelled[1]).toBe("PR_NUM = r'[1-9][0-9]{0,9}'");
+    expect(spelled[2]).toMatch(/^_child_runid_valid\(\) \{/);
+    const src = ccdSource();
+    const at = (s: string): number => src.indexOf(s);
+    expect(at("PR_NUM = r'[1-9][0-9]{0,9}'"), 'the first is _pr_py\'s').toBeGreaterThan(at('\n_pr_py() {'));
+    expect(src.indexOf("PR_NUM = r'[1-9][0-9]{0,9}'", at("PR_NUM = r'[1-9][0-9]{0,9}'") + 1), 'the second is _pr_train_py\'s')
+      .toBeGreaterThan(at('\n_pr_train_py() {'));
   });
 
   it.skipIf(WIDE_DIGIT_LOCALE === null)('refuses a superscript digit under a locale whose ranges admit it', () => {

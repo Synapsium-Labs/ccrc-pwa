@@ -71,6 +71,8 @@
 // `ccd-ws-collect-loose`) skip there.
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,7 +81,7 @@ import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelper
 import { CHILD_ENV, CHILD_STUBS, makeChild } from './childReclaimFixture.js';
 import { EXP_STUBS, NOW, makeArchived } from './wsExpireFixture.js';
 import { IDLE_FLOOR_SEAM, makeOrphan, COL_ID } from './wsCollectFixture.js';
-import { mergeBaseText } from './mergeBase.js';
+import { mergeBaseFiles, treeEntriesAt, type TreeEntry } from './mergeBase.js';
 import { ccdLauncherIn } from './consolidationCensus.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -335,18 +337,82 @@ export function listing(home: string): string[] {
   return out;
 }
 
-/** The merge-base's ccd, extracted into a tmp tree with its library beside it, or null with no origin/main or merge-base. */
-function baseCcd(): string | null {
-  const body = mergeBaseText(ROOT, path.relative(ROOT, CCD));
-  const lib = mergeBaseText(ROOT, path.relative(ROOT, CCD_LIB));
-  if (body === null || lib === null) return null;
-  const dir = mkTmp('c5d-base-ccd-');
-  const launcher = ccdLauncherIn(dir);
-  const libAt = path.join(dir, path.relative(ROOT, CCD_LIB));
-  fs.mkdirSync(path.dirname(libAt), { recursive: true });
-  fs.writeFileSync(launcher, body, { mode: 0o755 });
-  fs.writeFileSync(libAt, lib);
-  return launcher;
+/** The git blob id of `bytes`: the SHA-1 of `blob <length>\0` and the bytes. */
+const blobId = (bytes: Buffer): string =>
+  createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${bytes.length}\0`), bytes])).digest('hex');
+
+/** The guard's own `git ls-tree` reader, independent of `mergeBase.ts`: one `<mode> <oid> <path>` line per entry that `rev`
+ *  holds under `dir`, sorted. */
+function lsTree(cwd: string, rev: string, dir: string): string[] {
+  const out = execFileSync('git', ['ls-tree', '-r', '-z', rev, '--', `${dir}/`], { cwd, encoding: 'utf8', stdio: 'pipe' });
+  return out.split('\0').filter(Boolean).map((rec) => {
+    const [head, name] = rec.split('\t', 2) as [string, string];
+    const [mode, , oid] = head.split(' ') as [string, string, string];
+    return `${mode} ${oid} ${name}`;
+  }).sort();
+}
+
+/** What `root/dir` holds on disk, as `lsTree` writes it, and never following a link: a link is `120000` with the blob id of
+ *  its target text, a file is `100755` when any x bit is set and `100644` otherwise. */
+function treeOf(root: string, dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const n of fs.readdirSync(d)) {
+      const p = path.join(d, n);
+      const st = fs.lstatSync(p);
+      if (st.isDirectory()) { walk(p); continue; }
+      const name = path.relative(root, p);
+      if (st.isSymbolicLink()) out.push(`120000 ${blobId(Buffer.from(fs.readlinkSync(p)))} ${name}`);
+      else out.push(`${(st.mode & 0o111) !== 0 ? '100755' : '100644'} ${blobId(fs.readFileSync(p))} ${name}`);
+    }
+  };
+  walk(path.join(root, dir));
+  return out.sort();
+}
+
+/** Write each of `entries` as `rev` holds it in the repository at `cwd`, at `into/<path>`, by mode: a `100644` file at
+ *  `0o644`, a `100755` file at `0o755` (both set with `chmodSync`, so the umask cannot change them) and a `120000` link to
+ *  its target text. Any other entry (a `160000` gitlink, a `tree`) holds bytes this cannot keep, so it answers false. The
+ *  whole body is one try: it never throws, and any failure answers false. */
+function extractEntries(cwd: string, rev: string, entries: readonly TreeEntry[], into: string): boolean {
+  try {
+    for (const e of entries) {
+      if (e.mode !== '100644' && e.mode !== '100755' && e.mode !== '120000') return false;
+      const bytes = execFileSync('git', ['show', `${rev}:${e.path}`], { cwd, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+      const dest = path.join(into, e.path);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (e.mode === '120000') { fs.symlinkSync(bytes.toString('utf8'), dest); continue; }
+      fs.writeFileSync(dest, bytes);
+      fs.chmodSync(dest, e.mode === '100755' ? 0o755 : 0o644);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The merge-base's ccd, extracted into a tmp tree with every entry the base's own `ccd/lib/` holds beside it, each at its
+ *  repo-relative path and mode (D-7496: a base on either side of a library move runs), or null with no origin/main or
+ *  merge-base, or when an entry is refused, unreadable or cannot be written. It never throws on a refused or unreadable
+ *  entry, and returns null. It runs at collection time. */
+function baseCcd(root: string = ROOT): string | null {
+  let dir: string | undefined;
+  try {
+    const libs = mergeBaseFiles(root, path.relative(ROOT, path.dirname(CCD_LIB)));
+    if (libs === null) return null;
+    const show = (rel: string): Buffer =>
+      execFileSync('git', ['show', `${libs.base}:${rel}`], { cwd: root, stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+    const body = show(path.relative(ROOT, CCD));
+    dir = mkTmp('c5d-base-ccd-');
+    const launcher = ccdLauncherIn(dir);
+    fs.mkdirSync(path.dirname(launcher), { recursive: true });
+    fs.writeFileSync(launcher, body, { mode: 0o755 });
+    if (!extractEntries(root, libs.base, libs.entries, dir)) throw new Error('an entry was refused');
+    return launcher;
+  } catch {
+    if (dir !== undefined) fs.rmSync(dir, { recursive: true, force: true });
+    return null;
+  }
 }
 
 /** A fresh instance of `def`'s fixture, with the fixed generation written for a workspace row. */
@@ -543,6 +609,82 @@ describe('the detail normaliser (D-7082)', () => {
   });
 });
 
+/** The base extraction, on a scratch repository: every entry kept as git holds it at the named commit, and a refusal for the
+ *  rest. Not Linux-only: it uses git and symlinks alone. */
+describe('the base extraction keeps every entry it can, and refuses the rest (D-7496, review 1222)', () => {
+  const GIT_ISOLATED = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false',
+    '-c', 'core.hooksPath=/dev/null', '-c', 'init.templateDir='];
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', [...GIT_ISOLATED, ...args], { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+
+  /** A repository whose commit A holds `ccd/ccd`, `ccd/lib/plain.sh` (100644), `ccd/lib/run.sh` (100755) and `ccd/lib/link`
+   *  (a link to `plain.sh`, 120000), and whose HEAD, commit B, rewrites `plain.sh`. */
+  function scratch(): { repo: string; a: string; b: string } {
+    const repo = mkTmp('c5d-scratch-');
+    git(repo, 'init', '-q');
+    fs.mkdirSync(path.join(repo, 'ccd', 'lib'), { recursive: true });
+    // The launcher at the repository's own relative spelling of `CCD`: the one path to the script stays in `ccdWsHelpers.ts`.
+    fs.writeFileSync(path.join(repo, path.relative(ROOT, CCD)), '#!/bin/sh\necho ccd\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(repo, 'ccd', 'lib', 'plain.sh'), 'echo a\n');
+    fs.writeFileSync(path.join(repo, 'ccd', 'lib', 'run.sh'), '#!/bin/sh\necho run\n');
+    fs.chmodSync(path.join(repo, 'ccd', 'lib', 'run.sh'), 0o755);
+    fs.symlinkSync('plain.sh', path.join(repo, 'ccd', 'lib', 'link'));
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'a');
+    const a = git(repo, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(repo, 'ccd', 'lib', 'plain.sh'), 'echo b\n');
+    git(repo, 'commit', '-q', '-am', 'b');
+    return { repo, a, b: git(repo, 'rev-parse', 'HEAD') };
+  }
+  /** Commit C on top of HEAD: a gitlink, `ccd/lib/sub`, which no file can hold. */
+  function withGitlink(repo: string, a: string): string {
+    git(repo, 'update-index', '--add', '--cacheinfo', `160000,${a},ccd/lib/sub`);
+    git(repo, 'commit', '-q', '-m', 'c');
+    return git(repo, 'rev-parse', 'HEAD');
+  }
+
+  it('keeps a 100644 file, a 100755 file and a 120000 link as git holds them at the named commit, never at HEAD', () => {
+    const { repo, a } = scratch();
+    const want = lsTree(repo, a, 'ccd/lib');
+    expect(want.map((l) => l.split(' ')[0]).sort(), 'fixture control').toEqual(['100644', '100755', '120000']);
+    const out = mkTmp('c5d-extract-');
+    expect(extractEntries(repo, a, treeEntriesAt(repo, a, 'ccd/lib')!, out)).toBe(true);
+    expect(treeOf(out, 'ccd/lib')).toEqual(want);
+  });
+
+  it('refuses a gitlink, whose bytes it cannot keep', () => {
+    const { repo, a } = scratch();
+    const c = withGitlink(repo, a);
+    expect(extractEntries(repo, c, treeEntriesAt(repo, c, 'ccd/lib')!, mkTmp('c5d-extract-'))).toBe(false);
+  });
+
+  it('never throws: a destination it cannot write answers false', () => {
+    const { repo, a } = scratch();
+    const file = path.join(mkTmp('c5d-extract-'), 'regular');
+    fs.writeFileSync(file, 'x');
+    expect(extractEntries(repo, a, treeEntriesAt(repo, a, 'ccd/lib')!, path.join(file, 'x'))).toBe(false);
+  });
+
+  it('baseCcd extracts a repository\'s merge-base ccd/lib and launcher', () => {
+    const { repo, a } = scratch();
+    git(repo, 'update-ref', 'refs/remotes/origin/main', a);
+    const launcher = baseCcd(repo);
+    expect(launcher, 'a base was measured').not.toBeNull();
+    expect(fs.existsSync(launcher!)).toBe(true);
+    expect(treeOf(path.dirname(path.dirname(launcher!)), 'ccd/lib')).toEqual(lsTree(repo, a, 'ccd/lib'));
+  });
+
+  it('baseCcd answers null, and leaves no temp tree, when an entry is refused', () => {
+    const { repo, a } = scratch();
+    const c = withGitlink(repo, a);
+    git(repo, 'update-ref', 'refs/remotes/origin/main', c);
+    const made = (): string[] => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('c5d-base-ccd-')).sort();
+    const before = made();
+    expect(baseCcd(repo)).toBeNull();
+    expect(made(), 'baseCcd left its temp tree behind').toEqual(before);
+  });
+});
+
 describe.skipIf(!LINUX)('the retire-verdict table: every row through every retire eval (D-7082)', () => {
   const base = baseCcd();
   afterAll(() => { if (base) fs.rmSync(path.dirname(path.dirname(base)), { recursive: true, force: true }); });
@@ -555,10 +697,19 @@ describe.skipIf(!LINUX)('the retire-verdict table: every row through every retir
 
   it('the differential half has the merge-base\'s ccd (it fails on CI without one, and skips locally with a warning)', (ctx) => {
     if (base === null) {
-      if (process.env['CI']) throw new Error('retire-verdicts: no origin/main or no merge-base, so the tokens cannot be held against the base');
-      console.warn('retire-verdicts: skipped the differential half, no origin/main or merge-base in this checkout');
+      if (process.env['CI']) throw new Error('retire-verdicts: no origin/main or no merge-base, or the extraction refused an entry or could not be written, so the tokens cannot be held against the base');
+      console.warn('retire-verdicts: skipped the differential half, no origin/main or no merge-base, or the extraction refused an entry or could not be written');
       ctx.skip();
     }
+  });
+
+  it('the extracted tree holds every entry the merge-base\'s own ccd/lib holds, byte for byte and mode for mode, and that is not nothing (D-7496)', (ctx) => {
+    if (base === null) { ctx.skip(); return; } // the case above fails on CI without a base
+    const lib = path.relative(ROOT, path.dirname(CCD_LIB));
+    const at = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const want = lsTree(ROOT, at, lib);
+    expect(want.length, 'the base holds no ccd/lib entry: the guard would compare nothing').toBeGreaterThan(0);
+    expect(treeOf(path.dirname(path.dirname(base)), lib)).toEqual(want);
   });
 
   for (const def of ROWS) {

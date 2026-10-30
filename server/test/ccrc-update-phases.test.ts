@@ -5850,6 +5850,17 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(lines(home, 'launcher-argv'), 'CONTROL: the watchdog reached its rollback').toEqual(['rollback --from watchdog']);
     expectJournalUntouched(journal, 'the watchdog');
   });
+
+  // wave 29 (R38, D-6983): a value read from outside is held to ASCII digits by enumeration. Under a UTF-8 locale whose
+  // collation places other digits inside `0-9` (measured: en_US.UTF-8 on Linux accepts `²`, `٣` and `５`; C.UTF-8
+  // does not), a range would take one as digits and hand `sleep` a word it cannot read.
+  const HAS_EN_US = /^en_US\.utf-?8$/im.test(spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '');
+  it.skipIf(!HAS_EN_US).each(['²', '٣', '５'])('W29-A2: a non-ASCII digit is not a probe gap: %s', (digit) => {
+    const home = freshUpdateBox('ccrc-wd-gap-digit-');
+    const r = sourcedCcrc(home, `LC_ALL=en_US.UTF-8; CCRC_WATCHDOG_PROBE_GAP_S='${digit}'; _upd_watchdog_probe_gap_s`);
+    expect(r.stdout, r.stderr).toBe('5');
+    expect(r.stderr).toContain('is not digits-only — using 5');
+  });
 });
 
 describe('ccrc update: the migration keeps the old tree until the gate (W6 Task 3)', () => {

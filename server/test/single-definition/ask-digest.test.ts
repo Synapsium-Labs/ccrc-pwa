@@ -526,9 +526,11 @@ describe('one eligibility rule and one answer body for the parent and the operat
     expect(gate, 'and before the capture').toBeLessThan(body.indexOf('d.tmux.capture('));
   });
 
+  // W7 C7p (D-7194): the operator's ask answer is the family's `POST /api/questions/:id/answer` since
+  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler.
   it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
-    const operator = between('POST /api/sessions/:id/ask', stallCode(path.join(ccrcRoot, 'server/src/server.ts')),
-      "app.post('/api/sessions/:id/ask'", "app.get('/api/sessions/:id/commands'");
+    const operator = between('POST /api/questions/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/questions/:id/answer'", "app.post('/api/questions/:id/rule'");
     const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
       "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
     for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
@@ -858,12 +860,19 @@ describe('the Claude Code version grammar and its floor are defined once, in sha
     const holders = ALL.filter((f) => FLOOR.test(stallCode(f))).map(rel).sort();
     expect(holders).toEqual(['shared/claudeVersion.ts']);
   });
-  it('the grammar\'s body is spelled once, and livestate parses no version of its own', () => {
+  it('the grammar\'s body is spelled once, and livestate parses no version of its own', async () => {
     const holders = ALL.filter((f) => stallCode(f).includes(BODY)).map(rel).sort();
     expect(holders).toEqual(['shared/claudeVersion.ts']);
     const live = stallCode(path.join(ccrcRoot, 'server', 'src', 'livestate.ts'));
     expect(live).not.toMatch(/\(\\d\+\)\\\.\(\\d\+\)/);
-    expect(live).toMatch(/from '\.\.\/\.\.\/shared\/claudeVersion\.js'/);
+    // D-7512 (named exception): the floor's one reader, `liveStatusCoversDelegation`, moved to `liveVerdicts.ts`, so
+    // its import of the lexicon and its want of a version parse are read there, through the parse rather than as a
+    // literal pin over the file (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { parsedFile } = await import('../scan/symbols.js');
+    const { codeOnly, runtimeEdges } = await import('../rings/ring.js');
+    const verdicts = parsedFile('server/src/liveVerdicts.ts');
+    expect(codeOnly(verdicts.text)).not.toMatch(/\(\\d\+\)\\\.\(\\d\+\)/);
+    expect(runtimeEdges(verdicts).some((e) => e.specifier === '../../shared/claudeVersion.js')).toBe(true);
   });
 });
 
@@ -919,8 +928,8 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
     const [lane, table] = await Promise.all([import('../../src/coord/hibernate.js'), import('../../src/laneSchedule.js')]);
     expect(lane.HIBERNATE_SWEEP_MS, 'the definer re-exports the table\'s constant').toBe(table.HIBERNATE_SWEEP_MS);
   });
-  it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
-    const decl = /\b(?:const|let|var)\s+PRESENCE_OPEN_TTL_MS\b/;
+  it('VIEWER_OPEN_TTL_MS is declared once, in shared/api.ts beside VIEWER_TTL_MS', () => {
+    const decl = /\b(?:const|let|var)\s+VIEWER_OPEN_TTL_MS\b/;
     expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
   });
 });
@@ -971,6 +980,7 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
     ['WAKE_BURST', 'server/src/coord/wakeBudget.ts'], ['WAKE_WINDOW_MS', 'server/src/coord/wakeBudget.ts'],
     ['HIBERNATE_PER_SWEEP', 'server/src/coord/hibernate.ts'], ['HIBERNATE_ACT_LINE_MS', 'server/src/coord/hibernate.ts'],
     ['HIBERNATE_SWEEP_ACTOR', 'server/src/coord/hibernate.ts'], ['STOP_DONE_ACTOR', 'server/src/stopDone.ts'],
+    ['DEPS_SHED_ACTOR', 'server/src/depsShed.ts'],
     ['MAIL_WAKE_FLOOR_MS', 'server/src/watch.ts'],
   ])('%s is declared once, in %s', (c, home) => {
     expect(ALL.filter((f) => decl(c).test(stallCode(f))).map(rel), c).toEqual([home]);
@@ -981,7 +991,7 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
       .toEqual(['server/src/watch.ts']);
   });
   it('the lanes\' actor words are code-line literals in their definers alone', () => {
-    for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts']] as const) {
+    for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts'], ['sweep:deps-shed', 'server/src/depsShed.ts']] as const) {
       expect(ALL.filter((f) => stallCode(f).includes(`'${word}'`)).map(rel), word).toEqual([home]);
     }
   });
@@ -1589,17 +1599,13 @@ describe('the question doors: one reader, one core per principal, the old doors 
       .toEqual(QUESTION_STORE_EXCLUDED.map((x) => `${x.file} | ${x.symbol} | ${x.method} | true`));
   });
 
-  /** The eight aliases, each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
+  /** The aliases (eight at W3 Q3f; W7 C7p, D-7194, retires the four operator ones one per commit), each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
    *  404), and the reader that must come before its core call when it reads an ask's answer. */
   const ALIASES: ReadonlyArray<readonly [file: string, route: string, words: readonly string[], reader: string | null]> = [
     ['server/src/coord/routes.ts', '/api/asks/:id/answer', ['bad-request'], 'readAskAnswer('],
     ['server/src/coord/routes.ts', '/api/asks/:id/release', ['bad-request'], null],
     ['server/src/coord/routes.ts', '/api/approvals/:id/rule', ['bad-request'], null],
     ['server/src/coord/routes.ts', '/api/approvals/:id/release', ['bad-request'], null],
-    ['server/src/server.ts', '/api/sessions/:id/ask', ['unknown-session', 'bad-request'], 'readAskAnswer('],
-    ['server/src/server.ts', '/api/sessions/:id/dialog', ['unknown-session', 'bad-request'], null],
-    ['server/src/server.ts', '/api/sessions/:id/dialog/text', ['unknown-session', 'bad-request'], null],
-    ['server/src/server.ts', '/api/sessions/:id/dialog/multi', ['unknown-session', 'bad-request'], null],
   ];
 
   it.each(ALIASES.map((a) => [`POST ${a[1]}`, a] as const))('%s is an alias: its front ladder, then one call into a core', async (_n, [file, route, words, reader]) => {

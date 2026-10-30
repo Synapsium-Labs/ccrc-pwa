@@ -10,6 +10,8 @@ import {
 import { baseCommands, fleetOrder, GO_TO, SESSION_COMMANDS } from '../src/command/commands';
 import { matchRoute, ROUTES } from '../src/lib/routes';
 import { fleetSession } from './fleetFixture';
+import { fleetTree } from '../src/fleet/fleetTree';
+import type { FleetSession, RunSummary } from '../../shared/api';
 import { parseTs } from './literalWalker';
 
 const cmd = (id: string, title: string): Command => ({ id, title, group: 'Test', run: () => {} });
@@ -61,6 +63,29 @@ describe('the base commands', () => {
     expect(GO_TO.map((g) => g.id)).toContain('go-docs');
     const ids = new Set(baseCommands().map((c) => c.id));
     for (const go of GO_TO) expect(ids.has(go.id), go.id).toBe(true);
+  });
+
+  // C7d (D-7182): `fleetOrder` calls the fleet tree, so the palette's order is the cards' order, a worker under the
+  // coordinator whose run the wire binds to it. The behaviour row, OA-C15 (a) (D-7265): a worker the wire does not
+  // bind to the open run that names it (#746's recycled id, or an older server's frame) is not listed under that run's
+  // claimant (before C7d the palette re-composed the order itself and bracketed it by the run's ids).
+  it('lists the fleet in the fleet tree\'s order: a bound worker under its coordinator, an unbound one in its own place', () => {
+    const coord = fleetSession({ id: 'coord', project: 'project-a', role: 'coordinator', bucket: 'idle', statusUpdatedAt: 1 });
+    const other = fleetSession({ id: 'other', project: 'project-a', bucket: 'idle', statusUpdatedAt: 3 });
+    const runOf = (id: number, sessionId: string): RunSummary => ({ id, program: 'prog-a', programTitle: 'Programme A', wave: 1, waveOf: 2,
+      project: 'project-a', homeProject: null, sessionId, workspace: sessionId, branch: null, state: 'working', kind: 'work', reviews: null,
+      claimedBy: 'coord', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null,
+      handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+      health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
+      childReclaim: null, reviewCap: null });
+    const r = runOf(7, 'worker');
+    const bound = { id: 7, state: 'working' as const, claimedBy: 'coord' };
+    const worker = (over: Partial<FleetSession>): FleetSession => fleetSession({ id: 'worker', project: 'project-a', role: 'child', bucket: 'idle', statusUpdatedAt: 2, ...over });
+    const order = (w: FleetSession): string[] => fleetOrder([coord, w, other], [r]).map((s) => s.id);
+    const tree = (w: FleetSession): string[] => fleetTree([coord, w, other], [], [r]).flatMap((g) => g.rows.flatMap((row) => (row.kind === 'session' ? [row.session.id] : [])));
+    expect(order(worker({ run: bound, openRun: bound }))).toEqual(['other', 'coord', 'worker']);
+    expect(order(worker({ run: null, openRun: null }))).toEqual(['other', 'worker', 'coord']);
+    for (const w of [worker({ run: bound, openRun: bound }), worker({ run: null, openRun: null }), worker({})]) expect(order(w)).toEqual(tree(w));
   });
 
   it('orders the fleet as the fleet screen does: by card, then by the server bucket', () => {

@@ -239,7 +239,8 @@ describe('POST /api/approvals/:id/rule — the claimant rules, and the server si
   it('a ruling after the operator answered the dialog is already-ruled', async () => {
     f = await standardFixture();
     const { id } = await ask(f);
-    await f.app.inject({ method: 'POST', url: `/api/sessions/${CHILD}/dialog`, payload: { dialogId: 'd', optionIndex: 0 } });
+    // W7 C7p (D-7194): the operator's dialog answer through the family's door (was `POST /api/sessions/:id/dialog`).
+    await f.app.inject({ method: 'POST', url: `/api/questions/session-${CHILD}/answer`, payload: { kind: 'dialog', dialogId: 'd', optionIndex: 0 } });
     expect(rowOf(f, id).state).toBe('operator');
     expect((await f.rule(id, PARENT, 'allow')).json()).toMatchObject({ error: 'already-ruled' });
   });

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defaultCachePath, loadSnapshot, recordCcdVerbs, saveSnapshot } from '../src/fleetstate.js';
-import { reviveFleetSession, substrateFault, boardHome, repoLabel, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, substrateFault, boardHome, repoLabel, type FleetSession, type SessionLanding } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const tmpDir = (): string => mkTmp('ccrc-cache-');
@@ -598,6 +598,63 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     };
     await saveSnapshot([populated], cachePath);
     expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+  });
+
+  // Landing order wave 4b (D-7481): `landing` is optional on the wire, and ABSENCE means unknown, so a revived row
+  // either carries the key whole or has no key at all: never `landing: null`, and never a rejected session.
+  describe('landing (wave 4b)', () => {
+    const landing: SessionLanding = {
+      at: '2026-10-27T09:00:00Z', pr: 12, head: 'a'.repeat(40), baseRef: 'main',
+      base: { state: 'conflict', paths: ['README.md'], pathsCut: false },
+      paired: true, conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: true }], unmeasuredWith: [15],
+      cut: { heads: false, pairs: true, unbound: false },
+    };
+
+    it('round-trips a populated landing', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      const populated: FleetSession = { ...session('claude-quiet-basin'), landing };
+      await saveSnapshot([populated], cachePath);
+      expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+    });
+
+    it('a cache without it revives with NO key, not null (a cache from an older build)', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap, 'an older cache must still revive').not.toBeNull();
+      expect(Object.keys(snap?.sessions[0] ?? {})).not.toContain('landing');
+    });
+
+    it('a malformed landing revives with no key, and the session is kept', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      for (const bad of [
+        'nowhere', null, 7, [], {},
+        { ...landing, at: 7 },
+        { ...landing, at: undefined },
+        { ...landing, at: 'yesterday' },
+        { ...landing, at: '2026-10-27 09:00:00' },
+        { ...landing, at: '2026-10-27T09:00:00.000Z' },
+        { ...landing, pr: 0 },
+        { ...landing, base: { state: 'green' } },
+        { ...landing, base: { state: 'conflict', paths: [1] } },
+        { ...landing, paired: 'yes' },
+        { ...landing, conflicts: [{ pr: 14, paths: ['x'] }] },
+        { ...landing, unmeasuredWith: ['15'] },
+        { ...landing, cut: { heads: false, pairs: true } },
+      ]) {
+        writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), landing: bad }]);
+        const snap = await loadSnapshot(cachePath);
+        const label = JSON.stringify(bad);
+        expect(snap?.sessions, label).toHaveLength(1);
+        expect(Object.keys(snap?.sessions[0] ?? {}), label).not.toContain('landing');
+      }
+    });
+
+    it('a newer cache with a field this build does not know reads the known ones and drops the rest', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), landing: { ...landing, tomorrow: 'x', cut: { ...landing.cut, later: true } } }]);
+      expect((await loadSnapshot(cachePath))?.sessions[0]?.landing).toEqual(landing);
+    });
   });
 
   it('rejects a malformed stranded rather than laundering it into null', async () => {

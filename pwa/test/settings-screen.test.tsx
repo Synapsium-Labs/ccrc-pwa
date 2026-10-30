@@ -2387,12 +2387,13 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
   });
 
-  it('LOADING state: the Automation page is Stall watch, Temp root collector, then Cleanup pause, each a card under the page heading', async () => {
+  it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, then Roll idle sessions (D-7453), each a card under the page heading', async () => {
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'dispatchAbandon').mockReturnValue(new Promise(() => {}));
     await mount(swView());
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Cleanup pause']);
+      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions']);
   });
 
   it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {
@@ -2757,11 +2758,12 @@ describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
   it('P6: the section and its hook have no device branch and no device word', () => {
     // settingsText.ts holds the text the Settings screen and its sections share, so it is scanned with them. The
     // Temp root collector's section, hook, words and the shared not-available helper are Settings files too
-    // (path-identity spec 2026-10-12 §5.7: no string names a device).
+    // (path-identity spec 2026-10-12 §5.7: no string names a device). So is the Roll idle sessions card (D-7453).
     const srcOf = (...p: string[]): string => readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8');
     for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc], ['settingsText.ts', textSrc],
       ['CollectLaneSection.tsx', srcOf('fleet', 'CollectLaneSection.tsx')], ['useCollectLaneView.ts', srcOf('fleet', 'useCollectLaneView.ts')],
-      ['collectLaneWords.ts', srcOf('fleet', 'collectLaneWords.ts')], ['notAvailable.ts', srcOf('lib', 'notAvailable.ts')]]) {
+      ['collectLaneWords.ts', srcOf('fleet', 'collectLaneWords.ts')], ['notAvailable.ts', srcOf('lib', 'notAvailable.ts')],
+      ['RollIdleSection.tsx', srcOf('fleet', 'RollIdleSection.tsx')]]) {
       expect(src, name).not.toMatch(DEVICE_BRANCH);
       expect(src, name).not.toMatch(DEVICE_WORD);
     }

@@ -31,6 +31,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
+import { withRunBinding } from '../test/runBindingFixture';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const SKINS = [REFINED, INSTRUMENT] as const;
@@ -489,7 +490,8 @@ const FIT_FIXTURE: AppFixture = {
     '/api/runs': FIT_RUNS,
     '/api/claims': [],
   },
-  fleetFrames: [{ type: 'fleet', sessions: FIT_SESSIONS }, { type: 'runs', runs: FIT_RUNS }],
+  // The fleet frame of a current server: each worker carries the run binding over FIT_RUNS (D-7182, D-7461, C7d).
+  fleetFrames: [{ type: 'fleet', sessions: withRunBinding(FIT_SESSIONS as never[], FIT_RUNS as never[]) }, { type: 'runs', runs: FIT_RUNS }],
 };
 
 /** The three ways a row list is drawn: Refined's project cards, and Instrument's status mode (its default: the mode

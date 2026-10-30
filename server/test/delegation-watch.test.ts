@@ -37,9 +37,10 @@ import {
   mergeDelegationObservationInterval,
 } from '../src/coord/delegation-checkpoint.js';
 import {
-  DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, DelegationJournalWriter, buildDelegationJournalRecord, encodeDelegationJournalRecord, nodeDelegationFilePort,
+  DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, DelegationJournalWriter, buildDelegationJournalRecord, encodeDelegationJournalRecord,
   type DelegationFilePort,
 } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_EVENTS_CAP,
   DELEGATION_HOUR_CLOSE_MARGIN_MS,

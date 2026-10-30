@@ -28,3 +28,18 @@ export function wakeAdmit(recent: readonly number[], now: number, kind: WakeKind
   if (kind === 'auto' && live.length >= WAKE_BURST) return { admit: false, recent: live };
   return { admit: true, recent: [...live, now] };
 }
+
+/** An automatic wake admitted before its act (the automatic roll's, D-7542): `refund` gives the slot back when the act
+ *  woke nothing (ccd refused it, or its wake failed and the row went back to sleep), so a roll that did not wake
+ *  anything neither eats `WAKE_BURST` nor holds the mail lane's floor on that session. A second call does nothing. */
+export interface WakeAdmission { readonly refund: () => void }
+
+/** The window's list with ONE admission at `at` taken back (D-7542). An `at` no longer in it (pruned, or refunded
+ *  already) changes nothing. The list handed in is never mutated. */
+export function wakeRefund(recent: readonly number[], at: number): number[] {
+  const out = [...recent];
+  const i = out.lastIndexOf(at);
+  if (i >= 0) out.splice(i, 1);
+  return out;
+}
+

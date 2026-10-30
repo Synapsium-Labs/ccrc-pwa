@@ -189,8 +189,10 @@ _hook_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
 #      census branch, which the gate has nothing to say about
 #   2  no tree at all: no cwd anywhere, or a cwd that is not a directory
 # 1 and 2 collapsed would hand the card a `$GM_CWD` it must not speak about.
-_hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRESH GM_BEHIND
+_hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRESH GM_BEHIND, GM_LINKED's set, GM_MAX_DENIALS
   GM_CWD=""; GM_BUILT=""; GM_NODES=""; GM_ENGINE=""; GM_PIN=""; GM_FRESH=""; GM_BEHIND=""
+  GM_LINKED=""; GM_FILES=""; GM_REF=""; GM_AGE=""; GM_STORE=""; GM_DIFF=""; GM_BRANCH=""; GM_MAIN_MOVED=""; GM_DIFF_LIST=""
+  GM_MAX_DENIALS="$GRAPH_GATE_MAX_DENIALS"
   local tip="" lr="" ahead="" behind="" bcommit="" cwd=""
   cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
   # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
@@ -199,6 +201,15 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
   [ -n "$cwd" ] || return 2
   [ -d "$cwd" ] || return 2
   GM_CWD="$cwd"
+  # A LINKED TREE (graph revision 2 spec §6.3, D-7351): graphify-out is a link
+  # to the repository's published build, whose meta.json names the commit, the
+  # engine, the counts and the store. A link that dangles, or a meta.json that
+  # is not schema 1, falls to the old arm, which finds no graph.json through a
+  # dangling link and so prints the census row. A real directory is measured
+  # the old way until its migration (GR1's pins).
+  if [ -L "$cwd/graphify-out" ] && _hook_graph_meta "$cwd"; then
+    GM_LINKED=1
+  else
   [ -f "$cwd/graphify-out/graph.json" ] || return 1
 
   GM_BUILT=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
@@ -221,6 +232,7 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
   [[ "$GM_NODES" =~ ^[0-9]+$ ]] || GM_NODES=""
 
   GM_ENGINE=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || GM_ENGINE=""
+  fi
   GM_PIN=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || GM_PIN=""
 
   # STALENESS IS MEASURED OR IT IS NOT CLAIMED. A tree with no git, or a
@@ -296,6 +308,84 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
       fi
     fi
   fi
+  [ -z "$GM_LINKED" ] || _hook_graph_diff "$cwd"
+  return 0
+}
+
+# ── THE LINKED TREE'S READS (spec §2.3, §5.3, §6.2; D-7351) ─────────────
+# meta.json is about 1 KB and is read whole, `head -c` bounded, in ONE jq call;
+# every field is shape-checked before it is spent, and one that fails its shape
+# is dropped (its clause omitted), except the commit, without which nothing here
+# is datable and the tree is measured the old way. The age is computed in the
+# same call (`fromdateiso8601`), so no `date -d` dialect is involved.
+_hook_graph_meta() {   # <tree> -> 0 and GM_BUILT GM_ENGINE GM_NODES GM_FILES GM_REF GM_AGE GM_STORE, or 1
+  local m
+  m=$(head -c 8192 "$1/graphify-out/meta.json" 2>/dev/null | jq -r 'select(.schema == 1)
+    | [.commit, .engine, .nodes, .files, .ref, (try ((now - (.built_at | fromdateiso8601)) | floor) catch ""), .store]
+    | map(if . == null then "" else tostring | gsub("[\u0000-\u001f]"; "") end) | join("\u001f")' 2>/dev/null) || return 1
+  IFS=$'\x1f' read -r GM_BUILT GM_ENGINE GM_NODES GM_FILES GM_REF GM_AGE GM_STORE <<<"$m"
+  [[ "$GM_BUILT" =~ ^[0-9a-f]{40}$ ]] || { GM_BUILT=""; return 1; }
+  GM_ENGINE="${GM_ENGINE:0:64}"; GM_ENGINE="${GM_ENGINE//[[:space:]]/}"
+  [[ "$GM_NODES" =~ ^(0|[1-9][0-9]{0,11})$ ]] || GM_NODES=""
+  [[ "$GM_FILES" =~ ^(0|[1-9][0-9]{0,11})$ ]] || GM_FILES=""
+  [[ "$GM_REF" =~ ^refs/[A-Za-z0-9._/-]{1,200}$ ]] || GM_REF=""
+  [[ "$GM_AGE" =~ ^-?[0-9]{1,12}$ ]] || GM_AGE=""; [[ "$GM_AGE" != -* ]] || GM_AGE=0
+  [[ "$GM_STORE" == /* ]] || GM_STORE=""
+  _hook_load_graph_settings "$GM_STORE"
+  GM_MAX_DENIALS="$GS_MAX_DENIALS"
+  return 0
+}
+
+# The store's settings.json (spec §5.3), found through meta.json's `store`: the
+# hook never reads ccrc.env (ccd keeps it out of sessions) and never re-derives
+# the store (ccd/graph-resolve is its one definition). Absent, unparsable, of
+# another schema, or a key not its shape (ccd/graph-resolve's `pct`/`count0`):
+# that key keeps its default, and the defaults are ccd/ccrc's `_graph_knobs`'
+# (a test holds the line below equal to them).
+_hook_load_graph_settings() {   # <store> -> GS_MAX_DIFF_PCT GS_MAX_DENIALS GS_DIFF_LIST_MAX
+  local s="" a="" b="" c=""
+  GS_MAX_DIFF_PCT=25; GS_MAX_DENIALS=3; GS_DIFF_LIST_MAX=20
+  [ -n "$1" ] || return 0
+  s=$(head -c 4096 "$1/settings.json" 2>/dev/null | jq -r 'select(.schema == 1)
+    | [.gate_max_diff_pct, .gate_max_denials, .card_diff_list_max] | map(tostring) | join(" ")' 2>/dev/null) || s=""
+  read -r a b c <<<"$s"
+  if [[ "$a" =~ ^(0|[1-9][0-9]?|100)$ ]]; then GS_MAX_DIFF_PCT="$a"; fi
+  if [[ "$b" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then GS_MAX_DENIALS="$b"; fi
+  if [[ "$c" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then GS_DIFF_LIST_MAX="$c"; fi
+  return 0
+}
+
+# Spec §6.2's two distances. GM_DIFF counts the files differing between the
+# graph's commit and HEAD; GM_BRANCH, the share of those that are the branch's
+# own (changed since merge-base(graph, HEAD)); GM_DIFF_LIST names up to
+# CARD_DIFF_LIST_MAX of them, the branch's own FIRST, so main-line drift never
+# crowds them out, and stops at the first name that would take the list past
+# CARD_DIFF_LIST_MAX_CHARS (argued beside CARD_MAX_CHARS): a count alone let
+# real paths grow this card until the shared clip cut the hold after it. It
+# stops rather than skipping to a shorter name, so the order still holds and
+# "and N more" counts every name not said. GM_MAIN_MOVED counts what main gained since the refresh. A
+# git that will not answer leaves its value empty and its clause unsaid.
+_hook_graph_diff() {   # <tree>
+  local all="" mb="" br="" f="" n=0
+  local -A own=()
+  local -a first=() rest=()
+  all=$(git -C "$1" diff --no-renames --name-only "$GM_BUILT" HEAD 2>/dev/null) || return 0
+  mb=$(git -C "$1" merge-base "$GM_BUILT" HEAD 2>/dev/null) || mb=""
+  [ -z "$mb" ] || br=$(git -C "$1" diff --no-renames --name-only "$mb" HEAD 2>/dev/null) || br=""
+  while IFS= read -r f; do [ -z "$f" ] || own["$f"]=1; done <<<"$br"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -n "${own["$f"]:-}" ]; then first+=("$f"); else rest+=("$f"); fi
+  done <<<"$all"
+  GM_BRANCH=${#first[@]}; GM_DIFF=$(( GM_BRANCH + ${#rest[@]} ))
+  for f in "${first[@]}" "${rest[@]}"; do
+    [ "$n" -lt "$GS_DIFF_LIST_MAX" ] || break
+    (( ${#GM_DIFF_LIST} + 2 + ${#f} <= CARD_DIFF_LIST_MAX_CHARS )) || break
+    GM_DIFF_LIST+="${GM_DIFF_LIST:+, }$f"; n=$((n + 1))
+  done
+  [ "$GM_DIFF" -le "$n" ] || GM_DIFF_LIST+="${GM_DIFF_LIST:+ and }$(( GM_DIFF - n )) more"
+  [ -z "$GM_REF" ] || GM_MAIN_MOVED=$(git -C "$1" rev-list --count "$GM_BUILT..$GM_REF" 2>/dev/null) || GM_MAIN_MOVED=""
+  [[ "$GM_MAIN_MOVED" =~ ^[0-9]+$ ]] || GM_MAIN_MOVED=""
   return 0
 }
 
@@ -306,12 +396,22 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
 # GM_BEHIND is set only where a stamp the tail read accepted could be dated
 # against HEAD, so its emptiness carries condition 2's failure as well as the
 # freshness states that do not gate.
+# A LINKED tree (spec §6.3, D-7351) is gated by SHARE, not by commits: armed when
+# the files differing from the graph's commit are at most GATE_MAX_DIFF_PCT of
+# the graph's files and the graph's engine is the pin; the bound comes from the
+# store's settings.json, never from the constants below, which are the real
+# directory's until its migration.
 _hook_gate_tree() {   # -> 0 iff the measured tree carries a graph fresh enough to gate on
+  if [ -n "$GM_LINKED" ]; then
+    [ -n "$GM_DIFF" ] && [ -n "$GM_FILES" ] && [ -n "$GM_PIN" ] && [ "$GM_ENGINE" = "$GM_PIN" ] \
+      && [ $(( GM_DIFF * 100 )) -le $(( GS_MAX_DIFF_PCT * GM_FILES )) ]
+    return
+  fi
   [ -n "$GM_BEHIND" ] && [ "$GM_BEHIND" -le "$GRAPH_GATE_MAX_BEHIND" ]
 }
 
 _hook_graph_card() {
-  local row="" line="" rc=0
+  local row="" line="" rc=0 gcd="" src="" age=""
   _hook_graph_measure || rc=$?
   [ "$rc" -ne 2 ] || return 0
 
@@ -322,9 +422,18 @@ _hook_graph_card() {
     # its census carries one — a session that knows the tree was REFUSED does
     # not go hunting for a graph that is never going to appear. The census is
     # `{passes:[…]}`, last 10, newest LAST.
-    row=$(jq -r --arg p "$GM_CWD" \
-      '(.passes // []) | last | (.trees // [])
-       | map(select(.path == $p and ((.reason // "") != "")))
+    # A pass holding `repos[]` (graph revision 2 spec §7, D-7351) is read by the
+    # repository: the row whose `source` is the realpath of this tree's common
+    # dir, so every worktree and the main checkout share it. A pass of the old
+    # shape, which the sweep writes until its rewrite (GR4), is still read by
+    # path, so a tree the old sweep refused keeps its reason meanwhile.
+    gcd=$(git -C "$GM_CWD" rev-parse --git-common-dir 2>/dev/null) || gcd=""
+    [ -z "$gcd" ] || src=$(cd -- "$GM_CWD" >/dev/null 2>&1 && cd -- "$gcd" >/dev/null 2>&1 && pwd -P) || src=""
+    row=$(jq -r --arg p "$GM_CWD" --arg s "$src" \
+      '(.passes // []) | last | (. // {})
+       | if has("repos") then [(.repos // [])[] | select($s != "" and .source == $s)]
+         else (.trees // []) | map(select(.path == $p)) end
+       | map(select((.reason // "") != ""))
        | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
       "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
     [ -n "$row" ] || return 0
@@ -352,14 +461,29 @@ _hook_graph_card() {
   fi
 
   line="graphify: this tree has a knowledge graph — graphify-out/"
+  [ -z "$GM_LINKED" ] || line="$line is the graph of this repository's main at ${GM_BUILT:0:8}"
   [ -z "$GM_NODES" ] || line="$line, $GM_NODES nodes"
-  [ -z "$GM_BUILT" ] || line="$line, built at ${GM_BUILT:0:8}"
-  [ -z "$GM_FRESH" ] || line="$line ($GM_FRESH)"
+  [ -n "$GM_LINKED" ] || [ -z "$GM_BUILT" ] || line="$line, built at ${GM_BUILT:0:8}"
+  [ -n "$GM_LINKED" ] || [ -z "$GM_FRESH" ] || line="$line ($GM_FRESH)"
   # The engine/pin pair earns its place: sessions were measured running an
   # unversioned July copy of graphify against 0.9.9 graphs, and that drift is
   # invisible until a query fails strangely.
   [ -z "$GM_ENGINE" ] || line="$line, engine $GM_ENGINE"
   [ -z "$GM_PIN" ]    || line="$line (pin $GM_PIN)"
+  # Spec §6.3's sentence (R1, D-7351): the two distances of §6.2, the branch's
+  # own files named first. Each clause is said only where it was measured.
+  if [ -n "$GM_LINKED" ]; then
+    age="$GM_AGE"
+    if [ -z "$age" ]; then :; elif [ "$age" -lt 120 ]; then age="${age}s"
+    elif [ "$age" -lt 7200 ]; then age="$((age / 60))m"
+    elif [ "$age" -lt 172800 ]; then age="$((age / 3600))h"; else age="$((age / 86400))d"; fi
+    [ -z "$age" ] || line="$line, refreshed $age ago"
+    [ -z "$GM_MAIN_MOVED" ] || line="$line; main has moved $GM_MAIN_MOVED commit$([ "$GM_MAIN_MOVED" = 1 ] || echo s) since"
+    if [ "$GM_DIFF" = 0 ]; then line="$line. Your tree does not differ from it"
+    elif [ -n "$GM_DIFF" ]; then
+      line="$line. Your tree differs from it in $GM_DIFF file$([ "$GM_DIFF" = 1 ] || echo s), $GM_BRANCH of them your branch's own: $GM_DIFF_LIST — read those directly"
+    fi
+  fi
   # Single-quoted: the sentence carries backticks and double quotes verbatim.
   line="$line"'. Answer codebase questions with `graphify query "<question>"` first; `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for one concept; read `graphify-out/GRAPH_REPORT.md` only for broad architecture. Do not run `graphify update` or any build here — the ccrc sweep owns the write side.'
   # R5 (D-1613): the card says what the gate will DO in this tree, and it says
@@ -412,9 +536,13 @@ _hook_graph_card() {
 # exactly the "silently truncated into a passing value" failure fix round 1
 # (finding 2) named. Reading the LARGER of this file's two length constants
 # means a value genuinely within `CCRC_PROJ_MAX` is always captured whole (a
-# short read), while anything longer is truncated at a length that STILL
-# exceeds `CCRC_PROJ_MAX` (128 > 64) — so the length gate downstream still
-# correctly refuses it instead of silently accepting the truncated prefix.
+# short read). A length gate on `CT_V` alone does NOT refuse a longer value:
+# the trim runs AFTER the cut, so a short value padded with blanks past
+# `CCRC_ID_MAX` (`proj-a`, 122 spaces, `junk`) is cut inside the blanks and
+# trimmed back to `proj-a`, under any length gate. A caller that must refuse
+# an over-long value also checks `CT_RAWN < CCRC_ID_MAX` (a value that filled
+# the read is refused), as the merge arm's allowance and the generation reader
+# do.
 #
 # `read -N` returns 1 on a SHORT READ (fewer than the requested count because
 # EOF arrived first) — the NORMAL case for every field this function reads,
@@ -2437,6 +2565,25 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # fields that ARE gated. Raising the bound is the cheap answer;
 # drop-whole-subject logic on the hot path is not, and was refused.
 CARD_MAX_CHARS=2400
+# THE LINKED TREE'S DIFF LIST HAS ITS OWN CHARACTER BOUND, DERIVED FROM THE ONE
+# ABOVE (GR5 fix round, D-7351). The linked graphify sentence (spec §6.3) quotes
+# repository paths, whose number `card_diff_list_max` bounds but whose length
+# nothing did: 20 paths of about 65 characters made the graph card about 2150
+# characters, and since graphify is joined FIRST the clip above cut held case
+# A mid-sentence, losing its `mail list` and `runs list` instructions. So the
+# list gets what the structural worst case leaves, and never more:
+#   903  the linked graphify sentence with NO name in the list: a 12-digit node
+#        count (the meta read's own gate), engine and pin at 64, the age's
+#        12-digit gate as 8 digits of days, "main has moved", the differing
+#        and the branch counts and "and N more" each MODELLED at 7 digits (as
+#        `$id` and `$CT_N` are above), the advice and the armed-gate sentence
+#        (longer than the kill-switch one)
+#   1107 held case A 860 + co-tenant 245 + the two joins, as argued above (the
+#        role subject is shorter than case A and never beside it)
+# 2400 - 903 - 1107 = 390 characters of names. The list stops before a name
+# that would pass it, so every subject after graphify is said whole; the
+# real-directory arm has no list and is unchanged at 719.
+CARD_DIFF_LIST_MAX_CHARS=$(( CARD_MAX_CHARS - 903 - 1107 ))
 # ── THE COMPACTION CARD (spec 2026-09-09-graphify-compaction-card-design.md) ──
 # Three registry files per session, every suffix DOT-FREE so `_reg_purge`'s
 # loop (`ccd/ccd`: every dot-free `$REG/<id>.<suffix>` except `archived` and
@@ -3128,7 +3275,8 @@ case "$event" in
     # ONCE PER CONTEXT, BY SOURCE (D-5359): a `resume` or `fork` carries the transcript that already received it, so
     # it says nothing there (no "shown" marker exists or is added); startup, clear, compact and a
     # source-less start are fresh or rebuilt contexts. Mutually exclusive with every held sentence, so
-    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged.
+    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
+    # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
     # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
     # (D-3615), and every line added up there moves the frozen compaction-card corpus's anchors.
     _hook_role_card() {
@@ -3365,7 +3513,9 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # finishes after it is gone is taken by (a): whichever side of the generation's removal the write falls on, one of the two
 # sees it. NOT closed: a hook killed between its write and its re-check, after a purge that had already finished.
 # A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
-# written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation.
+# written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation. Both of its
+# guards refuse only a POSITIVE non-regular type (D-7503), as the entry guard does: `joinedprev` moves absent to regular (a
+# rotation's `mv -f`) and back (a purge's `rm -f`), and "absent or regular" probed as two `stat`s skipped a rotation on a move.
 # BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
 # confirms the path still names that inode (a second descriptor of it, `-ef` the locked one, both through `/dev/fd`) and still
 # holds more than the cap, then `mv -f`s it whole to
@@ -3392,7 +3542,7 @@ _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller
   { IFS= read -r -N "$JOIN_READ_MAX" cur < "$jf"; } 2>/dev/null
   nl="${cur//[!$'\n']/}"
   if (( ${#nl} > JOIN_ROTATE_AT )) && command -v flock >/dev/null 2>&1 \
-     && [[ ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
+     && [[ ! ( -L "$jp" || -d "$jp" || -p "$jp" || -S "$jp" || -b "$jp" || -c "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
     # TWO DESCRIPTORS ARE COMPARED, not the path and one of them: `-ef` follows a symlink to the same inode, so the link test is its
     # own conjunct; and on macOS `stat` of `/dev/fd/N` reports the real inode but the fdesc mount's device, so `"$jf" -ef /dev/fd/N`
     # is never true there and the rotation never ran (measured, D-5435). Both sides through `/dev/fd` carry the same device on either
@@ -3412,7 +3562,7 @@ _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller
       # atomically (it refuses to move INTO a directory), but it is NOT used: this hook runs on macOS boxes too (the epoch
       # fallback at the top, the probe-macos leg), BSD `mv` has no `-T`, and an `mv` that errors there would leave a rotation that never
       # happens where Homebrew supplies `flock`. The re-test narrows the window instead, and the stock-macOS box has no `flock` at all.
-      (( ${#nl} > JOIN_ROTATE_AT )) && [[ ! -L "$jf" && ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && mv -f "$jf" "$jp" 2>/dev/null
+      (( ${#nl} > JOIN_ROTATE_AT )) && [[ ! -L "$jf" && ! ( -L "$jp" || -d "$jp" || -p "$jp" || -S "$jp" || -b "$jp" || -c "$jp" ) ]] && mv -f "$jf" "$jp" 2>/dev/null
     fi
     { exec {fd}<&-; } 2>/dev/null
   fi
@@ -3478,9 +3628,24 @@ fi
 # D-4176. The braces put the redirection's own failure under 2>/dev/null (the
 # note at the hookstate write below), and `|| true` keeps exit 0 on every path.
 # A REGULAR FILE OR NOTHING D-4418: a symlink (a dangling one too), FIFO or other
-# node at the path, or a symlinked spool/, writes no line (builtin tests). Bash has no
-# O_NOFOLLOW or O_NONBLOCK redirection, so a node swapped in after the test is opened:
-# a link is followed; a FIFO blocks until Claude Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+# node at the path, or a symlinked spool/, writes no line (builtin tests).
+# OPENED ONCE, WRITTEN THROUGH THAT DESCRIPTOR (D-7503). The drain renames the file
+# away every tick and the next hook creates it, so the path moves both ways, regular
+# to absent and absent to regular. "Absent or regular" is two `stat`s, and a move
+# between them refused a plain append in EITHER probe order (a lost line, measured).
+# So the guard refuses only a POSITIVE non-regular type, which no such move makes
+# true; the file is then opened for append on fd 9, and the line goes through fd 9
+# only if what it opened is not a positive non-regular type either and the path is
+# still not a link. The descriptor's check is positive too (D-7503): on macOS a
+# `stat` of `/dev/fd/9` fails for a moment while a rename runs, so `-f /dev/fd/9`
+# read false for an open regular file and lost the line (measured under load). A FIFO
+# swapped in has blocked at the open, and a directory cannot be opened for append,
+# so nothing that matters reaches the write unchecked. A drain
+# after the open gets the line in the renamed file. Bash has no O_NOFOLLOW or
+# O_NONBLOCK redirection, so a node swapped in between the guard and the open is
+# opened: a link is followed (an absent target is created empty, never written; one
+# swapped out again before the check is not seen); a FIFO blocks until Claude Code
+# kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
 _hs="" _hs_g="" _hs_s="" _hs_f="" _hs_t="" _hs_p="$HOME/.ccrc/history/spool/$id.jsonl"
 if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
   case "$event" in
@@ -3514,7 +3679,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi
     _hs+='}'
-    [[ ! -L "$_hs_p" && ( -f "$_hs_p" || ! -e "$_hs_p" ) ]] && { printf '\n%s\n' "$_hs" >> "$_hs_p"; } 2>/dev/null || true
+    [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ ! ( -p /dev/fd/9 || -S /dev/fd/9 || -c /dev/fd/9 || -b /dev/fd/9 || -d /dev/fd/9 ) && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$_hs" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
   fi
 fi
 # <<< history-spool
@@ -3641,7 +3806,7 @@ _hook_spool_append() {   # $dsp_line, with $dsp_bucket $dsp_cut $dsp_cwd from th
   [[ "$g2" == "$dsp_gen" ]] || return 1
   [[ -d "$dsp_dir" && ! -L "$dsp_dir" ]] || return 1
   f="$dsp_dir/$dsp_bucket.spool"
-  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 1
+  [[ ! -L "$f" && ( ! -e "$f" || -f "$f" ) ]] || return 1   # ABSENCE FIRST (D-7448): a racing hook may create the bucket between the two probes, and absent-to-regular is the only move a current bucket makes, so this order never refuses a bucket being born, where `-f || ! -e` did (a lost line, measured)
   [[ -e "$f" ]] || fresh=1
   { printf '%s\n' "$dsp_line" >> "$f"; } 2>/dev/null || return 1
   [[ -z "$fresh" ]] || _hook_spool_prune "$dsp_dir" "$dsp_cut" || true
@@ -3783,8 +3948,9 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # The cheap conjuncts run first: the counters are already in hand, the
 # kill-switch is one stat, the tool name was read by the arm above, and only a
 # GATED call in an ARMED session pays for the jq that reads the command or the
-# git that dates the graph. A session that has queried once, or that has spent
-# its three denials, never pays anything again.
+# git that dates the graph. A session that has queried once never pays anything
+# again; one that has spent its denials pays the measurement on a gated call,
+# since a linked tree's bound is the store's setting, read by that measurement.
 # R6 (D-1745) shares this arm rather than copying it: the nudge's conditions
 # ARE the gate's 1-4 (kill-switch, a datable graph, freshness inside the bound,
 # `graphQueries` 0), and only the fifth — the denial bound — is the gate's
@@ -3797,8 +3963,7 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 pre_json=""
 if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
    && [ ! -e "$GRAPH_GATE_OFF" ]; then
-  gated=0 nudged=0 bounded=0 fpath=""
-  [[ "$gd" -lt "$GRAPH_GATE_MAX_DENIALS" ]] && bounded=1
+  gated=0 nudged=0 fpath=""
   case "${tool:-}" in
     Grep|Glob) gated=1 ;;
     Read)
@@ -3845,10 +4010,12 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
   # well, which made THIS conjunct redundant and left the shell copy pinned by
   # nothing (measured: dropping it stayed green). One site now, so the bound
   # test — three denials on `Grep`, then a `Grep` AND a shell search silent —
-  # reds the moment the conjunct goes. The price is one jq per shell search
-  # for a session that has spent its three denials and still never queried,
-  # which is the rare shape by design.
-  if [[ "$gated" -eq 1 && "$bounded" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree; then
+  # reds the moment the conjunct goes. It is the LAST conjunct, after the
+  # measurement, because the bound is the measured tree's (GM_MAX_DENIALS: the
+  # constant for a real directory, settings.json's for a linked tree, D-7351);
+  # the price is one measurement per gated call for a session that has spent
+  # its denials and still never queried, which is the rare shape by design.
+  if [[ "$gated" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree && [[ "$gd" -lt "$GM_MAX_DENIALS" ]]; then
     # The card's own vocabulary — node count and freshness word, measured by the
     # card's own function — plus the act, plus the bound. A session that cannot
     # run Bash at all still gets through on its fourth search, and the board
@@ -3857,7 +4024,7 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
     [ -z "$GM_NODES" ] || greason+="$GM_NODES nodes, "
     greason+="$GM_FRESH) and this session has not queried it yet."
     greason+=' Search tools open after one graph query — run: `graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a relationship, `graphify explain "<concept>"` for one concept).'
-    greason+=" Denial $((gd + 1)) of $GRAPH_GATE_MAX_DENIALS; after $GRAPH_GATE_MAX_DENIALS the gate opens anyway."
+    greason+=" Denial $((gd + 1)) of $GM_MAX_DENIALS; after $GM_MAX_DENIALS the gate opens anyway."
     # COUNTED ONLY IF IT CAN BE SAID, SAID ONLY ONCE IT IS COUNTED (D-1689).
     # A builder that could not make its JSON has denied nothing, and charging
     # the session for it would spend the bound on denials it never saw. And the
@@ -4069,7 +4236,8 @@ fi
 # leading redirection (`2>&1 gh …`, `>/dev/null gh …`, `</dev/null gh …`); a
 # `case` arm (`*) gh pr merge`); a function body (`f() { gh pr merge 42; }`);
 # a variable command word or argument (`$GH pr merge`, `gh pr $m`); a gh alias
-# (`gh alias set m 'pr merge'`); a `#` comment straight after a `)`; a ` #` or
+# (`gh alias set m 'pr merge'`); for the `--admin` deny, a flag word the raw
+# text does not spell whole (`--adm''in`, `--$f`); a `#` comment straight after a `)`; a ` #` or
 # `(#` inside an unquoted top-level `${…}`, which the strip reads as a comment
 # (`echo ${x:- #}; gh pr merge 42`); a form feed or vertical tab before a `#`
 # (the strip's blank class is Oniguruma `\s`; bash splits words on space, tab
@@ -4092,10 +4260,61 @@ fi
 # a heredoc inside backticks, likewise. A terminated heredoc BODY line that
 # begins `gh pr merge` is text and passes, unless an unquoted body runs it
 # inside `$(…)`.
+# WHAT PASSES UNPARSED, the `gh api` half (each pinned by a LISTED-pass case in
+# `session-hook-merge-deny.test.ts`, which looks for the phrase below in this list):
+#   - a query or body read from a file (`-F query=@mutation.graphql`,
+#     `--input body.json`, `cat f | gh api graphql --input -`): the file's text is
+#     never in the command;
+#   - a word or path assembled at run time (`q=merge; r=PullRequest`, a path in a
+#     variable built from pieces, a `$(…)` operand that holds a `/` or a separator
+#     such as `pulls/$(cat /tmp/n)/merge`): the text never holds the word whole;
+#   - a variable or quoted command word (`$GH api …`, `"gh" api …`): the strip
+#     drops the quoted word, so no `gh … api` head is left to ask about;
+#   - a `gh alias` (`gh alias set m 'api -X PUT'`);
+#   - a quoted or backticked `api` word (`gh "api" -X PUT …`, `gh 'api' …`, legacy
+#     backticks around the whole `gh api …`): the strip drops the quoted word or does
+#     not read the backtick as a command head. `gh a""pi …` is REFUSED, because
+#     the strip joins the halves into `api`;
+#   - a `.` or `..` path segment (`pulls/42/./merge`, `pulls/42/x/../merge`): the
+#     path test reads the text as written and does not normalise;
+#   - another HTTP client given gh's credential (`curl -X PUT -H "Authorization:
+#     Bearer $(gh auth token)" https://api.github.com/repos/<o>/<r>/pulls/<n>/merge`,
+#     `GH_TOKEN=$(gh auth token) curl …`, a script that reads `GH_TOKEN`): the hook
+#     asks about `gh`, not about the credential;
+#   - a write of the base branch's rules or protection that removes the queue, so
+#     that a plain merge then skips it (`gh api -X PUT repos/<o>/<r>/rulesets/<id>
+#     -f enforcement=disabled`, `gh api -X DELETE repos/<o>/<r>/branches/<b>/protection`):
+#     the coordinator skill forbids these writes as a rule of the skill only;
+#   - the head grammar's own classes, listed above for the merge head, pass the
+#     `gh api` head as they pass the merge head: `xargs gh api …`, `bash -c "…"`,
+#     `eval`, a leading redirection, an unlisted wrapper and a path-spelled wrapper;
+#   - an encoded or non-canonical merge path: a percent-encoded character
+#     (`pulls/42/%6derge`, which holds no `merge`, so the bash prefilter never wakes
+#     the arm), a doubled slash (`pulls/42//merge`, `repos/o/r//merges`) or a case
+#     variant (`pulls/42/Merge`), which wake the arm and which the path test does not
+#     read, since it reads the text as written;
+#   - a mutation word written with JSON `\u` escapes in a `--input -` body or a
+#     `-f query=` value (`\u0065nqueuePullRequest`): the escape is the body's, not
+#     the shell's, and the hook does not decode JSON. Such a payload can also skip
+#     the bash prefilter, which reads only `merge`, `Merge` and `enqueuePullRequest`;
+#   - a word or path broken by quotes or a backslash so that none of those three
+#     strings stays whole in the payload (`pulls/42/m""erge`): the arm never runs
+#     (the quote-free reading above catches it only when the payload wakes the arm,
+#     for example through another `merge`);
+#   - under the operator's allowance only, a repository gh resolves from ambient
+#     state rather than from the command: a working directory in another checkout
+#     left by an earlier call's `cd` (the Bash tool keeps its directory between
+#     calls; a `cd` in the same command is outside the grammar and refused), the
+#     checkout's git remotes, and the session's inherited environment (D-7249);
+#   - ways to move `main` that are not merges, out of this wave's scope and named
+#     as such: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL
+#     `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git
+#     push` to a protected branch.
 # The hook is a contract the fleet honours, not an access boundary (spec §4),
 # and identity on this box is attribution. A session with neither — a
-# coordinator's own, the operator's — is never asked, so the coordinator's `gh
-# pr merge <n> --match-head-commit <sha>` enqueues. A coordinator whose
+# coordinator's own, the operator's — is never asked THIS question (wave 2's), so
+# the coordinator's `gh pr merge <n> --match-head-commit <sha>` enqueues; it is
+# asked the bypass question below, like every session. A coordinator whose
 # workspace DOES carry one is refused like a worker: a self-claimed run's hold
 # (`POST /api/runs` admits a claimant that is its own session), or a reclaim
 # heir that was the programme's own worker (hold and marker both). The hook
@@ -4116,17 +4335,107 @@ fi
 # hook cannot read is still a marker — and its contents are never read.
 # Only a dispatch mints a child; a coordinator carries one only as that
 # reclaim heir (above).
-# Denying `--admin` to EVERY session, and a `gh api` merge — the pulls merge
-# endpoint, or a GraphQL merge mutation (`mergePullRequest`,
-# `enqueuePullRequest`, `enablePullRequestAutoMerge`) — is wave 2b's, after
-# the operator's queue ruleset and proof run (spec §5.2 step 4); until then
-# each passes this deny, measured.
+#
+# THE BYPASS DENY (landing-order wave 2b, spec §5.2 step 4). Every session, held
+# or not, is asked a second question AFTER wave 2's, whose text is unchanged:
+# does the merge it runs carry `--admin`? `--admin` is read from the RAW command,
+# quotes included, once the STRIPPED text holds a real `gh … pr … merge` head,
+# in the same jq that strips (the verdict flags, below). The wide reading is on
+# purpose (D-7111): the strip deletes quoted spans, so a quoted `'--admin'` or
+# `"--admin"` vanishes from the stripped text, while an `--admin` after a `$(…)`
+# argument, after a backslash-newline, or written `--admin=true` (all three kept
+# by the strip) would defeat a per-segment flag parse. THE COST, named in the reason: a command that
+# holds a real merge head and an unrelated `--admin` mention (a merge, then
+# `git commit -m "never --admin"`, in one command) is refused too; run them as
+# separate commands. A held or child session gets WAVE 2's reason (asked
+# first); any other session gets the bypass reason, which names the queue
+# landing `gh pr merge <n> --match-head-commit <sha>`, the read of the verdict
+# `gh pr view <n> --json state,mergedAt`, R9's door (the operator's own shell or
+# GitHub's UI) and the wide reading. Text with no merge head passes (`echo
+# --admin`, a commit message that names it).
+#
+# THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
+# in every session, by the same single jq and with the same reason prefix. Once the
+# STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
+# with `api` for `pr … merge`, derived from its text, so the two never drift) the
+# RAW command is read, with every `'`, `"` and `\` removed first (fixed-string
+# split and join, so `merge""PullRequest`, `merge'PullRequest'`, `pulls/"$n"/merge`,
+# `pulls/42/'merge'` and `m\erge` are words and paths), for a mutation word (`w`:
+# the fixed-string `contains` of any of `mergePullRequest`, `enqueuePullRequest`,
+# `enablePullRequestAutoMerge` or `mergeBranch`, the set written once in the jq
+# program) or a merge path (`p`: `pulls/<seg>/merge` or `repos/<seg>/<seg>/merges`,
+# each END-BOUNDED so `pulls/42/merges/x` is not one, and possessive, so the test
+# cannot backtrack). A path counts when EITHER of two readings finds it (one
+# alternation in the same jq, every segment possessive, the same end boundary): a
+# segment up to the next blank or `/` (`[^[:space:]/]++`), which reads
+# `pulls/$((42|0))/merge` and `pulls/$((42&255))/merge`; and a segment up to the next
+# `/` or separator (`;` `&` `|` or a newline), blanks, `(` and `)` included
+# (`[^;&|\n/]++`), so a `$(…)` operand with blanks is read as part of the path:
+# `pulls/$(gh pr view --json number -q .number)/merge` and `pulls/$(echo 42)/merge`
+# are paths, while a `$(…)` that holds a `/` or a `;` `&` `|` beside a blank is not
+# (below). The second reading stops at a separator: `gh api repos/o/r/pulls/42; echo
+# a/merge` is not a path. Any METHOD is refused, a GET
+# included (D-7112): a text-read GET exemption is defeated by a later `-X PUT` or a
+# `GET` inside a quoted field, and `gh pr view <n> --json state,mergedAt` answers
+# the same question, which the reason names. The wide reading is the same on
+# purpose (D-7111) and its cost is named in the reason's own sentence: a real `gh
+# api` head beside an unrelated mutation word (`gh api repos/o/r/pulls/42; echo
+# enqueuePullRequest`) is refused too; run them as separate commands. THE
+# ALLOWANCE NEVER LIFTS THIS HALF. Text with no `gh api` head passes (a commit
+# message, a PR body, a heredoc, a mail body that names a word or a path).
+#
+# THE VERDICT FLAGS. The strip's answer carries them, computed in the same jq.
+# Under the cap it is `=<flags><US><stripped>`, `<US>` the unit separator (0x1f)
+# and `<flags>` a string over `a` (the raw text holds the substring `--admin`), `s`
+# (the whole raw command matches ALLOW_ADMIN_RE, below), `w` (the quote-free raw text
+# holds a mutation word) and `p` (the quote-free raw text holds a merge path), in that
+# order. Over the cap it is `!<bytes>:<kinds>`, `<kinds>` a comma-separated subset
+# of `merge` (wave 2's `ocwords`), `admin` (`ocwords` AND the fixed string
+# `--admin` anywhere in the raw command) and `api` (`ocapiwords`: one segment, from
+# the same fixed-string `ocsegs` split, holds the words `gh` then `api` as an
+# `ocafter` bounded word match reads them, AND the quote-free raw text holds a mutation
+# word or the fixed string `/merge`, which stands for BOTH paths over the cap: its
+# wider reach, any `gh … api` segment beside the text `/merge` anywhere, is part of
+# the named over-cap cost below). No `splits(` regex call is added. Over the cap
+# wave 2's reason fires only when `<kinds>` holds `merge`, the bypass question
+# follows (`admin` or `api`), and the allowance never applies: `s` is computed in
+# the under-cap branch only. The bash side splits the answer with parameter
+# expansion on `$'\x1f'`, no fork.
+#
+# THE OPERATOR'S ALLOWANCE (D-7249). On 2026-10-28 the operator ruled that one
+# hosted project keeps landing by admin merge. The lift is a regular file,
+# `$REG/admin-merge-allowed/<project>`, in a DOTLESS registry subdirectory (the
+# pools precedent: every registry glob is suffix-shaped, so a directory is
+# invisible to all of them). NOTHING IN THIS TREE WRITES IT: the operator
+# creates it by hand, and its content is never read. The project is the
+# session's own, read with `_ct_read "$REG/$id.project"` (rc 0), non-empty,
+# passing CCRC_PROJ_CLASS (no `/`, so it cannot walk out of the directory) and
+# at most CCRC_PROJ_MAX characters; an absent, empty, unreadable or off-class
+# `.project` reads as not allowed, and the hook NEVER falls back to the session
+# id here (the card's probe does). The file is tested `[[ -f f && ! -L f ]]`: a
+# symlink or a directory is not an allowance. No fork, no jq. WHAT IT LIFTS: the
+# admin half of the bypass question for a session of that project, and only
+# when `s` is set, that is the command is exactly one admin merge of a PR named
+# by number (`[0-9]+`, never `\d`), optionally with `--match-head-commit <40
+# hex>`, `--squash`, `--merge`, `--rebase`, `--delete-branch` or `-d`,
+# single-spaced, with nothing before or after it. WHAT IT NEVER LIFTS: wave 2's
+# worker deny (asked first); any other spelling (a second command, a URL, a
+# branch, a repository flag, a quote, a `$`); the over-cap reading; the `gh
+# api` half. A repository `gh` resolves from ambient state rather than from the
+# command (a working directory left by an earlier call's `cd`, the checkout's
+# remotes, the inherited environment) is a listed pass under the allowance:
+# the hook is a contract, not an access boundary (R9).
 #
 # ORDER IS BUDGET, this arm's rule: the tool name is already read, the
-# substring prefilter costs no fork, and only a Bash payload carrying `merge`
-# pays the one jq for its command. The hold is read through `_ct_read` and
-# judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's own reader,
-# shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
+# substring prefilter costs no fork (`merge`, `Merge` and `enqueuePullRequest`:
+# bash glob tests are case-sensitive, and the last two names hold no lowercase
+# `merge`), and only a Bash payload carrying one of them pays the one jq for its
+# command, which also computes the flags: five fixed-string tests (`--admin` and the
+# four mutation words), one anchored `test` and one linear, possessive path `test`,
+# the last two under the cap only, plus three fixed-string split-and-joins that make
+# the quote-free text (`'`, `"`, `\`); no new call. The hold is read through
+# `_ct_read` and judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's
+# own reader, shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
 # is not a worker wave, exactly as the card declines to call it one; such a
 # session is then asked only whether it is a marked child.
 #
@@ -4201,9 +4510,12 @@ fi
 # 4,478 over-cap fleet commands in one two-day window, mostly prose. The
 # in-order search slices by `match` offsets, which jq 1.7 and 1.8 count in
 # codepoints (measured correct after é and an emoji); jq 1.6 is unverified.
-# Only where the deny already applies: a session with no wave hold and no
-# child marker is never refused, under the cap or over it. THE VALUE IS
-# MEASURED: the largest round size at which the worst quote-dense shape
+# Wave 2's question stays where its deny already applies: a session with no
+# wave hold and no child marker is never refused ON ITS ACCOUNT, under the cap
+# or over it. The bypass question (wave 2b) is asked of every session, and over
+# the cap it is refused when the raw text also holds `--admin` (the `admin`
+# kind, above) or an api command (the `api` kind, above: the fixed `/merge` stands
+# for both REST paths there, D-7115). THE VALUE IS MEASURED: the largest round size at which the worst quote-dense shape
 # measured costs about a quarter of `session-hook-sync-advisory.test.ts`'s
 # 1500 ms whole-hook bound. That shape is a run of quoted substitutions that
 # each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
@@ -4214,7 +4526,17 @@ fi
 # then `merge` as words, prose included: a one-line JSON mail body (its `\n`
 # escapes keep it one segment), a trailing `# comment`, a PR body that quotes or
 # merely mentions them in that order. It stays refused until it is split,
-# rephrased, or moved into a file. The coordinator accepted it (ruling 3510): of
+# rephrased, or moved into a file. Since wave 2b the same cost falls on EVERY
+# session whose over-cap raw text also holds `--admin` anywhere (D-7115; a long
+# command that holds a real merge and any `--admin` mention, a comment included,
+# is refused over the cap), or, for
+# the `api` kind, a segment that names `gh` then `api` as words beside a mutation
+# word or the text `/merge` anywhere in the command (a wider reach than the
+# under-cap paths: `/merge` stands for both and has no end bound, so it also
+# catches `/merges`, and a path merely starting `/merge`, such as
+# `docs/merge-queue.md` or `/merged`, is enough; prose can hold it): the
+# reason says to split the command or pass the text as a file, says the hook
+# cannot tell prose from a command over the cap, and gives both byte counts. The coordinator accepted it (ruling 3510): of
 # 3,537 over-cap fleet commands in another two-day window, the segment rule
 # refuses at most 12 more than a word-bounded three-word match would (that count
 # measured the three word tests unordered; the in-order search is stricter). No
@@ -4239,6 +4561,13 @@ fi
 # GH_MERGE_RE needs a blank before `pr` and `merge`), and a backslash-newline
 # straight after `merge` (`gh pr merge\<newline> 42`).
 # Classified, not closed (the stopping line, ruled 2026-10-03).
+# THE COST of the api half under the cap, accepted: the separator-bounded path reading
+# crosses blanks, so a non-merge `gh api` call whose later argument ends in `/merge`
+# (`gh api repos/o/r/pulls/42 -f body=docs/merge`) is refused too, and so is one
+# whose redirect target (`> out/merge`, `> "$TMPDIR/merge.json"`) or quoted string
+# (`--jq '.head.ref == "ws/merge"'`) holds `/merge` after `pulls/<n>`, and the
+# glued `pulls/<n>;x/merge`. Run it as a separate command, name the output file
+# another way, or pass the body as a file (`-F body=@<file>`).
 # The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
 # never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
 # are what the cap prevents, not what a command costs.
@@ -4253,6 +4582,18 @@ fi
 # heredoc.
 MERGE_PARSE_CAP=2048
 GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
+# GH_API_RE: the same head grammar with `api` for `pr … merge`, DERIVED from GH_MERGE_RE's own text so the two never
+# drift. GH_MERGE_RE is `<head>[ \t]+pr(<gh flags>)*[ \t]+merge<end>`, and `[ \t]+pr(` (GH_API_CUT, a blank class
+# then `pr(`, spelled with a real tab as GH_MERGE_RE spells it) occurs once in it, right after the head, so cutting
+# there leaves the head alone. The cut is quoted so the brackets are literal in the pattern, not a glob class.
+GH_API_CUT=$'[ \t]+pr('
+GH_API_RE=${GH_MERGE_RE%%"$GH_API_CUT"*}$'[ \t]+api([[:space:];&|()<>]|$)'
+# ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
+# `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
+# ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
+# from the others by its first characters, so the one anchored `test` cannot backtrack. It does not itself
+# require `--admin`: the allowance is consulted only when the flag `a` is set.
+ALLOW_ADMIN_RE='\A[ \t\n]*gh pr merge [0-9]+( --admin| --match-head-commit [0-9a-f]{40}| --squash| --merge| --rebase| --delete-branch| -d)*[ \t\n]*\z'
 MERGE_STRIP_JQ='
 def SQ: $q + "[^" + $q + "]*" + $q;
 def AQ: "\\$" + $q + "(?>(?:[^\\\\" + $q + "]++|\\\\(?:.|\\n|\\z))*)(?:" + $q + "|(?<ua>\\z))";
@@ -4302,25 +4643,54 @@ def ocafter($re): . as $s | [match($re)] | if length == 0 then empty else $s[.[0
 def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`()<>])");
 def ocwords: contains("gh") and contains("merge")
   and any(ocsegs[] | select(contains("gh") and contains("merge")) | ocmerge; true);
+def ocapi: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\sapi($|[\\s`()<>])");
+def MUT: ["mergePullRequest", "enqueuePullRequest", "enablePullRequestAutoMerge", "mergeBranch"];
+def mutword: . as $s | any(MUT[]; . as $w | $s | contains($w));
+def unq: split($q) | join("") | split("\"") | join("") | split("\\") | join("");
+def ocapiwords: contains("gh") and contains("api")
+  and ((unq) as $u | ($u | mutword) or ($u | contains("/merge")))
+  and any(ocsegs[] | select(contains("gh") and contains("api")) | ocapi; true);
+def ockinds: (ocwords) as $m | (ocapiwords) as $a
+  | [(if $m then "merge" else empty end), (if $m and contains("--admin") then "admin" else empty end), (if $a then "api" else empty end)] | join(",");
+def mergepath: "pulls/[^[:space:]/]++/merge(?![A-Za-z0-9_-])|repos/[^[:space:]/]++/[^[:space:]/]++/merges(?![A-Za-z0-9_-])|pulls/[^;&|\\n/]++/merge(?![A-Za-z0-9_-])|repos/[^;&|\\n/]++/[^;&|\\n/]++/merges(?![A-Za-z0-9_-])";
+def vflags: (unq) as $u | (if contains("--admin") then "a" else "" end) + (if test($allow) then "s" else "" end)
+  + (if ($u | mutword) then "w" else "" end) + (if ($u | test(mergepath)) then "p" else "" end);
 def capped(f): (.tool_input.command // "") as $c
   | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
-    then (if ($c | ocwords) then "!\($c | utf8bytelength)" else "" end)
-    else "=" + f end;
+    then ($c | ockinds) as $k | (if $k == "" then "" else "!\($c | utf8bytelength):\($k)" end)
+    else "=" + ($c | vflags) + "\u001f" + f end;
 capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
-if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
+if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
+      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* ) \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
-  mcmd="" mover=""
+  mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
+  mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass="" mapi="" madmin=""
   case "$mout" in
-    '='*) mcmd=${mout#=} ;;
-    '!'*) mover=${mout#!} ;;
+    '='*$'\x1f'*) mflags=${mout%%$'\x1f'*}; mflags=${mflags#=}; mcmd=${mout#*$'\x1f'} ;;
+    '!'*:*) mover=${mout#!}; mkinds=${mover#*:}; mover=${mover%%:*} ;;
   esac
-  if [[ -n "$mover" ]] || [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
-    mwhy=""
-    if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
-      mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
-    elif [[ -e "$REG/$id.child" ]]; then
-      mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
+  # Wave 2's question concerns a merge. The bypass question concerns `--admin` on a merge (madmin) and a
+  # `gh api` call that reaches a merge (mapi); the allowance may lift the first and never the second.
+  if [[ -n "$mover" ]]; then
+    case ",$mkinds," in *,merge,*) mmerge=1 ;; esac
+    case ",$mkinds," in *,admin,*) madmin=1 ;; esac
+    case ",$mkinds," in *,api,*) mapi=1 ;; esac
+  elif [[ -n "$mcmd" ]]; then
+    if [[ "$mcmd" =~ $GH_MERGE_RE ]]; then
+      mmerge=1
+      if [[ "$mflags" == *a* ]]; then madmin=1; fi
+    fi
+    if [[ ( "$mflags" == *w* || "$mflags" == *p* ) && "$mcmd" =~ $GH_API_RE ]]; then mapi=1; fi
+  fi
+  if [[ -n "$madmin" || -n "$mapi" ]]; then mbypass=1; fi
+  if [[ -n "$mmerge" || -n "$mbypass" ]]; then
+    mwhy="" mreason=""
+    if [[ -n "$mmerge" ]]; then
+      if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
+        mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
+      elif [[ -e "$REG/$id.child" ]]; then
+        mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
+      fi
     fi
     if [[ -n "$mwhy" && -n "$mover" ]]; then
       mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text reads as a \`gh … pr … merge\` command, so the deny cannot read whether it runs one; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
@@ -4328,8 +4698,41 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
     elif [[ -n "$mwhy" ]]; then
       mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
       mreason+=" Report wave-done to your coordinator; it lands the PR."
+    elif [[ -n "$mbypass" ]]; then
+      # THE OPERATOR'S ALLOWANCE (D-7249), under the cap only and only for a command the grammar reads as
+      # exactly one admin merge (`s`). The session's project is read from its own registry row, never
+      # from the id or the cwd: absent, empty, unreadable, off-class or one that filled the read
+      # (`CT_RAWN`, see `_ct_read`) reads as not allowed. No fork. What keeps the allowance off the
+      # over-cap and api forms is the grammar (`s` is set only under the cap, only for text
+      # ALLOW_ADMIN_RE matches) and the branch order (the over-cap reason is chosen before `mallow`
+      # is read); `-z "$mover"` and `-z "$mapi"` are defence in depth, which no test can red.
+      mallow=""
+      if [[ -z "$mover" && -z "$mapi" && "$mflags" == *s* ]] && _ct_read "$REG/$id.project" && [[ -n "$CT_V" ]]; then
+        case "$CT_V" in
+          *[!$CCRC_PROJ_CLASS]*) ;;
+          *) if (( ${#CT_V} <= CCRC_PROJ_MAX && CT_RAWN < CCRC_ID_MAX )) && [[ -f "$REG/admin-merge-allowed/$CT_V" && ! -L "$REG/admin-merge-allowed/$CT_V" ]]; then mallow=1; fi ;;
+        esac
+      fi
+      if [[ -n "$mover" ]]; then
+        # What the over-cap text reads as: a merge naming `--admin`, a `gh … api` call naming a mutation or `/merge`, or both.
+        mread=""
+        if [[ -n "$madmin" ]]; then mread="a \`gh … pr … merge\` command that names \`--admin\`"; fi
+        if [[ -n "$mapi" ]]; then mread+="${mread:+ and }a \`gh … api\` command that names a merge mutation or \`/merge\`"; fi
+        mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session, and this command is $mover bytes, over the deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text holds $mread: the hook cannot tell prose from a command over the cap, so it refuses the text."
+        mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or write the text with the Write tool and pass it as a file (\`--body-file <file>\` for \`gh pr create\`, \`ccrc-api mail send --json <file>\` for a mail), which keeps the command short."
+        mreason+=" A landing is \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues the PR; a bypass is R9's door, the operator's own shell or GitHub's UI."
+      elif [[ -z "$mallow" ]]; then
+        mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session: the merge queue is how a PR lands, and a bypass of it is not a session's to take (landing-order spec §5.2)."
+        mreason+=" Land a PR with \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues it, and read whether it merged with \`gh pr view <n> --json state,mergedAt\`. A bypass is R9's door: the operator's own shell or GitHub's UI."
+        if [[ -n "$mapi" ]]; then
+          mreason+=" A \`gh api\` call is refused when its command names a merge mutation (\`mergePullRequest\`, \`enqueuePullRequest\`, \`enablePullRequestAutoMerge\`, \`mergeBranch\`) or a merge path (\`repos/<o>/<r>/pulls/<n>/merge\`, \`repos/<o>/<r>/merges\`), by any method, a GET included: the hook cannot tell a read of the merge path from a write, so \`gh pr view <n> --json state,mergedAt\` is how a session asks whether a PR merged."
+          mreason+=" Note that the whole command is read, quoted text included, once it holds a \`gh api\` or merge command, so a real \`gh api\` call and an unrelated mention of a mutation word or merge path in one command is refused too: run them as separate commands, name an output file another way, or pass a body with \`-F body=@<file>\`."
+        else
+          mreason+=" Note that the whole command is read, quoted text included, once it holds a merge or api command, so a real \`gh pr merge\` and an unrelated \`--admin\` in one command is refused too: run them as separate commands."
+        fi
+      fi
     fi
-    if [[ -n "$mwhy" ]]; then
+    if [[ -n "$mreason" ]]; then
       pre_json=$(_hook_deny_json "$mreason") || pre_json=""
     fi
   fi
@@ -4416,6 +4819,7 @@ fi
 # calls; this deny does, before the tool runs, and invariant 10 rests on it (spec §6.6), whatever Claude Code's deny
 # matcher takes (Task 15's file names the bare forms only; Task 13 measured that no leading wildcard matched). The
 # approval surface is `approvals` as `ccrc-api`'s FIRST argument (bare, a path, or `"$API"`/`$API`), `/api/approvals`,
+# the question family's approval ids (`/api/questions/approval-<n>/…`, D-7323; its ask ids are not the surface),
 # any `approval-signing` path (the pinned public key's, and the server's private key's on `--role both`) and the
 # verifier; for Write, Edit, MultiEdit and NotebookEdit, a key's or the verifier's path; for Read, Grep and Glob, a
 # signing key's path (a Glob's pattern included). A child never rules on,
@@ -4518,7 +4922,7 @@ def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
 def fmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
@@ -4528,7 +4932,7 @@ def fmatch:
   (ACCTV as $v | select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(CCD + "account-pane" + NW)) | "account\tccd account-pane"),
   (select(test(AAUTH)) | "account\tccd-account-auth"),
-  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
+  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|/api/questions/approval-|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
   (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
   (select(hbt("[\n;&|]"; WR; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
   (select(hbt("[\n;&|]"; WR; BUILD)) | "other\ta write to a Claude Code build or its launcher"),
@@ -4537,7 +4941,7 @@ def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),

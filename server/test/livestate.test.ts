@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
+import { liveSessionStatus, liveStateReaderOver, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
@@ -332,5 +332,44 @@ describe('readLiveStateMeasured: startedAt, the process start the turn marker is
   it('the folded read carries it too', async () => {
     const { configDir, pid } = seedLive({ ...base, startedAt: 1790624162602 });
     expect((await readLiveState(localIO, configDir, pid))?.startedAt).toBe(1790624162602);
+  });
+});
+
+// D-7512: the reader `fleet.ts#assembleFleet` is handed. It must be `readLiveStateMeasured` over the io it was made
+// with, nothing more: the same answer under each of the live file's five conditions, from the same number of reads.
+describe('liveStateReaderOver: readLiveStateMeasured bound to one io (D-7512)', () => {
+  const PID = 4242;
+  const LIVE = path.join('sessions', `${PID}.json`);
+  const TORN = '{"pid":4242,"sessionId":"3';
+  /** A fresh double per read under test: the live file answers `bodies` in order (the last repeating), or, with
+   *  `null`, the inner io's own answer; every read of the live file is counted. */
+  const liveIO = (inner: FleetIO, bodies: string[] | null): { io: FleetIO; reads: () => number } => {
+    let n = 0;
+    const io: FleetIO = {
+      ...inner,
+      readFileMeasured: async (p, t, sig) => {
+        if (!p.endsWith(LIVE)) return inner.readFileMeasured(p, t, sig);
+        const i = n; n += 1;
+        return bodies === null ? inner.readFileMeasured(p, t, sig) : { ok: true, content: bodies[Math.min(i, bodies.length - 1)]! };
+      },
+    };
+    return { io, reads: () => n };
+  };
+  const conditions: [string, () => { io: FleetIO; reads: () => number }][] = [
+    ['absent', () => liveIO(localIO, null)],
+    ['unreadable', () => liveIO(degradedReadIO((p) => p.endsWith(LIVE)), null)],
+    ['torn once', () => liveIO(localIO, [TORN, JSON.stringify(base)])],
+    ['torn twice', () => liveIO(localIO, [TORN, TORN])],
+    ['well formed', () => liveIO(localIO, [JSON.stringify(base)])],
+  ];
+
+  it.each(conditions)('%s: the same read as readLiveStateMeasured, from the same number of reads', async (_c, make) => {
+    const configDir = path.join(mkTmp('ccrc-live-'), '.claude');
+    mkdirSync(path.join(configDir, 'sessions'), { recursive: true });
+    const direct = make();
+    const viaReader = make();
+    const expected = await readLiveStateMeasured(direct.io, configDir, PID);
+    expect(await liveStateReaderOver(viaReader.io)(configDir, PID)).toEqual(expected);
+    expect(viaReader.reads()).toBe(direct.reads());
   });
 });

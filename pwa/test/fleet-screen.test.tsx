@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ApiError, api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -146,9 +147,12 @@ const latestFleetSocket = (): FleetSocket => {
   return socket;
 };
 
+/** A frame as a current server sends it (D-7182, C7d): seeded sessions carry the run binding the server sends over the
+ *  runs the store holds once the patch lands (`runBindingFixture.ts`). */
 const seed = (store: FleetStore, patch: Partial<ReturnType<FleetStore['getState']>>): void => {
   act(() => {
-    store.setState(patch);
+    store.setState(patch.sessions === undefined ? patch
+      : { ...patch, sessions: withRunBinding(patch.sessions, patch.runs ?? store.getState().runs) });
   });
 };
 
@@ -1877,7 +1881,7 @@ describe('FleetScreen', () => {
 // the SAME `sessions` array the project cards below iterate, so the head can
 // never disagree with its own rows.
 describe('bucket sections', () => {
-  it('renders one section per non-empty bucket, in RANK order, and none for an empty one', () => {
+  it('renders one section per non-empty bucket, in BUCKET_ORDER (Working above Idle, OA-C14 (a), D-7188), and none for an empty one', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, {
@@ -1890,7 +1894,7 @@ describe('bucket sections', () => {
     });
 
     const heads = screen.getAllByText(/^(Needs you|Working|Done|Idle|Cleanup|Archived|Exited)$/);
-    expect(heads.map((h) => h.textContent)).toEqual(['Needs you', 'Idle', 'Working']);
+    expect(heads.map((h) => h.textContent)).toEqual(['Needs you', 'Working', 'Idle']);
     // No section rendered for a bucket with zero members.
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(screen.queryByText('Cleanup')).not.toBeInTheDocument();
@@ -3325,5 +3329,27 @@ describe('the Docs door (docs design 4.8, M4.L1)', () => {
     expect(door.nextElementSibling).toHaveClass('accounts-door');
     fireEvent.click(door);
     expect(location.pathname).toBe('/docs');
+  });
+});
+
+describe('the predicted-conflict chip renders after the claimed-files strip (landing order wave 5a; 4b F4 a)', () => {
+  it('puts the chip after the strip in the document, and outside it', async () => {
+    const T = Date.now();
+    vi.spyOn(api, 'claims').mockResolvedValue({ claims: [{
+      id: 1, project: 'ProjectC', paths: ['src/a.ts'], heldBy: 'lane-a-proj-a-alpha', heldByUuid: null, intent: '',
+      runId: 3, state: 'live', createdAt: T - 60_000, renewedAt: T - 60_000, expiresAt: T + 40 * 60_000,
+      hardExpiresAt: T + 8 * 3_600_000, endedAt: null, endedBy: null,
+    }] });
+    const store = makeStore();
+    renderFleet(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', roster: TEST_ROSTER, sessions: [session({ landing: {
+      at: new Date(T - 30_000).toISOString().replace(/\.\d{3}Z$/, 'Z'), pr: 12, head: 'abc1234', baseRef: 'main',
+      base: { state: 'clean' }, paired: true, conflicts: [], unmeasuredWith: [],
+      cut: { heads: false, pairs: false, unbound: false },
+    } })] });
+    const strip = await screen.findByRole('region', { name: 'Claimed files' }, { timeout: 5000 });
+    const chip = screen.getByRole('status', { name: /No predicted conflicts in 1 measured PR/ });
+    expect(strip.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING, 'the chip renders after the strip').not.toBe(0);
+    expect(strip.contains(chip), 'the chip is not inside the strip').toBe(false);
   });
 });

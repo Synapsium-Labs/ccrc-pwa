@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
@@ -883,7 +884,11 @@ describe('archived chip', () => {
     render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: 1785300000, pr: null,
     }) })} />);
-    expect(screen.getByText('archived')).toBeInTheDocument();
+    // The archived row is the server's (the fixture's archived rung: pane gone, bucket archived, C7j, D-7468), so the
+    // status chip reads "archived" too; the pin is the archived chip's own text.
+    const chips = screen.getAllByText('archived').filter((e) => e.classList.contains('chip--archived'));
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toBeInTheDocument();
   });
 
   it('does not derive from pr.phase — a merged PR alone is not an archive', () => {
@@ -1451,7 +1456,8 @@ describe('SessionScreen: the coordination line (D-5527)', () => {
     const store = createSessionStore(CHILD, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
-      fleet.setState({ sessions, runs: runs.map((r) => ({ ...r })), runsFrameSeen: true, conn: 'open' });
+      // A frame as a current server sends it (D-7182, C7d): each session carries the run binding over these runs.
+      fleet.setState({ sessions: withRunBinding(sessions, runs), runs: runs.map((r) => ({ ...r })), runsFrameSeen: true, conn: 'open' });
     });
     render(<SessionScreen id={CHILD} store={store} fleet={fleet} />);
   };

@@ -26,6 +26,7 @@ import { createElement } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import type { FleetSession, Presence, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { TEST_ROSTER } from './rosterFixture';
 import { seedAccountsAnswer } from './accountsAnswer';
 import { tableRows, type TableRow } from './presenceTable';
@@ -65,7 +66,9 @@ const RUN = (over: Partial<RunSummary> = {}): RunSummary => ({
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
   childReclaim: null, reviewCap: null, ...over,
 });
-const WORKER = (): FleetSession => fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/w/worker-a' });
+/** The worker of `RUN()`, carrying the run binding the current server sends for it (D-7182, C7d). */
+const WORKER = (): FleetSession =>
+  withRunBinding([fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/w/worker-a' })], [RUN()])[0]!;
 
 const has = (text: string): boolean => document.body.textContent?.includes(text) ?? false;
 

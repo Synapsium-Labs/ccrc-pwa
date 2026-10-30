@@ -14,8 +14,9 @@ export type AskResult = { ok: true } | { ok: false; error: AskRefuseCode };
 
 /**
  * D-5293: the body of an answer by option index, read ONCE for both routes
- * that press through `answerAsk`: the operator's `POST /api/sessions/:id/ask`
- * (`server.ts`) and the parent's `POST /api/asks/:id/answer`
+ * that press through `answerAsk`: the operator's ask (`POST /api/questions/
+ * session-<id>/answer`, which replaced `server.ts`'s `POST /api/sessions/:id/ask`
+ * in W7 C7p) and the parent's `POST /api/asks/:id/answer`
  * (`coord/routes.ts`). `optionIndexes` is an array of numbers (`answerAsk`
  * judges each one); `askKey`, when present, is a string. The operator's route
  * requires it; the parent's route compares it with the key its row was minted
@@ -43,9 +44,10 @@ export function readAskAnswer(body: unknown): { askKey: string | undefined; opti
  * On 2.1.280 and 2.1.300 Enter TOGGLES the cursor row and commits nothing
  * (`cc280-multiselect-seq-*.txt`, and `3` then Enter on 2.1.300 left two boxes
  * ticked with the question still up), so that answer came back ok:true with the
- * wrong boxes ticked. It is refused `multiselect` before any key. The pane route
- * `POST /api/sessions/:id/dialog/multi` (`answerDialogMulti`, `send.ts`) answers
- * it: it reads each box's tick, toggles only the boxes that differ, proves the
+ * wrong boxes ticked. It is refused `multiselect` before any key. The pane
+ * answer `POST /api/questions/session-<id>/answer` with `multi: true`
+ * (`answerDialogMulti`, `send.ts`; `/api/sessions/:id/dialog/multi` until W7
+ * C7p) answers it: it reads each box's tick, toggles only the boxes that differ, proves the
  * ticks, and commits with Tab.
  *
  * Fail-shut, in order, each hazard with its own name (analysis Tier-1 #4).

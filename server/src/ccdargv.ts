@@ -1,6 +1,7 @@
 import type { FleetState } from './fleetstate.js';
 import { ROUTE_WRITABLE_FIELDS, type CollectToken, type OrphanToken, type RouteFields, type StopSurface } from '../../shared/api.js';
 import type { DocSectionSlug } from '../../shared/docs.js';
+import type { DepsShedClass } from './depsShed.js';
 
 declare const CcdArgvBrand: unique symbol;
 
@@ -77,6 +78,10 @@ const looseHex = (hex: string): string => {
 /** `ccd hibernate --hold-ok <text>` (D-6091): the programme hold the run-done policy passes, verbatim, or nothing. Sent
  *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
 const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
+
+/** `ccd hibernate --roll` (D-7458): the automatic roll's one act, the sleep and the wake in one verb. Sent only behind
+ *  `HIBERNATE_ROLL_CAP`; an older ccd binds the bare flag as a second positional and dies on its arity rule. */
+const rollFlags = (roll: boolean): string[] => (roll ? ['--roll'] : []);
 
 /**
  * The DECLARED half of a provenance record (spec D2's `dec`), as the three ccd
@@ -398,9 +403,12 @@ export const CCD_ARGV = {
    *  attached terminal) and refuses `session-busy: <reason>` at exit 3 otherwise, touching nothing. ONE positional, the
    *  id, then the dec — stripped by ccd before its arity rule, as `ws-archive`'s are (`ccdargv-dec-parity.test.ts`;
    *  `hibernate-verb-dec-and-idempotence` (D-5424)).
-   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. */
-  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null) =>
-    argv(['hibernate', ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
+   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. `roll` (D-7458)
+   *  makes it the automatic roll's act: `.no-roll` refuses instead of `.no-hibernate`, and ccd wakes it in the same
+   *  verb, exiting 4 with `ccd: roll-wake-failed` when the wake fails and the row is back asleep, 5 with
+   *  `ccd: roll-wake-unrestored` when it could not be put back. */
+  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null, roll = false) =>
+    argv(['hibernate', ...rollFlags(roll), ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
@@ -544,6 +552,8 @@ export const CCD_ARGV = {
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
+  // D-7378: the bounded train prover the PR sweep runs after `pr-state --project` when a line read `train-unread`.
+  prTrainProve: (p: string)    => argv(['pr-train-prove', '--project', p]),
   /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
    *  whole call), each id a registry id (no comma, no colon: they delimit the pairs; no leading dash; no repeat) and
    *  each pr a positive integer with no leading zero. The builder refuses all of these itself, so a bad pair throws
@@ -624,6 +634,13 @@ export const CCD_ARGV = {
    *  positional. Behind `ORPHAN_CAP`. Never `--force`. `CCD_ARGV` is the one place this argv is composed. */
   wsOrphan: (token: OrphanToken, hex: string, rescue: boolean, dec: ActorFlags | null) =>
     argv(['ws-orphan', '--expect', token, '--tree-hex', treeHex(hex), ...rescueFlag(rescue), ...decFlags(dec)]),
+  /** `ws-shed-deps --session <id> --class child|coordinator [--dry-run]` (D-7278; design note 2026-10-28 §4): the
+   *  deps-shed arm's ask, on its own granted prefix (`['ws-shed-deps','--session']`, enrolled in the agent's
+   *  `REQUIRED_VERB_FLAG`). The box re-proves the sleep, the class (a `child` needs its marker), its floor, once a sleep,
+   *  and git's own list of ignored, untracked directories, and removes only those; `--dry-run` (the arm's shadow) removes
+   *  nothing. The dec trails. Behind `SHED_DEPS_CAP`. Its one composer is the arm's pass (`depsShedPass.ts`). */
+  wsShedDeps: (id: string, cls: DepsShedClass, dryRun: boolean, dec: ActorFlags | null) =>
+    argv(['ws-shed-deps', '--session', id, '--class', cls, ...(dryRun ? ['--dry-run'] : []), ...decFlags(dec)]),
   /** `ws-audit --collect-census` (fleet disk retention spec 2026-10-23 section 2.4, D-6625/D-6626): the read-only census
    *  of the entries directly under `~/.cc-tmp`, classed, names as hex. Behind `COLLECT_LOOSE_CAP`. Granted by
    *  `['ws-audit','--collect-census']`; it destroys nothing. */
@@ -1133,6 +1150,10 @@ export const COLLECT_CAP = 'collect-v1';
  *  inode. Spelled ONCE in `server/src`; ccd's `echo orphan-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which
  *  refuse on no evidence: the verb it gates deletes. */
 export const ORPHAN_CAP = 'orphan-v1';
+/** The `ccd caps` token that says this box's ccd has the deps-shed verb (D-7278): `ws-shed-deps --session <id> --class
+ *  <class> [--dry-run]`, one ccd inode. Spelled ONCE in `server/src`; ccd's `echo shed-deps-v1` is the other. READ IT WITH
+ *  `capSupported`/`ccdCan`, which refuse on no evidence: the verb it gates deletes. */
+export const SHED_DEPS_CAP = 'shed-deps-v1';
 /** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
  *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
  *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
@@ -1165,6 +1186,12 @@ export const WS_WRAPPER_CAP = 'ws-wrapper-v1';
  *  `capSupported` (false on no evidence), so a box without it keeps today's `held`. ccd's `echo hibernate-hold-ok` and
  *  `server/test/ccdCapTokens.ts` are the other two spellings. */
 export const HIBERNATE_HOLD_OK_CAP = 'hibernate-hold-ok';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--roll` (D-7458): the automatic coordinator roll's
+ *  one act, the sleep and the wake in one verb. It gates the roll lane: with no token the lane is unarmed and rolls
+ *  nothing (`capSupported`, false on no evidence). ccd's `echo hibernate-roll` and `server/test/ccdCapTokens.ts` are
+ *  the other two spellings. */
+export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
@@ -1286,6 +1313,7 @@ export const CCD_CAN = {
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
   prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
   prLanding: capRow('pr-landing-v1'),
+  prTrainProve: verbRow('pr-train-prove'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
   wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
   wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),
@@ -1293,6 +1321,8 @@ export const CCD_CAN = {
   wsCollectAudit: verbRow('ws-audit'), wsCollect: capRow(COLLECT_CAP),
   // The orphan lane's three rows all refuse on no evidence: the census and the audit are new flags an older ccd rejects.
   wsOrphanCensus: capRow(ORPHAN_CAP), wsOrphanAudit: capRow(ORPHAN_CAP), wsOrphan: capRow(ORPHAN_CAP),
+  // The deps-shed verb is new: an older ccd has none of it, and its dry run is the same row.
+  wsShedDeps: capRow(SHED_DEPS_CAP),
   // The loose arm's three rows all refuse on no evidence: the audit and the census are new flags an older ccd rejects.
   wsCollectCensus: capRow(COLLECT_LOOSE_CAP), wsCollectLooseAudit: capRow(COLLECT_LOOSE_CAP), wsCollectLoose: capRow(COLLECT_LOOSE_CAP),
   wsAttic: verbRow('ws-attic'),

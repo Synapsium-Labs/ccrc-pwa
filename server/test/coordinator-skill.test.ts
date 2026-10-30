@@ -121,13 +121,13 @@ const CONTRACT = [
   'A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:\'review\'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.',
   'Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.',
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
-  // Landing-order wave 1 (spec 2026-09-23 §5.1). Its one apostrophe is the straight one in `wave's`, from main's
-  // ledger-branch rule, which the fix-round-5 merge brought in. It is escaped in this literal and typed straight in SKILL.md,
-  // so a curly spelling there reds this pin. The whole line is pinned too, in the test after "carries all nineteen".
+  // Landing-order wave 1 (spec 2026-09-23 §5.1). Its two apostrophes are the straight ones in `wave's`, from main's
+  // ledger-branch rule, which the fix-round-5 merge brought in, and in `merge train's`, from the train-landing proof.
+  // Each is escaped in this literal and typed straight in SKILL.md, so a curly spelling there reds this pin. The whole line is pinned too, in the test after "carries all nineteen".
   // Landing-order wave 3e (spec §5.7) rewrote its landing sentence: the route comes from the rules of the repository,
   // route Q keeps its spelling and words, a direct route spells exactly one method flag, and --admin is
   // never used (spec §11, ruling 5 of 2026-10-25).
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. `--admin` and GitHub API merge or enqueue calls are governed by the external policy authority of the repository; until that authority answers, this session never uses them. It closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. `--admin` and GitHub API merge or enqueue calls are governed by the external policy authority of the repository; until that authority answers, this session never uses them. It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train\'s own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
@@ -157,6 +157,7 @@ describe('the coordinator skill: its contract', () => {
     const line15 = `\n15. ${CONTRACT[14]}\n`;
     expect(skill, 'clause 15 is not a whole line of SKILL.md followed by clause 16: text was added before, after or under it')
       .toContain(`${line15}16. `);
+    expect(skill.split(line15), 'clause 15\'s line is written more than once in SKILL.md').toHaveLength(2);
     expect(skill.split(line15).join('\n'), 'SKILL.md names --admin outside clause 15').not.toContain('--admin');
     expect(skill, 'SKILL.md names the retired approval licence').not.toMatch(/licence|\blicense\b/i);
     expect(skill, 'SKILL.md prints the licence route word again').not.toContain('admin=licensed');
@@ -437,16 +438,49 @@ describe('the coordinator skill: its contract', () => {
     expect(para, 'the read-back no longer says how many answers it gives').toContain('gives one of four answers.');
     expect(para, 'the queued answer (a non-null entry) is gone').toContain('answers a non-null `mergeQueueEntry`');
     expect(para, 'the MERGED answer is gone: a merged PR would read as nothing queued')
-      .toContain('A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm');
+      .toContain('A `state` of `MERGED` — or of `CLOSED` with `landedInTrain: true` on the PR\'s row of '
+        + '`ccd pr-state --session <sessionId>`, a merge train having landed it and closed it — means it already '
+        + 'landed: wait for or prove `merged:#<pr>`, and never disarm');
     expect(para, 'the ARMED answer is gone')
       .toContain('no entry but a non-null `autoMergeRequest` means it is only armed');
     expect(para, 'the NEITHER answer is gone')
-      .toContain('no entry, no `autoMergeRequest` and not merged means nothing is queued: read why');
+      .toContain('no entry, no `autoMergeRequest` and neither of those landed answers means nothing is queued: read why');
     // The disarm is the armed answer's act ALONE: it sits after the MERGED rule.
     const merged = para.indexOf('and never disarm');
     const disarm = para.indexOf('`gh pr merge <pr> --disable-auto`');
     expect(merged, 'the MERGED rule is gone').toBeGreaterThanOrEqual(0);
     expect(disarm, 'the disarm spelling is gone').toBeGreaterThan(merged);
+  });
+
+  it('proves a merge a merge train landed and closed the way the server reads it — CLOSED with `landedInTrain: true` at the same head', () => {
+    // A train lands a member through a train PR and CLOSES the member with the
+    // deployment's label, so `gh pr view` never answers MERGED for it. The
+    // server already reads it as merged (`isMergedRow`) and mails `merged:#N`;
+    // a proof that demanded MERGED would leave the run at `merging` for ever.
+    const wl = flat(refs('wave-lifecycle.md'));
+    expect(wl).toContain('answering MERGED with `headRefOid` equal to it, or CLOSED with `headRefOid` equal to it '
+      + 'and `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`');
+    expect(wl).toContain('On `merged:`, prove the merge exactly as above — MERGED, or CLOSED with '
+      + '`landedInTrain: true`, `headRefOid` equal to `handoffCommit`');
+  });
+
+  it('step 6 and every exact-SHA proof in §5 accept a train-landed PR — CLOSED with `landedInTrain: true` at the same head', () => {
+    // The producer-merged proof is spelled in four more places than the two
+    // above: step 6's "proven merged" and its cross-project exact-SHA proof,
+    // §5's cross-project twin, and the native-queue read-back's answers. A
+    // train-landed member answers CLOSED with no queue entry at every one.
+    const sk = flat(skill);
+    expect(sk).toContain('once wave N\'s PR is proven merged — MERGED at its verified head, or CLOSED there with '
+      + '`landedInTrain: true` on its row of `ccd pr-state --session <id>` —');
+    expect(sk).toContain('interface PR merged at the exact `producerSha` carried in the conditional producer contract '
+      + '(it reads MERGED there, or CLOSED there with `landedInTrain: true` on its row of `ccd pr-state --session <id>`)');
+    const wl = flat(refs('wave-lifecycle.md'));
+    expect(wl).toContain('PR merged at the exact `producerSha` carried with `producerRepoRoot` and `producerSourceRepoPath` '
+      + 'in the conditional producer contract (it reads MERGED there, or CLOSED there with `landedInTrain: true` on its '
+      + 'row of `ccd pr-state --session <sessionId>`)');
+    expect(wl).toContain('A `state` of `MERGED` — or of `CLOSED` with `landedInTrain: true` on the PR\'s row of '
+      + '`ccd pr-state --session <sessionId>`, a merge train having landed it and closed it — means it already landed');
+    expect(wl).toContain('A PR with no entry, no `autoMergeRequest` and neither of those landed answers means nothing is queued');
   });
 
   it('tells the session how to learn its own id the ONE way that is actually its own', () => {
@@ -743,24 +777,30 @@ describe('the coordinator skill: linkage', () => {
       // would be told how to lift the review-round cap on its own run, which is the cap's own defeat. The
       // forbid-mention case below is what turns this permission-to-omit into a prohibition.
       'POST /api/coord/review-cap',
+      // THE AUTOMATIC COORDINATOR ROLL (D-7453) — the operator-dial shape once more. The setting decides whether an idle
+      // coordinator is rolled onto the current release and its new rules; a coordinator told about this door would be
+      // told how to turn off its own roll and stay on rules the operator has replaced. Neither half is named, for the
+      // caps reason: the read is the first half of the invitation. The forbid-mention case below forbids it.
+      'GET /api/coord/roll-idle',
+      'POST /api/coord/roll-idle',
       // D-6910: the operator's read of that cap's ask, unnamed for the caps reason: the read is the first half of the
       // invitation. The same forbid-mention case covers it, since it names `review-cap` at all.
       'GET /api/coord/review-cap/:id',
       // DISK RETENTION shadow journal (D-6861) — a read-only view for the operator (and the agent that
       // reviews a disk lane before the operator arms it), not a coordination door: no session decides or acts through it.
       'GET /api/coord/shadow-journal',
-      // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): three routes the skill corpus does not name
-      // YET, each for its own reason. The follow-up is ccd's: `ccrc-api` and the coordinator skill name the claimant's two
-      // when the client moves onto them (W7 gates on the `questions-v1` cap word); until then the coordinator's doors are
-      // the old pair, which stay as aliases and stay named.
+      // D-7319 — the operator-dial shape once more: the switch of the server's act that abandons a dispatch that never
+      // came back. A coordinator told about this door would be told how to stop the server abandoning its own stalled
+      // runs; the read is the first half of that invitation, so neither half is named.
+      'GET /api/coord/dispatch-abandon',
+      'POST /api/coord/dispatch-abandon',
+      // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
+      // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
+      // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the
+      // approval lane of `wave-lifecycle.md` name them beside the old pair, which stay as aliases and stay named.
       // The OPERATOR's answer: session-gated, never a coordinator's door, for `POST /api/coord/pause`'s reason: naming it
       // would be an invitation to answer the operator's question in the operator's name.
       'POST /api/questions/:id/answer',
-      // The claimant's ruling: the same core as `POST /api/asks/:id/answer` and `POST /api/approvals/:id/rule`, which the
-      // corpus names and which keep answering byte for byte.
-      'POST /api/questions/:id/rule',
-      // The claimant's hand-over: the same core as `POST /api/asks/:id/release` and `POST /api/approvals/:id/release`.
-      'POST /api/questions/:id/release',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1840,6 +1880,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // Stall-watch settings wave 1, the caps dial's accounting: EXEMPT above
     // only PERMITS the omission; this is what FORBIDS the mention.
     expect(allSkillText).not.toContain('/api/coord/stall-watch');
+  });
+
+  it('never names the roll-idle settings door — a door that would tell a coordinator how to turn off its own roll onto the current release (D-7453)', () => {
+    // The caps dial's accounting: EXEMPT above only PERMITS the omission; this is what FORBIDS the mention.
+    expect(`${allSkillText}\nGET /api/coord/roll-idle\n`, 'CONTROL: a planted mention is seen').toContain('/api/coord/roll-idle');
+    expect(allSkillText).not.toContain('/api/coord/roll-idle');
   });
 
   it('never names the collector switch or its legacy file — a door that would tell a coordinator how to arm deletion of its own children’s temp roots', () => {
@@ -3157,14 +3203,14 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       '- `ROUTE U method=<m> admin=never` — an ungated direct merge: nothing is required and nothing waits. The same spelling as route G.',
       '- `admin=never` — no `--admin`, on every route (**No `--admin`**, below).',
       '- `strict=yes` — a strict-protection repository: clause 15\'s land-sync applies as it does today.',
-      '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on.',
+      '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on. A PR a merge train landed reads CLOSED instead, so for it the verdict prints `STOP not-at-head: the PR is CLOSED`. Before you report that stop, prove the landing as step 3 does: CLOSED, `headRefOid` equal to `handoffCommit`, and `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`. Where that proof holds, the PR landed, as on this line; where it does not (`trainUnproven`, `trainUnread`, no row, or another head), the stop stands.',
       '- `WAIT pending: <names>` — a reported required check is still running. Wait in the foreground, `gh pr checks <pr> --required --watch`, again if the call times out while a reported required check is still pending, then run the verdict again — never by ending your turn: no mail comes when checks finish. Once this landing attempt\'s bounded wait is spent, which a `BOUND_S=300` run that ends on this very line spends too (**After a bounded wait**, below), do not wait: report the line to the operator and leave the landing stopped.',
       '- `WAIT not-reported: <names>` — a required name nothing has reported on the head yet, whatever `gh pr checks <pr> --required` exits: it judges only the checks that have reported, and its `--watch` returns at once when every reported one is green. Wait on every check instead, `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its timeout at 600000, never repeated, whatever it exits or however it ends: a check that is not required and never completes must not hold the wait open. Then run the verdict again with `BOUND_S=300` on the line before it, and the Bash tool\'s timeout at 600000. It reads read 5 again every 30 seconds, each sleep cut short to what is left of its 300 seconds.',
       'A name it still reads as not reported is the stop `not-reported`.',
       '- `RED <names>` — a required check is red on the head, each name with its kind. If it is the PR\'s own, that is the existing fix-round rule (step 3: on route Q disarm first, then a fix round to the owning worker on the `merging → working` edge). If it is not the PR\'s own and its kind is `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait, then the verdict again. One of kind `[app <id>]` or `[status]` that is not the PR\'s own, which no rerun here reaches, or one still red after the one rerun, is the stop `red-unreachable`. Once this landing attempt\'s bounded wait is spent (**After a bounded wait**, below), that one rerun buys no waiting: run the verdict after it with `BOUND_S=0`, and if that line is a `WAIT`, report it and stop, with no watch.',
       '- `STOP <reason>: <what it read>` — a stop (below).',
       '- Anything else — no line at all (the run was cut off or did not parse), more than one line, or a first word this list does not name — is the stop `verdict-unread`: say what the run printed, and never land, enqueue or choose a route by hand.',
-      '**On every route** the merge is proven as step 3 proves it: MERGED, with `headRefOid` equal to `handoffCommit`. A refused merge on route G or U is read, reported and stopped on, and never retried with another method, with `--admin` or with `--auto`.',
+      '**On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED with `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`, with `headRefOid` equal to `handoffCommit`. A refused merge on route G or U is read, reported and stopped on, and never retried with another method, with `--admin` or with `--auto`.',
       'Run it once the review is clean and the run is at `merging` (§4), in the order step 3 gives for route Q, and again after every wait.',
     ];
     for (const a of actions) expect(prose, `§5b lost or reworded: ${a.slice(0, 70)}…`).toContain(a);
@@ -3183,7 +3229,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       '**One PR per child — the PR decides `sessionId`, not the project.** A CHILD is a workspace carrying the `$REG/<id>.child` marker — ordinarily one the server minted for a run, on a box whose `ccd` records it — and a MARKED child carries at most one PR.',
       'A fresh child always branches from the project\'s default branch — `ccd ws-add` sets `base` from `git symbolic-ref refs/remotes/origin/HEAD` — so it carries NONE of a spent producer\'s unmerged commits.',
       'If this producer\'s MARKED workspace opened a PR — the ordinary case for a wave that shipped code — it is SPENT: open wave N+1 WITHOUT its `sessionId`, even in the same project, and close the producer exactly as the cross-project arm below closes it: `final:true`, then require `released:true`, then require its own closed row\'s `state` to be `done` (`"$API" runs list --closed 1`) — and, if wave N+1 depends on an interface from this producer, independently prove that producer\'s PR merged at the exact SHA before dispatching wave N+1, because the closed row proves fingerprint and terminal state, never merge.',
-      'Here, with no cross-project `producerSha` to read, the exact SHA is the producer run\'s own verified `handoffCommit`: prove the merge with `gh pr view <pr> --json state,headRefOid`, answering MERGED with `headRefOid` equal to it — the coordinator lands every PR with `--match-head-commit <handoffCommit>`, by the route §5b reads from the repository\'s own rules, for exactly this reason (`--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them) — and on a native-queue project it lands with the same binding, as "Landing on a native-queue project" below says.',
+      'Here, with no cross-project `producerSha` to read, the exact SHA is the producer run\'s own verified `handoffCommit`: prove the merge with `gh pr view <pr> --json state,headRefOid`, answering MERGED with `headRefOid` equal to it, or CLOSED with `headRefOid` equal to it and `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>` (a merge train landed its work through a train PR and closed it; ccd sets it only when that train PR is MERGED and its record lists the PR at exactly this head, so a label alone reads `trainUnproven`, or `trainUnread` while ccd has not read the train record yet — read again later, never treat either as merged — and you never name a label) — the coordinator lands every PR with `--match-head-commit <handoffCommit>`, by the route §5b reads from the repository\'s own rules, for exactly this reason (`--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them) — and on a native-queue project it lands with the same binding, as "Landing on a native-queue project" below says.',
       'An UNMARKED producer — every workspace minted without a marker: by a box whose ccd did not yet mark children, or by a dispatch that journaled `child-omitted` (§2) — is never refused this way; dropping its `sessionId` anyway is still safe and follows the same one-PR rule.',
       'The same-project arm is for a producer whose workspace opened no PR — a research or measurement wave — and only for that.',
       'Naming a spent workspace is refused `workspace-spent`, with `pr` naming the PR, and nothing is opened; `spent-unmeasured` means the server could not read the evidence either way — retry the same open, and do not drop `sessionId` on its account.',
@@ -3246,13 +3292,13 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'The same enqueue is what an unattended lander does (ruling R5 as amended 2026-10-25: the queue re-tests the combined code, the required checks gate the enqueue, the head is bound): it needs no human present, and a worker still never enqueues its own PR.',
       'Prove it is IN the queue before you rely on the server: `gh api graphql -F o=\'{owner}\' -F n=\'{repo}\' -F p=<pr> -f query=\'query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }\'` gives one of four answers.',
       'A queued PR answers a non-null `mergeQueueEntry`, the success answer.',
-      'A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm — a merged PR answers a null entry too, so the entry alone cannot tell merged from nothing queued.',
+      'A `state` of `MERGED` — or of `CLOSED` with `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`, a merge train having landed it and closed it — means it already landed: wait for or prove `merged:#<pr>`, and never disarm — a merged PR answers a null entry too, so the entry alone cannot tell merged from nothing queued.',
       'A PR with no entry but a non-null `autoMergeRequest` means it is only armed, and nothing is queued and nothing will tell you so: disarm it (`gh pr merge <pr> --disable-auto`) and read why before you do anything else.',
-      'A PR with no entry, no `autoMergeRequest` and not merged means nothing is queued: read why before you do anything else.',
+      'A PR with no entry, no `autoMergeRequest` and neither of those landed answers means nothing is queued: read why before you do anything else.',
       'Disarm the same way before any fix round from `merging` — an armed auto-merge queues whatever head the branch carries once its checks pass, and GitHub disarms it on a push only from a login without write access.',
       'End your turn.',
       'The run waits at `merging`, holding the child, so its workspace is not reclaimed under a PR still in the queue, and the server tells you how the queue answered: a `status` mail `merged:#<pr>` once the PR reads merged, or `dequeued:#<pr>@<time>` when the queue removed it without landing (GitHub does not re-enqueue).',
-      'On `merged:`, prove the merge exactly as above — MERGED, `headRefOid` equal to `handoffCommit` — then close the producer as this step closes a spent one (on the last wave, as §6 closes it), and only then dispatch wave N+1.',
+      'On `merged:`, prove the merge exactly as above — MERGED, or CLOSED with `landedInTrain: true`, `headRefOid` equal to `handoffCommit` — then close the producer as this step closes a spent one (on the last wave, as §6 closes it), and only then dispatch wave N+1.',
       'A `merged:#<pr>` can also reach a run at `merging` on a project without the queue, when a sweep reads your own synchronous merge before your close: prove and close as usual; a run already closed needs nothing.',
       'On `dequeued:`, read why from the queue\'s own CI run, not the PR\'s checks, which ran on a different commit and can read green — `gh run list --event merge_group --json databaseId,headBranch,conclusion` finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and `gh run view <id> --log-failed` says why, while `gh pr view <pr> --json mergeStateStatus` answers a conflict.',
       'Then either enqueue it again exactly as above — the landing verdict (§5b) again first, then the checks, then the read-back — or send the owning worker a fix round on the `merging → working` edge (SKILL.md step 6\'s send-back; its fresh wave-done gets a fresh review run, and a fresh `merging`).',
@@ -3273,7 +3319,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(to, 'the No --admin paragraph and the proof paragraph lost the requested-change section that follows them').toBeGreaterThan(from);
     const whole = [
       '**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25, ruling 5). That ruling supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`: not a missing approval, not `enforce_admins`, and not a ruleset\'s `current_user_can_bypass`, which the verdict no longer reads. A direct route that needs an approval the fleet cannot give, and finds it missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` anything but `APPROVED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included: without `--admin` that merge could only be refused, or pass over the approval by a bypass the external authority has not granted. Under read 3b classic protection\'s approvals cannot be read, so there GitHub\'s refusal is the stop, `github-refused`. Route Q is unchanged: its enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is `--admin` after a refusal.',
-      '**On every route** the merge is proven as step 3 proves it: MERGED, with `headRefOid` equal to `handoffCommit`.',
+      '**On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED with `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`, with `headRefOid` equal to `handoffCommit`.',
       'A refused merge on route G or U is read, reported and stopped on, and never retried with another method, with `--admin` or with `--auto`.',
       'This session writes no setting to make a route work: no ruleset, no branch protection, no merge-method or auto-merge setting (clause 15).',
     ].join(' ');
@@ -3325,7 +3371,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       '- `ROUTE U method=<m> admin=never` — an ungated direct merge: nothing is required and nothing waits. The same spelling as route G.',
       '- `admin=never` — no `--admin`, on every route (**No `--admin`**, below).',
       '- `strict=yes` — a strict-protection repository: clause 15\'s land-sync applies as it does today. `strict=no` — it does not. `strict=unknown` comes only under read 3b: on a direct route the verdict has already stopped on a head behind the base, and route Q needs no strictness, since the queue tests the merged group itself.',
-      '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on.',
+      '- `MERGED head=<sha>` — the PR already landed: prove it as step 3 does (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a different head fails the proof, and that is reported, never closed on. A PR a merge train landed reads CLOSED instead, so for it the verdict prints `STOP not-at-head: the PR is CLOSED`. Before you report that stop, prove the landing as step 3 does: CLOSED, `headRefOid` equal to `handoffCommit`, and `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`. Where that proof holds, the PR landed, as on this line; where it does not (`trainUnproven`, `trainUnread`, no row, or another head), the stop stands.',
       '- `WAIT pending: <names>` — a reported required check is still running. Wait in the foreground, `gh pr checks <pr> --required --watch`, again if the call times out while a reported required check is still pending, then run the verdict again — never by ending your turn: no mail comes when checks finish. Once this landing attempt\'s bounded wait is spent, which a `BOUND_S=300` run that ends on this very line spends too (**After a bounded wait**, below), do not wait: report the line to the operator and leave the landing stopped.',
       '- `WAIT not-reported: <names>` — a required name nothing has reported on the head yet, whatever `gh pr checks <pr> --required` exits: it judges only the checks that have reported, and its `--watch` returns at once when every reported one is green. Wait on every check instead, `gh pr checks <pr> --watch --interval 30`, once, as one Bash call with its timeout at 600000, never repeated, whatever it exits or however it ends: a check that is not required and never completes must not hold the wait open. Then run the verdict again with `BOUND_S=300` on the line before it, and the Bash tool\'s timeout at 600000. It reads read 5 again every 30 seconds, each sleep cut short to what is left of its 300 seconds. **The bound is five minutes after the last of the PR\'s reported checks finished.** If the watch was cut off at its timeout, the five minutes start there instead: fifteen minutes of waiting budget in all, plus the time the commands themselves take, which this shell does not bound: only each Bash call\'s timeout at 600000 does. The read after the last sleep, made once the budget is spent and so outside it, decides the wait. A name it still reads as not reported is the stop `not-reported`. A `ROUTE` it prints is not yet landing permission: see **After a bounded wait**, below. Once this landing attempt\'s bounded wait is spent, none of this is started again: report the line to the operator and leave the landing stopped.',
       '- `RED <names>` — a required check is red on the head, each name with its kind. If it is the PR\'s own, that is the existing fix-round rule (step 3: on route Q disarm first, then a fix round to the owning worker on the `merging → working` edge). If it is not the PR\'s own and its kind is `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait, then the verdict again. One of kind `[app <id>]` or `[status]` that is not the PR\'s own, which no rerun here reaches, or one still red after the one rerun, is the stop `red-unreachable`. Once this landing attempt\'s bounded wait is spent (**After a bounded wait**, below), that one rerun buys no waiting: run the verdict after it with `BOUND_S=0`, and if that line is a `WAIT`, report it and stop, with no watch.',
@@ -3374,6 +3420,8 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'A `changes-requested` stop is read before `WAIT` and `RED` on every route and is the operator\'s to decide, as **A requested change** above says.',
       'Four stops no read decides are yours to name: `red-unreachable` (above), `verdict-unread` (above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub refused for a rule it enforces at merge and this session does not verify — reviews, signatures, deployments, code scanning, required workflows — which this session never works around.',
       'Not a stop: a required check red on the head that is the PR\'s own; that goes to the fix-round rule, on route G exactly as on route Q.',
+      'A `red-unreachable` whose red is `main`\'s own, already fixed on `main`, needs a new head, and its report names that route: a fix round to the owning worker on the `merging → working` edge (on route Q disarm first) for one clean merge of `main` and nothing else, then a review run scoped to that merge alone.',
+      'The one rerun the RED bullet allows does not clear a red that is `main`\'s own, and no close and reopen does either: the verdict calls a required name red while any completed run of it on the head failed, a later green run of it included (D-7495; judging only the newest run would loosen the gate, which is the operator\'s to decide), a rerun replays its run\'s original merge commit, and a close and reopen of the PR can race GitHub\'s recompute of the merge ref. The report of the stop names the new-head route above, not a rerun.',
     ].join(' ');
     expect(prose.slice(from).trim()).toBe(whole);
   });
@@ -3529,5 +3577,140 @@ describe('wave-lifecycle route default (D-6794)', () => {
     expect(text).toContain('`route-defaulted:<kind>`');
     expect(text).toContain('an empty `{}` is a passed route and is sent bare');
     expect(text).not.toContain('sends the identical bare argv it always has');
+  });
+});
+
+// Landing order wave 4, Task 2: the coordinator text for the lineage step. Every sentence below is pinned VERBATIM with
+// its server behaviour (`fingerprint.ts`'s lineage step, `closeDecide.ts`'s `doneRejectionMail`, `routes.ts`'s
+// `verifiedHead`), and holds no double quote, like every pinned clause. The code census above
+// ('mentions every declared MailRejectCode') is what requires the word at all; these pin what the skill says of it.
+describe('landing order wave 4: the lineage-unmeasured text, the recorded head and the brief\'s opt-in', () => {
+  const wl = flat(refs('wave-lifecycle.md'));
+  const step6 = (): string => {
+    const start = skill.indexOf('6. **Rule on the report**');
+    expect(start, 'SKILL.md lost step 6').toBeGreaterThanOrEqual(0);
+    return flat(skill.slice(start, skill.indexOf('**Same project:**', start)));
+  };
+
+  it('the reject.code table explains the word: a wait, mailed by the server, re-sent by the sender, no rejected: mail from the coordinator', () => {
+    expect(wl).toContain('| `lineage-unmeasured` | in a project the operator opted in to the radar\'s lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. ' +
+      'It is a wait, not a refusal: the server has already mailed the claim\'s sender, which re-sends the same claim unchanged after the radar\'s next tick, at most twice. ' +
+      'Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. ' +
+      'The advance and the work close mail the worker, and the review close mails the reviewer. ' +
+      'You send no `rejected:` mail for it, and you act only when the sender reports it.');
+  });
+
+  it('the paragraph after the rejected: instruction carves the word out, naming the server\'s three subjects', () => {
+    expect(wl).toContain('**Except `lineage-unmeasured`.** The server has already mailed that answer to whoever sent the claim, under its own subject ' +
+      '(`wave-done-unmeasured`, `wave-advance-unmeasured` or `review-done-unmeasured`), so send no `rejected: lineage-unmeasured` mail. ' +
+      'The sender re-sends the same claim after the radar\'s next tick, at most twice, and you act only when it reports the answer.');
+    // The carve-out comes after the instruction it carves out of, and before the detail paragraph.
+    const at = (needle: string): number => wl.indexOf(needle);
+    expect(at('**Except `lineage-unmeasured`.**')).toBeGreaterThan(at('A stale `wave-done` must never settle a wave.'));
+    expect(at('**Except `lineage-unmeasured`.**')).toBeLessThan(at('**Put `reject.detail` in that mail\'s body, verbatim.**'));
+  });
+
+  it('SKILL.md step 6 says the three things: never a failed review run, what stale-review means in an opted-in project, and TIP MOVED', () => {
+    const six = step6();
+    expect(six).toContain('`lineage-unmeasured` on a review close is never a failed review run: the server has already mailed the reviewer, ' +
+      'who re-sends its unchanged `review-done` after the radar\'s next tick, so close nothing, open nothing and send no `rejected:` mail until it does.');
+    expect(six).toContain('In a project the brief names as opted in to the radar\'s lineage, `stale-review` means a push the lineage could not prove clean; ' +
+      'everywhere else it means what it means today.');
+    expect(six).toContain('A report whose first line is `TIP MOVED` is never ruled on, even when its close was accepted. ' +
+      'Open a fresh review run against the live tip instead, and the review run that was closed counts as a round.');
+  });
+
+  it('the recorded head is defined ONCE, before §5\'s first <handoffCommit> spelling', () => {
+    const rule = 'In §5 and §5b, `<handoffCommit>` is the recorded head: the advance answer\'s `verifiedHead` when present, ' +
+      'otherwise the head the server\'s dequeue or merged brief prints.';
+    expect(wl).toContain(rule);
+    expect(wl.split(rule), 'the rule is written once').toHaveLength(2);
+    const five = wl.indexOf('## 5 — The boundary');
+    expect(five).toBeGreaterThanOrEqual(0);
+    expect(wl.indexOf(rule), 'the rule sits in §5').toBeGreaterThan(five);
+    expect(wl.indexOf(rule), 'the rule comes before the first <handoffCommit> spelling of §5').toBeLessThan(wl.indexOf('<handoffCommit>', five));
+    expect(wl).toContain('An advance answer with no `verifiedHead` means the claim you submitted was itself the verified head.');
+    // Final review F-A: once an advance answered `verifiedHead`, the later advances and the close submit it as both tips.
+    expect(wl).toContain('When an advance answered `verifiedHead`, every later advance of that run and its close that answer the same wave-done ' +
+      'submit the worker\'s fingerprint with `branchTip` and `handoffCommit` both set to that `verifiedHead` (the server\'s own answer, not a fresh measurement), ' +
+      'so the ordinary path verifies the head that is landing. ' +
+      'That rule ends with the wave-done it answered: once the run goes back to `working` (a send-back, or a lost merge race recorded from `merging`) ' +
+      'or a fresh `wave-done` arrives, submit the worker\'s fingerprint exactly as the worker reports it.');
+  });
+
+  // Fix round 1, F3: section 4's exactly-as-reported rule and the recorded-head rule read as one rule.
+  it('section 4\'s exactly-as-reported sentence points at the one exception, the recorded head', () => {
+    expect(wl).toContain('Submit that fingerprint **exactly as the worker reported it** (the one exception is the recorded head in §5: ' +
+      'while the same wave-done is still being answered after an advance answered `verifiedHead`, ' +
+      'the later advances and the close submit that `verifiedHead` as both tips)');
+  });
+
+  it('the verdict block itself is untouched by the rule: it still takes PR=<pr> HC=<handoffCommit> and holds no verifiedHead', () => {
+    const text = refs('wave-lifecycle.md');
+    const open = text.indexOf('( # The landing verdict');
+    const block = text.slice(open, text.indexOf('\n)\n```', open));
+    expect(block).toContain('PR=<pr> HC=<handoffCommit>');
+    expect(block).not.toContain('verifiedHead');
+  });
+
+  it('a brief for a project whose enabled marker exists names the opt-in and the radar\'s base', () => {
+    expect(wl).toContain('A brief for a project whose `$REG/landing/<project>/enabled` exists names the opt-in and the radar\'s base. ' +
+      'The worker\'s clause 9 exception and the reviewer\'s clause 3 exception apply only where the brief says so, and a brief for any other project says nothing of them.');
+  });
+
+  // Fix round 1, F4: the base is a ref name read from the PR, never a sha.
+  it('the opt-in paragraph says the base is a ref name read from the PR, and what a mismatch with the radar costs', () => {
+    expect(wl).toContain('says nothing of them. ' +
+      'Name the base in that brief as a ref name, `origin/<base>`, where `<base>` is the PR\'s base branch (`gh pr view <n> --json baseRefName`), and never as a sha. ' +
+      'Before a PR exists, as in a first worker brief, `<base>` is the repository\'s default branch, read as a ref name with `gh repo view <owner/repo> --json defaultBranchRef -q .defaultBranchRef.name`. ' +
+      'The radar walks against its conf\'s `base=`, which defaults to `main`; where the two differ, a merge the radar cannot place on its base gets today\'s answer (`stale-tip` or `stale-review`).');
+  });
+
+  it('no new sentence carries a double quote, and the word is in the corpus the census reads', () => {
+    for (const code of ['lineage-unmeasured']) expect(allSkillText).toContain(code);
+    for (const s of [
+      'It is a wait, not a refusal', 'Except `lineage-unmeasured`', 'is never a failed review run', 'is never ruled on, even when its close was accepted',
+      'is the recorded head', 'names the opt-in and the radar\'s base', 'When an advance answered `verifiedHead`',
+      'That rule ends with the wave-done it answered', 'Open a fresh review run against the live tip', 'Name the base in that brief as a ref name', 'Before a PR exists, as in a first worker brief',
+      'The radar walks against its conf', 'the one exception is the recorded head in §5',
+    ]) {
+      // Whitespace-flattened: the new paragraphs wrap at about 120 columns (final review F-H).
+      const flatAll = flat(allSkillText);
+      const at = flatAll.indexOf(s);
+      expect(at, s).toBeGreaterThanOrEqual(0);
+      const sentence = flatAll.slice(at, flatAll.indexOf('. ', at));
+      expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
+    }
+  });
+});
+
+describe('landing order wave 5a: §5b names the train-landed proof and the new-head route', () => {
+  const wl = refs('wave-lifecycle.md');
+  const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
+  const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
+  const fence = /```bash\n([\s\S]*?)```/;
+  const block = fence.exec(sec)?.[1] ?? '';
+  const prose = flat(sec.replace(fence, ''));
+
+  it('the CLOSED stop the MERGED line names is the one the block prints for a closed PR (review 1216)', () => {
+    expect(block).toContain('[ "$state" = CLOSED ] && stop "not-at-head: the PR is CLOSED"');
+    expect(prose).toContain('for it the verdict prints `STOP not-at-head: the PR is CLOSED`');
+  });
+
+  it('the strict rule the stop paragraph states is the block\'s own arm (D-7495)', () => {
+    expect(block).toContain('elif any($r[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))');
+  });
+
+  it('no 5a sentence holds a double quote', () => {
+    const flatAll = flat(allSkillText);
+    for (const s of [
+      'A PR a merge train landed reads CLOSED', 'Before you report that stop', 'Where that proof holds',
+      'A `red-unreachable` whose red is', 'The one rerun the RED bullet allows',
+    ]) {
+      const from = flatAll.indexOf(s);
+      expect(from, s).toBeGreaterThanOrEqual(0);
+      const sentence = flatAll.slice(from, flatAll.indexOf('. ', from));
+      expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
+    }
   });
 });

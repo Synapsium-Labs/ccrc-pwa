@@ -60,7 +60,8 @@ import {
   type DelegationProjectionPort,
   type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
-import { nodeDelegationFilePort, type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
+import { type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 
 // ── fixtures, copied in shape from delegation-recovery.test.ts ────────────────────────────────────────────────────────────
 

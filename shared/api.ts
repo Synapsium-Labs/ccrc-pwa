@@ -30,6 +30,24 @@ export type Presence = typeof PRESENCES[number];
 export type SessionBucket =
   | 'attention' | 'working' | 'done' | 'idle' | 'cleanup' | 'archived' | 'dead';
 
+/** The ONE order the buckets read in (D-7188, OA-C14 (a), D-7265): Needs you, Done, Working, Idle, Cleanup, Archived,
+ *  Dead, in both skins: the fleet list, the project cards, the bucket bar, Instrument's project mode and status table,
+ *  and the palette's order all read it. A `Record`, so a new `SessionBucket` member is a compile error here, never a
+ *  bucket with no place. Not which bucket a session is in: that is `sessionBucket`'s, below. */
+export const BUCKET_RANK: Readonly<Record<SessionBucket, number>> = {
+  attention: 0, done: 1, working: 2, idle: 3, cleanup: 4, archived: 5, dead: 6,
+};
+
+/** `BUCKET_RANK`'s keys, ascending: computed, never typed a second time. */
+export const BUCKET_ORDER: readonly SessionBucket[] =
+  (Object.keys(BUCKET_RANK) as SessionBucket[]).sort((a, b) => BUCKET_RANK[a] - BUCKET_RANK[b]);
+
+/** "Is this row archived", read from the server's bucket (D-7188, OA-C15 (a), D-7265): archived, or archived with its
+ *  PR merged, which `sessionBucket` files `cleanup`. It equals `archivedAt !== null && status === 'dead'`, the ladder's
+ *  first rung, so an archived row whose pane is live is not an archived row here. The one reader: no PWA site tests
+ *  `archivedAt` for absence, nor a bare `bucket === 'archived'`, which would drop the merged row. */
+export const isArchivedRow = (s: { readonly bucket: SessionBucket }): boolean => s.bucket === 'archived' || s.bucket === 'cleanup';
+
 /** The identity triple a registry read either measures or does not:
  *  `uuid`/`wrapper`/`workdir`, together — the fields `server/src/registry.ts`'s
  *  `SessionRecord.unmeasured` and `measuredIdentity()` gate on. Lives here,
@@ -609,6 +627,35 @@ export interface FleetSession {
   readonly run?: SessionRun | null;
   /** The newest OPEN run that names this incarnation, or `null`: the other named query beside `run`, with its contract. */
   readonly openRun?: SessionRun | null;
+  /** The landing radar's reading of THIS session's pull request, or ABSENT (landing order wave 4b, `SessionLanding`
+   *  below carries the contract). ADDITIVE and optional (`FLEET_PROTO` untouched). Absence DELIBERATELY collapses every
+   *  condition in which the radar does not speak for the session now: no radar, no or stale, unreadable, oversized or
+   *  unmeasured `probe`, a head with no match, a branch or PR that moved since the tick, an older server (D-7481). No
+   *  reader may branch on which one applies, and absence is never "no conflict". The live frame is CAST, so the PWA
+   *  reads the field only through `landingOf`, which also ages it. */
+  readonly landing?: SessionLanding;
+}
+
+/** One merge answer of the radar, as the wire carries it (wave 3b's `clean`, `conflict` and `unmeasured`). */
+export const LANDING_MERGE_STATES = ['clean', 'conflict', 'unmeasured'] as const;
+export type LandingMergeState = (typeof LANDING_MERGE_STATES)[number];
+export const isLandingMergeState = (v: unknown): v is LandingMergeState =>
+  typeof v === 'string' && (LANDING_MERGE_STATES as readonly string[]).includes(v);
+
+/** A predicted conflict of one head with ANOTHER open head: that head's PR number and the paths git named. */
+export interface LandingConflict { pr: number; paths: string[]; pathsCut: boolean }
+
+/** What the radar measured for one session's head (D-7479, D-7484): `at` is the doc's own clock. `base` is the head
+ *  against the base branch `baseRef`. `paired` is whether the head was in the radar's pairwise set; `conflicts` and
+ *  `unmeasuredWith` are the other heads it conflicts with or could not be measured against. `cut` says what the radar
+ *  left out: `heads` and `pairs` are its own cuts, `unbound` is a fleet head the radar did not pair (D-7479). Every
+ *  path is cut to 300 characters. "No predicted conflicts" is only ever said of a landing that is clean in every
+ *  field (D-7480). */
+export interface SessionLanding {
+  at: string; pr: number; head: string; baseRef: string;
+  base: { state: LandingMergeState; paths?: string[]; pathsCut?: boolean };
+  paired: boolean; conflicts: LandingConflict[]; unmeasuredWith: number[];
+  cut: { heads: boolean; pairs: boolean; unbound: boolean };
 }
 
 /**
@@ -949,6 +996,15 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | 'unmeasured' | null;
  *
  * `cut-short`: ccrc's own read of the PRs was ended before it answered — the runner's kill or the server's wait (not GitHub)
  *
+ * `train-unproven` (D-7362) is the one reason a `closed` phase carries: GitHub says CLOSED and the PR wears the
+ * deployment's landed-in-train label, but ccd could not prove the landing from the train record (the train PR it names
+ * is MERGED and lists it at exactly its head). A label alone never makes a PR merged, so it stays closed and says why.
+ *
+ * `train-unread` (D-7378) is that same labelled CLOSED PR when its train record could not be READ at all: no budget
+ * (the `--project` sweep has none and reads only kept proofs), a timeout, GitHub unreachable. It is a failed read, so
+ * the phase is `unknown`: never `closed`, which would end a run on a PR that may well have landed. `ccd pr-train-prove`
+ * proves it and keeps the proof, and the next sweep reads `merged`.
+ *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
  * `REASONS` Set, and `PrKeycap.tsx`'s `REASON_TEXT`. Only the last of the four
@@ -966,7 +1022,8 @@ export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
   | 'merge-unproven' | 'branch-drift'
-  | 'unavailable' | 'truncated' | 'cut-short';
+  | 'unavailable' | 'truncated' | 'cut-short'
+  | 'train-unproven' | 'train-unread';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -988,6 +1045,7 @@ const PR_REASON_MAP: Record<PrReason, true> = {
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
   'merge-unproven': true, 'branch-drift': true,
   unavailable: true, truncated: true, 'cut-short': true,
+  'train-unproven': true, 'train-unread': true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 
@@ -1347,8 +1405,12 @@ export interface WsAudit {
   /** `contained` is the fifth proof and the one with no PR beside it: the
    *  branch was never pushed and its tip is an ancestor of a freshly fetched
    *  origin/HEAD, so nothing unique exists to lose. `pr.number` is `null` on
-   *  that verdict — the audit claims no merge it did not witness. */
-  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | null; fetchedAt: number | null };
+   *  that verdict — the audit claims no merge it did not witness.
+   *  `train` is the sixth: a PR a merge train landed and closed, proven by
+   *  the train record — the train PR it names is MERGED and lists it at
+   *  exactly its head sha; `pr.number` is that PR and `pr.mergeCommit` the
+   *  train PR's merge commit, since GitHub named no merge commit for it. */
+  merge: { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'train' | null; fetchedAt: number | null };
   transcript: string;
   /** The checkouts nested under this workspace's worktree — registered
    *  children ccd created plus any filesystem strays found beside them
@@ -2079,7 +2141,8 @@ export function isAskState(v: unknown): v is AskState {
 
 /**
  * The principal an ask row names when THE OPERATOR answered it themselves —
- * `server.ts`'s `POST /api/sessions/:id/ask`, the lock-screen path, which
+ * the operator's ask, the lock-screen path (`POST /api/questions/session-<id>/
+ * answer`; `server.ts`'s `POST /api/sessions/:id/ask` until W7 C7p), which
  * takes the held row and settles it around its own press (Task 12, D-2171).
  * Every other value `answeredBy` can carry is a registry session id: the
  * parent's own route settles with `fromId`, guarded to equal the row's
@@ -3235,6 +3298,8 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
         : unnamedSpawnWord === 'keep' ? spawnWord as SpawnVerdict
         : 'unrecognised';
 
+    const landing = reviveSessionLanding(o, 'landing');
+
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
     // reading of `o`, which is how the two could drift apart.
@@ -3352,6 +3417,9 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // build does not know revives as no key (it reads `unknown`, never a guess); `deadSince` a finite number or null.
       ...(o['presence'] === undefined || !isPresenceWord(o['presence']) ? {} : { presence: o['presence'] }),
       ...(o['deadSince'] === undefined ? {} : { deadSince: reviveDeadSince(o['deadSince']) }),
+      // Landing order wave 4b (D-7481): an absent key stays absent, and a malformed one revives as no key with the
+      // session kept, never as `landing: null`: absence means unknown, and a cached prediction is aged by `landingOf`.
+      ...(landing === undefined ? {} : { landing }),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -3526,11 +3594,12 @@ const reviveAuditPr = (raw: unknown): AuditPr => {
   };
 };
 
-const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry', 'contained'];
-type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | null; fetchedAt: number | null };
+const PROOFS: readonly string[] = ['ancestor', 'tree', 'patch-id', 'cherry', 'contained', 'train'];
+type AuditMerge = { proof: 'ancestor' | 'tree' | 'patch-id' | 'cherry' | 'contained' | 'train' | null; fetchedAt: number | null };
 /** `WsAudit.merge` — `proof` is a closed vocabulary (the four ways
  *  `_pr_state_one` can corroborate a merge, plus `contained` — the reap
- *  ladder's never-pushed-nothing-unique rung), validated the same way
+ *  ladder's never-pushed-nothing-unique rung — and `train`, its rung for
+ *  a PR closed as landed in a merge train), validated the same way
  *  `isPrPhase`/`isPrReason` validate theirs: cast the CONSTANT, never the
  *  input. `fetchedAt` is `null` until Phase C actually fetched — the field's
  *  own docstring on `WsAudit` is why `0` cannot stand in for that. */
@@ -4065,7 +4134,7 @@ export type FleetMsg =
   /** Build 7. ADDITIVE, so no FLEET_PROTO bump: an already-deployed PWA drops
    *  an unknown frame type silently (`pwa/src/stores/fleet.ts:54-73`), which is
    *  the one-way new-writer/old-reader rule this file states at :560-566. */
-  | { type: 'runs'; runs: RunSummary[] }
+  | { type: 'runs'; runs: RunSummary[]; /** D-7334: see `RunSummary.lastMoveAt`. */ stallQuietMs?: number }
   /** Build 4, spec §4.2. Additive on the same terms as `runs` above. */
   | { type: 'coord'; coord: CoordStatus }
   /** §1.6's census. Additive on the same terms as `runs`/`coord` above — an
@@ -4527,7 +4596,7 @@ export interface Dialog {
 
 /**
  * A multiSelect AskUserQuestion question as `parseDialog` reads it off the pane (D-5048), the shape
- * `POST /api/sessions/:id/dialog/multi` answers. Measured on Claude Code 2.1.300 (2.1.280 paints the same): rows
+ * the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) answers. Measured on Claude Code 2.1.300 (2.1.280 paints the same): rows
  * `k. [ ] Label`, then `n+1. [ ] Type something`, then an unnumbered `Next` row (`Submit` on the last question), a
  * rule, and `n+2. Chat about this`. A box reads `[✔]` once ticked. The dialog's id does not change as boxes are ticked
  * or the cursor moves, so it names the question, never its ticks: a reader takes the ticks from here, fresh.
@@ -4623,7 +4692,7 @@ export type SessionStreamMsg =
    *  one is right and sends both exactly as read. The CLIENT is where the
    *  preference lives: it prefers this envelope over the scraped `dialog`
    *  when both are present. */
-  | { type: 'ask'; ask: HookAsk; key: string | null; pairing?: AskPairing }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes; pairing: D-7031, never on an approval
+  | { type: 'ask'; ask: HookAsk; key: string | null; pairing?: AskPairing }   // key: answerable via POST /api/questions/session-<id>/answer {kind:'ask'}; null for approval envelopes; pairing: D-7031, never on an approval
   | { type: 'ask_cleared'; pairing?: AskPairing } // the hook's ask went null, stale, or its hookstate file is gone; pairing: D-7211, the transcript copy's
   | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
       /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
@@ -4661,8 +4730,8 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
 /**
  * The presence heartbeat, defined ONCE for both halves because they are one
  * mechanism: the client re-states "this session is on screen" every
- * `PRESENCE_REFRESH_MS`, and the server stops believing a claim it has not
- * heard for `PRESENCE_TTL_MS`.
+ * `VIEWER_REFRESH_MS`, and the server stops believing a claim it has not
+ * heard for `VIEWER_TTL_MS`.
  *
  * A close frame is not guaranteed. A phone that loses signal in a lift or a
  * tunnel sends no FIN, the socket's 'close' never fires, and a claim held for
@@ -4677,20 +4746,20 @@ export type SessionClientMsg = { type: 'visible'; visible: boolean };
  * backgrounded tab all resolve to the same rule: keep saying it, or stop
  * counting.
  */
-export const PRESENCE_REFRESH_MS = 15_000;
-export const PRESENCE_TTL_MS = 45_000;
+export const VIEWER_REFRESH_MS = 15_000;
+export const VIEWER_TTL_MS = 45_000;
 /**
  * The OPEN claim's lifetime (D-5242, spec §5.11's presence contract): how long the server believes a
  * `/ws/session/:id` connection is still open after its last frame, visible or hidden. Every frame re-stamps it, and
  * the client's heartbeat now beats whatever the visibility (`visible:false` while hidden, which `isVisible` reads
  * exactly as before), so a hidden but running tab keeps its session from being put to sleep.
  *
- * Why it is so much longer than `PRESENCE_TTL_MS`: a browser throttles a hidden tab's timers, to about one wake-up a
- * minute at the most, so the hidden beat arrives a minute apart rather than every `PRESENCE_REFRESH_MS`, and the claim
+ * Why it is so much longer than `VIEWER_TTL_MS`: a browser throttles a hidden tab's timers, to about one wake-up a
+ * minute at the most, so the hidden beat arrives a minute apart rather than every `VIEWER_REFRESH_MS`, and the claim
  * must outlive several of those missed beats. A page the browser froze sends nothing, and its claim lapses after this
  * long — the case the open screen's wake covers when the operator comes back.
  */
-export const PRESENCE_OPEN_TTL_MS = 10 * 60_000;
+export const VIEWER_OPEN_TTL_MS = 10 * 60_000;
 
 /** Wire protocol generation of the PWA↔server pair. Bump on a breaking
  *  wire change. FLEET_PROTO_MIN is the kill-switch: raise it above an
@@ -5954,17 +6023,21 @@ export const MAIL_REJECT_CODES = [
   'no-handoff-commit',
   // review-run verdicts (design 2026-09-14 §5.3)
   'stale-review', 'report-unreadable',
+  // landing order wave 4 (D-7107): the radar has not measured the live tip yet. A verdict, not a counted refusal.
+  'lineage-unmeasured',
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
- * The done-authority subset of `MAIL_REJECT_CODES` — the eight a wave-done claim
+ * The done-authority subset of `MAIL_REJECT_CODES` — the nine a wave-done claim
  * or a forward advance can be refused with, as distinct from the ingress,
  * peer-bound and delivery families above: four a work run's claim alone
  * (`stale-tip`, `pr-regressed`, `pr-unmeasurable`, `no-handoff-commit`), two
  * shared by the branch resolution both verifiers run (`tip-unmeasurable`,
  * `branch-unmeasurable`), two a review run's alone (`stale-review`,
- * `report-unreadable`) (D-2797).
+ * `report-unreadable`) (D-2797), and one both verifiers share on a project the
+ * operator opted in to the radar's lineage (`lineage-unmeasured`, landing order
+ * wave 4): a verdict code, but NOT a refusal — see `DONE_REFUSAL_CODES`.
  *
  * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
  * one: the ARRAY is the single definition and the type follows it, because wave
@@ -5982,8 +6055,20 @@ export const DONE_AUTHORITY_CODES = [
   'pr-unmeasurable', 'no-handoff-commit',
   // review-run verdicts (design 2026-09-14 §5.3)
   'stale-review', 'report-unreadable',
+  // landing order wave 4 (D-7107)
+  'lineage-unmeasured',
 ] as const satisfies readonly MailRejectCode[];
 export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
+
+/**
+ * The done-authority codes that COUNT as a refusal (D-7107): every one but `lineage-unmeasured`, which is the radar's
+ * timing and not a fact about the claim. Every refusal count reads this list and never `DONE_AUTHORITY_CODES`:
+ * `closeRefusals`, `firstSubmission`, run health's `doneRejects` and `lastRejectCode`, and so the PWA chip. The
+ * unmeasured answer is still recorded (`mail_rejections`) and mailed, so a re-sent `wave-done` still counts in
+ * `waveDoneMails`. DERIVED by `.filter`, never typed out: `core-vocab.test.ts` reds on a hand-typed copy.
+ */
+export const DONE_REFUSAL_CODES: readonly Exclude<DoneRejectCode, 'lineage-unmeasured'>[] =
+  DONE_AUTHORITY_CODES.filter((c): c is Exclude<DoneRejectCode, 'lineage-unmeasured'> => c !== 'lineage-unmeasured');
 
 // NO `isDoneRejectCode` PREDICATE, deliberately. Every sibling vocabulary here
 // exports one because something reads a raw string back through it; nothing does
@@ -6535,7 +6620,8 @@ export interface RunHealth {
    *  the ceiling is the signal, and quiet siblings must not dilute it. */
   readonly mailReplayMax: number;
   /** How many done-authority refusals this run has collected
-   *  (`DONE_AUTHORITY_CODES`); other reject families are not counted. */
+   *  (`DONE_REFUSAL_CODES`: the authority codes less `lineage-unmeasured`, which is
+   *  the radar's timing and no refusal); other reject families are not counted. */
   readonly doneRejects: number;
   /** The newest one's code, or null when there are none. FREE TEXT on the wire in
    *  `MailSummary.lastError`'s sense — `mail_rejections.code` is stored
@@ -6832,6 +6918,20 @@ export interface RunSummary {
    *  rides every run of that coordinator, so a reader holding one run needs no second lookup. Read it ONLY through
    *  `childIdsOf`; see there for what absent and empty mean. */
   childIds?: readonly number[];
+
+  /** D-7334 (programme-boxes spec §2.5): the `at` of this run's newest MOVE, or null when it has none. A move is an act row
+   *  by the drift reader's rule (not a stall observation, not `causedBy = 'operator'`) or a mail naming the run whose sender
+   *  is a session, never a role sender. Read once per frame for the open runs (`CoordStore.runLastMoves`, carried by
+   *  `withLastMoves` in `server/src/coord/runWire.ts`). ADDITIVE and OPTIONAL; `FLEET_PROTO` is not bumped. Read it ONLY
+   *  through `runLastMove` (`pwa/src/fleet/runWords.ts`): absent is an older server and reads null; null falls back to the
+   *  run's dispatch or open time (D-7338).
+   *
+   *  Its threshold rides beside the runs on the same frame, as `stallQuietMs` (`FleetMsg`'s `runs` member): the quiet time
+   *  the stall watch applies (the Settings choice, else `STALL_QUIET_MS`), so the app's stalled word and the stall watch
+   *  mean one thing by quiet. ADDITIVE: absent before the server's first runs frame, and from an older server, which also
+   *  sends no `lastMoveAt`, so nothing reads as stalled. Declared here, not on that member, so the frame's line in the
+   *  union does not move a cited line below it. */
+  lastMoveAt?: number | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
@@ -6859,7 +6959,8 @@ export interface RunSummary {
  *  would otherwise have to test `closedAt` as a second condition to know which
  *  zeroes it may believe. So `activeMs` (`wallMs - holdMs`) is a ceiling
  *  whenever this is true, and a total only when it is false. `closeRefusals` is the
- *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
+ *  count of `mail_rejections` rows with a `DONE_REFUSAL_CODES` code (the authority
+ *  codes less `lineage-unmeasured`) for this
  *  run — the rows `closeRun` writes for a refused wave-done — and
  *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
  *  before.
@@ -8039,7 +8140,7 @@ export type LifecycleAct =
                     // <to>" (no new dec key — the dec vocabulary is pinned at
                     // four). Additive on the wire, as every act is.
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget' | 'hibernate'   // `hibernate` (D-5242): `ccd hibernate`, a DELIBERATE stop of a long-idle session journalled before its own `unsupervise` row (surface `none`, which alone reads as a crash); its own act so the journal never needs a filter to tell a sleep from a stop; `ensure` wakes it
-  | 'shed-deps'     // ws-shed-deps (#1772): a sleeping session's git-ignored, untracked dependency
+  | 'shed-deps'     // ws-shed-deps (D-7278): a sleeping session's git-ignored, untracked dependency
                     // directories removed, server-composed. Its own act: it removes no workspace,
                     // puts down no session and changes no git fact, so no removal set counts it.
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
@@ -8552,6 +8653,9 @@ export interface LifecycleMeas {
    *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
   readonly clipsKept: string | null;
   /** A `collect` `done`'s leaf (path-identity spec §3.4): see `COLLECT_LEAF_END_WORDS`, at the foot. */ readonly leaf: string | null;
+  /** The `--child` run marker a `ws-shed-deps` line was judged against (D-7278), beside its class in `mode`: the
+   *  decimal run id as ccd wrote it. Null: the session carries no marker (a coordinator, or a row with none), or another act. */
+  readonly childRun: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8574,6 +8678,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
   unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
+  childRun: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -10887,7 +10992,8 @@ export interface CollectLaneConfirmRequired {
   };
 }
 
-/** The 200 answer of the three answer routes (`POST /api/sessions/:id/dialog`, `/dialog/text`, `/dialog/multi`):
+/** The 200 answer of the three dialog answers (an option row, the own words, a multiSelect set; all on
+ *  `POST /api/questions/session-<id>/answer` since W7 C7p retired `/api/sessions/:id/dialog`, `/dialog/text` and `/dialog/multi`):
  *  the screen the pane settled on after the answer's last key (decision `ask-answer-returns-next-screen`).
  *  - `next` a Dialog: the pane moved to that menu (the next question, or the review screen an ask ends on);
  *  - `next: null`: no menu is on screen any more (the ask was submitted or declined);
@@ -10900,7 +11006,7 @@ export interface DialogAnswered {
   readonly next?: Dialog | null;
 }
 
-/** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
+/** Every refusal the option-row answer (`POST /api/questions/session-<id>/answer`) answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
  *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
  *  without a row here, is a compile error.
  *  - `not-alive`: the pane could not be captured.
@@ -10912,7 +11018,7 @@ export interface DialogAnswered {
  *    typed text.
  *  - `unparsed-dialog`: the menu on screen (before the walk, or where it landed) did not parse (`parsed: false`), so
  *    nothing proves where the cursor is. A multiSelect AskUserQuestion is one: Enter there toggles or commits rather
- *    than answering, so it is refused with no key; `POST /api/sessions/:id/dialog/multi` answers it (D-5048). */
+ *    than answering, so it is refused with no key; the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) answers it (D-5048). */
 export type DialogRefuseCode = 'not-alive' | 'stale-dialog' | 'walk-failed' | 'free-text-row' | 'unparsed-dialog';
 const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
   'not-alive': true, 'stale-dialog': true, 'walk-failed': true, 'free-text-row': true, 'unparsed-dialog': true,
@@ -10920,7 +11026,8 @@ const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
 export const DIALOG_REFUSE_CODES: readonly DialogRefuseCode[] =
   Object.keys(DIALOG_REFUSE_CODE_MAP) as DialogRefuseCode[];
 
-/** The longest answer `POST /api/sessions/:id/dialog/text` types (D-5047), in UTF-16 code units (`String.length`).
+/** The longest own-words answer the server types (D-5047; `POST /api/questions/session-<id>/answer` with `text`, the
+ *  retired `POST /api/sessions/:id/dialog/text` until W7 C7p), in UTF-16 code units (`String.length`).
  *  Measured on Claude Code 2.1.300 at 220x50: a 1000-character single-line answer, sent as one literal, arrived byte for
  *  byte, painted as 5 rows with the question still inside the 50-row capture, so its echo could be proved. Nothing
  *  longer was measured. A taller row can push the question out of the capture, and then no echo proves anything. */
@@ -10931,13 +11038,15 @@ export const DIALOG_TEXT_MAX = 1000;
  *  8-bit CSI. U+2028 and U+2029 are line breaks, and the answer is one line. */
 const DIALOG_TEXT_CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
-/** Will `POST /api/sessions/:id/dialog/text` type `text` (D-5047)? Not blank once trimmed, one line, no control
+/** Will the own-words answer (`POST /api/questions/session-<id>/answer` with `text`; `/dialog/text` until W7 C7p)
+ *  type `text` (D-5047)? Not blank once trimmed, one line, no control
  *  character, at most `DIALOG_TEXT_MAX`. The route answers 400 `bad-text` otherwise, before it captures the pane. */
 export function isDialogText(text: string): boolean {
   return text.trim() !== '' && text.length <= DIALOG_TEXT_MAX && !DIALOG_TEXT_CONTROL_RE.test(text);
 }
 
-/** Every refusal `POST /api/sessions/:id/dialog/text` answers with (`answerDialogText`, `server/src/inject/send.ts`,
+/** Every refusal the own-words answer (`POST /api/questions/session-<id>/answer` with `text`; `/dialog/text` until
+ *  W7 C7p) answers with (`answerDialogText`, `server/src/inject/send.ts`,
  *  D-5047). `bad-text` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
  *  - `bad-text`: `isDialogText` refuses the text. Nothing was captured or pressed.
  *  - `not-alive`: the pane could not be captured.
@@ -10960,11 +11069,11 @@ const DIALOG_TEXT_REFUSE_CODE_MAP: Readonly<Record<DialogTextRefuseCode, true>> 
 export const DIALOG_TEXT_REFUSE_CODES: readonly DialogTextRefuseCode[] =
   Object.keys(DIALOG_TEXT_REFUSE_CODE_MAP) as DialogTextRefuseCode[];
 
-/** The highest digit `POST /api/sessions/:id/dialog/multi` sends (D-5048). A box is toggled by its own digit, and an
+/** The highest digit the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) sends (D-5048). A box is toggled by its own digit, and an
  *  AskUserQuestion question has at most four options, so 9 is never the binding limit. */
 const DIALOG_MULTI_MAX_INDEX = 9;
 
-/** Will `POST /api/sessions/:id/dialog/multi` send `indexes` (D-5048)? A non-empty list of distinct whole numbers, each
+/** Will the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) send `indexes` (D-5048)? A non-empty list of distinct whole numbers, each
  *  from 1 to 9: the printed digits of the boxes to leave ticked. Empty is refused because Tab on a question with no box
  *  ticked skips it (measured), which is not an answer. The route answers 400 `bad-indexes` otherwise, before it captures
  *  the pane. Whether each index is one of the question's own options is the pane's to say (409 `not-an-option`). */
@@ -10974,7 +11083,7 @@ export function isDialogMultiIndexes(indexes: readonly number[]): boolean {
     indexes.every((i) => Number.isInteger(i) && i >= 1 && i <= DIALOG_MULTI_MAX_INDEX);
 }
 
-/** Every refusal `POST /api/sessions/:id/dialog/multi` answers with (`answerDialogMulti`, `server/src/inject/send.ts`,
+/** Every refusal the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) answers with (`answerDialogMulti`, `server/src/inject/send.ts`,
  *  D-5048). `bad-indexes` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
  *  - `bad-indexes`: `isDialogMultiIndexes` refuses the set. Nothing was captured or pressed.
  *  - `not-alive`: the pane could not be captured.
@@ -11660,7 +11769,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -11871,7 +11980,7 @@ export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; rea
  *              and the hook stops (D-5440). Terminal.
  *  `released`  minted released (a `releaseReason`: forbidden, truncated, unparseable, or no claimant to hold it for,
  *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
- *  `operator`  the operator answered the dialog (`POST /api/sessions/:id/dialog`), or the painted dialog closed with
+ *  `operator`  the operator answered the dialog (the option-row answer (`POST /api/questions/session-<id>/answer`)), or the painted dialog closed with
  *              no ruling taken: every approval has an answering principal. Terminal.
  *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal. Terminal.
  *  `unknown`   a token this build does not know, read off disk; never written.
@@ -12266,8 +12375,8 @@ export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
 const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
 export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
 
-/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
- *  which `pwa/src/fleet/sortFleet.ts` owns). */
+/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the order the buckets read in, which is
+ *  `BUCKET_ORDER`, near the top of this file, D-7188). */
 const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
   attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
 };
@@ -12468,8 +12577,89 @@ export type DeadCause = typeof DEAD_CAUSES[number];
 /** The answer of a successful `POST /api/runs/:id/advance`. `checksMail` is the capability token of PR landing in ccrc
  *  (stage 1, spec §3.7): present only on an advance to `merging` whose episode was decided `live`, so a coordinator that
  *  reads it knows the server will mail the checks and may end its turn. Its one reader is the coordinator, through the
- *  answer `ccrc-api runs advance` prints. */
-export interface AdvanceOk { ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN }
+ *  answer `ccrc-api runs advance` prints.
+ *
+ *  `verifiedHead` (landing order wave 4, D-7102) is the live branch tip a stale claim was accepted AT, on a project the
+ *  operator opted in to the radar's lineage: the episode's head and the landing's recorded head. ABSENT means the claim
+ *  itself was the head (every other advance, and every project not opted in). ADDITIVE and optional (`FLEET_PROTO`
+ *  untouched); its one reader is the coordinator skill's text, which binds it wherever it spells `<handoffCommit>`. */
+export interface AdvanceOk {
+  ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN; verifiedHead?: string;
+}
+
+/** How far ahead of the reader's clock a radar file's own `at` may read and still be trusted (D-7475). */
+export const FRESH_FUTURE_SKEW_S = 60;
+
+/** A radar file's clock, read as fresh: written at most `freshS` ago and at most FRESH_FUTURE_SKEW_S ahead (D-7475). The
+ *  one rule of the landing radar's files on the server: the readers of the `enabled` marker, a lineage doc and (wave 4b)
+ *  the `probe` doc take it, so no server reader keeps a copy. The PWA reads `landingShown` below instead, for the reason
+ *  D-7481 records. `at` is the file's own string, read as
+ *  `Date.parse` reads it; a missing, non-string or unparseable one is not fresh. Pure: `nowMs` is the caller's clock. */
+export function freshWithin(at: unknown, freshS: number, nowMs: number): boolean {
+  if (typeof at !== 'string') return false;
+  const t = Date.parse(at);
+  if (Number.isNaN(t)) return false;
+  const ageMs = nowMs - t;
+  return ageMs <= freshS * 1000 && ageMs >= -FRESH_FUTURE_SKEW_S * 1000;
+}
+
+/** Four timer intervals of the radar (doctor's CCRC_LAND_PROBE_STALE_S); both sides age a landing by it (D-7482). */
+export const RADAR_PROBE_FRESH_S = 1200;
+
+/** The one shape of a radar stamp: the `at` the radar writes is `%Y-%m-%dT%H:%M:%SZ` (wave 3b), UTC, fixed width, so a
+ *  stamp of any other shape (no zone, millis, a space for the `T`) is a doc or a frame the radar did not write, and two
+ *  stamps order by plain string comparison. Shape only: a reader still asks `freshWithin` or `landingShown` for the clock. */
+export const isRadarStamp = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(v);
+
+/** The DISPLAY's clock rule for a landing's `at` (D-7481): the stale bound only. Legitimately different from
+ *  `freshWithin`: a phone's clock is not the fleet box's, and a device clock that runs behind must not hide every live
+ *  landing, while the server has already refused a doc dated ahead. The one reader is the PWA's `landingOf`. A missing,
+ *  non-string or unparseable `at` is not shown. Pure: `nowMs` is the caller's clock. */
+export function landingShown(at: unknown, nowMs: number): boolean {
+  if (typeof at !== 'string') return false;
+  const t = Date.parse(at);
+  if (Number.isNaN(t)) return false;
+  return nowMs - t <= RADAR_PROBE_FRESH_S * 1000;
+}
+
+const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const isPrNum = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+const isRawObj = (v: unknown): v is RawObj => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** `FleetSession.landing` read from a persisted row (or by the PWA's `landingOf`): every field checked, and anything
+ *  malformed answers `undefined`, which the caller spreads as an ABSENT key, never as a throw or a null (D-7481). The
+ *  session around it is kept. */
+export function reviveSessionLanding(o: RawObj, k: string): SessionLanding | undefined {
+  const v = o[k];
+  if (!isRawObj(v)) return undefined;
+  const base = v['base'];
+  const cut = v['cut'];
+  if (!isRadarStamp(v['at']) || !isPrNum(v['pr']) || typeof v['head'] !== 'string' || typeof v['baseRef'] !== 'string') return undefined;
+  if (!isRawObj(base) || !isLandingMergeState(base['state'])) return undefined;
+  if (base['paths'] !== undefined && !isStrArr(base['paths'])) return undefined;
+  if (base['pathsCut'] !== undefined && typeof base['pathsCut'] !== 'boolean') return undefined;
+  if (typeof v['paired'] !== 'boolean') return undefined;
+  const conflicts = v['conflicts'];
+  if (!Array.isArray(conflicts)) return undefined;
+  const outConflicts: LandingConflict[] = [];
+  for (const c of conflicts as unknown[]) {
+    if (!isRawObj(c) || !isPrNum(c['pr']) || !isStrArr(c['paths']) || typeof c['pathsCut'] !== 'boolean') return undefined;
+    outConflicts.push({ pr: c['pr'], paths: c['paths'], pathsCut: c['pathsCut'] });
+  }
+  const unm = v['unmeasuredWith'];
+  if (!Array.isArray(unm) || !(unm as unknown[]).every(isPrNum)) return undefined;
+  if (!isRawObj(cut) || typeof cut['heads'] !== 'boolean' || typeof cut['pairs'] !== 'boolean' || typeof cut['unbound'] !== 'boolean') return undefined;
+  return {
+    at: v['at'], pr: v['pr'], head: v['head'], baseRef: v['baseRef'],
+    base: {
+      state: base['state'],
+      ...(base['paths'] === undefined ? {} : { paths: base['paths'] }),
+      ...(base['pathsCut'] === undefined ? {} : { pathsCut: base['pathsCut'] }),
+    },
+    paired: v['paired'], conflicts: outConflicts, unmeasuredWith: unm as number[],
+    cut: { heads: cut['heads'], pairs: cut['pairs'], unbound: cut['unbound'] },
+  };
+}
 
 /** `FleetHealth`'s host-pressure block (#1170), at the foot as an interface merge, the disk block's rule, so no line
  *  cited above moves. */

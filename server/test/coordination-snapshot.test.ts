@@ -1911,7 +1911,7 @@ describe('8B: backup-coord.mjs stays the SQLite-only snapshot, and the helper ne
 // `delegation.journalTailOmitted: {bytes, sha256}` (version 1 still; absence means nothing was left out), and the CLI says so on stderr.
 // The rule is the server's, restated once on this side (it cannot import server TypeScript); the differential below holds the two together.
 import { statSync } from 'node:fs';
-import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import { DelegationDurability, recoverDelegation, recoverDelegationFromFiles } from '../src/coord/delegation-checkpoint.js';
 
 describe('8C: capture of a torn tail (D-4655): the complete prefix, the checkpoint, an additive manifest field, and a warning', () => {
@@ -2165,7 +2165,7 @@ describe('8C: a snapshot taken past a torn tail restores as a valid pair, and th
     const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target));
     expect(report.failure).toBeNull();
     expect(report.tailHeal, 'the restored journal has no tail').toBeNull();
-    const dur = await DelegationDurability.open({ dir: liveDir(target), projection: null, now: () => Date.now(), randomUUID: () => 'u' });
+    const dur = await DelegationDurability.open({ dir: liveDir(target), projection: null, now: () => Date.now(), randomUUID: () => 'u', port: nodeDelegationFilePort });
     try {
       expect(dur.failure()).toBeNull();
       expect(dur.state().phase).toBe('ready');
@@ -3486,5 +3486,55 @@ describe('W23: thin keeps the newest N verified data sets and drops the rest, re
       expect(r.stdout, bad.join(' ')).toBe('');
     }
     expect(dirs.map(treeDigest)).toEqual(before);
+  });
+
+  // wave 29 (R46, D-6985): the pre-migration keep exists so one data set from before a schema migration survives. When a
+  // set the count already keeps predates it, that purpose is met, so no fourth set is kept for it.
+  const PRE = 'predates a schema migration';
+  it('W29-T1: a counted set from before the migration is the pre-migration keep, so no fourth is kept', () => {
+    const home = mkHome();
+    const t5 = template(home, '20260101-000005', 5);
+    const t4 = template(home, '20260101-000004', 4);
+    const own = clone(home, t5, stamp(9));
+    const dirs = [clone(home, t5, stamp(8)), clone(home, t4, stamp(7)), clone(home, t4, stamp(6))];
+    const { r, lines } = run({ own, dirs, keep: 3, by: 'backup' });
+    expect(r).toEqual({ kept: 3, thinned: 1, left: 0, refused: 0, stopped: false });
+    expect(lines.filter((l) => l.includes(PRE)), lines.join('\n')).toEqual([]);
+    expect(dirs.map((d) => H.classify({ from: d }).kind)).toEqual(['v1', 'v1', 'thinned']);
+  });
+
+  it('W29-T2: with every counted set after the migration, the newest one before it is still kept (D-6358, unchanged)', () => {
+    const home = mkHome();
+    const t5 = template(home, '20260101-000005', 5);
+    const t4 = template(home, '20260101-000004', 4);
+    const own = clone(home, t5, stamp(9));
+    const dirs = [clone(home, t5, stamp(8)), clone(home, t5, stamp(7)), clone(home, t4, stamp(6))];
+    const { r, lines } = run({ own, dirs, keep: 3, by: 'backup' });
+    expect(r).toEqual({ kept: 4, thinned: 0, left: 0, refused: 0, stopped: false });
+    expect(lines.filter((l) => l.includes(PRE))).toEqual([
+      `kept ${stamp(6)}: its coord.db predates a schema migration (user_version 4 < 5), so it is the one data set kept from before it`]);
+  });
+
+  it('W29-T3: a counted set whose header cannot be read gives no credit', () => {
+    const home = mkHome();
+    const t5 = template(home, '20260101-000005', 5);
+    const t4 = template(home, '20260101-000004', 4);
+    const own = clone(home, t5, stamp(9));
+    const blind = clone(home, t4, stamp(7));
+    const dirs = [clone(home, t5, stamp(8)), blind, clone(home, t4, stamp(6))];
+    // The header read (`dbUserVersion`'s 100 bytes at 0) of `blind`'s coord.db answers short; verification reads it whole.
+    const db = path.join(blind, 'coord.db');
+    const fs = {
+      ...H.realFs,
+      openRead(p: string) {
+        const h = H.realFs.openRead(p);
+        if (h === null || p !== db) return h;
+        return { ...h, size: h.size, read: (at: number, n: number) => (at === 0 && n === 100 ? new Uint8Array(0) : h.read(at, n)), close: () => h.close() };
+      },
+    };
+    const { r, lines } = run({ own, dirs, keep: 3, by: 'backup', fs });
+    expect(r, lines.join('\n')).toEqual({ kept: 4, thinned: 0, left: 0, refused: 0, stopped: false });
+    expect(lines.filter((l) => l.includes(PRE))).toHaveLength(1);
+    expect(H.classify({ from: dirs[2]! }).kind).toBe('v1');
   });
 });

@@ -1341,3 +1341,476 @@ _ws_loose_collect() {   # token hex surface actor reason -> ccd ws-collect --exp
 # `ws-audit --loose-hex <hex> --collect`, `ws-collect --expect <token> --loose-hex <hex>` and the record family under
 # `$REG/tmpquarantine-loose/`, in one ccd inode. The server composes them only behind that word (D-6625).
 # ── end loose temp entries ───────────────────────────────────────────────────── LOOSE-END ──
+
+# @ccd-lib:depsshed
+# ── ws-shed-deps: a sleeping session's ignored dependency directories (D-7278; design note 2026-10-28 §4) ─ DEPSSHED-BEGIN ──
+# THE SERVER'S ACT, composed by the server's deps-shed arm (`server/src/depsShedPass.ts`) and by nothing else (CLAUDE.md
+# SAFETY): sessions never run it. The server decides that the session's work is finished (a worker's run closed past the
+# age, or a coordinator's last chair ended past it, with no open chair); this verb re-proves at the act every fact the box
+# can see, and removes ONLY the git-ignored, untracked directories of the worktree whose name is one of
+# CCD_DEPS_SHED_NAMES (default `node_modules`). Every git fact stays: the index, every ref, every tracked file and every
+# untracked file git does not ignore, and `git status` is read before and after to prove it. There is no token: what is
+# removed is rebuildable (`npm ci`), and each rung is re-read here, `ccd-tmp-sweep`'s dead-arm reasoning.
+# stdout is ONE JSON line: `{"shed":…}` or `{"wouldShed":…}` (exit 0), a refusal `{"refused":<word>,…}` (exit 0), or a
+# failure after the act began `{"failed":<word>,…}` (exit 1). `--dry-run` runs every rung, removes nothing and journals
+# nothing, takes no lock and makes no lock file (the arm's shadow). The refusal words, in order: paused,
+# no-such-session, in-progress, archived, not-a-workspace, not-a-child, run-open, not-asleep, asleep-too-recently, already-shed,
+# unmeasured, nothing-to-shed, in-use; the failures: git-state-changed, shed-incomplete, and marker-not-own (journaled
+# only, after the answer: the exit found a shed marker that is not its own and left it standing, below).
+# TWO LOCKS, IN ONE ORDER, BOTH `-n`. Once the row is known to stand, a REAL shed takes `$REG/.reap-<id>.lock`, the lock
+# every verb that removes anything of the id takes (ws-reap, ws-reclaim, ws-expire, ws-restore, ws-collect), and then
+# its OWN `$REG/.shed-<id>.lock`; either one held answers the retryable `in-progress`, touching nothing. Both are asked
+# `-n`, never waited on, and always reap first, so no holder of one ever waits for the other. Neither is taken for an id
+# no row names, and `--dry-run` takes neither (a shadow never delays a wake, a reap, a restore or a collect). An
+# ARCHIVED row refuses `archived`, read under the reap lock (an expiry archives under it), so no row is archived while a
+# real shed runs and the spawn gate's archived branch never has to ask the shed lock.
+# THE MARKER, BECAUSE THE LOCK FILE CAN GO. `$REG/.shed-<id>.lock` is a dot-prefixed `$REG` file a dot-led project can
+# alias (`_reg_purge`'s R-3 paragraph: project `.shed-demo` + slug `quiet-basin` purges the shed lock of the session
+# `demo-quiet-basin`), and a lock file unlinked under its holder reads as free. So a real shed also writes the row field
+# `$REG/<id>.shedding` (`<pid> <dev:ino of the lock>`, which no other id's purge glob reaches) once it holds both locks,
+# re-reads the lock's identity after writing it (a lock file that went or changed meanwhile refuses `unmeasured`), and
+# takes it back on its one way out, only while its body is still its own (another body stays, journaled
+# `marker-not-own`). While the marker stands the gate frees a wake in ONE case, whatever its pid says: the lock file
+# stands, is the inode the marker names, and nobody holds its flock. A marker that does not read, a lock file that is
+# gone, or one that is another inode refuses. Neither a pid nor a missing lock proves the removal ended: the `rm` runs
+# as a child in its own process group (`_plat_timeout`) and inherits the lock's fd, so a shed whose bash is killed
+# mid-removal leaves the rm holding the flock (the gate frees once it lets go), and a shed killed after an alias purge
+# unlinked its lock leaves nothing the gate can ask, so its marker refuses every wake until the operator removes it.
+# WHAT AN OPERATOR SEES WHEN A WAKE IS REFUSED. Every pane-creating path meets the gate in `_spawn_start` (or the return
+# verbs' gate, `_ws_expire_refuse_return`) and dies there with its sentence, `ws-shed-deps is removing <id>'s dependency
+# directories and holds its shed lock — refusing to create a pane for it until that finishes; retry` (or, for a marker
+# the gate cannot prove over, one that names `$REG/<id>.shedding` and says to remove it by hand). It is never a wait.
+# A verb run OUTSIDE the unit (`ccd ensure`/`ccd start`, and the PWA's ensure and Revive routes, which compose them)
+# meets the return verbs' gate before it clears the stop stamp, so the session stays asleep, nothing else changed and
+# the verb answers the sentence as its error. INSIDE the unit it is different: the unit's `ccd supervise` reaches the
+# gate only after the verb that enabled the unit has cleared the stop stamp, and it dies with the sentence on stderr,
+# in the unit's journal; a swap's respawn the same. THE REMAINING UNIT-PATH WINDOW, stated, not closed: an outer
+# `ccd ensure`/`ccd start` that passed its gate just BEFORE a shed took its lock, and that clears the stop stamp only
+# AFTER the shed's last facts read it (between the two: `ccd ensure`'s live-pane probe and banner clears; `ccd start`'s
+# too, plus its registry writes and its compaction-lock acquire, which waits up to COMPACT_LOCK_WAIT, 5 s), enables a unit
+# whose supervise is then refused for as long as the removal runs, `Restart=always` (3 s) retrying it, and its start
+# limit (5 in 120 s) can leave the unit `failed`: the row then reads as nobody bringing it back, and `ccd start <id>`
+# revives it once the shed's journal line has landed. Both of the shed's stop-stamp reads (rung 4 and the last facts)
+# must miss the clear for this, so the outer verb must stall in that gap for longer than all of the shed's walks.
+# RETRY the same wake once the shed is over (it is bounded by the verb's runner row, 240 s, and a healthy one takes
+# seconds; the `shed-deps` journal line closes it). If it keeps refusing after that, a killed shed's orphaned `rm`
+# (bounded by its own timeout) still holds the lock, or the marker outlived a shed whose lock file an alias purge
+# unlinked: check that no `ccd ws-shed-deps` of the id and no `rm` under its worktree runs, remove `$REG/<id>.shedding`
+# by hand, and retry. The woken session runs `npm ci` before its next test step.
+# A WAKE AND A SHED EXCLUDE EACH OTHER. This is the one verb that removes from a tree that can wake, and every path that
+# creates a pane (start, ensure, the unit's supervise, swap's respawn) passes `_ws_expire_spawn_gate`, which for a row
+# that is not archived asks the SHED's marker and lock alone (`_ws_shed_spawn_held`: read-only, never creating the file, let go at
+# once) and refuses, never waits, while a real shed holds it. The reap lock is not asked there, so no other verb's hold
+# of it (ws-restore's own, across its `_spawn_start`; a reclaim of a kept child; a collect) ever refuses a spawn of a row
+# that is not archived. A wake that asked before this verb took the lock cleared the stop stamp at once,
+# so the verb asks for it twice: at rung 4, and again as its LAST FACTS, after every walk, `du` and the first git status
+# and just before the removal — the process walk over the candidates, then the stop stamp unchanged, no pane and a
+# stopped unit (`_ws_shed_asleep_why`). Either one moved refuses (`in-use`, `not-asleep`) with nothing removed.
+# ONLY A LINKED WORKTREE, RE-PROVED ON THE BOX. The row's `workspace` field is not taken on its word: the workdir must be
+# the top of a LINKED worktree (`git rev-parse --git-dir` differs from `--git-common-dir`) and be no project's main
+# checkout (`-ef` no entry of $PROJECTS_ROOT, nor its repository's own checkout); otherwise `not-a-workspace`.
+# THE CLASS IS NOT TAKEN ON THE SERVER'S WORD EITHER. `--class child` needs a readable child marker (`not-a-child`);
+# `--class coordinator` on a row that carries one needs it readable too (`not-a-child`), and refuses `run-open` while
+# the box can see that run is still going: another row it stands for, marked a child of the same run, holds no stop
+# stamp. Every journal line names the marker it was judged against (`meas.childRun`) beside the class (`meas.mode`).
+# NO REPOSITORY IS EVER INSIDE WHAT IS REMOVED. A candidate with a `.git` (a directory, a file, a link) at ANY depth is
+# not a candidate: a nested repository or a worktree that lives under an ignored directory keeps its uncommitted work,
+# and the before/after `git status` cannot see inside an ignored tree, so this walk is what proves it. A walk that cannot
+# finish refuses `unmeasured`.
+# THE ENVIRONMENT'S THREE KNOBS (ccd's override rule: an override may make ccd refuse, never aim it at another tree).
+# CCD_DEPS_SHED_MIN_ASLEEP_S is the box's floor on how long the session has slept, RAISE-ONLY (a value below the default
+# reads as the default; no argument names it); CCD_DEPS_SHED_SCAN_S bounds each walk and the removal, LOWER-ONLY (a value
+# above the default reads as the default), because the server's budget for the verb (`CCD_VERB_TIMEOUT_MS['ws-shed-deps']`,
+# `server/src/remote/runner.ts`) is sized from the default and `deps-shed-budget.test.ts` holds the sum; CCD_DEPS_SHED_NAMES
+# is NARROW-ONLY: it may name a subset of WS_SHED_NAMES_DEFAULT's rebuildable names (blank is all of them), any other
+# word is ignored with a warning on stderr, and it is split with globbing off; what it names is still only ever inside
+# this worktree among git's own ignored paths, never holding a repository (above).
+# THE VERB'S BOUND. Every call that walks a tree is bounded, and their number does not grow with the candidates: the
+# ignored listing, the repository walk, the size (`du`), the two `git status` reads and the ONE `rm` over every candidate,
+# six at WS_SHED_SCAN_S_DEFAULT each; the ONE toplevel read (with the git and common directories) and the ONE index read
+# at WS_SHED_QUICK_S each; the process walk at WS_PATH_USERS_SCAN_S. A bound reached ends the verb, except the size's (it
+# answers `bytes: null` and goes on), so at most two TERM-to-KILL graces are paid.
+WS_SHED_MIN_ASLEEP_S_DEFAULT=3600
+WS_SHED_SCAN_S_DEFAULT=30
+WS_SHED_QUICK_S=10
+WS_SHED_NAMES_DEFAULT=node_modules
+_ws_shed_int() {   # value default -> the value when it is a whole number of at most 10 digits, else the default; on stdout
+  # The grammar is the run id's, read through its one definition (`_child_runid_valid`, ccd/ccd), ASCII in every locale.
+  if _child_runid_valid "${1-}"; then printf '%s' "$1"; else printf '%s' "$2"; fi
+}
+_ws_shed_floor() {   # -> the floor in seconds: CCD_DEPS_SHED_MIN_ASLEEP_S, never below the default (raise-only)
+  local v; v=$(_ws_shed_int "${CCD_DEPS_SHED_MIN_ASLEEP_S-}" "$WS_SHED_MIN_ASLEEP_S_DEFAULT")
+  (( v >= WS_SHED_MIN_ASLEEP_S_DEFAULT )) || v=$WS_SHED_MIN_ASLEEP_S_DEFAULT
+  printf '%s' "$v"
+}
+_ws_shed_scan() {   # -> each walk's bound in seconds: CCD_DEPS_SHED_SCAN_S, never above the default (lower-only)
+  local v; v=$(_ws_shed_int "${CCD_DEPS_SHED_SCAN_S-}" "$WS_SHED_SCAN_S_DEFAULT")
+  (( v <= WS_SHED_SCAN_S_DEFAULT )) || v=$WS_SHED_SCAN_S_DEFAULT
+  printf '%s' "$v"
+}
+_ws_shed_names() {   # -> the directory names, one per line: CCD_DEPS_SHED_NAMES NARROWS the default set, never widens it
+  #                     (each word that is not one of WS_SHED_NAMES_DEFAULT's is dropped, with a warning on stderr);
+  #                     blank or unset is the default set. Split on blanks with globbing OFF (`read -ra`), so a `*` is a
+  #                     word, never the files of the verb's working directory.
+  local LC_ALL=C n d ok raw="${CCD_DEPS_SHED_NAMES-}"
+  local -a words=() defs=()
+  read -ra defs <<< "$WS_SHED_NAMES_DEFAULT"
+  [[ -n "${raw//[[:space:]]/}" ]] || raw=$WS_SHED_NAMES_DEFAULT
+  read -ra words <<< "${raw//$'\n'/ }"
+  for n in ${words[@]+"${words[@]}"}; do
+    ok=0
+    for d in "${defs[@]}"; do [[ $n == "$d" ]] && { ok=1; break; }; done
+    if (( ok )); then printf '%s\n' "$n"
+    else printf 'ccd: ws-shed-deps: CCD_DEPS_SHED_NAMES may only narrow the default names (%s); ignoring %q\n' "$WS_SHED_NAMES_DEFAULT" "$n" >&2
+    fi
+  done
+  return 0
+}
+_ws_shed_refused() {   # word detail -> the refusal, journaled (not under --dry-run) and printed; rc 0
+  (( dry )) || _lc_emit shed-deps refused "$id" "" verb ws-shed-deps refusal "$1" detail "$2" meas.mode "$cls" \
+    ${childrun:+meas.childRun "$childrun"} dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"refused":%s,"session":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$id")" "$(_json_str "$2")"
+  return 0
+}
+_ws_shed_failed() {   # word detail -> the post-start failure, journaled and printed; rc 1
+  _lc_fail shed-deps "$id" "" "$1" "$2" verb ws-shed-deps meas.mode "$cls" \
+    ${childrun:+meas.childRun "$childrun"} dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"failed":%s,"session":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$id")" "$(_json_str "$2")"
+  return 1
+}
+_ws_shed_git_state() {   # workdir -> the digest of `git status` (tracked changes and untracked files git does not ignore); rc 1 unread
+  local out
+  out=$(_plat_timeout "$scan" git -C "$1" status --porcelain=v1 -z --untracked-files=all 2>/dev/null | _plat_sha256 | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
+    && [[ $out =~ ^[0-9a-f]{64}$ ]] && printf '%s' "$out"
+}
+_ws_shed_listing() {   # workdir -> git's own NUL-separated list of ignored, untracked paths, a whole ignored directory collapsed
+  _plat_timeout "$scan" git -C "$1" ls-files -z --others --ignored --exclude-standard --directory
+}
+_ws_shed_tracked() {   # workdir rel... -> the NUL-separated tracked paths at or beneath any of the rels (one index read)
+  local w="$1"; shift
+  _plat_timeout "$WS_SHED_QUICK_S" git -C "$w" --literal-pathspecs ls-files -z -- "$@"
+}
+_ws_shed_repos() {   # phys... -> every `.git` at any depth beneath them, one per line; rc non-zero when the walk did not finish
+  _plat_timeout "$scan" find "$@" -xdev -name .git -prune -print
+}
+_ws_shed_size() {   # phys... -> their disk use in KiB, one integer; rc non-zero when `du` did not finish
+  _plat_timeout "$scan" du -sk -x -- "$@" | awk '{ s += $1 } END { print s + 0 }'; return "${PIPESTATUS[0]}"
+}
+_WS_SHED_HELD_WHY=''
+_ws_shed_spawn_held() {   # id -> rc 0 with _WS_SHED_HELD_WHY set when a wake must refuse: a real shed holds id's SHED lock
+  #                          right now, or its marker stands and the lock it marked does not prove the shed over; rc 1
+  #                          when it is free (no marker, and the lock file free or absent; or a marker whose lock still
+  #                          stands as the inode it marked and nobody holds it), or when no flock exists and no marker
+  #                          stands (a box with no flock runs no shed: rung 2a).
+  # THE WAKE'S HALF OF THE EXCLUSION, asked by `_ws_expire_spawn_gate` for a row that is not archived — every path that
+  # creates a pane (start, ensure, the unit's supervise, swap's respawn). It asks `$REG/.shed-<id>.lock` and nothing else:
+  # only a real shed ever takes that lock (a dry run takes none), so no other verb's hold of the reap lock refuses here.
+  # It opens the file READ-ONLY, so a wake never creates a shed lock (they are never unlinked), and lets it go at once: a
+  # wake that asked while the lock was free has cleared the stop stamp by the time rung 4 or the last facts read it.
+  # THE MARKER FIRST, AND IT FAILS CLOSED (rung 2c): `$REG/<id>.shedding` standing names the shed's pid and its lock's
+  # dev:ino. It frees a wake in ONE case only, whatever the pid says: the lock file stands, is the very inode the marker
+  # names, and nobody holds its flock (a finished shed's marker seen just before it was taken back, or a killed shed's
+  # once its orphaned `rm` let the lock go). A marker that does not read, a lock file that is gone, or one that is another
+  # inode refuses: a lock file purged by an alias id's glob proves nothing about the removal under it, and a pid proves
+  # nothing either (a killed shed's `rm` inherited the lock's fd and outlives it; a pid can be reused). Such a marker is
+  # the operator's to remove by hand, as the DEPSSHED header says.
+  local fd m="$REG/$1.shedding" l="$REG/.shed-$1.lock" mk='' mpid mdi di
+  _WS_SHED_HELD_WHY="ws-shed-deps is removing $1's dependency directories and holds its shed lock — refusing to create a pane for it until that finishes; retry"
+  if [[ -e $m || -L $m ]]; then
+    local stale="ws-shed-deps's marker $m stands and its shed lock $l does not prove that removal over — refusing to create a pane for $1; once no \`ccd ws-shed-deps\` of $1 and no rm under its worktree runs, remove $m by hand and retry"
+    [[ -f $m && ! -L $m ]] && _file_read_to mk "$m" || { _WS_SHED_HELD_WHY=$stale; return 0; }
+    mpid=${mk%% *}; mdi=${mk#* }
+    _child_runid_valid "$mpid" && [[ $mdi =~ ^[0-9]+:[0-9]+$ && $mk == "$mpid $mdi" ]] || { _WS_SHED_HELD_WHY=$stale; return 0; }
+    [[ -f $l && ! -L $l ]] && command -v flock >/dev/null 2>&1 || { _WS_SHED_HELD_WHY=$stale; return 0; }
+    di=$(_plat_devino "$l" 2>/dev/null) && [[ $di == "$mdi" ]] || { _WS_SHED_HELD_WHY=$stale; return 0; }
+    { exec {fd}<"$l"; } 2>/dev/null || { _WS_SHED_HELD_WHY=$stale; return 0; }
+    if flock -n "$fd"; then exec {fd}>&-; return 1; fi
+    exec {fd}>&-
+    return 0
+  fi
+  [[ -f $l && ! -L $l ]] && command -v flock >/dev/null 2>&1 || return 1
+  { exec {fd}<"$l"; } 2>/dev/null || return 1   # the group's 2> is temporary; a bare exec's would not be
+  if flock -n "$fd"; then exec {fd}>&-; return 1; fi
+  exec {fd}>&-
+  return 0
+}
+_ws_shed_gap() { :; }   # a test seam between the first git read and the last facts, as `_ws_orphan_gap` is the orphan verb's
+_WS_SHED_AWAKE_WHY=''
+_ws_shed_asleep_why() {   # stamp -> rc 0 with _WS_SHED_AWAKE_WHY set when id is NOT asleep: its stop stamp no longer reads
+  #                          as `stamp`, its pane answers anything but gone, or its unit anything but inactive or failed;
+  #                          rc 1 when it still sleeps. Asked at rung 4 and again just before the act (the caller's id)
+  local now_st='' unit
+  [[ -f "$REG/$id.stopped" && ! -L "$REG/$id.stopped" ]] && _file_read_to now_st "$REG/$id.stopped"
+  if [[ -z "$1" || "$now_st" != "$1" ]]; then
+    _WS_SHED_AWAKE_WHY="$id's stop stamp changed or went (a wake clears it)"; return 0
+  fi
+  _session_probe "$id"
+  unit=$(_svc_is_active "claude-session@$id")
+  if [[ "$PROBE_VERDICT" == gone && ( "$unit" == inactive || "$unit" == failed ) ]]; then return 1; fi
+  _WS_SHED_AWAKE_WHY="$id's pane answers ${PROBE_VERDICT:-nothing} and its unit ${unit:-nothing} — only a session with no pane and a stopped unit is shed"
+  return 0
+}
+_ws_shed_run() {   # -> everything after the registry rungs, contained (id, cls, dry, wd, floor and the dec words are the verb's)
+  local wdp rel dir phys top dev wdev i n=0 rc bytes=null kib before after err scan line keep
+  local -a names=() pre=() prephys=() cands=() physs=()
+  scan=$(_ws_shed_scan)
+  # ONE quick read answers three facts: the toplevel, the git directory and the repository's common one.
+  local revs gdir gcom p
+  local -a rv=()
+  wdp=$(cd -P -- "$wd" 2>/dev/null && pwd -P) \
+    && revs=$(_plat_timeout "$WS_SHED_QUICK_S" git -C "$wdp" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null) \
+    && mapfile -t rv <<< "$revs" && (( ${#rv[@]} == 3 )) && top=${rv[0]} && gdir=${rv[1]} && gcom=${rv[2]} \
+    && [[ "$top" == "$wdp" && $gdir == /?* && $gcom == /?* ]] \
+    || { _ws_shed_refused unmeasured "$wd is not the top of a git worktree that could be read — nothing was removed"; return; }
+  # A LINKED WORKTREE, NEVER A MAIN CHECKOUT: its git directory is not its repository's common one, and it is no
+  # project's checkout under any spelling (the row's `workspace` field is not taken on its word).
+  [[ ! $gdir -ef $gcom && $gdir != "$gcom" ]] \
+    || { _ws_shed_refused not-a-workspace "$wdp is a repository's own checkout, not a linked worktree — its dependencies are the operator's"; return; }
+  [[ ${gcom##*/} != .git || ! "$wdp" -ef "${gcom%/*}" ]] \
+    || { _ws_shed_refused not-a-workspace "$wdp is its repository's main checkout — its dependencies are the operator's"; return; }
+  for p in "$PROJECTS_ROOT"/*; do
+    [[ ! "$wdp" -ef "$p" ]] \
+      || { _ws_shed_refused not-a-workspace "$wdp is the project directory $p — its dependencies are the operator's"; return; }
+  done
+  wdev=$(_plat_devino "$wdp" 2>/dev/null) && wdev=${wdev%%:*} \
+    || { _ws_shed_refused unmeasured "the file system of $wdp could not be read — nothing was removed"; return; }
+  mapfile -t names < <(_ws_shed_names)
+  (( ${#names[@]} )) || { _ws_shed_refused nothing-to-shed "CCD_DEPS_SHED_NAMES names none of the default names ($WS_SHED_NAMES_DEFAULT), and it may only narrow them"; return; }
+  # THE CANDIDATES: git's own list of ignored, untracked paths, a whole ignored directory collapsed to one entry.
+  # Read NUL by NUL, never by lines: an ignored directory named `a/b<LF>vendor` is ONE entry, and split at its newline it
+  # would name a `vendor/` git does not ignore. git's exit status rides as the last record (every entry of git's own ends
+  # in a NUL, so a listing cut short runs into the status record and refuses).
+  local -a ents=()
+  mapfile -d '' -t ents < <(_ws_shed_listing "$wdp" 2>/dev/null; printf 'rc=%s\0' "$?")
+  (( ${#ents[@]} )) && [[ ${ents[-1]} == rc=0 ]] \
+    || { _ws_shed_refused unmeasured "git could not list the ignored paths of $wdp — nothing was removed"; return; }
+  unset 'ents[-1]'
+  for rel in ${ents[@]+"${ents[@]}"}; do
+    [[ $rel == */ ]] || continue
+    # A newline anywhere in the path is kept, never shed: the walks below answer one path per line.
+    [[ $rel != *$'\n'* ]] || continue
+    rel=${rel%/}
+    local leaf=${rel##*/} hit=0 nm
+    for nm in "${names[@]}"; do [[ $leaf == "$nm" ]] && { hit=1; break; }; done
+    (( hit )) || continue
+    # One plain relative path inside the worktree: no `..`, no `.`, no absolute spelling.
+    case "/$rel/" in */../*|*/./*|//*) continue ;; esac
+    dir="$wdp/$rel"
+    # A real directory reached through no link: its physical path is its spelling (a link anywhere on the way, the leaf
+    # included, resolves elsewhere and is skipped).
+    [[ -d $dir ]] || continue
+    phys=$(cd -P -- "$dir" 2>/dev/null && pwd -P) && [[ $phys == "$dir" ]] || continue
+    dev=$(_plat_devino "$dir" 2>/dev/null) && [[ ${dev%%:*} == "$wdev" ]] || continue
+    pre+=("$rel"); prephys+=("$phys")
+  done
+  # Not one tracked file beneath it (a vendored package git tracks keeps its directory). git's own listing never collapses
+  # a directory that holds a tracked file, so this is the second fence, asked of the index directly, once for them all.
+  if (( ${#pre[@]} )); then
+    local -a tracked=()
+    mapfile -d '' -t tracked < <(_ws_shed_tracked "$wdp" "${pre[@]}" 2>/dev/null; printf 'rc=%s\0' "$?")
+    (( ${#tracked[@]} )) && [[ ${tracked[-1]} == rc=0 ]] \
+      || { _ws_shed_refused unmeasured "git could not read the index of $wdp — nothing was removed"; return; }
+    unset 'tracked[-1]'
+    for i in "${!pre[@]}"; do
+      keep=0
+      for line in ${tracked[@]+"${tracked[@]}"}; do
+        [[ -n $line && ( $line == "${pre[$i]}" || $line == "${pre[$i]}/"* ) ]] && { keep=1; break; }
+      done
+      (( keep )) || { cands+=("${pre[$i]}"); physs+=("${prephys[$i]}"); }
+    done
+  fi
+  # No repository beneath it, at any depth: ONE walk over every candidate. A `.git` under a candidate drops that candidate.
+  if (( ${#physs[@]} )); then
+    local repos
+    repos=$(_ws_shed_repos "${physs[@]}" 2>/dev/null) \
+      || { _ws_shed_refused unmeasured "whether a repository stands beneath $(printf '%s ' "${physs[@]}")could not be walked — nothing was removed"; return; }
+    local -a keepc=() keepp=()
+    for i in "${!physs[@]}"; do
+      keep=1
+      while IFS= read -r line; do
+        [[ -n $line && $line == "${physs[$i]}/"* ]] && { keep=0; break; }
+      done <<< "$repos"
+      (( keep )) && { keepc+=("${cands[$i]}"); keepp+=("${physs[$i]}"); }
+    done
+    cands=(${keepc[@]+"${keepc[@]}"}); physs=(${keepp[@]+"${keepp[@]}"})
+  fi
+  (( ${#cands[@]} )) || { _ws_shed_refused nothing-to-shed "no ignored, untracked directory named $(printf '%s ' "${names[@]}")and holding no repository stands in $wdp"; return; }
+  # THE SIZE: one bounded `du` over every candidate, in KiB of disk; one that does not finish answers `bytes: null`.
+  kib=$(_ws_shed_size "${physs[@]}" 2>/dev/null) && [[ $kib =~ ^[0-9]+$ ]] && bytes=$(( kib * 1024 ))
+  before=$(_ws_shed_git_state "$wdp") \
+    || { _ws_shed_refused unmeasured "git status of $wdp could not be read — nothing was removed"; return; }
+  _ws_shed_gap
+  # THE LAST FACTS, closest to the act: everything above (the listing, the walks, `du`, git status) can take up to the
+  # verb's bounds, and nothing that wakes a session takes this verb's lock before its own early refusal
+  # (`_ws_expire_spawn_gate`), so a wake that won the race is asked for HERE, twice over.
+  # IN USE: one walk of the process table for every candidate; a holder refuses, an unmeasured answer refuses.
+  _ws_path_users_many "${physs[@]}"
+  for i in "${!physs[@]}"; do
+    case "${_WS_PATH_USERS_RCS[$i]-2}" in
+      0) ;;
+      1) _ws_shed_refused in-use "${physs[$i]} is in use (pids ${_WS_PATH_USERS_PIDS_OF[$i]-}) — nothing was removed"; return ;;
+      *) _ws_shed_refused unmeasured "${_WS_PATH_USERS_WHY_OF[$i]:-whether ${physs[$i]} is in use could not be asked} — nothing was removed"; return ;;
+    esac
+  done
+  # STILL ASLEEP, the last fact of all: the same stop stamp rung 4 read (a wake clears it first), no pane, a stopped unit.
+  _ws_shed_asleep_why "$st" \
+    && { _ws_shed_refused not-asleep "$_WS_SHED_AWAKE_WHY, after the verb's walks began — nothing was removed"; return; }
+  if (( dry )); then
+    printf '{"wouldShed":true,"session":%s,"class":%s,"dirs":%s,"bytes":%s}\n' "$(_json_str "$id")" "$(_json_str "$cls")" \
+      "${#cands[@]}" "$bytes"
+    return 0
+  fi
+  # THE ACT: ONE bounded removal over every candidate, on this file system only.
+  if [[ "$CCD_OS" == darwin ]]; then err=$(_plat_timeout "$scan" rm -rfx -- "${physs[@]}" 2>&1); rc=$?
+  else err=$(_plat_timeout "$scan" rm -rf --one-file-system -- "${physs[@]}" 2>&1); rc=$?; fi
+  for i in "${!physs[@]}"; do [[ -e ${physs[$i]} || -L ${physs[$i]} ]] || n=$(( n + 1 )); done
+  if (( rc != 0 || n != ${#physs[@]} )); then
+    _ws_shed_failed shed-incomplete "removing ${#physs[@]} dependency directories did not finish (rm exit $rc${err:+: $(printf '%s' "$err" | head -1)}; $n removed); what remains is still rebuildable"
+    return
+  fi
+  after=$(_ws_shed_git_state "$wdp") && [[ $after == "$before" ]] \
+    || { _ws_shed_failed git-state-changed "git status of $wdp changed across the removal (or could not be read again) — removed $n dependency directories"; return; }
+  local now; _now_s_to now
+  local -a mb=()
+  if [[ $bytes == null ]]; then _reg_set "$id" depsshed "$now" || :; else _reg_set "$id" depsshed "$now $bytes" || :; mb=(meas.bytes "$bytes"); fi
+  _lc_done shed-deps "$id" "" verb ws-shed-deps detail "removed $n dependency directories" meas.mode "$cls" \
+    ${childrun:+meas.childRun "$childrun"} ${mb[@]+"${mb[@]}"} meas.workdir "$wdp" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  printf '{"shed":true,"session":%s,"class":%s,"dirs":%s,"bytes":%s}\n' "$(_json_str "$id")" "$(_json_str "$cls")" "$n" "$bytes"
+  return 0
+}
+cmd_ws_shed_deps() {   # ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <word>] [--actor <text>] [--reason <text>]
+  local U='usage: ccd ws-shed-deps --session <id> --class child|coordinator [--dry-run] [--surface <word>] [--actor <text>] [--reason <text>]'
+  local lc_surface=none lc_actor='' lc_reason='' gs=0 ga=0 gr=0 id='' cls='' dry=0 w childrun='' LC_ALL=C
+  while (( $# )); do
+    case "$1" in
+      --session) [[ $# -ge 2 && -z "$id" && $2 != -* ]] || die "$U"; id="$2"; shift 2 ;;
+      --class)   [[ $# -ge 2 && -z "$cls" ]] || die "$U"; cls="$2"; shift 2 ;;
+      --dry-run) (( ! dry )) || die "$U"; dry=1; shift ;;
+      --surface) [[ $# -ge 2 && $2 != -* ]] || die "$U"; gs=1; lc_surface="$2"; shift 2 ;;
+      --actor)   [[ $# -ge 2 && $2 != -* ]] || die "$U"; ga=1; lc_actor="$2"; shift 2 ;;
+      --reason)  [[ $# -ge 2 && $2 != -* ]] || die "$U"; gr=1; lc_reason="$2"; shift 2 ;;
+      *)         die "$U" ;;
+    esac
+  done
+  [[ -n "$id" ]] || die "$U"
+  case "$cls" in child|coordinator) ;; *) die "$U" ;; esac
+  if (( gs )); then w=$(_lc_surface_norm "$lc_surface"); lc_surface=${w:-unknown}; fi
+  if (( ga )); then [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"; _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"; fi
+  if (( gr )); then [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"; _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"; fi
+  _reg_id_ok "$id" || die "bad session id"
+  _json_str probe >/dev/null 2>&1 || die "python3 unavailable — cannot quote the record safely"
+  # 1. paused
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
+    || { _ws_shed_refused paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing was removed"; return 0; }
+  # 2. the row, and never a main checkout
+  [[ -f "$REG/$id.uuid" ]] || { _ws_shed_refused no-such-session "no registry row names $id — nothing was removed"; return 0; }
+  # 2a. a box with no flock runs no shed, and its shadow says so too (the dry run answers what the act would)
+  command -v flock >/dev/null 2>&1 \
+    || { _ws_shed_refused unmeasured "flock (util-linux) is unavailable, so whether another verb is removing $id's files was never asked — nothing was removed"; return 0; }
+  # The shadow takes no lock and makes no lock file: it removes nothing, so it excludes nothing.
+  (( dry )) && { _ws_shed_locked; return; }
+  # 2b. a real shed: the reap lock (every verb that removes anything of the id takes it), THEN the shed's own lock (the
+  # one the spawn gate asks), both `-n`, in that order only; either held is the retryable `in-progress`.
+  local lfd sfd rc=0
+  exec {lfd}>>"$REG/.reap-$id.lock" \
+    || { _ws_shed_refused unmeasured "cannot open the reap lock at $REG/.reap-$id.lock — nothing was removed"; return 0; }
+  flock -n "$lfd" || {
+    exec {lfd}>&-
+    _ws_shed_refused in-progress "another ccd process is reaping, reclaiming, expiring, restoring or collecting $id and still holds the lock — nothing was removed"
+    return 0
+  }
+  exec {sfd}>>"$REG/.shed-$id.lock" || {
+    exec {lfd}>&-
+    _ws_shed_refused unmeasured "cannot open the shed lock at $REG/.shed-$id.lock — nothing was removed"; return 0
+  }
+  flock -n "$sfd" || {
+    exec {sfd}>&- {lfd}>&-
+    _ws_shed_refused in-progress "another ws-shed-deps of $id still holds its shed lock — nothing was removed"
+    return 0
+  }
+  # 2c. THE MARKER, `$REG/<id>.shedding` (`<pid> <dev:ino>`): the lock FILE can be unlinked under this holder by the
+  # purge of a dot-led alias id (`.shed-<id>`, the R-3 paragraph), and a gate that asked the file alone would read its
+  # absence as free. The marker is a row field, which no other id's purge glob reaches, and the gate refuses while it
+  # names a live holder, whatever the lock file says. The lock's identity is read before and after the marker is written:
+  # a lock file that went or changed between them refuses, with the marker taken back.
+  local sdi='' sdi2=''
+  { sdi=$(_plat_devino "$REG/.shed-$id.lock" 2>/dev/null) && [[ $sdi =~ ^[0-9]+:[0-9]+$ ]] \
+      && _reg_set "$id" shedding "$BASHPID $sdi" \
+      && sdi2=$(_plat_devino "$REG/.shed-$id.lock" 2>/dev/null) && [[ $sdi2 == "$sdi" ]]; } || {
+    rm -f -- "$REG/$id.shedding"
+    exec {sfd}>&- {lfd}>&-
+    _ws_shed_refused unmeasured "the shed lock at $REG/.shed-$id.lock went or changed as it was taken, so it could not be marked — nothing was removed"
+    return 0
+  }
+  _ws_shed_locked; rc=$?
+  # THE ONE WAY OUT takes back ONLY this shed's own marker: its body still `<this pid> <the lock's dev:ino>`. Any other
+  # body (another shed of the id wrote its own once this one's lock file was purged, or a hand edit) is left standing for
+  # the gate, which fails closed on it, and the mismatch is journaled (`marker-not-own`) through the shed's own failure
+  # helper, like its other words, with that helper's document sent to /dev/null: stdout keeps the act's answer.
+  local mnow=''
+  if [[ -f "$REG/$id.shedding" && ! -L "$REG/$id.shedding" ]] && _file_read_to mnow "$REG/$id.shedding" \
+     && [[ $mnow == "$BASHPID $sdi" ]]; then
+    rm -f -- "$REG/$id.shedding"
+  elif [[ -e "$REG/$id.shedding" || -L "$REG/$id.shedding" ]]; then
+    _ws_shed_failed marker-not-own "$REG/$id.shedding no longer reads as this shed's own ($BASHPID $sdi), so it was left standing for the operator" >/dev/null
+  else
+    _ws_shed_failed marker-not-own "$REG/$id.shedding went before this shed took it back" >/dev/null
+  fi
+  exec {sfd}>&- {lfd}>&-
+  return "$rc"
+}
+_ws_shed_locked() {   # -> rungs 2b to 11, under the caller's reap lock (the caller's locals: id, cls, dry and the dec words)
+  local wd='' ws=''
+  # 2d. never an archived row: the expiry lane owns it, and the spawn gate asks no shed lock for one. Read under the reap
+  # lock, which an expiry holds while it archives, so no row is archived while a real shed runs.
+  [[ ! -e "$REG/$id.archived" && ! -L "$REG/$id.archived" ]] \
+    || { _ws_shed_refused archived "$id is archived — the expiry lane owns an archived workspace — nothing was removed"; return 0; }
+  _reg_get_to ws "$id" workspace || ws=''
+  [[ -n "$ws" ]] || { _ws_shed_refused not-a-workspace "$id is a project's main checkout — its dependencies are the operator's"; return 0; }
+  _reg_get_to wd "$id" workdir || wd=''
+  [[ "$wd" == /?* && -d "$wd" && ! -L "${wd%/}" ]] \
+    || { _ws_shed_refused unmeasured "$id's workdir (${wd:-none}) is not one plain directory — nothing was removed"; return 0; }
+  # 3. the class's own fence, read here, never taken on the server's word: a worker needs its child marker; a
+  # coordinator that carries one needs it readable, and the run it names not visibly going (another row of that run,
+  # standing, holds no stop stamp). The marker is journaled beside the class on every line below (`meas.childRun`).
+  local cm=''
+  [[ -f "$REG/$id.child" && ! -L "$REG/$id.child" ]] && _file_read_to cm "$REG/$id.child"
+  _child_runid_valid "$cm" && childrun=$cm
+  if [[ $cls == child ]]; then
+    [[ -n $childrun ]] || { _ws_shed_refused not-a-child "$id carries no readable child marker — a worker sheds only as a dispatched child"; return 0; }
+  elif [[ -e "$REG/$id.child" || -L "$REG/$id.child" ]]; then
+    [[ -n $childrun ]] || { _ws_shed_refused not-a-child "$id carries a child marker ($REG/$id.child) that cannot be read — which run it serves is unknown"; return 0; }
+    local sm sib sm_v
+    for sm in "$REG"/*.child; do
+      sib=${sm##*/}; sib=${sib%.child}
+      [[ $sib != "$id" && -f $sm && ! -L $sm && -f "$REG/$sib.uuid" ]] || continue
+      sm_v=''; _file_read_to sm_v "$sm" || continue
+      [[ $sm_v == "$childrun" ]] || continue
+      [[ -f "$REG/$sib.stopped" ]] \
+        || { _ws_shed_refused run-open "$id is a child of run $childrun, and $sib, another child of it, is not asleep — the box can see that run is still going"; return 0; }
+    done
+  fi
+  # 4. asleep: a stop stamp, no tmux session, and a unit that says inactive or failed (`ws-archive --if-no-pane`'s test)
+  local st='' at=''
+  [[ -f "$REG/$id.stopped" && ! -L "$REG/$id.stopped" ]] && _file_read_to st "$REG/$id.stopped"
+  at=${st%% *}
+  [[ $at =~ ^[1-9][0-9]{0,11}$ ]] || { _ws_shed_refused not-asleep "$id carries no readable stop stamp — it is not asleep"; return 0; }
+  ! _ws_shed_asleep_why "$st" || { _ws_shed_refused not-asleep "$_WS_SHED_AWAKE_WHY"; return 0; }
+  # 5. the box's floor, raise-only
+  local now floor; _now_s_to now; floor=$(_ws_shed_floor)
+  (( now - at >= floor )) \
+    || { _ws_shed_refused asleep-too-recently "$id fell asleep $(( now - at ))s ago, less than the box's floor of ${floor}s"; return 0; }
+  # 6. at most once a sleep
+  if [[ -e "$REG/$id.depsshed" || -L "$REG/$id.depsshed" ]]; then
+    local ds=''
+    [[ -f "$REG/$id.depsshed" && ! -L "$REG/$id.depsshed" ]] && _file_read_to ds "$REG/$id.depsshed"
+    ds=${ds%% *}
+    [[ $ds =~ ^[1-9][0-9]{0,11}$ ]] || { _ws_shed_refused unmeasured "$REG/$id.depsshed stands but does not read as an epoch"; return 0; }
+    (( ds < at )) || { _ws_shed_refused already-shed "$id's dependencies were removed at epoch $ds, during this sleep"; return 0; }
+  fi
+  # 7 to 11, every git call contained
+  _ws_reclaim_contained _ws_shed_run
+}
+# SHED-DEPS-V1. `cmd_caps` echoes `shed-deps-v1` and `ws-shed-deps`: this box has the verb above, in one ccd inode. The
+# server composes it only behind that word (`ccdCan(state, 'wsShedDeps')`).
+# ── end deps-shed ──────────────────────────────────────────────────────────────── DEPSSHED-END ──

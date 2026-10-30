@@ -3,6 +3,7 @@
 // (`fleet-rollup-render.test.tsx` pins that), so a restyle that drops a rule goes red here AND there.
 import { describe, expect, it } from 'vitest';
 import { DEAD_LIFECYCLE } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import {
@@ -16,7 +17,7 @@ import {
 const roll = (
   sessions: FleetSession[], runs: RunSummary[] = [], prefs: RollupPrefs = NO_ROLLUP_PREFS,
   now = NOW, selectedId: string | null = null,
-): ReadonlyMap<string, CardRollup> => rollupFleet(fleetTree(sessions, [], runs), prefs, now, selectedId).cards;
+): ReadonlyMap<string, CardRollup> => rollupFleet(fleetTree(withRunBinding(sessions, runs), [], runs), prefs, now, selectedId).cards;
 
 const card = (cards: ReadonlyMap<string, CardRollup>, project: string): CardRollup => {
   const c = cards.get(project);

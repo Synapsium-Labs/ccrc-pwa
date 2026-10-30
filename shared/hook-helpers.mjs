@@ -12,6 +12,11 @@
 //   |            |                           | are their one definition                                              |
 //   | `authdead` | `ccd/ccd-account-health`  | `_authdead_mark`, `_authdead_clear` and `_authdead_sweep_staged`: byte |
 //   |            |                           | copies of their definitions in `ccd/ccd` (D-7049; ARCH-72, spec K16)   |
+//   | `apicap`   | `ccd/ccrc-api`            | `_api_server_cap`, from the body of `_hook_server_cap` in the          |
+//   |            |                           | `ccd/session-hook.sh` beside the given ccd (the name differs, the body |
+//   |            |                           | may not; D-7321, D-7329)                                              |
+//   | `log-line` | `ccd/ccd-update-sync`     | `_upd_redact`, a byte copy of its definition in `ccd/ccrc`, the one   |
+//   |            |                           | bash log-line redactor (W5 C5i; D-7078, D-7289)                       |
 //
 // Nothing else is: the hook's compaction-lock region differs from ccd's on purpose (its own exit-0 contract and rc-2
 // arms), so it stays hand-written.
@@ -19,15 +24,15 @@
 // Each copy sits between its region's BEGIN and END lines and carries the same `# ccrc:generated 1 sha256=…` stamp
 // `shared/mark.mjs` writes, over the region's own body, so the stamp tells a regenerated region from a hand-edited
 // one. Regenerate with
-//   ccrc restamp ccd/session-hook.sh        (or ccd/ccd-account-health)
-// (the one regeneration verb; it calls this module with the tree's own ccd). The `--write` / `--check` / `--restamp`
+//   ccrc restamp ccd/session-hook.sh        (or ccd/ccd-account-health, ccd/ccrc-api, ccd/ccd-update-sync)
+// (the one regeneration verb; it calls this module with the file the region's row names, in the tree's own ccd/). The `--write` / `--check` / `--restamp`
 // CLI below is the engine's entry: each takes the target file and dispatches on the region it carries. A pure byte
 // copy, not a `source`: a runtime-sourced sibling is refused by the architecture spec.
 //
 // Plain ESM with no npm imports, like `shared/mark.mjs`, so `deploy/` and the tests can run it with a bare `node`.
 
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { markGenerated, verifyMarker } from './mark.mjs';
 
 /** The hook's project/session-id shape, bounds and read cap: one definition. */
@@ -43,6 +48,12 @@ export const HOOK_REGION_END = '# ── END GENERATED HOOK HELPERS ──';
 export const AUTHDEAD_REGION_BEGIN = '# ── BEGIN GENERATED AUTH-DEAD WRITERS (shared/hook-helpers.mjs; edit them in ccd/ccd, then regenerate) ──';
 export const AUTHDEAD_REGION_END = '# ── END GENERATED AUTH-DEAD WRITERS ──';
 
+export const APICAP_REGION_BEGIN = '# ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──';
+export const APICAP_REGION_END = '# ── END GENERATED SERVER-CAP READER ──';
+
+export const LOGLINE_REGION_BEGIN = '# ── BEGIN GENERATED LOG-LINE REDACTOR (shared/hook-helpers.mjs; edit it in ccd/ccrc, then regenerate) ──';
+export const LOGLINE_REGION_END = '# ── END GENERATED LOG-LINE REDACTOR ──';
+
 /** The auth-dead marker's writers (D-7049), in their `ccd/ccd` definition order. */
 export const AUTHDEAD_WRITERS = Object.freeze(['_authdead_mark', '_authdead_clear', '_authdead_sweep_staged']);
 
@@ -52,8 +63,8 @@ export function ccdEpochBody(ccdSrc) {
   return m ? m[1] : null;
 }
 
-/** ccd's whole definition of `name` (its column-0 `name() {` line through its column-0 `}`, or the one line of a
- *  one-line definition), or null. */
+/** A bash source's whole definition of `name` (its column-0 `name() {` line through its column-0 `}`, or the one line
+ *  of a one-line definition), or null. Named for ccd, its first source; it reads only the text it is given. */
 export function ccdFunctionDefinition(ccdSrc, name) {
   const at = new RegExp(`^${name}\\(\\) \\{[^\\n]*$`, 'm').exec(ccdSrc);
   if (!at) return null;
@@ -82,13 +93,36 @@ export function renderAuthdeadBody(ccdSrc) {
   }).join('');
 }
 
+/** The server-cap reader region's body (unstamped), from the HOOK's text: `_hook_server_cap`'s whole definition with
+ *  its name line replaced by `_api_server_cap() {` (D-7321). */
+export function renderApicapBody(src) {
+  const def = ccdFunctionDefinition(src, '_hook_server_cap');
+  if (def === null || !def.includes('\n')) throw new Error('the hook has no _hook_server_cap to generate _api_server_cap from');
+  return `_api_server_cap() {\n${def.slice(def.indexOf('\n') + 1)}\n`;
+}
+
+/** The log-line redactor region's body (unstamped), from ccd/ccrc's text: `_upd_redact`'s whole definition, byte for
+ *  byte (W5 C5i). */
+export function renderLogLineBody(src) {
+  const def = ccdFunctionDefinition(src, '_upd_redact');
+  if (def === null) throw new Error('ccd/ccrc has no _upd_redact to copy');
+  return `${def}\n`;
+}
+
 /** One row per generated region. `detect` is the BEGIN line's prefix a file carrying the region (whole or damaged)
- *  is recognised by; `label` is the words `ccrc restamp` reports it in. */
+ *  is recognised by; `label` is the words `ccrc restamp` reports it in; `source` is the text `render` reads: `ccd` (the
+ *  given ccd) or `hook` (the `session-hook.sh` beside it, handed to that row only); `file` is the repository-relative
+ *  path of the file the row is given, for the CLI's third argument and the engine's `ccdSrc` (a `source: 'hook'` row
+ *  reads the hook beside it). */
 export const REGIONS = Object.freeze([
   Object.freeze({ name: 'hook', label: 'hook helpers', begin: HOOK_REGION_BEGIN, end: HOOK_REGION_END,
-    detect: '# ── BEGIN GENERATED HOOK HELPERS', render: renderHookBody }),
+    detect: '# ── BEGIN GENERATED HOOK HELPERS', source: 'ccd', file: 'ccd/ccd', render: renderHookBody }),
   Object.freeze({ name: 'authdead', label: 'auth-dead writers', begin: AUTHDEAD_REGION_BEGIN, end: AUTHDEAD_REGION_END,
-    detect: '# ── BEGIN GENERATED AUTH-DEAD WRITERS', render: renderAuthdeadBody }),
+    detect: '# ── BEGIN GENERATED AUTH-DEAD WRITERS', source: 'ccd', file: 'ccd/ccd', render: renderAuthdeadBody }),
+  Object.freeze({ name: 'apicap', label: 'server-cap reader', begin: APICAP_REGION_BEGIN, end: APICAP_REGION_END,
+    detect: '# ── BEGIN GENERATED SERVER-CAP READER', source: 'hook', file: 'ccd/ccd', render: renderApicapBody }),
+  Object.freeze({ name: 'log-line', label: 'log-line redactor', begin: LOGLINE_REGION_BEGIN, end: LOGLINE_REGION_END,
+    detect: '# ── BEGIN GENERATED LOG-LINE REDACTOR', source: 'ccd', file: 'ccd/ccrc', render: renderLogLineBody }),
 ]);
 
 const HOOK = REGIONS[0];
@@ -98,9 +132,17 @@ export function regionOf(src) {
   return REGIONS.find((r) => src.includes(r.detect)) ?? null;
 }
 
-/** The whole stamped region, BEGIN and END lines included, ending in a newline. */
-export function renderRegion(row, ccdSrc) {
-  return `${row.begin}\n${markGenerated(row.render(ccdSrc))}${row.end}\n`;
+/** The text `row` renders from: ccd's, or the sibling hook's for a `source: 'hook'` row. */
+function sourceOf(row, ccdSrc, hookSrc) {
+  const src = row.source === 'hook' ? hookSrc : ccdSrc;
+  if (typeof src !== 'string') throw new Error(`the ${row.label} region renders from ${row.source === 'hook' ? 'the sibling session-hook.sh' : 'ccd'}, which was not given`);
+  return src;
+}
+
+/** The whole stamped region, BEGIN and END lines included, ending in a newline. `ccdSrc` is the given text (the file
+ *  the row names); `hookSrc` is read by the `apicap` row only. */
+export function renderRegion(row, ccdSrc, hookSrc) {
+  return `${row.begin}\n${markGenerated(row.render(sourceOf(row, ccdSrc, hookSrc)))}${row.end}\n`;
 }
 
 /** The region as `src` carries it (BEGIN..END lines), or null. */
@@ -111,23 +153,23 @@ export function extractRegion(row, src) {
   return e < 0 ? null : src.slice(b, e + row.end.length + 1);
 }
 
-/** `src` with its region replaced by a fresh one from `ccdSrc`; throws when it carries no region. */
-export function applyRegion(row, src, ccdSrc) {
+/** `src` with its region replaced by a fresh one from `ccdSrc`, the given text; throws when it carries no region. */
+export function applyRegion(row, src, ccdSrc, hookSrc) {
   const old = extractRegion(row, src);
   if (old === null) throw new Error(`the file carries no generated ${row.label} region to regenerate`);
-  return src.replace(old, () => renderRegion(row, ccdSrc));
+  return src.replace(old, () => renderRegion(row, ccdSrc, hookSrc));
 }
 
 /**
  * 'current' | 'missing' | 'edited' (stamp no longer matches the region's own
- * body) | 'stale' (stamp matches, but ccd or the constants have moved on).
+ * body) | 'stale' (stamp matches, but the given text, the hook or the constants have moved on).
  */
-export function checkRegion(row, src, ccdSrc) {
+export function checkRegion(row, src, ccdSrc, hookSrc) {
   const region = extractRegion(row, src);
   if (region === null) return 'missing';
   const inner = region.slice(row.begin.length + 1, region.length - row.end.length - 1);
   if (verifyMarker(inner) !== 'ccrc-unmodified') return 'edited';
-  return region === renderRegion(row, ccdSrc) ? 'current' : 'stale';
+  return region === renderRegion(row, ccdSrc, hookSrc) ? 'current' : 'stale';
 }
 
 /** The hook's row, by its historical names. */
@@ -147,35 +189,52 @@ function startedAsScript() {
 }
 
 if (startedAsScript()) {
-  const [mode, targetPath, ccdPath] = process.argv.slice(2);
+  const [mode, targetPath, givenPath] = process.argv.slice(2);
   if (mode === '--regions') {
     // For `ccrc restamp`: each region's detect prefix and label, one tab-separated row per line.
     process.stdout.write(REGIONS.map((r) => `${r.detect}\t${r.label}\n`).join(''));
     process.exit(0);
   }
-  if ((mode !== '--write' && mode !== '--check' && mode !== '--restamp') || !targetPath || !ccdPath) {
-    process.stderr.write('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <ccd> | --regions\n');
+  if (mode === '--region-files') {
+    // For `ccrc restamp`: as `--regions`, with the file each row is given as a third column (`--regions` keeps its two,
+    // which an installed ccrc from before this mode reads).
+    process.stdout.write(REGIONS.map((r) => `${r.detect}\t${r.label}\t${r.file}\n`).join(''));
+    process.exit(0);
+  }
+  if ((mode !== '--write' && mode !== '--check' && mode !== '--restamp') || !targetPath || !givenPath) {
+    process.stderr.write('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <file> | --regions | --region-files\n');
     process.exit(2);
   }
   const target = readFileSync(targetPath, 'utf8');
-  const ccd = readFileSync(ccdPath, 'utf8');
+  const ccd = readFileSync(givenPath, 'utf8');
   const row = regionOf(target);
+  // The given file must be the one the target's row names (W5 C5i), compared by basename (a caller may know only that
+  // its file is named `ccd`), once, before any mode renders or writes. A file with no region has no row, so nothing is
+  // checked: `--restamp` prints `nothere`, and `--write` and `--check` keep the base's output through the hook row
+  // below (`missing`, or the "no region" throw).
+  const base = (p) => p.slice(p.lastIndexOf('/') + 1);
+  if (row !== null && base(givenPath) !== base(row.file)) {
+    process.stderr.write(`hook-helpers: ${targetPath} carries the ${row.label} region, whose file is ${row.file}; ${givenPath} is not that file\n`);
+    process.exit(2);
+  }
+  // The `apicap` row renders from the hook beside the given file; no other row reads it.
+  const hook = row?.source === 'hook' ? readFileSync(fileURLToPath(new URL('session-hook.sh', pathToFileURL(givenPath))), 'utf8') : undefined;
   if (mode === '--restamp') {
     // One line for `ccrc restamp`: nothere | refused-missing | current | regenerated.
     let v;
     if (row === null) v = 'nothere';
     else if (extractRegion(row, target) === null) v = 'refused-missing';
-    else if (checkRegion(row, target, ccd) === 'current') v = 'current';
+    else if (checkRegion(row, target, ccd, hook) === 'current') v = 'current';
     else {
-      writeFileSync(targetPath, applyRegion(row, target, ccd));
+      writeFileSync(targetPath, applyRegion(row, target, ccd, hook));
       v = 'regenerated';
     }
     process.stdout.write(`${v}\n`);
   } else if (mode === '--write') {
-    writeFileSync(targetPath, applyRegion(row ?? HOOK, target, ccd));
+    writeFileSync(targetPath, applyRegion(row ?? HOOK, target, ccd, hook));
     process.stdout.write('hook-helpers: regenerated\n');
   } else {
-    const v = checkRegion(row ?? HOOK, target, ccd);
+    const v = checkRegion(row ?? HOOK, target, ccd, hook);
     process.stdout.write(`hook-helpers: ${v}\n`);
     process.exit(v === 'current' ? 0 : 1);
   }

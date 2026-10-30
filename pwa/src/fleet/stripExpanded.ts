@@ -1,13 +1,13 @@
 // stripExpanded — the per-device memory of whether the lanes strip shows every lane or folds to the freest few (desktop
 // polish S5b, D-6530; the operator's rulings Q10 and Q13). ONE value in `localStorage` under `ccrc-accounts-strip`:
-// `'expanded'` or `'folded'`. It names `window.localStorage` and exports a hook, so it is L4 by `pwaRing`, as
-// `foldState.ts` is; the fold's arithmetic is `stripFold.ts`'s.
+// `'expanded'` or `'folded'`. It exports a hook, so it is L4 by `pwaRing`, as `foldState.ts` is; the fold's arithmetic
+// is `stripFold.ts`'s.
 //
 // WHAT STORAGE MAY SAY: only `'expanded'` expands. Absent, malformed or unreadable storage reads folded: unlike
 // `foldState.ts`, where absent means expanded ("never a fleet the reader cannot see"), the fold is the default here,
 // because its "+n more" words keep every hidden lane that needs the operator on screen and the full strip is one tap
-// away. Every read and write is in try/catch and goes through `window.localStorage` (Node 22 ships a bare
-// `localStorage` global that shadows jsdom's; `foldState.ts` has the same idiom).
+// away. Every read and write goes through the one storage port (`lib/storage.ts`, D-7190), which guards each one and
+// says when a read threw or a write was refused.
 //
 // THE PHONE NEVER READS IT: `useStripExpanded(enabled)` answers `false` and touches nothing (no storage read, no
 // subscription, no `storage` listener) when `enabled` is false. Below 900 px the strip passes false
@@ -21,6 +21,7 @@
 // arrives (a `storage` event) or a later write of this page succeeds. Otherwise storage wins whenever it holds one of
 // the two words, so a choice another tab stored is followed; absent or malformed storage reads folded.
 import { useSyncExternalStore } from 'react';
+import { pageStorage, readKey, UNREADABLE, writeKey } from '../lib/storage';
 
 const KEY = 'ccrc-accounts-strip';
 
@@ -34,23 +35,15 @@ const listeners = new Set<() => void>();
  *  (absent or malformed storage); over unreadable storage, this page's choice if it made one, else folded. */
 function readExpanded(): boolean {
   if (writeRefused) return pageValue;
-  try {
-    return window.localStorage.getItem(KEY) === 'expanded';
-  } catch {
-    return pageValue;
-  }
+  const raw = readKey(KEY, pageStorage, UNREADABLE);
+  return raw === UNREADABLE ? pageValue : raw === 'expanded';
 }
 
 /** Remember the choice: the page value always, storage when it takes it. Every mounted strip is told. */
 export function setStripExpanded(expanded: boolean): void {
   pageValue = expanded;
-  try {
-    window.localStorage.setItem(KEY, expanded ? 'expanded' : 'folded');
-    writeRefused = false;
-  } catch {
-    // The page value now overrides whatever storage still holds, until another tab writes the key.
-    writeRefused = true;
-  }
+  // A refused write: the page value now overrides whatever storage still holds, until another tab writes the key.
+  writeRefused = !writeKey(KEY, expanded ? 'expanded' : 'folded');
   for (const notify of [...listeners]) notify();
 }
 

@@ -5,7 +5,9 @@
 // The first describe is the CHARACTERIZATION PIN (spec §5.1 rule 1): every marker constant the server exports today,
 // read through the module that exports it, against the value it has on the PR's base. It is green on the old code and
 // stays green through every move commit, because the old names keep exporting the same characters.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, RECLAIM_PAUSE_MARKER,
@@ -18,9 +20,10 @@ import { IDLE_NUDGE_DISABLED_MARKER } from '../src/idlenudge.js';
 import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
+import { sqlStatementsIn, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import {
-  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
-  NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, markerSwitchNames, readSwitches,
+  ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
+  NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
@@ -76,7 +79,11 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(DRIFT_PUSH_LIVE_MARKER).toBe('drift-push-live');
     // ARCH-77 (#812): child reclaim's own off switch, a hand-touched row with no writer in the tree.
     expect(CHILD_RECLAIM_DISABLED_MARKER).toBe('child-reclaim-disabled');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live'].sort());
+    // D-7278: the deps-shed arm's live switch, a hand-armed row with no writer in the tree.
+    expect(DEPS_SHED_LIVE_MARKER).toBe('deps-shed-live');
+    // D-7404: the test box's remote switch, written later by a ccd verb behind a route (TB9); read by the wrapper (TB8).
+    expect(TESTBOX_REMOTE_LIVE_MARKER).toBe('testbox-remote-live');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
@@ -102,6 +109,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(Object.fromEntries(settingRows.map(([k, r]) => [k, 'setting' in r.storage ? r.storage.setting : null]))).toEqual({
       'stall-watch-level': 'stall_settings.level',
       'collect-lane-choice': 'collect_lane_settings.choice',
+      'roll-idle-targets': 'roll_settings.targets',
+      'dispatch-abandon-choice': 'dispatch_abandon_settings.choice',
     });
   });
 
@@ -114,15 +123,24 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has: two route-backed ccd verbs, two settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, four settings routes, the rest by hand', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
       'reclaim-paused': 'ccd reclaim-pause, through POST /api/coord/reclaim-pause',
       'stall-watch-level': 'POST /api/coord/stall-watch',
       'collect-lane-choice': 'POST /api/coord/collect-lane',
+      'testbox-remote-live': 'ccd testbox-remote, through POST /api/testbox/switch',
+      'roll-idle-targets': 'POST /api/coord/roll-idle',
+      'dispatch-abandon-choice': 'POST /api/coord/dispatch-abandon',
     });
   });
+
+  /** D-7404: a row whose writer a later task of its plan builds. Each entry names that task, and its row below asserts
+   *  the verb and the route are still ABSENT, so the entry goes red the day the writer lands and must be deleted then. */
+  const PENDING_WRITERS: Readonly<Record<string, string>> = {
+    [TESTBOX_REMOTE_LIVE_MARKER]: 'test box plan TB9 adds ccd testbox-remote, its ccdargv builder and POST /api/testbox/switch',
+  };
 
   it('every ccd-verb writer names a verb ccdargv builds and a route that runs it', () => {
     const argvSrc = readFileSync(new URL('../src/ccdargv.ts', import.meta.url), 'utf8');
@@ -131,9 +149,65 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       const m = /^ccd ([a-z-]+), through POST (\/api\/[a-z/-]+)$/.exec(r.writer);
       if (!r.writer.startsWith('ccd ')) continue;
       expect(m, `${k}: writer shape`).not.toBeNull();
+      if (k in PENDING_WRITERS) continue;
       expect(argvSrc.includes(`argv(['${m![1]}'`), `${k}: ccdargv builds ${m![1]}`).toBe(true);
       expect(routesSrc.includes(`app.post('${m![2]}'`), `${k}: ${m![2]} exists`).toBe(true);
     }
+  });
+
+  it('a pending writer is still absent: no ccdargv builder and no server route spells it yet (delete the entry when its task lands)', () => {
+    const argvSrc = readFileSync(new URL('../src/ccdargv.ts', import.meta.url), 'utf8');
+    const srcRoot = fileURLToPath(new URL('../src/', import.meta.url));
+    const serverSrc = (readdirSync(srcRoot, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts'))
+      .map((f) => readFileSync(path.join(srcRoot, f), 'utf8'));
+    expect(serverSrc.length, 'the walk reached server/src').toBeGreaterThan(100);
+    expect(Object.keys(PENDING_WRITERS)).toEqual([TESTBOX_REMOTE_LIVE_MARKER]);
+    for (const [k, why] of Object.entries(PENDING_WRITERS)) {
+      const row = (SWITCHES as Readonly<Record<string, { writer: string }>>)[k];
+      expect(row, `${k} is a row`).toBeDefined();
+      const m = /^ccd ([a-z-]+), through POST (\/api\/[a-z/-]+)$/.exec(row!.writer);
+      expect(m, `${k}: writer shape`).not.toBeNull();
+      expect(argvSrc.includes(`argv(['${m![1]}'`), `${k}: ccdargv already builds ${m![1]} (${why}): delete the pending entry`).toBe(false);
+      expect(serverSrc.some((src) => src.includes(m![2]!)), `${k}: ${m![2]} already exists in server/src (${why}): delete the pending entry`).toBe(false);
+    }
+  });
+
+  it('D-7404: the test box\'s switch is C2\'s, absent means every run is local, and its writer is the switch route', () => {
+    const row = SWITCHES[TESTBOX_REMOTE_LIVE_MARKER];
+    expect(row).toEqual({
+      storage: { marker: 'testbox-remote-live' }, default: 'absent: every run is local', owner: 'C2',
+      meaning: expect.stringMatching(/test box/), writer: 'ccd testbox-remote, through POST /api/testbox/switch',
+    });
+    // Appended: the last row of the table, after every row the base had.
+    expect(Object.keys(SWITCHES).at(-1)).toBe(TESTBOX_REMOTE_LIVE_MARKER);
+    expect(readSwitches([TESTBOX_REMOTE_LIVE_MARKER])[TESTBOX_REMOTE_LIVE_MARKER]).toBe('set');
+    expect(readSwitches([])[TESTBOX_REMOTE_LIVE_MARKER]).toBe('clear');
+    expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
+  });
+
+  it('the table has 33 rows: 29 markers and 4 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([33, 29, 4]);
+  });
+
+  it('D-7319: the dispatch abandon switch is Coordination\'s settings row, seeded on, written by its route and read by the store', () => {
+    expect(SWITCHES['dispatch-abandon-choice']).toEqual({
+      storage: { setting: 'dispatch_abandon_settings.choice' }, default: 'on', owner: 'C5',
+      meaning: expect.stringMatching(/never came back/), writer: 'POST /api/coord/dispatch-abandon',
+    });
+    // The row describes what the tree has: the table its migration creates and seeds on, the store's one reader of it
+    // and the store's one writer, which only the route calls. The abandon pass reads the store, never this row.
+    const store = 'server/src/coord/store.ts';
+    expect(sqlStatementsIn(symbolOf(store, 'CoordStore.dispatchAbandonSetting')).map((q) => [q.verb, q.table]))
+      .toEqual([['SELECT', 'dispatch_abandon_settings']]);
+    expect(sqlStatementsIn(symbolOf(store, 'CoordStore.setDispatchAbandon')).map((q) => [q.verb, q.table]))
+      .toEqual([['INSERT', 'dispatch_abandon_settings']]);
+    const ddl = sqlStatementsInFile('server/src/coord/schema.ts').filter((q) => /\bdispatch_abandon_settings\b/.test(q.text));
+    expect(ddl.map((q) => q.verb)).toEqual(['CREATE', 'INSERT']);
+    expect(ddl[1]!.text).toContain("VALUES (1, 'on', 0)");
+    // The test box row stays the last: this row sits with the other settings rows, ahead of it.
+    const keys = Object.keys(SWITCHES);
+    expect(keys.indexOf('dispatch-abandon-choice')).toBe(keys.indexOf('roll-idle-targets') + 1);
+    expect(keys.at(-1)).toBe(TESTBOX_REMOTE_LIVE_MARKER);
   });
 
   it('a listing with reclaim-paused is set for it and clear for every other marker row', () => {

@@ -117,8 +117,12 @@ const SITES: readonly Site[] = [
   } },
 ];
 
-/** The row read by bucket: its `archivedAt` kept only when the bucket says archived (BARE) or archived or cleanup (BOTH). */
-const bare = (s: FleetSession): FleetSession => ({ ...s, archivedAt: s.bucket === 'archived' ? s.archivedAt : null });
+/** The row read by bucket: its `archivedAt` kept only when the bucket says archived (BARE) or archived or cleanup (BOTH).
+ *  BARE also files a `cleanup` row as the dead row a bare `bucket === 'archived'` reads it as, so the reading still
+ *  differs once the sites read the bucket instead of `archivedAt` (C7j Step 5, through `isArchivedRow`): a blind
+ *  column would read BOTH. */
+const bare = (s: FleetSession): FleetSession =>
+  ({ ...s, archivedAt: s.bucket === 'archived' ? s.archivedAt : null, ...(s.bucket === 'cleanup' ? { bucket: 'dead' as const } : {}) });
 const both = (s: FleetSession): FleetSession => ({ ...s, archivedAt: s.bucket === 'archived' || s.bucket === 'cleanup' ? s.archivedAt : null });
 
 interface Cell { readonly row: Row; readonly verdict: string; readonly bare: string; readonly both: string }
@@ -152,46 +156,48 @@ describe('the rows', () => {
 });
 
 // One verdict per row, in `rows()` order: pane live (not archived: no PR, open, merged; archived: the same), then pane
-// gone in the same order. Each site's BARE and BOTH readings are pinned beside it; C7j Step 5's behaviour rows are the
-// cells where a reading differs.
+// gone in the same order. Each site's BARE and BOTH readings are pinned beside it. C7j Step 5 (OA-C15 (a), D-7265,
+// D-7188) moved every site to `shared/api.ts#isArchivedRow`, the BOTH reading: each verdict now equals its BOTH line,
+// and the cells that changed are class (i) only (an archived row whose pane is live, rows 4 to 6); the cleanup row
+// (class (ii)) reads as before at every site.
 const PINS: Record<string, { verdict: string; bare: string; both: string }> = {
   'SessionActionsSheet.tsx (Hold door: archivedAt === null)': {
-    verdict: 'shown shown shown hidden hidden hidden shown shown shown hidden hidden hidden',
+    verdict: 'shown shown shown shown shown shown shown shown shown hidden hidden hidden',
     bare: 'shown shown shown shown shown shown shown shown shown hidden hidden shown',
     both: 'shown shown shown shown shown shown shown shown shown hidden hidden hidden',
   },
   'SessionActionsSheet.tsx (Clean up workspace door: archivedAt !== null)': {
-    verdict: 'hidden hidden hidden shown shown shown hidden hidden hidden shown shown shown',
+    verdict: 'hidden hidden hidden hidden hidden hidden hidden hidden hidden shown shown shown',
     bare: 'hidden hidden hidden hidden hidden hidden hidden hidden hidden shown shown hidden',
     both: 'hidden hidden hidden hidden hidden hidden hidden hidden hidden shown shown shown',
   },
   'AccountsScreen.tsx#AccountsScreen (sessions on this account)': {
-    verdict: 'listed listed listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed',
+    verdict: 'listed listed listed listed listed listed not-listed not-listed not-listed not-listed not-listed not-listed',
     bare: 'listed listed listed listed listed listed not-listed not-listed not-listed not-listed not-listed not-listed',
     both: 'listed listed listed listed listed listed not-listed not-listed not-listed not-listed not-listed not-listed',
   },
   'ArchiveScreen.tsx#archivedSummary (count)': {
-    verdict: '0 0 0 1 1 1 0 0 0 1 1 1',
+    verdict: '0 0 0 0 0 0 0 0 0 1 1 1',
     bare: '0 0 0 0 0 0 0 0 0 1 1 0',
     both: '0 0 0 0 0 0 0 0 0 1 1 1',
   },
   'ArchiveScreen.tsx#ArchiveScreen (listed)': {
-    verdict: 'not-listed not-listed not-listed listed listed listed not-listed not-listed not-listed listed listed listed',
+    verdict: 'not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed listed listed listed',
     bare: 'not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed listed listed not-listed',
     both: 'not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed not-listed listed listed listed',
   },
   'PrSheet.tsx#PrSheet (merged branch: archived note or not)': {
-    verdict: '- - unarchived-note - - archived-note - - unarchived-note - - archived-note',
+    verdict: '- - unarchived-note - - unarchived-note - - unarchived-note - - archived-note',
     bare: '- - unarchived-note - - unarchived-note - - unarchived-note - - unarchived-note',
     both: '- - unarchived-note - - unarchived-note - - unarchived-note - - archived-note',
   },
   'sessionHeaderView.ts#headerBucket (the header status bucket, stream dead)': {
-    verdict: 'dead dead dead idle idle idle dead dead dead archived archived cleanup',
+    verdict: 'dead dead dead dead dead dead dead dead dead archived archived cleanup',
     bare: 'dead dead dead dead dead dead dead dead dead archived archived dead',
     both: 'dead dead dead dead dead dead dead dead dead archived archived cleanup',
   },
   'sessionHeaderView.ts#sessionHeaderView (archived chip)': {
-    verdict: 'no-chip no-chip no-chip chip chip chip no-chip no-chip no-chip chip chip chip',
+    verdict: 'no-chip no-chip no-chip no-chip no-chip no-chip no-chip no-chip no-chip chip chip chip',
     bare: 'no-chip no-chip no-chip no-chip no-chip no-chip no-chip no-chip no-chip chip chip no-chip',
     both: 'no-chip no-chip no-chip no-chip no-chip no-chip no-chip no-chip no-chip chip chip chip',
   },

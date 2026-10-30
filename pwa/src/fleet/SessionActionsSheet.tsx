@@ -14,7 +14,7 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
+import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, failedTo } from '../lib/api';
 
@@ -31,6 +31,7 @@ import { HoldControl } from './HoldControl';
 import { RenameSheet } from './RenameSheet';
 import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useEnsure } from '../session/useEnsure';
 import './fleet.css';
 
 /** Release's consequence sentence — what releasing the hold actually changes,
@@ -83,7 +84,7 @@ export function SessionActionsSheet({
   // Every hook runs BEFORE the null guard below: `session` goes null whenever
   // the sheet closes, and a conditional hook would throw on that render.
   const [swapOpen, setSwapOpen] = useState(false);
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [archBusy, setArchBusy] = useState(false);
   /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
    *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
@@ -153,21 +154,11 @@ export function SessionActionsSheet({
   const fault = substrateFault(session);
   const faultTitle = substrateFaultTitle(session);
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(session.id);
-      onClose();
-    } catch (err) {
-      // apiErrorText, never err.message: the runCcd routes fail as
-      // 502 { ok, stderr } with no `error` key, so err.message yields the
-      // generic "request failed (502)" and ccd's refusal never reaches anyone.
-      toast(failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  // apiErrorText (through failedTo), never err.message: the runCcd routes fail as
+  // 502 { ok, stderr } with no `error` key, so err.message yields the
+  // generic "request failed (502)" and ccd's refusal never reaches anyone.
+  const restart = (): Promise<void> =>
+    ensureNow(session.id, (err) => failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), onClose);
 
   // Workspace lifecycle §5.2: every session offers Archive, and every session already put away offers Restore.
   const putAway = isPutAway(session);
@@ -430,7 +421,7 @@ export function SessionActionsSheet({
               exclusive renders (not a stacked sheet): with only ONE control
               ever on screen for this row, "tap Hold, submit empty" needs no
               disambiguation between two same-named buttons. */}
-          {session.workspace !== null && session.archivedAt === null
+          {session.workspace !== null && !isArchivedRow(session)
             && session.held === null && (
             <HoldControl session={session} sheetOpen={open} onHeld={onClose} />
           )}
@@ -452,7 +443,7 @@ export function SessionActionsSheet({
               carry. Archived only: archive is the staging step, and the audit
               this opens refuses `not-archived` anyway — offering it earlier
               would just be a button that always refuses. */}
-          {session.workspace !== null && session.archivedAt !== null && (
+          {session.workspace !== null && isArchivedRow(session) && (
             <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => onReap(session.id)}>

@@ -24,7 +24,7 @@ import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
 import type { FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
 import { operatorAsk, summaryParts, type RolledRow } from './rollup';
-import { RUN_WORD, programWave, programmeTitle, runForSession } from './runWords';
+import { RUN_WORD, boundOpenRun, claimedRunsOf, programWave, programmeTitle } from './runWords';
 
 export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
 export type ProgHue = (typeof PROG_HUES)[number];
@@ -100,9 +100,9 @@ type LeadFacts = { slug: string; title: string } & Pick<ProgrammeBoxView, 'more'
 
 const WAITING: ReadonlySet<RunState> = new Set<RunState>(['awaiting-review', 'merging']);
 
-/** The run a row is doing: a spawn's own, or the session's current run (`runForSession`). */
+/** The run a row is doing: a spawn's own, or the session's open bound run (`boundOpenRun`, the wire's binding). */
 export function rowRun(row: FleetRow, runs: readonly RunSummary[]): RunSummary | null {
-  return row.kind === 'pending' ? row.run : runForSession(runs, row.session);
+  return row.kind === 'pending' ? row.run : boundOpenRun(runs, row.session);
 }
 
 /** One card's boxes, the workers of programmes elsewhere, and the rows in no programme. `rows` is the card's tree
@@ -118,12 +118,13 @@ export function programmeBoxes(
   const farIds = new Set(far.map((r) => r.id));
   const byId = new Map<number, RunSummary>();
   for (const r of runs) byId.set(r.id, r);
+  // Each session's claimed runs through the one coordinator-side reader (`claimedRunsOf`, D-7182); a run a session
+  // claims for itself is no box. The runs here are the open runs frame's, so its open filter keeps every one of them.
+  const all = [...byId.values()];
   const claims = new Map<string, RunSummary[]>();
-  for (const r of byId.values()) {
-    if (r.claimedBy === null || r.claimedBy === r.sessionId || !onCard.has(r.claimedBy)) continue;
-    const list = claims.get(r.claimedBy);
-    if (list) list.push(r);
-    else claims.set(r.claimedBy, [r]);
+  for (const id of onCard) {
+    const list = claimedRunsOf(all, id).filter((r) => r.claimedBy !== r.sessionId);
+    if (list.length > 0) claims.set(id, list);
   }
 
   const drafts: (Omit<ProgrammeBoxView, 'lead'> & LeadFacts)[] = [];

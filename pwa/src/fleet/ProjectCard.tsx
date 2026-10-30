@@ -33,7 +33,7 @@ import { nestFleet, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
-import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
 import {
   cardAbroad, fleetHues, foldedCard, programmeBoxes, rankBoxes, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
 } from './programmeBoxes';
@@ -296,10 +296,11 @@ function ProjectCardView({
   const shownAbroad = cardAbroad(abroad, prog.boxes);
   const rowKey = (row: FleetRow): string => (row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`);
   // Task 5: the hold reason's door, decided HERE because this is the level that
-  // holds the runs. `runForSession` answers off the run rows — never by reading
-  // the id out of the hold string, which stays display-only (its docstring
-  // carries the measurement). `null` when the board has no row for this
-  // session, and `SessionLine` renders exactly the inert cell it always did for
+  // holds the runs. `boundOpenRun` answers off the wire's binding and the run
+  // rows — never by reading the id out of the hold string, which stays
+  // display-only (its docstring carries the measurement). `null` when the board
+  // has no row for this session's open bound run, and `SessionLine` renders
+  // exactly the inert cell it always did for
   // that, so a hand hold and a hold outliving its run both read as text.
   //
   // `/runs` unfocused, because there is no per-run route to focus
@@ -308,7 +309,7 @@ function ProjectCardView({
   // names the programme, so the operator lands looking at the right group.
   // `OPEN_RUNS`, one module constant (C9), so a memo'd line is handed the same door on every render.
   const openRunFor = (session: FleetSession): (() => void) | null =>
-    runForSession(runs, session) === null ? null : OPEN_RUNS;
+    boundOpenRun(runs, session) === null ? null : OPEN_RUNS;
 
   // The orphaned worker's marker and every ruling about when it stays silent:
   // `orphanWords.ts`. Bound here to this card's own runs, project and LIVE

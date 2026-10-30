@@ -5,8 +5,10 @@
 // generated region, OA-C17 (a), D-7265). They word some tokens differently on purpose, and W7 changes neither.
 // `refusal-words.characterization.test.ts` keeps its own rows.
 import { describe, expect, it } from 'vitest';
-import { ASK_REFUSE_TEXT, NOTIFICATION_REFUSAL_TEXT } from '../src/lib/refusalWords';
-import { DIALOG_REFUSE_TEXT } from '../src/session/askWords';
+import { QUESTION_DOOR_REFUSALS } from '../../shared/api';
+import { ApiError } from '../src/lib/api';
+import { ASK_REFUSE_TEXT, NOTIFICATION_QUESTION_DOOR_TEXT, NOTIFICATION_REFUSAL_TEXT } from '../src/lib/refusalWords';
+import { DIALOG_REFUSE_TEXT, QUESTION_DOOR_REFUSE_TEXT, dialogMultiRefusal, dialogRefusal, dialogTextRefusal } from '../src/session/askWords';
 
 describe('the answer paths\' refusal tables, pinned (W7 C7e)', () => {
   it('DIALOG_REFUSE_TEXT: the sheets\' words for an option answer\'s refusals', () => {
@@ -56,5 +58,26 @@ describe('the answer paths\' refusal tables, pinned (W7 C7e)', () => {
       'not-alive': 'That session is no longer running.',
       'unknown-session': 'That session is gone.',
     });
+  });
+});
+
+// W7 C7g (D-7185, D-7485): W3 Q3f's door family adds one word of its own, `kind-mismatch` (`shared/api.ts`
+// `#QUESTION_DOOR_REFUSALS`). Each surface words it once, in a table of its own beside the ones above, which stay as
+// they were: the sheets (`askWords.ts#QUESTION_DOOR_REFUSE_TEXT`, read by the row's, the own words' and the set's
+// refusal) and the notification (`refusalWords.ts#NOTIFICATION_QUESTION_DOOR_TEXT`, rendered into push-sw.js's region).
+describe('the question door family\'s own word, worded once per surface (W7 C7g)', () => {
+  const SHEET = "The server couldn't take that answer for this session's question, so nothing was pressed. Answer it in the terminal.";
+  it('QUESTION_DOOR_REFUSE_TEXT and NOTIFICATION_QUESTION_DOOR_TEXT, total over QUESTION_DOOR_REFUSALS', () => {
+    expect(Object.keys(QUESTION_DOOR_REFUSALS)).toEqual(['kind-mismatch']);
+    expect(QUESTION_DOOR_REFUSE_TEXT).toEqual({ 'kind-mismatch': SHEET });
+    expect(NOTIFICATION_QUESTION_DOOR_TEXT).toEqual({ 'kind-mismatch': "That answer didn't fit this session's question — open the session." });
+  });
+  it('the sheets word kind-mismatch with it, whichever answer was refused; other codes keep their own tables', () => {
+    const refused = new ApiError(400, { ok: false, error: 'kind-mismatch' });
+    expect(dialogRefusal(refused, false)).toBe(SHEET);
+    expect(dialogRefusal(refused, true)).toBe(SHEET);
+    expect(dialogTextRefusal(refused)).toBe(SHEET);
+    expect(dialogMultiRefusal(refused)).toBe(SHEET);
+    expect(dialogRefusal(new ApiError(409, { ok: false, error: 'stale-dialog' }), false)).toBe(DIALOG_REFUSE_TEXT['stale-dialog']);
   });
 });

@@ -12,7 +12,12 @@
 //      censuses, single-definition, deviation-refs, growth-check, ownership, the rings, ccd-contexts, dtbd, the
 //      tests-inclusive typecheck, the oss metadata, the pin suites of TypeScript code) and every test whose source
 //      lists the tracked tree or reads the diff itself (TREE_READER: a direct `git ls-files`, `git diff` or
-//      `git merge-base`, the shape of topology-clean, gitignore-secrets and consolidation-path-guard);
+//      `git merge-base`, the shape of topology-clean, gitignore-secrets and consolidation-path-guard), and every test
+//      that lists a source tree itself (a ratchet, a census, a "nowhere else in server/src" rule) whose file measured
+//      at most SCANNER_MAX_MS on the last full run. Which tests those are: the UNION of what the last full run
+//      RECORDED (the `tree-scanners` artifact, tree-scanners.mjs) and what the static detector `scansSourceTree`
+//      finds, so a shard whose record was lost, or a listing the capture cannot see, drops no scanner the detector
+//      knows; without a readable artifact, the static detector alone;
 //   4. the session-hook suites when ccd/ccd, ccd/session-hook.sh or shared/api.ts changed (SESSION_HOOK_TRIGGERS):
 //      the hook is bash, so no import reaches it.
 // What this leaves out — a test the map has no entry for or does not trust, a TypeScript file a test reads as text
@@ -29,6 +34,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { liveTestFiles, unsafeTestPaths } from './select-tests.mjs';
+import { readTreeScanners } from './tree-scanners.mjs';
 import { planShards, toMatrix, PROFILES } from './shards.mjs';
 
 /** Repo-relative patterns of the server suites that read the whole tree, so they run on every fast pull request. */
@@ -65,16 +71,283 @@ export const PIN_MAP_CARRIED = [
  *  as `h.git(...)`. Such a test checks whatever the change touched, so vitest can never relate it. */
 export const TREE_READER = /\b(?:execFileSync|spawnSync|execSync|execFile|spawn)\(\s*['"`]git(?:['"`]\s*,\s*\[[^\]]*?['"`]|\s+(?:-C\s+\S+\s+)?)(?:ls-files|merge-base|diff)\b/;
 
+// ── The tree scanners (D-7455) ──────────────────────────────────────────────────────────────────────────────────────
+// A test that LISTS a source tree itself (a ratchet, a census, a single-definition or ring rule, a "nowhere else in
+// server/src" check) reads every file under it as text, so vitest relates it to no change, and a red there first
+// shows in the merge queue. The full run RECORDS them (tree-scanners.mjs: a setup file wraps fs's listers), and the
+// plan reads that record UNIONED with the static detector below: the record adds what the detector misses, and the
+// detector keeps what the record lost (a shard's scans not uploaded) or cannot see (a child process, a mocked fs, a
+// listing of an ancestor of the roots). With no readable `tree-scanners` artifact, the detector alone. It is kept as
+// it is, with no further shapes. `scansSourceTree` finds them from the source, by shape:
+//   - a source root spelled as a literal: `'server/src'`, `'pwa/src'`, `'agent/src'`, `'shared'`, `'ccd'`, or the
+//     segments `'server', 'src'` / `serverRoot, 'src'` / `'..', 'src'` (from server/test, server/src) — the directory itself, never a
+//     file or subdirectory under it, never one joined onto a base that does not name the repository (a fixture's
+//     `join(home, 'ccd')` is not the tree) or after another literal segment (`join(h, 'older-tree', 'ccd')`); a
+//     leading `../` is allowed (`'../../pwa/src'`), and an array of roots is roots (`['deploy', 'ccd']`);
+//   - a name bound to one: a `const` whose value spells a root (for the rest of its block), a name declared first and
+//     assigned one later (a `beforeAll`; for its declaration's block), an alias of one (a default parameter
+//     `dir = srcRoot`), `path.dirname(<a file directly in a root>)` (a helper's `CCD`, `ccd/ccd`), a package dir with
+//     `'src'` joined on (`path.join(root, 'src')`, `root` the server package), and a loop or an array callback over
+//     such a value (for its body);
+//   - a LISTER: readdirSync / readdir / opendirSync / globSync / glob, or a function the module defines or imports
+//     from a helper under server/test that calls a lister (the repo's walkers: `walk`, `sourceFiles`, `walkSrc`…),
+//     however it is reached: `fs.readdirSync(`, `fsp.readdir(`, `io.readdir(`, `fs.promises.readdir(`, `[...walk(`;
+//   - a SCANNER: a lister called on a root, or a function that calls a scanner (`sitesOf(REPO, ['server/src'], …)`,
+//     the census helpers' `ccdCallGraph()`).
+// A test file scans when its own code calls a scanner. Comments are blanked first. ci-fast-plan.test.ts's SELF-CHECK
+// holds the capture to the detector: every static positive fixture there, run under the capture, is recorded.
+
+const ROOT_DIRS = String.raw`(?:server\/src|pwa\/src|agent\/src|shared|ccd)\/?`;
+const Q = '[\'"`]';
+/** A source root spelled as a literal; another segment may follow only when it is a root too. */
+export const SOURCE_ROOT = new RegExp(String.raw`(?:${Q}(?:\.\.\/)*${ROOT_DIRS}${Q}|${Q}(?:server|pwa|agent|\.\.)${Q}\s*,\s*${Q}src${Q}|\b(?:server|pwa|agent)[\w$]*\s*,\s*${Q}src${Q}|${Q}\.\.\/src\/?${Q})(?!\s*,\s*${Q}(?!${ROOT_DIRS}${Q}))`, 'g');
+/** A base a root may be joined onto: one that names the repository or the test's own directory. */
+const REPO_BASE = /repo|root|here|dirname|import\.meta/i;
+const FS_LISTERS = ['readdirSync', 'readdir', 'opendirSync', 'globSync', 'glob'];
+const IDENT = '[A-Za-z_$][\\w$]*';
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Does `text` spell a source root (not one joined onto a non-repository base, nor under another literal segment)? */
+function spellsRoot(text) {
+  for (const m of text.matchAll(SOURCE_ROOT)) {
+    // The literal segments written before it in the same call: only `'..'` may sit between a base and a root
+    // (`join(home, '.local', 'bin', 'ccd')` and `join(h, 'older-tree', 'ccd')` are a fixture's files, not the tree).
+    // An array or another call's arguments (`['deploy', 'ccd']`) is a list of roots, not a path.
+    const before = text.slice(0, m.index);
+    const segs = /(?:['"`][^'"`\n]*['"`]\s*,\s*)*$/.exec(before)[0];
+    const head = before.slice(0, before.length - segs.length);
+    const inJoin = /(?:join|resolve)\(\s*(?:[^,()]+?\s*,\s*)?$/.test(head);
+    if (inJoin && [...segs.matchAll(/['"`]([^'"`\n]*)['"`]/g)].some((x) => x[1] !== '..')) continue;
+    const base = /(?:join|resolve)\(\s*([^,()]+?)\s*,\s*$/.exec(head);
+    if (!base || REPO_BASE.test(base[1])) return true;
+  }
+  return false;
+}
+
+/** Comments blanked, newlines kept. One left-to-right pass, so whichever opens first wins: a `/*` inside a string
+ *  (a `'**' + '/*.ts'` glob) is the string's, a `//` inside a string stays (server/test/sourceScan.ts's reading). */
+const CODE_OR_COMMENT = /('(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
+export const blankComments = (s) => s.replace(CODE_OR_COMMENT, (m, str) => (str !== undefined ? m : m.replace(/[^\n]/g, ' ')));
+
+const indentAt = (src, idx) => src.slice(src.lastIndexOf('\n', idx - 1) + 1).match(/^[ \t]*/)[0].length;
+/** Where the code that starts at `idx` ends: the first later line indented less than it (`block`: the rest of the
+ *  enclosing block), or no deeper and not a closing bracket (its own body). */
+function regionEnd(src, idx, block) {
+  const ind = indentAt(src, idx);
+  for (let p = src.indexOf('\n', idx); p !== -1;) {
+    const next = src.indexOf('\n', p + 1);
+    const line = src.slice(p + 1, next === -1 ? undefined : next);
+    const li = line.length - line.trimStart().length;
+    if (line.trim() !== '' && (block ? li < ind : li <= ind && !/^\s*[}\])]/.test(line))) return p;
+    p = next;
+  }
+  return src.length;
+}
+
+/** The functions a module defines (declarations and arrow consts), with the span of their bodies. */
+function definedFunctions(src) {
+  const re = new RegExp(`(?:function\\s+(${IDENT})\\s*\\(|(?:const|let)\\s+(${IDENT})\\s*(?::[^=\\n]{0,80})?=\\s*(?:async\\s+)?(?:\\([^)]*\\)|${IDENT})\\s*(?::[^=\\n]{0,80})?=>)`, 'g');
+  return [...src.matchAll(re)].map((m) => ({ name: m[1] ?? m[2], start: m.index + m[0].length, end: regionEnd(src, m.index, false) }));
+}
+
+/** A name used as itself (`NAME`, `...NAME`), never a member of something else (`x.NAME`) or a piece of a string. */
+const usedName = (name, tail = String.raw`(?![\w$'"\x60])`) => new RegExp(String.raw`(?<![\w$'"\x60])(?<!(?:^|[^.])\.)${esc(name)}${tail}`);
+/** A package directory's value (`path.join(here, '..')` from server/test, `path.join(REPO, 'server')`): one that
+ *  would spell a source root with `'src'` joined on. Its first line only, ending in the call's closing paren. */
+function spellsPackageDir(value) {
+  const v = value.split('\n')[0].trim().replace(/;$/, '').trim();
+  return v.endsWith(')') && !spellsRoot(v) && spellsRoot(`${v.slice(0, -1)}, 'src')`);
+}
+/** A file directly in a source root (`path.resolve(__dirname, '../../ccd/ccd')`, `path.join(REPO, 'ccd', 'ccd')`):
+ *  the value spells a root once its last segment is dropped. `path.dirname(<it>)` is that root. */
+function spellsFileInRoot(value) {
+  const v = value.split('\n')[0].trim().replace(/;$/, '').trim();
+  const last = /,\s*(['"`])([^'"`\n]+)\1\s*\)$/.exec(v);
+  if (!last || last[2] === '..' || spellsRoot(v)) return false;
+  const cut = last[2].includes('/') ? `${last[1]}${last[2].slice(0, last[2].lastIndexOf('/'))}${last[1]}` : '';
+  return spellsRoot(`${v.slice(0, last.index)}${cut === '' ? '' : `, ${cut}`})`);
+}
+
+/** `covers(text, at)`: does `text`, at offset `at`, spell a root or name a binding to one in scope there? A binding
+ *  is a `const`/`let` whose value spells a root, a name assigned one after its declaration (`let SRC_DIR = ''` then
+ *  `SRC_DIR = path.resolve(…, 'agent', 'src')` in a `beforeAll`: bound for the declaration's block), `<package dir
+ *  binding>, 'src'` (`path.join(root, 'src')` where `root` is the server package), and a loop or array callback over
+ *  one (for its body). */
+function rootCover(src, importedFiles = new Set()) {
+  /** @type {Array<{ name: string, start: number, end: number, pkg?: boolean }>} */
+  const bound = [];
+  /** Names bound to a file directly in a root (`CCD`, a helper's `ccd/ccd`), and where. */
+  const files = [];
+  const fileIn = (name, at) => importedFiles.has(name) || files.some((b) => b.name === name && inScope(b, at));
+  const inScope = (b, at) => at >= b.start && at < b.end;
+  const covers = (text, at) => spellsRoot(text) || bound.some((b) => inScope(b, at) && (b.pkg
+    ? usedName(b.name, String.raw`\s*,\s*${Q}src${Q}(?!\s*,\s*${Q})`).test(text)
+    : usedName(b.name).test(text)));
+  const seen = new Set();
+  const bind = (name, at, value, declared) => {
+    if (seen.has(`${name}@${at}`)) return;
+    // A later assignment is bound from its declaration when one comes before it, else from the assignment.
+    const span = () => {
+      const decls = declared ? [] : [...src.slice(0, at).matchAll(new RegExp(String.raw`\b(?:let|var)\s+${esc(name)}\b`, 'g'))];
+      const from = decls.length > 0 ? decls[decls.length - 1].index : at;
+      seen.add(`${name}@${at}`);
+      return { name, start: from, end: regionEnd(src, from, true) };
+    };
+    if (spellsFileInRoot(value)) { files.push(span()); return; }
+    const dir = new RegExp(String.raw`^\s*(?:path\.)?dirname\(\s*(${IDENT})\s*\)\s*(?:[),;]|$)`).exec(value);
+    // An alias of a root binding (`dir = srcRoot`, a default parameter), never of a package one.
+    const alias = new RegExp(String.raw`^\s*(${IDENT})\s*(?:[),;:]|$)`).exec(value);
+    const root = spellsRoot(value);
+    const pkg = !root && spellsPackageDir(value);
+    if (!(pkg || root || (dir && fileIn(dir[1], at)) || (alias && alias[1] !== name && bound.some((b) => !b.pkg && b.name === alias[1] && inScope(b, at))))) return;
+    bound.push({ ...span(), pkg });
+  };
+  const DECL = new RegExp(`\\b(?:const|let)\\s+(${IDENT})\\s*(?::[^=\\n]{0,80})?=\\s*([^;]{0,300})`, 'g');
+  // A later assignment: `NAME = value`, not `==`/`=>`, not a member (`x.NAME =`) and not a declaration (seen above).
+  const ASSIGN = new RegExp(String.raw`(?<![\w$.])(${IDENT})[ \t]*=(?![=>])[ \t]*(?=([^;\n]{0,300}))`, 'g'); // the value is looked at, not consumed: `f = (dir = SRC)`
+  const assigns = [...src.matchAll(ASSIGN)].filter((m) => !/[\w$.][ \t]*$/.test(src.slice(Math.max(0, m.index - 24), m.index))
+    && !/^(?:const|let|var|null|undefined|true|false|this)$/.test(m[1]));
+  const decls = [...src.matchAll(DECL)];
+  for (let pass = 0; pass < 2; pass++) {
+    for (const m of decls) bind(m[1], m.index, m[2], true);
+    for (const m of assigns) bind(m[1], m.index, m[2], false);
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    for (const m of src.matchAll(new RegExp(`\\bfor\\s*\\(\\s*(?:const|let)\\s+(${IDENT})\\s+of\\s+([^)\\n]{0,300})\\)`, 'g'))) {
+      if (covers(m[2], m.index)) bound.push({ name: m[1], start: m.index, end: regionEnd(src, m.index, false) });
+    }
+    for (const m of src.matchAll(new RegExp(`(\\[[^\\]\\n]{0,300}\\]|${IDENT})\\s*\\.(?:flatMap|map|forEach|filter)\\(\\s*\\(?\\s*(${IDENT})`, 'g'))) {
+      if (covers(m[1], m.index)) bound.push({ name: m[2], start: m.index, end: regionEnd(src, m.index, false) });
+    }
+  }
+  covers.files = files.map((b) => b.name);
+  return covers;
+}
+
+/** The calls `name(args…` to any of `names` in `src` between `from` and `to` (args: the rest of that line). A call
+ *  through a namespace or an object (`fs.readdirSync(`, `fsp.readdir(`, `io.readdir(`, `fs.promises.readdir(`) and a
+ *  spread one (`[...walk('ccd')]`) count: the name is what lists, whatever it is reached through. */
+function callsTo(src, names, from = 0, to = src.length) {
+  if (names.size === 0) return [];
+  const re = new RegExp(`(?<![\\w$])(${[...names].map(esc).join('|')})\\(([^;\\n]{0,300})`, 'g');
+  return [...src.slice(from, to).matchAll(re)].map((m) => ({ name: m[1], args: m[2], at: from + m.index }));
+}
+
 /**
- * The guard suites among the live tests: a GUARD_TESTS pattern (less PIN_MAP_CARRIED), or a TREE_READER source.
- * @param {string[]} live repo-relative test paths @param {(file: string) => string} readSource @returns {string[]}
+ * One module's listers, scanners and names bound to a file directly in a root, and the first call of its own that
+ * scans a source root (`hit`, or null). `imported` carries what its helper imports bring, under the names this module
+ * uses (a helper's `CCD = path.resolve(__dirname, '../../ccd/ccd')` makes `path.dirname(CCD)` the ccd root here).
+ * @param {string} raw @param {{ listers: Set<string>, scanners: Set<string>, files?: Set<string> }} [imported]
+ * @returns {{ listers: Set<string>, scanners: Set<string>, files: Set<string>, hit: string | null }}
  */
-export function guardTests(live, readSource) {
+export function scanShape(raw, imported = { listers: new Set(), scanners: new Set(), files: new Set() }) {
+  const src = blankComments(raw);
+  const fns = definedFunctions(src);
+  const covers = rootCover(src, imported.files ?? new Set());
+  const listers = new Set([...FS_LISTERS, ...imported.listers]);
+  const scanners = new Set(imported.scanners);
+  const scans = (c) => scanners.has(c.name) || (listers.has(c.name) && covers(c.args, c.at));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const f of fns) {
+      const cs = callsTo(src, new Set([...listers, ...scanners]), f.start, f.end);
+      if (!listers.has(f.name) && cs.some((c) => listers.has(c.name))) { listers.add(f.name); changed = true; }
+      if (!scanners.has(f.name) && cs.some(scans)) { scanners.add(f.name); changed = true; }
+    }
+  }
+  const hit = callsTo(src, new Set([...listers, ...scanners])).find(scans);
+  const files = new Set(covers.files);
+  if (hit) return { listers, scanners, files, hit: `${hit.name}(${hit.args}`.slice(0, 120) };
+  // A lister handed to an iteration over roots: `ROOTS.flatMap(sources)`.
+  const named = [...listers].map(esc).join('|');
+  const passed = [...src.matchAll(new RegExp(`(\\[[^\\]\\n]{0,300}\\]|${IDENT})\\s*\\.(?:flatMap|map|forEach)\\(\\s*(${named})\\s*\\)`, 'g'))]
+    .find((m) => covers(m[1], m.index));
+  return { listers, scanners, files, hit: passed ? passed[0].slice(0, 120) : null };
+}
+
+/**
+ * Does the test (or helper) at `file` list a source tree itself? Its helper imports under server/test are read with
+ * `readSource` too, so a test that calls a census helper's scanner scans. Returns the scanning call, or null.
+ * @param {string} file repo-relative @param {(file: string) => string} readSource
+ * @param {Map<string, { exports: { listers: Set<string>, scanners: Set<string>, files: Set<string> }, hit: string | null }>} [memo]
+ * @returns {string | null}
+ */
+export function scansSourceTree(file, readSource, memo = new Map()) {
+  return moduleScan(file, readSource, memo, new Set()).hit;
+}
+
+function moduleScan(file, readSource, memo, stack) {
+  const known = memo.get(file);
+  if (known) return known;
+  const none = { exports: { listers: new Set(), scanners: new Set(), files: new Set() }, hit: null };
+  if (stack.has(file)) return none;
+  stack.add(file);
+  let src;
+  try { src = readSource(file); } catch { return none; }
+  const imported = { listers: new Set(), scanners: new Set(), files: new Set() };
+  for (const m of src.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*['"](\.\.?\/[^'"]+)['"]/g)) {
+    const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), m[2])).replace(/\.[cm]?js$/, '.ts');
+    if (!target.startsWith('server/test/') || /\.test\.ts$/.test(target)) continue;
+    const helper = moduleScan(target, readSource, memo, stack);
+    for (const spec of m[1].split(',')) {
+      const [orig, alias] = spec.replace(/^\s*type\s+/, '').trim().split(/\s+as\s+/).map((s) => s.trim());
+      if (!orig) continue;
+      if (helper.exports.listers.has(orig)) imported.listers.add(alias ?? orig);
+      if (helper.exports.scanners.has(orig)) imported.scanners.add(alias ?? orig);
+      if (helper.exports.files.has(orig)) imported.files.add(alias ?? orig);
+    }
+  }
+  const shape = scanShape(src, imported);
+  const result = { exports: { listers: shape.listers, scanners: shape.scanners, files: shape.files }, hit: shape.hit };
+  memo.set(file, result);
+  return result;
+}
+
+/** A tree scanner whose whole file took longer than this on the last full run is left to the merge queue: the plan
+ *  runs files, not cases, and a scan case inside a long fixture suite would cost the whole suite on every PR. */
+export const SCANNER_MAX_MS = 10_000;
+
+/**
+ * The live tests that list a source tree themselves, less the map-carried pins, each with what shows it and its
+ * measured duration (null when none was measured): the files the static detector finds, and with `recorded` (the
+ * `tree-scanners` artifact, `{ file: roots }`) every file the last full run recorded too — the union, so neither a lost
+ * shard record nor a shape the detector misses drops a scanner. Without it (null: missing or unreadable), the static
+ * detector's alone.
+ * @param {string[]} live @param {(file: string) => string} readSource @param {Record<string, number> | null} [durations]
+ * @param {Record<string, string[]> | null} [recorded]
+ * @param {Map<string, unknown>} [memo] the static detector's per-file results (`scansSourceTree`'s memo); a caller that
+ *   asks more than once over the same `readSource` passes one, so the tree is scanned once, not once per call
+ * @returns {Array<{ file: string, hit: string, ms: number | null }>}
+ */
+export function treeScanners(live, readSource, durations = null, recorded = null, memo = new Map()) {
+  const out = [];
+  const ms = (f) => (durations && typeof durations[f] === 'number' ? durations[f] : null);
+  for (const f of live) {
+    if (PIN_MAP_CARRIED.includes(f)) continue;
+    const seen = recorded && Object.hasOwn(recorded, f) && recorded[f].length > 0 ? `listed ${recorded[f].join(', ')} on the last full run` : null;
+    const hit = seen ?? scansSourceTree(f, readSource, memo);
+    if (hit) out.push({ file: f, hit, ms: ms(f) });
+  }
+  return out;
+}
+
+/**
+ * The guard suites among the live tests: a GUARD_TESTS pattern (less PIN_MAP_CARRIED), a TREE_READER source, or a
+ * tree scanner (`treeScanners`: the recorded and the static ones) whose file measured at most SCANNER_MAX_MS (or was
+ * not measured: run it, the safe direction).
+ * @param {string[]} live repo-relative test paths @param {(file: string) => string} readSource
+ * @param {Record<string, number> | null} [durations] the full run's per-file durations, ms
+ * @param {Record<string, string[]> | null} [recorded] the full run's recorded tree scanners, or null
+ * @param {Map<string, unknown>} [memo] the static detector's memo, as `treeScanners` takes it
+ * @returns {string[]}
+ */
+export function guardTests(live, readSource, durations = null, recorded = null, memo = new Map()) {
+  const scanners = new Set(treeScanners(live, readSource, durations, recorded, memo).filter((s) => s.ms === null || s.ms <= SCANNER_MAX_MS).map((s) => s.file));
   return live.filter((f) => {
     if (GUARD_TESTS.some((re) => re.test(f)) && !PIN_MAP_CARRIED.includes(f)) return true;
     let src = '';
     try { src = readSource(f); } catch { return true; } // unreadable: run it, the safe direction
-    return TREE_READER.test(src);
+    return TREE_READER.test(src) || scanners.has(f);
   });
 }
 
@@ -168,16 +441,24 @@ function main() {
     if (!opt.untraced) throw new Error('no --untraced file was handed in');
     const untraced = parseUntraced(readFileSync(opt.untraced, 'utf8'));
     const changed = execFileSync('git', ['diff', '--name-only', '--no-renames', opt.base, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).split('\n');
-    const guards = guardTests(live, (f) => readFileSync(path.join(repoDir, f), 'utf8'));
+    let durations = null;
+    if (opt.times) {
+      try { durations = JSON.parse(readFileSync(opt.times, 'utf8')); } catch { durations = null; }
+    }
+    const readSource = (f) => readFileSync(path.join(repoDir, f), 'utf8');
+    // The full run's recorded scanners, unioned with the static detector's; null (no --scanners, or not readable):
+    // the static detector's alone.
+    const recorded = readTreeScanners(opt.scanners);
+    const memo = new Map(); // one static scan of the tree for both
+    const guards = guardTests(live, readSource, durations, recorded, memo);
+    const heavy = treeScanners(live, readSource, durations, recorded, memo).filter((s) => s.ms !== null && s.ms > SCANNER_MAX_MS);
     const sel = fastSelection({ live, related, untraced, guards, changed });
     // Never an empty matrix: the guard suites always run, so an empty selection means the lists went blind.
     if (sel.files.length === 0) throw new Error('the fast selection is empty — no guard suite matched');
     const unsafe = unsafeTestPaths(sel.files);
     if (unsafe.length > 0) throw new Error(`a selected test path no shard list can carry: ${unsafe.map((f) => JSON.stringify(f)).join(', ')}`);
-    let durations = null;
-    if (opt.times) {
-      try { durations = JSON.parse(readFileSync(opt.times, 'utf8')); } catch { durations = null; }
-    }
+    // A heavy scanner the change relates to runs anyway; the summary names the ones that did not run.
+    const left = heavy.filter((s) => !sel.files.includes(s.file));
     const plan = planShards(sel.files, durations, PROFILES.linuxFast);
     writeOutputs({ server_matrix: JSON.stringify(toMatrix(plan)), count: String(sel.files.length), fallback: '' });
     const lines = [
@@ -187,6 +468,16 @@ function main() {
       '',
       ...sel.files.map((f) => `- \`${f}\``),
       '',
+      recorded
+        ? `The tree scanners are the ${Object.keys(recorded).length} file(s) the last full run recorded listing a source root (the \`tree-scanners\` artifact), and every file the static detector (\`scansSourceTree\`) finds.`
+        : 'No `tree-scanners` artifact was readable: the tree scanners are the static detector\'s (`scansSourceTree`).',
+      '',
+      ...(left.length === 0 ? [] : [
+        `${left.length} tree scanner(s) over ${SCANNER_MAX_MS / 1000} s a file are left to the merge queue (the plan runs files, not cases):`,
+        '',
+        ...left.map((s) => `- \`${s.file}\` (${Math.round((s.ms ?? 0) / 1000)} s)`),
+        '',
+      ]),
     ];
     writeSummary(lines.join('\n'));
     console.log(`fast plan: ${sel.files.length} file(s), ${plan.length} shard(s) (${sel.related} related, ${sel.untraced} untraced, ${sel.guards} guards, session-hook ${sel.hook})`);

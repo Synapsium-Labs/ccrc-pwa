@@ -4,6 +4,13 @@
 // `EnvelopeSheet`'s content) hold one instance (`createAnswerLifecycle`) and perform its commands through an injected
 // seam (`performAnswer`, `AnswerSeam`); the notification's request is rendered from `answerRequest` (`ASK_REQUEST`).
 //
+// The doors (W7 C7g, D-7185, D-7485): an option row, the own words, a multiSelect set and the notification's ask are
+// answers to an operator question, and go to W3 Q3f's `POST /api/questions/session-<id>/answer` with the family's body
+// (`questionBodyOf`), through one writer, `lib/api.ts#answerQuestion`. It is the only door: C7p (D-7194, D-7540)
+// retired the old doors Q3f's family replaced, on the server and in the skew fallback C7g kept here, so a server
+// without `questions-v1` (older than Q3f) is no longer answered. The tab move and Deny are not answers: they stay
+// session doors (`/dialog/tab`, and the literal Escape through `/interrupt`).
+//
 // What it holds, and why each piece is ONE value:
 //  - `phase`: the option answer, the tab move and Deny (`sending`), an option answer that landed and waits for the pane
 //    to move on (`sent`), and a refusal (`failed`, which carries the door's refusal TOKEN, never a sentence: each surface
@@ -18,7 +25,7 @@
 // while `locked` is refused (no command, the state unchanged), and so is a `dismiss`. The state is updated
 // synchronously at dispatch (`createAnswerLifecycle`), so a second tap handled in the same tick as the first finds the
 // lock taken: the guard the sheet once kept in a ref beside its render state is this state itself.
-import type { Dialog, DialogAnswered, DialogTabTarget } from '../../../shared/api';
+import { formatQuestionId, type Dialog, type DialogAnswered, type DialogTabTarget, type QuestionAnswerBody } from '../../../shared/api';
 import type { Api } from '../lib/api';
 import type { PickCall, WordsCall } from './AskParts';
 import { freeTextSlot, questionKey, slotHolds } from './askLive';
@@ -303,8 +310,28 @@ export function createAnswerLifecycle(initial: AnswerState = INITIAL_ANSWER_STAT
 
 // ─── performing a sheet's command ──────────────────────────────────────────────────────────────────────────────────
 
-/** The writers the sheets' commands go through: `lib/api.ts`'s `api` by default, injected for tests. */
-export type AnswerSeam = Pick<Api, 'answerDialog' | 'answerDialogText' | 'answerDialogMulti' | 'answerDialogTab' | 'interrupt'>;
+/** The writers the sheets' commands go through: `lib/api.ts`'s `api` by default, injected for tests. One writer for
+ *  every answer (`answerQuestion`, which chooses the door), and the two session doors that answer nothing. */
+export type AnswerSeam = Pick<Api, 'answerQuestion' | 'answerDialogTab' | 'interrupt'>;
+
+/** The commands that answer an operator question, and so take the family's door. */
+export type QuestionCommand = Extract<AnswerCommand, { kind: 'answer' | 'text' | 'multi' | 'ask' }>;
+
+/** The body a question command sends to `POST /api/questions/session-<id>/answer` (`shared/api.ts#QuestionAnswerBody`):
+ *  an option row `{kind:'dialog', dialogId, optionIndex}`, the own words the same with `text`, a multiSelect set
+ *  `{kind:'dialog', multi:true, dialogId, optionIndexes}`, and the notification's `{kind:'ask', askKey, optionIndexes}`. */
+export function questionBodyOf(c: QuestionCommand): QuestionAnswerBody {
+  switch (c.kind) {
+    case 'answer':
+      return { kind: 'dialog', dialogId: c.dialogId, optionIndex: c.optionIndex };
+    case 'text':
+      return { kind: 'dialog', dialogId: c.dialogId, optionIndex: c.optionIndex, text: c.text };
+    case 'multi':
+      return { kind: 'dialog', multi: true, dialogId: c.dialogId, optionIndexes: [...c.optionIndexes] };
+    case 'ask':
+      return { kind: 'ask', askKey: c.askKey, optionIndexes: [...c.optionIndexes] };
+  }
+}
 
 /** Perform a sheet's command through `seam`: the one place a sheet's answer is written. An answer route's reply
  *  (`DialogAnswered`) is returned for the kinds that carry one; Deny's interrupt answers nothing. */
@@ -313,11 +340,9 @@ export function performAnswer(c: Extract<SheetCommand, { kind: 'deny' }>, seam: 
 export function performAnswer(c: SheetCommand, seam: AnswerSeam): Promise<DialogAnswered | void> {
   switch (c.kind) {
     case 'answer':
-      return seam.answerDialog(c.sessionId, c.dialogId, c.optionIndex);
     case 'text':
-      return seam.answerDialogText(c.sessionId, c.dialogId, c.optionIndex, c.text);
     case 'multi':
-      return seam.answerDialogMulti(c.sessionId, c.dialogId, c.optionIndexes);
+      return seam.answerQuestion(c.sessionId, questionBodyOf(c));
     case 'tab':
       return seam.answerDialogTab(c.sessionId, { dialogId: c.dialogId, to: c.to, ...(c.from === undefined ? {} : { from: c.from }) });
     case 'deny':
@@ -336,14 +361,26 @@ export interface AnswerRequest {
   readonly body: string;
 }
 
-/** The `ask` command's declared shape (the notification's answer, `POST /api/sessions/:id/ask`), read by `answerRequest`
- *  and by the renderer of `push-sw.js`'s generated region, so the two never drift. The action is the notification's
- *  `ask:<key>:<index>`: the key minted server-side and carried verbatim, the index a number, never derived from a label. */
+/** The family's operator door: `POST /api/questions/<question id>/answer`, the id `shared/api.ts#formatQuestionId`'s
+ *  `session-<id>`. */
+const QUESTIONS_PATH_PREFIX = '/api/questions/';
+const QUESTIONS_ANSWER_SUFFIX = '/answer';
+const questionsAnswerPath = (sessionId: string): string =>
+  `${QUESTIONS_PATH_PREFIX}${encodeURIComponent(formatQuestionId({ kind: 'session', sessionId }))}${QUESTIONS_ANSWER_SUFFIX}`;
+
+/** The `ask` command's declared shape (the notification's answer), read by `answerRequest` and by the renderer of
+ *  `push-sw.js`'s generated region, so the two never drift: the family's door and body (`questionsPathPrefix`,
+ *  `questionIdPrefix`, `questionsPathSuffix`, `kindField`/`kindValue`), the only door since C7p. The action is the
+ *  notification's `ask:<key>:<index>`: the key minted server-side and carried verbatim, the index a number, never
+ *  derived from a label. */
 export const ASK_REQUEST = {
   method: 'POST',
-  pathPrefix: '/api/sessions/',
-  pathSuffix: '/ask',
+  questionsPathPrefix: QUESTIONS_PATH_PREFIX,
+  questionIdPrefix: 'session-',
+  questionsPathSuffix: QUESTIONS_ANSWER_SUFFIX,
   contentType: 'application/json',
+  kindField: 'kind',
+  kindValue: 'ask',
   keyField: 'askKey',
   indexesField: 'optionIndexes',
   actionPattern: '^ask:([^:]+):(\\d+)$',
@@ -361,26 +398,27 @@ const sessionPath = (id: string, suffix: string): string => `/api/sessions/${enc
 const json = (path: string, body: unknown): AnswerRequest =>
   ({ method: 'POST', path, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
+/** The door and the JSON value an answer to session `sessionId`'s question takes: the family's door with `body`.
+ *  `lib/api.ts#answerQuestion` posts it. */
+export function questionAnswerRequest(sessionId: string, body: QuestionAnswerBody): { path: string; payload: QuestionAnswerBody } {
+  return { path: questionsAnswerPath(sessionId), payload: body };
+}
+
 /** The request a command's door takes: the method, the path and the JSON body, byte for byte what that kind's writer
- *  sends (`lib/api.ts` for the sheets' kinds, `push-sw.js` for `ask`). */
+ *  sends (`lib/api.ts#answerQuestion` for the sheets' answers, `answerDialogTab` and `interrupt` for the two session
+ *  doors, `push-sw.js` for `ask`). */
 export function answerRequest(c: AnswerCommand): AnswerRequest {
   switch (c.kind) {
     case 'answer':
-      return json(sessionPath(c.sessionId, '/dialog'), { dialogId: c.dialogId, optionIndex: c.optionIndex });
     case 'text':
-      return json(sessionPath(c.sessionId, '/dialog/text'), { dialogId: c.dialogId, optionIndex: c.optionIndex, text: c.text });
     case 'multi':
-      return json(sessionPath(c.sessionId, '/dialog/multi'), { dialogId: c.dialogId, optionIndexes: c.optionIndexes });
+    case 'ask': {
+      const r = questionAnswerRequest(c.sessionId, questionBodyOf(c));
+      return json(r.path, r.payload);
+    }
     case 'tab':
       return json(sessionPath(c.sessionId, '/dialog/tab'), { dialogId: c.dialogId, to: c.to, ...(c.from === undefined ? {} : { from: c.from }) });
     case 'deny':
       return json(sessionPath(c.sessionId, '/interrupt'), { source: 'deny' });
-    case 'ask':
-      return {
-        method: ASK_REQUEST.method,
-        path: `${ASK_REQUEST.pathPrefix}${encodeURIComponent(c.sessionId)}${ASK_REQUEST.pathSuffix}`,
-        headers: { 'content-type': ASK_REQUEST.contentType },
-        body: JSON.stringify({ [ASK_REQUEST.keyField]: c.askKey, [ASK_REQUEST.indexesField]: c.optionIndexes }),
-      };
   }
 }

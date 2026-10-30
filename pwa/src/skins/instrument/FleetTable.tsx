@@ -61,7 +61,7 @@ import { cardsOf, childRunContext, fleetTree, workingOn, type FleetTreeGroup } f
 import { orphanNote } from '../../fleet/orphanWords';
 import { ProgrammeBox } from '../../fleet/ProgrammeBox';
 import type { ProgHue } from '../../fleet/programmeBoxes';
-import { isRunClosed, runForSession } from '../../fleet/runWords';
+import { boundOpenRun, isRunClosed } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
 import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
 import { OPEN_RUNS, openSession } from '../../fleet/openers';
@@ -72,6 +72,7 @@ import { ackAll, acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
 import { useLocation } from '../../lib/router';
 import { rovingStep } from '../../lib/rovingStep';
+import { readKey, writeKey } from '../../lib/storage';
 import { DESK_QUERY, useMediaQuery } from '../../lib/useMediaQuery';
 
 /** The toggle's per-device memory. */
@@ -81,19 +82,12 @@ export type GroupMode = 'status' | 'project';
 
 /** The remembered mode: status unless storage says project. Never throws. */
 export function loadGroupMode(): GroupMode {
-  try {
-    return window.localStorage.getItem(GROUP_MODE_KEY) === 'project' ? 'project' : 'status';
-  } catch {
-    return 'status';
-  }
+  return readKey(GROUP_MODE_KEY) === 'project' ? 'project' : 'status';
 }
 
+/** Through the storage port (`lib/storage.ts`, D-7190): a mode that cannot be saved still applies for this mount. */
 function saveGroupMode(mode: GroupMode): void {
-  try {
-    window.localStorage.setItem(GROUP_MODE_KEY, mode);
-  } catch {
-    /* a mode that cannot be saved still applies for this mount */
-  }
+  writeKey(GROUP_MODE_KEY, mode);
 }
 
 const MODES: readonly { readonly id: GroupMode; readonly label: string }[] = [
@@ -235,7 +229,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           onActions={onActions}
           roster={roster}
           projectPool={chrome.projects.poolFor(s.project)}
-          onOpenRun={runForSession(runs, s) === null ? null : OPEN_RUNS}
+          onOpenRun={boundOpenRun(runs, s) === null ? null : OPEN_RUNS}
           workingOn={workingOn(s, cards)}
           childRun={childRunContext(s, runs, lookup)}
           coordinator={orphan?.presence ?? null}

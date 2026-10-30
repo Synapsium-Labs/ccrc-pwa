@@ -29,7 +29,7 @@ import { recordInterrupt } from '../src/interruptlog.js';
 import { askKey } from '../src/askkey.js';
 import { COLLECT_FEED_TITLE, COLLECT_SETTING_FEED_TITLE, measureCollectLaneRow } from '../src/collectLane.js';
 import {
-  IDLE_COMPACT_NUDGE_PROMPT, PRESENCE_OPEN_TTL_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT,
+  IDLE_COMPACT_NUDGE_PROMPT, VIEWER_OPEN_TTL_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT,
   type CollectLaneView, type FleetSession,
 } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
@@ -309,7 +309,7 @@ const nudgeRig = async (o: { notifyLog?: boolean } = {}) => {
   const record: SessionRecord = {
     hibernatedAt: null,
     namedByOperator: false, title: null,
-    id: A, wrapper: 'claude', project: 'project-a', workdir: NUDGE_WORKDIR, uuid: NUDGE_UUID,
+    id: A, wrapper: 'claude', project: 'project-a', projectEvidence: 'measured', workdir: NUDGE_WORKDIR, uuid: NUDGE_UUID,
     started: true, home: null, pool: null, lastswap: null,
     workspace: `${A}-ws`, branch: null, branchEvidence: 'absent', base: null,
     prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
@@ -442,7 +442,10 @@ describe("interruptlog.ts's recordInterrupt: recorded always, never pushed (D-58
   });
 });
 
-describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorded always, never pushed (D-5850)", () => {
+// W7 C7p (D-7194): the operator's ask answer was `POST /api/sessions/:id/ask` in `server.ts` until C7p retired it; the
+// family's `POST /api/questions/session-<id>/answer {kind:'ask'}` calls the same operator core, so these rows run through
+// it and hold the same pair.
+describe("the operator-answer pair (POST /api/questions/session-<id>/answer {kind:'ask'}, was POST /api/sessions/:id/ask): recorded always, never pushed (D-5850)", () => {
   const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
   const ASK_KEY = askKey({ questions: [QUESTION] })!;
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
@@ -473,8 +476,8 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
         dialogId: 'dlg-1', question: QUESTION.question, options: QUESTION.options.map((o) => o.label), now });
       if (fail) rec.archiveThrowsOn('every');
       const at = rec.mark();
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${B}/ask`,
-        payload: { askKey: ASK_KEY, optionIndexes: [1] } });
+      const res = await app.inject({ method: 'POST', url: `/api/questions/session-${B}/answer`,
+        payload: { kind: 'ask', askKey: ASK_KEY, optionIndexes: [1] } });
       return { home, rec, res, calls: rec.since(at), id };
     } finally {
       await app.close();
@@ -1099,7 +1102,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
       listing: async () => [],
-      startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
+      startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
     // D-6091: a lane that already wrote its mail-only zero, so the one row here is the sleep's.

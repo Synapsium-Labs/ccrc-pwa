@@ -528,7 +528,8 @@ per lane. macOS gets the role's one LaunchAgent, a launchd job per session, and 
 
 **One of those timers spends account usage, on purpose.** `ccd-telemetry-keepalive` takes one
 minimal turn on an idle `telemetry: "anthropic"` account — the seeded default account is one — so its
-usage reading stays fresh, at most once per `CCRC_KEEPALIVE_FRESH` (1800 s) per account.
+usage reading stays fresh, at most once per `CCRC_KEEPALIVE_FRESH` (1800 s; a `~/.ccrc/ccrc.env` line, or the
+environment) per account.
 `touch ~/.ccrc/keepalive-paused` stops it and `rm` resumes it; that file survives an update, which
 re-enables the timer. What it costs and what it never touches: "Account health and the telemetry
 keepalive", below.
@@ -1310,6 +1311,12 @@ containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
 way as the rest; a value that is not its shape keeps its default and warns.
+Two of the fleet box's ccd-* sweeps read their settings the same way (wave 29, D-6981): `CCRC_KEEPALIVE_MODEL`,
+`CCRC_KEEPALIVE_PROMPT` and `CCRC_KEEPALIVE_FRESH` (`ccd-telemetry-keepalive`) and `CCRC_USAGE_SWEEP_DAYS`
+(`ccd-usage-sweep`). Their units have no shell and no `EnvironmentFile=`, so each sweep sources
+`ccd/lib/ccrc-settings.sh`, ccrc's own reader generated from `ccd/ccrc` and placed at `~/.local/libexec/ccrc`, and a line
+in `ccrc.env` survives a reboot. A line that reader refuses, or a value a sweep cannot use, stops that sweep's pass with a
+line naming the setting, where it came from and what was refused; a server-role box runs none of these sweeps.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -3007,8 +3014,8 @@ per day, throttled on the attempt rather than the success. It never touches an a
 registered session is sitting on (a live pane or a fresh supervisor heartbeat; unmeasurable reads as occupied),
 and after `CCRC_KEEPALIVE_BACKOFF_AFTER` (3) failures in a row it waits a window that doubles from 1 h to 24 h.
 The last ten passes' rows land in `~/.ccrc/keepalive.json`, with `fiveBefore`/`fiveAfter` so the cost is a
-measurement rather than an estimate. Raise `CCRC_KEEPALIVE_FRESH` in a drop-in
-(`systemctl --user edit ccd-telemetry-keepalive.service`) to spend less; `touch ~/.ccrc/keepalive-paused` stops it
+measurement rather than an estimate. Raise it with a `CCRC_KEEPALIVE_FRESH=` line in `~/.ccrc/ccrc.env` to spend less
+(a drop-in or an `environment.d` line that sets it still wins over the file); `touch ~/.ccrc/keepalive-paused` stops it
 entirely, and `rm` resumes it.
 
 ### ccd compacts an idle session before Claude Code has to
@@ -3163,7 +3170,8 @@ nothing places even then, an explicit `--route class=` refuses rather than land 
 the coordinator row's class, which nobody typed, falls back to class-blind placement.
 
 **The usage sweep** (`ccd-usage-sweep.timer`, every four hours on a Linux box of any role but `server`) is what
-measures the Fable share: it reads every rostered account's transcripts for the last `CCRC_USAGE_SWEEP_DAYS` (7),
+measures the Fable share: it reads every rostered account's transcripts for the last `CCRC_USAGE_SWEEP_DAYS` (7; a
+`~/.ccrc/ccrc.env` line, or the environment),
 read-only, de-duplicates the records by message id and writes `~/.cc-sessions/usage/sweep/latest.json`, which ccd
 and the server (`server/src/shares.ts`) both read as each account's share; a census of its last ten passes goes to
 `~/.ccrc/usage-sweep.json`. `touch ~/.ccrc/usage-sweep-paused` stops it, and an empty roster projection is a
@@ -3415,25 +3423,27 @@ An `AskUserQuestion` shows the full question, its header and the option descript
 pane through the whole ask (D-5089): the tappable question is the one the pane is painting, matched by its labels
 and, where two questions share them, by the pane's title; the sheet says which of N it is, lists the others
 read-only, and ends on the pane's review screen with **Submit answers** and a **Cancel** that says first that it
-declines every answer. Own words go through the question's own free-text row (`/dialog/text`, D-5090): the text
+declines every answer. Own words go through the question's own free-text row (the answer with `text`, D-5090): the text
 stays in the field until the terminal shows the answer taken, a refusal says why and keeps it, a row left holding
 the whole text is submitted without typing it again, a paste over the 1000-character limit is counted and held
 rather than cut, a tab or another control character holds **Send** with a line saying why, and **Chat about this**
 is a row of its own that says it declines the ask. A multiSelect question is a set of checkboxes, committed whole
-with **Next** (`/dialog/multi`, D-5091). One send is under way at a time, and the rows that decline the whole ask
+with **Next** (the answer with `multi: true`, D-5091). One send is under way at a time, and the rows that decline the whole ask
 wait for it. The hook's envelope stays on the session stream past thirty minutes while the pane shows that ask's own
 menu, or its review screen listing at least one answered question and none but its own (D-6324); it ages out when no
 corresponding menu is up, a review with nothing answered included, and the sheet then carries on from the pane alone
 with the same rows, field and boxes.
 
-Five routes act on what the pane already shows, each with its own named refusals:
+Five answers act on what the pane already shows, each with its own named refusals. Since W7 C7p the first four are
+the one operator door, `POST /api/questions/session-<id>/answer`, whose body's `kind` (and `text` or `multi`) picks the
+answer; the session routes they replaced are retired:
 
 | Route | What it does | Gate |
 | --- | --- | --- |
-| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed; refuses an AskUserQuestion's free-text row (`free-text-row`) before any key, and again on the screen the walk lands on, before Enter, because Enter on the empty row rejects the whole ask (D-5045) |
-| `POST /api/sessions/:id/dialog/text` | answers an **AskUserQuestion** in your own words: walks to its free-text row, types the text after tmux's `--`, then presses Enter (D-5047) | `400 bad-text` for a blank, multi-line, control-character or over-1000-character text, before any capture; refuses a stale dialog id and any row but the free-text one (`not-free-text`, also for a row holding other text); types nothing until a capture shows the same title, the cursor on the still-empty row and the footer's `to edit in` hint (`focus-failed`); presses Enter only once a capture shows the cursor still on the row and the row holding exactly the text (`echo-failed`, no Enter). Typing changes the dialog id. A retry with the same text onto a row that already holds it types nothing and submits it |
-| `POST /api/sessions/:id/dialog/multi` | answers a **multiSelect** AskUserQuestion question: `optionIndexes` is the whole set of boxes to leave ticked; it sends a digit only for each box whose tick differs, then Tab (D-5048) | `400 bad-indexes` for an empty, repeated or out-of-1..9 set, before any capture; refuses a stale dialog id, a menu that is not a multiSelect question it can read (`not-multiselect`), an index that is not one of the question's options, the free-text row included (`not-an-option`), a ticked free-text box (`free-text-ticked`), and a cursor off the option rows or an edit hint in the footer (`cursor-not-on-option`: a digit on the free-text row is typed into it), all before any key; presses Tab only once a capture shows exactly the wanted ticks with the cursor where it was (`ticks-failed`, no Tab), and answers ok only once a capture shows the next question or the review screen (`commit-failed`) |
-| `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single and single-select: a multiSelect question is refused `multiselect` before any key, because on Claude Code 2.1.280 and later Enter toggles the cursor row instead of committing (D-5048) |
+| `POST /api/questions/session-<id>/answer` with `{kind: 'dialog', dialogId, optionIndex}` (the retired `POST /api/sessions/:id/dialog`'s answer, W7 C7p) | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed; refuses an AskUserQuestion's free-text row (`free-text-row`) before any key, and again on the screen the walk lands on, before Enter, because Enter on the empty row rejects the whole ask (D-5045) |
+| `POST /api/questions/session-<id>/answer` with `{kind: 'dialog', dialogId, optionIndex, text}` (the retired `POST /api/sessions/:id/dialog/text`'s answer, W7 C7p) | answers an **AskUserQuestion** in your own words: walks to its free-text row, types the text after tmux's `--`, then presses Enter (D-5047) | `400 bad-text` for a blank, multi-line, control-character or over-1000-character text, before any capture; refuses a stale dialog id and any row but the free-text one (`not-free-text`, also for a row holding other text); types nothing until a capture shows the same title, the cursor on the still-empty row and the footer's `to edit in` hint (`focus-failed`); presses Enter only once a capture shows the cursor still on the row and the row holding exactly the text (`echo-failed`, no Enter). Typing changes the dialog id. A retry with the same text onto a row that already holds it types nothing and submits it |
+| `POST /api/questions/session-<id>/answer` with `{kind: 'dialog', multi: true, dialogId, optionIndexes}` (the retired `POST /api/sessions/:id/dialog/multi`'s answer, W7 C7p) | answers a **multiSelect** AskUserQuestion question: `optionIndexes` is the whole set of boxes to leave ticked; it sends a digit only for each box whose tick differs, then Tab (D-5048) | `400 bad-indexes` for an empty, repeated or out-of-1..9 set, before any capture; refuses a stale dialog id, a menu that is not a multiSelect question it can read (`not-multiselect`), an index that is not one of the question's options, the free-text row included (`not-an-option`), a ticked free-text box (`free-text-ticked`), and a cursor off the option rows or an edit hint in the footer (`cursor-not-on-option`: a digit on the free-text row is typed into it), all before any key; presses Tab only once a capture shows exactly the wanted ticks with the cursor where it was (`ticks-failed`, no Tab), and answers ok only once a capture shows the next question or the review screen (`commit-failed`) |
+| `POST /api/questions/session-<id>/answer` with `{kind: 'ask', askKey, optionIndexes}` (the retired `POST /api/sessions/:id/ask`'s answer, W7 C7p) | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single and single-select: a multiSelect question is refused `multiselect` before any key, because on Claude Code 2.1.280 and later Enter toggles the cursor row instead of committing (D-5048) |
 | `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 
 Ordinary input has routes of its own: `POST /api/sessions/:id/prompt` types a message one line at a time, each
@@ -4231,6 +4241,22 @@ naming the coordinator — are the notifications, and this lane's rows (each wit
 seen dead, and one when the breaker trips) are records of the same incident. A mirror that goes stale between the pass
 and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done. A mirror
 gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.
+
+**A dispatch that never came back is abandoned by the server** (D-7319, the operator's ruling of 2026-10-29). The fleet
+card draws "spawn never completed" for a `planned` run whose dispatch stamp is older than `SPAWN_STALL_MS` and that
+bound no session. The same lane pass, before any of the crash's own gates, abandons such a run once it is proven dead:
+the stamp is at least `CCRC_DISPATCH_ABANDON_MS` old (default 15 minutes; a value under `SPAWN_STALL_MS` is refused for
+the default, so the `ws-add` started at that stamp has returned or been killed), no registry row's `.child` marker names
+the run, no row of its project has an unreadable marker or the shape a cut-short `ws-add` leaves (a workspace with no
+marker, no hold and no spawn), the box marks its workspaces (no `child-omitted:` on the run), the registry was read
+whole, the run is still claimed, and `$REG/reclaim-paused` is clear. The act is the operator's own abandon arm, reached
+through the coordination serialiser like the dead-coordinator lane's (`causedBy: sweep`): it re-reads all of that
+immediately before its commit, inside the serialiser every dispatch holds, so a retry that restamped the run, a child
+that appeared or a switch turned off meanwhile stops it. After the commit the run's events carry
+`dispatch-abandoned:never-came-back` and the coordinator is mailed `dispatch-abandoned` so it can dispatch again. A
+`ws-add` that somehow finished later leaves a child of a closed run: the run stays `failed`, and child reclamation takes
+that workspace under its usual rule. **Settings › Automation › Dispatches that never came back** turns it off (stored in
+`coord.db`, seeded On; `/api/coord/dispatch-abandon`); only an exact stored On arms it.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
@@ -5076,9 +5102,30 @@ refused but counts in the window. A manual swap refuses a sleeping row `409 hibe
 deliverable, with `hibernatedAt`; the reclaim door treats a sleeping claimant as alive; a sleeping main checkout stays
 out of the archived fold. **The presence contract:** beside the visible claim that suppresses pushes, every
 `/ws/session/:id` connection holds an *open* claim, stamped at connect and by every frame, visible or hidden, believed
-for `PRESENCE_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat now beats while hidden too
+for `VIEWER_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat now beats while hidden too
 (`visible:false`, which leaves notifications as they were), and for that long after a server start every session counts
 as viewed.
+
+**The automatic coordinator roll (D-7452 to D-7454).** An idle coordinator is restarted onto the node's current ccrc
+release, its conversation resumed, so a new release or new skill text reaches it. It is **behind** when its Claude Code
+process started (the live file's `startedAt`) before the node's current install completed (`~/.ccrc/installed`'s
+modification time). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
+`server/src/coord/rollTarget.ts`). It is skipped, by name, when hibernation is armed and will take it within 30 minutes
+(the wake brings the release), when its live status moved in the last 10 minutes (`compacting`), or when it carries
+`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). A session that is not a coordinator (an unreadable `.child` counts as
+a child) is never rolled. It picks the release up when it next starts for another reason. The act is a row of the
+sleep executor (`server/src/rollLane.ts`) and ONE ccd verb, `ccd hibernate --roll` (D-7458): ccd re-measures, sleeps
+the session and wakes it at once, for at most one session a sweep, on the serialiser and the session's queue, behind
+the wake budget as an automatic wake, and only on a box whose `ccd caps` lists `hibernate-roll`. ccd's refusal (a draft
+in the input, `esc to interrupt`, an attached terminal, `.no-roll`) is a skip, and nothing is woken; a failed wake
+exits 4 (`roll-wake-failed`) after ccd puts the session back to sleep (hibernated, unit stopped, the wake's `.woke`
+stamp put back), so mail or an open screen wakes it; a failed wake ccd cannot put back to sleep (its `.hibernated`
+could not be written again) exits 5 (`roll-wake-unrestored`) and journals `not restored` with the session to check; a
+call cut short, never answered or with an unmeasured ending journals `outcome unknown` and names the session to check. Every skip is a `ccrc-server:
+roll-skip <id>: <reason>` line. **Settings › Automation › Roll idle sessions** (`GET`/`POST /api/coord/roll-idle`, one
+`roll_settings` row) is `Coordinators` (the default) or `Off`. `$REG/hibernate-disabled` stops it too. The Claude
+Code binary trigger comes with `ccd roll` (binary-lifecycle wave 2). `ccrc update`'s supervisor sweep is unchanged: it
+restarts supervisors, never Claude Code.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -5164,8 +5211,52 @@ refused like a worker and is sent to the operator's shell. The deny is a contrac
 cannot parse (`bash -c "…"`, a quoted command word, a variable or alias, a path-spelled wrapper, and
 the rest) is listed in the hook's header, and a jq failure or a hook timeout fails it open
 (`server/test/session-hook-merge-deny.test.ts`). This tree changes no repository setting: requiring
-the queue is the operator's act, and denying `--admin` to every session, or a `gh api` merge, is not
-shipped.
+the queue is the operator's act.
+
+**The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
+deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:
+the hook refuses `gh pr merge … --admin`, and a `gh api` call that reaches a merge (the pulls merge
+endpoint, the repository `merges` endpoint, and the `mergePullRequest`, `enqueuePullRequest`,
+`enablePullRequestAutoMerge` and `mergeBranch` mutations), in any session, held or not, coordinator
+included. It is the same arm, the same single `jq` and the same strip: once the stripped text holds a real
+`gh … pr … merge` head or `gh … api` head (the second head grammar is derived from the first's text, so the
+two cannot drift), the verdict is read from the raw command, quotes included. That wide reading is on purpose
+and its cost is named in the reason: a command that holds a real head beside an unrelated `--admin` or
+mutation word (a merge, then a `git commit -m "never --admin"`, in one command) is refused, so run them as
+separate commands. For the `gh api` half the raw text is first read quote-free (`'`, `"` and `\` removed), so
+`merge""PullRequest` and `pulls/"$n"/merge` are words and paths, and a merge path counts under either of two
+segment readings, one up to the next blank or `/` and one up to the next `/` or separator; the second reads
+`pulls/$(…)/merge` and `pulls/$((42|0))/merge` as paths, at the cost that `gh api repos/o/r/pulls/42 -f
+body=docs/merge` is refused too (pass the body as a file). Any method is refused, a `GET` of a merge path
+included, because a text-read exemption is defeated by a later `-X PUT`; `gh pr view <n> --json
+state,mergedAt` answers the same question. Text with no such head passes, so a commit message, a PR body or a
+mail that names these words is untouched, and so does everything the coordinator runs to land: the
+`--match-head-commit <sha>` enqueue, `--disable-auto` and every read of the landing verdict. Over the
+2048-byte parse cap the hook cannot parse, so an over-cap command whose raw text reads as an admin merge or a
+`gh api` merge is refused in every session, prose included, with a reason that gives both byte counts; send a
+long body as a file (`--body-file`) or split the command. What it does not read is listed, not closed, in the
+hook header's `WHAT PASSES UNPARSED` list, each class pinned by a LISTED-pass case: a query or body read from
+a file, a word or path assembled at run time, a variable or quoted command word, a `gh alias`, the head
+grammar's own classes (`xargs`, `bash -c`, `eval`, a leading redirection, a path-spelled wrapper), an
+encoded, doubled-slash or case-variant merge path, a mutation word written with JSON `\u` escapes, a word
+broken by quotes before the prefilter sees it, a quoted or backticked `api` word, a `.` or `..` path
+segment, another HTTP client handed gh's credential (`curl` with `gh auth token`), a write of the base
+branch's rules or protection that removes the queue, and the ways to move `main` that are not merges (a ref
+`PATCH`, the `updateRef` family of mutations, `git push` to a protected branch), which are out of scope. It is
+a contract the fleet honours, not a wall, and a jq failure or a hook timeout fails it open.
+
+One narrow allowance exists (D-7249). The operator may create, by hand, a regular file at
+`$REG/admin-merge-allowed/<project>` (a dotless registry subdirectory, so no registry glob sees it; nothing in
+this tree writes it, and its content is never read). For a session of that project, read from its own
+`$REG/<id>.project` with no fallback to the session id, a `.project` that is absent, unreadable, empty or
+off-class, and an allowance that is a symlink or not a regular file, each read as not allowed, and the
+allowance lifts only the admin half, only for a command in a fixed grammar and only under the
+cap: exactly one admin merge of a PR named by number, optionally with `--match-head-commit <40 hex>`,
+`--squash`, `--merge`, `--rebase`, `--delete-branch` or `-d`, single-spaced, with nothing before or after it. It
+never lifts the `gh api` half, the over-cap reading or the worker deny. A repository `gh` resolves from
+ambient state (a working directory left by an earlier call's `cd`, the checkout's remotes, the inherited
+environment) is a listed pass under it. The break-glass door for everyone else is the operator's own shell,
+which runs no hook, or GitHub's UI (R9).
 
 **Peers and claims (build 9).** Sessions that share a repository find each other and stake out paths
 through the server — `ccd` never sees a claim. `GET /api/peers?of=<id>` (or `?project=<slug>`,
@@ -5519,8 +5610,9 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   to it on the `compact` source alone (R8, below) — and on a `PreToolUse` at most one of: the search
   gate's deny on a gated call (R5, below), the worker merge deny on a `gh pr merge` from a session whose
   hold names a programme wave or whose workspace carries the child marker (the landing-order rule, "The native merge queue" above: the
-  coordinator merges, workers never do; a speed bump on that one verb, not a wall — a `gh api` merge
-  passes it), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
+  coordinator merges, workers never do; a speed bump on that one verb, not a wall — the bypass deny
+  (landing-order wave 2b, "The native merge queue" above) answers every session's `--admin` merge and `gh api`
+  merge in the same reason slot, with the worker deny's reason first), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
   `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
   `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
   then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
@@ -6117,9 +6209,9 @@ and without the probe's `-c` settings, and it reads refs only. The other childre
 the scratch, under the prefix. A `core.alternateRefsCommand` in the operator's own config is one of the fetch's own
 config-driven commands, like its credential helper and its ssh command.
 
-`ccrc doctor`'s `land-probe` check reads these files, and so does a person. Nothing else reads them yet: wave 4 of
-the landing-order programme adds the lineage acceptance, which reads `enabled` and the `.lineage` files, and wave 4b
-adds the server's reader and the PWA chip.
+`ccrc doctor`'s `land-probe` check reads these files, and so does a person. Wave 4 of the landing-order programme's
+lineage acceptance reads `enabled` and the `.lineage` files. Wave 4b's server reader and the fleet screen's
+predicted-conflict chip read `probe`; doctor and a person read the rest.
 
 ### Temp-dir reaper (ccd-tmp-sweep)
 
@@ -6602,9 +6694,10 @@ you need to reason about one.*
   the body at `~/.local/libexec/ccrc/ccd` and, at `~/.local/bin/ccd`, a
   standard-library Python launcher rendered from `ccd-entry.py` by
   `ccd-entry-install.py` (what it decides before Bash starts is "Only the
-  launcher starts a reclaim", under Fleet coordination), plus the library the
+  launcher starts a reclaim", under Fleet coordination), plus the libraries the
   body pins and loads at its foot, `lib/disk-retention.sh` (the fleet
-  disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279); `ccrc`, the box
+  disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279) and
+  `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -6679,7 +6772,81 @@ isolation boundary its test harness relies on:
 
 `ws-add` refuses below `CCD_DISK_FLOOR_GB` (default 10) GiB free on
 `~/worktrees` — an environment override `ccd` allows because it can only make
-`ccd` refuse, never aim it at a different tree. `ccd` with no verb prints its
+`ccd` refuse, never aim it at a different tree. `CCD_LANDED_LABEL` (default
+`landed-in-train`; set empty to turn it off) names the label a merge train puts
+on a member PR it closes after landing its work. The label is a claim, never
+the proof (D-7362): a CLOSED PR carrying it reads as merged — in `pr-state`'s
+phase, and so the archive reason, the cleanup bucket and the merged notice, in
+`pr-landing`, and in the cleanup itself (`ws-audit`/`ws-reap`, as proof
+`train`) — only when the train record proves it, and ccd decides that once, in
+one place, for every reader (`landedInTrain: true` on the row). The proof: the
+train PR the member names (a `train #<n>` comment on it, as a train leaves when
+it closes a member — every such reference is tried, newest first, and one
+GitHub says is no pull request in this repository is only a failed candidate),
+or one
+a search finds whose record lists the member's head sha, must be MERGED into
+the same base and its record must list the member at exactly the member's head;
+the reap also requires that the branch hold nothing beyond that head. A
+labelled PR whose train record was read and did not prove it (the train is
+CLOSED unmerged, lists another sha, GitHub says the number it names is no pull
+request here, or no train names it) reads as closed, with reason
+`train-unproven` (`trainUnproven: true` on the row), and the reap refuses it
+`not-merged`. Only such a definitive answer fails a candidate (D-7381): a train
+read that fails any other way (an HTTP 5xx, a rate limit, the network, auth, a
+timeout, a signal, an answer that is not a PR's JSON) is unread, as is a train
+that is still OPEN (it may yet merge) or whose state is missing or odd, and one unread
+candidate makes the whole record unread unless something proved the landing,
+even when the search fallback answered empty. A labelled PR whose train record
+could not be READ (no time left in the read's budget, a timeout, GitHub
+unreachable) is neither closed nor merged: it reads `unknown` with reason `train-unread` (`trainUnread: true` on
+the row; `pr-landing` adds `train` to the line's `unmeasured`), so nothing ends
+a run on it, and the reap refuses it `gh-unreadable` (D-7378). A CLOSED train
+that never merged proves nothing. The token's merge fact is the train PR's
+merge commit, so main later editing the same lines never turns a proven landing
+into a refusal. A proof, once made, is kept in `$REG/.train-proofs`, one line
+per member keyed by repository, base, number and head (a merged train never
+un-merges; a refusal is never kept). The `pr-state --project` sweep has no time
+left for train reads and reads only kept proofs, so the server follows a sweep
+that read `train-unread` with `ccd pr-train-prove --project <p>`: its own verb
+and timeout row, proving at most `PR_TRAIN_PROVE_MAX` members a call and
+keeping the proofs, so the next sweep reads `merged`. The prover is fair
+(D-7381): every attempt that does not prove leaves a tried line in
+`$REG/.train-tried` (outcome `failed` or `unread`, and the time; a separate
+file, never read as a proof), and each call asks the members with no tried line
+first, then the oldest tried. A member whose record was read and failed less
+than `PR_TRAIN_TRIED_TTL` (30 minutes) ago is not asked again, and the sweep
+reads it `train-unproven`, not `train-unread`, until the line expires; an
+`unread` outcome is asked again on the next call. Only a read that can make no
+gh call at all (the sweep) answers from a fresh `failed` line, and a kept proof
+is read before it: a read that asked GitHub and hit an unread candidate reads
+`train-unread` whatever the line says. A proof found by any read, `pr-landing`'s
+included (which keeps none), removes the member's tried line.
+
+**The train record (D-7335)** is the one machine-readable block in a train PR's
+body, and a train tool writes exactly one: an HTML comment on lines of its own,
+opened by `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
+member, closed by `-->`:
+
+```
+<!-- ccrc-train v1
+member #1797 0123456789abcdef0123456789abcdef01234567
+member #1800 89abcdef0123456789abcdef0123456789abcdef
+-->
+```
+
+A member line is exactly `member`, one space, `#` and the PR number, one space,
+and the full 40-character head sha in lowercase hex: no tabs, no second space,
+no short or uppercase sha. Leading and trailing spaces on a line are ignored;
+nothing else is. Tables,
+lists and prose beside the block are for people and are never parsed, so a
+body with only a table proves nothing. No block, two blocks, a block that never
+closes, a line inside it that is not a member line, or a member listed twice
+proves nothing for any member, and neither does a member listed at a sha other
+than its head.
+
+A coordinator
+proves the merge before closing the run from `landedInTrain: true` on the PR's
+row of `ccd pr-state --session <id>`. It names a label, never a path. `ccd` with no verb prints its
 usage, and `ccd caps` lists the verbs (and capability tokens) this copy
 implements — that list is the authority; the table below is a map:
 
@@ -7062,7 +7229,7 @@ until then an open tab can hold pre-deploy JS against a post-deploy server. A
 synchronous `hello` frame closes that gap without doing anything yet:
 
 - `FLEET_PROTO` / `FLEET_PROTO_MIN` live once, in `shared/api.ts` beside
-  `PRESENCE_REFRESH_MS` — both currently `1`, with `MIN <= PROTO` pinned by a
+  `VIEWER_REFRESH_MS` — both currently `1`, with `MIN <= PROTO` pinned by a
   test. **`FLEET_PROTO_MIN` is the kill-switch**: raise it above an old
   build's `FLEET_PROTO` to block that build. It is dormant until then.
 - `/ws/fleet`'s first frame, sent synchronously before the async `fleet`
@@ -7278,6 +7445,7 @@ incomplete outright, so no flip ever returns to it:
 # The ccd PAIR goes back together, body first (D-3696).
 restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ~/.local/libexec/ccrc/lib/disk-retention.sh   # the body's library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -7592,12 +7760,17 @@ These conventions carry more weight here than style:
   renders the digest of the library it publishes into the installed body BEFORE it stamps it, so
   the stamp covers the pin. Editing the library needs no restamp. The library must end in exactly
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
+  `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and is treated the same
+  way, its pin `__CCD_LIB_TRAIN_SHA256=stamp-at-install`; the body reads and checks both before it
+  evaluates either.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the
   region has gone stale. `ccd/ccd-account-health` carries the same module's second region, the
   auth-dead writers copied from `ccd/ccd`: after editing `_authdead_mark`, `_authdead_clear` or
   `_authdead_sweep_staged`, run `bash ccd/ccrc restamp ccd/ccd-account-health`.
+  `ccd/ccd-update-sync` carries the module's log-line region, `_upd_redact` copied from
+  `ccd/ccrc`; after editing it, run `bash ccd/ccrc restamp ccd/ccd-update-sync`.
 - **A feature pull request does not edit the shared ledgers.** An existing file under
   `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
   add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`

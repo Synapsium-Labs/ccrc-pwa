@@ -169,7 +169,7 @@ export function paneTicks(multi: DialogMulti): number[] {
 }
 
 /**
- * The set a multiSelect commit sends (`api.answerDialogMulti`, D-5048), ordered as the answer will list it: `ticked` is
+ * The set a multiSelect commit sends (`api.answerQuestion`'s multiSelect set, D-5048), ordered as the answer will list it: `ticked` is
  * the operator's set, in the order its boxes were ticked. The answer lists boxes in the order they became ticked
  * (measured, `cc300-ask-review-tick-order`), and the route sends a digit only for a box whose tick differs on the pane,
  * new ticks in the order asked. So a box the pane already shows ticked is never re-sent and keeps its place (screen

@@ -80,14 +80,14 @@ describe('the design spec', () => {
   // D-7379: the citation names each constant by symbol (`shared/api.ts#NAME`, CLAUDE.md's form for a code
   // citation), never by line, so a line added anywhere above the constants in that file breaks no spec. The row
   // resolves each cited symbol to the one line that defines it, today, and checks the value the spec states there.
-  it('Appendix A cites the presence constants by symbol, and each defines the value the spec states', () => {
-    const m = /`PRESENCE_REFRESH_MS = 15_000`, `PRESENCE_TTL_MS = 45_000` \(`shared\/api\.ts#(\w+)`, `shared\/api\.ts#(\w+)`\)/.exec(s);
+  it('Appendix A cites the viewer constants by symbol, and each defines the value the spec states', () => {
+    const m = /`VIEWER_REFRESH_MS = 15_000`, `VIEWER_TTL_MS = 45_000` \(`shared\/api\.ts#(\w+)`, `shared\/api\.ts#(\w+)`\)/.exec(s);
     expect(m, 'the citation is gone, or cites by line again').not.toBeNull();
-    expect([m![1], m![2]], 'the citation names the constants the sentence states').toEqual(['PRESENCE_REFRESH_MS', 'PRESENCE_TTL_MS']);
+    expect([m![1], m![2]], 'the citation names the constants the sentence states').toEqual(['VIEWER_REFRESH_MS', 'VIEWER_TTL_MS']);
     const api = readFileSync(path.join(root, 'shared/api.ts'), 'utf8').split('\n');
     const defining = (name: string): string[] => api.filter((l) => new RegExp(`^export const ${name}\\b`).test(l));
-    expect(defining(m![1]!)).toEqual(['export const PRESENCE_REFRESH_MS = 15_000;']);
-    expect(defining(m![2]!)).toEqual(['export const PRESENCE_TTL_MS = 45_000;']);
+    expect(defining(m![1]!)).toEqual(['export const VIEWER_REFRESH_MS = 15_000;']);
+    expect(defining(m![2]!)).toEqual(['export const VIEWER_TTL_MS = 45_000;']);
   });
 });
 

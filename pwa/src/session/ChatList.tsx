@@ -13,6 +13,7 @@ import { splitClipPaths } from '../../../shared/api';
 import { MailCard, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
+import { onPageHidden } from '../lib/pageClock';
 import { useFrameSet } from '../skins/frame';
 import type { SkinSet } from '../skins/types';
 import type { PendingSend } from '../stores/session';
@@ -774,10 +775,10 @@ function ChatScroller({
     const save = (): void => rememberRows(meter.visit(), opened.record);
     const onVisibility = (): void => { if (document.visibilityState === 'hidden') save(); };
     window.addEventListener('pagehide', save);
-    document.addEventListener('visibilitychange', onVisibility);
+    const stopHidden = onPageHidden(onVisibility);
     return () => {
       window.removeEventListener('pagehide', save);
-      document.removeEventListener('visibilitychange', onVisibility);
+      stopHidden();
       save();
     };
   }, [meter, opened]);

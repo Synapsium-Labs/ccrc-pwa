@@ -29,6 +29,8 @@ import { parseStallDetail } from './stall.js';
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
 import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
 import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
+import type { DispatchAbandonRead } from './deadDispatch.js';
+import type { DispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
@@ -66,6 +68,8 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
 import { newestTag } from '../../../shared/semver.js';
+import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import type { RollSettingsRead } from './rollTarget.js';
 import {
   SHADOW_JOURNAL_MAX_AGE_MS, SHADOW_JOURNAL_MAX_ROWS, isShadowLane, shadowVerdictKey,
   type ShadowLane, type ShadowVerdictInput, type ShadowVerdictRow,
@@ -74,9 +78,12 @@ import {
 import { isHaltingUpdate } from '../../../shared/update-move.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
+  MAIL_ROLE_IDS,
   holdReasonVerdict,
   type HoldReasonVerdict,
 } from './rundefs.js';
+// `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
+import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
@@ -85,7 +92,7 @@ import {
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES, REVIEW_DONE_SUBJECT,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_REFUSAL_CODES, REVIEW_DONE_SUBJECT,
   isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
@@ -4109,7 +4116,8 @@ export class CoordStore {
    *  pair `hold done` with the next `release done`; a swap is ONE `done` row
    *  in ccd's journal (no intent, no landing pair — `ccd/ccd:17166`), so it is
    *  COUNTED and flagged, never timed. Refused wave-dones are the
-   *  `mail_rejections` rows `closeRun` records with a DONE_AUTHORITY code,
+   *  `mail_rejections` rows `closeRun` records with a `DONE_REFUSAL_CODES` code
+   *  (the authority codes less `lineage-unmeasured`),
    *  counted through `doneRejectCount` — the SAME private statement
    *  `runHealth`'s `doneRejects` rides, so `GET /api/runs` and
    *  `GET /api/runs/:id/signals` cannot drift apart (R7-3).
@@ -4538,8 +4546,10 @@ export class CoordStore {
 
   /**
    * THE ONE COUNT of a run's refused wave-dones — the `mail_rejections` rows
-   * `closeRun` writes through `recordRejection` with a `DONE_AUTHORITY_CODES`
-   * code — and, riding the same statement, the newest one's code.
+   * `closeRun` writes through `recordRejection` with a `DONE_REFUSAL_CODES`
+   * code (the done-authority codes less `lineage-unmeasured`, which is the
+   * radar's timing and no refusal, D-7107) — and, riding the same statement,
+   * the newest one's code.
    *
    * Private because it is a measurement two PUBLIC surfaces must agree on, not
    * a surface of its own: `runHealth`'s `doneRejects`/`lastRejectCode` (what
@@ -4570,13 +4580,13 @@ export class CoordStore {
     // syntax error.
     if (runIds.length === 0) return out;
     const ph = placeholders(runIds.length);
-    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    const codes = placeholders(DONE_REFUSAL_CODES.length);
     for (const row of this.db.prepare(
       'SELECT r.runId AS runId, count(*) AS c, ' +
       '(SELECT x.code FROM mail_rejections x WHERE x.runId = r.runId ' +
       `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
       `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
-    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES) as unknown as
+    ).all(...DONE_REFUSAL_CODES, ...runIds, ...DONE_REFUSAL_CODES) as unknown as
       { runId: number; c: number; lastCode: string | null }[]) {
       out.set(row.runId, { count: row.c, lastCode: row.lastCode });
     }
@@ -4844,6 +4854,35 @@ export class CoordStore {
     return { running };
   }
 
+  // ── the automatic roll's setting (D-7453) ─────────────────────────────────
+
+  /** The "Roll idle sessions" row as read: a row, no row, or a read that failed, never one `null`. Nothing is decided
+   *  here: `rollTargetsOf` (L1, `coord/rollTarget.ts`) decides what the stored word means. */
+  rollSettings(): RollSettingsRead {
+    try {
+      const r = this.db.prepare('SELECT targets FROM roll_settings WHERE id = 1').get() as { targets: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', targets: r.targets };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The one writer of `roll_settings`, in one `tx()`: the row before, then the write (an insert for a lost row), then
+   *  the row after. It validates nothing: the route has narrowed `targets`. A write that changes nothing runs no
+   *  `UPDATE`, so `updatedAt` stays. */
+  setRollTargets(targets: ClaudeRollTargets, at: number): { before: RollSettingsRead; after: RollSettingsRead } {
+    return tx(this.db, () => {
+      const before = this.rollSettings();
+      if (before.kind === 'unreadable') throw new Error(`roll settings unreadable inside the write: ${before.detail}`);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO roll_settings (id, targets, updatedAt) VALUES (1, ?, ?)').run(targets, at);
+      } else if (before.targets !== targets) {
+        this.db.prepare('UPDATE roll_settings SET targets = ?, updatedAt = ? WHERE id = 1').run(targets, at);
+      }
+      return { before, after: this.rollSettings() };
+    });
+  }
+
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 
   /** The settings row, every value as read: a row, no row, or a read that failed, three words and never one `null`.
@@ -4904,6 +4943,42 @@ export class CoordStore {
     });
   }
 
+  // ── the dead-dispatch act's switch and candidates (D-7319) ─────────────────────────────────────────────────
+  /** `dispatch_abandon_settings` (migration 33), read: the row's raw choice and write time, `absent` for a lost row, or
+   *  `unreadable` with the driver's detail. `stallSettings()`'s shape: prepared and run inside the `try`, never a throw.
+   *  Nothing is decided here: only an exact `on` arms the act, and `isDispatchAbandonChoice` says so at the reader. */
+  dispatchAbandonSetting(): DispatchAbandonRead {
+    try {
+      const r = this.db.prepare('SELECT choice, CAST(updatedAt AS TEXT) AS updatedText FROM dispatch_abandon_settings WHERE id = 1')
+        .get() as { choice: unknown; updatedText: unknown } | undefined;
+      if (r === undefined) return { kind: 'absent' };
+      const at = typeof r.updatedText === 'string' ? Number(r.updatedText) : NaN;
+      return { kind: 'row', choice: r.choice, updatedAt: Number.isSafeInteger(at) ? at : null };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The switch's one writer, called only by `POST /api/coord/dispatch-abandon`: an upsert of the one row, in one
+   *  statement, then the read back. The route has validated `choice`. */
+  setDispatchAbandon(choice: DispatchAbandonChoice, at: number): DispatchAbandonRead {
+    this.db.prepare(
+      'INSERT INTO dispatch_abandon_settings (id, choice, updatedAt) VALUES (1, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET choice = excluded.choice, updatedAt = excluded.updatedAt',
+    ).run(choice, at);
+    return this.dispatchAbandonSetting();
+  }
+
+  /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
+   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
+   *  so this query is economy, never a permission. */
+  stalledDispatchRunIds(startedAtOrBefore: number): number[] {
+    return (this.db.prepare(
+      "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
+      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
+    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
+  }
+
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
   // Each is `{ ok: true, rows } | { ok: false, detail }`: a thrown statement or a value this process cannot prove is a
   // failure with its detail, never a throw and never an overloaded null. They read; the decider (`drift.ts`) judges.
@@ -4916,22 +4991,62 @@ export class CoordStore {
       const runs = this.db.prepare(
         `SELECT id, program, state, claimedBy, openedAt FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
       ).all() as { id: unknown; program: string; state: string; claimedBy: string | null; openedAt: unknown }[];
-      const events = this.db.prepare(
-        "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
-        'ORDER BY at DESC, id DESC',
-      );
+      const lastActAt = this.lastActReader();
       const out: DriftRunRow[] = [];
       for (const r of runs) {
-        let lastActAt: number | null = null;
-        for (const e of events.all(r.id as number) as { at: unknown; causedBy: string; detail: string | null }[]) {
-          if (parseStallDetail(e.detail) !== null) continue;
-          lastActAt = driftInt(e.at, 'run_events at');
-          break;
-        }
         out.push({ id: driftInt(r.id, 'runs id'), program: r.program, state: r.state, claimedBy: r.claimedBy,
-          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt });
+          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt: lastActAt(r.id as number) });
       }
       return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The ACT rule, written once: `driftOpenRuns` and `runLastMoves` (D-7334) both read a run's newest act through it.
+   *  The answer for one run is the `at` of its newest `run_events` row that is neither caused by `'operator'` nor a stall
+   *  observation (`parseStallDetail` reads it), or null when there is none. Prepared once per read; it throws as the
+   *  statement does, and its callers turn that into their failure arm. The rows are walked newest first and the walk
+   *  stops at the first act (`iterate`, fix round 1, F5): the runs frame asks this for every open run on every tick, so
+   *  its cost follows the stall rows above the newest act, not the run's whole history. */
+  private lastActReader(): (runId: number) => number | null {
+    const events = this.db.prepare(
+      "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
+      'ORDER BY at DESC, id DESC',
+    );
+    return (runId) => {
+      for (const e of events.iterate(runId) as Iterable<{ at: unknown; causedBy: string; detail: string | null }>) {
+        if (parseStallDetail(e.detail) !== null) continue;
+        return driftInt(e.at, 'run_events at');
+      }
+      return null;
+    };
+  }
+
+  /** `RunSummary.lastMoveAt` for each of `runIds` (D-7334; programme-boxes spec §2.5): the newer of the run's newest act
+   *  (`lastActReader`, the drift reader's rule) and its newest mail naming it from the run's worker, its reviewer or its
+   *  coordinator session — the run's `sessionId`, the `sessionId` of a review run whose `reviews` is this run, or its
+   *  `claimedBy` — never a role sender (`MAIL_ROLE_IDS`: the brief, rejections, close notices and stall checks move
+   *  nothing), and never another session's (fix round 1, F3), or null when it has neither. Every asked id is in the
+   *  answer. Two indexed statements a run (`run_events_by_run`; `mail_by_run`, its senders by the runs key and
+   *  `runs_by_reviews`), so its caller reads it once per frame, for the open runs only. A thrown statement or an
+   *  unprovable value is the failure arm. */
+  runLastMoves(runIds: readonly number[]): RunLastMovesRead {
+    try {
+      const lastActAt = this.lastActReader();
+      const roles = [...MAIL_ROLE_IDS];
+      const mail = this.db.prepare(
+        `SELECT MAX(at) AS at FROM mail WHERE runId = ? AND fromId NOT IN (${roles.map(() => '?').join(', ')}) ` +
+        'AND fromId IN (SELECT sessionId FROM runs WHERE id = ? UNION ALL SELECT claimedBy FROM runs WHERE id = ? ' +
+        'UNION ALL SELECT sessionId FROM runs WHERE reviews = ?)',
+      );
+      const moves = new Map<number, number | null>();
+      for (const id of runIds) {
+        const act = lastActAt(id);
+        const sent = driftIntOrNull((mail.get(id, ...roles, id, id, id) as { at: unknown }).at, 'mail at');
+        moves.set(id, act === null ? sent : sent === null ? act : Math.max(act, sent));
+      }
+      return { ok: true, moves };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }
@@ -7897,8 +8012,9 @@ export class CoordStore {
       // (D-2545). Answering `'unknown-ask'` here would be the overloaded value
       // this whole change removes — a coordinator told "no such ask" for a row
       // that is sitting there. It THROWS instead, and it is unreachable by
-      // construction from both call sites: `/answer` reads `askById` and
-      // `POST /api/sessions/:id/ask` reads `heldAskFor` immediately before,
+      // construction from both call sites: `/answer` reads `askById` and the
+      // operator's ask (`coord/questions.ts`, behind `POST /api/questions/
+      // session-<id>/answer` since W7 C7p) reads `heldAskFor` immediately before,
       // each refusing the unreadable row in its own words first. Widening
       // `AskTakeResult` would put a never-wire word into the ask refusal
       // vocabulary the two routes send verbatim.

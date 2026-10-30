@@ -20,7 +20,7 @@ import type { AskPairing, Dialog } from '../../shared/api';
 import { askSource } from '../src/session/askLive';
 import { DialogSheet, UNPLACED_VIEW } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
-import { api } from '../src/lib/api';
+import { spyApiAnswer } from './answerSeam';
 import { CACHING_TRACING, pane, type AskEnvelope } from './askPanes';
 import { tablePairing, wirePairing } from './wirePairing';
 
@@ -53,7 +53,7 @@ describe('the envelope before the menu (a hook question envelope, dialog null)',
   });
 
   it('the sheet shows question 1, read-only: its words, no row a tap answers, and not the unpaired view', () => {
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     mount(CACHING_TRACING, null);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // Question 1 is the sheet's title (question 2 is listed below it, as the envelope's next question).

@@ -674,10 +674,10 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 69,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts
+      'server/src/watch.ts': 68,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts; C4n (D-7171): - 1, execChildReclaim's queue pin
       'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
-      'server/src/coord/routes.ts': 38,
+      'server/src/coord/routes.ts': 37,   // C4n (D-7171): 38 - 1, childReclaimPort's queue pin re-keyed on scan/symbols.ts
       'server/src/coord/childReclaim.ts': 6,
       'server/src/coord/expireArchived.ts': 0,
       'server/src/coord/collectTempRoot.ts': 0,
@@ -715,8 +715,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 69,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts
-      'server/src/coord/routes.ts': 38,
+      'server/src/watch.ts': 68,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts; C4n (D-7171): - 1, execChildReclaim's queue pin
+      'server/src/coord/routes.ts': 37,   // C4n (D-7171): 38 - 1, childReclaimPort's queue pin re-keyed on scan/symbols.ts
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
       'server/src/coord/redact.ts': 0,
@@ -763,11 +763,10 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('literal source pins over every other server/src file may only shrink (ARCH-06; the counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/accounts/mask.ts': 1,
       'server/src/askbody.ts': 1,
       'server/src/askkey.ts': 1,
       'server/src/askwindow.ts': 1,
-      'server/src/auth/sessions.ts': 3,
+      'server/src/auth/sessions.ts': 2,
       'server/src/auth/webauthn.ts': 2,
       'server/src/childReclaimSweep.ts': 7,
       'server/src/collectLane.ts': 7,
@@ -779,7 +778,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/delegation-checkpoint.ts': 33,
       'server/src/coord/delegation-correlation.ts': 4,
       'server/src/coord/delegation-ingest.ts': 5,
-      'server/src/coord/delegation-journal.ts': 14,
+      'server/src/coord/delegation-journal.ts': 10,
       'server/src/coord/delegation-model.ts': 5,
       'server/src/coord/delegation-policy.ts': 6,
       'server/src/coord/digest.ts': 2,
@@ -798,7 +797,6 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/stall.ts': 6,
       'server/src/coord/stallsettings.ts': 5,
       'server/src/coord/store.ts': 56,
-      'server/src/coord/token.ts': 1,
       'server/src/deps.ts': 2,
       'server/src/docs/policy.ts': 10,
       'server/src/exec.ts': 1,
@@ -810,7 +808,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/io.ts': 8,
       'server/src/limits.ts': 1,
       'server/src/linear/client.ts': 2,
-      'server/src/livestate.ts': 2,
+      'server/src/livestate.ts': 1,
       'server/src/localcaps.ts': 3,
       'server/src/pane/dialog.ts': 4,
       'server/src/poolrule.ts': 6,

@@ -121,7 +121,7 @@
 //
 // D-5090 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 3):
 // own words answer an AskUserQuestion THROUGH its free-text row
-// (`api.answerDialogText`, D-5047), in both sheets (`AskParts.tsx`'s
+// (`api.answerQuestion`'s own words, D-5047), in both sheets (`AskParts.tsx`'s
 // `OwnWords`). The reply this file used to send pressed the pane's `Chat about
 // this` row, which declines the WHOLE ask, then typed the text as a new prompt
 // while Claude carried on, and emptied the box before trying; it is deleted,
@@ -134,7 +134,7 @@
 //
 // D-5091 (Task 4): a multiSelect question the pane carries as `Dialog.multi`
 // is answered as boxes, in both sheets (`AskParts.tsx`'s `MultiPick`): the
-// commit sends the whole set through `api.answerDialogMulti` (D-5048). The
+// commit sends the whole set through `api.answerQuestion` (D-5048). The
 // operator's set and the commit's call live HERE too, for the same two
 // reasons: the boxes repaint under the same id while the server ticks them,
 // and an `ask_cleared` mid-commit hands the same set and call to the scraped

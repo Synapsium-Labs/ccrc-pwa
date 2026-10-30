@@ -31,6 +31,24 @@ export function pidGone(pid: number): boolean {
   } catch { return true; }
 }
 
+/** A holder of `lock`: ONE process opens it on fd 9, takes flock(2) on that descriptor, then becomes `sleep` (exec keeps
+ *  the pid and the descriptor), so SIGKILL on the returned child releases the lock and leaves no orphan. The holder is
+ *  python3's fcntl.flock (flock(2), the lock ccd's flock(1) takes), not flock(1): util-linux's `--no-fork` is missing
+ *  from the portable flock 0.4.0 a macOS runner installs (rc 64), and a bash holder would need the harness's
+ *  containment env. The caller waits
+ *  for `lockHeld` and kills the child (D-7499). */
+export function holdLandLock(lock: string): ChildProcess {
+  // python3's fcntl.flock is flock(2) on the descriptor, the same lock ccd's flock(1) takes, in one process.
+  return spawn('python3', ['-I', '-c', 'import fcntl,sys,time\nf=open(sys.argv[1],"a")\nfcntl.flock(f,fcntl.LOCK_EX)\ntime.sleep(30)', lock], { stdio: 'ignore' });
+}
+
+/** True while another process holds `lock`: a non-blocking take on a fresh descriptor answers 1, the conflict code
+ *  of both flock(1)s. Any other failure (no flock, a bad option) is not a holder, so it never reads as one. */
+export function lockHeld(lock: string): boolean {
+  const probe = 'import fcntl,sys\nf=open(sys.argv[1],"a")\ntry:\n  fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError:\n  sys.exit(1)';
+  return spawnSync('python3', ['-I', '-c', probe, lock]).status === 1;
+}
+
 /** Wait until `fn` holds, or the budget (ms) is spent; the last answer. */
 export async function until(fn: () => boolean, ms = 10_000, stepMs = 50): Promise<boolean> {
   const end = Date.now() + ms;

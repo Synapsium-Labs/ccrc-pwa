@@ -104,6 +104,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   worktree no registry row names, under the ccd worktree root or a `.claude`/`.superpowers` worktrees directory), behind a
   token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
   **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-shed-deps` is forbidden to every session too** (D-7278): it is the SERVER's act on a SLEEPING worker's or coordinator's git-ignored, untracked dependency directories only (`ccd ws-shed-deps --session <id> --class child|coordinator`, composed by the deps-shed arm of the run-done row, shadow until `$REG/deps-shed-live`), behind the installed direct entry, with every rung re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -274,7 +275,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   JSON/SQL fixtures; `vitestFollows` in select-tests.mjs), the guard suites that scan the whole tree or the diff
   (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
   `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
-  `git diff` or `git merge-base` itself: `TREE_READER`), and every `session-hook*` suite when `ccd/ccd`,
+  `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
+  `shared`, `pwa/src`, `agent/src` or `ccd` — whose file took at most `SCANNER_MAX_MS` on the last full run, the heavier
+  ones named in the summary and left to the queue: the full run RECORDS which tests list a root (a setup file wraps fs's
+  listers, `.github/ci/tree-scanners.mjs`, published as the `tree-scanners` artifact beside `testtimes`), unioned with
+  the static `scansSourceTree`, which stands alone when no artifact is readable), and every `session-hook*` suite when `ccd/ccd`,
   `ccd/session-hook.sh` or `shared/api.ts` changed (`.github/ci/fast-plan.mjs`, the `fast-plan` job), packed by measured duration behind the
   required summary `test (server)`; and the agent and pwa TESTS only when the change can reach them
   (`.github/ci/reach.mjs`: a package skips only when every changed file is under a directory it never reads, so `agent`
@@ -498,12 +503,14 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4),
   `POST /api/coord/stall-watch` (stall-watch settings wave 1), `POST /api/coord/collect-lane`
   (child-reclamation wave 10, which also refuses `live` while sign-in is dark), `POST /api/coord/review-cap`
-  (D-6795, the operator's lift of the review-round cap for one work run) and `POST /api/questions/:id/answer` (W3 Q3f,
+  (D-6795, the operator's lift of the review-round cap for one work run), `POST /api/coord/dispatch-abandon` (D-7319, the
+  operator's switch on abandoning a dispatch that never came back), `POST /api/coord/roll-idle` (D-7453, the
+  operator's Settings row for the automatic coordinator roll) and `POST /api/questions/:id/answer` (W3 Q3f,
   D-7030, the operator's answer door of the question family) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other six are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other eight are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -551,6 +558,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
   workspace branch, **never a separate feature branch** (a feature branch wedges every close with `stale-tip`).
   Re-measurement reads git ref files + `.prhistory` fresh, never the claim body.
+  For a project whose landing conf opts in (`$REG/landing/<project>/enabled`), the fingerprint also accepts a claimed
+  tip that the conflict radar's lineage carries to the live tip through clean base merges, and the landing then binds
+  that live tip; anything it cannot read answers as before, or `lineage-unmeasured`.
 - **One run row per wave; wave N+1 is a NEW `POST /api/runs`, not a reopen. Open wave N+1's run BEFORE closing
   wave N's** — close-first leaves zero open runs and the server retires the program, breaking
   `toId:'coordinator'` mail that carries NO `runId`. Mail naming a `runId` still resolves

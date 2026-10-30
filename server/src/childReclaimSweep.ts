@@ -40,7 +40,7 @@ export const CHILD_RECLAIM_DEFER_CEILING_MS = 15 * 60_000;
  *  what `deferExpired` skips. Every other defer (`paused`, `held`,
  *  `state-changed`, …) is a condition the ceiling must never override, so it
  *  starts the any-kind clock only, never the presence clock. */
-export const CHILD_RECLAIM_PRESENCE_DEFERS = ['presence', 'attached', 'tree-busy'] as const;
+export const CHILD_RECLAIM_VIEWER_DEFERS = ['presence', 'attached', 'tree-busy'] as const;
 
 /** One reading of the sweep lane's two clocks. */
 export interface ChildReclaimLaneNow {
@@ -78,7 +78,7 @@ export interface ChildReclaimAsk {
  *  (`ChildReclaimLaneNow.monoMs`: never stepped, stopped while the box is
  *  suspended, and meaningless outside this process), with three exceptions.
  *  `firstDeferredAt` is wall-clock epoch ms because it is DISPLAYED (each
- *  request's `deferredSinceMs`, the run chip's `at`). `lastPresenceWallAt` is
+ *  request's `deferredSinceMs`, the run chip's `at`). `lastViewerWallAt` is
  *  the presence gap's second operand. `bornAt` is ccd's clock, compared for
  *  equality only, and `markerRunId` and `generation` are no clock at all. That is safe only
  *  because this memory never leaves the process: it is never persisted or
@@ -96,8 +96,8 @@ export interface ChildReclaimAsk {
  *  of continuous deferral"): a child that is not asked writes nothing, so time
  *  nobody measured must never count as presence observed. Each presence-class
  *  answer brackets its observation between the request that asked
- *  (`lastPresenceDeferredAt`) and its own arrival. The next answer extends the
- *  episode only while its ARRIVAL is within `CHILD_RECLAIM_PRESENCE_GAP_PASSES`
+ *  (`lastViewerDeferredAt`) and its own arrival. The next answer extends the
+ *  episode only while its ARRIVAL is within `CHILD_RECLAIM_VIEWER_GAP_PASSES`
  *  (two and a half) pass intervals of that request. The episode starts at its
  *  first answer's ARRIVAL. The ceiling licenses an ask only while the latest
  *  answer's REQUEST is that recent. Each gap is the larger of the monotonic
@@ -107,7 +107,7 @@ export interface ChildReclaimAsk {
  *
  *  What keeps the ceiling REACHABLE however many children are due is the
  *  order (`childReclaimAskOrder`). The senior presence-held due child
- *  (`presenceHeldSince`) holds the lease and is asked on every pass it is due,
+ *  (`viewerHeldSince`) holds the lease and is asked on every pass it is due,
  *  exactly as a lone child is, while every other due child waits. A holder
  *  whose answer does not continue its episode, or whose request is rejected,
  *  forfeits the lease, so a slow box costs the lease and never stops the lane.
@@ -144,17 +144,17 @@ export interface ChildReclaimSweepEntry extends ChildReclaimTierState {
    *  first presence-class answer, the instant `childReclaimDeferExpired`
    *  measures the ceiling from. `null` whenever the last outcome was not a
    *  presence-class deferral. */
-  readonly firstPresenceDeferredAt: number | null;
+  readonly firstViewerDeferredAt: number | null;
   /** The REQUEST instant (monotonic) of the episode's latest presence-class
    *  answer. The next answer extends the episode only if it ARRIVES within
-   *  `CHILD_RECLAIM_PRESENCE_GAP_PASSES` intervals of it, and the ceiling
+   *  `CHILD_RECLAIM_VIEWER_GAP_PASSES` intervals of it, and the ceiling
    *  licenses an ask only within as many. `null` exactly when
-   *  `firstPresenceDeferredAt` is. */
-  readonly lastPresenceDeferredAt: number | null;
+   *  `firstViewerDeferredAt` is. */
+  readonly lastViewerDeferredAt: number | null;
   /** That same request on the WALL clock, read only by the gap reading, whose
    *  larger difference neither a backward wall step nor a suspend can shrink.
-   *  `null` exactly when `lastPresenceDeferredAt` is. */
-  readonly lastPresenceWallAt: number | null;
+   *  `null` exactly when `lastViewerDeferredAt` is. */
+  readonly lastViewerWallAt: number | null;
   /** The lease's seniority: the ARRIVAL (monotonic) of the unlicensed
    *  presence-class answer that put this child in line. An unlicensed presence
    *  answer keeps it, unless the request went to the lease's HOLDER and the
@@ -162,7 +162,7 @@ export interface ChildReclaimSweepEntry extends ChildReclaimTierState {
    *  and re-joins at the back on its next unlicensed presence answer. A
    *  licensed presence answer, any other outcome and a rejection clear it.
    *  Read ONLY by `childReclaimAskOrder`, never by the licence. */
-  readonly presenceHeldSince: number | null;
+  readonly viewerHeldSince: number | null;
   /** `failed` outcomes in a row (spec §5.9: "retries back off in between");
    *  any other outcome ends the run. */
   readonly consecutiveFailures: number;
@@ -209,8 +209,8 @@ export const childReclaimFirstSighting = (
   monoMs: number, bornAt: number | null, markerRunId: number, generation: ChildReclaimGenerationKey,
   tier: ChildReclaimTierState = CHILD_RECLAIM_TIER_NONE,
 ): ChildReclaimSweepEntry => ({
-  firstEligibleAt: monoMs, firstDeferredAt: null, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
-  lastPresenceWallAt: null, presenceHeldSince: null,
+  firstEligibleAt: monoMs, firstDeferredAt: null, firstViewerDeferredAt: null, lastViewerDeferredAt: null,
+  lastViewerWallAt: null, viewerHeldSince: null,
   consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt, markerRunId, generation,
   lastDeferWhy: null, ...childReclaimTierOf(tier),
 });
@@ -865,16 +865,16 @@ export const CHILD_RECLAIM_SWEEP_REJECTED: ChildReclaimSweepOutcome = { kind: 'f
  *  its episode restarts until it holds the lease. The bound is this
  *  multiplier times the interval the caller hands in, never a constant of its
  *  own. */
-const CHILD_RECLAIM_PRESENCE_GAP_PASSES = 2.5;
+const CHILD_RECLAIM_VIEWER_GAP_PASSES = 2.5;
 
-/** Is `now` within `CHILD_RECLAIM_PRESENCE_GAP_PASSES` pass intervals of the
+/** Is `now` within `CHILD_RECLAIM_VIEWER_GAP_PASSES` pass intervals of the
  *  entry's latest presence-class REQUEST (inclusive), on the LARGER of the
  *  monotonic and the wall-clock differences? `false` with no presence answer
  *  on record. The one gap reading: continuity and freshness both ask it. */
-const childReclaimPresenceWithin = (entry: ChildReclaimSweepEntry, now: ChildReclaimLaneNow, passIntervalMs: number): boolean =>
-  entry.lastPresenceDeferredAt !== null && entry.lastPresenceWallAt !== null
-  && Math.max(now.monoMs - entry.lastPresenceDeferredAt, now.wallMs - entry.lastPresenceWallAt)
-     <= CHILD_RECLAIM_PRESENCE_GAP_PASSES * passIntervalMs;
+const childReclaimViewerWithin = (entry: ChildReclaimSweepEntry, now: ChildReclaimLaneNow, passIntervalMs: number): boolean =>
+  entry.lastViewerDeferredAt !== null && entry.lastViewerWallAt !== null
+  && Math.max(now.monoMs - entry.lastViewerDeferredAt, now.wallMs - entry.lastViewerWallAt)
+     <= CHILD_RECLAIM_VIEWER_GAP_PASSES * passIntervalMs;
 
 /** The memory after one attempt (spec §5.7, §5.9). `null` = forget the
  *  child's entry: it is already gone, or truly reclaimed. A TERMINAL REFUSAL
@@ -891,27 +891,27 @@ const childReclaimPresenceWithin = (entry: ChildReclaimSweepEntry, now: ChildRec
  *  The PRESENCE clock is an EPISODE (spec §5.7). Every outcome other than a
  *  presence-class deferral ends it, so `failed` (a rejected request among
  *  them, which the lane writes as `failed`), `refused` and a non-presence
- *  `deferred` clear `firstPresenceDeferredAt`, `lastPresenceDeferredAt`,
- *  `lastPresenceWallAt` and `presenceHeldSince`.
+ *  `deferred` clear `firstViewerDeferredAt`, `lastViewerDeferredAt`,
+ *  `lastViewerWallAt` and `viewerHeldSince`.
  *
  *  A presence-class deferral brackets its observation. It stamps the REQUEST
- *  (`ask.at`) into `lastPresenceDeferredAt` (monotonic) and
- *  `lastPresenceWallAt` (wall). It STARTS a new episode at its ARRIVAL
+ *  (`ask.at`) into `lastViewerDeferredAt` (monotonic) and
+ *  `lastViewerWallAt` (wall). It STARTS a new episode at its ARRIVAL
  *  (`answered.monoMs`) in three cases:
  *  - none is running;
  *  - the request was `licensed` (sent with `deferExpired: true`), so an answer
  *    to it restarts the episode rather than letting every later retry keep
  *    skipping ccd's presence rungs;
- *  - the arrival is more than `CHILD_RECLAIM_PRESENCE_GAP_PASSES` ×
+ *  - the arrival is more than `CHILD_RECLAIM_VIEWER_GAP_PASSES` ×
  *    `passIntervalMs` after the previous request on either clock, so the time
  *    between was never observed.
  *
  *  Only an UNLICENSED presence answer arriving within that gap (inclusive)
  *  extends the episode. An unlicensed presence answer keeps
- *  `presenceHeldSince`, or sets it to its arrival, except that a request sent
+ *  `viewerHeldSince`, or sets it to its arrival, except that a request sent
  *  as the lease's holder whose answer does not extend the episode clears it:
- *  the holder forfeits. A licensed one clears it. `firstDeferredAt` (stamped once) and `lastPresenceWallAt`
- *  are `ask.at.wallMs`; `lastPresenceDeferredAt`, `lastAskedAt`, `lastFailedAt` and `refusedAt` are `ask.at.monoMs`.
+ *  the holder forfeits. A licensed one clears it. `firstDeferredAt` (stamped once) and `lastViewerWallAt`
+ *  are `ask.at.wallMs`; `lastViewerDeferredAt`, `lastAskedAt`, `lastFailedAt` and `refusedAt` are `ask.at.monoMs`.
  *
  *  `lastDeferWhy` is the deferral's own word after a deferral and null after
  *  every other outcome, a rejection (written as `failed`) among them: the
@@ -930,33 +930,33 @@ export function childReclaimNextEntry(
       return {
         ...entry, ...childReclaimTierAfterFailure(entry, outcome.token, outcome.stuck),
         consecutiveFailures: entry.consecutiveFailures + 1, lastFailedAt: ask.at.monoMs,
-        firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null,
+        firstViewerDeferredAt: null, lastViewerDeferredAt: null, lastViewerWallAt: null, viewerHeldSince: null,
         refusedAt: null, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
       };
     case 'refused':
       return {
         ...entry, ...CHILD_RECLAIM_TIER_NONE, consecutiveFailures: 0, lastFailedAt: null,
-        firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null,
+        firstViewerDeferredAt: null, lastViewerDeferredAt: null, lastViewerWallAt: null, viewerHeldSince: null,
         refusedAt: ask.at.monoMs, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
       };
     case 'deferred': {
-      const presence = (CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(outcome.why);
+      const viewerClass = (CHILD_RECLAIM_VIEWER_DEFERS as readonly string[]).includes(outcome.why);
       // the NEW answer's ARRIVAL against the previous answer's REQUEST
-      const continues = presence && !ask.licensed && entry.firstPresenceDeferredAt !== null
-        && childReclaimPresenceWithin(entry, answered, passIntervalMs);
+      const continues = viewerClass && !ask.licensed && entry.firstViewerDeferredAt !== null
+        && childReclaimViewerWithin(entry, answered, passIntervalMs);
       // the lease: an unlicensed presence answer keeps the child in line or puts it at the back,
       // EXCEPT that a holder whose answer does not continue its episode forfeits
-      const inLine = presence && !ask.licensed && (continues || !ask.asHolder);
+      const inLine = viewerClass && !ask.licensed && (continues || !ask.asHolder);
       // THE PERSISTENT TIER STANDS (spec §5.7): `...entry` keeps its membership, its word, j and its run. The ramp
       // is cleared exactly as it always was (`consecutiveFailures`, `lastFailedAt`), so a deferred tier child is due
       // on its next pass, and the presence lease, its episode and its licence are unchanged (spec §5.7).
       return {
         ...entry,
-        firstDeferredAt: entry.firstDeferredAt ?? ask.at.wallMs,                                                // WALL: display only
-        firstPresenceDeferredAt: presence ? (continues ? entry.firstPresenceDeferredAt : answered.monoMs) : null, // the episode starts at an ARRIVAL
-        lastPresenceDeferredAt: presence ? ask.at.monoMs : null,                                                // freshness reads the REQUEST
-        lastPresenceWallAt: presence ? ask.at.wallMs : null,
-        presenceHeldSince: inLine ? (entry.presenceHeldSince ?? answered.monoMs) : null,
+        firstDeferredAt: entry.firstDeferredAt ?? ask.at.wallMs,                                                   // WALL: display only
+        firstViewerDeferredAt: viewerClass ? (continues ? entry.firstViewerDeferredAt : answered.monoMs) : null, // the episode starts at an ARRIVAL
+        lastViewerDeferredAt: viewerClass ? ask.at.monoMs : null,                                                // freshness reads the REQUEST
+        lastViewerWallAt: viewerClass ? ask.at.wallMs : null,
+        viewerHeldSince: inLine ? (entry.viewerHeldSince ?? answered.monoMs) : null,
         refusedAt: null, consecutiveFailures: 0, lastFailedAt: null, lastAskedAt: ask.at.monoMs,
         lastDeferWhy: outcome.why,                                                                              // the episode a feed row is written once for
       };
@@ -968,11 +968,11 @@ export function childReclaimNextEntry(
  *  First, the current PRESENCE episode has spanned the ceiling on the
  *  MONOTONIC clock, measured from its first answer's ARRIVAL (at EXACTLY the
  *  ceiling, yes). Second, its latest answer's REQUEST is within
- *  `CHILD_RECLAIM_PRESENCE_GAP_PASSES` × `passIntervalMs` of `now` on the
+ *  `CHILD_RECLAIM_VIEWER_GAP_PASSES` × `passIntervalMs` of `now` on the
  *  larger of the two clocks (inclusive). So the licence rests on presence
  *  observed continuously up to the ask in real time, never on one sample
  *  followed by time nobody measured (spec §5.7: "15 minutes of continuous
- *  deferral"). `presenceHeldSince` is never read here: the lease decides who
+ *  deferral"). `viewerHeldSince` is never read here: the lease decides who
  *  is asked, never what is licensed. The presence clock alone:
  *  any other deferral is a condition the ceiling must never override. How
  *  long the child waited is not this function's to say: the lane passes
@@ -981,9 +981,9 @@ export function childReclaimNextEntry(
  *  states the wait and its why for a `deferred` outcome and for a
  *  ceiling-expired reclaim (spec §5.7, §5.9). */
 export const childReclaimDeferExpired = (entry: ChildReclaimSweepEntry, now: ChildReclaimLaneNow, passIntervalMs: number): boolean =>
-  entry.firstPresenceDeferredAt !== null
-  && now.monoMs - entry.firstPresenceDeferredAt >= CHILD_RECLAIM_DEFER_CEILING_MS   // the span: the MONOTONIC clock alone
-  && childReclaimPresenceWithin(entry, now, passIntervalMs);                         // freshness: the larger of the two clocks
+  entry.firstViewerDeferredAt !== null
+  && now.monoMs - entry.firstViewerDeferredAt >= CHILD_RECLAIM_DEFER_CEILING_MS   // the span: the MONOTONIC clock alone
+  && childReclaimViewerWithin(entry, now, passIntervalMs);                         // freshness: the larger of the two clocks
 
 /** The ORDINARY failure ramp (spec §5.9: "retries back off in between"):
  *  `min(ceiling, passInterval × 2^k)` after k failed attempts in a row — two
@@ -1102,8 +1102,8 @@ export const childReclaimDue = (entry: ChildReclaimSweepEntry, monoMs: number, p
   childReclaimBackoffOver(entry, monoMs, passIntervalMs)
   && (entry.refusedAt === null || monoMs - entry.refusedAt >= CHILD_RECLAIM_DEFER_CEILING_MS);
 
-/** Least first by (`presenceHeldSince`, `firstEligibleAt`, id): the lease's
- *  seniority. Read only for items whose `presenceHeldSince` is a number. */
+/** Least first by (`viewerHeldSince`, `firstEligibleAt`, id): the lease's
+ *  seniority. Read only for items whose `viewerHeldSince` is a number. */
 const childReclaimSeniorFirst = (
   a: { readonly id: string; readonly entry: ChildReclaimSweepEntry }, ah: number,
   b: { readonly id: string; readonly entry: ChildReclaimSweepEntry }, bh: number,
@@ -1115,7 +1115,7 @@ const childReclaimSeniorFirst = (
 
 /** THE ORDER THE LANE ASKS IN (spec §5.7: a wait on presence is bounded). The
  *  holder of the presence lease comes first: the due child with a
- *  `presenceHeldSince`, least by (`presenceHeldSince`, `firstEligibleAt`, id).
+ *  `viewerHeldSince`, least by (`viewerHeldSince`, `firstEligibleAt`, id).
  *  It is named in `holderId`, so the lane can tell each answer which role its
  *  request was sent in. Every other due child follows in the fairness order
  *  (`lastAskedAt`, never-asked first, then `firstEligibleAt`, then id), which
@@ -1140,7 +1140,7 @@ export function childReclaimAskOrder<T extends { readonly id: string; readonly e
   let holder: T | null = null;
   let holderSince = 0;
   for (const x of due) {
-    const since = x.entry.presenceHeldSince;
+    const since = x.entry.viewerHeldSince;
     if (since === null) continue;
     if (holder === null || childReclaimSeniorFirst(x, since, holder, holderSince)) {
       holder = x;
@@ -1620,7 +1620,7 @@ export function childReclaimFeedQuiet(
   entry: ChildReclaimSweepEntry, listed: readonly ChildReclaimAttention[], sessionId: string,
 ): ChildReclaimFeedQuiet {
   const why = entry.lastDeferWhy;
-  const deferWhy = why !== null && !(CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(why) ? why : null;
+  const deferWhy = why !== null && !(CHILD_RECLAIM_VIEWER_DEFERS as readonly string[]).includes(why) ? why : null;
   // A listed STUCK item is read like a failing one (spec §5.9): a retry that finds the same word writes no new row.
   const failing = listed.find((a) => (a.kind === 'failing' || a.kind === 'stuck') && a.sessionId === sessionId);
   const failureToken = failing !== undefined && (failing.kind === 'failing' || failing.kind === 'stuck') && failing.token !== ''

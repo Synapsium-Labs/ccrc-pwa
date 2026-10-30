@@ -395,10 +395,11 @@ export type ClaimantDoorDeps = Pick<ApprovalRaiseDeps, 'coord' | 'io' | 'cfg' | 
   readonly pressAsk: (childId: string, askKey: string, optionIndexes: readonly number[]) => Promise<AskResult>;
 };
 
-/** What the operator's core (`answer`) reads, named and passed in: built ONCE in `buildServer` and handed to both the
- *  old operator doors and `POST /api/questions/:id/answer`, so the two can never read different wiring. The press
+/** What the operator's core (`answer`) reads, named and passed in: built ONCE in `buildServer` and handed to
+ *  `POST /api/questions/:id/answer` (and, until W7 C7p retired them, to the old operator doors, so the two never read
+ *  different wiring). The press
  *  functions (`answerAsk`, `answerDialog`, `answerDialogText`, `answerDialogMulti` over the server's queue), the answered
- *  frame's emit (`answeredFrame`), and the child's hookstate as the watcher last read it (the `/dialog` door's approval
+ *  frame's emit (`answeredFrame`), and the child's hookstate as the watcher last read it (the option row's approval
  *  marking) are closures there, so this file imports no outer ring at runtime. `coord` is the server's, and may be
  *  absent: the operator's press goes through plain on a box with no coordination store. */
 export interface OperatorDoorDeps {
@@ -1650,7 +1651,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return sent(200, { ok: true });
   };
 
-  /** `POST /api/sessions/:id/ask`'s ladder after its body read (Task 12, D-2171): the OPERATOR's own answer path. A
+  /** The operator's ask ladder after its body read (Task 12, D-2171; `POST /api/sessions/:id/ask`'s until W7 C7p retired
+   *  it, `POST /api/questions/session-<id>/answer`'s since): the OPERATOR's own answer path. A
    *  held row is taken BEFORE the keystroke (the row is the mutex) and settled after it; a lost CAS never refuses the
    *  operator (the press goes through on its own merits), and an unreadable or throwing store answers the press
    *  UNRECORDED (D-2169's free degrade, D-2545, whole-branch review F3), never a 500 and never a refusal. */
@@ -1717,7 +1719,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return sent(200, res);
   };
 
-  /** The operator's answer: the ask's record arms, or a dialog's. `/dialog`'s row first records the operator on the
+  /** The operator's answer: the ask's record arms, or a dialog's. An option row (`/dialog`'s, until W7 C7p) first records the operator on the
    *  child's open approval rows BEFORE any key (D-5298, spec §6.3 server step 7), gated on the child's hookstate (none
    *  read, or an approval envelope; D-5491: the operator is the one principal that always wins), a failed marking
    *  answered anyway; then the press, its answered frame (`answered`), and the door's status: `bad-text` and

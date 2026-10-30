@@ -142,6 +142,10 @@ export const HIBERNATE_SWEEP_MS = 5 * 60_000;
 /** The checks lane's beat (PR landing in ccrc, stage 1): the fastest a project's read cadence goes. */
 export const LANDING_CHECKS_BEAT_MS = 30_000;
 
+/** The landing radar lane's look (landing order wave 4b, D-7481): the radar's own timer ticks every 5 minutes, so a 60 s
+ *  look keeps the fleet frame's `landing` within one tick of the `probe` file. The pass's read deadline is half of it. */
+export const LANDING_RADAR_SWEEP_MS = 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -151,11 +155,11 @@ export type LaneClock = 'mono' | 'wall';
 export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 
 export type LaneName =
-  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'serverCaps'
+  | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -195,6 +199,12 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'landingChecks', cadenceMs: LANDING_CHECKS_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
     staleAfterMs: 5 * 60_000, warnKey: 'ccrc-server: the landing checks lane failed',
+  },
+  // Landing order wave 4b: the conflict radar's console half. One listing and one read a project a minute; a pass still
+  // running after five minutes is abandoned, like the checks lane's.
+  {
+    name: 'landingRadar', cadenceMs: LANDING_RADAR_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 5 * 60_000, warnKey: 'ccrc-server: the landing radar lane failed',
   },
   { name: 'serverCaps', cadenceMs: SERVER_CAPS_WRITE_MS, derivedFrom: null, clock: 'mono', flight: 'join', warnKey: null },
   { name: 'tasks', cadenceMs: TASK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
@@ -263,6 +273,11 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // cover of these two lanes the operator ruled on 2026-10-26 (D-7052).
   { name: 'sleepRunDone', cadenceMs: STOP_DONE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'sleepIdleHours', cadenceMs: HIBERNATE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  // D-7452: the automatic coordinator roll runs inside hibernation's clock (binary-lifecycle spec §7.4), one pass at a time.
+  {
+    name: 'rollIdle', cadenceMs: HIBERNATE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'sleepIdleHours', reason: 'the roll shares hibernation\'s gate and its clock' },
+  },
 ];
 
 export function laneRow(name: string): LaneRow {

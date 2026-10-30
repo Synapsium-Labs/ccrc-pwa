@@ -7,8 +7,8 @@
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { WARN_GLYPH } from '@ccrc/ui';
-import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState,
-  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
+import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -77,6 +77,18 @@ export const itemTallyLabel = (items: RunItemTally): string =>
  *  answer, so this only ever changes an impossible `undefined`. */
 export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
   run.closedAt ?? null;
+
+/** What `runLastMove` reads: `RunSummary`'s two times, and the server's `lastMoveAt` (D-7334). It was declared here,
+ *  structurally, before `RunSummary` carried the field; `RunSummary.lastMoveAt` is on the wire type now, and every
+ *  `RunSummary` satisfies this alias. The alias goes in Task G1b, with the card wiring (Task G1b), when the reader takes
+ *  `RunSummary` and no caller changes. */
+type LastMoveCarrier = Pick<RunSummary, 'openedAt' | 'dispatchedAt'> & { readonly lastMoveAt?: number | null };
+
+/** The one reader of `RunSummary.lastMoveAt` (D-7334, D-7338). ABSENT is an older server and reads null, so an older server
+ *  shows no movement (programme-boxes spec §5). NULL is a server that measured no move on the run yet, and falls back to its
+ *  dispatch time, then its open time. A number is the move. */
+export const runLastMove = (run: LastMoveCarrier): number | null =>
+  run.lastMoveAt === undefined ? null : run.lastMoveAt ?? run.dispatchedAt ?? run.openedAt;
 
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's
@@ -230,72 +242,6 @@ export function anyDispatchPending(
   return runs.some(isDispatchPending);
 }
 
-/** The run — if any — that this list says is being worked in that session
- *  (Task 5). One reader, so the fleet card's hold-reason door and anything that
- *  follows it ask the same question the same way.
- *
- *  THE ANSWER COMES FROM THE RUN ROWS, NEVER FROM THE HOLD STRING. The hold
- *  text on a session already spells `program:<slug> wave:N/M run:<id>` and it is
- *  tempting to read the id back out of it — `rundefs.ts`'s `holdReason` calls
- *  that out as DISPLAY-ONLY and `run-routes.test.ts` scans both `server/src` and
- *  `pwa/src` for a parser and fails the build on one — including one written in
- *  a COMMENT, which is why this note describes the regex instead of spelling it
- *  (measured on this branch: a helper that read the id out of the reason with a
- *  digit capture, dropped into `pwa/src`, reds that pin, and so did the first
- *  draft of this very docstring). The `runs` frame is the
- *  same `coord.db` the server itself answers from, so this is the cheaper source
- *  as well as the sanctioned one — and it is strictly more honest, because a
- *  hold left behind by a closed run parses to a run id the board cannot show,
- *  while this answers `null` for it.
- *
- *  Callers pass the ACTIVE runs they already hold, so `null` means "the board
- *  has no row for this session" — exactly the question a door needs answered,
- *  and not the same as "this session has never had a run".
- *
- *  During the required open-successor-before-close-producer boundary, two rows
- *  can name the same session. The API orders rows oldest-first, so the last
- *  matching id is the current wave; first-match would render the outgoing one.
- *
- *  It takes the SESSION, not its id, because a matching id is not enough
- *  (D-5828): see `runBelongsTo`, the one rule every caller goes through. */
-export function runForSession(
-  runs: readonly RunSummary[], session: { id: string; child?: ChildMark },
-): RunSummary | null {
-  let current: RunSummary | null = null;
-  for (const run of runs) {
-    if (runBelongsTo(run, session) && (current === null || run.id > current.id)) current = run;
-  }
-  return current;
-}
-
-/** D-5828: whether this run is THIS session's — the one rule the fleet card and
- *  the session header apply (through `runForSession`), so the two can never
- *  attribute a run differently (card ⊆ header, D-5545). The PR sheet's open-run
- *  note deliberately does not: it predicts the archive door, which matches by id
- *  (D-5830).
- *
- *  A run names its worker by id, and an id outlives its workspace: once a
- *  workspace is archived and reaped, ccd's slug picker may give the same name to
- *  a new workspace. A run opened for the old one and never closed then names the
- *  new one too, and the card read that stale run's claimant — an archived
- *  coordinator — and said "coordinator gone" about a worker whose coordinator is
- *  alive. Run ids only increase, so a run whose id is LOWER than the run that
- *  minted this workspace (its `.child` marker, read through `childMarkOf`) was
- *  opened before this workspace existed and is never its run. The marker's own
- *  run (an equal id) and a later wave bound to the same child (a higher id) still
- *  match.
- *
- *  KNOWN LIMIT: a row whose marker names no run — `none`, `unreadable`,
- *  `unrecognised` — keeps the id-only answer, since there is nothing to order the
- *  run against. Binding runs to the worker's generation is the structural fix. */
-export function runBelongsTo(
-  run: { id: number; sessionId: string | null }, session: { id: string; child?: ChildMark },
-): boolean {
-  if (run.sessionId !== session.id) return false;
-  const mark = childMarkOf(session);
-  return mark.kind !== 'child' || run.id >= mark.runId;
-}
-
 /**
  * Which card a run's rows belong on: the card the session it is ABOUT renders
  * on. Wave 2 of board placement moves a coordinated workspace to its
@@ -322,6 +268,14 @@ export function runBelongsTo(
  *
  * `cardOf` is built ONCE per render by the caller from `boardHome` over the
  * whole session list — never inside a card, which sees only its own rows.
+ *
+ * A BY-ID CARD LOOKUP, NAMED (D-7205). Its two `cardOf.get` calls are keyed on a
+ * run's `sessionId` and `claimedBy`, and they stay by id: the question is which
+ * CARD a run renders on (a session id to a card), not which session is the
+ * run's worker, and a run whose worker the wire does not bind still renders on
+ * its project's card. With `workerOf`'s closed-run arm and `coordinatorOf`
+ * (D-7207) they are the PWA's named by-id run lookups, counted and may only
+ * shrink (`server/test/rings/pwa-one-owner.test.ts`).
  */
 export function runCard(
   run: { sessionId: string | null; claimedBy: string | null; project: string },
@@ -331,6 +285,81 @@ export function runCard(
     return run.claimedBy === null ? run.project : cardOf.get(run.claimedBy) ?? run.project;
   }
   return cardOf.get(run.sessionId) ?? run.project;
+}
+
+// ─── The run binding, read from the wire (D-7182; ARCH-61's PWA half, GitHub #796; spec K10) ──────────────────────
+//
+// The server decides which run is a session's (`FleetSession.run`, `.openRun`, through `shared/api.ts#sessionRunOf`,
+// computed once per assembly by `server/src/coord/runBinding.ts#bindingOf`, keyed on the session's INCARNATION), so a
+// recycled workspace name does not inherit a run opened for the occupant before it (#746). These are the PWA's only
+// run-to-session readers: no other `pwa/src` file compares a run's `sessionId` or `claimedBy` with a session id or keys
+// a session map on one (`server/test/rings/pwa-one-owner.test.ts`'s run-binding block counts them).
+
+/** A session as the run readers see it: its id and its wire binding (both binding keys optional, an older server's). */
+export interface BoundSession {
+  readonly id: string;
+  readonly run?: SessionRun | null;
+  readonly openRun?: SessionRun | null;
+}
+
+/** The session's OPEN bound run, as the row the runs list carries (`sessionRunOf(s, 'open')`, matched to `runs` by the
+ *  run's own id), or `null`: no open run binds this incarnation, the server did not or could not decide (an older
+ *  server: no key at all), or `runs` has no row for it. Callers pass the ACTIVE runs they already hold, so `null` also
+ *  means "this list has no row for that run", exactly the question a door needs answered.
+ *
+ *  THE ANSWER COMES FROM THE WIRE'S BINDING AND THE RUN ROWS, NEVER FROM THE HOLD STRING. The hold text on a session
+ *  already spells the programme, wave and run id, and it is tempting to read the id back out of it; `rundefs.ts`'s
+ *  `holdReason` calls that out as DISPLAY-ONLY and `run-routes.test.ts` scans `server/src` and `pwa/src` for such a
+ *  parser and fails the build on one, a comment included, which is why this note describes it instead of spelling it.
+ *
+ *  The OPEN run, not the newest: the fleet's questions (the card's parent, the child's label, the header's run, the
+ *  hold-reason door, the orphan marker) are about the run being worked now, and `openRun` is the server's named answer
+ *  to that, so a newer run that closed while an older one is open does not hide the open one (`sessionRunOf`'s note). */
+export function boundOpenRun<R extends { readonly id: number }>(runs: readonly R[], session: BoundSession): R | null {
+  const bound = sessionRunOf(session, 'open');
+  return bound === null ? null : runs.find((r) => r.id === bound.id) ?? null;
+}
+
+/** THE COORDINATOR-SIDE READER (D-7182): the OPEN runs this session claims, in list order. The wire answers "whose
+ *  children are these" per run (`RunSummary.childIds`, `server/src/coord/runBinding.ts#childrenOf`), not per session,
+ *  so "which open runs does this session hold" is asked here once, by the claimant's id. A closed run is never one: the
+ *  archive door's programme question and the palette's programme terms are about work that can still move. */
+export function claimedRunsOf<R extends { readonly claimedBy: string | null; readonly state: RunState }>(
+  runs: readonly R[], sessionId: string,
+): R[] {
+  return runs.filter((r) => r.claimedBy === sessionId && !isRunClosed(r));
+}
+
+/** THE WORKER READER (D-7182, D-7205): the listed session that is this run's worker, or `null`.
+ *
+ *  OPEN RUN: the session carrying the run's `sessionId` counts only when its own wire binding names this run
+ *  (`sessionRunOf(s, 'open')` or `sessionRunOf(s)`), so a recycled worker id, whose binding names another run or none,
+ *  finds no worker (#746). An older server sends no binding at all, so there an open run finds no worker (the skew row).
+ *
+ *  CLOSED RUN (`isRunClosed`): no wire fact tells a recycled id from the same incarnation (`run` is only the newest bound
+ *  run, `openRun` and `childIds` hold open runs only), so a finished run's worker is the listed session carrying its id,
+ *  today's lookup, the named by-id arm (D-7205): a finished row keeps its session, its chips and its open link.
+ *
+ *  ONE lookup for both arms: the open arm confirms the same session by its binding. */
+export function workerOf<S extends BoundSession>(
+  run: { readonly id: number; readonly state: RunState; readonly sessionId: string | null },
+  sessionsById: ReadonlyMap<string, S>,
+): S | null {
+  if (run.sessionId === null) return null;
+  const s = sessionsById.get(run.sessionId) ?? null;
+  if (s === null || isRunClosed(run)) return s;
+  return sessionRunOf(s, 'open')?.id === run.id || sessionRunOf(s)?.id === run.id ? s : null;
+}
+
+/** THE COORDINATOR READER (D-7207): the listed session carrying this run's claimant id, for every run, open or closed,
+ *  or `null`. A named by-id lookup, today's, because no wire field binds a run's claimant to an incarnation:
+ *  `RunSummary.childIds` is a fact about the WORKER's binding, and keying the coordinator on it would take the
+ *  coordinator, and with it the Resume door, off a planned run (`sessionId: null`), an undecidable binding, an
+ *  unlistable tick and every run without `childIds`, none of them #746 rows. A recycled coordinator id is answered as
+ *  today: the hazard no wire fact closes, named (a field binding the claimant's incarnation would be a server
+ *  prerequisite of its own). */
+export function coordinatorOf<S>(run: { readonly claimedBy: string | null }, sessionsById: ReadonlyMap<string, S>): S | null {
+  return run.claimedBy === null ? null : sessionsById.get(run.claimedBy) ?? null;
 }
 
 /** What the board says about a wave that RESUMED its session rather than
@@ -412,7 +441,7 @@ export const finishedMoreLabel = (next: number, hidden: number): string => {
 
 /** Board order: the ones that can move first, the ones that are over last.
  *  One constant, shared by the grouping and the sort, so the two cannot drift —
- *  the same shape `sortFleet.ts`'s RANK/BUCKET_ORDER pair has. */
+ *  the same shape `shared/api.ts`'s BUCKET_RANK/BUCKET_ORDER pair has. */
 export const RUN_ORDER: readonly RunState[] = [
   'awaiting-review', 'failed', 'working', 'dispatched', 'merging', 'closing', 'planned', 'done', 'unknown',
 ];
@@ -826,14 +855,14 @@ export type ChildMarkRead =
   | { readonly kind: 'unrecognised' };
 
 /** THE ONE READER of `FleetSession.child` in `pwa/src`. Optional here although the
- *  wire type requires it: the live `fleet` frame is cast, never revived. Four
+ *  wire type requires it: the live `fleet` frame is cast, never revived. Three
  *  callers: `childOfRunLabel` (the fleet line), `abandonChildOf` (the abandon
- *  sheet), `childRunsSeen` (the board's memory of which runs had a child) and
- *  `runBelongsTo` (which runs can be this workspace's, D-5828).
+ *  sheet) and `childRunsSeen` (the board's memory of which runs had a child).
+ *  Which runs can be this workspace's is the wire's binding now (`workerOf`,
+ *  D-7182), not a reading of the mark.
  *  The label says nothing for `none` OR `unrecognised`; the sheet must hedge on
- *  `unrecognised` and not on `none`; the board's memory and `runBelongsTo` keep
- *  `child` alone. So this answers four ways, and the label's `null` is never
- *  reused as a mark. */
+ *  `unrecognised` and not on `none`; the board's memory keeps `child` alone. So
+ *  this answers four ways, and the label's `null` is never reused as a mark. */
 export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
   const c: unknown = session.child;
   if (c === undefined) return { kind: 'none' };
@@ -848,6 +877,12 @@ export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
 };
 
 /**
+ * A NAMED READER (D-7214): its question is "which finished runs had a child",
+ * not which session is a run's worker, so it reads the server's own `.child`
+ * mark and the cold rows' reclaim chips, never `RunSummary.childIds` (which
+ * names only OPEN runs with a bound worker, so it never names a finished one).
+ * Counted by the run-binding census and may only shrink.
+ *
  * The run ids this board knows had a child (child-reclamation wave 6). A fleet
  * frame's child mark names its minting run, and a finished row carries a chip
  * only for a child. By the time the reclaim's end reaches the coord frame, the
@@ -873,8 +908,8 @@ export interface ChildOfRunLabel {
   readonly title: string;
 }
 
-/** What a child's label is told about its run: the ACTIVE run bound to the
- *  session (`runForSession` — the current wave, so a workspace resumed for wave 5
+/** What a child's label is told about its run: the OPEN run the wire binds to the
+ *  session (`boundOpenRun` — the current wave, so a workspace resumed for wave 5
  *  answers wave 5, never the run its `.child` mark names), and its coordinator's
  *  display name when the fleet carries it. `fleetTree.ts`'s `coordinationOf`
  *  builds it; the default says nothing is known. */

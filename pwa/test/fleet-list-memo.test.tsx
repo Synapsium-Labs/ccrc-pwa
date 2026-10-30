@@ -27,6 +27,7 @@ import { FleetScreen } from '../src/screens/FleetScreen';
 import { FleetTable, GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { renderFleet } from './fleetHost';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 
 const probe = vi.hoisted(() => ({ lines: [] as string[], heads: [] as string[] }));
 
@@ -67,7 +68,7 @@ const row = (id: string, project: string, over: Partial<FleetSession> = {}): Fle
 const quiet = (id: string): FleetSession =>
   row(id, 'project-d', { status: 'idle', bucket: 'idle', statusUpdatedAt: NOW - 40 * MIN, bucketSince: NOW - 40 * MIN });
 
-const FLEET: readonly FleetSession[] = [
+const FLEET_ROWS: readonly FleetSession[] = [
   row('ws-a', 'project-a', { role: 'coordinator', name: 'the coordinator' }),
   row('ws-b', 'project-a', { role: 'child', child: { kind: 'child', runId: 41 } }),
   row('ws-c', 'project-a'), row('ws-d', 'project-a'), row('ws-e', 'project-a'),
@@ -96,6 +97,9 @@ const RUNS: readonly RunSummary[] = [
   run(43, 'ws-gone', 'ws-k', 'project-c'),
   run(44, 'ws-gone', 'ws-l', 'project-c'),
 ];
+
+/** The fleet frame of a current server: each worker carries the run binding the server sends over RUNS (D-7182, C7d). */
+const FLEET: readonly FleetSession[] = withRunBinding(FLEET_ROWS, RUNS);
 
 /** ws-f's dispatch, spawning for 42 seconds: a pending child on project-b's card, with a readout to the second. */
 const SPAWNING = run(42, 'ws-f', null, 'project-b', {

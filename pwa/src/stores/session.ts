@@ -5,7 +5,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
-  PRESENCE_REFRESH_MS,
+  VIEWER_REFRESH_MS,
   SECRET_MASK,
   type AskPairing,
   type ChatEvent,
@@ -19,6 +19,7 @@ import {
 import type { WorkflowView } from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 
 /** A staged image handed to send(). The path is what the server/dispatch see;
  *  the preview URL is carried only so the optimistic bubble can render the
@@ -707,6 +708,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   let socket: ReconnectingSocket | null = null;
   /** The presence heartbeat's timer — see `beat` below. */
   let heartbeat: ReturnType<typeof setInterval> | null = null;
+  // The page clock's stops for this connection's subscriptions (D-7191): visible, hidden and online.
+  let stopPageClock: (() => void)[] = [];
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -775,7 +778,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
     /**
      * Tell the server whether this session is on the operator's screen, so it
-     * can suppress notifications for it (`server/src/presence.ts`, read by the
+     * can suppress notifications for it (`server/src/viewer.ts`, read by the
      * watcher's `pushOne`). A notification for the pane you are looking at
      * teaches you to dismiss notifications.
      *
@@ -798,8 +801,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
      * whenever no close frame arrives — a phone in a lift or a tunnel sends no
      * FIN — and every notification for this session would then be suppressed
      * for a viewer who is long gone, indefinitely. So the server expires a
-     * claim it has not heard for `PRESENCE_TTL_MS` and this re-states it every
-     * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
+     * claim it has not heard for `VIEWER_TTL_MS` and this re-states it every
+     * `VIEWER_REFRESH_MS` (three refreshes of slack, both defined together
      * in `shared/api.ts`).
      *
      * WHATEVER the visibility (D-5242's presence contract): the server also
@@ -915,14 +918,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           makeSocket: deps.makeSocket,
         });
         socket.start();
-        document.addEventListener('visibilitychange', onVisible);
-        window.addEventListener('online', nudge);
-        heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
+        stopPageClock = [onPageVisible(onVisible), onPageHidden(onVisible), onOnline(nudge)];
+        heartbeat ??= setInterval(beat, VIEWER_REFRESH_MS);
       },
 
       disconnect() {
-        document.removeEventListener('visibilitychange', onVisible);
-        window.removeEventListener('online', nudge);
+        for (const stop of stopPageClock) stop();
+        stopPageClock = [];
         if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
         // Say so before the socket goes: leaving the session screen means the
         // operator is no longer looking at it, and a close alone would let the

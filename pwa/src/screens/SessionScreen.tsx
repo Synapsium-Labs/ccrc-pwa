@@ -19,6 +19,7 @@ import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
+import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
@@ -30,6 +31,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
+import { ensureSession, useEnsure } from '../session/useEnsure';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
@@ -110,8 +112,8 @@ export function useWakeOnOpen(
 
   useEffect(() => {
     const onChange = (): void => { setVisible(document.visibilityState === 'visible'); };
-    document.addEventListener('visibilitychange', onChange);
-    return () => document.removeEventListener('visibilitychange', onChange);
+    const stops = [onPageVisible(onChange), onPageHidden(onChange)];
+    return () => { for (const stop of stops) stop(); };
   }, []);
 
   // One screen per id: a screen re-pointed at another session starts that session's wake from scratch.
@@ -121,7 +123,7 @@ export function useWakeOnOpen(
   // `pending`, and a failure toast's Wake checks before it calls.
   const wake = useCallback((): void => {
     set('pending');
-    api.ensure(id).then(
+    ensureSession(id).then(
       // A row still asleep stays `sent` (nothing more until it reads alive); a row that already reads alive
       // re-arms here, since the effect below skipped it while the call was out.
       () => { if (phase.current === 'pending') set(asleepRef.current ? 'sent' : 'armed'); },
@@ -214,7 +216,7 @@ export function SessionScreen({
   const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
 
   const kbInset = useKeyboardInsets();
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [terminalOpen, setTerminalOpen] = useState(false);
   // D-286 (was D-B4-13)'s nonce. Bumped by the transcript's one `Answer` control; read by
   // `DialogSheet` to clear a dismissal the reader had made. It carries no
@@ -405,17 +407,8 @@ export function SessionScreen({
   const { asleepAt, waking, pending: wakePending, wake } = useWakeOnOpen(id, live, fault);
   const asleep = asleepAt !== null;
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(id);
-    } catch (err) {
-      toast(`Couldn't restart — ${err instanceof Error ? err.message : String(err)}`, 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  const restart = (): Promise<void> =>
+    ensureNow(id, (err) => `Couldn't restart — ${err instanceof Error ? err.message : String(err)}`);
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
   // quietly; anything else is a real failure. `background-only` (D-5236): the

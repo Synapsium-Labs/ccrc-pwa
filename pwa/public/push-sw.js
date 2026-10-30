@@ -6,14 +6,15 @@
 
 // ccrc:generated answer-lifecycle BEGIN
 // Rendered by pwa/test/answerRegion.ts from pwa/src/session/answerLifecycle.ts#ASK_REQUEST and
-// pwa/src/lib/refusalWords.ts#NOTIFICATION_REFUSAL_TEXT; push-sw.test.ts holds it byte-equal. Never edit it by hand:
-// change the source, then run `CCRC_WRITE_ANSWER_REGION=1 npx vitest run test/push-sw.test.ts` in pwa/.
+// pwa/src/lib/refusalWords.ts; push-sw.test.ts holds it byte-equal.
+// Never edit it by hand: change the source, then run `CCRC_WRITE_ANSWER_REGION=1 npx vitest run test/push-sw.test.ts`
+// in pwa/.
 
 /**
- * One sentence per refusal `POST /api/sessions/:id/ask` can return, rendered beside the code that shows them because
- * the operator reads them with no app open and no way to ask a follow-up question. The table and why its set is the
- * route's own union are in `refusalWords.ts#NOTIFICATION_REFUSAL_TEXT`. An unlisted token falls back to the generic
- * sentence rather than showing the operator a bare error code.
+ * One sentence per refusal the answer's door can return, rendered beside the code that shows them because the operator
+ * reads them with no app open and no way to ask a follow-up question. The tables and why their set is the route's own
+ * union are in `refusalWords.ts#NOTIFICATION_REFUSAL_TEXT` and `#NOTIFICATION_QUESTION_DOOR_TEXT`. An unlisted token
+ * falls back to the generic sentence rather than showing the operator a bare error code.
  */
 const REFUSAL = {
   'stale-ask': 'That question is gone.',
@@ -27,22 +28,30 @@ const REFUSAL = {
   'menu-mismatch': 'The terminal is showing something else now.',
   'not-alive': 'That session is no longer running.',
   'unknown-session': 'That session is gone.',
+  'kind-mismatch': 'That answer didn\'t fit this session\'s question — open the session.',
 };
 
 /**
- * The request the notification action "ask:<key>:<index>" sends for session `sessionId`, or null when the action is
- * not one (or there is no session): then nothing is sent and the app opens. The key is minted server-side and carried
- * verbatim; the index is a number, never derived from a label, because a relabelled or reordered option would then
- * silently answer a different question.
+ * The notification action "ask:<key>:<index>" for session `sessionId`, as the answer it sends, or null when the action
+ * is not one (or there is no session): then nothing is sent and the app opens. The key is minted server-side and
+ * carried verbatim; the index is a number, never derived from a label, because a relabelled or reordered option would
+ * then silently answer a different question.
  */
-function askRequestOf(action, sessionId) {
+function askOf(action, sessionId) {
   const m = /^ask:([^:]+):(\d+)$/.exec(action);
   if (m === null || sessionId === null) return null;
+  return { kind: 'ask', sessionId, askKey: m[1], optionIndexes: [Number(m[2])] };
+}
+
+/**
+ * The request that answers `ask`: the question door family's operator door and its body, the one door there is.
+ */
+function askRequestOf(ask) {
   return {
     method: 'POST',
-    path: '/api/sessions/' + encodeURIComponent(sessionId) + '/ask',
+    path: '/api/questions/' + encodeURIComponent('session-' + ask.sessionId) + '/answer',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ askKey: m[1], optionIndexes: [Number(m[2])] }),
+    body: JSON.stringify({ kind: ask.kind, askKey: ask.askKey, optionIndexes: ask.optionIndexes }),
   };
 }
 // ccrc:generated answer-lifecycle END
@@ -167,12 +176,12 @@ self.addEventListener('notificationclick', (event) => {
   const url = sameOriginPath(notification.data && notification.data.url)
     ?? (sid ? `/s/${encodeURIComponent(sid)}` : '/');
 
-  // "ask:<key>:<index>", read by the generated region's askRequestOf: the key
-  // is minted server-side and carried verbatim, and this worker never derives an
+  // "ask:<key>:<index>", read by the generated region's askOf: the key is
+  // minted server-side and carried verbatim, and this worker never derives an
   // index from a label, because a relabelled or reordered option would then
   // silently answer a different question.
-  const req = askRequestOf(action, sid);
-  if (req === null) {
+  const ask = askOf(action, sid);
+  if (ask === null) {
     notification.close();
     event.waitUntil(openApp(url));
     return;
@@ -180,6 +189,9 @@ self.addEventListener('notificationclick', (event) => {
 
   notification.close();
   event.waitUntil((async () => {
+    // The door: the question family's operator door, the only one (W7 C7p
+    // retired the old /ask and the /health read that chose between them).
+    const req = askRequestOf(ask);
     let res;
     try {
       res = await fetch(req.path, { method: req.method, headers: req.headers, body: req.body });

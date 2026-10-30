@@ -4,11 +4,10 @@
 // command palette" (D-5469: a door runs a command, so the search door needs
 // one); S2d adds the session's (`SESSION_COMMANDS`, D-5466).
 import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
-import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
-import { groupFleet } from '../fleet/groupFleet';
-import { nestFleet } from '../fleet/nestFleet';
-import { isRunClosed, runCard } from '../fleet/runWords';
-import { matchRoute, ROUTES } from '../lib/routes';
+import type { FleetSession, RunSummary } from '../../../shared/api';
+import { fleetTree } from '../fleet/fleetTree';
+import { isRunClosed } from '../fleet/runWords';
+import { matchRoute, ROUTES, sessionPath } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 import { sessionEntries } from './sessionEntries';
 
@@ -35,20 +34,20 @@ export const GO_TO: readonly { id: string; title: string; path: string; chord?: 
   return parent === null ? [] : [{ id: `go-${r.id}`, title: `Go to ${parent.title} › ${r.title}`, path: r.path }];
 });
 
-/** The fleet in the order the fleet screen draws it: its cards in
- *  `groupFleet`'s order (which sorts with `sortFleet`), and each card's rows
- *  in `nestFleet`'s, a run's worker under its owner. The pending dispatch rows
- *  carry no session, so they are not stops. `]` and `[` walk this list, and
- *  "Open session…" lists it, so neither invents an order of its own. */
+/** The fleet in the order the fleet screen draws it: the fleet tree's
+ *  (`fleetTree`, D-7182), its cards in `groupFleet`'s order (which sorts with
+ *  `sortFleet`) and each card's rows in `nestFleet`'s, a run's bound worker
+ *  under its owner. It calls the tree rather than re-composing it, so the
+ *  palette's order and the cards cannot drift. The pending dispatch rows carry
+ *  no session, so they are not stops. `]` and `[` walk this list, and "Open
+ *  session…" lists it, so neither invents an order of its own. */
 export function fleetOrder(
   sessions: readonly FleetSession[],
   runs: readonly RunSummary[],
 ): FleetSession[] {
-  const cardOf = new Map(sessions.map((s) => [s.id, boardHome(s)] as const));
   const active = runs.filter((r) => !isRunClosed(r));
-  return groupFleet([...sessions], []).flatMap((g) =>
-    nestFleet(g.sessions, active.filter((r) => runCard(r, cardOf) === g.project))
-      .flatMap((row) => (row.kind === 'session' ? [row.session] : [])));
+  return fleetTree([...sessions], [], active).flatMap((g) =>
+    g.rows.flatMap((row) => (row.kind === 'session' ? [row.session] : [])));
 }
 
 /** The session the path names, or null off a session screen. */
@@ -67,7 +66,7 @@ export function stepSession(ctx: CommandContext, step: 1 | -1): void {
   const next = at < 0
     ? (step > 0 ? 0 : list.length - 1)
     : (at + step + list.length) % list.length;
-  ctx.navigate(`/s/${encodeURIComponent(list[next]!.id)}`);
+  ctx.navigate(sessionPath(list[next]!.id));
 }
 
 /** The session's commands (W2 Task S2d, D-5466): the ⋯ menu's items on the base, plus the two header doors that

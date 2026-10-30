@@ -199,8 +199,8 @@ function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[
   return bin;
 }
 
-/** What the pair installer publishes for the tree's ccd: its three pin placeholders rendered to the digests of the
- *  tree's library (D-6913) and of the docs redactor's two `shared/` files (D-7077), then its line-2 placeholder swapped, in
+/** What the pair installer publishes for the tree's ccd: its four pin placeholders rendered to the digests of the
+ *  tree's two libraries (D-6913, D-7463) and of the docs redactor's two `shared/` files (D-7077), then its line-2 placeholder swapped, in
  *  place, for the marker `markGenerated` writes (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
 const stampedCcd = (dir: string): Buffer => {
   const digestOf = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
@@ -208,7 +208,8 @@ const stampedCcd = (dir: string): Buffer => {
   const lines = readFileSync(path.join(dir, 'ccd'), 'utf8')
     .replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact.mjs'))}`)
     .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact-cli.mjs'))}`)
-    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`).split('\n');
+    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`)
+    .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${digestOf(path.join(dir, 'lib', 'train-proof.sh'))}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return Buffer.from(markGenerated(lines.join('\n')));
 };
@@ -1763,6 +1764,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const rsyncAt = deploySh.indexOf('agent shared deploy ccd "$BOX":ccrc/');
     for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;',
       'cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh;',
+      'cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh;',
       // The docs redactor's two files (D-7077), in the library's guarded form.
       'cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs;',
       'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;']) {
@@ -1783,9 +1785,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       const home = mkTmp('ccrc-agent-ccdpair-');
       mkdirSync(path.join(home, 'ccrc', 'ccd'), { recursive: true });
       for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
-      // The library the body pins and the publisher places first (D-6913).
+      // The libraries the body pins and the publisher places first (D-6913, D-7463).
       mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
-      cpSync(path.join(repoCcd, 'lib', 'disk-retention.sh'), path.join(home, 'ccrc', 'ccd', 'lib', 'disk-retention.sh'));
+      for (const f of ['disk-retention.sh', 'train-proof.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
       // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
       mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
       for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
@@ -1803,6 +1805,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(out.indexOf('body published'), 'body before the launcher, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
       expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'disk-retention.sh'))),
         'the library is the tree\'s').toBe(true);
+      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'train-proof.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'train-proof.sh'))),
+        'the second library is the tree\'s').toBe(true);
       const entry = path.join(home, '.local', 'bin', 'ccd');
       const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;

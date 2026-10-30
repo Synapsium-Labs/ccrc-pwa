@@ -17,7 +17,7 @@
 //   (c) the rejection rows (D-7226): `propagate` readers reject the executor (no notice, no effect) and land in the
 //       caller's own sentence; `judged` readers answer their step's sentence;
 //   (d) child-spent's three `gone` sources (D-7230);
-//   (e) the held-at-the-act rows, and today's gap (child-spent's `reclaim-paused` read once, at 2b);
+//   (e) the held-at-the-act rows (child-spent's `reclaim-paused` re-read at step 6 since C4o, D-7401);
 //   (f) temp-orphan's synchronous tail (two probes);
 //   (g) the collector's call order;
 //   (h) the side-effect rows (D-7199);
@@ -171,6 +171,16 @@ const childRig = async (o: ChildOpts = {}) => {
       if (what === 'reject') throw new Error('EIO: the registry listing failed');
       if (what === 'null') return null;
       return base.io.readdir(p, timeoutMs, signal);
+    },
+    // Step 6's listing is the measured one (D-5969): it counts in the same registry-listing sequence as the plain ones.
+    async readdirMeasured(p: string, timeoutMs?: number, signal?: AbortSignal) {
+      if (p !== reg) return base.io.readdirMeasured(p, timeoutMs, signal);
+      listings += 1;
+      spy.log.push('readdirMeasured');
+      const what = hooks.listing?.(listings);
+      if (what === 'reject') throw new Error('EIO: the registry listing failed');
+      if (what === 'null') return { ok: false, reason: 'unreadable' };
+      return base.io.readdirMeasured(p, timeoutMs, signal);
     },
     async readFileMeasured(p: string, timeoutMs?: number, signal?: AbortSignal) {
       if (p === path.join(reg, `${KID}.generation`)) {
@@ -337,10 +347,11 @@ describe('child-spent (reclaimChild): the step matrix (C4h a)', () => {
     expect(await childReclaimPauseRead({ readdir: async () => [RECLAIM_PAUSE_MARKER] }, '/fixture/reg')).toBe('set');
   });
 
-  it('child-spent: the listing count of a clean pass is four plain readdirs (record, pause, disabled, disabled at the act)', async () => {
+  it('child-spent: the listing count of a clean pass is three plain readdirs (record, pause, disabled) and the act\'s one measured listing', async () => {
     const k = await childRig();
     expect(await reclaimChild(k.deps, k.req)).toMatchObject({ kind: 'reclaimed' });
-    expect(spy.log.filter((l) => l === 'readdir')).toHaveLength(4);
+    expect(spy.log.filter((l) => l === 'readdir' || l === 'readdirMeasured'))
+      .toEqual(['readdir', 'readdir', 'readdir', 'readdirMeasured']);
   });
 
   it('child-spent: the defer words are the ladder\'s own vocabulary', () => {
@@ -530,12 +541,23 @@ describe('child-spent (reclaimChild): rejections, gone, the act, effects, argv a
     expect(notifySpy.mock.calls.map((c) => c[1].title)).toEqual(['child reclaim deferred']);
   });
 
-  it("child-spent: TODAY'S GAP — reclaim-paused clean at 2b and raised from the next listing on still reaches the ws-reclaim argv (C4o flips this row)", async () => {
+  it('child-spent: held at the act — reclaim-paused clean at 2b and raised from the next listing on composes no ws-reclaim (C4o flipped this row, D-7401)', async () => {
+    // Before C4o the server composed ws-reclaim here and folded ccd's in-lock `paused` refusal; ccd's answer is still
+    // scripted, so a server that reached the argv again would read it.
     const k = await childRig();
     k.hooks.audit = () => { k.raise(RECLAIM_PAUSE_MARKER); };
     k.answers.act = () => k.actDoc({ refused: 'paused', detail: 'reclaim-paused is raised' });
-    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused', 'reclaim-paused is raised'));
-    expect(k.argvs).toEqual([KAUDIT, kAct(k.runId)]);
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused-at-server',
+      'reclaim-paused is raised: automatic reclamation is paused fleet-wide at the act'));
+    expect(k.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: an unmeasurable listing at step 6 still answers the child-reclaim-disabled sentence', async () => {
+    const k = await childRig();
+    k.hooks.listing = (n) => (n === 4 ? 'null' : undefined);
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused-at-server',
+      'the registry did not list, so a set child-reclaim-disabled cannot be ruled out at the act'));
+    expect(k.argvs).toEqual([KAUDIT]);
   });
 
   it('child-spent: the stale arm needs its own capability, and its flags ride both argvs', async () => {
@@ -1347,10 +1369,11 @@ describe('the difference table (C4h b; plan item 2 and item 16)', () => {
     expect([by('temp-orphan', 'propagate'), by('temp-orphan', 'judged')]).toEqual([4, 4]);
   });
 
-  it('the listing mode: child-spent takes plain readdirs, one per marker; the other two ONE measured listing per read', async () => {
+  it('the listing mode: child-spent takes plain readdirs at decide, one per marker, and one measured listing at the act; the other two ONE measured listing per read', async () => {
     const k = await childRig();
     await reclaimChild(k.deps, k.req);
-    expect(spy.log.filter((l) => l === 'readdir')).toHaveLength(4);
+    expect(spy.log.filter((l) => l === 'readdir' || l === 'readdirMeasured'))
+      .toEqual(['readdir', 'readdir', 'readdir', 'readdirMeasured']);
     spy.log.length = 0;
     const x = await expiryRig();
     await expireArchived(x.deps, x.req);
@@ -1533,7 +1556,7 @@ describe('the close route (C4h k; D-7228)', () => {
 // for byte), and a `need` sequence whose reads, as the rig records them, are the executor's reads in the executor's
 // order up to its act. A row that answers `{ act: true }` must stand where the executor composed its verb.
 import {
-  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_VIEWER_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
   decideRetire, type RetireDecision, type RetireFactSet, type RetireReason, type RetireReasonName, type RetireStep,
 } from '../src/retire.js';
 import {
@@ -1542,7 +1565,10 @@ import {
 } from '../src/coord/childReclaim.js';
 import { readSessionRecord } from '../src/registry.js';
 import { readChildSiblings } from '../src/coord/siblingRead.js';
-import { CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledSentence } from '../src/coord/childReclaimDisabled.js';
+import {
+  CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledSentence,
+} from '../src/coord/childReclaimDisabled.js';
+import { readSwitches } from '../../shared/switches.js';
 import { ARCHIVE_EXPIRED_RETIRE, readExpiryStore, type ArchiveExpiredFacts, type ExpireArchivedRequest } from '../src/coord/expireArchived.js';
 import { parseExpireAudit } from '../src/archivedExpiry.js';
 import {
@@ -1627,6 +1653,18 @@ const childDisabledDetail = async (k: ChildRig, when: string): Promise<string | 
   if (state === 'set') return childReclaimDisabledSentence(when);
   return state === 'clear' ? null : `${CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE}${when}`;
 };
+/** Step 6's two readings of its one measured listing: both markers, or both the rejection. */
+const childActSwitches = async (k: ChildRig) => {
+  let names: readonly string[] | null;
+  try {
+    const listed = await k.deps.io.readdirMeasured(k.deps.cfg.registryDir);
+    names = listed.ok ? listed.entries : null;
+  } catch (err) {
+    const rejected = new RetireRejected(err);
+    return { pause: rejected, disabled: rejected };
+  }
+  return { pause: readSwitches(names)[RECLAIM_PAUSE_MARKER], disabled: childReclaimDisabledOf(names) };
+};
 const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
   const { deps, req } = k;
   const now = (): number => (deps.now ?? Date.now)();
@@ -1646,7 +1684,7 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
     [RETIRE_STEPS.offSwitch]: () => childDisabledDetail(k, ''),
     [RETIRE_STEPS.generation]: () => (req.licenceGeneration.kind === 'none' ? null
       : childReclaimGenerationRead(deps.io, deps.cfg.registryDir, req.sessionId)),
-    [RETIRE_STEPS.presence]: () => !req.deferExpired && deps.viewers?.isVisible(req.sessionId) === true,
+    [RETIRE_STEPS.viewer]: () => !req.deferExpired && deps.viewers?.isVisible(req.sessionId) === true,
     [RETIRE_STEPS.capability]: () => [ccdCan(deps.fleetState, 'wsReclaim'),
       req.stale === undefined || capSupported(deps.fleetState, RECLAIM_STALE_CAP)],
     [RETIRE_STEPS.audit]: async () => {
@@ -1660,10 +1698,10 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
     [RETIRE_STEPS.auditVerdict]: () => true,
     [RETIRE_STEPS.markerMatch]: () => true,
     [RETIRE_STEPS.auditGeneration]: () => true,
-    [RETIRE_STEPS.offSwitchLast]: () => childDisabledDetail(k, ' at the act'),
+    [RETIRE_STEPS.offSwitchLast]: () => childActSwitches(k),
   };
 };
-const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
+const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'readdirMeasured' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
   || l.startsWith('argv:');
 /** The executor on one rig and the decider on its twin, each rig built by `make`: both outcomes, both read logs (each
  *  up to the act's argv). */
@@ -1721,10 +1759,10 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     // The rule itself, over facts: a person looking defers a request below its ceiling and passes one past it.
     const k = await childRig();
     const facts = (await drive(CHILD_SPENT_RETIRE, k.req, childReaders(k))).facts;
-    const seen = { ...facts, [RETIRE_STEPS.presence]: true } as ChildSpentFacts;
+    const seen = { ...facts, [RETIRE_STEPS.viewer]: true } as ChildSpentFacts;
     expect(decideRetire(seen, CHILD_SPENT_RETIRE, k.req)).toEqual({ outcome: deferredC(k, 'presence', 'someone is viewing this session') });
     expect(decideRetire(seen, CHILD_SPENT_RETIRE, { ...k.req, deferExpired: true })).toEqual({ act: true });
-    expect(CHILD_SPENT_RETIRE.presence).toBe(RETIRE_PRESENCE_RULES.untilCeiling);
+    expect(CHILD_SPENT_RETIRE.viewer).toBe(RETIRE_VIEWER_RULES.untilCeiling);
   });
 
   it('child-spent: a raised pause says automatic reclamation is paused', async () => {
@@ -1770,7 +1808,7 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     const k = await childRig();
     const facts = (await drive(CHILD_SPENT_RETIRE, k.req, childReaders(k))).facts;
     const boom = new Error('EIO: presence lost');
-    expect(() => decideRetire({ ...facts, [RETIRE_STEPS.presence]: new RetireRejected(boom) } as unknown as ChildSpentFacts, CHILD_SPENT_RETIRE, k.req)).toThrow(boom);
+    expect(() => decideRetire({ ...facts, [RETIRE_STEPS.viewer]: new RetireRejected(boom) } as unknown as ChildSpentFacts, CHILD_SPENT_RETIRE, k.req)).toThrow(boom);
   });
 
   it('child-spent: gone has three sources — the record step, the audit\'s verdict and the act — and the gate answers the first two', async () => {
@@ -1784,7 +1822,7 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     expect(act.dec.ok && act.dec.d.decision, 'the act\'s own refusal is the act\'s, past the gate').toEqual({ act: true });
   });
 
-  it('child-spent: held at the act — the off switch at the act, the audit\'s generation, and today\'s gap (reclaim-paused read once)', async () => {
+  it('child-spent: held at the act — the off switch at the act, the audit\'s generation, and reclaim-paused at the act (C4o, D-7401)', async () => {
     const off = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(CHILD_RECLAIM_DISABLED_MARKER); }; });
     expect(off.outcome).toEqual(deferredC(off.b, 'paused-at-server', 'child-reclaim-disabled is set at the act: child reclaim is switched off'));
     const gen = await childRow({ licence: 'g1' }, (k) => {
@@ -1793,7 +1831,8 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     });
     expect(gen.outcome).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
     const gap = await childRow(undefined, (k) => { k.hooks.audit = () => { k.raise(RECLAIM_PAUSE_MARKER); }; });
-    expect(gap.dec.ok && gap.dec.d.decision, 'C4o flips this row').toEqual({ act: true });
+    expect(gap.outcome, 'C4o flipped this row').toEqual(deferredC(gap.b, 'paused-at-server',
+      'reclaim-paused is raised: automatic reclamation is paused fleet-wide at the act'));
     const stale = await childRow({ stale: true }, () => {});
     expect(stale.dec.ok && stale.dec.d.decision).toEqual({ act: true });
   });
@@ -1830,7 +1869,7 @@ const expiryReaders = (x: ExpiryRig): Readers<ArchiveExpiredFacts> => {
       req.childOf === undefined || capSupported(deps.fleetState, EXPIRE_CHILD_CAP)],
     [RETIRE_STEPS.switches]: () => expirySwitchesOf(x),
     [RETIRE_STEPS.store]: () => readExpiryStore(deps.coord, req.sessionId, req.childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null }),
-    [RETIRE_STEPS.presence]: () => deps.viewers?.isVisible(req.sessionId) === true,
+    [RETIRE_STEPS.viewer]: () => deps.viewers?.isVisible(req.sessionId) === true,
     [RETIRE_STEPS.audit]: async () => {
       const argv = CCD_ARGV.wsExpireAudit(req.sessionId, req.childOf);
       if (!ccdCan(deps.fleetState, 'wsExpireAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
@@ -1890,7 +1929,7 @@ describe('decideRetire: archive-expired over C4h\'s matrix (C4i; D-7166)', () =>
 
   it('archive-expired: presence defers with no ceiling (decider suite)', async () => {
     expect((await expiryRow(undefined, (x) => { x.see(true); })).outcome).toMatchObject({ kind: 'deferred', why: 'presence' });
-    expect(ARCHIVE_EXPIRED_RETIRE.presence).toBe(RETIRE_PRESENCE_RULES.noCeiling);
+    expect(ARCHIVE_EXPIRED_RETIRE.viewer).toBe(RETIRE_VIEWER_RULES.noCeiling);
   });
 
   it('archive-expired: an unlistable registry names its reason (decider suite)', async () => {
@@ -1982,7 +2021,7 @@ const collectReaders = (d: CollectTempRootDeps, job: CollectJob): Readers<TempOr
       collectLooseHexOf(job.id) === null || (ccdCan(d.fleetState, 'wsCollectLoose') && ccdCan(d.fleetState, 'wsCollectLooseAudit'))],
     [RETIRE_STEPS.id]: () => collectLooseHexOf(job.id),
     [RETIRE_STEPS.switches]: () => collectSwitches(d.io, d.cfg.registryDir),
-    [RETIRE_STEPS.presence]: () => d.viewers?.isVisible(job.id) === true,
+    [RETIRE_STEPS.viewer]: () => d.viewers?.isVisible(job.id) === true,
     [RETIRE_STEPS.audit]: () => collectAskedOf(d, job.id),
     [RETIRE_STEPS.staleGeneration]: () => d.lane.generations(job.id),
     [RETIRE_STEPS.auditVerdict]: () => true,
@@ -2012,7 +2051,7 @@ const collectReaders = (d: CollectTempRootDeps, job: CollectJob): Readers<TempOr
     [RETIRE_STEPS.flip]: (f) => d.lane.flipped(f[RETIRE_STEPS.lane] as CollectLaneSettled),
     [RETIRE_STEPS.safety]: () => true,
     [RETIRE_STEPS.licenceStands]: () => ({ generations: d.lane.generations(job.id), observation: d.lane.observation(job.id) }),
-    [RETIRE_STEPS.presenceLast]: () => d.viewers?.isVisible(job.id) === true,
+    [RETIRE_STEPS.viewerLast]: () => d.viewers?.isVisible(job.id) === true,
     [RETIRE_STEPS.holdLast]: (f) => collectOpenRunHold(d.coord, job.id, doc(f).value),
     [RETIRE_STEPS.live]: () => true,
     [RETIRE_STEPS.looseMarker]: () => ccdCan(d.fleetState, 'wsCollectLoose'),
@@ -2162,10 +2201,10 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
   const ROWS = [CHILD_SPENT_RETIRE, ARCHIVE_EXPIRED_RETIRE, TEMP_ORPHAN_RETIRE] as unknown as readonly RetireReason<never, RetireFactSet, unknown>[];
 
   it('each row names its reason, its listing mode, its presence rule and its notice home', () => {
-    expect(ROWS.map((r) => [r.name, r.listing, r.presence, r.notice])).toEqual([
-      [RETIRE_REASON_NAMES.childSpent, RETIRE_LISTING_MODES.plainPerMarker, RETIRE_PRESENCE_RULES.untilCeiling, RETIRE_NOTICE_HOMES.executor],
-      [RETIRE_REASON_NAMES.archiveExpired, RETIRE_LISTING_MODES.measuredOnce, RETIRE_PRESENCE_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
-      [RETIRE_REASON_NAMES.tempOrphan, RETIRE_LISTING_MODES.measuredOnce, RETIRE_PRESENCE_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
+    expect(ROWS.map((r) => [r.name, r.listing, r.viewer, r.notice])).toEqual([
+      [RETIRE_REASON_NAMES.childSpent, RETIRE_LISTING_MODES.plainPerMarker, RETIRE_VIEWER_RULES.untilCeiling, RETIRE_NOTICE_HOMES.executor],
+      [RETIRE_REASON_NAMES.archiveExpired, RETIRE_LISTING_MODES.measuredOnce, RETIRE_VIEWER_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
+      [RETIRE_REASON_NAMES.tempOrphan, RETIRE_LISTING_MODES.measuredOnce, RETIRE_VIEWER_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
     ]);
   });
 
@@ -2235,7 +2274,7 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
   });
 
   it('a step whose fact is missing is the step asked for: no fact is read out of order', () => {
-    const later = { [RETIRE_STEPS.presence]: false, [RETIRE_STEPS.capability]: [true, true] } as ChildSpentFacts;
+    const later = { [RETIRE_STEPS.viewer]: false, [RETIRE_STEPS.capability]: [true, true] } as ChildSpentFacts;
     expect(decideRetire(later, CHILD_SPENT_RETIRE, {} as ChildReclaimRequest)).toEqual({ need: RETIRE_STEPS.record });
   });
 
@@ -2260,7 +2299,7 @@ type LaneAFact = string | RetireRejected | null;
 interface LaneAFacts {
   readonly [RETIRE_STEPS.id]?: LaneAFact;
   readonly [RETIRE_STEPS.switches]?: LaneAFact;
-  readonly [RETIRE_STEPS.presence]?: LaneAFact;
+  readonly [RETIRE_STEPS.viewer]?: LaneAFact;
   readonly [RETIRE_STEPS.audit]?: LaneAFact;
   readonly [RETIRE_STEPS.switchesLast]?: LaneAFact;
   readonly [RETIRE_STEPS.latch]?: LaneAFact;
@@ -2272,7 +2311,7 @@ interface LaneAReq { readonly sessionId: string }
 type LaneARead = { readonly kind: 'value'; readonly v: string | null } | { readonly kind: 'async'; readonly v: string | null }
   | { readonly kind: 'reject'; readonly err: Error } | { readonly kind: 'throw'; readonly err: Error };
 
-const LANE_A_DECIDE: readonly LaneAStep[] = [RETIRE_STEPS.id, RETIRE_STEPS.switches, RETIRE_STEPS.presence];
+const LANE_A_DECIDE: readonly LaneAStep[] = [RETIRE_STEPS.id, RETIRE_STEPS.switches, RETIRE_STEPS.viewer];
 const LANE_A_ACT: readonly LaneAStep[] = [RETIRE_STEPS.switchesLast, RETIRE_STEPS.latch, RETIRE_STEPS.lane];
 const LANE_A_STEPS: readonly LaneAStep[] = [...LANE_A_DECIDE, RETIRE_STEPS.audit, ...LANE_A_ACT];
 /** The fixture row's async steps: the switches, the audit and the last switches. Every other step is `sync`. */
@@ -2300,7 +2339,7 @@ const laneARow = (o: {
     audit: spec(RETIRE_STEPS.audit) as RetireStepSpec & { readonly step: typeof RETIRE_STEPS.audit },
     act: LANE_A_ACT.map(spec),
     listing: RETIRE_LISTING_MODES.measuredOnce,
-    presence: RETIRE_PRESENCE_RULES.noCeiling,
+    viewer: RETIRE_VIEWER_RULES.noCeiling,
     notice: o.notice ?? RETIRE_NOTICE_HOMES.executor,
     judge: judge as RetireReason<LaneAReq, LaneAFacts, string>['judge'],
     evidence: [],
@@ -2409,7 +2448,7 @@ describe('retireAct: the one executor loop over fixture rows (C4j; D-7167)', () 
   });
 
   it('a throwing synchronous reader behaves as a rejecting one of its mode', async () => {
-    for (const at of [RETIRE_STEPS.id, RETIRE_STEPS.presence, RETIRE_STEPS.lane] as const) {
+    for (const at of [RETIRE_STEPS.id, RETIRE_STEPS.viewer, RETIRE_STEPS.lane] as const) {
       const err = new Error(`${at} threw`);
       const judged = laneAPort({ reads: { [at]: { kind: 'throw', err } } });
       const out = `lane-a ${at}: rejected (${at} threw)`;
@@ -2449,7 +2488,7 @@ describe('retireAct: the one executor loop over fixture rows (C4j; D-7167)', () 
   });
 
   it('a reader\'s effect runs once, only for a step the decider asked for', async () => {
-    const t = laneAPort({ reads: { [RETIRE_STEPS.presence]: { kind: 'value', v: 'stop' } } });
+    const t = laneAPort({ reads: { [RETIRE_STEPS.viewer]: { kind: 'value', v: 'stop' } } });
     await retireAct(t.port, laneARow(), LANE_A_REQ);
     const effects = t.log.filter((l) => l.startsWith('effect:'));
     expect(effects).toEqual(['effect:id', 'effect:switches', 'effect:presence']);

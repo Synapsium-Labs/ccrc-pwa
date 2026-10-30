@@ -21,7 +21,9 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, thirty-one rows, and nothing else.
+#   * The route comes from ROUTES below, thirty-one rows, and nothing else; four
+#     of them name a second template, the question door family's, sent only
+#     while the server advertises `questions-v1` (D-7326).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -57,7 +59,10 @@
 #
 # SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
 # shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
-# copy at ~/.local/bin would be dead on every box.
+# copy at ~/.local/bin would be dead on every box. The GENERATED SERVER-CAP
+# READER region below is a byte copy of the hook's `_hook_server_cap`, renamed
+# `_api_server_cap` (D-7321), never a `source`; regenerate it with
+# `ccrc restamp ccd/ccrc-api`.
 set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
@@ -77,6 +82,9 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
+# The four claimant rows carry a fifth field, the question door family's
+# template (D-7325), sent in place of the path only while the server advertises
+# `questions-v1`; every other row has four.
 # Thirty-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
@@ -140,8 +148,8 @@ declare -A ROUTES=(
   # IS the ask's parent. Deriving here would read as a security boundary this
   # client cannot be — identity on this fleet is attribution, not authentication,
   # and every `.uuid` is readable by the one UNIX user these sessions share.
-  [asks.answer]='POST|/api/asks/{id}/answer|yes|-'
-  [asks.release]='POST|/api/asks/{id}/release|yes|-'
+  [asks.answer]='POST|/api/asks/{id}/answer|yes|-|/api/questions/ask-{id}/rule'
+  [asks.release]='POST|/api/asks/{id}/release|yes|-|/api/questions/ask-{id}/release'
   # The durable feed. `--program` filters through `feed_events.runId` and answers
   # one programme's events; without it the read is the whole box's, oldest-first.
   # An event that names no run is programless and appears only unfiltered.
@@ -165,10 +173,26 @@ declare -A ROUTES=(
   # there too: this grammar takes no positional word after the id (D-5489). `show` derives identity from the pane, as
   # `asks list` does, so a session reads only a row held for it. A CHILD's own tool call to any `approvals` row is
   # refused by its PreToolUse deny (plan Task 14), before this client runs.
-  [approvals.rule]='POST|/api/approvals/{id}/rule|yes|-'
-  [approvals.release]='POST|/api/approvals/{id}/release|yes|-'
+  [approvals.rule]='POST|/api/approvals/{id}/rule|yes|-|/api/questions/approval-{id}/rule'
+  [approvals.release]='POST|/api/approvals/{id}/release|yes|-|/api/questions/approval-{id}/release'
   [approvals.show]='GET|/api/approvals/{id}|yes|-'
 )
+
+# ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──
+# ccrc:generated 1 sha256=b13a129bd7002352be7dfc797c104d07461cf4b34ab6bc1d6cb6e2dde47e177a
+_api_server_cap() {
+  local want="$1" l1="" l2="" l3="" l4="" at now
+  { { IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && ! IFS= read -r l4; } < "$HOME/.ccrc/server-caps"; } 2>/dev/null || return 1
+  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0123456789]{1,11})$ ]] || return 1
+  at=$(( 10#${BASH_REMATCH[1]} ))
+  # The word class is spelled out, never a range: under a UTF-8 locale `a-z` may collate non-ASCII letters into it.
+  [[ "$l2" =~ ^caps(\ [abcdefghijklmnopqrstuvwxyz0123456789-]{1,64})*$ ]] || return 1
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  [[ "$now" =~ ^[0123456789]+$ ]] || return 1
+  (( at <= now && now - at <= 180 )) || return 1
+  [[ " ${l2#caps} " == *" $want "* ]]
+}
+# ── END GENERATED SERVER-CAP READER ──
 
 # Every refusal leaves by this door, in the SAME JSON envelope the routes
 # themselves use, so a caller never parses two shapes. The human sentence goes to
@@ -206,7 +230,7 @@ usage() {
     printf 'which a later release stops writing by default.\n\n'
     printf 'Closed table — no URL, host or path is an argument.\n\n'
     for k in $(printf '%s\n' "${!ROUTES[@]}" | sort); do
-      IFS='|' read -r m p _ q <<< "${ROUTES[$k]}"
+      IFS='|' read -r m p _ q _ <<< "${ROUTES[$k]}"
       [[ "$q" == '-' ]] && q='' || q="  [--${q//,/ | --}]"
       printf '  %-18s %-5s %s%s\n' "${k/./ }" "$m" "$p" "$q"
     done
@@ -375,8 +399,8 @@ main() {
   local key="$group.$verb"
   [[ -n "${ROUTES[$key]+set}" ]] || { usage; refuse 'unknown-verb' "no such verb: $group $verb"; }
 
-  local method tmpl needs qkeys
-  IFS='|' read -r method tmpl needs qkeys <<< "${ROUTES[$key]}"
+  local method tmpl needs qkeys family
+  IFS='|' read -r method tmpl needs qkeys family <<< "${ROUTES[$key]}"
 
   # A positional id, if this row declares one. It is read before the flags so an
   # id can never be mistaken for a flag value. The ONE row with a grammar of its own,
@@ -444,8 +468,9 @@ main() {
   # The intent row's body is the body `parse_intent` synthesized: never read from a file or stdin.
   [[ -z "$intent_body" ]] || body="$intent_body"
 
-  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites two more: the intent
-  # row's (above, replaced whole) and `runs.open`'s (below). Measured
+  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites three more: the intent
+  # row's (above, replaced whole), `runs.open`'s (below) and the claimant rows'
+  # `kind` (below, D-7322). Measured
   # 2026-09-02: at least 101 of this project's allocations already carry an empty
   # holder, because the documented body omits `byId` and the route stores
   # `byId ?? ''` — an omitted field and an explicit empty string reaching one
@@ -546,6 +571,37 @@ main() {
     # an unfiltered diagnostic read, so the bounded client fixes the held view
     # rather than exposing caller-selected state.
     query="parent=$DERIVED_ID&fromUuid=$DERIVED_UUID&state=held"
+  fi
+
+  # THE THIRD BODY FILL, and the one route this client may send two ways: the question door family (D-7322). The
+  # four claimant rows name the family's template as a fifth field (D-7325), and it is sent ONLY while the server
+  # advertises `questions-v1` in a current `~/.ccrc/server-caps` (D-7326), read by `_api_server_cap`, the generated
+  # copy of the hook's reader. A row with no family never opens that file: the test of `$family` comes first on the
+  # one line that calls the reader. Every unreadable, stale, torn, future or unlisted file reads as not advertised,
+  # and then the old row goes out exactly as before: the old doors stay on every server until they are retired.
+  # A 404 is never read as "no family": `unknown-ask` and `unknown-approval` are 404s too.
+  #
+  # The family reads its body by `kind`, so the kind is spliced in, and it is the ROW's, read from the template's
+  # `ask-` or `approval-` prefix, never from the caller. The `byId` fill's rules hold: a body that already names
+  # `"kind":` (the same textual test over a whitespace-stripped copy, with the same stated limits) is left alone, so a
+  # contrary kind reaches the server and is answered there; a bodyless call is sent as the kind alone, which both
+  # doors refuse alike; a body that is not a JSON object is refused here and nothing is sent.
+  if [[ -n "$family" ]] && _api_server_cap questions-v1; then
+    local qkind="${family#/api/questions/}"
+    qkind="${qkind%%-*}"
+    tmpl="$family"
+    if [[ -z "$body" ]]; then
+      body="{\"kind\":\"$qkind\"}"
+    else
+      local kb="${body//[[:space:]]/}"
+      [[ "$kb" == '{'* ]] || refuse 'bad-body' 'the body is not a JSON object; kind cannot be added'
+      case "$kb" in
+        *'"kind":'*) : ;;                    # the caller has spoken
+        *)
+          splice_body_field 'kind' "$qkind" \
+            'the body is not a JSON object; kind cannot be added' ;;
+      esac
+    fi
   fi
 
   local path url

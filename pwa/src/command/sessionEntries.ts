@@ -8,9 +8,10 @@
 // claimant. A coordinator (`coordinatorRole`, never a claim) ranks first on an equal match, then the other sessions,
 // then the exited ones.
 import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
-import { isRunClosed, programmeTitle } from '../fleet/runWords';
+import { claimedRunsOf, isRunClosed, programmeTitle } from '../fleet/runWords';
 import { COORDINATOR_WORD, coordinatorRole } from '../fleet/sessionFacts';
 import { sessionLabel } from '../fleet/sessionLabel';
+import { sessionPath } from '../lib/routes';
 import type { Command } from './registry';
 
 /** A coordinator's tier, any other session's, and an exited one's whatever its role. */
@@ -37,7 +38,7 @@ export function sessionEntries(
     const title = sessionLabel(s);
     const lead = coordinatorRole(s);
     const card = boardHome(s);
-    const programmes = open.filter((r) => r.claimedBy === s.id).flatMap((r) => [programmeTitle(r.program, open), r.program]);
+    const programmes = claimedRunsOf(open, s.id).flatMap((r) => [programmeTitle(r.program, open), r.program]);
     const terms = [s.name, s.workspace, s.branch, s.project, card === s.project ? null : card, ...programmes]
       .filter((t): t is string => typeof t === 'string' && t.trim() !== '');
     return {
@@ -48,7 +49,7 @@ export function sessionEntries(
       terms,
       tier: s.bucket === 'dead' ? TIER_EXITED : lead ? TIER_COORDINATOR : TIER_SESSION,
       searchOnly: where === 'top',
-      run: (c) => c.navigate(`/s/${encodeURIComponent(s.id)}`),
+      run: (c) => c.navigate(sessionPath(s.id)),
     };
   });
 }

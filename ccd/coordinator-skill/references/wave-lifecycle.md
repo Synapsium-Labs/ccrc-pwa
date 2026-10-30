@@ -429,6 +429,15 @@ when you re-measure it, and a brief, a ledger entry or a review note may cite
 the branch name and expect it to resolve. Releasing the hold (or closing every
 run naming the session) un-freezes it, and the next sweep may rename it then.
 
+**A brief for an opted-in project says so.** A brief for a project whose `$REG/landing/<project>/enabled` exists names
+the opt-in and the radar's base. The worker's clause 9 exception and the reviewer's clause 3 exception apply only
+where the brief says so, and a brief for any other project says nothing of them. Name the base in that brief as a
+ref name, `origin/<base>`, where `<base>` is the PR's base branch (`gh pr view <n> --json baseRefName`), and never as
+a sha. Before a PR exists, as in a first worker brief, `<base>` is the repository's default branch, read as a ref name
+with `gh repo view <owner/repo> --json defaultBranchRef -q .defaultBranchRef.name`. The radar walks against its conf's
+`base=`, which defaults to `main`; where the two differ, a merge the radar cannot place on its base gets today's answer
+(`stale-tip` or `stale-review`).
+
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
 and that injection is your next turn.
@@ -592,7 +601,10 @@ same, and shows as `absent`.
   (from `awaiting-review` ONLY — see above) — re-measured. Send it when a
   `status`/`wave-done` mail carries a claimed fingerprint (`{branchTip,
   prNumber, prPhase, handoffCommit}`). Submit that fingerprint **exactly as
-  the worker reported it** — never rebuild it by pairing a freshly re-measured
+  the worker reported it** (the one exception is the recorded head in §5:
+  while the same wave-done is still being answered after an advance answered
+  `verifiedHead`, the later advances and the close submit that `verifiedHead`
+  as both tips) — never rebuild it by pairing a freshly re-measured
   `branchTip` with the mail's ORIGINAL `handoffCommit`; see the
   `no-handoff-commit` row below for what that specific mix produces. Re-
   measuring locally first (read-only ccd is fine here: `ccd pr-state
@@ -618,6 +630,7 @@ same, and shows as `absent`.
 | `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
+| `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick, at most twice. Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
 
 **`pr-unmeasurable` has two causes, and they need different responses.** The
 server returns it both for a transient re-read failure (`detail` reads like
@@ -638,6 +651,11 @@ Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
 `answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
 this run's id — and leave the run alone. A stale `wave-done` must never
 settle a wave.
+
+**Except `lineage-unmeasured`.** The server has already mailed that answer to whoever sent the claim, under its own
+subject (`wave-done-unmeasured`, `wave-advance-unmeasured` or `review-done-unmeasured`), so send no
+`rejected: lineage-unmeasured` mail. The sender re-sends the same claim after the radar's next tick, at most twice, and
+you act only when it reports the answer.
 
 **Put `reject.detail` in that mail's body, verbatim.** The code alone is not
 always the whole message: `pr-unmeasurable` above means two different things —
@@ -740,6 +758,17 @@ an operator/DB act, not a client one — or address the mail with an explicit
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
 
+**The recorded head.** In §5 and §5b, `<handoffCommit>` is the recorded head: the advance answer's `verifiedHead` when
+present, otherwise the head the server's dequeue or merged brief prints. An advance answer with no `verifiedHead` means
+the claim you submitted was itself the verified head. On a project the operator opted in to the radar's lineage the
+recorded head can be the live tip rather than the tip the worker claimed, and it is the head every spelling below
+binds: the native-queue enqueue, the spent-producer arm and the MERGED proof. When an advance answered `verifiedHead`,
+every later advance of that run and its close that answer the same wave-done submit the worker's fingerprint with
+`branchTip` and `handoffCommit` both set to that `verifiedHead` (the server's own answer, not a fresh measurement), so
+the ordinary path verifies the head that is landing. That rule ends with the wave-done it answered: once the run goes
+back to `working` (a send-back, or a lost merge race recorded from `merging`) or a fresh `wave-done` arrives, submit
+the worker's fingerprint exactly as the worker reports it.
+
 1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.
@@ -767,7 +796,14 @@ whole time, which is the only prevention this ordering rule buys.
    terminal state, never merge. Here, with no cross-project `producerSha` to
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
-   MERGED with `headRefOid` equal to it — the coordinator lands every PR with
+   MERGED with `headRefOid` equal to it, or CLOSED with `headRefOid` equal to it
+   and `landedInTrain: true` on the PR's row of `ccd pr-state --session
+   <sessionId>` (a merge train landed its work through a train PR and closed
+   it; ccd sets it only when that train PR is MERGED and its record lists the
+   PR at exactly this head, so a label alone reads `trainUnproven`, or
+   `trainUnread` while ccd has not read the train record yet — read again
+   later, never treat either as merged — and you never name a label) — the
+   coordinator lands every PR with
    `--match-head-commit <handoffCommit>`, by the route §5b reads from the
    repository's own rules, for exactly this reason (`--admin` and GitHub API
    merge or enqueue calls are governed by the repository's external policy
@@ -832,14 +868,16 @@ whole time, which is the only prevention this ordering rule buys.
    is IN the queue before you rely on the server:
    `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
    gives one of four answers. A queued PR answers a non-null
-   `mergeQueueEntry`, the success answer. A `state` of `MERGED` means it
-   already landed: wait for or prove `merged:#<pr>`, and never disarm — a
+   `mergeQueueEntry`, the success answer. A `state` of `MERGED` — or of
+   `CLOSED` with `landedInTrain: true` on the PR's row of
+   `ccd pr-state --session <sessionId>`, a merge train having landed it and
+   closed it — means it already landed: wait for or prove `merged:#<pr>`, and never disarm — a
    merged PR answers a null entry too, so the entry alone cannot tell merged
    from nothing queued. A PR with no entry but a non-null `autoMergeRequest`
    means it is only armed, and nothing is queued and nothing will tell you so:
    disarm it (`gh pr merge <pr> --disable-auto`) and read why before you do
-   anything else. A PR with no entry, no `autoMergeRequest` and not merged
-   means nothing is queued: read why before you do anything else. Disarm the
+   anything else. A PR with no entry, no `autoMergeRequest` and neither of
+   those landed answers means nothing is queued: read why before you do anything else. Disarm the
    same way before any fix round from `merging` — an armed auto-merge queues
    whatever head the branch carries once its checks pass, and GitHub disarms it on a push only
    from a login without write access. End your turn. The run waits at
@@ -848,7 +886,8 @@ whole time, which is the only prevention this ordering rule buys.
    `status` mail `merged:#<pr>` once the PR reads merged, or
    `dequeued:#<pr>@<time>` when the queue removed it without landing (GitHub
    does not re-enqueue). On `merged:`, prove the merge exactly as above —
-   MERGED, `headRefOid` equal to `handoffCommit` — then close the producer as
+   MERGED, or CLOSED with `landedInTrain: true`, `headRefOid` equal to
+   `handoffCommit` — then close the producer as
    this step closes a spent one (on the last wave, as §6 closes it), and only
    then dispatch wave N+1. A `merged:#<pr>` can also reach a run at `merging`
    on a project without the queue, when a sweep reads your own synchronous
@@ -886,7 +925,9 @@ whole time, which is the only prevention this ordering rule buys.
    run id, and require its own `state` to be `done`. If the consumer depends on
    an interface from this producer, independently prove the producer interface
    PR merged at the exact `producerSha` carried with `producerRepoRoot` and
-   `producerSourceRepoPath` in the conditional producer contract. The closed row
+   `producerSourceRepoPath` in the conditional producer contract (it reads
+   MERGED there, or CLOSED there with `landedInTrain: true` on its row of
+   `ccd pr-state --session <sessionId>`). The closed row
    proves fingerprint and terminal state, not merge.
 
    A missing/non-`done` producer row, failed release, or required exact-SHA merge
@@ -1195,7 +1236,14 @@ decides what this session does, and nothing else does:
   group itself.
 - `MERGED head=<sha>` — the PR already landed: prove it as step 3 does
   (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a
-  different head fails the proof, and that is reported, never closed on.
+  different head fails the proof, and that is reported, never closed on. A PR a
+  merge train landed reads CLOSED instead, so for it the verdict prints
+  `STOP not-at-head: the PR is CLOSED`. Before you report that stop, prove the
+  landing as step 3 does: CLOSED, `headRefOid` equal to `handoffCommit`, and
+  `landedInTrain: true` on the PR's row of `ccd pr-state --session
+  <sessionId>`. Where that proof holds, the PR landed, as on this line; where
+  it does not (`trainUnproven`, `trainUnread`, no row, or another head), the
+  stop stands.
 - `WAIT pending: <names>` — a reported required check is still running. Wait
   in the foreground, `gh pr checks <pr> --required --watch`, again if the call
   times out while a reported required check is still pending, then run the
@@ -1309,8 +1357,10 @@ there GitHub's refusal is the stop, `github-refused`. Route Q is unchanged: its
 enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is
 `--admin` after a refusal.
 
-**On every route** the merge is proven as step 3 proves it: MERGED, with
-`headRefOid` equal to `handoffCommit`. A refused merge on route G or U is
+**On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED
+with `landedInTrain: true` on the PR's row of `ccd pr-state --session
+<sessionId>`, with `headRefOid` equal to `handoffCommit`. A refused merge on
+route G or U is
 read, reported and stopped on, and never retried with another method, with
 `--admin` or with `--auto`. This session writes no setting to make a route
 work: no ruleset, no branch protection, no merge-method or auto-merge setting
@@ -1378,7 +1428,17 @@ refused for a rule it enforces at merge and this session does not verify —
 reviews, signatures, deployments, code scanning, required workflows — which
 this session never works around. Not a stop: a required check red on the head
 that is the PR's own; that goes to the fix-round rule, on route G exactly as
-on route Q.
+on route Q. A `red-unreachable` whose red is `main`'s own, already fixed on
+`main`, needs a new head, and its report names that route: a fix round to the
+owning worker on the `merging → working` edge (on route Q disarm first) for one
+clean merge of `main` and nothing else, then a review run scoped to that merge
+alone. The one rerun the RED bullet allows does not clear a red that is
+`main`'s own, and no close and reopen does either: the verdict calls a required
+name red while any completed run of it on the head failed, a later green run of
+it included (D-7495; judging only the newest run would loosen the gate, which
+is the operator's to decide), a rerun replays its run's original merge commit,
+and a close and reopen of the PR can race GitHub's recompute of the merge ref.
+The report of the stop names the new-head route above, not a rerun.
 
 ## 6 — Final merge
 
@@ -1577,6 +1637,10 @@ Clause 11 is what licenses this: `POST /api/asks/:id/answer` is the one route th
 a child's pane, and this session never does it by any other means. All three routes in the
 lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
 entry, not an invitation like the operator-only doors above.
+The client sends `asks answer` and `asks release` to the question door family's claimant pair,
+`POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), when the
+server advertises `questions-v1`, and to `POST /api/asks/:id/answer` and `/release` otherwise;
+both answer through the same core, refusal for refusal, and the commands below do not change.
 
 **A cross-project coordinator receives its children's questions** (the operator's ruling of
 2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
@@ -1695,6 +1759,12 @@ UTC and the ready-to-run commands. Three routes are yours, each through the clie
   final.
 - `GET /api/approvals/:id` (`"$API" approvals show <id>`) — the row, redacted, for the claimant
   it was held for; anyone else is `403`.
+
+The client sends `approvals rule` and `approvals release` to the question door family's
+claimant pair, `POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id
+`approval-<n>`), when the server advertises `questions-v1`, and to the rule and release routes
+above otherwise; both answer through the same core, refusal for refusal, and the mailed commands
+do not change.
 
 A ruling after the window is refused `hook-gone`: the child's hook has returned and the
 operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other

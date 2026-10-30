@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readHookStateRawMeasured } from '../src/hookstate.js';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { HookState } from '../src/hookstate.js';
@@ -299,12 +300,12 @@ describe('sessionBucket', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
-    const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
+    const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000);
     const waitingHookStates = new Map<string, HookState>([
       ['claude-a-project-f', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false }],
     ]);
     const withWaitingHook = await assembleFleet(
-      localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
+      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
     );
 
     const before = withoutHook.find((x) => x.id === 'claude-a-project-f')!;
@@ -334,7 +335,7 @@ describe('sessionBucket', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleetNoHookFile = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home2 }), new Tmux(idleRun), 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home2 }), new Tmux(idleRun), liveStateReaderOver(localIO), 1784600000,
     );
     const noHook = fleetNoHookFile.find((x) => x.id === 'claude-demo')!;
     expect(noHook.status).toBe('idle');
@@ -375,7 +376,7 @@ describe('sessionBucket', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1786973300,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1786973300,
     );
     const s = fleet.find((x) => x.id === 'demo-calm-mesa')!;
     expect(s.status).toBe('busy');
@@ -415,7 +416,7 @@ describe('sessionBucket', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1786973300,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1786973300,
     );
     const s = fleet.find((x) => x.id === 'demo-blocked')!;
     // `status` is untouched by this fix — `waiting` still collapses to busy,
@@ -450,7 +451,7 @@ describe('sessionBucket', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1786973300,
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1786973300,
     );
     const s = fleet.find((x) => x.id === 'demo-mute')!;
     expect(s.bucket).toBe('attention');
@@ -498,7 +499,7 @@ describe('sessionBucket', () => {
         { state: 'done', updatedAt: 1784600000000, event: 'SessionStart', ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false }],
     ]);
     const fleet = await assembleFleet(
-      localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, sessionStartDone,
+      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, undefined, undefined, undefined, sessionStartDone,
     );
     const s = fleet.find((x) => x.id === 'claude-a-project-f')!;
     // The raw hook field is unchanged — the mail delivery gate still reads it.
@@ -667,7 +668,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
         return { ran: true, code: 0, stdout: '', stderr: '' };
       };
       const cfg = loadConfig({ CCRC_HOME: home });
-      const fleet = await assembleFleet(localIO, cfg, new Tmux(run), Math.floor(Date.now() / 1000),
+      const fleet = await assembleFleet(localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), Math.floor(Date.now() / 1000),
         undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
       return fleet.find((x) => x.id === ID)!;
     };
@@ -774,7 +775,7 @@ describe('a carried done stands through delegated work, and the rung holds it wo
       const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
       if (!raw.ok) throw new Error(`unreadable hookstate after event ${i}: ${raw.reason}`);
       expect(raw.state, `after ${i} agent events`).toMatchObject({ state: 'done', event: 'Stop', updatedAt: stopAt });
-      const fleet = await assembleFleet(localIO, cfg, new Tmux(run), Math.floor(Date.now() / 1000),
+      const fleet = await assembleFleet(localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), Math.floor(Date.now() / 1000),
         undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
       const row = fleet.find((x) => x.id === ID)!;
       expect(row.status, `after ${i} agent events`).toBe('busy');

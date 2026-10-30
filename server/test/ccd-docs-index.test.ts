@@ -178,7 +178,7 @@ describe('docs verbs: advertised, dispatched, and every well-shaped call is one 
     const r = runCcdDocs(h, ['docs-nope']);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe('');
-    expect(r.stderr).toContain('|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version}');
+    expect(r.stderr).toContain('|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version}');
   });
 
   it.each(DOCS_T6_WELL_SHAPED.map(([label, args]) => [label, args] as const))(

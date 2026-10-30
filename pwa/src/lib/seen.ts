@@ -1,4 +1,5 @@
 import type { FleetSession } from '../../../shared/api';
+import { readKey, writeKey } from './storage';
 
 const KEY = 'ccrc:seen:v1';
 
@@ -14,7 +15,7 @@ const BADGED: ReadonlySet<FleetSession['bucket']> = new Set(['attention', 'done'
  * of the person holding the phone, not of the fleet — storing this map
  * server-side would let the desktop mark the phone's badge read.
  *
- * The server DOES keep a viewer notion: `server/src/presence.ts`, "which
+ * The server DOES keep a viewer notion: `server/src/viewer.ts`, "which
  * sessions a human is currently LOOKING AT". It is a DIFFERENT fact, not a
  * copy of this one, and the difference is deliberate. Presence collapses
  * across every connected client (`isVisible(id)` is true if ANY connection
@@ -32,7 +33,7 @@ const BADGED: ReadonlySet<FleetSession['bucket']> = new Set(['attention', 'done'
  */
 export function loadAcks(): Acks {
   try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}') as unknown;
+    const raw = JSON.parse(readKey(KEY) ?? '{}') as unknown;
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {};
     const out: Acks = {};
     for (const [k, v] of Object.entries(raw)) if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
@@ -140,7 +141,7 @@ export function subscribeAcks(fn: () => void): () => void {
  *  and, because every mutator bases off the published snapshot rather than
  *  storage, nothing rolls it back before then. */
 function save(acks: Acks): Acks {
-  try { localStorage.setItem(KEY, JSON.stringify(acks)); } catch { /* private mode / quota */ }
+  writeKey(KEY, JSON.stringify(acks)); // refused (private mode / quota): the published map below still holds it
   return publish(acks);
 }
 

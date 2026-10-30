@@ -69,6 +69,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { asking, run, sess } from './rollupFixture';
+import { withRunBinding } from './runBindingFixture';
 
 const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
@@ -113,8 +114,9 @@ function stubWidth(desk: boolean): void {
   }));
 }
 
+/** A fleet frame and a runs frame from a current server: each session carries its run binding over `runs` (D-7461). */
 function mount(sessions: FleetSession[] = SESSIONS, runs: RunSummary[] = RUNS): void {
-  act(() => useFleetStore.setState({ conn: 'open', sessions, runs, runsFrameSeen: true, fleetFrameSeen: true }));
+  act(() => useFleetStore.setState({ conn: 'open', sessions: withRunBinding(sessions, runs), runs, runsFrameSeen: true, fleetFrameSeen: true }));
   navigate('/');
   render(<App />);
 }
@@ -215,7 +217,7 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
   });
 
   it("the session the operator has open stays in its box's tray, though it does not ask (G3's Step 0 ruling)", () => {
-    act(() => useFleetStore.setState({ conn: 'open', sessions: SESSIONS, runs: RUNS, runsFrameSeen: true, fleetFrameSeen: true }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions: withRunBinding(SESSIONS, RUNS), runs: RUNS, runsFrameSeen: true, fleetFrameSeen: true }));
     navigate('/s/a2');
     render(<App />);
     const tray = boxOf(groupOf('attention'), 'coord-a').querySelector<HTMLElement>('.pg-tray')!;
@@ -292,7 +294,8 @@ describe("Instrument's Status view shows programmes, not children (G3, D-7333)",
     mount();
     const chips = [...table().querySelectorAll('.bucket-bar .bucket-head')].map((c) =>
       `${words(c.querySelector('.bucket-head-label')!)} ${words(c.querySelector('.bucket-head-count')!)}`);
-    expect(chips).toEqual(['Needs you 2', 'Done 2', 'Idle 3', 'Working 4']);
+    // In `BUCKET_ORDER`, the one order since #1903 (D-7188): G3 changes neither the bar's order nor its counts.
+    expect(chips).toEqual(['Needs you 2', 'Done 2', 'Working 4', 'Idle 3']);
     // Project mode draws its cards as G2 shipped them: the children toggle is there.
     expect(table().querySelector('.proj-children-toggle')).not.toBeNull();
   });

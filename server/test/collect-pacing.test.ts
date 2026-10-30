@@ -13,7 +13,7 @@ import {
 } from '../src/childReclaimSweep.js';
 import {
   COLLECT_CHANGED_RECENTLY_SPAN_MS, COLLECT_PROBE_CLASS, COLLECT_RUN_NONE, COLLECT_VERDICT_TABLE, COLLECT_VERDICT_WORDS,
-  collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold, collectAfterPresence, collectAfterWouldCollect,
+  collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold, collectAfterViewer, collectAfterWouldCollect,
   collectAttentionCauses, collectDue, collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedStep, collectFirstSighting,
   collectIdleSchedule, collectLicence,
   collectNextAskMono, collectRefusalClass, collectRipe, collectRunTier, collectWouldCollectKey, collectWouldCollectStands,
@@ -39,7 +39,7 @@ const id = () => {
     audit: (a: CollectAudit, mono: number, wall?: number) => { e = collectAfterAudit(e, a, step(mono, ++g, wall), true); return self; },
     act: (r: CollectResult, mono: number) => { e = collectAfterAct(e, r, step(mono, ++g)); return self; },
     hold: (mono: number) => { e = collectAfterHold(e, 'run-open', step(mono, ++g)); return self; },
-    presence: (mono: number) => { e = collectAfterPresence(e, step(mono, ++g)); return self; },
+    presence: (mono: number) => { e = collectAfterViewer(e, step(mono, ++g)); return self; },
     wouldCollect: (mono: number) => { e = collectAfterWouldCollect(e, step(mono, ++g)); return self; },
     next: (): number | null => collectNextAskMono(e, PASS, OBSERVE),
   };
@@ -342,7 +342,7 @@ describe('a fold that failed: the pair resets under a new generation, the id tak
     return {
       ...collectFeedStep(i.e(), { kind: 'row', key: 'x', outlivesObservations: true }).entry,
       obs: { token: T1, arrivedMono: 5 * MIN },
-      presence: { count: 2, sinceMono: MIN, atMono: 4 * MIN },
+      viewer: { count: 2, sinceMono: MIN, atMono: 4 * MIN },
       streak: { word: 'in-use', sinceMono: MIN, lastMono: 4 * MIN, detail: 'in-use: d' },
       scheduleMono: 40 * MIN,
     };
@@ -550,7 +550,7 @@ describe('the hold and the presence defer', () => {
 
   it('a hold ends presence\'s continuity, and a presence defer ends the hold\'s', () => {
     const seen = id().presence(0).hold(C / 2).presence(C);
-    expect([seen.e().presence?.sinceMono, collectAttentionCauses(seen.e())], 'a hold between: presence starts again')
+    expect([seen.e().viewer?.sinceMono, collectAttentionCauses(seen.e())], 'a hold between: presence starts again')
       .toEqual([C, []]);
     const held = id().hold(0).presence(C / 2).hold(C);
     expect([held.e().held?.sinceMono, collectAttentionCauses(held.e())], 'a presence defer between: the hold starts again')
@@ -566,7 +566,7 @@ describe('the hold and the presence defer', () => {
     expect([held.e().held?.sinceMono, collectAttentionCauses(held.e())], 'a would-collect: the hold starts again')
       .toEqual([C, []]);
     const seen = id().presence(0).wouldCollect(C / 2).presence(C);
-    expect([seen.e().presence?.sinceMono, collectAttentionCauses(seen.e())], 'a would-collect: presence starts again')
+    expect([seen.e().viewer?.sinceMono, collectAttentionCauses(seen.e())], 'a would-collect: presence starts again')
       .toEqual([C, []]);
   });
 });
@@ -579,7 +579,7 @@ describe('every answer but a collectable one ends the hold\'s, presence\'s and t
     b: id().act(DIE, 0).presence(MIN),
   });
   const readA = (e: CollectEntry) => [e.held, e.streak?.sinceMono ?? null, e.scheduleMono];
-  const readB = (e: CollectEntry) => [e.die, e.presence];
+  const readB = (e: CollectEntry) => [e.die, e.viewer];
   const apply = (a: CollectAudit, mono = 2 * MIN) => {
     const { a: ia, b: ib } = setups();
     ia.audit(a, mono); ib.audit(a, mono);
@@ -592,7 +592,7 @@ describe('every answer but a collectable one ends the hold\'s, presence\'s and t
     expect(a.e().streak?.sinceMono, 'A: the changed-recently streak').toBe(0);
     expect(a.e().scheduleMono, 'A: the schedule').not.toBeNull();
     expect(b.e().die, 'B: the die').not.toBeNull();
-    expect(b.e().presence, 'B: the presence defer').not.toBeNull();
+    expect(b.e().viewer, 'B: the presence defer').not.toBeNull();
   });
 
   const ENDING: readonly (readonly [string, CollectAudit])[] = [
@@ -641,7 +641,7 @@ describe('every answer but a collectable one ends the hold\'s, presence\'s and t
       expect(a.held, `A, observes=${observes}: the hold stands`).toEqual(ia.e().held);
       expect([a.streak, a.scheduleMono], `A, observes=${observes}: the streak and the schedule end`).toEqual([null, null]);
       expect(b.die, `B, observes=${observes}: the die stands`).toEqual(ib.e().die);
-      expect(b.presence, `B, observes=${observes}: presence stands`).toEqual(ib.e().presence);
+      expect(b.viewer, `B, observes=${observes}: presence stands`).toEqual(ib.e().viewer);
     }
   });
 });
@@ -671,11 +671,11 @@ describe('the deferral words\' own attention', () => {
     // proves every one ended.
     const before: CollectEntry = {
       ...collectFeedStep(i.e(), { kind: 'row', key: 'x', outlivesObservations: true }).entry,
-      presence: { count: 2, sinceMono: MIN, atMono: 4 * MIN },
+      viewer: { count: 2, sinceMono: MIN, atMono: 4 * MIN },
       streak: { word: 'in-use', sinceMono: MIN, lastMono: 4 * MIN, detail: 'in-use: d' },
       scheduleMono: 40 * MIN,
     };
-    expect([before.presence, before.streak, before.scheduleMono].map((x) => x !== null), 'presence, the streak and the schedule stand')
+    expect([before.viewer, before.streak, before.scheduleMono].map((x) => x !== null), 'presence, the streak and the schedule stand')
       .toEqual([true, true, true]);
     expect([before.terminal.kind, before.verbFailed.kind, before.failing.kind], 'the three runs stand').toEqual(['run', 'run', 'run']);
     expect([before.deferrals, before.deferredAtMono], 'a deferral count').toEqual([1, 3 * MIN]);
@@ -687,7 +687,7 @@ describe('the deferral words\' own attention', () => {
       ...before, idGen: 99, obs: null, evidence: { runId: 7, leaf: '/home/u/.cc-tmp/demo-a' },
       failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE,
       deferrals: 2, deferredAtMono: 5 * MIN,
-      held: null, presence: null, streak: null, scheduleMono: null, die: null,
+      held: null, viewer: null, streak: null, scheduleMono: null, die: null,
     });
   });
 });

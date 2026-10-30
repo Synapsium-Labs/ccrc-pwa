@@ -36,7 +36,7 @@ import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { accountOpsFor } from './accounts/ops.js';
-import { SecretMasker, fingerprintAnswerOf } from './accounts/mask.js';
+import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -51,6 +51,7 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
   ? new PushService(
       { publicKey: cfg.vapidPublic, privateKey: cfg.vapidPrivate, subject: cfg.vapidSubject },
       path.join(cfg.home, '.ccrc', 'push-subs.json'),
+      SHAPE_ONLY_MASKER,
     )
   : undefined;
 

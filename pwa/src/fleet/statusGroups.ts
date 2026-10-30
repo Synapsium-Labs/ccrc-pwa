@@ -52,7 +52,7 @@
 // (`coordinatorPresence`, through the same lookup), so 'hibernated' (mail wakes it) and an unmeasured presence are not gone. The groups: Needs you (the boxes that need the operator, then the
 // rows in no programme that do), Programmes (the other boxes, in `boxOrder`), then `groupByStatus` over the rows in no
 // programme. Every group counts what it draws: a box counts one, and a hidden child counts nowhere.
-import { sessionAsk, substrateFault, type FleetSession, type SessionBucket } from '../../../shared/api';
+import { BUCKET_ORDER, sessionAsk, substrateFault, type FleetSession, type SessionBucket } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import type { FleetTreeGroup } from './fleetTree';
 import type { FleetRow } from './nestFleet';
@@ -66,24 +66,21 @@ import { sortFleet } from './sortFleet';
 /** Why a Needs-you session needs you. `null` is "no field says", never a fifth reason. */
 export type NeedsReason = 'ask' | 'allow' | 'fault' | 'sign-in';
 
-/** The table's order, its headings and which groups fold. A `Record`, so a new
- *  `SessionBucket` member is a compile error here, never a silently missing group. */
-export const STATUS_GROUPS: Record<SessionBucket, { readonly order: number; readonly label: string; readonly folds: boolean }> = {
-  attention: { order: 0, label: 'Needs you', folds: false },
-  done: { order: 1, label: 'Done', folds: false },
-  working: { order: 2, label: 'Working', folds: false },
-  idle: { order: 3, label: 'Idle', folds: true },
-  cleanup: { order: 4, label: 'Cleanup', folds: true },
-  archived: { order: 5, label: 'Archived', folds: true },
-  dead: { order: 6, label: 'Exited', folds: true },
+/** The table's headings and which groups fold. A `Record`, so a new `SessionBucket` member is a compile error here,
+ *  never a silently missing group. The order is not here: it is `shared/api.ts#BUCKET_ORDER`, the one order (D-7188). */
+export const STATUS_GROUPS: Record<SessionBucket, { readonly label: string; readonly folds: boolean }> = {
+  attention: { label: 'Needs you', folds: false },
+  done: { label: 'Done', folds: false },
+  working: { label: 'Working', folds: false },
+  idle: { label: 'Idle', folds: true },
+  cleanup: { label: 'Cleanup', folds: true },
+  archived: { label: 'Archived', folds: true },
+  dead: { label: 'Exited', folds: true },
 };
-
-const ORDER: readonly SessionBucket[] =
-  (Object.keys(STATUS_GROUPS) as SessionBucket[]).sort((a, b) => STATUS_GROUPS[a].order - STATUS_GROUPS[b].order);
 
 /** The Status view's one group that is not a bucket (Task G3): the programme boxes that do not need the operator, just
  *  after Needs you. Open, like the groups the operator reads first. */
-export const PROGRAMMES_GROUP = { order: 0.5, label: 'Programmes', folds: false } as const;
+export const PROGRAMMES_GROUP = { label: 'Programmes', folds: false } as const;
 
 export interface StatusGroup {
   bucket: SessionBucket;
@@ -101,7 +98,7 @@ export interface StatusGroup {
  *  count of 0; the view decides whether to show it. */
 export function groupByStatus(sessions: readonly FleetSession[], acks: Acks): StatusGroup[] {
   const sorted = sortFleet([...sessions]);
-  return ORDER.map((bucket) => {
+  return BUCKET_ORDER.map((bucket) => {
     const rows = sorted.filter((s) => s.bucket === bucket);
     return {
       bucket,
@@ -128,11 +125,11 @@ export function needsReason(s: FleetSession): NeedsReason | null {
 /** A Status view group's key: a bucket, or the programmes. */
 export type StatusGroupId = SessionBucket | 'programmes';
 
-/** The groups' order: the buckets', with Programmes at its own place among them. */
-const VIEW_ORDER: readonly StatusGroupId[] = [...ORDER, 'programmes' as const]
-  .sort((a, b) => viewGroup(a).order - viewGroup(b).order);
+/** The groups' order: the buckets' (`BUCKET_ORDER`), with Programmes just after Needs you. */
+const VIEW_ORDER: readonly StatusGroupId[] =
+  BUCKET_ORDER.flatMap((b): StatusGroupId[] => (b === 'attention' ? [b, 'programmes'] : [b]));
 
-function viewGroup(id: StatusGroupId): { readonly order: number; readonly label: string; readonly folds: boolean } {
+function viewGroup(id: StatusGroupId): { readonly label: string; readonly folds: boolean } {
   return id === 'programmes' ? PROGRAMMES_GROUP : STATUS_GROUPS[id];
 }
 
