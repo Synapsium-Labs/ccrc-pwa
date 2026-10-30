@@ -137,10 +137,10 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
   });
 
   /** D-7404: a row whose writer a later task of its plan builds. Each entry names that task, and its row below asserts
-   *  the verb and the route are still ABSENT, so the entry goes red the day the writer lands and must be deleted then. */
-  const PENDING_WRITERS: Readonly<Record<string, string>> = {
-    [TESTBOX_REMOTE_LIVE_MARKER]: 'test box plan TB9 adds ccd testbox-remote, its ccdargv builder and POST /api/testbox/switch',
-  };
+   *  the verb and the route are still ABSENT, so the entry goes red the day the writer lands and must be deleted then.
+   *  D-7411: the test box switch's entry is deleted with its writer (`ccd testbox-remote`, `CCD_ARGV.testboxRemote`,
+   *  `POST /api/testbox/switch`, test box plan TB9), so the row above now checks it like every other ccd-verb writer. */
+  const PENDING_WRITERS: Readonly<Record<string, string>> = {};
 
   it('every ccd-verb writer names a verb ccdargv builds and a route that runs it', () => {
     const argvSrc = readFileSync(new URL('../src/ccdargv.ts', import.meta.url), 'utf8');
@@ -161,7 +161,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     const serverSrc = (readdirSync(srcRoot, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts'))
       .map((f) => readFileSync(path.join(srcRoot, f), 'utf8'));
     expect(serverSrc.length, 'the walk reached server/src').toBeGreaterThan(100);
-    expect(Object.keys(PENDING_WRITERS)).toEqual([TESTBOX_REMOTE_LIVE_MARKER]);
+    expect(Object.keys(PENDING_WRITERS), 'no row waits on a writer since TB9 (D-7411)').toEqual([]);
     for (const [k, why] of Object.entries(PENDING_WRITERS)) {
       const row = (SWITCHES as Readonly<Record<string, { writer: string }>>)[k];
       expect(row, `${k} is a row`).toBeDefined();

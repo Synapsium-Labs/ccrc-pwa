@@ -197,6 +197,9 @@ describe('the closed route table', () => {
     [['approvals', 'rule', '41'], 'POST', '/api/approvals/41/rule', '/api/questions/approval-41/rule'],
     [['approvals', 'release', '41'], 'POST', '/api/approvals/41/release', '/api/questions/approval-41/release'],
     [['approvals', 'show', '41'], 'GET', '/api/approvals/41'],
+    // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
+    [['testbox', 'status'], 'GET', '/api/testbox'],
+    [['testbox', 'tools-sync'], 'POST', '/api/testbox/tools-sync'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
@@ -233,7 +236,8 @@ describe('the closed route table', () => {
     // Twenty-five since `coordinators.intent` (delegation broker wave 3, Task 15).
     // Twenty-eight since the approvals rows (coordinator-first routing, plan Task 14).
     // Thirty-one since the claimant's approvals rows (plan Task 16).
-    expect(keys).toHaveLength(31);
+    // Thirty-three since the test box's status and tools-sync rows (test box plan TB9, D-7411).
+    expect(keys).toHaveLength(33);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -243,6 +247,7 @@ describe('the closed route table', () => {
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
       23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
       27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
+      32: 'thirty-two', 33: 'thirty-three',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -372,6 +377,7 @@ describe('the four claimant rows send the question door family while the server 
       ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
+      ['testbox', 'status'], ['testbox', 'tools-sync'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');

@@ -85,6 +85,8 @@ import { CHECKS_MAIL_TOKEN, mergingAtDetail, type ChecksMode } from '../../../sh
 import { readSwitches } from '../../../shared/switches.js';
 import { checksModeAt } from './landing.js';
 import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
+import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
+import { notRanSentence } from '../unmeasured.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
@@ -520,6 +522,9 @@ export interface CoordRoutesHandle {
  *  limiter reads no `req.ip`, like `auth/ratelimit.ts`); it runs on `preHandler`, after the
  *  route's own auth `onRequest` hook, so an unauthenticated call never spends it. */
 export const RUN_SPEND_RATE_LIMIT = { max: 600, timeWindow: '1 minute' } as const;
+
+/** The refusal the test box's read and sync answer a caller with neither a session nor the box token (D-7554). */
+const TESTBOX_UNAUTHENTICATED = { ok: false, error: 'unauthenticated', detail: `takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})` } as const;
 
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
@@ -2156,6 +2161,54 @@ export function registerCoordRoutes(
     // `requested`, never `paused`: the authoritative answer is the next
     // `{type:'coord'}` frame's `reclaim` field, and the toggle settles on that.
     return reply.code(200).send({ ok: true, requested: body.state });
+  });
+
+  /** Test box plan TB9 (D-7411; spec 2026-10-28 §2.7): the test box's three doors.
+   *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass.
+   *  - `POST /api/testbox/switch` takes `{on: boolean}` and nothing else, and runs `ccd testbox-remote --state on|off`
+   *    through the agent's whitelist, the marker's one writer. SESSION-ONLY (`coord-pause-route.test.ts`'s
+   *    `SESSION_ONLY`): the operator's switch, never the box token's, so no coordinator can arm remote runs.
+   *  - `POST /api/testbox/tools-sync` takes no body: the release and the versions it sends are the fleet host's own.
+   *  D-7554: the read and the sync ALSO take the box token (EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, the `GET
+   *  /api/runs` pattern), because `ccrc-api testbox status|tools-sync` is a cookieless fleet-host caller (the update
+   *  lane's signal). No `coordMutex` and no `notConfigured` arm: none of them touches the coordination database. */
+  app.get('/api/testbox', async (req, reply) => {
+    if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
+      && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
+    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null });
+  });
+  app.post('/api/testbox/switch', async (req, reply) => {
+    const body = req.body as { on?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      return refuseRoute(reply, 'bad-request');
+    }
+    if (!ccdCan(deps.fleetState, 'testboxRemote')) return refuseRoute(reply, 'unsupported');
+    const res = await deps.runCcd(CCD_ARGV.testboxRemote(body.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST. A verb that never ran, or may not have, said nothing, so its forged code is not
+    // read as the verb's refusal: the answer is the one not-ran sentence (`notRanSentence`), since whether the switch
+    // moved is unmeasured, and the pass forced here re-reads the block's `switch`, the authoritative answer either way.
+    if (res.ran === false) {
+      void watcher?.testboxLane.sweep(true);
+      return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd testbox-remote', res) });
+    }
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    // `requested`, never the switch: the authoritative answer is the block's `switch`, re-read by a pass now.
+    void watcher?.testboxLane.sweep(true);
+    return reply.code(200).send({ ok: true, requested: body.on });
+  });
+  app.post('/api/testbox/tools-sync', async (req, reply) => {
+    if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
+      && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/testbox/tools-sync') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
+    const body = req.body as unknown;
+    if (body !== undefined && body !== null && !(typeof body === 'object' && Object.keys(body).length === 0)) {
+      return refuseRoute(reply, 'bad-request');
+    }
+    const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync();
+    if (!r.ok) {
+      const refusal = TESTBOX_SYNC_REFUSAL[r.reason];
+      return refuseRoute(reply, refusal.error, { detail: refusal.detail });
+    }
+    return reply.code(200).send({ ok: r.reply.outcome === 'sent', ...r.reply });
   });
 
   /** `GET`/`POST /api/coord/caps` — the coordination cap becomes an

@@ -183,7 +183,7 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
   const REGION_TO = '# THAT SKIP IS THE LOOP';
   const CARDINAL = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
     'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN',
-    'EIGHTEEN'];
+    'EIGHTEEN', 'NINETEEN'];
 
   /** What a scan for `$REG/.<name>` literals CANNOT see, each with its reason
    *  — and each SELF-CHECKED below, so this cannot quietly become the memory

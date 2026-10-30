@@ -79,6 +79,7 @@ import type { MeasuredDirectoryRead } from './io.js';
 import { TmpCensusBeat } from './tmpSweepLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
+import { TestboxLane } from './testboxLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
@@ -1054,6 +1055,8 @@ export class FleetWatcher {
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
+  /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
+  readonly testboxLane = new TestboxLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
   /** The registry ids of the last good listing (`null` until one lands: nothing is mailed without it). */
   private registryIds: ReadonlySet<string> | null = null;
@@ -2371,6 +2374,8 @@ export class FleetWatcher {
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
       // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
       void this.sweepPressure();
+      // The test box's poll (D-7411), above the fail-shut return too: it lists the registry itself. Own clock, never awaited.
+      void this.testboxLane.sweep();
       // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted
       // exactly when the registry read fails. Own clock (`TmpCensusBeat`), never awaited.
       void this.sweepTmpSweepCensus().catch(() => { /* one bad sweep must not kill the poll */ });

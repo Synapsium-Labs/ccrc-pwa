@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, thirty-one rows, and nothing else; four
+#   * The route comes from ROUTES below, thirty-three rows, and nothing else; four
 #     of them name a second template, the question door family's, sent only
 #     while the server advertises `questions-v1` (D-7326).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
@@ -85,7 +85,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # The four claimant rows carry a fifth field, the question door family's
 # template (D-7325), sent in place of the path only while the server advertises
 # `questions-v1`; every other row has four.
-# Thirty-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Thirty-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -176,6 +176,12 @@ declare -A ROUTES=(
   [approvals.rule]='POST|/api/approvals/{id}/rule|yes|-|/api/questions/approval-{id}/rule'
   [approvals.release]='POST|/api/approvals/{id}/release|yes|-|/api/questions/approval-{id}/release'
   [approvals.show]='GET|/api/approvals/{id}|yes|-'
+  # The test box (test box plan TB9, D-7411, D-7554): its status block, and the tools sync the update lane signals
+  # once a roll ends (spec §2.10). Both routes take a session OR the box token; neither takes a body or a query, and the
+  # sync sends the box only the fleet host's own release and measured versions. The switch has NO row, on purpose:
+  # arming remote runs is the operator's act, from the Settings card.
+  [testbox.status]='GET|/api/testbox|no|-'
+  [testbox.tools-sync]='POST|/api/testbox/tools-sync|no|-'
 )
 
 # ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──

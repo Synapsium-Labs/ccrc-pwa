@@ -36,6 +36,7 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP,
+  TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, type TestboxReq, type TestboxToolsSyncReq,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
   updateSpawnArgv, updateWriterMayLive,
@@ -44,6 +45,7 @@ import {
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { measureDisk, type DiskSeams } from './disk.js';
 import { measurePressure, type PressureSeams } from './pressure.js';
+import { measureTestbox, syncTestboxTools, type TestboxOpSeams } from './testboxOp.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { boundedSpawn } from '../../shared/spawn.mjs';
@@ -91,6 +93,7 @@ export interface AgentOpts {
   spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
   diskSeams?: Partial<DiskSeams>; // default realDiskSeams() — tests inject the statfs/stat/mountinfo reads; the `disk` op's ONLY disk reads
   pressureSeams?: Partial<PressureSeams>; // default: the two /proc/pressure files — tests inject the text (#1170)
+  testboxSeams?: Partial<TestboxOpSeams>; // default realTestboxSeams() — tests inject the agent's PATH and the clock (D-7411)
 }
 
 export interface RunningAgent {
@@ -450,6 +453,7 @@ interface ConnCtx {
   spawnAccount: AccountOpSpawn;
   diskSeams: Partial<DiskSeams>;
   pressureSeams: Partial<PressureSeams>;
+  testboxSeams: Partial<TestboxOpSeams>;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -607,8 +611,8 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       return;
     }
     case 'update': {
-      // Design 2026-09-20 §10. One of the THREE wire-triggered spawns outside the
-      // exec whitelist (agent/CLAUDE.md; the others are `token-sync`'s and `account`'s). `validateReq` has already refused a tag
+      // Design 2026-09-20 §10. One of the FOUR wire-triggered spawn classes outside the
+      // exec whitelist (agent/CLAUDE.md; the others are `token-sync`'s, `account`'s and `testbox`'s). `validateReq` has already refused a tag
       // that fails `isReleaseTag` and a kind outside `RequestKind`, so this body
       // never sees an unvalidated argument. `updateSpawnArgv` checks both AGAIN
       // and throws on a caller bug, so an edit that lets one through reaches
@@ -689,6 +693,18 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       // #1170. No argument (`validateReq` refuses a frame that carries one); two fixed kernel files. A file that cannot
       // be read or parsed throws into the envelope's `.catch`, an error the server reads as unmeasured, never as calm.
       send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams) }));
+      return;
+    }
+    case 'testbox': {
+      // Test box plan TB9 (D-7411). No argument (`validateReq` refuses a frame that carries one). The fourth class of
+      // wire-triggered spawn outside the exec whitelist (agent/CLAUDE.md, D-7430): `systemctl --user show-environment`,
+      // the settings printer and the six version probes, each a fixed argv with no field of this frame in it.
+      send(ws, ok(req.id, { ...await measureTestbox(ctx.cfg.home, ctx.testboxSeams) }));
+      return;
+    }
+    case 'testbox-tools-sync': {
+      // The op's one write (spec §2.7): the release and the versions are the fleet host's, read and measured here.
+      send(ws, ok(req.id, { ...await syncTestboxTools(ctx.cfg.home, ctx.testboxSeams) }));
       return;
     }
     case 'token-sync': {
@@ -889,6 +905,16 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       // #1170: no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), and nothing is read.
       if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
       return { t: 'req', id, op: 'pressure' } satisfies PressureReq;
+    }
+    case 'testbox': {
+      // TB9 (D-7411): no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), nothing runs.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'testbox' } satisfies TestboxReq;
+    }
+    case 'testbox-tools-sync': {
+      // The same: a replayed frame that carries a release, a version or anything else is `bad-request`, never sent on.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'testbox-tools-sync' } satisfies TestboxToolsSyncReq;
     }
     case 'token-sync': {
       // The ONE code guard (`isClaimCode`, never a regex here). A missing, non-string or malformed code is a
@@ -1217,6 +1243,7 @@ function handleConnection(
     spawnAccount: opts.spawnAccount,
     diskSeams: opts.diskSeams,
     pressureSeams: opts.pressureSeams,
+    testboxSeams: opts.testboxSeams,
   };
 
   const helloTimer = setTimeout(() => {
@@ -1261,10 +1288,12 @@ function handleConnection(
       // the closed set every agent has always had: `update`, `token-sync`
       // (box-token lifecycle spec 4.4), `account` (accounts spec §13.2, whose
       // remote arm sends a secret only to an agent that names it here) and `disk`
-      // (fleet disk retention spec §2.5, D-6614: it takes no field). It is
-      // required in `ReadyFrame`, so it cannot be dropped silently.
+      // (fleet disk retention spec §2.5, D-6614: it takes no field), `pressure`
+      // (#1170) and `testbox`/`testbox-tools-sync` (test box plan TB9, D-7411,
+      // D-7555: no field either). It is required in `ReadyFrame`, so it cannot
+      // be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -1362,6 +1391,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
     diskSeams: rawOpts.diskSeams ?? {},
     pressureSeams: rawOpts.pressureSeams ?? {},
+    testboxSeams: rawOpts.testboxSeams ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {

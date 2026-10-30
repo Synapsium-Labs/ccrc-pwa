@@ -179,6 +179,11 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the deps-shed verb granted without --session',
     codes: ['TS2322'],
   },
+  // THE TEST BOX SWITCH (D-7411), g14's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g24-testbox-remote-without-state.ts': {
+    what: 'the test box switch verb granted without --state',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -401,6 +406,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--session']])))
       .toThrow(/only grantable with '--expect'/);
     expect(() => auditExecWhitelist(withCcd([['ws-collect', '--expect']]))).not.toThrow();
+  });
+
+  it('throws on a testbox-remote without --state, and grants exactly the one prefix (D-7411)', () => {
+    expect(() => auditExecWhitelist(withCcd([['testbox-remote']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['testbox-remote', '--on']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['testbox-remote', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'testbox-remote'), 'one testbox-remote grant, on --state')
+      .toEqual([['testbox-remote', '--state']]);
   });
 
   it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {

@@ -6727,14 +6727,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — EIGHTEEN dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these ten are
+# NOT reachable this way, and this set IS the boundary — NINETEEN dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these eleven are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The ten: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The eleven: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
 # records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
 # `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
@@ -6755,8 +6755,11 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `$REG/.pool-epoch.$$.tmp` staging file, written by the same tmp-then-rename
 # idiom outside `_reg_set` itself, before it renames into the dot-FREE
 # `$REG/pool-epoch` — the projection's published name carries no dot, only
-# its transient staging copy does; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last three ARE candidate glob matches when
+# its transient staging copy does; `ccd testbox-remote`'s
+# `$REG/.testbox-remote-live.$$.tmp` staging file (TB9, D-7411), the same
+# idiom again: the raise renames it onto the dot-FREE `$REG/testbox-remote-live`,
+# the test box switch, so only the transient copy carries a dot; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last four ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
@@ -9148,6 +9151,7 @@ EOF
   echo docs-tree
   echo docs-show
   echo docs-fetch
+  echo testbox-remote   # D-7411: the test box switch's writer, behind POST /api/testbox/switch
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
@@ -30289,6 +30293,33 @@ cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower th
   fi
 }
 
+cmd_testbox_remote() {   # ccd testbox-remote --state on|off — raise or lower the test box's remote switch
+  # (test box plan TB9, D-7411; spec 2026-10-28 §2.7). While `$REG/testbox-remote-live` exists, a `ccrc test` run
+  # goes to the test box when spec §2.4's checks pass; absent, every run is local, today's `ccrc test`. This verb is
+  # the marker's ONE writer, reached from `POST /api/testbox/switch` (session-only) through the agent's two-token
+  # grant; the wrapper (ccd/ccrc-test) is its one reader, and reads it itself, so the switch works with the server
+  # down. `cmd_reclaim_pause`'s shape, granted on its argument (a registry-file write or unlink that deletes nothing),
+  # with one difference: the raise is ATOMIC, a fresh file renamed onto the name (`_plat_mv_notdir`), so no reader
+  # sees a half-made marker and a dangling link is replaced, never followed. CHECKED on both arms, for `cmd_ws_hold`'s
+  # reason. Journals nothing, for `cmd_coord_pause`'s. The echoed word is for a human; nothing parses it.
+  [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd testbox-remote --state on|off"
+  local state=$2 marker tmp
+  [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+  marker="$REG/testbox-remote-live"
+  if [[ $state == on ]]; then
+    tmp="$REG/.testbox-remote-live.$$.tmp"
+    { : > "$tmp" && _plat_mv_notdir "$tmp" "$marker"; } \
+      || { rm -f -- "$tmp"; die "could not raise the test box switch — remote runs are NOT on"; }
+    echo "on"
+  else
+    if [[ -e $marker || -L $marker ]]; then   # -L: a dangling link is lowered too, so no stale name stays
+      rm -f -- "$marker" || die "could not lower the test box switch — remote runs are STILL on"
+    fi
+    echo "off"
+  fi
+}
+
 # ── EVERY tmux TARGET IS EXACT (D-3525, closing D-2781 and D-2862) ──────────
 # `_tmux` answers a session's NAME — what `new-session -s` creates. A `-t`
 # argument is not a name to tmux, it is a SEARCH: the exact name, then a UNIQUE
@@ -44951,6 +44982,7 @@ case "${1:-}" in
   ws-title)   shift; cmd_ws_title "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
   reclaim-pause) shift; cmd_reclaim_pause "$@" ;;
+  testbox-remote) shift; cmd_testbox_remote "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -44964,6 +44996,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

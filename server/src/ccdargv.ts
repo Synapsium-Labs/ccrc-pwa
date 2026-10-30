@@ -709,6 +709,10 @@ export const CCD_ARGV = {
    *  vocabulary is ccd's and no route can invent a third word the verb would
    *  `die` on. The flag LEADS, where the agent's two-token grant expects it. */
   reclaimPause: (state: 'on' | 'off') => argv(['reclaim-pause', '--state', state]),
+  /** The test box switch's writer (test box plan TB9, D-7411; spec §2.7) — `coordPause`'s shape exactly: `state` is a
+   *  two-member union, the on|off vocabulary is ccd's, and the flag LEADS, where the agent's two-token grant expects it.
+   *  `ccd testbox-remote` is `$REG/testbox-remote-live`'s one shell writer. */
+  testboxRemote: (state: 'on' | 'off') => argv(['testbox-remote', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
    *  `enable` rule above: the project-pool route picks between two words rather
@@ -1328,6 +1332,8 @@ export const CCD_CAN = {
   wsAttic: verbRow('ws-attic'),
   wsHold: verbRow('ws-hold'), wsRelease: verbRow('ws-release'), wsRename: verbRow('ws-rename'),
   coordPause: verbRow('coord-pause'), reclaimPause: capRow(RECLAIM_PAUSE_CAP),
+  // A new verb: `ccd caps` names it, and a box whose list lacks it is refused 501 rather than sent a usage error.
+  testboxRemote: verbRow('testbox-remote'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),

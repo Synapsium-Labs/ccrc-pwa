@@ -505,8 +505,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (child-reclamation wave 10, which also refuses `live` while sign-in is dark), `POST /api/coord/review-cap`
   (D-6795, the operator's lift of the review-round cap for one work run), `POST /api/coord/dispatch-abandon` (D-7319, the
   operator's switch on abandoning a dispatch that never came back), `POST /api/coord/roll-idle` (D-7453, the
-  operator's Settings row for the automatic coordinator roll) and `POST /api/questions/:id/answer` (W3 Q3f,
-  D-7030, the operator's answer door of the question family) are
+  operator's Settings row for the automatic coordinator roll), `POST /api/testbox/switch` (test box plan TB9, D-7411,
+  the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554)
+  and `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside

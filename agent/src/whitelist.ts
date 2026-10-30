@@ -358,6 +358,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-orphan': '--expect',
   'ws-title': '--session',
   'ws-shed-deps': '--session',
+  'testbox-remote': '--state',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -518,6 +519,12 @@ export const EXEC_WHITELIST = {
     // positional form the verb might grow and stay green in
     // `whitelist-subset.test.ts`'s layers 2 and 3 (g14 is the other side).
     ['reclaim-pause', '--state'],
+    // The test box switch's writer (test box plan TB9, D-7411; spec 2026-10-28 §2.7), granted on `coord-pause`'s
+    // argument exactly: `$REG/testbox-remote-live` is a registry-file write/unlink, non-destructive, and the server
+    // may write only `~/.cc-clips` here, so the marker is raised through this verb or not at all. ENROLLED in
+    // `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole argument surface, and a bare `['testbox-remote']`
+    // would admit every positional form it might grow (g24 is the other side).
+    ['testbox-remote', '--state'],
     // The project pool tag's writer (account pools, spec §5.4.2), granted on
     // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
     // write/unlink, non-destructive, and granting it widens nothing that

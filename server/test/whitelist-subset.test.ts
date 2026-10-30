@@ -286,6 +286,19 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('off')])).toBe(true);
   });
 
+  // The test box switch (test box plan TB9, D-7411): `reclaim-pause`'s argument exactly. What this verb guards is
+  // whether a session's tests leave the fleet host, reached from `POST /api/testbox/switch` (session-only), so a bare
+  // `['testbox-remote']` — green in layer 2 and in layer 3's reachability check — is refused here.
+  it('testbox-remote is grantable ONLY with --state', () => {
+    const tb = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'testbox-remote');
+    expect(tb.length, 'exactly one testbox-remote grant').toBe(1);
+    expect(tb[0]).toEqual(['testbox-remote', '--state']);
+    expect(isExecAllowed('ccd', ['testbox-remote', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['testbox-remote'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.testboxRemote('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.testboxRemote('off')])).toBe(true);
+  });
+
   // NATIVE DOCS READER wave 2 (spec 2026-10-01 section 2 (a), row 44). Four
   // read-only verbs, each enrolled for its ARGUMENT SURFACE (`coord-pause`'s
   // reason) and reached from session-gated routes that carry no box token. A
@@ -530,6 +543,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsTitle: ['ws-title', '--session', 'demo-quiet-basin', '--title', '-- ENG-1234 - Fix the login flow'],
     coordPause: ['coord-pause', '--state', 'on'],
     reclaimPause: ['reclaim-pause', '--state', 'on'],
+    testboxRemote: ['testbox-remote', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
     route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
@@ -798,5 +812,71 @@ describe("layer 4b — the token-sync op is not an exec path, and its spawn port
     for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
       expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls spawnTokenSync(`).toBe(0);
     }
+  });
+});
+
+// Layer 4c (test box plan TB9, D-7411, D-7430): the `testbox` and `testbox-tools-sync` ops are the FOURTH class of
+// wire-triggered spawn outside the exec whitelist. Their spawns are fixed templates in `agent/src/testboxOp.ts`
+// (`systemctl --user show-environment`, the settings printer, the six version probes), run through the bounded spawner
+// with no field of the frame in them. The same two properties as layers 4 and 4b: neither case nor the op's module
+// names an exec-surface symbol, and the op bodies are called exactly once each in agent/src, inside their own case.
+describe('layer 4c — the testbox ops are not an exec path, and their bodies have one caller each', () => {
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools']])(
+    "(a) `case '%s'` and agent/src/testboxOp.ts name no exec-surface symbol", (word, body) => {
+      const cut = caseBody(handleReq, word);
+      expect(code(cut)).not.toMatch(EXEC_PATH);
+      expect(code(cut), 'the cut is the op, not an empty slice').toMatch(new RegExp(`\\b${body}\\s*\\(`));
+      expect(code(readFileSync(path.join(SRC_DIR, 'testboxOp.ts'), 'utf8'))).not.toMatch(EXEC_PATH);
+    });
+
+  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools']])(
+    "(b) the `%s` op's body is called exactly once in agent/src, inside its case", (word, body) => {
+      const cut = caseBody(handleReq, word);
+      const call = new RegExp(`\\b${body}\\s*\\(`, 'g');
+      expect(code(cut).match(call)?.length ?? 0, `one call inside case '${word}'`).toBe(1);
+      const outside = serverSrc.replace(cut, '');
+      expect(outside.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+      expect(code(outside).match(call)?.length ?? 0, `call sites outside case '${word}' in server.ts`).toBe(0);
+      for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts' && n !== 'testboxOp.ts')) {
+        expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls ${body}(`).toBe(0);
+      }
+    });
+
+  it("(c) the op's module spawns only through the bounded spawner, never `child_process` itself", () => {
+    const src = code(readFileSync(path.join(SRC_DIR, 'testboxOp.ts'), 'utf8'));
+    expect(src).not.toMatch(/child_process/);
+    expect(src).toMatch(/from '\.\/testbox\/exec\.js'/);
   });
 });

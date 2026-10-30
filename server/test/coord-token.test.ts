@@ -493,10 +493,11 @@ describe('matchDigestSlots: every slot compared, every time', () => {
 });
 
 describe('every box-token lane names itself to the check', () => {
-  // The 15 call sites (server.ts 2, coord/routes.ts 12, update/routes.ts 1) each
+  // The 17 call sites (server.ts 2, coord/routes.ts 14, update/routes.ts 1) each
   // pass their route key, so a retired presentation is counted per lane. The
   // one call before the first registration is requireMailToken's own, which
-  // passes the `route` its 15 callers name.
+  // passes the `route` its callers name. Two are the test box's read and tools
+  // sync (test box plan TB9, D-7554), which take the session OR the box token.
   const CALL = /checkMailToken\(deps\.mailToken \?\? null, req\.headers\[MAIL_TOKEN_HEADER\](?:, ([^)]+))?\)/g;
   const sites = (rel: string): { lane: string | null; route: string | null }[] => {
     const src = readFileSync(path.join(repoRoot, 'server', 'src', rel), 'utf8');
@@ -508,9 +509,9 @@ describe('every box-token lane names itself to the check', () => {
     });
   };
 
-  it('all fifteen pass a lane, and a literal lane is its own route key', () => {
+  it('all seventeen pass a lane, and a literal lane is its own route key', () => {
     const all = ['server.ts', 'coord/routes.ts', 'update/routes.ts'].flatMap(sites);
-    expect(all).toHaveLength(15);
+    expect(all).toHaveLength(17);
     for (const s of all) {
       expect(s.lane, `a call inside ${s.route ?? 'the helper'} names no lane`).not.toBeNull();
       if (s.route === null) expect(s.lane).toBe('route');

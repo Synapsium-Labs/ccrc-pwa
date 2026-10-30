@@ -279,8 +279,16 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   const TB8_HOLDERS = [
     'agent/src/testbox/budget.ts', 'agent/src/testbox/client.ts', 'ccd/ccrc-test', 'ccd/testbox-parity', 'server/test/testbox-wrapper.test.ts',
   ];
-  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB8_HOLDERS].sort();
-  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB8: the remote arm)', () => {
+  // TB9 (D-7411) adds the agent op, which reads the fleet host's settings through the printer (testboxOp.ts), its wire
+  // types and their doc, the server's decider and poll, the switch's ccd verb with its grant and its builder (each
+  // naming the marker it writes), and their tests.
+  const TB9_HOLDERS = [
+    'agent/CLAUDE.md', 'agent/src/testboxOp.ts', 'agent/src/whitelist.ts', 'agent/test/testbox-op.test.ts', 'ccd/ccd',
+    'server/src/ccdargv.ts', 'server/src/testbox.ts', 'server/src/testboxLane.ts', 'server/test/testbox-routes.test.ts',
+    'shared/agent-protocol.ts',
+  ];
+  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB8_HOLDERS, ...TB9_HOLDERS].sort();
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB8: the remote arm; TB9: the agent op, the decider and the switch verb)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);
