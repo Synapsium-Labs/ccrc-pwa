@@ -690,12 +690,15 @@ export class FleetWatcher {
    * `hasNotice` before announcing. The tray tag alone was not enough: it made a
    * repeated push REPLACE that PR's own notification, but every push is also a
    * feed row, and nothing replaced the row. Measured 2026-10-21: a restart
-   * wrote a merged PR's `merged` row a second time. Three repeats remain, by
+   * wrote a merged PR's `merged` row a second time. Four repeats remain, by
    * design: a row pruned past `FEED_RETENTION` reads as never written; a push
-   * the presence gate kept out of the archive wrote no row to find; and a row
-   * archived before the key existed is matched only by its exact body, so one
-   * whose reason clause changed since (its run closed after it was written)
-   * repeats once, at the first sweep after the deploy, and that repeat is keyed.
+   * the presence gate kept out of the archive wrote no row to find; a push
+   * whose archive write threw (`notify` logs it, answers `archived: 'failed'`
+   * and still pushes) wrote none either; and a row archived before the key
+   * existed is matched only by its exact body, so one whose reason clause
+   * changed since (a hold placed, released or reworded, a run opened or
+   * closed, or the run read turning readable or unreadable) repeats once, at
+   * the first sweep after the deploy, and that repeat is keyed.
    */
   private mergedNotified = new Set<string>();
   /** The merge-queue word each session's last full pr-state line carried
@@ -1817,7 +1820,8 @@ export class FleetWatcher {
    * The set of session ids that currently have a pending menu dialog. Exposed
    * so a one-shot fleet assembly (the /api/fleet REST, and the /ws/fleet push
    * on a connect before this watcher's first broadcast — after it, the cold
-   * frame IS that broadcast, `currentFleet`) can reflect an ALREADY-pending
+   * frame is that broadcast, `currentFleet`, less any landing past its window
+   * (`dropStaleLandings`)) can reflect an ALREADY-pending
    * dialog. Without this, a
    * dialog that appeared before a client connected shows no "needs you" marker
    * on the fleet overview: the initial push omits it and the watcher only
@@ -1829,10 +1833,13 @@ export class FleetWatcher {
   }
 
   /** The fleet this watcher last BROADCAST, or null before its first. A new
-   *  /ws/fleet socket takes it as its cold frame: it is exactly what every
-   *  connected client already holds, and this watcher re-emits only on change,
-   *  so a cold frame assembled apart from it — from state captured at connect,
-   *  or off a registry listing that failed once — was never corrected. */
+   *  /ws/fleet socket takes it as its cold frame, and the degraded GET
+   *  /api/fleet answers it, in both cases less any landing past its window
+   *  (`server.ts` passes it through `dropStaleLandings`): what every connected
+   *  client holds, save a prediction too old to show, which the next listable
+   *  tick drops for them too. This watcher re-emits only on change, so a cold
+   *  frame assembled apart from it, from state captured at connect or off a
+   *  registry listing that failed once, was never corrected. */
   currentFleet(): FleetSession[] | null {
     return this.lastFleet;
   }
@@ -8074,8 +8081,9 @@ export class FleetWatcher {
    * contradict each other. `sweepMerged` announces a merge once per
    * (workspace, PR) through the in-memory `mergedNotified` latch — an edge —
    * because a sentence repeated every 120 s for the life of a workspace is
-   * noise, and losing that edge to a restart costs one silently-replaced
-   * notification (see the field's own docstring). The old consumer was
+   * noise, and a restart that loses that edge does not repeat the
+   * announcement, because the archive's keyed row answers `hasNotice` (the
+   * field's own docstring lists the repeats that remain). The old consumer was
    * `ws-archive`, which is idempotent and destructive, so it wanted the
    * opposite: no latch at all, and a retry every sweep. It is gone (operator
    * ruling, 2026-09-10 — see `sweepMerged`).

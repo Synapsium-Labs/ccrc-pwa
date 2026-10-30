@@ -292,6 +292,9 @@ const CHECKS: Case[] = [
   ['red is named before pending: one required name red and another still running prints RED', with_(measured, {
     checkruns: runs(run('test (server)', 'failure'), run('test (agent)', null, 'in_progress'), run('test (pwa)'), run('build-pwa')) }),
     'RED test (server) [github-actions]'],
+  ['a required name that failed and then passed on the same head is still red: any completed run that failed is red (D-7495)',
+    with_(measured, { checkruns: runs(run('test (server)', 'failure'), run('test (server)'), run('test (agent)'), run('test (pwa)'), run('build-pwa')) }),
+    'RED test (server) [github-actions]'],
   ['a required App check red on the head, which no rerun reaches', with_(thirdParty, {
     checkruns: runs(run('ci/app', 'action_required', 'completed', OTHER_APP)) }), 'RED ci/app [app 999]'],
   ['a required commit status in error', with_(bare, { ...rules(rsc([{ context: 'legacy/ci' }])),

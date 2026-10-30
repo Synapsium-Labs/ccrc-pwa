@@ -1236,7 +1236,14 @@ decides what this session does, and nothing else does:
   group itself.
 - `MERGED head=<sha>` — the PR already landed: prove it as step 3 does
   (MERGED, `headRefOid` equal to `handoffCommit`). It is not a stop; a
-  different head fails the proof, and that is reported, never closed on.
+  different head fails the proof, and that is reported, never closed on. A PR a
+  merge train landed reads CLOSED instead, so for it the verdict prints
+  `STOP not-at-head: the PR is CLOSED`. Before you report that stop, prove the
+  landing as step 3 does: CLOSED, `headRefOid` equal to `handoffCommit`, and
+  `landedInTrain: true` on the PR's row of `ccd pr-state --session
+  <sessionId>`. Where that proof holds, the PR landed, as on this line; where
+  it does not (`trainUnproven`, `trainUnread`, no row, or another head), the
+  stop stands.
 - `WAIT pending: <names>` — a reported required check is still running. Wait
   in the foreground, `gh pr checks <pr> --required --watch`, again if the call
   times out while a reported required check is still pending, then run the
@@ -1350,8 +1357,10 @@ there GitHub's refusal is the stop, `github-refused`. Route Q is unchanged: its
 enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is
 `--admin` after a refusal.
 
-**On every route** the merge is proven as step 3 proves it: MERGED, with
-`headRefOid` equal to `handoffCommit`. A refused merge on route G or U is
+**On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED
+with `landedInTrain: true` on the PR's row of `ccd pr-state --session
+<sessionId>`, with `headRefOid` equal to `handoffCommit`. A refused merge on
+route G or U is
 read, reported and stopped on, and never retried with another method, with
 `--admin` or with `--auto`. This session writes no setting to make a route
 work: no ruleset, no branch protection, no merge-method or auto-merge setting
@@ -1419,7 +1428,17 @@ refused for a rule it enforces at merge and this session does not verify —
 reviews, signatures, deployments, code scanning, required workflows — which
 this session never works around. Not a stop: a required check red on the head
 that is the PR's own; that goes to the fix-round rule, on route G exactly as
-on route Q.
+on route Q. A `red-unreachable` whose red is `main`'s own, already fixed on
+`main`, needs a new head, and its report names that route: a fix round to the
+owning worker on the `merging → working` edge (on route Q disarm first) for one
+clean merge of `main` and nothing else, then a review run scoped to that merge
+alone. The one rerun the RED bullet allows does not clear a red that is
+`main`'s own, and no close and reopen does either: the verdict calls a required
+name red while any completed run of it on the head failed, a later green run of
+it included (D-7495; judging only the newest run would loosen the gate, which
+is the operator's to decide), a rerun replays its run's original merge commit,
+and a close and reopen of the PR can race GitHub's recompute of the merge ref.
+The report of the stop names the new-head route above, not a rerun.
 
 ## 6 — Final merge
 

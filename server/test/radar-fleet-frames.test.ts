@@ -120,9 +120,15 @@ describe('FleetSession.landing on the three frames', () => {
   });
 
   it('tick() runs the lane itself: no earlier pass, and the broadcast still reaches a landing', async () => {
-    const { watcher } = await boot(false);
-    await watcher.tick();
+    const { bus, watcher } = await boot(false);
+    const frames: FleetSession[][] = [];
+    bus.on('fleet', (s) => frames.push(s as FleetSession[]));
+    await watcher.tick();                                                         // the lane's first pass starts here
     await vi.waitFor(() => expect(watcher.currentLandings().get(ID)).toMatchObject(LANDING));
+    await watcher.tick();                                                         // a tick after the pass broadcasts it
+    expect(frames.length, 'tick() broadcast no fleet').toBeGreaterThan(0);
+    expect(row(frames.at(-1)!).landing, 'the broadcast never reached the landing the lane found').toMatchObject(LANDING);
+    expect(row(watcher.currentFleet()!).landing).toMatchObject(LANDING);
   });
 
   // Fix round 1, R1 (review 1225, F1): four sends carry a fleet that was not just assembled, so `assembleFleet`'s own

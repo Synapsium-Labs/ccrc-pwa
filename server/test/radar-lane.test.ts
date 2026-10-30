@@ -334,7 +334,9 @@ describe('the radar lane', () => {
     // G6 (review 1225, F4). The cases above hand `sweepRadar(null, …)` in directly, which is why a `[]` for the null in the
     // tick's hand-off survived: an empty record list is a LISTED registry with no sessions, and rebuilds the map empty.
     // This one drives `tick()`, twice, a lane beat (60 s) apart, the registry unlistable through its `readdir` alone.
-    it('tick() hands an unlistable registry to the lane as null: the kept map is re-aged, never emptied', async () => {
+    // It pins the null hand-off and the kept map. Its second tick runs at +61 s, inside the doc's window, so the re-ageing
+    // is pinned by the direct `sweepRadar(null, …)` cases above (review 1226, F2).
+    it('tick() hands an unlistable registry to the lane as null, and the lane keeps the map it holds (G6)', async () => {
       plantFleet(); plantProbe(worked());
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(NOW);
