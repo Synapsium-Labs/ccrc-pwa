@@ -37,6 +37,7 @@ const pendingReads = () => {
     stall: vi.spyOn(api, 'stallWatch').mockImplementation(never),
     collect: vi.spyOn(api, 'collectLane').mockImplementation(never),
     dispatchAbandon: vi.spyOn(api, 'dispatchAbandon').mockImplementation(never),
+    testbox: vi.spyOn(api, 'testbox').mockImplementation(never),
     fetch,
   };
 };
@@ -104,11 +105,11 @@ describe('the index and the section routes', () => {
     expect(within(index()).getAllByRole('link')).toHaveLength(5);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its five cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its six cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3]);
   });
 });
 
@@ -151,6 +152,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
       expect(reads.stall).toHaveBeenCalledTimes(1);
       expect(reads.collect).toHaveBeenCalledTimes(1);
       expect(reads.dispatchAbandon).toHaveBeenCalledTimes(1);
+      expect(reads.testbox).toHaveBeenCalledTimes(1);
       // The auth status, once per mount (its own fetch: `readAuthStatus` never raises auth-lost).
       expect(reads.fetch.mock.calls.filter(([u]) => String(u).includes('/api/auth/status'))).toHaveLength(1);
     });
@@ -206,6 +208,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
     expect(reads.stall).not.toHaveBeenCalled();
     expect(reads.collect).not.toHaveBeenCalled();
     expect(reads.dispatchAbandon).not.toHaveBeenCalled();
+    expect(reads.testbox).not.toHaveBeenCalled();
     expect(reads.fetch).not.toHaveBeenCalled();
   });
 
@@ -227,16 +230,16 @@ describe('the provider: reads made once (spec §4.4)', () => {
     const files = readdirSync(dir).filter((f) => /\.tsx?$/.test(f));
     expect(files).toContain('SettingsDataProvider.tsx');
     expect(files.length).toBeGreaterThanOrEqual(9);
-    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useLinearConnection', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
+    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useTestboxView', 'useLinearConnection', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
     /** The value names a file imports (a `type` import reads nothing). */
     const imported = (text: string): string[] => [...text.matchAll(/^import \{([^}]*)\} from '[^']+';/gm)]
       .flatMap((m) => m[1]!.split(',').map((n) => n.trim()).filter((n) => n !== '' && !n.startsWith('type ')))
       .map((n) => n.split(' as ')[0]!.trim());
     const importers = files.filter((f) => imported(readFileSync(path.join(dir, f), 'utf8')).some((n) => READS.has(n)));
     expect(importers).toEqual(['SettingsDataProvider.tsx']);
-    // And the three cards outside the directory take the frame's poll rather than reading their own.
-    for (const f of [path.join('screens', 'StallWatchSection.tsx'), path.join('fleet', 'CollectLaneSection.tsx'), path.join('screens', 'LinearSection.tsx')]) {
-      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearConnection)\(/);
+    // And the cards outside the directory take the frame's poll rather than reading their own.
+    for (const f of [path.join('screens', 'StallWatchSection.tsx'), path.join('fleet', 'CollectLaneSection.tsx'), path.join('screens', 'LinearSection.tsx'), path.join('fleet', 'TestBoxSection.tsx')]) {
+      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearConnection|TestboxView)\(/);
     }
   });
 });
@@ -289,7 +292,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     updates: ['Fleet version', 'Nodes', 'Update policy'],
     appearance: ['Layout and theme'],
     notifications: ['Push notifications', 'Release announcements'],
-    automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions'],
+    automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Test box'],
     security: ['Sign-in gate', 'Box token', 'Linear'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
