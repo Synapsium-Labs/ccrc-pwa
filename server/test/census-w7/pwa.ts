@@ -422,6 +422,8 @@ export const VIEWER_PRESENCE_NAMES: readonly string[] = [
   'PRESENCE_REFRESH_MS', 'PRESENCE_TTL_MS', 'PRESENCE_OPEN_TTL_MS',
   'presenceHeldSince', 'lastPresenceWallAt', 'lastPresenceDeferredAt', 'firstPresenceDeferredAt', 'collectAfterPresence',
   'presenceSince', 'childReclaimPresenceWithin', 'CollectPresence', 'CHILD_RECLAIM_PRESENCE_GAP_PASSES', 'CHILD_RECLAIM_PRESENCE_DEFERS',
+  // the retire rows' viewer rule, its judge and the viewer steps' keys (`server/src/retire.ts`, C4i's, after item 18 was counted)
+  'RETIRE_PRESENCE_RULES', 'RetirePresenceRule', 'presenceJudge', 'presenceLast',
 ];
 
 /** Every identifier occurrence of a `VIEWER_PRESENCE_NAMES` name in a source (imports included; comments are not code),
@@ -435,6 +437,24 @@ export const viewerWordsAsPresence = (): W7Site[] => [
   ...walkSrc({ roots: ['shared'], min: 5, flat: true, match: /\.ts$/ }),
   ...pwaSources(),
 ].flatMap((rel) => viewerWordsAsPresenceIn(parsedFile(rel), rel));
+
+/** The files where a bare `presence` NAME can only mean a viewer: the collector's and the child reclaim's memory, the
+ *  retire rows and the three reasons' executors. A session's presence is not read in any of them. */
+export const VIEWER_ONLY_FILES: readonly string[] = [
+  'server/src/collectLane.ts', 'server/src/childReclaimSweep.ts', 'server/src/retire.ts',
+  'server/src/coord/collectTempRoot.ts', 'server/src/coord/expireArchived.ts', 'server/src/coord/childReclaim.ts',
+];
+
+/** Every identifier `presence` in a `VIEWER_ONLY_FILES` source (a field, a key, a property read, a local), kind
+ *  `presence`. `presence` is also SESSION presence's name, so `viewerWordsAsPresence` cannot list it by name; this
+ *  row reads it only where it can mean a viewer. KNOWN WIDTH: a member keyed BY the persisted word (a map from each
+ *  defer, item or why word, such as `collectLane.ts#COLLECT_ITEM_MANY`) keeps the word as its key and is listed. */
+export function viewerNamesAsPresenceIn(p: ParsedFile, file: string): W7Site[] {
+  return identifierReferences(p.text, file, new Set(['presence']))
+    .map((r) => ({ file, symbol: enclosingSymbol(p, lineOffset(p.text, r.line, r.name)), line: r.line, text: lineStart(p.text, r.line).trim().slice(0, 140), kind: r.name }));
+}
+export const viewerNamesAsPresence = (): W7Site[] =>
+  VIEWER_ONLY_FILES.flatMap((rel) => viewerNamesAsPresenceIn(parsedFile(rel), rel));
 
 /** The word OA-C18 (a) keeps (D-7193, Task C7o): every whole string expression whose value is exactly `presence` in
  *  `server/src` and `shared/`, kind `presence`. It is the defer, feed and journal word a viewer's claim is answered

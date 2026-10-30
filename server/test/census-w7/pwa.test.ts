@@ -16,7 +16,7 @@ import {
   dialogSheetStatesIn, ensureCallers, ensureCallersIn, fixture, inlineDeadChecks, inlineDeadChecksIn, pageClockSubscriptions,
   pageClockSubscriptionsIn, paneTextDecisions, paneTextDecisionsIn, placementCopies, placementCopiesIn, PUSH_SW, requestPolls,
   requestPollsIn, runMatchers, runMatchersIn, sessionPathLiterals, sessionPathLiteralsIn, showSite, singleReaders, singleReadersIn,
-  storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, persistedPresenceWords, persistedPresenceWordsIn, type W7Site,
+  storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, viewerNamesAsPresence, viewerNamesAsPresenceIn, persistedPresenceWords, persistedPresenceWordsIn, type W7Site,
 } from './pwa.js';
 import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
 import { ENSURE_OWNER, SESSION_PATH_OWNER } from './pwa.js';
@@ -261,6 +261,16 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
     expect(got.map((s) => [s.kind, s.line])).toEqual([['PRESENCE_TTL_MS', 1], ['PRESENCE_TTL_MS', 3]]);
   });
 
+  it('viewerNamesAsPresence: a bare presence name counts as a field, a key, a read and a local; a string, a longer name and a comment do not', () => {
+    const got = run(viewerNamesAsPresenceIn, [
+      'interface E { readonly presence: V | null }',
+      "const e = { presence: null, kind: 'presence' }; // presence",
+      'const n = e.presence?.count;',
+      'const presence = true; const presenceOf = 1;',
+    ].join('\n'), 'server/src/collectLane.ts');
+    expect(got.map((s) => [s.kind, s.line])).toEqual([['presence', 1], ['presence', 2], ['presence', 3], ['presence', 4]]);
+  });
+
   it("persistedPresenceWords: a 'presence' literal counts, in a union type too; a bare property name, a longer word and a comment do not", () => {
     const got = run(persistedPresenceWordsIn, [
       "export type Why = 'caps' | 'presence';",
@@ -401,12 +411,20 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     held('placementCopies', placementCopies(), 0);
   });
 
-  it('viewerWordsAsPresence(): 0 (from 62): no viewer constant or defer-derived identifier says presence (C7o, D-7193)', () => {
+  it('viewerWordsAsPresence(): 0 (from 92: item 18\'s 62 and the retire rows\' 30): no viewer constant or defer-derived identifier says presence (C7o, D-7193)', () => {
     const sites = viewerWordsAsPresence();
     const byName = countBy(sites, (s) => s.kind);
     console.log(`census-w7 viewerWordsAsPresence: ${sites.length} ${JSON.stringify(byName)}`);
     held('viewerWordsAsPresence', sites, 0);
     expect(byName).toEqual({});
+  });
+
+  it('viewerNamesAsPresence(): 5 (from 44): only the maps keyed BY the persisted word keep a bare presence name (C7o, D-7193)', () => {
+    const sites = viewerNamesAsPresence();
+    const byFile = countBy(sites, (s) => s.file);
+    console.log(`census-w7 viewerNamesAsPresence: ${sites.length} ${JSON.stringify(byFile)}`);
+    held('viewerNamesAsPresence', sites, 5);
+    expect(byFile).toEqual({ 'server/src/collectLane.ts': 2, 'server/src/coord/collectTempRoot.ts': 2, 'server/src/coord/childReclaim.ts': 1 });
   });
 
   it("persistedPresenceWords(): the 'presence' word the wire, the feed, coord.db and the journals carry, by file (C7o keeps it)", () => {
