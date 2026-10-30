@@ -662,12 +662,21 @@ while [ $# -gt 0 ]; do
     --classify) mode=classify; shift ;;
     --classify-shell) mode=classify-shell; shift ;;
     --status) mode=status; shift ;;
+    --testbox-knobs) mode=testbox-knobs; shift ;;
     -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --) shift; break ;;
     -*) _tusage "unknown argument: $1" ;;
     *) break ;;
   esac
 done
+# `--testbox-knobs host|box` (D-7403, D-7430): the test box's settings, validated, one `KEY<US>default<US>value<US>from`
+# line each, from ccd/testbox-knobs. It only reads: the slice's settings are not loaded and nothing is forked.
+if [ "$mode" = testbox-knobs ]; then
+  [ $# -eq 1 ] && { [ "$1" = host ] || [ "$1" = box ]; } || _tusage "--testbox-knobs takes host or box"
+  # shellcheck source=testbox-knobs
+  . "$TEST_HERE/testbox-knobs" || { echo "$PROG: cannot load $TEST_HERE/testbox-knobs, so no test box setting can be read" >&2; exit 1; }
+  _testbox_knobs "$1"; exit $?
+fi
 _tload
 if [ "$mode" = status ]; then [ $# -eq 0 ] || _tusage "--status takes no command"; _tstatus; exit $?; fi
 if [ "$mode" = classify-shell ]; then

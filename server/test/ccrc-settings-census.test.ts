@@ -90,9 +90,19 @@ const SIBLING_FILES: readonly string[] = (() => {
     .filter((f) => /^#!.*\bbash\b/.test(read(f).split('\n', 1)[0]!)).sort();
 })();
 const SIBLING_CODE: Record<string, string> = Object.fromEntries(SIBLING_FILES.map((f) => [f, codeOf(read(f))]));
+/** D-7403 (test box TB1): the test box's settings table, ccd/testbox-knobs, sourced by ccd/ccrc-test and never placed by
+ *  `_inst_bins`; its literal `_ccrc_knob` calls are the test box keys' only takes. */
+const TESTBOX_KNOBS = 'ccd/testbox-knobs';
+const TESTBOX_CODE = codeOf(read(TESTBOX_KNOBS));
 /** Every file whose literal `_ccrc_knob`/`_keep_knob` calls C2 and C4 read. */
-const KNOB_CODE = (): string[] => [...FILES.map((f) => CODE[f]), ...SIBLING_FILES.map((f) => SIBLING_CODE[f]!)];
+const KNOB_CODE = (): string[] => [...FILES.map((f) => CODE[f]), ...SIBLING_FILES.map((f) => SIBLING_CODE[f]!), TESTBOX_CODE];
 const EXAMPLE = read('deploy/ccrc.env.example');
+/** D-7451: the test box's own keys (the ones `_tb_box_table` takes) are documented in the box's example file, the
+ *  template of its one config file, /etc/ccrc-testbox/ccrc.env, never in the fleet host's. */
+const TESTBOX_EXAMPLE = read('deploy/testbox/ccrc.env.example');
+const TESTBOX_BOX_KEYS: ReadonlySet<string> = new Set(
+  [...(/^_tb_box_table\(\) \{[\s\S]*?\n\}$/m.exec(TESTBOX_CODE)?.[0] ?? '').matchAll(/\b_ccrc_knob (CCRC_[A-Z0-9_]+)/g)].map((m) => m[1]!),
+);
 const README = read('README.md');
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
@@ -295,6 +305,9 @@ function boxEnvCalls(): { file: CodeFile; owner: string; key: string; text: stri
  *  CCRC_SETTINGS in graph revision 2's GR2, and its plan folds every task's README text into GR8, which names them in
  *  the paragraph and deletes this. C2 still holds their example lines and defaults. */
 const README_LATER = /^CCRC_GRAPH_/;
+/** D-7403: the test box's keys join CCRC_SETTINGS in TB1, and the test box plan folds every task's README text into
+ *  TB11, which names them in the paragraph and deletes this. C2 still holds their example lines and defaults. */
+const README_LATER_TESTBOX = /^CCRC_TESTBOX_/;
 
 /** The README paragraph that opens `**ccrc's own settings.**`. */
 function readmeSettingsParagraph(): string | null {
@@ -306,8 +319,8 @@ function readmeSettingsParagraph(): string | null {
 
 /** A documented setting's block: the `#` lines directly above its line, up to
  *  the nearest bare `#` line, blank line or other `# KEY=` line. */
-function exampleBlocks(name: string): string[] {
-  const lines = EXAMPLE.split('\n');
+function exampleBlocks(name: string, example: string = EXAMPLE): string[] {
+  const lines = example.split('\n');
   const out: string[] = [];
   lines.forEach((l, i) => {
     if (!new RegExp('^(# )?' + escapeRe(name) + '=').test(l)) return;
@@ -353,8 +366,11 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     for (const s of SETTINGS) {
       const d = [...(defaults.get(s) ?? [])];
       if (d.length !== 1) { faults.push(`${s}: ${d.length} distinct defaults across its literal calls (${d.join(', ')}), not one`); continue; }
-      const blocks = exampleBlocks(s);
-      if (blocks.length === 0) faults.push(`${s}: no "${s}=" or "# ${s}=" line in deploy/ccrc.env.example`);
+      const boxKey = TESTBOX_BOX_KEYS.has(s);
+      const exampleFile = boxKey ? 'deploy/testbox/ccrc.env.example' : 'deploy/ccrc.env.example';
+      const blocks = exampleBlocks(s, boxKey ? TESTBOX_EXAMPLE : EXAMPLE);
+      if (blocks.length === 0) faults.push(`${s}: no "${s}=" or "# ${s}=" line in ${exampleFile}`);
+      if (boxKey && exampleBlocks(s).length > 0) faults.push(`${s}: a test box key documented in deploy/ccrc.env.example, which the box never reads`);
       const re = /^\d+$/.test(d[0]) ? new RegExp('\\bDefault\\b[^.;]*\\b' + d[0] + '\\b') : /\bDefault\b/;
       for (const b of blocks) if (!re.test(b)) faults.push(`${s}: its block does not name its default (${d[0]}) as ${re}: ${JSON.stringify(b)}`);
     }
@@ -362,11 +378,13 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     if (para === null) faults.push("README: no paragraph opens **ccrc's own settings.**");
     else {
       for (const s of SETTINGS)
-        if (!README_LATER.test(s) && !new RegExp('\\b' + s + '\\b').test(para)) faults.push(`README: the settings paragraph does not name ${s}`);
+        if (!README_LATER.test(s) && !README_LATER_TESTBOX.test(s) && !new RegExp('\\b' + s + '\\b').test(para)) faults.push(`README: the settings paragraph does not name ${s}`);
       // The exception expires itself: once the paragraph names any graph key, it must name them all, and this row then
       // asks for README_LATER to be deleted.
       const named = SETTINGS.filter((s) => README_LATER.test(s) && new RegExp('\\b' + s + '\\b').test(para));
       if (named.length > 0) faults.push(`README: the settings paragraph names ${named.length} graph key(s); name every one and delete README_LATER`);
+      const namedTb = SETTINGS.filter((s) => README_LATER_TESTBOX.test(s) && new RegExp('\\b' + s + '\\b').test(para));
+      if (namedTb.length > 0) faults.push(`README: the settings paragraph names ${namedTb.length} test box key(s); name every one and delete README_LATER_TESTBOX`);
     }
     expect(faults).toEqual([]);
   });
