@@ -224,10 +224,14 @@ describe('the bare-host mode\'s scope (D-7289)', () => {
     expect(n('$(_upd_redact)')).toBe(0);
   });
 
-  it('every _upd_redact call in ccd/ccrc and ccd/ccrc-doctor-checks passes exactly one argument', () => {
-    for (const f of ['ccd/ccrc', 'ccd/ccrc-doctor-checks']) {
+  // The call counts are pinned exactly, as measured on this tree: a call the reader stops seeing (a new spelling, a moved
+  // line it misreads) reds here, not only a call that passes a second word. A commit that adds or removes a call moves
+  // its file's count in the same diff.
+  const CALLS = { 'ccd/ccrc': 18, 'ccd/ccrc-doctor-checks': 3 } as const;
+  it('every _upd_redact call in ccd/ccrc and ccd/ccrc-doctor-checks passes exactly one argument, and their counts are pinned', () => {
+    for (const [f, count] of Object.entries(CALLS)) {
       const calls = updRedactCalls(read(f));
-      expect(calls.length, `${f} has _upd_redact callers`).toBeGreaterThan(0);
+      expect(calls.length, `${f}'s _upd_redact calls`).toBe(count);
       for (const c of calls) expect({ f, line: c.line, args: c.args, bareHost: c.bareHost }, c.text).toEqual({ f, line: c.line, args: 1, bareHost: false });
     }
   });
