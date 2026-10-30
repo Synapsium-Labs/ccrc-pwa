@@ -858,12 +858,19 @@ describe('the Claude Code version grammar and its floor are defined once, in sha
     const holders = ALL.filter((f) => FLOOR.test(stallCode(f))).map(rel).sort();
     expect(holders).toEqual(['shared/claudeVersion.ts']);
   });
-  it('the grammar\'s body is spelled once, and livestate parses no version of its own', () => {
+  it('the grammar\'s body is spelled once, and livestate parses no version of its own', async () => {
     const holders = ALL.filter((f) => stallCode(f).includes(BODY)).map(rel).sort();
     expect(holders).toEqual(['shared/claudeVersion.ts']);
     const live = stallCode(path.join(ccrcRoot, 'server', 'src', 'livestate.ts'));
     expect(live).not.toMatch(/\(\\d\+\)\\\.\(\\d\+\)/);
-    expect(live).toMatch(/from '\.\.\/\.\.\/shared\/claudeVersion\.js'/);
+    // D-7512 (named exception): the floor's one reader, `liveStatusCoversDelegation`, moved to `liveVerdicts.ts`, so
+    // its import of the lexicon and its want of a version parse are read there, through the parse rather than as a
+    // literal pin over the file (the literal-pin ratchet, `advance-switches.test.ts`).
+    const { parsedFile } = await import('../scan/symbols.js');
+    const { codeOnly, runtimeEdges } = await import('../rings/ring.js');
+    const verdicts = parsedFile('server/src/liveVerdicts.ts');
+    expect(codeOnly(verdicts.text)).not.toMatch(/\(\\d\+\)\\\.\(\\d\+\)/);
+    expect(runtimeEdges(verdicts).some((e) => e.specifier === '../../shared/claudeVersion.js')).toBe(true);
   });
 });
 
