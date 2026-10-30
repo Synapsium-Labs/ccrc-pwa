@@ -392,3 +392,18 @@ describe('viewer facts take viewer words; "presence" in TS is session presence (
     ]);
   });
 });
+
+// C7p (D-7194, D-7540; ARCH-57 #792, W7's tail): the four operator answer doors W3 Q3f's family replaced (`/ask`,
+// `/dialog`, `/dialog/text`, `/dialog/multi`) leave the server in C7p's server half, which lands after this ratchet,
+// and the PWA bundle names none of them: no skew table, no fallback, no generated render in `push-sw.js`. Read through
+// W7's census (`census-w7/pwa.ts#retiredAnswerPathRefs`), so the sites are the syntax tree's. 5 at C7g's tip (the skew
+// table's 4 and push-sw's rendered `/ask`), 0 here, and it may only stay 0. RECORDED MUTANT (run at C7p's PWA-half
+// tip): putting C7g's skew door back into `lib/api.ts`'s `createApi`
+// (`answerAsk: (id, askKey, optionIndexes) => post(`${sid(id)}/ask`, …)`) reds this row with
+// `pwa/src/lib/api.ts#createApi:<line> [reference]  `${sid(id)}/ask``.
+describe('the PWA bundle names no retired operator answer door (C7p, D-7194, D-7540)', () => {
+  it('retiredAnswerPathRefs(): 0 (from 5 at C7g); may only stay 0', async () => {
+    const { retiredAnswerPathRefs, showSite } = await import('../census-w7/pwa.js');
+    expect(retiredAnswerPathRefs().map(showSite)).toEqual([]);
+  });
+});

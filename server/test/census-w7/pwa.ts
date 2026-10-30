@@ -571,3 +571,25 @@ export function oldAnswerDoorPathsIn(p: ParsedFile, file: string): W7Site[] {
 }
 export const oldAnswerDoorPaths = (): W7Site[] =>
   [...overPwa(oldAnswerDoorPathsIn), ...oldAnswerDoorPathsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];
+
+// ─── C7p. the retired operator answer doors (D-7194, D-7540) ────────────────────────────────────────────────────────
+
+/** The four old operator answer doors W3 Q3f's family replaced, which W7 C7p's server half retires after its PWA half
+ *  (D-7540). `/dialog/tab` is not one: it answers nothing and stays a session door. */
+export const RETIRED_ANSWER_DOORS: readonly string[] = ['/ask', '/dialog', '/dialog/text', '/dialog/multi'];
+
+/** A retired door's path: one of the four at the end of a string's text, or before its query or fragment. */
+const RETIRED_ANSWER_DOOR = /\/(?:ask|dialog|dialog\/text|dialog\/multi)(?=$|[?#])/;
+
+/** Every string expression in the PWA bundle's sources (`pwa/src`, and `pwa/public/push-sw.js`, generated region
+ *  included) that names a retired operator answer door, whatever surrounds it: a whole path, a template's static part
+ *  (`${sid(id)}/dialog` is one), a bare suffix (`'/ask'`, the shape C7g's skew table held), or a path with a query.
+ *  Wider than `oldAnswerDoorPaths`, which matched only a string ENDING with a door, and classes nothing: C7p's tip
+ *  counts 0, and any site is a reference to a path C7p's server half retires. KNOWN WIDTH: a path assembled from a
+ *  variable suffix is not seen, and a comment is not code. */
+export function retiredAnswerPathRefsIn(p: ParsedFile, file: string): W7Site[] {
+  return stringExpressions(p.text, file).filter((x) => RETIRED_ANSWER_DOOR.test(x.text))
+    .map((x) => site(p, file, x.start, x.line, p.text.slice(x.start, x.end).slice(0, 140), 'reference'));
+}
+export const retiredAnswerPathRefs = (): W7Site[] =>
+  [...overPwa(retiredAnswerPathRefsIn), ...retiredAnswerPathRefsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];
