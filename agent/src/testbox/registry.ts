@@ -127,7 +127,7 @@ export class Registry {
   async packument(name: string, origin: string): Promise<{ status: number; body: Uint8Array | null; json: unknown }> {
     const file = this.packumentFile(name);
     let up: { status: number; bytes: Uint8Array } | null = null;
-    try { up = await this.upstream(name.replace('/', '%2f')); } catch { up = null; }
+    try { up = await this.upstream(name.replace(/\//g, '%2f')); } catch { up = null; }
     if (up !== null && up.status === 200) {
       let json: unknown;
       try { json = JSON.parse(Buffer.from(up.bytes).toString('utf8')); } catch { return { status: 502, body: null, json: null }; }

@@ -5,6 +5,7 @@
 // `gc` runs with git's default prune expiry. Every call passes `-c safe.directory=<mirror>`, `GIT_CONFIG_NOSYSTEM=1`
 // and an environment built from empty, so no `GIT_DIR`-style variable of the service's can redirect it. The fleet
 // agent's entry point imports nothing that reaches this file.
+import { createHash } from 'node:crypto';
 import { SERVICE_PATH, type Exec, type ExecResult } from './exec.js';
 
 export type Git = (args: readonly string[]) => Promise<ExecResult>;
@@ -64,7 +65,12 @@ export function mirrorOps(git: Git): MirrorOps {
 
 /** D-7407 (TB5): the files at a run's tree, read from the mirror for its install keys (spec §2.2): the snapshot's
  *  working tree when the run carries one, its head otherwise. `null` when the run has no head or a path is not a file
- *  there, so the run installs in its own copy and no key is queued. */
+ *  there, so the run installs in its own copy and no key is queued.
+ *
+ *  Byte-exact or `null`: the exec captures stdout as UTF-8 text up to the bounded spawner's cap and answers an empty
+ *  string past it, so each blob's bytes as read are hashed as git hashes a blob and compared with the object id the
+ *  tree names. A blob past the cap, or one whose bytes a UTF-8 decode would change, does not match, and the whole
+ *  read is `null`: a key is never computed over bytes the file does not hold. */
 export async function runTreeFiles(git: Git, mirror: string, runId: string, paths: readonly string[]): Promise<{ path: string; bytes: Uint8Array }[] | null> {
   if (!RUN_ID.test(runId)) throw new Error(`not a run id: ${JSON.stringify(runId)}`);
   const ref = async (name: string): Promise<boolean> =>
@@ -73,9 +79,19 @@ export async function runTreeFiles(git: Git, mirror: string, runId: string, path
   if (rev === null) return null;
   const out: { path: string; bytes: Uint8Array }[] = [];
   for (const p of paths) {
-    const r = await git([...at(mirror), 'cat-file', 'blob', `${rev}:${p}`]);
+    const id = await git([...at(mirror), 'rev-parse', '--verify', '--quiet', `${rev}:${p}`]);
+    const oid = id.stdout.trim();
+    if (id.status !== 0 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(oid)) return null;
+    const r = await git([...at(mirror), 'cat-file', 'blob', oid]);
     if (r.status !== 0) return null;
-    out.push({ path: p, bytes: Buffer.from(r.stdout, 'utf8') });
+    const bytes = Buffer.from(r.stdout, 'utf8');
+    if (blobId(bytes, oid.length === 40 ? 'sha1' : 'sha256') !== oid) return null;
+    out.push({ path: p, bytes });
   }
   return out;
+}
+
+/** The object id git gives a blob of `bytes`: the hash of `blob <length>\0` and the bytes. */
+function blobId(bytes: Uint8Array, algo: 'sha1' | 'sha256'): string {
+  return createHash(algo).update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
 }
