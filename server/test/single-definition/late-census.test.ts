@@ -83,6 +83,9 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     expect(named('SecretMasker.maskWithCarry')).toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
     expect(named('SecretMasker.maskDeep')).toEqual(expect.arrayContaining(['walkStrings']));
     expect(parsedFile(mask).symbols.map((x) => x.name)).not.toContain('SecretMasker.walk');
+    // and the shape-only mask splices the same spans: no private copy of shapeSpans behind SHAPE_MASK
+    expect(callsIn(symbolOf('server/src/accounts/shapes.ts', 'maskShapes')).map((c) => c.name ?? ''))
+      .toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
     for (const c of ['shapeSpans', 'spliceMasked', 'walkStrings', 'SHAPE_MASK']) {
       expect(holders(decl(c)), c).toEqual(['server/src/accounts/shapes.ts']);
     }
