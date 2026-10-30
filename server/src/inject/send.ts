@@ -2168,8 +2168,8 @@ const rowText = (row: Dialog['options'][number]): string =>
   collapse(row.description === undefined ? row.label : `${row.label} ${row.description}`);
 
 /**
- * Type `text` into an AskUserQuestion's free-text ("Type something.") row and submit it as the answer (D-5047,
- * `POST /api/sessions/:id/dialog/text`). Enter on that row while it is EMPTY rejects the WHOLE ask and discards every
+ * Type `text` into an AskUserQuestion's free-text ("Type something.") row and submit it as the answer (D-5047;
+ * `POST /api/questions/session-<id>/answer` with `text`, `/api/sessions/:id/dialog/text` until W7 C7p). Enter on that row while it is EMPTY rejects the WHOLE ask and discards every
  * question already answered (measured on Claude Code 2.1.300 and 2.1.291), so each step is proved on a fresh capture:
  *
  *  1. `isDialogText` (`shared/api.ts`) or `bad-text`, before the pane is touched.

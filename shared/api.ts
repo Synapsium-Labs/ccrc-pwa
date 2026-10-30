@@ -11025,7 +11025,8 @@ const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
 export const DIALOG_REFUSE_CODES: readonly DialogRefuseCode[] =
   Object.keys(DIALOG_REFUSE_CODE_MAP) as DialogRefuseCode[];
 
-/** The longest answer `POST /api/sessions/:id/dialog/text` types (D-5047), in UTF-16 code units (`String.length`).
+/** The longest own-words answer the server types (D-5047; `POST /api/questions/session-<id>/answer` with `text`, the
+ *  retired `POST /api/sessions/:id/dialog/text` until W7 C7p), in UTF-16 code units (`String.length`).
  *  Measured on Claude Code 2.1.300 at 220x50: a 1000-character single-line answer, sent as one literal, arrived byte for
  *  byte, painted as 5 rows with the question still inside the 50-row capture, so its echo could be proved. Nothing
  *  longer was measured. A taller row can push the question out of the capture, and then no echo proves anything. */
@@ -11036,13 +11037,15 @@ export const DIALOG_TEXT_MAX = 1000;
  *  8-bit CSI. U+2028 and U+2029 are line breaks, and the answer is one line. */
 const DIALOG_TEXT_CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
-/** Will `POST /api/sessions/:id/dialog/text` type `text` (D-5047)? Not blank once trimmed, one line, no control
+/** Will the own-words answer (`POST /api/questions/session-<id>/answer` with `text`; `/dialog/text` until W7 C7p)
+ *  type `text` (D-5047)? Not blank once trimmed, one line, no control
  *  character, at most `DIALOG_TEXT_MAX`. The route answers 400 `bad-text` otherwise, before it captures the pane. */
 export function isDialogText(text: string): boolean {
   return text.trim() !== '' && text.length <= DIALOG_TEXT_MAX && !DIALOG_TEXT_CONTROL_RE.test(text);
 }
 
-/** Every refusal `POST /api/sessions/:id/dialog/text` answers with (`answerDialogText`, `server/src/inject/send.ts`,
+/** Every refusal the own-words answer (`POST /api/questions/session-<id>/answer` with `text`; `/dialog/text` until
+ *  W7 C7p) answers with (`answerDialogText`, `server/src/inject/send.ts`,
  *  D-5047). `bad-text` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
  *  - `bad-text`: `isDialogText` refuses the text. Nothing was captured or pressed.
  *  - `not-alive`: the pane could not be captured.

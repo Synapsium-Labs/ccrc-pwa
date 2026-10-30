@@ -314,9 +314,6 @@ describe('knownId route census', () => {
       { method: 'POST', routePath: '/api/sessions/:id/prompt', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/route', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/dialog', args: 'id' },
-      // D-5047: the free-text row's own route, NOT a `text` field on `/dialog`. An older server that ignored such a
-      // field would walk onto the empty row and press Enter, rejecting the whole ask; it answers 404 to a new route.
-      { method: 'POST', routePath: '/api/sessions/:id/dialog/text', args: 'id' },
       // Decision `ask-dialog-tab-route`: moving the pane between an ask's tabs, arrows only, never Enter.
       { method: 'POST', routePath: '/api/sessions/:id/dialog/tab', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
@@ -337,10 +334,10 @@ describe('knownId route census', () => {
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
     // W7 C7p (D-7194): 22 -> 21 and 18 -> 17 POST with `POST /api/sessions/:id/ask` retired, 20 and 16 with
-    // `/dialog/multi`; the operator's answers are gated by the same `knownId` inside the family's door
-    // (`coord/routes.ts`, through its wiring).
-    expect(requestGates).toHaveLength(20);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(16);
+    // `/dialog/multi`, 19 and 15 with `/dialog/text`; the operator's answers are gated by the same `knownId` inside the
+    // family's door (`coord/routes.ts`, through its wiring).
+    expect(requestGates).toHaveLength(19);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(15);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -599,8 +596,8 @@ describe('write routes', () => {
     ]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/text`,
-      payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text: ASK_TEXT },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text: ASK_TEXT },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -618,8 +615,8 @@ describe('write routes', () => {
     for (const text of ['', '   ', 'a\nb', '\x1b[31mred', 'x'.repeat(1001)]) {
       const res = await app.inject({
         method: 'POST',
-        url: `/api/sessions/${ID}/dialog/text`,
-        payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text },
+        url: answerDoor(ID),
+        payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text },
       });
       expect(res.statusCode, JSON.stringify(text.slice(0, 12))).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-text' });
@@ -631,13 +628,15 @@ describe('write routes', () => {
   it('POST dialog/text answers 400 bad-request for a missing or mistyped field (D-5047)', async () => {
     const { app, calls } = await makeApp([ASK_OPEN]);
     const id = parseDialog(ASK_OPEN)!.id;
+    // W7 C7p (D-7194): through the family's door, where a dialog body with no `text` is the option row's answer (the
+    // first element here was `{ dialogId, optionIndex }` on the retired `/dialog/text`); its missing text is a `null`.
     for (const payload of [
-      { dialogId: id, optionIndex: 3 },
+      { dialogId: id, optionIndex: 3, text: null },
       { dialogId: id, optionIndex: 3, text: 42 },
       { dialogId: id, optionIndex: '3', text: ASK_TEXT },
       { optionIndex: 3, text: ASK_TEXT },
     ]) {
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/text`, payload });
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', ...payload } });
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     }
@@ -649,8 +648,8 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([ASK_OPEN]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/text`,
-      payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 2, text: ASK_TEXT },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 2, text: ASK_TEXT },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'not-free-text' });
@@ -829,7 +828,8 @@ describe('write routes', () => {
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
-      ['/api/sessions/nope/dialog/text', { dialogId: 'x', optionIndex: 1, text: 'hi' }],
+      // W7 C7p: the own words, through the family's door since `/dialog/text` was retired.
+      [answerDoor('nope'), { kind: 'dialog', dialogId: 'x', optionIndex: 1, text: 'hi' }],
       // W7 C7p: a multiSelect set, through the family's door since `/dialog/multi` was retired.
       [answerDoor('nope'), { kind: 'dialog', multi: true, dialogId: 'x', optionIndexes: [1] }],
       ['/api/sessions/nope/dialog/tab', { dialogId: 'x', to: 'next' }],

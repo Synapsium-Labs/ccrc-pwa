@@ -2162,7 +2162,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 20 request-id routes (16 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 19 request-id routes (15 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's floor is 97 agent-WS operations [registry-read-census:fleet]
@@ -2450,26 +2450,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // approval rows BEFORE any key, gated on the watcher's hookstate, D-5491) and the press are the operator's core,
     // `questions.answer`, which `POST /api/questions/session-<id>/answer` calls too.
     const out = await questions.answer({ kind: 'dialog', form: 'row', sessionId: id, dialogId: body.dialogId, optionIndex: body.optionIndex }, operatorDoorDeps);
-    return reply.code(out.status).send(out.body);
-  });
-
-  /**
-   * D-5047: type an answer into an AskUserQuestion's free-text row ("Type something.") and submit it, proved focused
-   * before typing and echoed before Enter (`answerDialogText`, `inject/send.ts`). A NEW route, deliberately not a
-   * `text` field on `/dialog` above: an older server would ignore that field, walk onto the empty row and press Enter,
-   * which rejects the whole ask. An older server answers this route 404 instead. `bad-text` (`isDialogText`,
-   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
-   */
-  app.post('/api/sessions/:id/dialog/text', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown; text?: unknown };
-    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number' || typeof body.text !== 'string') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // W3 Q3f (D-7030): an ALIAS from here on, into the operator's core (`questions.answer`): the press, its answered
-    // frame, and `bad-text` 400, every other refusal 409.
-    const out = await questions.answer({ kind: 'dialog', form: 'text', sessionId: id, dialogId: body.dialogId, optionIndex: body.optionIndex, text: body.text }, operatorDoorDeps);
     return reply.code(out.status).send(out.body);
   });
 

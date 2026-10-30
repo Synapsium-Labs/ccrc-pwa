@@ -139,9 +139,9 @@ export const QUESTION_DOOR_TAGS: Readonly<Record<string, QuestionDoorTag>> = {
   '/api/asks/:id/release': 'claimant',
   '/api/approvals/:id/rule': 'claimant',
   '/api/approvals/:id/release': 'claimant',
-  // W7 C7p (D-7194): `/api/sessions/:id/ask` and `/dialog/multi` retired; the family's `/answer` below answers them.
+  // W7 C7p (D-7194): `/api/sessions/:id/ask`, `/dialog/multi` and `/dialog/text` retired; the family's `/answer` below
+  // answers them.
   '/api/sessions/:id/dialog': 'operator',
-  '/api/sessions/:id/dialog/text': 'operator',
   '/api/sessions/:id/dialog/tab': 'navigation',
   // W3 Q3f (D-7030; OA-C7 (a)): the family, in `coord/routes.ts`; the path picks the principal.
   '/api/questions/:id/answer': 'operator',

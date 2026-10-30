@@ -963,23 +963,25 @@ const REVIEW_296 = fixture('cc296-ask-2q-long-review');
 const OP_TEXT_MULTI_TAB_ROWS: Row[] = [
   ['POST /api/sessions/:id/dialog/text | 1 | an unknown session', async () => {
     const s = await dialogFixture([SAME_LABELS_Q2]);
-    return dialogOutcome(s, await op(s.f, '/api/sessions/project-a-nobody-here/dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT }));
+    return dialogOutcome(s, await opDialog(s.f, 'text', 'project-a-nobody-here', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT }));
   }],
-  ['POST /api/sessions/:id/dialog/text | 2 | a bad body (no text)', async () => {
+  // W7 C7p: on the family's door a dialog body with no `text` is the option row's answer, so this row's bad body is a
+  // `text` that is not a string (renamed from `a bad body (no text)`; the EXPECTED outcome is the same bytes).
+  ['POST /api/sessions/:id/dialog/text | 2 | a bad body (text not a string)', async () => {
     const s = await dialogFixture([SAME_LABELS_Q2]);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog/text`, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3 }));
+    return dialogOutcome(s, await opDialog(s.f, 'text', CHILD, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 }));
   }],
   ['POST /api/sessions/:id/dialog/text | press refused | bad-text is a 400', async () => {
     const s = await dialogFixture([SAME_LABELS_Q2]);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog/text`, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' }));
+    return dialogOutcome(s, await opDialog(s.f, 'text', CHILD, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' }));
   }],
   ['POST /api/sessions/:id/dialog/text | press refused | another dialog id is a 409', async () => {
     const s = await dialogFixture([SAME_LABELS_Q2]);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog/text`, { dialogId: 'not-this-one', optionIndex: 3, text: TEXT }));
+    return dialogOutcome(s, await opDialog(s.f, 'text', CHILD, { dialogId: 'not-this-one', optionIndex: 3, text: TEXT }));
   }],
   ['POST /api/sessions/:id/dialog/text | success | walked, proved, typed, echoed, Enter', async () => {
     const s = await dialogFixture([SAME_LABELS_Q2, FOCUSED, TYPED]);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog/text`, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT }));
+    return dialogOutcome(s, await opDialog(s.f, 'text', CHILD, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT }));
   }],
   ['POST /api/sessions/:id/dialog/multi | 1 | an unknown session', async () => {
     const s = await dialogFixture([TOOLS_OPEN]);
@@ -1313,7 +1315,7 @@ const EXPECTED: Record<string, Outcome> = {
     {"status": 200, "body": "{\"ok\":true}", "effects": {"keys": ["project-a-quiet-basin Enter"]}},
   "POST /api/sessions/:id/dialog/text | 1 | an unknown session":
     {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-session\"}", "effects": {"keys": []}},
-  "POST /api/sessions/:id/dialog/text | 2 | a bad body (no text)":
+  "POST /api/sessions/:id/dialog/text | 2 | a bad body (text not a string)":
     {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"keys": []}},
   "POST /api/sessions/:id/dialog/text | press refused | bad-text is a 400":
     {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-text\"}", "effects": {"keys": []}},
@@ -1365,7 +1367,6 @@ describe('question-doors pin: each door\'s auth posture', () => {
     // W7 C7p (D-7194): `POST /api/sessions/:id/ask` retired; the door that answers its rows above holds its posture.
     'POST /api/questions/:id/answer': { exempt: false, originCheck: true },
     'POST /api/sessions/:id/dialog': { exempt: false, originCheck: true },
-    'POST /api/sessions/:id/dialog/text': { exempt: false, originCheck: true },
     'POST /api/sessions/:id/dialog/tab': { exempt: false, originCheck: true },
   };
   it.each(Object.entries(POSTURE))('%s', (route, want) => {

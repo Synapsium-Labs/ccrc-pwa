@@ -259,12 +259,6 @@ const PAIRS: Pair[] = [
     }],
   ['answer dialog | the marking throws: answered anyway', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }),
     (s) => { vi.spyOn(s.f.coord, 'markApprovalOperator').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
-  ['answer dialog text | a bad body (no text is the plain dialog; text not a string)', () => dialogSide([SAME_LABELS_Q2]),
-    (s) => post(s, `/api/sessions/${CHILD}/dialog/text`, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 }),
-    (s) => post(s, `/api/questions/session-${CHILD}/answer`, { kind: 'dialog', dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 })],
-  ['answer dialog text | bad-text is a 400', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' })],
-  ['answer dialog text | another dialog id is a 409', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: 'not-this-one', optionIndex: 3, text: TEXT })],
-  ['answer dialog text | success', () => dialogSide([SAME_LABELS_Q2, FOCUSED, TYPED]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT })],
 ];
 
 /** The pairs whose old door W7 C7p retired, each unchanged from its PAIRS row. */
@@ -287,6 +281,12 @@ const RETIRED_PAIRS: Pair[] = [
   ['answer dialog multi | bad-indexes is a 400', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [1, 1] })],
   ['answer dialog multi | another dialog id is a 409', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: 'not-this-one', optionIndexes: [3, 1] })],
   ['answer dialog multi | success: the next screen back', () => dialogSide([TOOLS_OPEN, TOOLS_2_1, SIZES_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [3, 1] })],
+  ['answer dialog text | a bad body (no text is the plain dialog; text not a string)', () => dialogSide([SAME_LABELS_Q2]),
+    (s) => post(s, `/api/sessions/${CHILD}/dialog/text`, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 }),
+    (s) => post(s, `/api/questions/session-${CHILD}/answer`, { kind: 'dialog', dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 })],
+  ['answer dialog text | bad-text is a 400', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' })],
+  ['answer dialog text | another dialog id is a 409', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: 'not-this-one', optionIndex: 3, text: TEXT })],
+  ['answer dialog text | success', () => dialogSide([SAME_LABELS_Q2, FOCUSED, TYPED]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT })],
   // (a row moves here from PAIRS in the commit that retires its door)
 ];
 
@@ -321,6 +321,14 @@ const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
     {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "answer dialog multi | success: the next screen back":
     {"status": 200, "body": "sha256:05b4c2c9db0d95cfe1ffc97b1d14591aafb55d90788baec75d7cfbdafef72289", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 3", "project-a-quiet-basin 1", "project-a-quiet-basin Tab"], "feed": [], "pushes": []}},
+  "answer dialog text | a bad body (no text is the plain dialog; text not a string)":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog text | bad-text is a 400":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-text\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog text | another dialog id is a 409":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog text | success":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin Down", "project-a-quiet-basin Down", "project-a-quiet-basin -l - only in staging, sampled 10%", "project-a-quiet-basin Enter"], "feed": [], "pushes": []}},
   // (each row's old-door outcome, recorded on the base before the commit that retired its door)
 };
 

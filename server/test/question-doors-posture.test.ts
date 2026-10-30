@@ -79,7 +79,6 @@ const OLD_DOORS: Readonly<Record<string, string>> = {
   'POST /api/approvals/:id/rule': '/api/approvals/1/rule',
   'POST /api/approvals/:id/release': '/api/approvals/1/release',
   'POST /api/sessions/:id/dialog': '/api/sessions/project-a-quiet-basin/dialog',
-  'POST /api/sessions/:id/dialog/text': '/api/sessions/project-a-quiet-basin/dialog/text',
   'POST /api/sessions/:id/dialog/tab': '/api/sessions/project-a-quiet-basin/dialog/tab',
 };
 
@@ -121,6 +120,7 @@ const RETIRED: Readonly<Record<Credential, Posture>> = {
 const RETIRED_DOORS: Readonly<Record<string, string>> = {
   'POST /api/sessions/:id/ask': '/api/sessions/project-a-quiet-basin/ask',
   'POST /api/sessions/:id/dialog/multi': '/api/sessions/project-a-quiet-basin/dialog/multi',
+  'POST /api/sessions/:id/dialog/text': '/api/sessions/project-a-quiet-basin/dialog/text',
 };
 
 const EXPECTED: Readonly<Record<string, Readonly<Record<Credential, Posture>>>> = {
@@ -129,7 +129,6 @@ const EXPECTED: Readonly<Record<string, Readonly<Record<Credential, Posture>>>> 
   'POST /api/approvals/:id/rule': CLAIMANT,
   'POST /api/approvals/:id/release': CLAIMANT,
   'POST /api/sessions/:id/dialog': OPERATOR,
-  'POST /api/sessions/:id/dialog/text': OPERATOR,
   'POST /api/sessions/:id/dialog/tab': OPERATOR,
 };
 
