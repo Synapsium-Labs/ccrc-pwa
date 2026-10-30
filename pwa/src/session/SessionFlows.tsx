@@ -20,7 +20,7 @@ import { createTargetSlot } from '../command/targetSlot';
 import type { SessionCommandTarget } from '../command/registry';
 import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
-import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
+import { isPutAway, restoreReachesEnsure } from '../fleet/archivePutAway';
 import { substrateFaultText } from '../fleet/substrateWords';
 import { PrSheet } from './PrSheet';
 import { UNCHECKED_PR } from './PrKeycap';

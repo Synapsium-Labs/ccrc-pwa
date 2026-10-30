@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { UNCHECKED_PR, type FleetSession, type PrPhase, type PrState } from '../../shared/api';
 import { hasPrCap, prDoorWord } from '../src/session/prCap';
-import { isPutAway, restoreReachesEnsure } from '../src/fleet/ArchiveSheet';
+import { isPutAway, restoreReachesEnsure } from '../src/fleet/archivePutAway';
 import { sessionMenu } from '../src/session/SessionFlows';
 import { fleetSession } from './fleetFixture';
 
