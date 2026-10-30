@@ -788,6 +788,18 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  could not be read" may well have stored the choice. */
     setRollIdle: (targets: ClaudeRollTargets) =>
       postJsonOr<RollIdleView | 'unreadable'>('/api/coord/roll-idle', 'unreadable', { targets }),
+    /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
+     *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
+     *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
+    testbox: () => getJson<{ readonly ok: true; readonly testbox: unknown }>('/api/testbox'),
+    /** `POST /api/testbox/switch`: `{on}` and nothing else (the route refuses any other field). The answer is
+     *  `requested`, never the switch: the block's `switch` field, re-read, is the authoritative answer. */
+    setTestboxSwitch: (on: boolean) =>
+      postJsonOr<{ readonly ok: true; readonly requested: boolean } | 'unreadable'>('/api/testbox/switch', 'unreadable', { on }),
+    /** `POST /api/testbox/tools-sync`: no body; the release and the versions sent are the fleet host's own. */
+    testboxToolsSync: () =>
+      postJsonOr<{ readonly ok: boolean; readonly outcome?: unknown; readonly detail?: unknown } | 'unreadable'>(
+        '/api/testbox/tools-sync', 'unreadable'),
     /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
      *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
      *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */

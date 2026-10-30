@@ -315,6 +315,12 @@ export const SETTINGS_CARDS = {
       purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
         + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
     },
+    /** Test box plan TB10 (D-7412): the section's last card (D-7418). */
+    testbox: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Test box',
+      purpose: 'Whether ccrc test runs on the test box instead of the fleet host, and how that box is doing: its tools, '
+        + 'its runs and queue, and why runs fell back here in the last day.',
+    },
   },
   security: {
     gate: {
