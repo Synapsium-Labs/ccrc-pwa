@@ -1120,6 +1120,8 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
       'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-replay-out',
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
+      // Test box TB11 (D-7413): the fleet host's four test box classes.
+      'testbox-token', 'testbox-push-key', 'testbox-times', 'testbox-runs-log',
     ]);
     // D-7278 (the intended change): the one class the ruling took out of containment.
     expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual(['workspace-dependency-dirs']);
@@ -1127,6 +1129,30 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     const row2 = policy.split('\n').find((l) => l.startsWith('| 2 | `node_modules` inside a workspace'));
     expect(row2, 'the policy\'s inventory row 2').toBeTruthy();
     expect(row2).toContain('| dies with #1; in a SLEEPING worker');
+  });
+  it('declares the fleet host\'s test box files: the operator\'s token and push key, the durations file and the runs log (D-7413, D-7445)', () => {
+    const by = (n: string) => LIFECYCLE.find((x) => x.name === n);
+    for (const [n, root] of [['testbox-token', '~/.ccrc/testbox.token'], ['testbox-push-key', '~/.ccrc/testbox-push.key']] as const) {
+      const c = by(n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.root.startsWith(root), `${n}'s root`).toBe(true);
+      expect([c!.pattern, c!.collector]).toEqual(['O', null]);
+      expect(c!.ruling).toContain('removed by hand when the test box is retired');
+    }
+    const times = by('testbox-times');
+    expect(times, 'shared/lifecycle.ts declares no testbox-times class').toBeTruthy();
+    expect(times!.root).toContain('CCRC_TESTBOX_TIMES');
+    expect([times!.pattern, times!.creators[0]]).toEqual(['R', 'ccd-testbox-times (the daily timer)']);
+    expect(times!.collector).toContain('a failed pass keeps the previous file');
+    const runs = by('testbox-runs-log');
+    expect(runs, 'shared/lifecycle.ts declares no testbox-runs-log class').toBeTruthy();
+    expect([runs!.root, runs!.pattern]).toEqual(['$REG/testbox-runs/<UTC date>.log', 'R']);
+    expect(runs!.creators).toEqual(['ccd/ccrc-test (the wrapper, the runs log\'s one writer, D-7445)']);
+    expect(runs!.collector).toContain('ccd/ccrc-test');
+    expect(runs!.bound).toContain('two day files');
+    // The bound is the wrapper's own: its removal keeps a day file only from yesterday on.
+    const wrapper = readFileSync(path.join(REPO_ROOT, 'ccd', 'ccrc-test'), 'utf8');
+    expect(wrapper).toContain('if [[ "$day" < "$yday" ]]; then rm -f -- "$old"; fi');
   });
   it('declares a sleeping session\'s ignored dependency directories, the one class the deps-shed arm collects (D-7278)', () => {
     const c = LIFECYCLE.find((x) => x.name === 'workspace-dependency-dirs');

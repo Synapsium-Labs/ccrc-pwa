@@ -1714,8 +1714,12 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  and on a server-role box too). The `land-probe` describe in `ccrc-doctor-core.test.ts`
  *  plants a conf and its files where the check answers. Measured the same way: with the
  *  check in the table and this `+ 1` absent, every `(N skipped)` pin that reads this
- *  constant reds. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 13;
+ *  constant reds.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (test box TB11, D-7413, D-7567): `testbox`
+ *  SKIPs - `healthy()` sets no test box URL, so no test box is configured (state
+ *  `off`). `ccrc-doctor-testbox.test.ts` configures one and plants each answer. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 14;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

@@ -305,9 +305,8 @@ function boxEnvCalls(): { file: CodeFile; owner: string; key: string; text: stri
  *  CCRC_SETTINGS in graph revision 2's GR2, and its plan folds every task's README text into GR8, which names them in
  *  the paragraph and deletes this. C2 still holds their example lines and defaults. */
 const README_LATER = /^CCRC_GRAPH_/;
-/** D-7403: the test box's keys join CCRC_SETTINGS in TB1, and the test box plan folds every task's README text into
- *  TB11, which names them in the paragraph and deletes this. C2 still holds their example lines and defaults. */
-const README_LATER_TESTBOX = /^CCRC_TESTBOX_/;
+// D-7403, D-7413: the test box's CCRC_TESTBOX_* keys joined CCRC_SETTINGS in TB1 with a README exception that TB11
+// retired by naming every one of them in the paragraph; they are held like every other setting now.
 
 /** The README paragraph that opens `**ccrc's own settings.**`. */
 function readmeSettingsParagraph(): string | null {
@@ -378,13 +377,11 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
     if (para === null) faults.push("README: no paragraph opens **ccrc's own settings.**");
     else {
       for (const s of SETTINGS)
-        if (!README_LATER.test(s) && !README_LATER_TESTBOX.test(s) && !new RegExp('\\b' + s + '\\b').test(para)) faults.push(`README: the settings paragraph does not name ${s}`);
+        if (!README_LATER.test(s) && !new RegExp('\\b' + s + '\\b').test(para)) faults.push(`README: the settings paragraph does not name ${s}`);
       // The exception expires itself: once the paragraph names any graph key, it must name them all, and this row then
       // asks for README_LATER to be deleted.
       const named = SETTINGS.filter((s) => README_LATER.test(s) && new RegExp('\\b' + s + '\\b').test(para));
       if (named.length > 0) faults.push(`README: the settings paragraph names ${named.length} graph key(s); name every one and delete README_LATER`);
-      const namedTb = SETTINGS.filter((s) => README_LATER_TESTBOX.test(s) && new RegExp('\\b' + s + '\\b').test(para));
-      if (namedTb.length > 0) faults.push(`README: the settings paragraph names ${namedTb.length} test box key(s); name every one and delete README_LATER_TESTBOX`);
     }
     expect(faults).toEqual([]);
   });

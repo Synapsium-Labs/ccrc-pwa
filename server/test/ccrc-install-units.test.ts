@@ -903,6 +903,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       '--user enable --now ccd-scope-sweep.timer',
       // landing order wave 3b: the conflict radar's timer, on the sweeps' gate and degrade-rather-than-die idiom.
       '--user enable --now ccd-land-probe.timer',
+      // test box TB11 (D-7413): the durations timer, on the radar's gate and idiom.
+      '--user enable --now ccd-testbox-times.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.

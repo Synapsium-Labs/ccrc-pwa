@@ -145,6 +145,7 @@ describe('the cadence census, on the real tree', () => {
       'OnCalendar=*:0/5',
       'OnUnitActiveSec=15min',
       'OnUnitActiveSec=1h',
+      'OnUnitActiveSec=24h',   // test box TB11 (D-7413): ccd-testbox-times.timer, daily
       'OnUnitActiveSec=2min',
       'OnUnitActiveSec=4h',
       'OnUnitActiveSec=5min',
