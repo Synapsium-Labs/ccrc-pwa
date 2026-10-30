@@ -144,7 +144,8 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
     }
     const measured = await opened.page.evaluate(([FIRST_LINE_ARG, WHO_LINE_ARG]): Measure => {
       // The panel is found from the ask itself: the who line is the ask's own.
-      // (At a desk the surface is T1c's inline card, `[data-ask-surface]`, whose one scroller is `.ask-inline-body`.)
+      // (At a desk the surface is T1c's inline card, `[data-ask-surface]`, whose `.ask-inline-body` holds the question region,
+      // the scroller of a long question since Task T1d, and the answer surface.)
       const panel = document.querySelector('.ask-who')!.closest<HTMLElement>('.sheet-panel, [data-ask-surface]')!;
       const title = panel.querySelector<HTMLElement>('.sheet-title');
       const scrolls = (el: HTMLElement): boolean => {
@@ -255,7 +256,11 @@ describe('an ask at a desk opens at its top too (D-6325, D-6326)', () => {
   it(named(desk), async () => {
     const { measured, errors } = await openAndMeasure(desk, true);
     expect(measured.panelText).toContain(FIRST_LINE);
-    expect(measured.scrollers.map((s) => s.cls), 'the question overflows its body').toHaveLength(1);
+    // Task T1d: the question scrolls in its own region; fixture 1's answer surface (about 560px) is taller than the card
+    // leaves it, so it scrolls on its own too. Nothing else does.
+    const cls = measured.scrollers.map((s) => s.cls);
+    expect(cls.filter((c) => c.startsWith('ask-inline-question')), 'the question overflows its region').toHaveLength(1);
+    expect(cls.filter((c) => !c.startsWith('ask-inline-question') && !c.startsWith('ask-inline-surface')), 'nothing else scrolls').toEqual([]);
     expect(measured.focusIn, 'the arriving ask takes no focus').toBe(false);
     expectReadsFromTop(measured);
     expect(errors).toEqual([]);
