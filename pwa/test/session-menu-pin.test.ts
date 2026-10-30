@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { UNCHECKED_PR, type FleetSession, type PrPhase, type PrState } from '../../shared/api';
 import { hasPrCap, prDoorWord } from '../src/session/prCap';
 import { isPutAway, restoreReachesEnsure } from '../src/fleet/archivePutAway';
-import { sessionMenu } from '../src/session/SessionFlows';
+import { sessionMenu } from '../src/session/sessionMenu';
 import { fleetSession } from './fleetFixture';
 
 const FAULT = { at: 1, text: 'tmux socket gone' };

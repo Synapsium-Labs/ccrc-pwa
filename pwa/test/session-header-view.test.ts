@@ -9,7 +9,7 @@ import { createElement } from 'react';
 import { UNCHECKED_PR, type FleetSession, type RosterWire, type SessionStatus } from '../../shared/api';
 import type { Coordination } from '../src/fleet/fleetTree';
 import { sessionFacts } from '../src/fleet/sessionFacts';
-import { sessionMenu } from '../src/session/SessionFlows';
+import { sessionMenu } from '../src/session/sessionMenu';
 import {
   deepLinkFallback, headerTickMs, sessionHeaderView, type HeaderChipKind, type SessionHeaderViewInput,
 } from '../src/session/sessionHeaderView';

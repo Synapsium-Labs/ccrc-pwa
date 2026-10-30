@@ -176,8 +176,8 @@ describe('one builder for both surfaces (spec 4.8, M4.L2)', () => {
   // template, a `?ref=`, a call to `docsPageUrl` or `docsLocation`). It does not see a builder imported from a third
   // module under another name, or a URL assembled from pieces that never spell those; the behaviour cases above are
   // what pin the hrefs themselves.
-  // The menu's caller moved with the menu (W2 Task S2d): `SessionFlows` builds the ⋯ menu now.
-  it.each(['src/fleet/SessionActionsSheet.tsx', 'src/session/SessionFlows.tsx'])(
+  // The menu's caller moved with the menu (W2 Task S2d): `SessionFlows` builds the ⋯ menu now; its items to `sessionMenu.ts` (D-7573).
+  it.each(['src/fleet/SessionActionsSheet.tsx', 'src/session/sessionMenu.ts'])(
     '%s calls sessionDocsHref and builds no Docs URL of its own', (rel) => {
       const text = readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
       expect(text).toContain('sessionDocsHref(session)');
