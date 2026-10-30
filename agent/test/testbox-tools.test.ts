@@ -25,7 +25,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import type { RunSubmit, StatusAnswer, TestboxRepoRow, ToolsSync, TestboxToolVersions } from '../../shared/testbox.js';
+import { readTestboxFrame, type RunSubmit, type RunSummary, type StatusAnswer, type TestboxRepoRow, type ToolsSync, type TestboxToolVersions } from '../../shared/testbox.js';
 import { serviceFor, startTestboxServer, timerWork } from '../src/testbox/main.js';
 import { FRAME_HANDLERS, type TestboxService } from '../src/testbox/service.js';
 import { buildInstallSpec, buildRunSpec, writeInstallSpec, writeSpec, type SpecSettings } from '../src/testbox/spec.js';
@@ -35,7 +35,7 @@ import {
   ended, encodeToolsSpec, IDLE_TOOLS, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, sameAsBox, seenRuns,
   toolsSettings, withSync, type BoxTools, type ToolsSettings,
 } from '../src/testbox/tools.js';
-import { attachToolSync, HANDOVER_DIR, statusOf, ToolSync, type ServedService } from '../src/testbox/toolsync.js';
+import { attachToolSync, HANDOVER_DIR, statusOf, ToolSync, toolSyncOf, type ServedService } from '../src/testbox/toolsync.js';
 import { durationMs } from '../src/testbox/config.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -1151,6 +1151,177 @@ describe('the sets in use are the ones the specs name (D-7559; spec §2.10: a ru
     expect(d.t.resume()).toBe(1);
     d.waiting.push(Q1);
     expect(d.t.queuedFrames().map((f) => f.runId)).toEqual([Q1]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The takeover on the entry point's own service (D-7426, D-7559): `serviceFor`, the WebSocket door, the real queue,
+// the hand-over and the next service on the same root. Only the system manager is a fixture.
+// ---------------------------------------------------------------------------------------------------------------
+
+describe('the takeover on the entry point\'s service: what it answers, what it queues and what it hands over (D-7426, D-7559)', () => {
+  const [RUN_R, NEW_N] = ['6'.repeat(32), '7'.repeat(32)];
+  const IDS = [RUN_R, NEW_N, Q1, Q2, Q3];
+  const TAKEOVER_REPORT = `result\tok\nrelease\t${NEW_TAG}\nset\ts.bbbbbbbb\ntakeover\t1\nnode-changed\t0\n`;
+
+  /** A fixture root with one repository row and no tool set yet, and the entry point's settings for it (one run at a time). */
+  function fixture(): TestboxConfig {
+    const fx = mkTmp('ccrc-tb-takeover-');
+    const tools = path.join(fx, 'tools');
+    const repos = path.join(fx, 'repos');
+    for (const d of [tools, repos]) mkdirSync(d, { recursive: true });
+    writeFileSync(path.join(repos, 'project-a.json'), `${JSON.stringify({ ...SPEC_ROW, mirrorPath: path.join(fx, 'mirrors', 'project-a.git') })}\n`);
+    return { ...cfgFor({ root: path.join(fx, 'box'), tools } as unknown as Box), repos };
+  }
+
+  /** The system manager: the tools unit reports a replaced release; a run unit records whose run it is (from its spec)
+   *  and, for RUN_R, waits until released; every other unit ends at once with 0. */
+  function units(cfg: TestboxConfig) {
+    const ran: string[] = [];
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => { release = r; });
+    const sys: SystemManager = {
+      async run(unit: string): Promise<UnitEnd> {
+        if (unit === 'ccrc-testbox-tools.service') writeFileSync(path.join(cfg.toolsDir, 'sync-report'), TAKEOVER_REPORT);
+        const m = /^ccrc-testbox-run@([0-9]+)\.service$/.exec(unit);
+        if (m !== null) {
+          const spec = readFileSync(path.join(cfg.root, 'specs', m[1]!), 'utf8');
+          const id = IDS.find((x) => spec.includes(x)) ?? '?';
+          ran.push(id);
+          if (id === RUN_R) await held;
+        }
+        return { exit: 0, result: 'success' };
+      },
+      async stop() { /* nothing to stop */ },
+      async active() { return false; },
+    };
+    return { sys, ran, release: () => release() };
+  }
+
+  /** A connection through the WebSocket door, past its hello: the frames it was sent and how it closed. */
+  async function door(port: number) {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const frames: string[] = [];
+    let closed: string | null = null;
+    ws.on('message', (m) => frames.push(m.toString()));
+    ws.on('close', (_code, reason) => { closed = reason.toString(); });
+    await new Promise<void>((r, j) => { ws.once('open', () => r()); ws.once('error', j); });
+    ws.send(JSON.stringify({ t: 'hello', token: 'tok' }));
+    await expect.poll(() => frames.length).toBe(1);
+    return { ws, frames, closed: (): string | null => closed, send: (f: unknown) => ws.send(JSON.stringify(f)) };
+  }
+
+  /** The entry point's start order: the service, the hand-over resumed, then the door. */
+  async function boot(cfg: TestboxConfig, sys: SystemManager, exits: number[]) {
+    const svc = serviceFor(cfg, path.join(cfg.toolsDir, 'release', 'installed'), (c) => { exits.push(c); }, { sys });
+    await svc.start();
+    const resumed = toolSyncOf(svc)!.resume();
+    const srv = await startTestboxServer({ host: '127.0.0.1', port: 0, token: 'tok', service: svc });
+    return { svc, srv, resumed };
+  }
+
+  const summaryOf = (cfg: TestboxConfig, id: string): string => path.join(cfg.root, 'results', id, 'summary.json');
+
+  it('while a takeover waits for a run, every status answer and every hello reads as the frame family\'s, with the configured run limit', async () => {
+    const cfg = fixture();
+    const a = units(cfg);
+    const exits: number[] = [];
+    const { svc, srv } = await boot(cfg, a.sys, exits);
+    try {
+      const c = await door(srv.port);
+      c.send(submitOf(RUN_R));
+      await expect.poll(() => a.ran).toEqual([RUN_R]);
+      c.send(frameOf(NEW_TAG));
+      await expect.poll(() => toolSyncOf(svc)!.stateNow().takeover).toBe(true);
+      const now = readTestboxFrame(JSON.stringify(statusOf(svc)));
+      expect(now.ok ? now.value : now.reason).toMatchObject({ t: 'status', runs: { inProgress: 1, limit: cfg.runs } });
+      const late = await door(srv.port);
+      const hello = readTestboxFrame(late.frames[0]!);
+      expect(hello.ok ? hello.value : hello.reason, 'a hello during the takeover').toMatchObject({ t: 'status', runs: { limit: cfg.runs } });
+      expect(exits).toEqual([]);
+      a.release();
+      await expect.poll(() => exits).toEqual([0]);
+      for (const x of [c, late]) x.ws.close();
+    } finally {
+      a.release();
+      await srv.close();
+    }
+  });
+
+  it('a queued run and one submitted through the door during the takeover are handed over, run by the next service in order ahead of a new submission, and leave their summaries', async () => {
+    const cfg = fixture();
+    const a = units(cfg);
+    const exits: number[] = [];
+    const first = await boot(cfg, a.sys, exits);
+    try {
+      const c = await door(first.srv.port);
+      c.send(submitOf(RUN_R));
+      await expect.poll(() => a.ran).toEqual([RUN_R]);
+      c.send(submitOf(Q1));
+      await expect.poll(() => [...first.svc.positions().keys()]).toEqual([Q1]);
+      c.send(frameOf(NEW_TAG));
+      await expect.poll(() => toolSyncOf(first.svc)!.stateNow().takeover).toBe(true);
+      // Submitted during the takeover: accepted and queued behind Q1, never refused.
+      c.send(submitOf(Q2));
+      await expect.poll(() => [...first.svc.positions().keys()]).toEqual([Q1, Q2]);
+      expect(c.closed(), 'the submission is not refused').toBeNull();
+      a.release();
+      await expect.poll(() => exits).toEqual([0]);
+      expect(existsSync(summaryOf(cfg, RUN_R)), 'the run in progress ended and was summarised').toBe(true);
+      expect(a.ran, 'the old service starts nothing once the takeover began').toEqual([RUN_R]);
+      c.ws.close();
+    } finally {
+      a.release();
+      await first.srv.close();
+    }
+    // The next service, on the new tree, at the same root.
+    const b = units(cfg);
+    const next = await boot(cfg, b.sys, []);
+    try {
+      expect(next.resumed).toBe(2);
+      const late = await door(next.srv.port);
+      late.send(submitOf(NEW_N));
+      await expect.poll(() => [Q1, Q2, NEW_N].every((id) => existsSync(summaryOf(cfg, id)))).toBe(true);
+      expect(b.ran, 'the handed-over runs first, in their order, then the new one').toEqual([Q1, Q2, NEW_N]);
+      for (const id of [Q1, Q2]) {
+        const s = JSON.parse(readFileSync(summaryOf(cfg, id), 'utf8')) as RunSummary;
+        expect(s).toMatchObject({ t: 'run.summary', runId: id, exit: 0, ranOn: 'test-box' });
+      }
+      expect(readdirSync(path.join(cfg.root, HANDOVER_DIR))).toEqual([]);
+      late.ws.close();
+    } finally {
+      await next.srv.close();
+    }
+  });
+
+  it('a refused duplicate run.submit never replaces the queued run\'s frame: the hand-over is the submission the service queued', async () => {
+    const cfg = fixture();
+    const a = units(cfg);
+    const exits: number[] = [];
+    const { svc, srv } = await boot(cfg, a.sys, exits);
+    try {
+      const c = await door(srv.port);
+      c.send(submitOf(RUN_R));
+      await expect.poll(() => a.ran).toEqual([RUN_R]);
+      c.send(submitOf(Q1));
+      await expect.poll(() => [...svc.positions().keys()]).toEqual([Q1]);
+      // A retry of Q1 with another argv: the service refuses it, and the connection closes with the reason.
+      const dup = await door(srv.port);
+      dup.send({ ...submitOf(Q1), argv: ['./node_modules/.bin/vitest', 'run', 'test/other.test.ts'] });
+      await expect.poll(() => dup.closed()).toBe(`run id ${Q1} already used`);
+      c.send(frameOf(NEW_TAG));
+      await expect.poll(() => toolSyncOf(svc)!.stateNow().takeover).toBe(true);
+      a.release();
+      await expect.poll(() => exits).toEqual([0]);
+      const dir = path.join(cfg.root, HANDOVER_DIR);
+      const handed = readdirSync(dir);
+      expect(handed).toHaveLength(1);
+      expect(JSON.parse(readFileSync(path.join(dir, handed[0]!), 'utf8'))).toEqual(submitOf(Q1));
+      c.ws.close();
+    } finally {
+      a.release();
+      await srv.close();
+    }
   });
 });
 

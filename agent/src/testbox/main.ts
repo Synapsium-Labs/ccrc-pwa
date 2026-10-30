@@ -22,7 +22,7 @@ import { pristineSettings } from './pristine.js';
 import { registrySettings, startRegistry } from './registry.js';
 import { liveRunIds } from './runs.js';
 import { FRAME_HANDLERS, TestboxService, type Conn } from './service.js';
-import { systemctlManager } from './systemd.js';
+import { systemctlManager, type SystemManager } from './systemd.js';
 import { toolsSettings } from './tools.js';
 import { attachToolSync, statusOf, ToolSync, toolSyncOf } from './toolsync.js';
 import { boundedExec, SERVICE_PATH, SHORT_BOUND_MS } from './exec.js';
@@ -157,12 +157,15 @@ export function readToken(file: string): string {
   return t;
 }
 
-export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c)): TestboxService {
+/** What a test may put in place of the box's own (the service never passes any): the system manager. */
+export interface ServiceSeams { readonly sys?: SystemManager }
+
+export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c), seams: ServiceSeams = {}): TestboxService {
   const facts = releaseFacts(release);
   const sysEnv = { PATH: SERVICE_PATH, LANG: 'C' };
   const short = boundedExec(sysEnv, SHORT_BOUND_MS);
   const git = realGit(boundedExec(gitEnv(os.homedir()), cfg.unitMaxMs));
-  const sys = systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs));
+  const sys = seams.sys ?? systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs));
   // TB6 (D-7408, D-7426): the tool sync. Its takeover closes admissions through the run limit it hands the service.
   const tools = new ToolSync({ sys, root: cfg.root, toolsDir: cfg.toolsDir, settings: toolsSettings(cfg.lines, durationMs), now: () => Date.now(), exit });
   // TB6 (spec §2.10): each spec's PATH names the set current when it is built, never the link a sync switches.
