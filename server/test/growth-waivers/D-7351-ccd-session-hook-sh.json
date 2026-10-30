@@ -1,7 +1,7 @@
 {
   "file": "ccd/session-hook.sh",
-  "maxDelta": 79,
+  "maxDelta": 81,
   "d": "D-7351",
-  "reason": "graph revision 2 GR5, the read side: the linked tree's meta.json read, the store's settings.json read with its defaults, the diff split into the branch's own files and the rest, the share gate and the spec section 6.3 card sentence, plus the census reader by repository; measured +79 net code lines against the merge-base (the plan estimated +55); kept in the hook because the hook loads no library (spec section 5.2)",
+  "reason": "graph revision 2 GR5, the read side: the linked tree's meta.json read, the store's settings.json read with its defaults, the diff split into the branch's own files and the rest, the share gate and the spec section 6.3 card sentence, plus the census reader by repository and the diff list's character bound; measured +81 net code lines against the merge-base (the plan estimated +55); kept in the hook because the hook loads no library (spec section 5.2)",
   "added": "2026-10-30"
 }
