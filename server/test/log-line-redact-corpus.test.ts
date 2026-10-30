@@ -1,6 +1,7 @@
 // log-line-redact-corpus.test.ts — the one corpus both bash log-line redactors are held to (W5 Task C5i; ARCH-67,
 // D-7078; the act ruled under D-7289). Each row of `fixtures/redact/log-line.json` is run through:
 //   * `ccrc`: ccd/ccrc's `_upd_redact "$input"`, the call every ccd/ccrc and `ccrc doctor` caller makes;
+//   * `bareHost`: ccd/ccrc's `_upd_redact "$input" bare-host`, the mode only ccd-update-sync's `say` passes (D-7289);
 //   * `updateSync`: ccd/ccd-update-sync's own `say "$input"`, with every function `say` calls, its stderr line read
 //     and its `ccd-update-sync: ` prefix and trailing newline cut. So the column holds whatever `say` applies, and
 //     the file needs no edit when `say` switches redactor.
@@ -29,6 +30,7 @@ interface Row {
   readonly home: string;
   readonly locale: 'C' | 'utf8';
   readonly ccrc?: string; readonly ccrcHex?: string;
+  readonly bareHost?: string; readonly bareHostHex?: string;
   readonly updateSync?: string; readonly updateSyncHex?: string;
 }
 const ROWS: readonly Row[] = (JSON.parse(read('server/test/fixtures/redact/log-line.json')) as { rows: Row[] }).rows;
@@ -36,10 +38,11 @@ const ROWS: readonly Row[] = (JSON.parse(read('server/test/fixtures/redact/log-l
 /** The columns, each a fixed stdin script (its definitions file is `$1`, its input file `$2`) and the stream it reads. */
 const SCRIPTS = {
   ccrc: { script: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input"\n', stream: 'stdout' },
+  bareHost: { script: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n', stream: 'stdout' },
   updateSync: { script: '. "$1"\ninput="$(cat -- "$2")"\nsay "$input"\n', stream: 'stderr' },
 } as const;
 type Column = keyof typeof SCRIPTS;
-const COLUMNS: readonly Column[] = ['ccrc', 'updateSync'];
+const COLUMNS: readonly Column[] = ['ccrc', 'bareHost', 'updateSync'];
 
 const work = mkTmp('log-line-corpus-');
 
@@ -72,7 +75,7 @@ const definitions = (): Record<Column, string> => {
   const files = { upd: join(work, 'upd-defs.sh'), say: join(work, 'say-defs.sh') };
   writeFileSync(files.upd, `${upd!}\n`);
   writeFileSync(files.say, say!);
-  return { ccrc: files.upd, updateSync: files.say };
+  return { ccrc: files.upd, bareHost: files.upd, updateSync: files.say };
 };
 
 const PREFIX = Buffer.from('ccd-update-sync: ');
@@ -120,4 +123,100 @@ describe('the log-line redaction corpus (D-7078)', () => {
         expect(shown(run(defs, c, inputOf(r), r.home, r.locale)), c).toEqual(shown(want(r, c)));
       }
     });
+});
+
+/** The number of shell words after `_upd_redact` at `from` in `code`, up to the end of its command (an unquoted `)`,
+ *  `;`, `&`, `|` or the line's end). Quotes, `$(…)`, `${…}` and backslashes are followed, so a word holding spaces or
+ *  parentheses is one word. */
+function updRedactArgCount(code: string, from: number): number {
+  let i = from;
+  const skipNested = (open: string, close: string): void => {
+    let depth = 1;
+    i += 1;
+    while (i < code.length && depth > 0) {
+      const c = code[i]!;
+      if (c === '\\') { i += 2; continue; }
+      if (c === "'" && open === '(') { i = code.indexOf("'", i + 1); if (i < 0) i = code.length; i += 1; continue; }
+      if (c === '"') { skipDouble(); continue; }
+      if (c === '$' && (code[i + 1] === '(' || code[i + 1] === '{')) { i += 1; skipNested(code[i]!, code[i] === '(' ? ')' : '}'); continue; }
+      if (c === open) depth += 1;
+      else if (c === close) depth -= 1;
+      i += 1;
+    }
+  };
+  const skipDouble = (): void => {
+    i += 1;
+    while (i < code.length && code[i] !== '"') {
+      const c = code[i]!;
+      if (c === '\\') { i += 2; continue; }
+      if (c === '$' && (code[i + 1] === '(' || code[i + 1] === '{')) { i += 1; skipNested(code[i]!, code[i] === '(' ? ')' : '}'); continue; }
+      if (c === '`') { const e = code.indexOf('`', i + 1); i = e < 0 ? code.length : e + 1; continue; }
+      i += 1;
+    }
+    i += 1;
+  };
+  let words = 0;
+  for (;;) {
+    while (i < code.length && (code[i] === ' ' || code[i] === '\t')) i += 1;
+    if (i >= code.length || ');&|\n'.includes(code[i]!)) return words;
+    words += 1;
+    while (i < code.length && !' \t);&|\n'.includes(code[i]!)) {
+      const c = code[i]!;
+      if (c === '\\') i += 2;
+      else if (c === "'") { const e = code.indexOf("'", i + 1); i = e < 0 ? code.length : e + 1; }
+      else if (c === '"') skipDouble();
+      else if (c === '$' && (code[i + 1] === '(' || code[i + 1] === '{')) { i += 1; skipNested(code[i]!, code[i] === '(' ? ')' : '}'); }
+      else i += 1;
+    }
+  }
+}
+
+/** Every `_upd_redact` call in `src` (comment lines and trailing comments cut; its definition line skipped): the line,
+ *  the enclosing column-0 function (or null), the words it passes, and whether one of them is `bare-host`. */
+function updRedactCalls(src: string): Array<{ line: number; fn: string | null; args: number; bareHost: boolean; text: string }> {
+  const out: Array<{ line: number; fn: string | null; args: number; bareHost: boolean; text: string }> = [];
+  let fn: string | null = null;
+  src.split('\n').forEach((raw, k) => {
+    const def = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(raw);
+    if (def) fn = def[1]!;
+    else if (raw.startsWith('}')) { fn = null; return; }
+    if (/^\s*#/.test(raw)) return;
+    const code = raw.replace(/\s#(?:\s.*)?$/, '');
+    for (const m of code.matchAll(/(?<![A-Za-z0-9_])_upd_redact(?![A-Za-z0-9_])/g)) {
+      const after = m.index! + m[0].length;
+      if (/^\s*\(\s*\)/.test(code.slice(after))) continue;
+      const args = updRedactArgCount(code, after);
+      out.push({ line: k + 1, fn: def ? def[1]! : fn, args, bareHost: /(?:^|\s)["']?bare-host["']?(?=\s|\)|$)/.test(code.slice(after)), text: raw.trim() });
+    }
+    if (def && raw.trimEnd().endsWith('}') && !raw.trimEnd().endsWith('{')) fn = null;
+  });
+  return out;
+}
+
+describe('the bare-host mode\'s scope (D-7289)', () => {
+  it('the word counter reads one argument through quotes, $(…) and ${…}, and two when two are passed', () => {
+    const n = (code: string): number => updRedactArgCount(code, code.indexOf('_upd_redact') + '_upd_redact'.length);
+    expect(n('x="$(_upd_redact "$m")"')).toBe(1);
+    expect(n('w="$(_upd_redact "${A:-the (probe) gave; no reason}")"')).toBe(1);
+    expect(n('"$(_upd_redact "the box\'s ccrc.env sets ${s:-$n}${u:+; x:$u}")"')).toBe(1);
+    expect(n('$(_upd_redact "$(printf \'%s\' "a b")")')).toBe(1);
+    expect(n('$(_upd_redact "$1" bare-host)')).toBe(2);
+    expect(n('$(_upd_redact $x bare-host)')).toBe(2);
+    expect(n('_upd_redact "$a" "$b"; echo')).toBe(2);
+    expect(n('$(_upd_redact)')).toBe(0);
+  });
+
+  it('every _upd_redact call in ccd/ccrc and ccd/ccrc-doctor-checks passes exactly one argument', () => {
+    for (const f of ['ccd/ccrc', 'ccd/ccrc-doctor-checks']) {
+      const calls = updRedactCalls(read(f));
+      expect(calls.length, `${f} has _upd_redact callers`).toBeGreaterThan(0);
+      for (const c of calls) expect({ f, line: c.line, args: c.args, bareHost: c.bareHost }, c.text).toEqual({ f, line: c.line, args: 1, bareHost: false });
+    }
+  });
+
+  it('any call in ccd/ccd-update-sync that passes bare-host lies in say', () => {
+    for (const c of updRedactCalls(read('ccd/ccd-update-sync'))) {
+      if (c.bareHost || c.args > 1) expect(c.fn, c.text).toBe('say');
+    }
+  });
 });

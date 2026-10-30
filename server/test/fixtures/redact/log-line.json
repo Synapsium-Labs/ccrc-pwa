@@ -6,6 +6,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "/srv/home/u/x",
+      "bareHost": "/srv/home/u/x",
       "updateSync": "/srv/home/u/x"
     },
     {
@@ -14,6 +15,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "/srv/home/u:/usr/bin",
+      "bareHost": "/srv/home/u:/usr/bin",
       "updateSync": "/srv/home/u:/usr/bin"
     },
     {
@@ -22,6 +24,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "/srv/home/u",
+      "bareHost": "/srv/home/u",
       "updateSync": "/srv/home/u"
     },
     {
@@ -30,6 +33,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "cannot read ~/.ccrc/agent.env",
+      "bareHost": "cannot read ~/.ccrc/agent.env",
       "updateSync": "cannot read ~/.ccrc/agent.env"
     },
     {
@@ -38,6 +42,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "K=~/x",
+      "bareHost": "K=~/x",
       "updateSync": "K=~/x"
     },
     {
@@ -46,6 +51,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "~",
+      "bareHost": "~",
       "updateSync": "~"
     },
     {
@@ -54,6 +60,7 @@
       "home": "/",
       "locale": "C",
       "ccrc": "http://h/p",
+      "bareHost": "http://h/p",
       "updateSync": "http://h/p"
     },
     {
@@ -62,6 +69,7 @@
       "home": "/fixture-home",
       "locale": "C",
       "ccrc": "https://host",
+      "bareHost": "https://host",
       "updateSync": "https://host"
     },
     {
@@ -70,6 +78,7 @@
       "home": "/fixture-home",
       "locale": "C",
       "ccrc": "host/path",
+      "bareHost": "host/path",
       "updateSync": "host/path"
     },
     {
@@ -78,6 +87,7 @@
       "home": "/fixture-home",
       "locale": "C",
       "ccrc": "https://host/path@x",
+      "bareHost": "https://host/path@x",
       "updateSync": "https://host/path@x"
     },
     {
@@ -86,6 +96,7 @@
       "home": "/fixture-home",
       "locale": "C",
       "ccrc": "https://host?a@b",
+      "bareHost": "https://host?a@b",
       "updateSync": "https://host?a@b"
     },
     {
@@ -94,6 +105,7 @@
       "home": "/fixture-home",
       "locale": "C",
       "ccrc": "https://host#a@b",
+      "bareHost": "https://host#a@b",
       "updateSync": "https://host#a@b"
     },
     {
@@ -102,6 +114,7 @@
       "home": "/fixture-home",
       "locale": "C",
       "ccrc": "https://host?a@b#c@d",
+      "bareHost": "https://host?a@b#c@d",
       "updateSync": "https://host?a@b#c@d"
     },
     {
@@ -110,6 +123,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS",
+      "bareHost": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS",
       "updateSync": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS"
     },
     {
@@ -118,6 +132,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https://example.com/path?email=a@example.com&x=1",
+      "bareHost": "https://example.com/path?email=a@example.com&x=1",
       "updateSync": "https://example.com/path?email=a@example.com&x=1"
     },
     {
@@ -126,6 +141,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS",
+      "bareHost": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS",
       "updateSync": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS"
     },
     {
@@ -134,6 +150,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "~/.ccrc/floor",
+      "bareHost": "~/.ccrc/floor",
       "updateSync": "~/.ccrc/floor"
     },
     {
@@ -142,6 +159,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "fetching 127.0.0.1:1/rel/x and \"h/r\"",
+      "bareHost": "fetching 127.0.0.1:1/rel/x and \"h/r\"",
       "updateSync": "fetching 127.0.0.1:1/rel/x and \"h/r\""
     },
     {
@@ -150,6 +168,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "see <h/r> and h/r",
+      "bareHost": "see <h/r> and h/r",
       "updateSync": "see <h/r> and h/r"
     },
     {
@@ -158,6 +177,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "fetching http:/h/r and https:///h/r",
+      "bareHost": "fetching http:/h/r and https:///h/r",
       "updateSync": "fetching http:/h/r and https:///h/r"
     },
     {
@@ -166,6 +186,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "curl: (6) user@host",
+      "bareHost": "curl: (6) host",
       "updateSync": "curl: (6) host"
     },
     {
@@ -174,6 +195,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "mail a@example.com today",
+      "bareHost": "mail a@example.com today",
       "updateSync": "mail a@example.com today"
     },
     {
@@ -182,6 +204,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https://h/r?email=a@example.com/y",
+      "bareHost": "https://h/r?email=a@example.com/y",
       "updateSync": "https://h/r?email=a@example.com/y"
     },
     {
@@ -190,6 +213,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "@scope/pkg",
+      "bareHost": "@scope/pkg",
       "updateSync": "@scope/pkg"
     },
     {
@@ -198,6 +222,7 @@
       "home": "/",
       "locale": "C",
       "ccrc": "cmd http://h/p",
+      "bareHost": "cmd http://h/p",
       "updateSync": "cmd http://h/p"
     },
     {
@@ -206,6 +231,7 @@
       "home": "/home/u/",
       "locale": "C",
       "ccrc": "~/.ccrc/floor",
+      "bareHost": "~/.ccrc/floor",
       "updateSync": "~/.ccrc/floor"
     },
     {
@@ -214,6 +240,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "/home/user2/f",
+      "bareHost": "/home/user2/f",
       "updateSync": "/home/user2/f"
     },
     {
@@ -222,6 +249,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "~/f",
+      "bareHost": "~/f",
       "updateSync": "~/f"
     },
     {
@@ -230,6 +258,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "path \"~\" here",
+      "bareHost": "path \"~\" here",
       "updateSync": "path \"~\" here"
     },
     {
@@ -238,6 +267,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "PATH=~:/usr/bin",
+      "bareHost": "PATH=~:/usr/bin",
       "updateSync": "PATH=~:/usr/bin"
     },
     {
@@ -246,6 +276,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "(cd ~)",
+      "bareHost": "(cd ~)",
       "updateSync": "(cd ~)"
     },
     {
@@ -254,6 +285,7 @@
       "home": "",
       "locale": "C",
       "ccrc": "https://h?a@b",
+      "bareHost": "https://h?a@b",
       "updateSync": "https://h?a@b"
     },
     {
@@ -262,6 +294,7 @@
       "home": "",
       "locale": "C",
       "ccrc": "https://h#a@b",
+      "bareHost": "https://h#a@b",
       "updateSync": "https://h#a@b"
     },
     {
@@ -270,6 +303,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "/srv/home/u/x and ~/y",
+      "bareHost": "/srv/home/u/x and ~/y",
       "updateSync": "/srv/home/u/x and ~/y"
     },
     {
@@ -278,6 +312,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "~/x",
+      "bareHost": "~/x",
       "updateSync": "~/x"
     },
     {
@@ -286,6 +321,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "cd ~/x",
+      "bareHost": "cd ~/x",
       "updateSync": "cd ~/x"
     },
     {
@@ -294,6 +330,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "/usr/bin:~/bin",
+      "bareHost": "/usr/bin:~/bin",
       "updateSync": "/usr/bin:~/bin"
     },
     {
@@ -302,6 +339,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "\"~/x\"",
+      "bareHost": "\"~/x\"",
       "updateSync": "\"~/x\""
     },
     {
@@ -310,6 +348,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "file://~/x",
+      "bareHost": "file://~/x",
       "updateSync": "file://~/x"
     },
     {
@@ -318,6 +357,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "127.0.0.1:1/rel/x",
+      "bareHost": "127.0.0.1:1/rel/x",
       "updateSync": "127.0.0.1:1/rel/x"
     },
     {
@@ -326,6 +366,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "\"h/r\"",
+      "bareHost": "\"h/r\"",
       "updateSync": "\"h/r\""
     },
     {
@@ -334,6 +375,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
       "updateSync": "https://h/r"
     },
     {
@@ -342,6 +384,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
       "updateSync": "https://h/r"
     },
     {
@@ -350,6 +393,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https:////h/r",
+      "bareHost": "https:////h/r",
       "updateSync": "https:////h/r"
     },
     {
@@ -358,6 +402,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "http:/h/r",
+      "bareHost": "http:/h/r",
       "updateSync": "http:/h/r"
     },
     {
@@ -366,6 +411,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https:///h/r",
+      "bareHost": "https:///h/r",
       "updateSync": "https:///h/r"
     },
     {
@@ -374,6 +420,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "file:////home/u/x",
+      "bareHost": "file:////home/u/x",
       "updateSync": "file:////home/u/x"
     },
     {
@@ -382,6 +429,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "note:/y/z",
+      "bareHost": "note:/y/z",
       "updateSync": "note:/y/z"
     },
     {
@@ -390,6 +438,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "x:////home/u/f",
+      "bareHost": "x:////home/u/f",
       "updateSync": "x:////home/u/f"
     },
     {
@@ -398,6 +447,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "x:////home/u/f",
+      "bareHost": "x:////home/u/f",
       "updateSync": "x:////home/u/f"
     },
     {
@@ -406,6 +456,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
       "updateSync": "https://h/r"
     },
     {
@@ -414,6 +465,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
       "updateSync": "https://h/r"
     },
     {
@@ -422,6 +474,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
       "updateSync": "https://h/r"
     },
     {
@@ -430,6 +483,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
       "updateSync": "https://h/r"
     },
     {
@@ -438,6 +492,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "~/.ccrc/x",
+      "bareHost": "~/.ccrc/x",
       "updateSync": "~/.ccrc/x"
     },
     {
@@ -446,6 +501,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "~/.ccrc/x",
+      "bareHost": "~/.ccrc/x",
       "updateSync": "~/.ccrc/x"
     },
     {
@@ -454,6 +510,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "/srv/home/u/x",
+      "bareHost": "/srv/home/u/x",
       "updateSync": "/srv/home/u/x"
     },
     {
@@ -462,6 +519,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "/home/user2/f",
+      "bareHost": "/home/user2/f",
       "updateSync": "/home/user2/f"
     },
     {
@@ -470,6 +528,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "é/home/u/x",
+      "bareHost": "é/home/u/x",
       "updateSync": "é/home/u/x"
     },
     {
@@ -478,6 +537,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "é/home/u/x",
+      "bareHost": "é/home/u/x",
       "updateSync": "é/home/u/x"
     },
     {
@@ -486,6 +546,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "/home/ué",
+      "bareHost": "/home/ué",
       "updateSync": "/home/ué"
     },
     {
@@ -494,6 +555,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "/home/ué",
+      "bareHost": "/home/ué",
       "updateSync": "/home/ué"
     },
     {
@@ -502,6 +564,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrcHex": "ff2f686f6d652f752f78",
+      "bareHostHex": "ff2f686f6d652f752f78",
       "updateSyncHex": "ff2f686f6d652f752f78"
     },
     {
@@ -510,6 +573,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrcHex": "ff2f686f6d652f752f78",
+      "bareHostHex": "ff2f686f6d652f752f78",
       "updateSyncHex": "ff2f686f6d652f752f78"
     },
     {
@@ -518,6 +582,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrcHex": "2f686f6d652f75ff",
+      "bareHostHex": "2f686f6d652f75ff",
       "updateSyncHex": "2f686f6d652f75ff"
     },
     {
@@ -526,6 +591,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrcHex": "2f686f6d652f75ff",
+      "bareHostHex": "2f686f6d652f75ff",
       "updateSyncHex": "2f686f6d652f75ff"
     },
     {
@@ -534,6 +600,7 @@
       "home": "/home/u",
       "locale": "utf8",
       "ccrc": "file://~/x",
+      "bareHost": "file://~/x",
       "updateSync": "file://~/x"
     },
     {
@@ -542,6 +609,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "could not resolve host in u:hunter2@h.invalid:9)",
+      "bareHost": "could not resolve host in h.invalid:9)",
       "updateSync": "could not resolve host in h.invalid:9)"
     },
     {
@@ -550,6 +618,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "mail a@b",
+      "bareHost": "mail b",
       "updateSync": "mail b"
     },
     {
@@ -558,6 +627,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "x (a@b)",
+      "bareHost": "x b)",
       "updateSync": "x b)"
     },
     {
@@ -566,6 +636,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "h@\"",
+      "bareHost": "\"",
       "updateSync": "\""
     },
     {
@@ -574,6 +645,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": ")h/r",
+      "bareHost": ")h/r",
       "updateSync": "u:p@)h/r"
     },
     {
@@ -582,6 +654,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": " )<?",
+      "bareHost": " )<?",
       "updateSync": " S@)<?"
     },
     {
@@ -590,6 +663,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@demo-gone.service); read: systemctl --user status claude-session@demo-gone.service",
+      "bareHost": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: demo-gone.service); read: systemctl --user status demo-gone.service",
       "updateSync": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: demo-gone.service); read: systemctl --user status demo-gone.service"
     },
     {
@@ -598,6 +672,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "see claude-session@abc.service",
+      "bareHost": "see abc.service",
       "updateSync": "see abc.service"
     },
     {
@@ -606,6 +681,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "sets CCRC_MAIL_FROM=ops@example.com",
+      "bareHost": "sets example.com",
       "updateSync": "sets example.com"
     },
     {
@@ -614,6 +690,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "ssh root@box",
+      "bareHost": "ssh box",
       "updateSync": "ssh box"
     },
     {
@@ -622,6 +699,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrc": "git HEAD@{1}",
+      "bareHost": "git {1}",
       "updateSync": "git {1}"
     },
     {
@@ -630,6 +708,7 @@
       "home": "/home/u",
       "locale": "C",
       "ccrcHex": "68747470733a2f2f682f72",
+      "bareHostHex": "68747470733a2f2f682f72",
       "updateSyncHex": "68747470733a2f2f682f72"
     }
   ]
