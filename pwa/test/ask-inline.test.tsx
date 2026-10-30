@@ -218,7 +218,9 @@ describe('the ask is one container at each width', () => {
   });
 
   // Task T1d: the question region scrolls and holds nothing focusable, so it is a Tab stop of its own, named, between the
-  // header and the options: a keyboard scrolls a long question in an engine that does not make a scroller focusable.
+  // header and the options: a keyboard scrolls a long question in an engine that does not make a scroller focusable. It is a
+  // stop whether or not the question overflows (Task T1e, D-7565): jsdom lays nothing out, so no region overflows here, and
+  // the stop is held all the same.
   it('the question region is a named Tab stop between the header and the options', () => {
     media(true);
     const { arrive } = mount();

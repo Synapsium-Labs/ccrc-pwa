@@ -65,7 +65,7 @@ export function AskSurface({ open, onClose, eyebrow, title, raise = 0, onInline,
 }
 
 /** The inline card: the header (T1b's `AskHeader`, passed as the eyebrow), then the QUESTION in a region of its own, then
- *  the SURFACE (the options and the answer controls) in its own (Task T1d, amending D-6326's one scroller at the desk). Each
+ *  the SURFACE (the options and the answer controls) in its own (Task T1d, D-7565, amending D-6326's one scroller at the desk). Each
  *  region sits in a slot that sets the order in which they give up height (`chat.css`): a long question scrolls in its
  *  region while the options under it stay whole, a short one has no scrollbar, and only a surface taller than the card
  *  leaves it scrolls, on its own. `aria-labelledby` names the card by the question; `tabIndex={-1}` lets a click on its
@@ -81,7 +81,7 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The pane's height, as `--ask-pane` on the card: the question region is at most 40% of it (Task T1d), and a percentage
+  // The pane's height, as `--ask-pane` on the card: the question region is at most 40% of it (Task T1d, D-7565), and a percentage
   // in the card's own rules would be of the card. Measured where the card is seated (its parent, `.chat`) and again when
   // that pane resizes; without a ResizeObserver (jsdom) the card keeps chat.css's default, the window's height.
   useLayoutEffect(() => {
@@ -137,7 +137,11 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
       <div className="ask-inline-body">
         <div className="ask-inline-question-slot">
           {/* A scroller with nothing focusable in it: a keyboard reaches it as a Tab stop of its own, between the header and
-              the options, so a long question scrolls by its keys in any engine (Task T1d). */}
+              the options, so a long question scrolls by its keys in any engine (Task T1d, D-7565). THE KEYS: Space, PageUp
+              and PageDown, Home and End scroll it, natively. An ARROW does not: the region is not a row, so T1c's key model
+              (`askKeyAction`, `askKeys.ts`) puts the highlight on the start row and focus follows it. While the post-answer
+              fence stands (R102) the fence stops every key but Tab inside the card, so none of them scrolls it then. It is
+              a stop whether or not the question overflows, so the card's tab order never depends on a measurement. */}
           <div className="ask-inline-question" tabIndex={0} role="group" aria-label="Question">
             <h2 id={titleId} className="ask-inline-title">{title}</h2>
           </div>
