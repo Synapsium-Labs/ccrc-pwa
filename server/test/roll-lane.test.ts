@@ -299,6 +299,17 @@ describe('rollPass: claimed runs and claims do not hold a roll (D-7562)', () => 
     expect(f.calls).toEqual([]);
   });
 
+  it('with claims, undelivered mail to the coordinator still holds', async () => {
+    const f = fake();
+    openRun(f.coord, { claimedBy: COORD, state: 'planned' });
+    claim(f.coord, COORD);
+    const m = f.coord.insertMail({ fromId: CHILD, fromUuid: `uuid-${CHILD}`, toId: COORD, runId: null,
+      kind: 'question', subject: 'still queued', body: 'body', artifacts: [] });
+    f.coord.queueDelivery(m.id, COORD, 'envelope');
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'idle-gate:mail' }]);
+    expect(f.calls).toEqual([]);
+  });
+
   it('with claims, an open run naming the coordinator as worker still holds', async () => {
     const f = fake();
     openRun(f.coord, { claimedBy: COORD2, state: 'working', worker: COORD });

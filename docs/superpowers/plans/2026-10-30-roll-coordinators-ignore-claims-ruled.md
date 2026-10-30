@@ -41,5 +41,25 @@ otherwise be due for rolls; and the pin that hibernation's own verdict still hol
 `server/test/roll-lane.test.ts` "rollPass: claimed runs and claims do not hold a roll (D-7562)" holds the same on a real
 coordination store: planned runs and a dispatched run with a live child roll; a busy coordinator is held by the gate; an
 attached or drafting one is refused by ccd at the act; a non-coordinator never rolls; an open run naming the
-coordinator as worker still holds. `server/test/hibernate-sweep.test.ts`'s claimant rows (every open state holds
+coordinator as worker still holds; undelivered mail to a coordinator with claims still holds `idle-gate:mail`. `server/test/hibernate-sweep.test.ts`'s claimant rows (every open state holds
 `run-claimant`) are unchanged and green.
+
+**Mutants, measured** (each run one file at a time against `roll-target`, `roll-lane`, `hibernate-verdict`,
+`hibernate-sweep` and `sleep-lanes-pin`; the counts are failing tests):
+
+- The default flipped to `pass` (`IDLE_GATE_HOLDS_CLAIMS` passing claims): 22 red, `roll-target` 2, `hibernate-verdict`
+  3, `hibernate-sweep` 9, `sleep-lanes-pin` 8, `roll-lane` 0.
+- The roll's gate set to `hold` (`ROLL_IDLE_GATE` holding claims, the bug): 11 red, `roll-target` 6, `roll-lane` 5 (4 on
+  the red-first commit, plus the mail row, which then reads `idle-gate:run-claimant`).
+- Under `pass`, the claimed open run kept (only the claim cleared): 10 red, `roll-target` 5, `roll-lane` 5.
+- Under `pass`, the claim kept (only the claimed open run cleared): 9 red, `roll-target` 5, `roll-lane` 4.
+- Under `pass`, mail cleared too: 2 red, `roll-target` 1, `roll-lane` 1.
+- Under `pass`, an open run naming it as worker cleared too: 2 red, `roll-target` 1, `roll-lane` 1.
+- `hibernation-due` asking the roll's gate instead of hibernation's own: 1 red, `roll-target` 1.
+
+## Residuals, named
+
+- A child's prompt raised while its coordinator sleeps through a roll, or after the roll's wake failed, goes to the
+  operator (`parent-not-live`), as it does for any claimant that is not live. The roll does not hold for it.
+- A failed roll wake can leave a coordinator that claims runs hibernated. It still reads as alive to reclaim, so its runs
+  are not taken from it, and its children's mail wakes it.
