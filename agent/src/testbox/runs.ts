@@ -5,6 +5,9 @@
 // `runs/<k>/run` that no active unit owns. `prepareFailed` reasons are `TESTBOX_FALLBACK`'s words. Results, logs and
 // refs are kept for `CCRC_TESTBOX_RETENTION`; a run's refs go only after that time AND its directory's deletion.
 //
+// D-7407 (TB5): `installStep` decides each package's install step in the prepare: a clone of the key's pristine
+// install when it is present, otherwise `npm ci --prefer-offline` in the run's copy (the caller queues the key).
+//
 // D-7501: the prepare unit says why it failed on its last stderr line, in `TESTBOX_FALLBACK`'s words; that output
 // file is written by the system manager outside the run directory (spec §2.2), so the service reads it there.
 import { TESTBOX_FALLBACK, type TestboxFallbackId, type TestboxPrepareFailed, type TestboxPrepareFailure } from '../../../shared/testbox.js';
@@ -152,6 +155,33 @@ export function step(r: RunState, ev: RunEvent): { readonly run: RunState; reado
       if (r.phase !== 'clean') return none;
       return { run: { ...r, phase: 'done' }, act: { t: 'summarise' } };
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The prepare's install step per package (D-7407; spec §2.2 "Prepare", step 2).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The clone of a present pristine install: data blocks shared, diverging on write, timestamps kept. */
+export const CLONE_ARGV = ['cp', '-R', '--reflink=always', '--preserve=timestamps'] as const;
+/** The install in the run's own copy, against the registry proxy the box's `npmrc` names. */
+export const INSTALL_ARGV = ['npm', 'ci', '--prefer-offline'] as const;
+
+export interface InstallStep {
+  readonly package: string;
+  /** The package's install key; `null` when its inputs could not be read at the run's tree. */
+  readonly key: string | null;
+  readonly mode: 'clone' | 'install';
+  /** The directory the step runs in: the package's directory in the run's checkout. */
+  readonly dir: string;
+  readonly argv: readonly string[];
+}
+
+/** One package's step: a clone of `<pristineRoot>/<key>` to the package's `node_modules` when the key is present,
+ *  otherwise `npm ci --prefer-offline` in the run's copy (and the caller queues the key's build). */
+export function installStep(pkg: string, key: string | null, present: boolean, pristineRoot: string, checkout: string): InstallStep {
+  const dir = `${checkout}/${pkg}`;
+  if (key !== null && present) return { package: pkg, key, mode: 'clone', dir, argv: [...CLONE_ARGV, `${pristineRoot}/${key}`, `${dir}/node_modules`] };
+  return { package: pkg, key, mode: 'install', dir, argv: [...INSTALL_ARGV] };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

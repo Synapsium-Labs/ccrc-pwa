@@ -4,6 +4,13 @@
 // L1 deciders; it acts through the system manager (`systemd.ts`), the mirror (`mirror.ts`), the spec file
 // (`spec.ts`) and the output and report readers (`results.ts`). TB5 and TB6 each add one line to `FRAME_HANDLERS`.
 //
+// D-7407, D-7543 (TB5): no frame carries pristine-install work, so TB5 adds no `FRAME_HANDLERS` line; it wires the
+// pristine store (`pristine.ts`) into the run manager through the optional `pristine` dependency instead. With it, a
+// prepare's spec names each package's install step (`runs.ts#installStep`: a clone of the key's pristine install, or
+// `npm ci --prefer-offline` in the run's copy and the key queued), a queued key is built in the install unit as a
+// `pristine` queue entry (one at a time, counting as one run), the status answer lists the present and failed keys,
+// and the timer queues due builds and expires unused keys. Without it every run is as TB4 built it.
+//
 // What a client sees (D-7501): the hello is answered with the status answer (the frame family has no status request);
 // a `run.submit` is queued and then streamed as `run.log` frames and one `run.summary`; a submission the box will not
 // run is refused, and the connection closes with the reason. A run keeps going when its connection drops; positions
@@ -18,11 +25,15 @@ import type { MirrorOps } from './mirror.js';
 import { admit, cancel as queueCancel, enqueue, EMPTY_QUEUE, finish, positions, queueCounts, type QueueState } from './queue.js';
 import { lastLine, logTail, OUTPUT_DRAIN_MS, OutputTail, PREPARE_STDERR, readReport, RUN_LOG, SLOT_OUTPUT_FILES } from './results.js';
 import {
-  cleaned, heldUsers, liveRunIds, makePool, queuedRun, retentionPlan, retrySweep, startupSweep, step, takeUser,
-  type KeptRun, type Pool, type RunAct, type RunEvent, type RunState,
+  cleaned, heldUsers, installStep, liveRunIds, makePool, queuedRun, retentionPlan, retrySweep, startupSweep, step, takeUser,
+  type InstallStep, type KeptRun, type Pool, type RunAct, type RunEvent, type RunState,
 } from './runs.js';
-import { buildRunSpec, runPaths, writeSpec, type RunSpec, type SpecSettings } from './spec.js';
-import { statusAnswer, type ProbeResult } from './status.js';
+import {
+  adopt, buildEnded, buildQueued, copyEnded, due, emptyStore, expire, nodeChanged, pristineLists, seen, undoom,
+  type InstallInput, type PristineSettings, type PristineStore,
+} from './pristine.js';
+import { buildInstallSpec, buildRunSpec, runPaths, writeInstallSpec, writeSpec, type RunSpec, type SpecSettings } from './spec.js';
+import { statusAnswer, type ProbeResult, type StatusFacts } from './status.js';
 import { units, type SystemManager, type UnitEnd } from './systemd.js';
 
 /** The settings the run manager reads, all from `config.ts`. */
@@ -48,7 +59,22 @@ export interface ServiceDeps {
   readonly serviceVersion: string;
   /** The box's measured tool versions; the tool sync (TB6) measures them, and until then there are none. */
   readonly tools?: () => TestboxToolVersions | null;
+  /** The pristine installs (TB5, D-7543); absent, every run installs nothing beyond its prepare. */
+  readonly pristine?: PristineDeps;
 }
+
+/** What the pristine store needs from outside (D-7543). */
+export interface PristineDeps {
+  readonly settings: PristineSettings;
+  /** A run's install inputs at its tree in the mirror, in the given order; `null` when one cannot be read. */
+  readonly inputs: (mirror: string, runId: string, paths: readonly string[]) => Promise<InstallInput[] | null>;
+  /** The node version the box's installs run under. */
+  readonly node: () => string;
+  readonly platform: string;
+}
+
+/** The queue's word for the service's own pristine builds. */
+const PRISTINE_SESSION = 'pristine';
 
 /** Where a run's frames go: the connection that submitted it, while it is open. */
 export interface RunSink {
@@ -75,6 +101,9 @@ interface Run {
 /** A unit end that could not be read is a failure, never a pass. */
 const FAILED_END: UnitEnd = { exit: 255, result: 'unknown' };
 
+/** UTC ISO 8601 to the second, as the status frame carries a time. */
+const utcSecond = (ms: number): string => new Date(ms).toISOString().replace(/\.[0-9]{3}Z$/, 'Z');
+
 export class TestboxService {
   private queue: QueueState = EMPTY_QUEUE;
   private pool: Pool;
@@ -84,10 +113,14 @@ export class TestboxService {
   private readonly sync: TestboxSync = { state: 'idle', detail: null, at: null };
   private readonly fleetTools: TestboxToolVersions | null = null;
   private readonly driving = new Set<Promise<void>>();
+  private store: PristineStore | null;
 
   constructor(private readonly d: ServiceDeps) {
     this.pool = makePool(d.settings.runs);
+    this.store = d.pristine === undefined ? null : emptyStore(d.pristine.node(), d.pristine.platform);
   }
+
+  private get pristineRoot(): string { return path.join(this.s.root, 'pristine'); }
 
   private get s(): ServiceSettings { return this.d.settings; }
 
@@ -103,6 +136,7 @@ export class TestboxService {
     const swept = startupSweep(this.pool, seen);
     this.pool = swept.pool;
     for (const k of swept.clean) await this.cleanSlot(k);
+    if (this.store !== null && existsSync(this.pristineRoot)) this.store = adopt(this.store, readdirSync(this.pristineRoot), this.d.now());
   }
 
   private async anyActive(k: number): Promise<boolean> {
@@ -130,8 +164,17 @@ export class TestboxService {
       mirrors: this.d.rows.map((r) => ({ name: r.name, mirrorPath: r.mirrorPath, present: existsSync(path.join(r.mirrorPath, 'HEAD')) })),
       release: this.d.release, serviceVersion: this.d.serviceVersion, tools: this.d.tools?.() ?? null, fleetTools: this.fleetTools,
       sync: this.sync, inProgress: counts.inProgress, limit: this.s.runs, queueDepth: counts.queueDepth,
-      pristine: [], failedKeys: [], heldRunUsers: heldUsers(this.pool, this.s.runUserPrefix),
+      ...this.pristineFacts(), heldRunUsers: heldUsers(this.pool, this.s.runUserPrefix),
     });
+  }
+
+  private pristineFacts(): Pick<StatusFacts, 'pristine' | 'failedKeys'> {
+    if (this.store === null) return { pristine: [], failedKeys: [] };
+    const l = pristineLists(this.store);
+    return {
+      pristine: l.pristine,
+      failedKeys: l.failed.map((f) => ({ repository: f.repository, package: f.package, key: f.key, exit: Math.min(FAILED_END.exit, f.exit), attempts: f.attempts, nextAttempt: utcSecond(f.nextAttemptAt) })),
+    };
   }
 
   /** Each waiting run's position (spec §2.8). */
@@ -180,8 +223,7 @@ export class TestboxService {
     const { state, started } = admit(this.queue, limits);
     this.queue = state;
     for (const e of started) {
-      if (e.kind !== 'run') continue;
-      const p = this.drive(e.id).finally(() => { this.driving.delete(p); });
+      const p = (e.kind === 'run' ? this.drive(e.id) : this.build(e.id)).finally(() => { this.driving.delete(p); });
       this.driving.add(p);
     }
   }
@@ -215,8 +257,8 @@ export class TestboxService {
       case 'start-prepare': {
         const built = buildRunSpec(run.submit, run.row, k, this.s, this.d.chrome);
         if (!built.ok) return { t: 'prepared', exit: FAILED_END.exit, lastStderr: null };
-        run.spec = built.spec;
-        writeSpec(this.s.root, built.spec);
+        run.spec = { ...built.spec, ...(this.store === null ? {} : { installs: await this.installSteps(run, p.runDir) }) };
+        writeSpec(this.s.root, run.spec);
         mkdirSync(p.out, { recursive: true });
         // The slot's output files are the last run's until a unit writes them again: a prepare that never ran its main
         // (an `ExecStartPre=` that refused) must not be given that run's reason, nor a run its output.
@@ -225,6 +267,8 @@ export class TestboxService {
         const end = run.state.cancelled ? FAILED_END : await this.unitRun(units.prepare(k));
         run.prepareMs = Math.max(0, this.d.now() - t0);
         run.prepareExit = end.exit;
+        for (const st of run.spec.installs ?? []) if (st.mode === 'clone' && st.key !== null && this.store !== null) this.store = copyEnded(this.store, st.key);
+        this.queueBuilds();
         return { t: 'prepared', exit: end.exit, lastStderr: lastLine(path.join(p.out, PREPARE_STDERR)) };
       }
       case 'start-run': {
@@ -331,11 +375,77 @@ export class TestboxService {
     for (const m of touched) await this.d.mirror.gc(m);
   }
 
-  /** The timer's work: fetch, sweep, retention. */
+  /** The timer's work: fetch, sweep, retention, and the pristine store's (a new node version, unused keys, builds
+   *  whose next attempt has come). */
   async tick(): Promise<void> {
     await this.fetchMirrors().catch(() => undefined);
     await this.sweep();
     await this.retention().catch(() => undefined);
+    this.pristineTick();
+  }
+
+  // -------------------------------------------------------------------------------------------------------------
+  // Pristine installs (TB5, D-7407, D-7543; spec §2.2 "Pristine installs").
+  // -------------------------------------------------------------------------------------------------------------
+
+  /** Each package's install step for a run, in the row's install order; every key named is used now. */
+  private async installSteps(run: Run, runDir: string): Promise<InstallStep[]> {
+    const pd = this.d.pristine!;
+    const steps: InstallStep[] = [];
+    for (const pkg of run.row.packages) {
+      const inputs = await pd.inputs(run.row.mirrorPath, run.submit.runId, pkg.installInputs).catch(() => null);
+      let key: string | null = null;
+      let present = false;
+      if (inputs !== null && this.store !== null) {
+        const r = seen(this.store, run.row.name, pkg.name, inputs, this.d.now());
+        this.store = r.store;
+        key = r.key;
+        present = r.present;
+      }
+      steps.push(installStep(pkg.name, key, present, this.pristineRoot, path.join(runDir, 'checkout')));
+    }
+    return steps;
+  }
+
+  /** Every due key queued as a `pristine` entry, then the queue pumped. */
+  private queueBuilds(): void {
+    if (this.store === null) return;
+    for (const key of due(this.store, this.d.now())) {
+      const q = enqueue(this.queue, { id: key, session: PRISTINE_SESSION, kind: 'pristine' });
+      if (q === null) continue;
+      this.queue = q;
+      this.store = buildQueued(this.store, key);
+    }
+    this.pump();
+  }
+
+  private pristineTick(): void {
+    const pd = this.d.pristine;
+    if (pd === undefined || this.store === null) return;
+    const now = this.d.now();
+    this.store = expire(nodeChanged(this.store, pd.node(), now), now, pd.settings.keepMs);
+    this.queueBuilds();
+  }
+
+  /** One key's build: the install unit (its first step lays the inputs out fresh and removes the doomed keys; on
+   *  success its last step moves `node_modules` to `pristine/<key>`), then, whatever the end, `clean@install`. */
+  private async build(key: string): Promise<void> {
+    const entry = this.store?.entries.find((e) => e.key === key);
+    let exit: number = FAILED_END.exit;
+    if (entry !== undefined && entry.package !== null && this.store !== null) {
+      const doomed = [...this.store.doomed];
+      writeInstallSpec(this.s.root, buildInstallSpec(key, entry.package, entry.inputs, doomed, this.s));
+      const p = runPaths(this.s.root, 'install', '-');
+      mkdirSync(p.out, { recursive: true });
+      // A build the service lost (a restart mid-build) left `install/run`; the first step refuses to reuse it.
+      if (existsSync(p.runDir)) await this.unitRun(units.clean('install'));
+      exit = (await this.unitRun(units.install())).exit;
+      await this.unitRun(units.clean('install'));
+      this.store = undoom(this.store, doomed);
+    }
+    if (this.store !== null) this.store = buildEnded(this.store, key, exit, this.d.now(), this.d.pristine!.settings.retryMs);
+    this.queue = finish(this.queue, key);
+    this.pump();
   }
 
   /** For the tests and the status rows: the pool as it stands. */
