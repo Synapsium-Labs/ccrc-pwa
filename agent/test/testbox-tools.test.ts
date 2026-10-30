@@ -16,7 +16,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync,
+  chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync,
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -28,7 +28,7 @@ import WebSocket from 'ws';
 import type { RunSubmit, StatusAnswer, TestboxRepoRow, ToolsSync, TestboxToolVersions } from '../../shared/testbox.js';
 import { serviceFor, startTestboxServer, timerWork } from '../src/testbox/main.js';
 import { FRAME_HANDLERS, type TestboxService } from '../src/testbox/service.js';
-import { buildInstallSpec, buildRunSpec, type SpecSettings } from '../src/testbox/spec.js';
+import { buildInstallSpec, buildRunSpec, writeInstallSpec, writeSpec, type SpecSettings } from '../src/testbox/spec.js';
 import type { TestboxConfig } from '../src/testbox/config.js';
 import type { SystemManager, UnitEnd } from '../src/testbox/systemd.js';
 import {
@@ -760,10 +760,11 @@ describe('the release base is the box file\'s (D-7457)', () => {
 // ---------------------------------------------------------------------------------------------------------------
 
 /** The system manager's seam: `ccrc-testbox-tools.service` is the script run with the service's spec. */
-function fakeSys(b: Box, specFile: string, seen: string[]): SystemManager {
+function fakeSys(b: Box, specFile: string, seen: string[], beforeUnit?: (n: number) => void | Promise<void>): SystemManager {
   return {
     async run(unit: string): Promise<UnitEnd> {
       seen.push(unit);
+      await beforeUnit?.(seen.length);
       const r = await exec(b.script, [specFile], b.env);
       return { exit: r.code < 0 ? 255 : r.code, result: r.code === 0 ? 'success' : 'exit-code' };
     },
@@ -785,7 +786,7 @@ const cfgFor = (b: Box): TestboxConfig => ({
   lines: new Map([...SETTINGS_LINES, ['CCRC_TESTBOX_PRISTINE_KEEP', { value: '7d' }]]) as unknown as TestboxConfig['lines'],
 });
 
-function driver(b: Box, o: { live?: string[]; now?: () => number } = {}) {
+function driver(b: Box, o: { live?: string[]; now?: () => number; beforeUnit?: (n: number) => void | Promise<void> } = {}) {
   const svcRoot = path.join(path.dirname(b.root), 'svc');
   const units: string[] = [];
   const exits: number[] = [];
@@ -800,7 +801,7 @@ function driver(b: Box, o: { live?: string[]; now?: () => number } = {}) {
     submit: (f, conn) => { submitted.push({ f, conn }); },
   };
   const t = new ToolSync({
-    sys: fakeSys(b, path.join(svcRoot, 'specs', 'tools'), units), root: svcRoot, toolsDir: b.tools,
+    sys: fakeSys(b, path.join(svcRoot, 'specs', 'tools'), units, o.beforeUnit), root: svcRoot, toolsDir: b.tools,
     settings: { ...TS, proxy: `127.0.0.1:${W.registry.port}` }, now: o.now ?? (() => 1_000), exit: (c) => { exits.push(c); },
   });
   t.serve(served);
@@ -1033,6 +1034,125 @@ function slowService() {
   };
   return { served, c, release: () => { for (const g of gates.splice(0)) g(); } };
 }
+
+describe('the sets in use are the ones the specs name (spec §2.10: a run resolves current once, at its prepare; the previous version of each tool is kept until no run uses it)', () => {
+  const [RUN_A, RUN_B] = ['4'.repeat(32), '5'.repeat(32)];
+  const chromeBuilds = (): void => { for (const v of [CHROME_2, CHROME_3]) W.dl.files.set(`/chrome-for-testing-public/${v}/linux64/chrome-linux64.zip`, chromeZip(v)); };
+  const svcOf = (b: Box): TestboxService => serviceFor(cfgFor(b), path.join(b.tools, 'release', 'installed'), () => undefined);
+  const depsOf = (svc: TestboxService): { settings: SpecSettings; chrome: string } => (svc as unknown as { d: { settings: SpecSettings; chrome: string } }).d;
+  /** A prepare starting now: the run's spec built with the entry point's settings and written where the service writes
+   *  it; returns the spec's first PATH entry, `<tools>/sets/<set>/bin`. */
+  const prepareNow = (svc: TestboxService, root: string, runId: string, k: number): string => {
+    const d = depsOf(svc);
+    const r = buildRunSpec({ ...SPEC_SUBMIT, runId }, SPEC_ROW, k, d.settings, d.chrome);
+    if (!r.ok) throw new Error(r.reason);
+    writeSpec(root, r.spec);
+    return (r.spec.env.find(([n]) => n === 'PATH')?.[1] ?? '').split(':')[0]!;
+  };
+  const setOf = (bin: string): string => path.basename(path.dirname(bin));
+  const currentSet = (b: Box): string => path.basename(realpathSync(path.join(b.tools, 'current')));
+  const keptIn = (root: string): string[] => readFileSync(path.join(root, 'specs', 'tools'), 'utf8').split('\0').filter((r) => r.startsWith('K'));
+
+  it('a run whose prepare starts while a sync runs keeps its set through the next sync, though that set is no longer the previous one', async () => {
+    const b = makeBox();
+    chromeBuilds();
+    const live: string[] = [];
+    let svc: TestboxService | null = null;
+    let first = '';
+    const d = driver(b, { live, beforeUnit: (n) => {
+      // The second sync's unit is about to switch current: a prepare starts first, under the set current now.
+      if (n === 2) { first = prepareNow(svc!, path.join(path.dirname(b.root), 'svc'), RUN_A, 1); live.push(RUN_A); }
+    } });
+    svc = svcOf(b);
+    await d.t.request(frameOf(BOOT_TAG));
+    const s1 = currentSet(b);
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_2 }));
+    expect(setOf(first)).toBe(s1);
+    expect(currentSet(b)).not.toBe(s1);
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_3 }));
+    expect(d.units).toHaveLength(3);
+    expect(keptIn(d.svcRoot), 'the third sync keeps the set the live run\'s spec names').toContain(`K${s1}`);
+    expect(existsSync(path.join(first, 'node')), 'the run\'s node is still there').toBe(true);
+    expect(existsSync(path.join(b.tools, 'chrome', NEW.chrome)), 'and its Chrome').toBe(true);
+  }, 180_000);
+
+  it('a frame that waited for a sync runs with the sets of the runs that started meanwhile', async () => {
+    const b = makeBox();
+    chromeBuilds();
+    const live: string[] = [];
+    let svc: TestboxService | null = null;
+    let first = '';
+    const d = driver(b, { live, beforeUnit: (n) => {
+      if (n !== 2) return;
+      // A third frame comes while the second sync runs, and waits for it; then a prepare starts under the set current now.
+      void d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_3 }));
+      first = prepareNow(svc!, path.join(path.dirname(b.root), 'svc'), RUN_A, 1);
+      live.push(RUN_A);
+    } });
+    svc = svcOf(b);
+    await d.t.request(frameOf(BOOT_TAG));
+    const s1 = currentSet(b);
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_2 }));
+    await d.t.settled();
+    expect(d.units, 'the waiting frame ran after the second sync').toHaveLength(3);
+    expect(setOf(first)).toBe(s1);
+    expect(keptIn(d.svcRoot)).toContain(`K${s1}`);
+    expect(existsSync(path.join(first, 'node'))).toBe(true);
+  }, 180_000);
+
+  it('a pristine install\'s set is kept while its spec names it; a slot\'s spec whose run has ended keeps nothing', async () => {
+    const b = makeBox();
+    chromeBuilds();
+    const d = driver(b);
+    const svc = svcOf(b);
+    await d.t.request(frameOf(BOOT_TAG));
+    const s1 = currentSet(b);
+    const install = buildInstallSpec('k1', 'server', [], [], depsOf(svc).settings);
+    writeInstallSpec(d.svcRoot, install);
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_2 }));
+    const s2 = currentSet(b);
+    // A run that prepared under the second set and has ended (it is not live) left its spec on slot 2.
+    expect(setOf(prepareNow(svc, d.svcRoot, RUN_B, 2))).toBe(s2);
+    await d.t.request(frameOf(BOOT_TAG, { ...NEW, chrome: CHROME_3 }));
+    expect(keptIn(d.svcRoot), 'the install\'s set, and not the ended run\'s').toEqual([`K${s1}`]);
+    expect(existsSync(path.join((install.env.find(([n]) => n === 'PATH')?.[1] ?? '').split(':')[0]!, 'node'))).toBe(true);
+  }, 180_000);
+
+  it('a prepare\'s Chrome and PATH come from one reading of current, whichever is read first', async () => {
+    const b = makeBox();
+    const d = driver(b);
+    await d.t.request(frameOf(BOOT_TAG));
+    const s1 = currentSet(b);
+    // Another set, switched in by one rename between the two reads of the same prepare.
+    const other = path.join(b.tools, 'sets', 's.otherset');
+    mkdirSync(path.join(other, 'bin'), { recursive: true });
+    writeFileSync(path.join(other, 'chrome'), '');
+    const swap = (to: string): void => { const tmp = path.join(b.tools, 'current.swap'); symlinkSync(to, tmp); renameSync(tmp, path.join(b.tools, 'current')); };
+    const chrome = d.t.chrome();
+    swap(path.join('sets', 's.otherset'));
+    const bin = d.t.bin();
+    expect(setOf(bin), 'the PATH read after the switch, in the same prepare').toBe(s1);
+    expect(realpathSync(chrome)).toBe(realpathSync(path.join(b.tools, 'sets', s1, 'chrome')));
+    await Promise.resolve();
+    // The next prepare reads current afresh.
+    expect(setOf(d.t.bin())).toBe('s.otherset');
+    const bin2 = d.t.bin();
+    swap(path.join('sets', s1));
+    expect(d.t.chrome(), 'the Chrome read after the switch, in the same prepare').toBe(realpathSync(path.join(other, 'chrome')));
+    expect(setOf(bin2)).toBe('s.otherset');
+  }, 180_000);
+
+  it('a run handed over at a takeover is handed over again at the next one, while it still waits', async () => {
+    const b = makeBox();
+    const d = driver(b);
+    const dir = path.join(d.svcRoot, HANDOVER_DIR);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `000000000000001-000001-${Q1}.json`), `${JSON.stringify(submitOf(Q1))}\n`);
+    expect(d.t.resume()).toBe(1);
+    d.waiting.push(Q1);
+    expect(d.t.queuedFrames().map((f) => f.runId)).toEqual([Q1]);
+  });
+});
 
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
 
