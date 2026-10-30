@@ -4,7 +4,7 @@
 
 **Routing.** Band 3, native, for both the note and the build. Secret masking is security-sensitive, so it is never handed off.
 
-**Base.** Measured on `origin/main` `b99070116`. The masking files were re-checked on `cf7cb2da1` (RS2, #1931, merged during the note): RS2 changes none of `accounts/mask.ts`, `transcript/parse.ts`, `transcript/tail.ts`, `secret-mask.test.ts`, `late-census.test.ts` or `advance-switches.test.ts`. On `cf7cb2da1` the set holds **10** entries, and its stamp reads `size: 10`. All prototypes and probes ran on a scratch copy of the tree outside the repository, and none of them is committed. Code is cited by file and symbol.
+**Base.** Measured on `origin/main` `b99070116`. The masking files were re-checked on `cf7cb2da1` (RS2, #1931, merged during the note): RS2 changes none of `accounts/mask.ts`, `transcript/parse.ts`, `transcript/tail.ts`, `secret-mask.test.ts`, `late-census.test.ts` or `advance-switches.test.ts`. On `cf7cb2da1` the set holds **10** entries, and its stamp reads `size: 10`. RS7 (#1932) then merged as `efc2cd836`: of the files above it changes only `secret-mask.test.ts` (its one `new PushService(` call), and it drains `push.ts`'s key, so on `efc2cd836` the set holds **9** and the stamp reads `size: 9`. The fixed rows of Step 1 and their mutants (Step 6) were measured on `efc2cd836`. All prototypes and probes ran on a scratch copy of the tree outside the repository, and none of them is committed. Code is cited by file and symbol.
 
 ## The edge, re-measured
 
@@ -162,7 +162,7 @@ Measured on 2026-10-30 with `gh pr list --state open --json number,files` (21 op
 | #1933 (RS4, link errors) | `outward-edges.data.ts`: deletes the `token/link.ts` and `update/converge.ts` keys, the two keys on either side of `parse.ts`'s key, which its hunk carries as context; the stamp line | deletes `parse.ts`'s key; the stamp line | **textual conflict** (adjacent deletions, and the same stamp line) |
 | #1934 (RS6, journal split) | `advance-switches.test.ts`: the `delegation-journal.ts` row of the every-other-file `CEILING`; `outward-edges.data.ts`'s two delegation keys; the stamp line | deletes that `CEILING`'s `accounts/mask.ts` row (its first row, more than three lines above #1934's); the `parse.ts` key; the stamp line | `advance-switches.test.ts`: line-disjoint. **The stamp line is the same line** |
 
-**Order.** RS10's build lands **after RS7 (#1932)**, as the plan's landing order has it, and after #1933 and #1934. Whichever of these is still open when RS10 reaches the queue, RS10 rebases onto it after it merges. On each rebase it keeps every other PR's deletions, recounts the set and rewrites the stamp from the count; it never keeps a stale size. Both PRs touch `secret-mask.test.ts` too, so RS10 waits for #1932 rather than landing beside it.
+**Order.** RS10's build lands **after RS7 (#1932)**, as the plan's landing order has it, and after #1933 and #1934. Whichever of these is still open when RS10 reaches the queue, RS10 rebases onto it after it merges. On each rebase it keeps every other PR's deletions, recounts the set and rewrites the stamp from the count; it never keeps a stale size. Both PRs touch `secret-mask.test.ts` too, so RS10 waits for #1932 rather than landing beside it. (#1932 has since merged as `efc2cd836`; the rule-6 table above is as measured before it did.)
 
 The build's Step 0 measures all of this again on its own base.
 
@@ -212,7 +212,7 @@ The new header and `SHAPE_MASK`'s doc cite symbols only (`accounts/mask.ts#Secre
 
 - [ ] **Step 0: Re-ground**, and report any count that differs before any commit.
   - The rings of `parse.ts` (L1) and `mask.ts` (L4).
-  - The set's keys and stamp (10 on `cf7cb2da1`).
+  - The set's keys and stamp (10 on `cf7cb2da1`, 9 on `efc2cd836`).
   - `parseTranscriptLine`'s callers (2 production, 62 test).
   - `SHAPE_ONLY_MASKER`'s readers.
   - That nothing calls `ingest`, `offer`, `retain` or `close` on it.
@@ -239,8 +239,16 @@ The new header and `SHAPE_MASK`'s doc cite symbols only (`accounts/mask.ts#Secre
 
       The reference is a **fresh** keyless `SecretMasker`, never `parse.ts`'s own import. So after the drain this row is exactly the differential between the L1 value and `SecretMasker`, and no byte of it changes.
 
+      **This row is relative, so it alone does not hold main's bytes.** After Step 4 the subject and the reference both run `spliceMasked` and `walkStrings`. A mistake in a shared helper changes both together, and the row stays green while the masked output of every egress changes. The note's review measured three such mutants of today's `mask.ts` (M1–M3 in Step 6). Each, applied alone, passes `secret-mask.test.ts`, `transcript-parse.test.ts`, `pane-sgr-guard-characterization.test.ts`, `continued-in-parity.test.ts`, `approval-raise.test.ts`, `approvals-routes.test.ts` and `roster-reload.test.ts`, and by construction it passes this row too. Re-measured on `efc2cd836` for `secret-mask.test.ts`: each of M1, M2 and M3 alone leaves it at 85 passed, 1 skipped. The fixed rows below hold main's bytes as literals instead, and Step 7's cross-tree run holds them over the corpus.
+
       The row also asserts that `SHAPE_ONLY_MASKER.maskDeep(v)` deep-equals `new SecretMasker().maskDeep(v)`: the singleton keeps no state.
     - **Keyless reach:** `SHAPE_ONLY_MASKER.fingerprintMax()` is `null`. While the differential loop runs, spies see 0 calls of `globalThis.setTimeout` and 0 of `Date.now` (measured: 0 and 0; these spies are created and read inside the one row, so `clearMocks` does not touch them, and the row restores them before it ends).
+    - **Fixed rows: main's bytes, as literals.** These rows read no recorded input and no reference masker. Each expected value is spelled from the fixture's own pieces and `SECRET_MASK` / `SECRET_MASK_TOO_LARGE`, and each row asserts exact equality (`toBe`, or `toEqual` over the whole object). The block's `beforeAll` has already stopped the recorder, so they add nothing to the corpus. All were measured green on `efc2cd836` in a scratch copy, with the file's own `fill`, `SK`, `OAT`, `JWT`, `CMP` and `TOKEN_1` helpers and one more assembled credential, `GEN = [SK, fill(20, 'g', 'hex')].join('-')`.
+      - **Overlapping spans give one `SECRET_MASK`.** `a = '{"access_token": "' + GEN + '\\u0041' + fill(10, 'b', 'hex') + '"}'` (a JSON escape inside the field value: `genericSk` ends at the backslash, and `codexTokenField` runs on past it from the same start), and `b = '{"id_token": "' + JWT + '\\"q"}'` (the same overlap, with `jwt`). For `SHAPE_ONLY_MASKER` and a fresh `new SecretMasker()`, `maskText(a)` is `'{"access_token": "' + SECRET_MASK + '"}'` and `maskText(b)` is `'{"id_token": "' + SECRET_MASK + '"}'`. Then, through the parse: an assistant `tool_use` record with `input: { command: a, other: [b] }` gives an event whose `input` is exactly `JSON.stringify({ command: <a's masked value>, other: [<b's masked value>] })`. This last assertion reads `parseTranscriptLine` alone, so after Step 5 it holds `SHAPE_MASK`'s bytes too.
+      - **What `maskDeep` passes through.** With `d = new Date(0)`, `u8 = new Uint8Array([1, 2])`, `ab = new ArrayBuffer(2)` and `tj = { hidden: OAT, toJSON() { return { k: 'x ' + OAT + ' y' }; } }`, for both maskers `maskDeep({ d, u8, ab, tj, n: null, b: true, k: 3, s: OAT })` gives `out.d` `toBe` `d`, `out.u8` `toBe` `u8`, `out.ab` `toBe` `ab` (the same instances), and the whole result `toEqual`s `{ d, u8, ab, tj: { k: 'x ' + SECRET_MASK + ' y' }, n: null, b: true, k: 3, s: SECRET_MASK }`. So `toJSON`'s answer is walked and the object's own fields are not.
+      - **Where the too-large notice goes.** A keyed masker as the file's `maskerOver(() => TOKEN_1, [CMP])` builds it; `ceiling = RUNS_PER_CHUNK * MAX_CHUNKS`; `runs` are `ceiling + 10` fillers of `CMP`'s length, as the existing ceiling row builds them. `maskText(OAT + ' ' + runs.join(' ') + ' ' + CMP + ' after')` is exactly `SECRET_MASK + ' ' + runs.slice(0, ceiling).join(' ') + ' ' + SECRET_MASK_TOO_LARGE`. That fixes in one value: a shape span before the cut is spliced, the cut falls after run `ceiling - 1` and its separator, and the notice comes last. The existing ceiling rows test only `endsWith` and `toContain`.
+
+      The shape-only masker never reaches the cut (Problem 1), so the third row runs a keyed masker. It is here because Step 4 rewrites that same assembly (`masked + SECRET_MASK_TOO_LARGE`).
     - A failing message names the input's index and `SECRET_MASK`'s count, never the input.
 
   The fixtures stay assembled at run time, as the file's header requires, so no whole shape is written into the tree.
@@ -273,7 +281,11 @@ The new header and `SHAPE_MASK`'s doc cite symbols only (`accounts/mask.ts#Secre
   | `shapes.ts` imports `RUN_MAX_BYTES` from `./mask.js` | `outward-edges.test.ts` (fresh pair `shapes.ts -> mask.ts`, L1 → L4) |
   | `shapes.ts` evicts `viewMemo` with a `setTimeout` held on a module-scope name | `shapes.ts` becomes L4, so `outward-edges.test.ts` reds `parse.ts -> shapes.ts` and `mask.ts`'s import stays inward |
   | `SecretMasker` keeps its own `walk` | `late-census`'s one-owner row |
-  | `maskWithCarry` appends `SECRET_MASK_TOO_LARGE` before the splice | `secret-mask.test.ts`'s budget rows |
+  | `maskWithCarry` appends `SECRET_MASK_TOO_LARGE` before the splice | Step 1's too-large fixed row, and `secret-mask.test.ts`'s budget rows (measured on `efc2cd836` with `out.unshift(SECRET_MASK_TOO_LARGE)`: the fixed row reds) |
+  | **M1:** `spliceMasked` drops its `if (!masked)` test, so each overlapping span pushes its own `SECRET_MASK` | Step 1's overlapping-spans fixed row (measured on `efc2cd836`: `a` and `b` each give two masks; the row reds and the other fixed rows stay green). Not the differential, nor any other row of the file |
+  | **M2:** `walkStrings` loses its `toJSON` branch | Step 1's passthrough fixed row (measured: `tj` comes back as its own fields). Not the differential |
+  | **M3:** `walkStrings` loses its `Date` passthrough | Step 1's passthrough fixed row (measured: `out.d` is no longer `d`). Not the differential |
+  | `walkStrings` loses its `ArrayBuffer.isView` / `ArrayBuffer` passthrough | Step 1's passthrough fixed row (measured). Not the differential |
   | the custody row's reader goes back to `readFileSync` | `advance-switches.test.ts` (a pin over a file with no row) |
   | `shapes.ts`'s header names the fingerprint table | `secret-mask.test.ts`'s custody holder list |
 
@@ -294,6 +306,12 @@ The new header and `SHAPE_MASK`'s doc cite symbols only (`accounts/mask.ts#Secre
   - `growth-check.test.ts`
   - `deviation-refs.test.ts`
   - both `tsc` runs
+  - **the cross-tree differential**, the absolute check over the corpus. It is a measurement, not a committed test, and its result goes in the PR body:
+    - in a scratch copy of the tip (never committed), the block's `beforeAll` also writes `corpus` as JSON to a file in the scratch directory, and the file is run once in full;
+    - one scratch vitest file, kept outside both trees and pointed at each tree in turn, reads that corpus and writes, for each input, `JSON.stringify` of `SHAPE_ONLY_MASKER.maskDeep(v)`, of `new SecretMasker().maskDeep(v)` and of the `parseTranscriptLine` events for the Step 1 `tool_use` record holding `v`. It runs against a fresh `origin/main` worktree and against the tip; at the tip it also writes `SHAPE_MASK.maskDeep(v)`;
+    - the two output files are compared byte for byte, and the tip's `SHAPE_MASK` column against main's `SHAPE_ONLY_MASKER` column.
+
+    The PR body prints the input count and the mismatch count of each column, which must be 0. A value that JSON cannot carry (a `Date`, bytes, a `toJSON` object) does not survive the corpus file, which is why the fixed rows above hold those.
 
 **Exit (GATE), counted.**
 - No key from `transcript/parse.ts` in `OUTWARD_EDGE_EXEMPTIONS`.
@@ -302,6 +320,7 @@ The new header and `SHAPE_MASK`'s doc cite symbols only (`accounts/mask.ts#Secre
 - `parse.ts` names neither `SHAPE_ONLY_MASKER` nor `accounts/mask`.
 - `SHAPE_ONLY_MASKER`'s readers are unchanged, except for RS7's `push.ts` → `index.ts`.
 - Every masked string `parseTranscriptLine` emits is unchanged over the corpus: Step 1's differential row passes unedited from Step 1 to the tip.
+- Main's bytes hold, independently of the moved code: Step 1's three fixed rows pass unedited from Step 1 to the tip, and the cross-tree differential (Step 7) reports 0 mismatches in every column.
 - The PR body prints the set's keys and the stamp at base and at tip. It also prints the callers of `SHAPE_ONLY_MASKER`, `shapeMatchers` and `SHAPE_MASK` at base and at tip, by file and symbol.
 
 **Must not change:** any masked output, from any egress. **Rollback:** `git revert`.
@@ -317,7 +336,7 @@ Net code lines, counted by `growthCheck.ts#codeLines`:
 | `transcript/parse.ts` | 271 | 271 | 0 |
 | **source, net** | | | **+11** |
 
-The +11 is the new header, `maskShapes` and `SHAPE_MASK`. The tests add about 60 lines (Step 1's block and Step 4's row) and about 15 (`late-census`). None of these files is on `growth-check.test.ts`'s `GROWTH_FILES` list, so the check is not affected.
+The +11 is the new header, `maskShapes` and `SHAPE_MASK`. The tests add about 100 lines (Step 1's block with its three fixed rows, and Step 4's row) and about 15 (`late-census`). None of these files is on `growth-check.test.ts`'s `GROWTH_FILES` list, so the check is not affected.
 
 ## What this note does not change
 
