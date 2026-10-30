@@ -80,6 +80,16 @@ function preCodeClass(pre: HastElement): string {
   return Array.isArray(cls) ? cls.map((v) => String(v)).join(' ') : typeof cls === 'string' ? cls : '';
 }
 
+/** The renderer's grammar facts the page highlight budget reads, handed in because this L1 module may not load `lib/markdown.tsx` (D-7574). */
+export interface DocsHighlightLanguages {
+  codeLanguage(className: string): string;
+  inScanPageBudget(lang: string): boolean;
+  inMarkdownPageBudget(lang: string): boolean;
+}
+
+/** Transitional (D-7574): the renderer's own three, until every caller passes its `DocsHighlightLanguages`. */
+const RENDERER_LANGUAGES: DocsHighlightLanguages = { codeLanguage, inScanPageBudget, inMarkdownPageBudget };
+
 /** A copy of `tree` with every URL moved out (spec 4.11; refinement (n)). Iteratively, in document pre-order: the root
  *  and every element are copied (text, comment and doctype nodes are shared, untouched); every `URL_KEYS` property of
  *  an element is deleted from its copy and recorded in `urls` under the copy; `img` elements are numbered 0..n-1;
@@ -93,8 +103,10 @@ function preCodeClass(pre: HastElement): string {
  *  names (`markdown` and its aliases, `md` among them, which are outside the scan set), has its own budget,
  *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, and refuses only markdown blocks the same way (review 450 F1). An element with nothing to record has no
  *  entry. Never writes `tree`, so a kept outcome can be detached again, and part 2's Export reuses the copy and its
- *  map (a second detach of the copy finds no URL). */
-export function detachUrls(tree: HastRoot): Detached {
+ *  map (a second detach of the copy finds no URL). `langs` holds the renderer's grammar facts (`DocsHighlightLanguages`),
+ *  handed in by the Docs page. */
+export function detachUrls(tree: HastRoot, langs?: DocsHighlightLanguages): Detached {
+  const l = langs ?? RENDERER_LANGUAGES;
   const urls = new WeakMap<HastElement, DetachedUrls>();
   const root: HastRoot = { ...tree, children: [] };
   // Children are pushed last to first, so they pop first to last; each entry names the array its copy joins.
@@ -131,10 +143,10 @@ export function detachUrls(tree: HastRoot): Detached {
     if (node.tagName === 'pre') {
       const chars = preCodeChars(node);
       codeChars += chars;
-      const language = codeLanguage(preCodeClass(node));
-      const scan = inScanPageBudget(language);
+      const language = l.codeLanguage(preCodeClass(node));
+      const scan = l.inScanPageBudget(language);
       if (scan) scanChars += chars;
-      const md = inMarkdownPageBudget(language);
+      const md = l.inMarkdownPageBudget(language);
       if (md) markdownChars += chars;
       highlight = codeChars <= DOCS_HIGHLIGHT_PAGE_MAX_CHARS && (!scan || scanChars <= DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS)
         && (!md || markdownChars <= DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS);
