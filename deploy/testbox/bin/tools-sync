@@ -159,9 +159,11 @@ _tbt_release_fetch() (   # <tag> <stage dir> -> <stage>/release; rc 0, or the di
   . "$TBT_TREE/ccd/testbox-knobs" || { echo "ccrc: the installed tree's ccd/testbox-knobs cannot be loaded" >&2; exit 1; }
   # D-7457: the box file's value, in this shell, before `_upd_resolve` (which reads it again itself, environment first).
   _tb_release_base || { echo "ccrc: $TB_BOX_WHY — nothing was fetched" >&2; exit 1; }
-  # The update lane's own state, pointed inside the staging directory: its `mktemp -d` honours TMPDIR, its phase file
-  # is the update report it would write on a fleet host, and every sentence it prints is redacted.
-  TMPDIR="$stage"
+  # The update lane's own state, pointed inside the staging directory: `_upd_resolve` makes its staging directory under
+  # UPD_STAGE_PARENT, its phase file is the update report it would write on a fleet host, and every sentence it prints
+  # is redacted.
+  # shellcheck disable=SC2034  # read by the sourced ccd/ccrc
+  UPD_STAGE_PARENT="$stage"
   # shellcheck disable=SC2034  # read by the sourced ccd/ccrc
   BOX_UPDATE_JSON="$stage/update.json"
   # shellcheck disable=SC2034
@@ -304,12 +306,16 @@ _tbt_chrome_install() {   # <tools> <version> -> <tools>/chrome/<version>; TBT_C
 }
 
 # ── 6. the switch ────────────────────────────────────────────────────────
+# `node` and `chrome` at the top (the verifier's PATH, D-7424, and CCRC_CHROME), and `bin/` with node, npm and npx: the
+# directory spec.ts puts first on every run's and install's PATH (`<tools>/current/bin`).
 _tbt_make_set() {   # -> TBT_NEW_SET under <tools>/sets, a directory of links naming one version of each, and `versions`
   local d nv="${TBT_V[node]}" cv="${TBT_V[chrome]}" t
   mkdir -p -- "$TBT_TOOLS/sets" && d="$(mktemp -d "$TBT_TOOLS/sets/s.XXXXXXXX")" || { TBT_WHY="cannot create a tool set"; return 1; }
-  chmod 0755 "$d"
-  ln -s "../../node/$nv/bin/node" "$d/node" && ln -s "../../node/$nv/bin/npm" "$d/npm" && ln -s "../../node/$nv/bin/npx" "$d/npx" \
-    && ln -s "../../chrome/$cv/chrome-linux64/chrome" "$d/chrome" || { TBT_WHY="cannot link the tool set $d"; return 1; }
+  chmod 0755 "$d" && mkdir -m 0755 -- "$d/bin" || { TBT_WHY="cannot create the tool set $d"; return 1; }
+  ln -s "../../node/$nv/bin/node" "$d/node" && ln -s "../../chrome/$cv/chrome-linux64/chrome" "$d/chrome" \
+    && ln -s "../../../node/$nv/bin/node" "$d/bin/node" && ln -s "../../../node/$nv/bin/npm" "$d/bin/npm" \
+    && ln -s "../../../node/$nv/bin/npx" "$d/bin/npx" \
+    || { TBT_WHY="cannot link the tool set $d"; return 1; }
   { for t in "${TBT_TOOLS_ORDER[@]}"; do printf '%s\t%s\n' "$t" "${TBT_V[$t]}"; done; } > "$d/versions" && chmod 0644 "$d/versions" \
     || { TBT_WHY="cannot write $d/versions"; return 1; }
   TBT_NEW_SET="${d##*/}"

@@ -22203,7 +22203,8 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   _upd_release_base >/dev/null 2>&1 && base="$KNOB" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
-  UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
+  # UPD_STAGE_PARENT: set only by the test box's tools unit, which stages under its own <tools> (TB6, D-7408).
+  UPD_STAGE="$(if [ -n "${UPD_STAGE_PARENT:-}" ]; then mktemp -d "$UPD_STAGE_PARENT/ccd.XXXXXXXXXX"; else _plat_mktemp_d; fi)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
   _exit_add '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"'

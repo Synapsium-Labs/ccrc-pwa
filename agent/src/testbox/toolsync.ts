@@ -5,12 +5,17 @@
 // the driver attached to that service here (`attachToolSync`, by the entry point).
 //
 // The takeover (D-7426): a sync that replaced the release closes the service's admissions (the entry point hands the
-// service a run limit this driver sets to 0), waits for the runs in progress to end, and exits 0, so the service
-// manager restarts the service on the new tree. A new node version queues every pristine key's rebuild at once, by
-// one tick of the service's timer work (the pristine store reads the box's node from this driver).
-import { mkdirSync, readFileSync, readlinkSync, renameSync, writeFileSync } from 'node:fs';
+// service a run limit this driver sets to 0), waits for the runs in progress to end, hands every queued run to the
+// next service (`<root>/handover/`, which that service queues at its start, in the same order) and exits 0, so the
+// service manager restarts the service on the new tree and queued runs wait for it. A new node version queues every
+// pristine key's rebuild at once, by one tick of the service's timer work (the pristine store reads the box's node
+// from this driver); that tick and the timer's own run one after the other, never at once (`serviceTick`).
+import { mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { StatusAnswer, TestboxFrame, TestboxSync, TestboxToolVersions, ToolsSync } from '../../../shared/testbox.js';
+import {
+  readTestboxFrame,
+  type RunLog, type RunSubmit, type RunSummary, type StatusAnswer, type TestboxFrame, type TestboxSync, type TestboxToolVersions, type ToolsSync,
+} from '../../../shared/testbox.js';
 import { units, type SystemManager } from './systemd.js';
 import {
   ended, IDLE_TOOLS, encodeToolsSpec, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, seenRuns, syncNow,
@@ -26,7 +31,14 @@ export interface ServedService {
   tick(): Promise<void>;
   /** The run ids that hold a run user now. */
   liveRuns(): Iterable<string>;
+  /** The ids waiting in the queue, in queue order. */
+  waiting(): Iterable<string>;
+  /** A submission, as a connection's `run.submit` reaches the service. */
+  submit(f: RunSubmit, conn: { send(frame: RunLog | RunSummary): void; refuse(reason: string): void }): void;
 }
+
+/** Under `CCRC_TESTBOX_ROOT`: the queued runs a takeover hands to the next service (D-7426). */
+export const HANDOVER_DIR = 'handover';
 
 export interface ToolSyncDeps {
   readonly sys: SystemManager;
@@ -44,12 +56,17 @@ export interface ToolSyncDeps {
 const utcSecond = (ms: number): string => new Date(ms).toISOString().replace(/\.[0-9]{3}Z$/, 'Z');
 
 const readText = (f: string): string | null => { try { return readFileSync(f, 'utf8'); } catch { return null; } };
+const listDir = (d: string): string[] => { try { return readdirSync(d); } catch { return []; } };
 const linkName = (f: string): string | null => { try { return path.basename(readlinkSync(f)); } catch { return null; } };
 
 export class ToolSync {
   private state: ToolsState = IDLE_TOOLS;
   private svc: ServedService | null = null;
   private running: Promise<void> | null = null;
+  /** The service's timer work in progress or last run: each `serviceTick` runs after it. */
+  private ticked: Promise<void> = Promise.resolve();
+  /** Each submission the service was handed, by run id, while it may still be waiting (`noteSubmit`). */
+  private readonly submits = new Map<string, RunSubmit>();
 
   constructor(private readonly d: ToolSyncDeps) {}
 
@@ -72,6 +89,72 @@ export class ToolSync {
 
   /** The current set's node version, for the pristine store's install keys; `null` before a set is in place. */
   node(): string | null { return this.versions()?.node ?? null; }
+
+  /** `<tools>/current/chrome` resolved now, for the prepare that starts now (spec §2.10: the next prepare picks the new
+   *  set; a sync prunes the Chrome a set no run uses, so a path resolved once at the service's start goes stale). */
+  chrome(): string {
+    const link = path.join(this.d.toolsDir, 'current', 'chrome');
+    try { return realpathSync(link); } catch { return link; }
+  }
+
+  /** The service's timer work, after any in progress: the timer's tick and a node change's never run at once. */
+  serviceTick(): Promise<void> {
+    const svc = this.svc;
+    if (svc === null) return Promise.resolve();
+    const p = this.ticked.catch(() => undefined).then(() => svc.tick());
+    this.ticked = p.catch(() => undefined);
+    return p;
+  }
+
+  /** A `run.submit` a connection hands the service (the entry point calls this first): kept while it may wait, so a
+   *  takeover can hand it over. */
+  noteSubmit(f: RunSubmit): void { this.submits.set(f.runId, f); }
+
+  /** The submissions still waiting in the service's queue, in its order; the rest are forgotten. */
+  queuedFrames(): RunSubmit[] {
+    if (this.svc === null) return [];
+    const out: RunSubmit[] = [];
+    for (const id of this.svc.waiting()) { const f = this.submits.get(id); if (f !== undefined) out.push(f); }
+    const keep = new Set(out.map((f) => f.runId));
+    for (const id of [...this.submits.keys()]) if (!keep.has(id)) this.submits.delete(id);
+    return out;
+  }
+
+  /** At the service's start, after its own: the runs a takeover handed over are queued, in their order, each with no
+   *  connection (its summary is the service's `results/<id>`, as for any run whose link dropped); returns how many. */
+  resume(): number {
+    const svc = this.svc;
+    if (svc === null) throw new Error('the tool sync serves no service');
+    const dir = path.join(this.d.root, HANDOVER_DIR);
+    let n = 0;
+    for (const name of listDir(dir).filter((x) => x.endsWith('.json')).sort()) {
+      const file = path.join(dir, name);
+      const text = readText(file);
+      try { unlinkSync(file); } catch { /* gone */ }
+      const r = text === null ? null : readTestboxFrame(text.trim());
+      if (r === null || !r.ok || r.value.t !== 'run.submit') { console.error(`ccrc-testbox: a handed-over run (${name}) does not read as a run.submit; dropped`); continue; }
+      const id = r.value.runId;
+      svc.submit(r.value, { send: () => undefined, refuse: (why) => console.error(`ccrc-testbox: the handed-over run ${id} was refused: ${why}`) });
+      n++;
+    }
+    return n;
+  }
+
+  /** D-7426: each queued run written for the next service, in queue order; its log directory, which is empty while it
+   *  has not started, is removed so the next service takes the id afresh. */
+  private handOver(): void {
+    const frames = this.queuedFrames();
+    if (frames.length === 0) return;
+    const dir = path.join(this.d.root, HANDOVER_DIR);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const at = String(this.d.now()).padStart(15, '0');
+    frames.forEach((f, i) => {
+      const file = path.join(dir, `${at}-${String(i + 1).padStart(6, '0')}-${f.runId}.json`);
+      writeFileSync(`${file}.tmp`, `${JSON.stringify(f)}\n`, { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
+      try { rmdirSync(path.join(this.d.root, 'logs', f.runId)); } catch { /* none, or not empty */ }
+    });
+  }
 
   /** The run limit the service admits under: its own, or 0 once a takeover has begun. */
   runLimit(own: number): number { return this.state.takeover ? 0 : own; }
@@ -98,9 +181,11 @@ export class ToolSync {
     if (r.start !== null) await this.drive(r.start);
   }
 
-  /** The timer's work: a failed sync whose next attempt has come is run again. */
+  /** The timer's work: a failed sync whose next attempt has come is run again. The timer does not wait for it
+   *  (`main.ts#timerWork`): a sync runs a unit for minutes, and a takeover waits for every run. */
   async tick(): Promise<void> {
     this.noteRuns();
+    this.queuedFrames();
     const f = retryDue(this.state, this.d.now());
     if (f === null) return;
     this.state = retryStarted(this.state, utcSecond(this.d.now()));
@@ -118,7 +203,7 @@ export class ToolSync {
         const e = ended(this.state, exit, parseReport(readText(this.reportFile)), this.d.now(), this.d.settings.retryMs, utcSecond(this.d.now()));
         this.state = e.state;
         if (e.takeover) { await this.takeover(); return; }
-        if (e.nodeChanged && this.svc !== null) await this.svc.tick().catch(() => undefined);
+        if (e.nodeChanged) await this.serviceTick().catch(() => undefined);
         f = null;
         if (e.next !== null) {
           const r = requested(this.state, e.next, this.box(), utcSecond(this.d.now()));
@@ -145,9 +230,11 @@ export class ToolSync {
     }
   }
 
-  /** D-7426: no new run starts, the runs in progress end, and the process exits 0 for the new tree to take over. */
+  /** D-7426: no new run starts, the runs in progress end, the queued ones are handed over, and the process exits 0
+   *  for the new tree to take over. */
   private async takeover(): Promise<void> {
     if (this.svc !== null) await this.svc.idle();
+    try { this.handOver(); } catch (e) { console.error(`ccrc-testbox: the queued runs could not be handed over: ${e instanceof Error ? e.message : String(e)}`); }
     this.d.exit(0);
   }
 

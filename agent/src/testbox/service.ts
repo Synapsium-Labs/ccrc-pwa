@@ -53,7 +53,7 @@ export interface ServiceDeps {
   readonly probe: () => Promise<ProbeResult>;
   readonly mirror: MirrorOps;
   readonly now: () => number;
-  /** `<tools>/current/chrome`, resolved once at start. */
+  /** `<tools>/current/chrome`, read when each prepare starts (TB6: the entry point resolves it on each read). */
   readonly chrome: string;
   readonly release: string | null;
   readonly serviceVersion: string;

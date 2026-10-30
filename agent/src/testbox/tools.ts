@@ -8,7 +8,8 @@
 // that arrives while a sync runs waits and runs next, the newest replacing an older one. A failed sync is retried on
 // the pristine build's backoff (`CCRC_TESTBOX_PRISTINE_RETRY`, the last delay repeating); a new frame runs at once. A
 // sync that replaced the release ends in the takeover (D-7426): the service starts no run, lets the runs in progress
-// end, and exits to be restarted on the new tree, and no frame starts a sync meanwhile. A run resolves the tool set
+// end, hands the queued ones to the next service and exits to be restarted on the new tree, and no frame starts a sync
+// meanwhile. A run resolves the tool set
 // once, so the service names, in each spec, the set every live run started under, and the tools unit keeps those.
 import {
   TESTBOX_TOOLS,

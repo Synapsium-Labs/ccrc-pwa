@@ -5,7 +5,7 @@
 // checks each connection's `hello` to the fleet agent's contract (`hello.ts`) against the service's token file, and
 // speaks `shared/testbox.ts`'s frames, `TESTBOX_PROTO`, never the fleet agent's `AgentReq` (D-7428). It imports
 // nothing of the fleet agent's (`agent/test/testbox-imports.test.ts`).
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { BlockList, isIP } from 'node:net';
 import os from 'node:os';
@@ -105,6 +105,8 @@ function handleConnection(ws: WebSocket, o: TestboxServerOpts): void {
     }
     const r = readTestboxFrame(text);
     if (!r.ok) { conn.refuse(r.reason); return; }
+    // TB6 (D-7426): the driver keeps each submission while it may wait, so a takeover can hand it to the next service.
+    if (r.value.t === 'run.submit') toolSyncOf(o.service)?.noteSubmit(r.value);
     const handler = FRAME_HANDLERS[r.value.t];
     if (handler === undefined) { conn.refuse(`${r.value.t} is not a frame the service takes`); return; }
     Promise.resolve(handler(o.service, r.value, conn)).catch((e: unknown) => conn.refuse(e instanceof Error ? e.message : String(e)));
@@ -156,8 +158,6 @@ export function readToken(file: string): string {
 }
 
 export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c)): TestboxService {
-  const chromeLink = path.join(cfg.toolsDir, 'current', 'chrome');
-  const chrome = existsSync(chromeLink) ? realpathSync(chromeLink) : chromeLink;
   const facts = releaseFacts(release);
   const sysEnv = { PATH: SERVICE_PATH, LANG: 'C' };
   const short = boundedExec(sysEnv, SHORT_BOUND_MS);
@@ -169,7 +169,8 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
   const svc = new TestboxService({
     settings, rows: readRepoRows(cfg.repos), sys,
     probe: () => reflinkProbe(cfg.root, short), mirror: mirrorOps(git),
-    now: () => Date.now(), chrome, release: facts.release, serviceVersion: facts.serviceVersion,
+    // TB6 (spec §2.10): `<tools>/current/chrome` resolved when each prepare starts, so the next prepare picks the new set.
+    now: () => Date.now(), get chrome(): string { return tools.chrome(); }, release: facts.release, serviceVersion: facts.serviceVersion,
     // TB6: the box's measured tool versions are the current set's.
     tools: () => tools.versions(),
     // TB5 (D-7407, D-7543): the installs run under the box's node, the current set's (TB6), else the one this service runs under.
@@ -178,7 +179,10 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
       node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
   });
-  tools.serve({ status: () => svc.status(), idle: () => svc.idle(), tick: () => svc.tick(), liveRuns: () => liveRunIds(svc.poolNow()) });
+  tools.serve({
+    status: () => svc.status(), idle: () => svc.idle(), tick: () => svc.tick(), liveRuns: () => liveRunIds(svc.poolNow()),
+    waiting: () => svc.positions().keys(), submit: (f, conn) => svc.submit(f, conn),
+  });
   attachToolSync(svc, tools);
   return svc;
 }
@@ -190,6 +194,15 @@ export async function registryFor(cfg: TestboxConfig): Promise<{ close(): Promis
   return startRegistry({ host: r.host, port: r.port, upstream: r.upstream, cacheDir: path.join(cfg.root, 'registry'), timeoutMs: cfg.unitMaxMs });
 }
 
+/** The timer's work (L5): the service's tick, after any tick in progress, and beside it, not awaited, the tool sync's
+ *  retry, whose unit runs for minutes and whose takeover waits for every run (TB6). */
+export function timerWork(service: TestboxService): Promise<void> {
+  const tools = toolSyncOf(service);
+  if (tools === undefined) return service.tick();
+  void tools.tick().catch((e: unknown) => console.error(`ccrc-testbox: tool sync: ${e instanceof Error ? e.message : String(e)}`));
+  return tools.serviceTick();
+}
+
 async function main(): Promise<void> {
   const release = releaseOf(fileURLToPath(import.meta.url));
   const cfg = await readTestboxConfig(release);
@@ -199,13 +212,15 @@ async function main(): Promise<void> {
   const service = serviceFor(cfg, release);
   await registryFor(cfg);
   await service.start();
+  // TB6 (D-7426): the runs a takeover handed over wait in this service's queue, in their order.
+  toolSyncOf(service)?.resume();
   const server = await startTestboxServer({ host: cfg.listen.host, port: cfg.listen.port, token, service });
   // The one scheduler (L5 owns it): fetch, sweep and retention on `CCRC_TESTBOX_FETCH_EVERY`.
   let ticking = false;
   const timer = setInterval(() => {
     if (ticking) return;
     ticking = true;
-    void service.tick().then(() => toolSyncOf(service)?.tick()).finally(() => { ticking = false; });
+    void timerWork(service).finally(() => { ticking = false; });
   }, cfg.fetchEveryMs);
   console.log(`ccrc-testbox on ${cfg.listen.host}:${server.port}`);
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
