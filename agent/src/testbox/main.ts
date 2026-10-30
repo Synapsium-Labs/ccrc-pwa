@@ -21,7 +21,7 @@ import { gitEnv, mirrorOps, realGit, runTreeFiles } from './mirror.js';
 import { pristineSettings } from './pristine.js';
 import { registrySettings, startRegistry } from './registry.js';
 import { liveRunIds } from './runs.js';
-import { FRAME_HANDLERS, TestboxService, type Conn } from './service.js';
+import { FRAME_HANDLERS, TestboxService, type Conn, type PristineDeps } from './service.js';
 import { systemctlManager, type SystemManager } from './systemd.js';
 import { toolsSettings } from './tools.js';
 import { attachToolSync, statusOf, ToolSync, toolSyncOf } from './toolsync.js';
@@ -155,8 +155,9 @@ export function readToken(file: string): string {
   return t;
 }
 
-/** What a test may put in place of the box's own (the service never passes any): the system manager. */
-export interface ServiceSeams { readonly sys?: SystemManager }
+/** What a test may put in place of the box's own (the service never passes any): the system manager, and the reader of
+ *  a run's install inputs from its mirror. */
+export interface ServiceSeams { readonly sys?: SystemManager; readonly inputs?: PristineDeps['inputs'] }
 
 export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c), seams: ServiceSeams = {}): TestboxService {
   const facts = releaseFacts(release);
@@ -178,7 +179,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
     tools: () => tools.versions(), admitting: () => tools.admitting(),
     // TB5 (D-7407, D-7543): the installs run under the box's node, the current set's (TB6), else the one this service runs under.
     pristine: {
-      settings: pristineSettings(cfg.lines, durationMs), inputs: (m, id, paths) => runTreeFiles(git, m, id, paths),
+      settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths) => runTreeFiles(git, m, id, paths)),
       node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
   });

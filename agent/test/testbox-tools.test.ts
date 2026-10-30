@@ -26,7 +26,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { readTestboxFrame, type RunSubmit, type RunSummary, type StatusAnswer, type TestboxRepoRow, type ToolsSync, type TestboxToolVersions } from '../../shared/testbox.js';
-import { serviceFor, startTestboxServer, timerWork } from '../src/testbox/main.js';
+import { serviceFor, startTestboxServer, timerWork, type ServiceSeams } from '../src/testbox/main.js';
 import { FRAME_HANDLERS, type TestboxService } from '../src/testbox/service.js';
 import { buildInstallSpec, buildRunSpec, writeInstallSpec, writeSpec, type SpecSettings } from '../src/testbox/spec.js';
 import type { TestboxConfig } from '../src/testbox/config.js';
@@ -135,6 +135,18 @@ describe('tools.ts: the decider (spec §2.10)', () => {
     expect(e.takeover).toBe(true);
     expect(requested(e.state, frameOf('v0.0.4'), BOX, MEASURED_AT).start).toBeNull();
     expect(retryDue({ ...e.state, sync: { state: 'failed', detail: 'x', at: null }, nextAt: 0, last: frameOf('v0.0.4') }, 1)).toBeNull();
+  });
+
+  it('a frame pending when a sync ends in the takeover, or one that comes during it, is kept for the next service, the newest replacing an older', async () => {
+    const a = requested(IDLE_TOOLS, frameOf('v0.0.3'), BOX, MEASURED_AT).state;
+    const b = requested(a, frameOf('v0.0.4'), BOX, MEASURED_AT).state;
+    const e = ended(b, 0, parseReport('result\tok\ntakeover\t1\n'), 0, TS.retryMs, MEASURED_AT);
+    expect(e.takeover).toBe(true);
+    expect(e.next, 'this service starts no sync').toBeNull();
+    expect(e.state.pending?.release, 'the frame that waited is not lost').toBe('v0.0.4');
+    const c = requested(e.state, frameOf('v0.0.5'), BOX, MEASURED_AT);
+    expect(c.start).toBeNull();
+    expect(c.state.pending?.release, 'one that comes during the takeover is recorded').toBe('v0.0.5');
   });
 
   it('a live run keeps the set it was first seen under; a run that ended lets its set go', async () => {
@@ -1305,13 +1317,22 @@ describe('the takeover on the entry point\'s service: what it answers, what it q
 
   /** The system manager: the tools unit reports a replaced release; a run unit records whose run it is (from its spec)
    *  and, for RUN_R, waits until released; every other unit ends at once with 0. */
-  function units(cfg: TestboxConfig) {
+  function units(cfg: TestboxConfig, o: { report?: string; holdTools?: boolean } = {}) {
     const ran: string[] = [];
+    /** The release each tools unit was started for (its spec's `R` record). */
+    const synced: string[] = [];
     let release: () => void = () => undefined;
     const held = new Promise<void>((r) => { release = r; });
+    let releaseTools: () => void = () => undefined;
+    const toolsHeld = new Promise<void>((r) => { releaseTools = r; });
     const sys: SystemManager = {
       async run(unit: string): Promise<UnitEnd> {
-        if (unit === 'ccrc-testbox-tools.service') writeFileSync(path.join(cfg.toolsDir, 'sync-report'), TAKEOVER_REPORT);
+        if (unit === 'ccrc-testbox-tools.service') {
+          const rec = readFileSync(path.join(cfg.root, 'specs', 'tools'), 'utf8').split('\0').find((r) => r.startsWith('R'));
+          synced.push(rec?.slice(1) ?? '?');
+          if (o.holdTools === true) await toolsHeld;
+          writeFileSync(path.join(cfg.toolsDir, 'sync-report'), o.report ?? TAKEOVER_REPORT);
+        }
         const m = /^ccrc-testbox-run@([0-9]+)\.service$/.exec(unit);
         if (m !== null) {
           const spec = readFileSync(path.join(cfg.root, 'specs', m[1]!), 'utf8');
@@ -1324,7 +1345,7 @@ describe('the takeover on the entry point\'s service: what it answers, what it q
       async stop() { /* nothing to stop */ },
       async active() { return false; },
     };
-    return { sys, ran, release: () => release() };
+    return { sys, ran, synced, release: () => release(), releaseTools: () => releaseTools() };
   }
 
   /** A connection through the WebSocket door, past its hello: the frames it was sent and how it closed. */
@@ -1341,8 +1362,8 @@ describe('the takeover on the entry point\'s service: what it answers, what it q
   }
 
   /** The entry point's start order: the service, the hand-over resumed, then the door. */
-  async function boot(cfg: TestboxConfig, sys: SystemManager, exits: number[]) {
-    const svc = serviceFor(cfg, path.join(cfg.toolsDir, 'release', 'installed'), (c) => { exits.push(c); }, { sys });
+  async function boot(cfg: TestboxConfig, sys: SystemManager, exits: number[], seams: Omit<ServiceSeams, 'sys'> = {}) {
+    const svc = serviceFor(cfg, path.join(cfg.toolsDir, 'release', 'installed'), (c) => { exits.push(c); }, { sys, ...seams });
     await svc.start();
     const resumed = toolSyncOf(svc)!.resume();
     const srv = await startTestboxServer({ host: '127.0.0.1', port: 0, token: 'tok', service: svc });
@@ -1420,6 +1441,114 @@ describe('the takeover on the entry point\'s service: what it answers, what it q
       late.ws.close();
     } finally {
       await next.srv.close();
+    }
+  });
+
+  const OTHER_TAG = 'v0.0.3';
+
+  it('a tools.sync sent while the takeover waits for a run is handed over, never dropped: the next service runs it', async () => {
+    const cfg = fixture();
+    const a = units(cfg);
+    const exits: number[] = [];
+    const first = await boot(cfg, a.sys, exits);
+    try {
+      const c = await door(first.srv.port);
+      c.send(submitOf(RUN_R));
+      await expect.poll(() => a.ran).toEqual([RUN_R]);
+      c.send(frameOf(NEW_TAG));
+      await expect.poll(() => toolSyncOf(first.svc)!.stateNow().takeover).toBe(true);
+      c.send(frameOf(OTHER_TAG));
+      await settle();
+      expect(c.closed(), 'the frame is not refused: it is recorded').toBeNull();
+      a.release();
+      await expect.poll(() => exits).toEqual([0]);
+      expect(a.synced, 'the old service runs no second sync').toEqual([NEW_TAG]);
+      c.ws.close();
+    } finally {
+      a.release();
+      await first.srv.close();
+    }
+    const b = units(cfg, { report: 'result\tnoop\n' });
+    const next = await boot(cfg, b.sys, []);
+    try {
+      // The next service runs the handed-over frame.
+      await expect.poll(() => b.synced).toEqual([OTHER_TAG]);
+      await toolSyncOf(next.svc)!.settled();
+      expect(readdirSync(path.join(cfg.root, HANDOVER_DIR)).filter((n) => n !== HANDOVER_DROPPED), 'and removes it').toEqual([]);
+    } finally {
+      await next.srv.close();
+    }
+  });
+
+  it('a tools.sync pending when a sync ends in the takeover is handed over, never dropped: the next service runs it', async () => {
+    const cfg = fixture();
+    const a = units(cfg, { holdTools: true });
+    const exits: number[] = [];
+    const first = await boot(cfg, a.sys, exits);
+    try {
+      const c = await door(first.srv.port);
+      c.send(frameOf(NEW_TAG));
+      await expect.poll(() => a.synced).toEqual([NEW_TAG]);
+      // Waits for the sync in progress, which then ends in the takeover.
+      c.send(frameOf(OTHER_TAG));
+      await expect.poll(() => toolSyncOf(first.svc)!.stateNow().pending?.release).toBe(OTHER_TAG);
+      a.releaseTools();
+      await expect.poll(() => exits).toEqual([0]);
+      expect(a.synced).toEqual([NEW_TAG]);
+      c.ws.close();
+    } finally {
+      a.releaseTools();
+      await first.srv.close();
+    }
+    const b = units(cfg, { report: 'result\tnoop\n' });
+    const next = await boot(cfg, b.sys, []);
+    try {
+      await expect.poll(() => b.synced).toEqual([OTHER_TAG]);
+      await toolSyncOf(next.svc)!.settled();
+    } finally {
+      await next.srv.close();
+    }
+  });
+
+  it('a set a prepare has resolved is kept by a sync that starts before the prepare writes its spec (the set is pinned at resolution)', async () => {
+    const cfg = fixture();
+    const [S_A, S_B] = ['s.aaaaaaaa', 's.bbbbbbbb'];
+    for (const s of [S_A, S_B]) mkdirSync(path.join(cfg.toolsDir, 'sets', s, 'bin'), { recursive: true });
+    const point = (set: string): void => {
+      const tmp = path.join(cfg.toolsDir, 'current.swap');
+      symlinkSync(path.join('sets', set), tmp);
+      renameSync(tmp, path.join(cfg.toolsDir, 'current'));
+    };
+    point(S_A);
+    const a = units(cfg, { report: 'result\tnoop\n' });
+    // The prepare's install inputs are read after its spec is built and before it is written: held here.
+    let releaseInputs: () => void = () => undefined;
+    const inputsHeld = new Promise<void>((r) => { releaseInputs = r; });
+    let reading = 0;
+    const inputs = async (): Promise<null> => { reading++; await inputsHeld; return null; };
+    const first = await boot(cfg, a.sys, [], { inputs });
+    try {
+      const c = await door(first.srv.port);
+      c.send(submitOf(RUN_R));
+      // The prepare has resolved its set and waits on its inputs.
+      await expect.poll(() => reading).toBe(1);
+      expect(existsSync(path.join(cfg.root, 'specs', '1')), 'its spec is not written yet').toBe(false);
+      // A sync switches current meanwhile; the next one starts before the prepare writes its spec.
+      point(S_B);
+      c.send(frameOf(NEW_TAG));
+      await expect.poll(() => a.synced).toEqual([NEW_TAG]);
+      const kept = readFileSync(path.join(cfg.root, 'specs', 'tools'), 'utf8').split('\0').filter((r) => r.startsWith('K'));
+      expect(kept, 'the set the prepare resolved is kept').toContain(`K${S_A}`);
+      releaseInputs();
+      await expect.poll(() => a.ran).toEqual([RUN_R]);
+      const spec = readFileSync(path.join(cfg.root, 'specs', '1'), 'utf8');
+      expect(spec, 'the spec names the set it resolved').toContain(`EPATH=${path.join(cfg.toolsDir, 'sets', S_A, 'bin')}:`);
+      a.release();
+      c.ws.close();
+    } finally {
+      releaseInputs();
+      a.release();
+      await first.srv.close();
     }
   });
 
