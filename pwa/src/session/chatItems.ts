@@ -10,7 +10,8 @@
 import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
 import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
 import type { ToolResultEvent, ToolUseEvent } from '@ccrc/ui';
-import { isLocalDivider, type PendingSend } from '../stores/session';
+import type { PendingSend } from '../stores/session';
+import { isLocalDivider } from './localDivider';
 import type { MessageEvent } from './MessageBubble';
 import { timeOf } from '../lib/format';
 

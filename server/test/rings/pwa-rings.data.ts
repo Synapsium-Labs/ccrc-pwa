@@ -20,7 +20,6 @@ export const PWA_L1_EXEMPTIONS: EntrySet = {
   'pwa/src/fleet/startProgramPolicy.ts -> pwa/src/lib/api.ts': { reason: "the start policy matches the fetch adapter's ApiError class and its error words", since: '2026-10-20' },
   'pwa/src/lib/notAvailable.ts -> pwa/src/lib/api.ts': { reason: "the not-available reader matches the fetch adapter's ApiError class", since: '2026-10-20' },
   'pwa/src/session/askWords.ts -> pwa/src/lib/api.ts': { reason: "the ask words match the fetch adapter's ApiError class and its failure sentences", since: '2026-10-20' },
-  'pwa/src/session/chatItems.ts -> pwa/src/stores/session.ts': { reason: "the chat items read the session store's isLocalDivider predicate", since: '2026-10-20' },
   'pwa/src/session/sessionHeaderView.ts -> pwa/src/session/PrKeycap.tsx': { reason: "the header view reads the PR keycap's hasPrCap predicate", since: '2026-10-20' },
   'pwa/src/session/sessionHeaderView.ts -> pwa/src/session/SessionFlows.tsx': { reason: "the header view reads the session flows' sessionMenu, the menu's one reader", since: '2026-10-20' },
   'pwa/src/skins/index.ts -> pwa/src/skins/instrument/parts.tsx': { reason: "the skin registry names the instrument skin's part set", since: '2026-10-20' },

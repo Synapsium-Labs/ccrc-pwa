@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import { applySessionMsg, type SessionSnapshot } from '../src/stores/session';
-import { isLocalDivider } from '../src/stores/session';
+import { isLocalDivider } from '../src/session/localDivider';
 
 // D-7572 (ARCH-05): the local-divider predicate's inputs and outputs, held
 // across its move inward. Only the `isLocalDivider` import line may change.
