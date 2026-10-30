@@ -150,6 +150,7 @@ const warnRe = (key: string, value: string, source: string, def: string): RegExp
 // side, or a `<`, `<=`, `>`, `>=`, `==`, `!=` against N inside `(( … ))`, found by a balanced-paren match so a
 // `$(…)` or `$((…))` operand does not hide it. Not a threshold: 0 and 1 (emptiness, presence, a first item), and an
 // exit status (`$?`, `$rc`, a name ending in `rc`, or its fallback) compared with a code such as timeout's 124.
+// A Python file (ccd/graph-build, a `python` shebang) goes through pyThresholdLiterals, which has no bash forms.
 const SCANNED = ['ccd/ccd-graph-sweep', 'ccd/graph-build', 'ccd/graph-resolve'] as const;
 const isStatus = (operand: string): boolean => /^"?\$\{?(\?|[A-Za-z_]*rc)(:-[0-9]+)?\}?"?$/.test(operand);
 const isThreshold = (n: string): boolean => /^\d+$/.test(n) && Number(n) > 1;
@@ -176,7 +177,47 @@ function arithBodies(l: string): string[] {
   }
   return out;
 }
+/** The Python arm (a file whose first line is a `python` shebang): a numeric literal greater than 1, integer or
+ *  decimal, directly on either side of `<`, `<=`, `>`, `>=`, `==` or `!=`, in a code line. A comment (whole-line or
+ *  trailing), a string literal and a triple-quoted block are blanked first, so prose and messages never match;
+ *  the return arrow `->` and the shifts `<<`/`>>` are not comparisons. */
+function pyThresholdLiterals(text: string): string[] {
+  const out: string[] = [];
+  const isNum = (n: string): boolean => /^\d+(\.\d+)?$/.test(n) && Number(n) > 1;
+  let inDoc: string | null = null;
+  for (const raw of text.split('\n')) {
+    let code = '';
+    let cut = raw.length;
+    for (let i = 0; i < raw.length; ) {
+      if (inDoc) {
+        const j = raw.indexOf(inDoc, i);
+        if (j < 0) { i = raw.length; break; }
+        i = j + 3; inDoc = null; code += '_';
+        continue;
+      }
+      const ch = raw[i];
+      if (ch === '#') { cut = i; break; }
+      if (raw.startsWith('"""', i) || raw.startsWith("'''", i)) { inDoc = raw.slice(i, i + 3); i += 3; continue; }
+      if (ch === '"' || ch === "'") {
+        let j = i + 1;
+        while (j < raw.length && raw[j] !== ch) j += raw[j] === '\\' ? 2 : 1;
+        code += '_'; i = j + 1;
+        continue;
+      }
+      code += ch; i++;
+    }
+    let hit = false;
+    for (const m of code.matchAll(/(?<![-<>=!])(<=|>=|==|!=|<|>)(?![<>=])/g)) {
+      const left = /(?:^|[^\w.])(\d+(?:\.\d+)?)\s*$/.exec(code.slice(0, m.index));
+      const right = /^\s*(\d+(?:\.\d+)?)(?![\w.])/.exec(code.slice(m.index + m[0].length));
+      if ((left && isNum(left[1])) || (right && isNum(right[1]))) hit = true;
+    }
+    if (hit) out.push(raw.slice(0, cut).trim());
+  }
+  return out;
+}
 function thresholdLiterals(text: string): string[] {
+  if (/^#!.*\bpython/.test(text.split('\n')[0])) return pyThresholdLiterals(text);
   const out: string[] = [];
   for (const raw0 of text.split('\n')) {
     if (/^\s*#/.test(raw0)) continue;
@@ -211,7 +252,8 @@ const KNOWN: Record<(typeof SCANNED)[number], string[]> = {
     ': "${CCRC_GRAPH_HOOKSTATE_FRESH_SECS:=1800}"',
     '[ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"',
   ],
-  'ccd/graph-build': [],
+  // cpu.stat's two-field line shape (`usage_usec <n>`), not a bound a build obeys
+  'ccd/graph-build': ["if len(f) == 2 and f[0] == 'usage_usec' and f[1].isdigit():"],
   'ccd/graph-resolve': [],
 };
 
@@ -369,6 +411,35 @@ describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs 
       "[ \"$n\" -gt \"${CCRC_GRAPH_BUDGET:-'4'}\" ] && wait=1",
       '(( $(date +%s) - t0 >= 600 )) && timed_out=1',
       'if (( $((now - t0)) > 21600 )); then stale=1; fi',
+    ]);
+  });
+
+  it('the scanner on a Python file (a `python` shebang): it sees a literal on either side of a comparison, and passes comments, strings, docstrings, 0 and 1, a setting, the return arrow and a shift', () => {
+    expect(thresholdLiterals([
+      '#!/usr/bin/env python3',
+      '    if late > 600:',
+      '    if 21600 <= age: stale = True',
+      '    while n>=4 and ok:',
+      '    if peak_kb != 2048 or cpu == 1.5:',
+      '    timed_out = elapsed >= 600.0',
+      // not thresholds: a comment, a string, a docstring, 0 and 1, a name, the return arrow, a shift
+      '    # if late > 600: is a comment',
+      '    x = 1  # late > 600 in a trailing comment',
+      "    log('late > 600 is a message')",
+      '    log("n >= 4 is a message")',
+      '    """a docstring',
+      '    where late > 600 is prose',
+      '    """',
+      '    if late > a.slot_wait:',
+      '    if r.returncode == 0 and n > 1:',
+      'def main(argv) -> int:',
+      '    m = n >> 4',
+    ].join('\n'))).toEqual([
+      'if late > 600:',
+      'if 21600 <= age: stale = True',
+      'while n>=4 and ok:',
+      'if peak_kb != 2048 or cpu == 1.5:',
+      'timed_out = elapsed >= 600.0',
     ]);
   });
 });

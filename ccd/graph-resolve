@@ -102,3 +102,129 @@ _gr_knobs() {
     GK["$k"]="$v"
   done < <(_graph_knobs "${1:-}")
 }
+
+# ── the store, the repository key and the source ref (GR3, D-7349; spec §2.1, §2.2) ──
+# The ONLY definitions of these three. The sweep, the exclude writer, the doctor and install/uninstall source this
+# file; the session hook never re-derives them (it reads the build's meta.json through its link). Each function prints
+# its answer AND leaves it in a variable (GR_STORE, GR_REPO_KEY, GR_SOURCE_REF and GR_SOURCE_COMMIT); one that refuses
+# returns 1 and leaves the reason, one sentence, in GR_WHY. Call it directly (`_gr_store >/dev/null || …"$GR_WHY"`)
+# when the reason is wanted: a `$(…)` runs it in a subshell, which keeps neither.
+#
+# Every git call here goes through `_gr_git <git dir> …`, with the caller's GIT_* environment removed, so a session's
+# GIT_DIR or GIT_COMMON_DIR can never answer for the repository named on the command line.
+
+_gr_git() {   # <git dir> <git args…>
+  local d="$1"; shift
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE GIT_TERMINAL_PROMPT=0 git --git-dir="$d" "$@"
+}
+
+# ── _gr_realpath <absolute path> — the realpath, for a path that may not exist yet ──
+# The longest existing prefix is resolved (`cd -P`, links followed) and the rest is appended as written; a missing
+# part that names `.` or `..` is refused, since it could not be resolved without existing. An existing file is spelled
+# under its directory's realpath (the store's callers then refuse it as not a directory).
+_gr_realpath() {
+  local p="$1" rest="" base d
+  [[ "$p" == /* ]] || return 1
+  while [ "$p" != / ] && [ ! -e "$p" ]; do
+    p="${p%/}"; base="${p##*/}"
+    case "$base" in .|..) return 1 ;; esac
+    [ -n "$base" ] && rest="/$base$rest"
+    p="${p%/*}"; [ -n "$p" ] || p=/
+  done
+  if [ ! -d "$p" ]; then rest="/${p##*/}$rest"; p="${p%/*}"; [ -n "$p" ] || p=/; fi   # an existing non-directory
+  d="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
+  [ "$d" = / ] && d=""
+  d="${d}${rest}"
+  printf '%s\n' "${d:-/}"
+}
+
+# ── _gr_store — the realpath of the graph store root (GK[CCRC_GRAPH_STORE]), or rc 1 with GR_WHY ──
+# Refused: a relative path, `/`, $HOME, and $HOME/projects or $HOME/worktrees or anything inside them (the roots the
+# sweep and ccd enumerate, spec §2.2). Compared as realpaths, so a link cannot smuggle the store inside a root.
+_gr_store() {
+  GR_WHY="" GR_STORE=""
+  local s="${GK[CCRC_GRAPH_STORE]:-}" r h root
+  if [ -z "$s" ]; then GR_WHY="the graph store is not set (CCRC_GRAPH_STORE; call _gr_knobs first)"; return 1; fi
+  if [[ "$s" != /* ]]; then GR_WHY="the graph store '$s' is not an absolute path"; return 1; fi
+  if ! r="$(_gr_realpath "$s")"; then GR_WHY="the graph store '$s' cannot be resolved to a real path"; return 1; fi
+  h="$(_gr_realpath "$HOME")" || h="$HOME"
+  if [ "$r" = / ]; then GR_WHY="the graph store '$s' is the filesystem root"; return 1; fi
+  if [ "$r" = "$h" ]; then GR_WHY="the graph store '$s' is the home directory"; return 1; fi
+  for root in "$HOME/projects" "$HOME/worktrees"; do
+    root="$(_gr_realpath "$root")" || continue
+    case "$r/" in
+      "$root"/*) GR_WHY="the graph store '$s' is inside ${root/#"$h"/\~}, which the sweep and ccd enumerate"; return 1 ;;
+    esac
+  done
+  GR_STORE="$r"
+  printf '%s\n' "$r"
+}
+
+# ── _gr_store_init — create the store root (0755) and its .ccrc-graph-store marker; print the root ──
+# ONE function (D-7360): the sweep calls it before a pass and `ccrc install`/`update` at install, so the doctor's
+# "store missing or unmarked" holds on a box before its first pass. A root that already holds the marker is kept as
+# it is; an existing root without it is refused unless it is an empty directory, so a typo can never adopt (and a
+# later collector never delete) someone else's directory.
+_gr_store_init() {
+  local r
+  _gr_store >/dev/null || return 1
+  r="$GR_STORE"; GR_STORE=""
+  if [ -e "$r/.ccrc-graph-store" ]; then GR_STORE="$r"; printf '%s\n' "$r"; return 0; fi
+  if [ -e "$r" ] || [ -L "$r" ]; then
+    if [ ! -d "$r" ]; then GR_WHY="the graph store '$r' exists and is not a directory"; return 1; fi
+    if [ -n "$(ls -A -- "$r" 2>/dev/null)" ]; then
+      GR_WHY="the graph store '$r' is not empty and has no .ccrc-graph-store marker; refusing to adopt it"; return 1
+    fi
+  fi
+  if ! mkdir -p "$r" || ! chmod 0755 "$r"; then GR_WHY="the graph store '$r' cannot be created"; return 1; fi
+  if ! printf 'ccrc graph store (graph revision 2); removed only by ccrc\n' > "$r/.ccrc-graph-store"; then
+    GR_WHY="the graph store's marker '$r/.ccrc-graph-store' cannot be written"; return 1
+  fi
+  GR_STORE="$r"
+  printf '%s\n' "$r"
+}
+
+# ── _gr_repo_key <common dir> — `<basename of the main checkout>-<first 8 hex of sha256(realpath(common dir))>` ──
+# The digest is of the realpath string, without a newline, so every worktree of one repository (they share the
+# common dir) and its main checkout get one key. The main checkout is the common dir's parent when the common dir is
+# `<checkout>/.git`, else the common dir itself (a bare repository, `.git` suffix dropped). A character outside the
+# key's shape (`_gr_fits repokeys`) becomes `_`.
+_gr_repo_key() {
+  GR_WHY="" GR_REPO_KEY=""
+  local c name sum
+  if [ -z "${1:-}" ] || ! c="$(cd -P -- "$1" 2>/dev/null && pwd -P)"; then
+    GR_WHY="the git common dir '${1:-}' does not exist"; return 1
+  fi
+  if [ "${c##*/}" = .git ]; then name="${c%/.git}"; name="${name##*/}"; else name="${c##*/}"; name="${name%.git}"; fi
+  name="$(printf '%s' "${name:-repo}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+  sum="$(printf '%s' "$c" | _plat_sha256)"   # ccd/ccrc's platform shim; the caller sourced ccd/ccrc first
+  sum="${sum%% *}"
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { GR_WHY="cannot hash the git common dir '$c'"; return 1; }
+  GR_REPO_KEY="$name-${sum:0:8}"
+  printf '%s\n' "$GR_REPO_KEY"
+}
+
+# ── _gr_source_ref <common dir> — `<full ref name> <commit>` of the source ref, or rc 1 (no-source) ──
+# In order: the CCRC_GRAPH_SOURCE_REF setting, origin/HEAD, origin/main, origin/master, then the local default
+# branch (the branch the common dir's HEAD names, the main checkout's). The first that names a commit wins, printed as
+# git's full name of it, which follows a symbolic ref (origin/HEAD prints as refs/remotes/origin/main).
+_gr_source_ref() {
+  GR_WHY="" GR_SOURCE_REF="" GR_SOURCE_COMMIT=""
+  local c="${1:-}" cand full commit local_head
+  if [ -z "$c" ] || [ ! -d "$c" ]; then GR_WHY="no-source: the git common dir '$c' does not exist"; return 1; fi
+  local_head="$(_gr_git "$c" symbolic-ref -q HEAD 2>/dev/null)" || local_head=""
+  for cand in ${GK[CCRC_GRAPH_SOURCE_REF]:+"${GK[CCRC_GRAPH_SOURCE_REF]}"} origin/HEAD origin/main origin/master \
+      ${local_head:+"$local_head"}; do
+    full="$(_gr_git "$c" rev-parse --verify -q --symbolic-full-name "$cand" 2>/dev/null)" || continue
+    [[ "$full" == refs/* ]] || continue
+    commit="$(_gr_git "$c" rev-parse --verify -q "$full^{commit}" 2>/dev/null)" || continue
+    # shellcheck disable=SC2034  # GR_SOURCE_REF and GR_SOURCE_COMMIT are this library's output
+    GR_SOURCE_REF="$full" GR_SOURCE_COMMIT="$commit"
+    printf '%s %s\n' "$full" "$commit"
+    return 0
+  done
+  # shellcheck disable=SC2034  # GR_WHY is read by the callers
+  GR_WHY="no-source: none of ${GK[CCRC_GRAPH_SOURCE_REF]:+${GK[CCRC_GRAPH_SOURCE_REF]}, }origin/HEAD, origin/main, origin/master or the local default branch names a commit in '$c'"
+  return 1
+}
