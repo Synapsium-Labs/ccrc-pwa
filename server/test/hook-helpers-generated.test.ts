@@ -511,3 +511,57 @@ describe('the log-line redactor region (C5i)', () => {
     expect(readFileSync(f)).toEqual(before);
   });
 });
+
+// C5i: the shipped ccd/ccd-update-sync carries the log-line region, current against ccd/ccrc, after its `set +x` and
+// `export LC_ALL=C`, with nothing but comments between it and `say`. Each row finds the region by its BEGIN line and
+// asserts that line is there before it compares positions, so an absent region reds on that assertion.
+describe('ccd/ccd-update-sync carries the log-line region (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-sync-');
+  const sync = read('ccd/ccd-update-sync');
+  const LL = REGIONS.find((r) => (r.name as string) === 'log-line');
+  const beginAt = (): number => {
+    const at = sync.indexOf(`\n${LL_BEGIN}\n`);
+    expect(at, 'ccd-update-sync carries the log-line BEGIN line').toBeGreaterThanOrEqual(0);
+    expect(sync.split(LL_BEGIN.slice(0, 40)).length - 1, 'exactly one log-line BEGIN line').toBe(1);
+    return at + 1;
+  };
+
+  it('is current against ccd/ccrc, and no _upd_redact is defined outside it (a later definition would win)', () => {
+    beginAt();
+    expect(LL, 'the engine carries a log-line row').toBeDefined();
+    expect(regionOf(sync)).toBe(LL);
+    expect(checkRegion(LL!, sync, ccrc)).toBe('current');
+    const rest = sync.replace(extractRegion(LL!, sync)!, '');
+    expect(rest).not.toMatch(/(?:^|[\s;&|(){}])(?:function\s+_upd_redact\b|_upd_redact\s*\(\s*\))/m);
+    expect(rest).not.toMatch(/^\s*(?:alias|eval|source|\.)\s[^\n]*_upd_redact/m);
+  });
+
+  it('--check ccd/ccd-update-sync ccd/ccrc answers current', () => {
+    const r = spawnSync('node', [MODULE, '--check', path.join(root, 'ccd/ccd-update-sync'), path.join(root, 'ccd/ccrc')],
+      { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    expect(r.stdout.trim(), r.stderr).toBe('hook-helpers: current');
+    expect(r.status).toBe(0);
+  });
+
+  it('sits after `export LC_ALL=C`, with only blank or comment lines between its END line and `say() {`', () => {
+    const at = beginAt();
+    const lc = sync.indexOf('\nexport LC_ALL=C\n');
+    expect(lc, 'ccd-update-sync exports LC_ALL=C at its top level').toBeGreaterThanOrEqual(0);
+    expect(at).toBeGreaterThan(lc);
+    const end = sync.indexOf(`\n${LL_END}\n`, at);
+    expect(end, 'the region has its END line').toBeGreaterThan(at);
+    const say = sync.indexOf('\nsay() {', end);
+    expect(say, 'say() is defined after the region').toBeGreaterThan(end);
+    const between = sync.slice(end + LL_END.length + 2, say + 1).split('\n').filter((l) => l !== '');
+    for (const l of between) expect(l, 'only comments between the region and say').toMatch(/^\s*#/);
+  });
+
+  it('lies after `set +x`, the file\'s first line of code', () => {
+    const at = beginAt();
+    const lines = sync.split('\n');
+    const first = lines.findIndex((l, i) => i > 0 && l.trim() !== '' && !/^\s*#/.test(l));
+    expect(lines[first]!.replace(/\s+#.*$/, ''), 'the first line of code').toBe('set +x');
+    expect(at).toBeGreaterThan(lines.slice(0, first + 1).join('\n').length);
+  });
+});

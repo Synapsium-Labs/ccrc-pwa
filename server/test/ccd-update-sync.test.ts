@@ -377,7 +377,7 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     }
     expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?a@b#c@d');
     const section = (text: string, fn: string): string => {
-      const i = text.indexOf('  local home="${HOME:-}"\n', text.indexOf(`${fn}() {`));
+      const i = text.indexOf('  local home="${HOME:-}"\n', text.indexOf(`\n${fn}() {`));
       return text.slice(i, text.indexOf("  printf '%s' \"$s\"\n}", i));
     };
     const ccrcSrc = readFileSync(CCRC, 'utf8');
