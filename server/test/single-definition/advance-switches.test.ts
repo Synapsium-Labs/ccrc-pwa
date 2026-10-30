@@ -767,7 +767,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/askbody.ts': 1,
       'server/src/askkey.ts': 1,
       'server/src/askwindow.ts': 1,
-      'server/src/auth/sessions.ts': 3,
+      'server/src/auth/sessions.ts': 2,
       'server/src/auth/webauthn.ts': 2,
       'server/src/childReclaimSweep.ts': 7,
       'server/src/collectLane.ts': 7,

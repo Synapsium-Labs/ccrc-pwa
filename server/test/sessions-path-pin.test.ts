@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { defaultSessionsPath } from '../src/auth/sessions.js';
+import { defaultSessionsPath } from '../src/auth/paths.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
