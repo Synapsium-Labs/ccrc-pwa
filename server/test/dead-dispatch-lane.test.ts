@@ -7,7 +7,9 @@
 //   * in flight: inside the bound, or restamped by a retry between the pass's read and the act -> never;
 //   * the switch off -> never, and Settings' write turns it back on;
 //   * the cleanup pause raised, or a box that minted without the marker -> never;
-//   * a late child after the abandon -> the run stays `failed`, nothing is journaled or mailed again.
+//   * a late child after the abandon -> the run stays `failed`, nothing is journaled or mailed again;
+//   * D-7502: more candidates than the pass cap -> at most the cap handled a pass, oldest stamp first, the rest on
+//     the next passes, until every one is abandoned.
 // NOTHING here reaches a box: tmux and ccd are a scripted recorder, the registry is a fixture HOME's.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -24,6 +26,7 @@ import { DISPATCH_ABANDON_DEFAULT_MS, DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_S
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
+import { DISPATCH_ABANDON_PER_PASS } from '../src/coord/abandonDeadDispatch.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -73,8 +76,8 @@ const fixture = async (opts: { beforeAbandon?: () => void } = {}) => {
   // The coordinator: live in tmux, supervised now, so the lane's own coordinator reason leaves it alone.
   plant(COORD, { started: '1', supervised: String(Math.floor(T0 / 1000)) });
   /** A planned run claimed by the coordinator, whose dispatch was stamped `ageMs` ago and bound nothing. */
-  const stalled = (ageMs: number): number => {
-    const r = coord.openRun({ program: 'prog-a', title: 'prog-a', project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD });
+  const stalled = (ageMs: number, program = 'prog-a'): number => {
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD });
     if (!('id' in r)) throw new Error('openRun refused');
     coord.markDispatchStarted(r.id, clock - ageMs);
     return r.id;
@@ -226,5 +229,50 @@ describe('the dead-dispatch reason of the dead-coordinator lane (D-7319)', () =>
     expect(okRun(f.coord.run(id))!.sessionId).toBeNull();
     expect(f.reasons(id)).toHaveLength(1);
     expect(f.mail()).toHaveLength(1);
+  });
+});
+
+describe('the dead-dispatch pass cap (D-7502)', () => {
+  /** `n` stalled runs, opened newest stamp first so that id order is the reverse of stamp order: an oldest-first pass
+   *  is then visibly not an id-order pass. Answers the ids oldest stamp first. */
+  const herd = (f: Awaited<ReturnType<typeof fixture>>, n: number): number[] => {
+    const ids: number[] = [];
+    for (let i = 0; i < n; i += 1) ids.push(f.stalled(BOUND + (i + 1) * 1_000, `prog-${i}`));
+    return ids.reverse();
+  };
+
+  it('the cap is 20 candidates a pass', () => {
+    expect(DISPATCH_ABANDON_PER_PASS).toBe(20);
+  });
+
+  it('more candidates than the cap: one pass hands at most the cap to the arm, the oldest stamps first', async () => {
+    let arms = 0;
+    const f = await fixture({ beforeAbandon: () => { arms += 1; } });
+    const ids = herd(f, DISPATCH_ABANDON_PER_PASS + 5);
+    await f.pass();
+    expect(arms).toBe(DISPATCH_ABANDON_PER_PASS);
+    const oldest = ids.slice(0, DISPATCH_ABANDON_PER_PASS);
+    const rest = ids.slice(DISPATCH_ABANDON_PER_PASS);
+    expect(oldest.map((id) => f.stateOf(id))).toEqual(oldest.map(() => 'failed'));
+    expect(rest.map((id) => f.stateOf(id))).toEqual(rest.map(() => 'planned'));
+    expect(f.mail()).toHaveLength(DISPATCH_ABANDON_PER_PASS);
+    expect(rest.flatMap((id) => f.reasons(id))).toEqual([]);
+  });
+
+  it('more candidates than the cap are all abandoned across passes, each once, no pass over the cap', async () => {
+    let arms = 0;
+    const f = await fixture({ beforeAbandon: () => { arms += 1; } });
+    const total = DISPATCH_ABANDON_PER_PASS * 2 + 1;
+    const ids = herd(f, total);
+    const perPass: number[] = [];
+    for (let p = 0; p < 4; p += 1) {
+      arms = 0;
+      await f.pass();
+      perPass.push(arms);
+    }
+    expect(perPass).toEqual([DISPATCH_ABANDON_PER_PASS, DISPATCH_ABANDON_PER_PASS, 1, 0]);
+    expect(ids.map((id) => f.stateOf(id))).toEqual(ids.map(() => 'failed'));
+    expect(ids.map((id) => f.reasons(id).length)).toEqual(ids.map(() => 1));
+    expect(f.mail()).toHaveLength(total);
   });
 });
