@@ -7,7 +7,6 @@ import {
   BURNED_CODES_KEPT, CLAIM_ALERT_EVERY_MS, MAX_PENDING, claimVerdict, codeExpiresAt, keepBurned,
   type ClaimDoorState, type ClaimMatch,
 } from './policy.js';
-import { mintClaimCode } from './files.js';
 
 /** What one claim step answers the route. A 200 carries the value, served from
  *  memory (the holder's pending slot via `valueOf`), never from the pending file. `nodeId` is the presenting node, which
@@ -45,6 +44,9 @@ export class ClaimDoor {
   private readonly warn: (line: string) => void;
   /** CONTRACT ADDITION (marked): injectable so a test can count compares. */
   private readonly compare: (a: Buffer, b: Buffer) => boolean;
+  /** D-7505: the claim-code mint, `TokenStore#mintClaimCode` (token/ports.ts), injected randomness: the driver passes
+   *  its store's member, so the door loads no file adapter. Called exactly once per {@link issue}. */
+  private readonly mintClaimCode: () => string;
   private lastMissWarnAt: number | null = null;
   private lastReplayWarnAt: number | null = null;
   /** Generations the driver must discard (an expired or misbound code burned
@@ -53,10 +55,11 @@ export class ClaimDoor {
   readonly alerts: { expired: string[]; wrongNode: string[]; replays: number } = { expired: [], wrongNode: [], replays: 0 };
 
   constructor(opts: { valueOf: (generation: string) => string | null; warn: (line: string) => void;
-    compare?: (a: Buffer, b: Buffer) => boolean }) {
+    compare?: (a: Buffer, b: Buffer) => boolean; mintClaimCode: () => string }) {
     this.valueOf = opts.valueOf;
     this.warn = opts.warn;
     this.compare = opts.compare ?? timingSafeEqual;
+    this.mintClaimCode = opts.mintClaimCode;
   }
 
   /** Mints a code for `generation`, bound to the measured fleet `nodeId`, and keeps
@@ -65,7 +68,7 @@ export class ClaimDoor {
   issue(generation: string, nodeId: string, now: number): string {
     const live = this.state.live.filter((s) => s.generation !== generation);
     if (live.length >= MAX_PENDING) throw new RangeError(`ClaimDoor: at most ${MAX_PENDING} live codes`);
-    const code = mintClaimCode();
+    const code = this.mintClaimCode();
     this.state = { ...this.state, live: [...live,
       { digest: sha256(code).toString('hex'), generation, nodeId, expiresAt: codeExpiresAt(now) }] };
     return code;
