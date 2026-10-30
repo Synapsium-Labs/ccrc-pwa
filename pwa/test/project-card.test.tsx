@@ -546,6 +546,22 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
     expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe(WARN_GLYPH);
   });
 
+  it('D-7563: the stalled run bound to its returned child clears the wedge, and the child is drawn under its coordinator', () => {
+    // The server's auto-bind leaves the run planned and its stamp as it was, and names the child workspace as its
+    // session. BOTH directions on the same group: unbound, the wedge; bound, the child's own row and no wedge.
+    const stalled = spawning({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS * 600 });
+    const unbound = render(
+      <ProjectCard group={pair} runs={[stalled]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('spawn never completed')).toBeInTheDocument();
+    unbound.unmount();
+    const { container } = render(
+      <ProjectCard group={pair} runs={[{ ...stalled, sessionId: 'demo-still-cove' }]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('spawn never completed')).toBeNull();
+    expect(container.querySelector('.proj-pending')).toBeNull();
+    expect(container.querySelector('.proj-nest[data-depth="1"] .sess-label')?.textContent).toBe('still-cove');
+  });
+
   it('renders nothing at all for a planned run nobody has dispatched', () => {
     // The no-regression pin, and the reason the STAMP is the signal: a wave N+1
     // opened and waiting, and every wave N>=2 resume, carry no stamp and have

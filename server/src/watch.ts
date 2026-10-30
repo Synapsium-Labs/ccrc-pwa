@@ -5780,7 +5780,7 @@ export class FleetWatcher {
     const serial = this.deadCoordinatorSerial;
     if (serial === null) return;
     try {
-      await abandonDeadDispatches({ coord, io: this.deps.io, cfg: this.deps.cfg, serial, now: () => Date.now() });
+      await abandonDeadDispatches({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, serial, now: () => Date.now() });
     } catch (err) {
       console.warn(`ccrc-server: dispatch-abandon: the pass failed (${err instanceof Error ? err.message : String(err)}) — nothing more this pass`);
     }

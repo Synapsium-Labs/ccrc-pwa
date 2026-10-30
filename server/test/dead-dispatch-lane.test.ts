@@ -10,6 +10,10 @@
 //   * a late child after the abandon -> the run stays `failed`, nothing is journaled or mailed again;
 //   * D-7502: more candidates than the pass cap -> at most the cap handled a pass, oldest stamp first, the rest on
 //     the next passes, until every one is abandoned.
+//   * D-7563: the run's one child workspace came back with a live pane -> bound to it (the spawn arm's own store write),
+//     journaled, not abandoned, not mailed, and the card's phantom gone; two children, another run's marker, a pane not
+//     live, a session already named by a run, the switch off, or a pane that dies before the write -> never bound; a
+//     second pass does nothing; the pass cap counts binds.
 // NOTHING here reaches a box: tmux and ccd are a scripted recorder, the registry is a fixture HOME's.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -22,11 +26,12 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { closeRun } from '../src/coord/close.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { DISPATCH_ABANDON_DEFAULT_MS, DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT } from '../../shared/dispatch-abandon.js';
+import { DISPATCH_ABANDON_DEFAULT_MS, DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT, DISPATCH_BIND_EVENT } from '../../shared/dispatch-abandon.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
 import { DISPATCH_ABANDON_PER_PASS } from '../src/coord/abandonDeadDispatch.js';
+import { bindReturnedChild } from '../src/coord/dispatch.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -34,7 +39,7 @@ const T0 = 1_790_000_000_000;
 const COORD = 'demo-coord';
 const BOUND = DISPATCH_ABANDON_DEFAULT_MS;
 
-const fixture = async (opts: { beforeAbandon?: () => void } = {}) => {
+const fixture = async (opts: { beforeAbandon?: () => void; livePane?: (id: string) => boolean } = {}) => {
   let clock = T0;
   vi.spyOn(Date, 'now').mockImplementation(() => clock);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -44,11 +49,16 @@ const fixture = async (opts: { beforeAbandon?: () => void } = {}) => {
   mkdirSync(path.join(reg, '.lifecycle'), { recursive: true });
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
   const calls: string[][] = [];
+  // D-7563: the panes tmux answers live besides the coordinator's, and every id it was asked about.
+  const live = new Set<string>();
+  const asked: string[] = [];
+  const livePane = (id: string): boolean => (opts.livePane ?? ((x: string) => live.has(x)))(id);
   const run: Runner = async (cmd, args) => {
     if (path.basename(cmd) === 'tmux') {
       if (args[0] !== 'has-session') return { ran: true, code: 1, stdout: '', stderr: '' };
       const id = (args[2] ?? '').replace(/^=cc-/, '').replace(/:$/, '');
-      return id === COORD ? { ran: true, code: 0, stdout: '', stderr: '' } : { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
+      asked.push(id);
+      return id === COORD || livePane(id) ? { ran: true, code: 0, stdout: '', stderr: '' } : { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
     }
     calls.push(args);
     return { ran: true, code: 0, stdout: '', stderr: '' };
@@ -90,7 +100,9 @@ const fixture = async (opts: { beforeAbandon?: () => void } = {}) => {
   const mail = () => coord.db.prepare('SELECT fromId, toId, runId, subject, body FROM mail ORDER BY id').all() as
     { fromId: string; toId: string; runId: number | null; subject: string; body: string }[];
   const reasons = (id: number) => coord.runEvents(id).filter((e) => e.detail?.startsWith(DISPATCH_ABANDON_EVENT) === true);
-  return { coord, reg, cfg, calls, plant, stalled, pass, stateOf, mail, reasons, acts: () => acts,
+  const binds = (id: number) => coord.runEvents(id).filter((e) => e.detail?.startsWith(DISPATCH_BIND_EVENT) === true);
+  const sessionOf = (id: number) => okRun(coord.run(id))!.sessionId;
+  return { coord, reg, cfg, calls, plant, stalled, pass, stateOf, mail, reasons, binds, sessionOf, live, asked, acts: () => acts,
     advance: (ms: number) => { clock += ms; }, now: () => clock };
 };
 
@@ -274,5 +286,183 @@ describe('the dead-dispatch pass cap (D-7502)', () => {
     expect(ids.map((id) => f.stateOf(id))).toEqual(ids.map(() => 'failed'));
     expect(ids.map((id) => f.reasons(id).length)).toEqual(ids.map(() => 1));
     expect(f.mail()).toHaveLength(total);
+  });
+});
+
+describe('the returned child (D-7563): a run whose one child came back live is bound to it', () => {
+  const returned = (f: Awaited<ReturnType<typeof fixture>>, id: number, ws = 'w9'): string => {
+    const sid = `demo-${ws}`;
+    f.plant(sid, { workspace: ws, branch: `ws/${ws}`, child: String(id), started: '1' });
+    f.live.add(sid);
+    return sid;
+  };
+
+  it('binds the run to the child, journals it once, abandons nothing, mails nothing, asks the fleet nothing', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.sessionOf(id)).toBe(sid);
+    expect(f.binds(id)).toHaveLength(1);
+    expect(f.binds(id)[0]!.causedBy).toBe('sweep');
+    expect(f.binds(id)[0]!.detail).toMatch(new RegExp(`^${DISPATCH_BIND_EVENT} session=${sid} started=\\d+$`));
+    expect(f.reasons(id)).toEqual([]);
+    expect(f.mail()).toEqual([]);
+    expect(f.calls).toEqual([]);
+    // The spawn arm's adopted shape: no birth dated, since the child may be an earlier attempt's.
+    expect(f.coord.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(id)).toEqual({ sessionBornAt: null, sessionBornFor: null });
+  });
+
+  it('idempotent: a second pass binds nothing again, journals nothing more, and the run is no longer a candidate', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    await f.pass();
+    expect(f.coord.stalledDispatchRunIds(f.now())).not.toContain(id);
+    await f.pass();
+    expect(f.sessionOf(id)).toBe(sid);
+    expect(f.binds(id)).toHaveLength(1);
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.mail()).toEqual([]);
+  });
+
+  it("the card's phantom child is gone: the run is no longer planned-and-unbound, so it binds a session row", async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    const before = okRun(f.coord.run(id))!;
+    expect(before.sessionId).toBeNull();
+    await f.pass();
+    const after = okRun(f.coord.run(id))!;
+    // `nestFleet` draws "spawn never completed" only for a planned, stamped run whose session is not on the list
+    // (`pwa/test/nest-fleet-returned-child.test.ts` pins that half); the run now names the child, which is.
+    expect(after).toMatchObject({ state: 'planned', sessionId: sid });
+    expect(after.dispatchStartedAt).toBe(before.dispatchStartedAt);
+  });
+
+  it('two children naming the run never bind: kept planned and unbound, as before', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    returned(f, id, 'w8');
+    returned(f, id, 'w9');
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.mail()).toEqual([]);
+  });
+
+  it("a live child whose marker names another run never binds this one: today's verdict stands", async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    returned(f, id + 100);
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    // Today the pass reads no workspace for the run and abandons it.
+    expect(f.stateOf(id)).toBe('failed');
+  });
+
+  it('a child whose pane is not live never binds: kept planned and unbound', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    f.live.delete(sid);
+    await f.pass();
+    expect(f.asked).toContain(sid);
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+  });
+
+  it('a child session a run already names never binds', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    const other = f.coord.openRun({ program: 'prog-b', title: 'prog-b', project: 'demo', wave: 1, waveOf: 1, claimedBy: COORD });
+    if (!('id' in other)) throw new Error('openRun refused');
+    f.coord.setSession(other.id, sid);
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+  });
+
+  it('the switch off binds nothing and asks tmux nothing', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    f.coord.setDispatchAbandon('off', f.now());
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.asked).not.toContain(sid);
+  });
+
+  it('a pane that dies between the verdict and the write stops the bind (its re-measure)', async () => {
+    let asks = 0;
+    const f = await fixture({ livePane: (x) => x === 'demo-w9' && (asks += 1) === 1 });
+    const id = f.stalled(BOUND * 2);
+    returned(f, id);
+    await f.pass();
+    expect(asks).toBe(2);
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.stateOf(id)).toBe('planned');
+  });
+
+  it('the pass cap counts binds: more returned children than the cap bind at most the cap a pass', async () => {
+    const f = await fixture();
+    const ids: number[] = [];
+    for (let i = 0; i < DISPATCH_ABANDON_PER_PASS + 3; i += 1) {
+      const id = f.stalled(BOUND + (i + 1) * 1_000, `prog-${i}`);
+      returned(f, id, `w${i}`);
+      ids.push(id);
+    }
+    await f.pass();
+    expect(ids.filter((id) => f.sessionOf(id) !== null)).toHaveLength(DISPATCH_ABANDON_PER_PASS);
+    await f.pass();
+    expect(ids.filter((id) => f.sessionOf(id) !== null)).toHaveLength(ids.length);
+    expect(ids.map((id) => f.binds(id).length)).toEqual(ids.map(() => 1));
+  });
+});
+
+describe("bindReturnedChild (D-7563): the spawn arm's write, refused on any change since the pass measured", () => {
+  it('binds a planned, unbound run with the same claimant and stamp; refuses each change, writing nothing', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const startedAt = okRun(f.coord.run(id))!.dispatchStartedAt!;
+    const ask = (over: Partial<{ claimedBy: string; startedAt: number }> = {}) =>
+      bindReturnedChild(f.coord, { runId: id, sessionId: 'demo-w9', claimedBy: COORD, startedAt, ...over });
+    expect(ask({ claimedBy: 'demo-other' })).toMatchObject({ ok: false });
+    expect(ask({ startedAt: startedAt + 1 })).toMatchObject({ ok: false });
+    expect(bindReturnedChild(f.coord, { runId: id + 1000, sessionId: 'demo-w9', claimedBy: COORD, startedAt })).toMatchObject({ ok: false });
+    expect(f.sessionOf(id)).toBeNull();
+    expect(ask()).toEqual({ ok: true });
+    expect(f.sessionOf(id)).toBe('demo-w9');
+    // Bound now: a second ask refuses and leaves the session it bound.
+    expect(bindReturnedChild(f.coord, { runId: id, sessionId: 'demo-w8', claimedBy: COORD, startedAt })).toMatchObject({ ok: false });
+    expect(f.sessionOf(id)).toBe('demo-w9');
+  });
+
+  it("dates no birth (the adopted arm's null): another run's recorded birth for that session is never copied onto it", async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const startedAt = okRun(f.coord.run(id))!.dispatchStartedAt!;
+    // An earlier run that once recorded a birth for this session id, since bound elsewhere.
+    const old = f.stalled(BOUND * 3, 'prog-old');
+    f.coord.db.prepare('UPDATE runs SET sessionBornAt = dispatchStartedAt, sessionBornFor = ? WHERE id = ?').run('demo-w9', old);
+    expect(bindReturnedChild(f.coord, { runId: id, sessionId: 'demo-w9', claimedBy: COORD, startedAt })).toEqual({ ok: true });
+    expect(f.coord.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(id)).toEqual({ sessionBornAt: null, sessionBornFor: null });
+  });
+
+  it('refuses a run that is no longer planned', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const startedAt = okRun(f.coord.run(id))!.dispatchStartedAt!;
+    f.coord.advance(id, 'failed', 'operator');
+    expect(bindReturnedChild(f.coord, { runId: id, sessionId: 'demo-w9', claimedBy: COORD, startedAt })).toMatchObject({ ok: false });
+    expect(f.sessionOf(id)).toBeNull();
   });
 });

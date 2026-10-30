@@ -19,6 +19,16 @@
 //      row of the run's project whose marker is unreadable, and no row of the run's project that looks like a cut-short
 //      `ws-add` left it (a workspace with no marker, no hold and no spawn yet: `cmd_ws_add` writes the rows, then the
 //      marker, then spawns the pane, so a kill between leaves exactly that shape).
+//
+// D-7563 (operator ruling 2026-10-30): A RETURNED CHILD IS BOUND, NOT KEPT FOREVER. Step 5's first half used to keep a
+// run with a child workspace for good: the `ws-add` came back (its `.child` marker names the run, its pane runs) but the
+// run never bound its session, so the card drew "spawn never completed" with no end. When EXACTLY ONE row's marker names
+// the run, that row is a measured workspace of the run's own project, its pane measured `live`, and NO run names its
+// session yet, the verdict is `bind` to that session, and the executor binds through the spawn arm's own store write.
+// Every other shape keeps today's answer, `child-workspace`: two such rows, a pane not live or not asked, a session some
+// run already names (or whose runs could not be read), a row not of the run's project or not measured. A marker that
+// names ANOTHER run is not this run's child at all, exactly as before. Every guard above step 5 still comes first, so a
+// bind needs the switch on, the pause clear, the bound passed, a marking box and a registry read whole.
 import type { ChildMark } from '../../../shared/api.js';
 import { isDispatchAbandonChoice, isDispatchAbandonRefusal, type DispatchAbandonView } from '../../../shared/dispatch-abandon.js';
 
@@ -64,6 +74,15 @@ export type DeadDispatchRegistry =
   | { readonly listed: true; readonly refused: number; readonly records: readonly DeadDispatchRecord[];
       readonly pause: 'set' | 'clear' | 'unmeasurable' };
 
+/** D-7563: what the executor measured of the ONE row whose marker names the run, beyond the registry: its tmux pane
+ *  (`live`, `gone`, or `unknown` when tmux could not say), and how many runs already name its session (`unreadable`
+ *  when the store could not say). Measured only when exactly one row names the run; absent, nothing binds. */
+export interface ReturnedChildFacts {
+  readonly id: string;
+  readonly pane: 'live' | 'gone' | 'unknown';
+  readonly namedBy: number | 'unreadable';
+}
+
 export interface DeadDispatchFacts {
   /** Settings' switch: `true` only when the stored choice reads exactly `on`. */
   readonly armed: boolean;
@@ -71,6 +90,8 @@ export interface DeadDispatchFacts {
   /** The run's journal carries a `child-omitted:` event: a box that minted it without a marker. */
   readonly childOmitted: boolean;
   readonly registry: DeadDispatchRegistry;
+  /** D-7563: the one child's measured facts; absent when no single child was measured. */
+  readonly returned?: ReturnedChildFacts;
   readonly now: number;
   readonly boundMs: number;
 }
@@ -101,6 +122,7 @@ export const isDeadDispatchKebab = (tok: string): boolean =>
 
 export type DeadDispatchVerdict =
   | { readonly kind: 'dead'; readonly claimedBy: string; readonly startedAt: number }
+  | { readonly kind: 'bind'; readonly sessionId: string; readonly claimedBy: string; readonly startedAt: number }
   | { readonly kind: 'keep'; readonly why: DeadDispatchKeep; readonly detail?: string };
 
 const keep = (why: DeadDispatchKeep, detail?: string): DeadDispatchVerdict =>
@@ -119,8 +141,14 @@ export function deadDispatchVerdict(f: DeadDispatchFacts): DeadDispatchVerdict {
   if (run.claimedBy === null) return keep('unclaimed');
   if (f.childOmitted) return keep('unmarked-box');
   if (f.registry.refused > 0) return keep('registry-unmeasured', `${f.registry.refused} listed name(s) refused`);
-  for (const r of f.registry.records) {
-    if (r.child.kind === 'child' && r.child.runId === run.id) return keep('child-workspace', r.id);
+  const children = f.registry.records.filter((r) => r.child.kind === 'child' && r.child.runId === run.id);
+  if (children.length > 0) {
+    const c = children[0]!;
+    const back = f.returned;
+    const bindable = children.length === 1 && back !== undefined && back.id === c.id && back.pane === 'live'
+      && back.namedBy === 0 && c.project === run.project && c.workspace !== null && c.identityMeasured;
+    if (!bindable) return keep('child-workspace', children.map((r) => r.id).join(', '));
+    return { kind: 'bind', sessionId: c.id, claimedBy: run.claimedBy, startedAt: run.dispatchStartedAt };
   }
   for (const r of f.registry.records) {
     if (r.project !== run.project) continue;
