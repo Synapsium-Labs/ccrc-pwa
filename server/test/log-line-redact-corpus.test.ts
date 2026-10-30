@@ -53,9 +53,15 @@ const UTF8 = ['C.UTF-8', 'en_US.UTF-8'].find((loc) => spawnSync('bash', ['--nopr
   env: ghContainedEnv(work, { LC_ALL: loc, PATH: process.env['PATH'] ?? '' }),
 }).stdout === '1') ?? 'C.UTF-8';
 
-/** `say`'s definition and every function of ccd-update-sync it calls (transitively), callees first. */
+/** `say`'s definition and every function of ccd-update-sync it calls (transitively), callees first. Throws when the
+ *  file defines any function more than once: bash runs a name's LAST definition, `ccdFunctionDefinition` returns its
+ *  FIRST, so the column would test a definition the script never runs. */
 function sayDefinitions(sync: string): string | null {
   const fns = [...sync.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
+  for (const n of new Set(fns)) {
+    const k = fns.filter((f) => f === n).length;
+    if (k > 1) throw new Error(`ccd/ccd-update-sync defines ${n} ${k} times; bash runs the last, the corpus would copy the first`);
+  }
   const want = ['say'];
   const defs: string[] = [];
   for (let i = 0; i < want.length; i++) {
