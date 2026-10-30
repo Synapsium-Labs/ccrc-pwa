@@ -6,11 +6,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { WORKSPACE_SLUG_RE } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 describe('workspace slug grammar', () => {
   it('WORKSPACE_SLUG_RE is exactly ccd\'s _ws_slug_valid pattern', () => {
-    const m = /^_ws_slug_valid\(\) \{ \[\[ "\$1" =~ (\S+) ]]; \}$/m.exec(readFileSync(CCD, 'utf8'));
+    const m = /^_ws_slug_valid\(\) \{ \[\[ "\$1" =~ (\S+) ]]; \}$/m.exec(ccdSource());
     expect(m, '_ws_slug_valid not found in ccd/ccd in its one-line form').not.toBeNull();
     expect(WORKSPACE_SLUG_RE.source).toBe(m![1]);
   });

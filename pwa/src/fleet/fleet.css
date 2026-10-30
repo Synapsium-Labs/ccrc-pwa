@@ -165,6 +165,8 @@
    and groupFleet.ts for the shape it used to have, where `Cleanup` counted
    rows that rendered nowhere on this screen. The one chip whose rows sit
    behind a fold is `Archived`, and that fold states the identical count.
+   The words are `STATUS_GROUPS`' labels (Needs you, Done, ... Exited), one
+   vocabulary with Instrument's group heads (T3a, D-6331).
    Every chip is self-grounded (background + color on the ONE rule) so the
    count, the unseen badge and "Mark all seen" are all measured by
    design/audit.mjs's own descendant-of-a-self-grounded-ancestor pass —
@@ -185,10 +187,21 @@
   padding: var(--sp-1) var(--sp-3);
   font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
 }
-.bucket-head .bucket-head-count {
+.bucket-head .bucket-head-count,
+.bucket-head .bucket-head-sep {
   font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
+}
+/* Exited and Archived are quiet (T3a, D-6331): nothing is asked of you there, so the chip recedes by ink and weight
+   and draws no unseen badge (`lib/seen.ts`'s BADGED holds only attention, done and cleanup). `data-quiet` is the
+   marker `BucketBar` sets. Self-grounded like every chip (background and color on this ONE rule, so the audit's
+   descendant pass measures the label and the count), from tokens: `--ink-tertiary` on `--bg-surface` is 5.77 dark and
+   5.70 light, both over 4.5. Never `opacity`, which composites the whole subtree (see the note above `.fleet-list`). */
+.bucket-head[data-quiet] {
+  background: var(--bg-surface);
+  color: var(--ink-tertiary);
+  font-weight: var(--weight-regular);
 }
 /* Same tokens as the "waiting on you" badge elsewhere on this screen
    (--status-attention-text on --status-attention-tint) — reused, not
@@ -527,6 +540,7 @@
   gap: 5px;
 }
 .acct-gauge {
+  position: relative;
   display: grid;
   grid-template-columns: 18px 1fr 34px;
   align-items: center;
@@ -750,26 +764,88 @@
 
 
 
-/* Accounts strip — usage shown once per account, with reset countdowns. Also
-   the nav affordance onto /accounts (Task 6, Build 3 PR G): role="link" in
-   AccountsStrip.tsx, so the whole grid is one tap target — min-height off the
-   shared token rather than trusting the gauges inside it to always clear the
-   floor on their own. */
-.accounts-strip {
+/* Accounts strip, the lanes row (T2c, D-6329): a card per lane, most free first, two columns on a phone and four from
+   700px, each card the door to its lane (role="link" in AccountsStrip.tsx, so it declares the tap floor itself:
+   `.account-gauge` below) and All accounts after the last card, a row of its own on a phone. The strip is a plain group
+   while it has cards. Only the placeholder, no lane to show, is itself one door to /accounts (D-161), and so only
+   `.accounts-strip[role="link"]` takes the floor and the pointer. */
+.accounts-strip,
+.accounts-flyout {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+.accounts-strip {
+  position: relative;
   margin-bottom: var(--sp-2);
+}
+.accounts-strip[role="link"] {
   min-height: var(--tap-min);
   cursor: pointer;
 }
 @media (min-width: 700px) {
-  .accounts-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .accounts-strip,
+  .accounts-flyout { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+/* The end cell: the fold's control (when the strip folds) and then All accounts, a gap between them. Its own row under
+   the cards on a phone (and wherever the cards wrap to two columns); the desk's frame header puts it in the row's
+   next track (shell.css). The two share ONE row at every width and never stack: All accounts keeps its width
+   (`flex: none`), and the control gives (`flex: 1 1 0; min-width: 0`), its words wrapping inside it, centred, over
+   as many lines as they need. "+13 more · 1 sign-in expired · 1 rate-limited" is 290 to 330px on one line in the
+   quiet Button's mono, wider than a phone's share of the cell, and a cell that wrapped its buttons put All accounts
+   on a second 44px row. The quiet variant is `leading-none` with no vertical padding, so the control sets a line
+   height and a little padding of its own for a wrapped line to clear its border; the tap floor (`min-h-tap`) is
+   the Button's, and is kept. The control is the one element here with `aria-controls` (at the desk it names the strip's
+   group; on a phone, the panel it opens). On a phone the open panel is a child of this cell too, between the two, so
+   `:not([aria-controls])` matches it; its `flex: none` is moot there, since the panel is absolutely positioned (below)
+   and out of the flex row. */
+.accounts-end {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.accounts-end > [aria-controls] {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-block: var(--sp-1);
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+}
+.accounts-end > :not([aria-controls]) {
+  flex: none;
+}
+/* The phone's panel (phone-strip-tap-panel): the cards of the lanes the line folds away (Task C13), opened by a tap on
+   the fold's control. It sits in the end cell after the control, but hangs from the strip (`position: relative`
+   above): just under the strip's bottom edge and across its width, drawn over the content and pushing none of it down. Its cards wrap in the strip's own
+   phone grid (the selector lists above). Taller than the room left under the strip, it scrolls itself: that room is
+   `--panel-room`, which the strip measures when the panel opens and gives it inline, so this default (the whole
+   viewport) holds only until then. Layer, hairline and the pop shadow: the surface the other floating panels use. The
+   desk's frame header restyles the same class for its hover flyout (shell.css). */
+.accounts-flyout {
+  --panel-room: 100dvh;
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  right: 0;
+  z-index: var(--z-sheet);
+  max-height: calc(var(--panel-room) - var(--sp-1) - var(--sp-2));
+  overflow-y: auto;
+  padding: var(--sp-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--elev-pop);
 }
 .account-gauge {
   display: grid;
+  align-content: center;
   gap: 1px;
   padding: 3px var(--sp-2) 4px;
+  /* A card is a control: the floor at every width, since a weekly-only or no-reading card is otherwise 20 to 36px. */
+  min-height: var(--tap-min);
+  cursor: pointer;
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
@@ -791,13 +867,22 @@
   display: grid;
   gap: 1px;
 }
+/* What a lane never read says in place of its windows (laneWords' NO_READING): no meter beside it. It sets no colour of
+   its own: it reads in the card's ink, which the contrast gate already measures on the card. */
+.acct-unread {
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+}
 .account-gauge-label {
   font-family: var(--family-mono);
   font-size: var(--fs-2xs);
   font-weight: var(--weight-semibold);
   line-height: 1.25;
 }
+/* `position: relative` on both the strip's row and the picker's gauge: the percentage's `sr-only` span is absolutely
+   positioned, and with no positioned ancestor it escaped the detail pane (the scroller) and stretched the document. */
 .acct-row {
+  position: relative;
   display: grid;
   grid-template-columns: 1.5em minmax(0, 1fr) auto auto;
   align-items: center;
@@ -893,6 +978,13 @@
    that survives. */
 @media (forced-colors: active) {
   .sess-line--active {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+  /* The arrived lane's row (AccountsScreen): its accent edge is an inset box-shadow, dropped here, and its focus ring
+     is removed by the script-focus rule (`:focus`, so the second selector outranks it), so the same inset outline marks it. */
+  .accounts-row[data-arrived],
+  .accounts-row[data-arrived][tabindex="-1"]:focus {
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
@@ -1599,6 +1691,21 @@ button.sess-held {
   inset: calc((var(--sp-8) - 2px - var(--tap-min)) / 2);
 }
 
+/* D-6332: under a mouse the row's ⋯ is transparent until its row is hovered, holds a keyboard's focus
+   (`:focus-visible` inside the row) or is the selected row. A pointer's focus reveals nothing: a row whose ⋯ took the
+   focus from a click, or got it back from a sheet closed with the mouse, lights no second ⋯ beside the selected
+   row's. While any row of the fleet is hovered, every other row's ⋯ goes dark, the selected and the focused row's
+   included, so a hover never shows two; a ⋯ that itself holds the keyboard's focus stays drawn. OPACITY and nothing else: the button stays mounted, focusable and in the accessibility tree, with its
+   44px ::before overlay and its `open-actions` door, and no transition owes a reduced-motion entry. A coarse pointer
+   has no hover, so the rule does not apply there: a touch screen draws every row's ⋯. */
+@media (hover: hover) and (pointer: fine) {
+  .sess-actions { opacity: 0; }
+  .sess-line:hover .sess-actions,
+  .sess-line:has(:focus-visible) .sess-actions,
+  .sess-line--active .sess-actions { opacity: 1; }
+  .fleet:has(.sess-line:hover) .sess-line:not(:hover) .sess-actions:not(:focus-visible) { opacity: 0; }
+}
+
 /* ── session actions sheet ────────────────────────────────────────── */
 .sess-sheet {
   display: flex;
@@ -2235,6 +2342,11 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
+/* A lane arrived at from a card (`/accounts?lane=<id>`): the screen scrolls it into view and focuses it by script, so
+   the row is a focus target with no ring of its own (tabindex -1, never a tab stop), and the one quiet edge says which
+   row the card meant. An inset shadow on the row's own ground, not a border: it moves no layout and adds no ink. */
+.accounts-row[tabindex="-1"]:focus { outline: none; }
+.accounts-row[data-arrived] { box-shadow: inset 2px 0 0 var(--accent); }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
 /* A sentence ("disabled on the fleet host"), so the UI face — see
    `.accounts-projection`. */
@@ -2982,6 +3094,23 @@ button.proj-card-pool::before {
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 
+/* ── The predicted-conflict chip (landing order wave 4b) ──────────────────
+   One read-only pill beside the hot-files strip, on the strip's own gutters. Self-grounded: every rule that sets an ink
+   sets its ground too, so the gate measures the pair. The WORD carries the meaning; the ink only quiets or raises it —
+   attention for a predicted conflict, tertiary for "partly measured" and "no predicted conflicts". */
+.chip--conflict {
+  display: flex;
+  width: fit-content;
+  max-width: calc(100% - 2 * var(--sp-4));
+  margin: 0 var(--sp-4) var(--sp-2);
+  color: var(--ink-tertiary);
+  background: var(--bg-raised);
+}
+.chip--conflict[data-state='conflict'] {
+  color: var(--status-attention-text);
+  background: var(--bg-raised);
+}
+
 /* — centralised update management W3: SettingsScreen (design 2026-09-20 §13) —
    Its head and column are `PageScaffold`'s since settings Task R2b1 (D-5504):
    `.settings-screen`, `.settings-head` and `.settings-title` retired with the
@@ -3495,9 +3624,12 @@ button.proj-card-pool::before {
    programme to `…` at every width, desktop included. The card now draws both
    forms (`Fit`, SessionMeta.tsx: the full text and the token-shortened one,
    both aria-hidden, the full text spoken once) and the card's own column
-   picks: the shortened form only in a phone-narrow column (226px at 360,
+   picks: the shortened form in a phone-narrow column (226px at 360,
    256px at 390 — the widths the budget was measured at), the full text,
    wrapping at a hyphen or a space, wherever the column is 320px or wider.
+   From the 900px desk breakpoint the media block below takes over: the full
+   form always, a name or branch past two lines ending in the browser's clamp
+   `…` at the end of its second line (D-6332).
    `.sess-body` already sits in a `minmax(0, 1fr)` track, so containing its
    inline size changes nothing about its layout. Layout only: no colour. */
 .sess-body { container: sess-body / inline-size; }
@@ -3508,6 +3640,35 @@ button.proj-card-pool::before {
 @container sess-body (min-width: 320px) {
   .fit-full { display: inline; }
   .fit-short { display: none; }
+}
+
+/* D-6332, desk-rule-not-container-threshold: the container query above never fires at the desk, where the fleet
+   column's track (185px at 1280, Refined) is narrower than a phone's (226px at 360), so a width threshold cannot tell
+   the two apart. From the desk breakpoint the full form of every `Fit` pair draws, and the name and a branch may take
+   two lines, wrapping at their token breaks and cut where the second line ends (the browser's line clamp), so the
+   text fills the track rather than stopping at a fixed 28 characters. A name `shortenByToken` leaves whole (no `Fit`
+   pair: within the budget, or one unbroken token) is the plain `.sess-label`, the button's direct child, and takes
+   the same clamp. A `Fit` pair's full text stays in the row button's `title` and in its accessible name; a plain
+   name has no `title` (it is cut as one unbroken token longer than two lines of its track, and, at the narrowest
+   track, as a name of wide capitals within the budget that needs a third line), and its full text stays
+   in the DOM, which is its accessible name, and in the session header. The programme slug and its
+   wave tail are never clamped: the clamp is named for the name's box and the branch cell alone, and none of them can
+   reach a `.sess-pw` descendant. `overflow-wrap: anywhere` lets a name joined by `_` or `.` (CSS breaks only at
+   hyphens and spaces) wrap inside the box rather than run out of it sideways with no `…`. Below 900px nothing
+   changes. */
+@media (min-width: 900px) {
+  .sess-body .fit-full { display: inline; }
+  .sess-body .fit-short { display: none; }
+  .sess-label-fit,
+  .sess-open > .sess-label,
+  .sess-context[data-context='branch'] {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
 }
 
 /* The banner stack's slot (W2 Task S2c, BannerStack.tsx): no box of its own, so a sticky banner inside it stays
@@ -3522,60 +3683,3 @@ button.proj-card-pool::before {
   justify-content: flex-end;
   margin-bottom: var(--sp-2);
 }
-
-/* The compact gauges (W2 Task S2c, CompactGauges.tsx): one group, one door to /accounts, on the tap floor like the
-   full strip. Layout only: the name's ink is its lane hue, the meter paints itself (meter.tsx). In `bar` and `led`
-   the lanes are one row, one line tall, that wraps and clips: a gauge that does not fit whole wraps out of sight (the
-   door counts it into "+n"), so no gauge shrinks under its floor or paints over its neighbour. */
-.accounts-compact {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  min-width: 0;
-  min-height: var(--tap-min);
-  overflow: hidden;
-  cursor: pointer;
-}
-.accounts-compact-lanes {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: var(--sp-3);
-  min-width: 0;
-  height: 1.5em;
-  overflow: hidden;
-  font-size: var(--fs-2xs);
-  line-height: 1.5;
-}
-.accounts-compact[data-compact='grid'] .accounts-compact-lanes {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-1) var(--sp-3);
-  height: auto;
-}
-.accounts-compact-gauge {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: var(--sp-1);
-  height: 1.5em;
-  min-width: 0;
-}
-/* The floor in `bar` and `led`: a 6ch name, the 40px meter, a 5ch reading ("reset"). A name past 12ch truncates, so
-   a gauge's natural width is bounded and one long name never wraps the rest out. */
-.accounts-compact:not([data-compact='grid']) .accounts-compact-gauge {
-  min-width: calc(6ch + 40px + 5ch + 2 * var(--sp-1));
-}
-.accounts-compact-name { max-width: 12ch; }
-.accounts-compact-pct,
-.accounts-compact-more {
-  flex: none;
-  font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
-}
-.accounts-compact-pct { min-width: 5ch; }
-/* A gauge the measure hid (`hiddenGauges`: wrapped, or cut at the row's edge) is not drawn, and moves nothing, so
-   the measure stays true; its lane is in the "+n". With every placed gauge hidden the "+n" leads (W2 Task S4b). */
-.accounts-compact-gauge[data-clipped] { visibility: hidden; }
-.accounts-compact[data-lanes-hidden] > .accounts-compact-more { order: -1; }

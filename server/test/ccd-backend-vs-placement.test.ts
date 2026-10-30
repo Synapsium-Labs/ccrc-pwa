@@ -21,7 +21,7 @@ import path from 'node:path';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 
 /** A roster in the shape this change exists for: a Codex lane that IS placeable. */
 const roster = parseRoster({ version: 1, accounts: [
@@ -108,7 +108,7 @@ describe('_is_anthropic_backend — the question homeAble was overloaded with', 
 });
 
 describe('the four callers now ask the backend question', () => {
-  const src = readFileSync(CCD, 'utf8');   // ccd is ~17k lines: a spawned cat ENOBUFs
+  const src = ccdSource();   // ccd is ~17k lines: a spawned cat ENOBUFs
   const code = src.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
 
   it('the transcript sanitiser fires on the CROSS-BACKEND hop', () => {

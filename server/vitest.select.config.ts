@@ -92,4 +92,15 @@ if (listFile) {
   };
 }
 
+// The tree-scan capture (D-7455, .github/ci/tree-scanners.mjs): only when `CCRC_TREE_SCANS_OUT` names a file, which
+// ci.yml sets in a full-suite run's server shards. Appended after the base config's setup files (the git scrub stays
+// first), and assigned rather than merged, as `include` is above.
+if (process.env.CCRC_TREE_SCANS_OUT) {
+  const setup = merged.test?.setupFiles;
+  merged.test = {
+    ...merged.test,
+    setupFiles: [...(Array.isArray(setup) ? setup : setup ? [setup] : []), 'test/tree-scans.setup.mjs'],
+  };
+}
+
 export default merged;

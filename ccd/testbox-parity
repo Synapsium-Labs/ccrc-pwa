@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# testbox-parity — the test box's parity check, test box spec §6 (D-7410, D-7416; TB14 runs it before OA-TB2 arms).
+#
+#   testbox-parity [--repo <path>] [--package <dir>] [--workers <n>] [--flaky <file>]... \
+#                  (--pr <number> | --rev <commit>)... -- <command> [<arg>...]
+#
+# For each merged PR (its merge commit, through `gh pr view`) or commit: a FRESH worktree at it, every package with a
+# lockfile installed from the lockfile alone (`npm ci`, the parity reference of spec §2.4), then the same command twice
+# on the same snapshot, both legs with the junit reporter on stdout and the same worker count (`--maxWorkers=<n>`,
+# `--workers`, default 2, the box's CCRC_TESTBOX_WORKERS default):
+#   local — `ccrc test --local` in the worktree's package directory: the slice and the queue, never the box;
+#   box   — the test box client, run directly (agent/dist/agent/src/testbox/client.js), so the leg runs before arming,
+#           with the switch off: the client never reads the switch marker, only the wrapper does.
+# It prints, per file, pass or fail on each side and each side's skipped tests (count and names), and says `agree` or
+# `DIFFERS`; a file named by `--flaky` (the known-load-flake list) that differs is re-run alone on both sides once, and
+# that answer counts. Exit 0 when every file agrees, 1 when one differs or a leg could not run, 2 on a usage error.
+#
+# WHY JUNIT, NOT JSON (D-7561). The box's runner adds its own JSON reporter with `--outputFile.json=` in the run's
+# directory (agent/src/testbox/spec.ts#reporterArgv), and vitest writes every JSON reporter to that file, so a JSON
+# reporter of the session's never reaches stdout on the box; junit on stdout carries per-test skips on both sides.
+#
+# AN OPERATOR TOOL, NOT A SESSION DOOR. The session hook routes sessions to `ccrc test`, whose remote arm obeys the
+# switch; nothing routes a session here. It writes only its own temporary directory and the worktrees it adds (removed
+# before it exits), with the five git location variables scrubbed.
+set -uo pipefail
+
+TP_HERE="${BASH_SOURCE[0]}"
+[[ "$TP_HERE" == */* ]] || TP_HERE="./$TP_HERE"
+TP_HERE="$(cd "${TP_HERE%/*}" && pwd)"
+TP_CLIENT="${TP_HERE%/*}/agent/dist/agent/src/testbox/client.js"
+PROG="testbox-parity"
+
+_tp_usage() {
+  echo "$PROG: $*" >&2
+  echo "usage: testbox-parity [--repo <path>] [--package <dir>] [--workers <n>] [--flaky <file>]... (--pr <n> | --rev <commit>)... -- <command> [<arg>...]" >&2
+  exit 2
+}
+_tp_git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY git "$@"; }
+
+repo="$PWD" pkg=server workers=2
+revs=() flaky=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) [ $# -ge 2 ] || _tp_usage "--repo takes a path"; repo="$2"; shift 2 ;;
+    --package) [ $# -ge 2 ] || _tp_usage "--package takes a directory"; pkg="$2"; shift 2 ;;
+    --workers) [[ "${2:-}" =~ ^[1-9][0-9]?$ ]] || _tp_usage "--workers takes 1 to 99"; workers="$2"; shift 2 ;;
+    --flaky) [ $# -ge 2 ] || _tp_usage "--flaky takes a file"; flaky+=("$2"); shift 2 ;;
+    --pr) [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || _tp_usage "--pr takes a number"; revs+=("pr:$2"); shift 2 ;;
+    --rev) [ $# -ge 2 ] || _tp_usage "--rev takes a commit"; revs+=("rev:$2"); shift 2 ;;
+    --) shift; break ;;
+    *) _tp_usage "unknown argument: $1" ;;
+  esac
+done
+[ $# -gt 0 ] || _tp_usage "missing command"
+[ ${#revs[@]} -gt 0 ] || _tp_usage "name at least one --pr or --rev"
+[ -f "$TP_CLIENT" ] || { echo "$PROG: no test box client at $TP_CLIENT (build agent/ first)" >&2; exit 1; }
+cmd=("$@" --reporter=junit "--maxWorkers=$workers")
+
+TP_TMP=$(mktemp -d "${TMPDIR:-/tmp}/testbox-parity.XXXXXX") || { echo "$PROG: no temporary directory" >&2; exit 1; }
+TP_WTS=()
+_tp_cleanup() {
+  local w
+  for w in ${TP_WTS[@]+"${TP_WTS[@]}"}; do _tp_git -C "$repo" worktree remove --force "$w" >/dev/null 2>&1 || rm -rf -- "$w"; done
+  rm -rf -- "$TP_TMP"
+}
+trap _tp_cleanup EXIT
+
+# The per-file comparison of two junit outputs: `<file>\t<local>\t<box>\t<local skipped>\t<box skipped>\t<verdict>`.
+TP_COMPARE='
+const fs = require("fs");
+const read = (f) => {
+  const out = new Map();
+  const text = fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "";
+  for (const m of text.matchAll(/<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g)) {
+    const attr = (k) => (new RegExp(`\\b${k}="([^"]*)"`).exec(m[1]) || [])[1] || "";
+    const file = attr("classname"), name = attr("name"), body = m[3] || "";
+    const e = out.get(file) || { fail: false, skipped: [] };
+    if (/<(failure|error)\b/.test(body)) e.fail = true;
+    if (/<skipped\b/.test(body)) e.skipped.push(name);
+    out.set(file, e);
+  }
+  return out;
+};
+// `node -e <script> <a> <b>`: the two files are argv[1] and argv[2].
+const [a, b] = [read(process.argv[1]), read(process.argv[2])];
+let differ = 0;
+for (const f of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+  const x = a.get(f), y = b.get(f);
+  const word = (e) => (e === undefined ? "absent" : e.fail ? "fail" : "pass");
+  const sk = (e) => (e === undefined ? "-" : `${e.skipped.length}${e.skipped.length ? " (" + e.skipped.sort().join(", ") + ")" : ""}`);
+  const same = word(x) === word(y) && sk(x) === sk(y);
+  if (!same) differ++;
+  process.stdout.write(`${f}\t${word(x)}\t${word(y)}\t${sk(x)}\t${sk(y)}\t${same ? "agree" : "DIFFERS"}\n`);
+}
+process.exit(differ === 0 ? 0 : 1);
+'
+
+# One leg's junit, from its stdout: the <testsuites> document alone.
+_tp_junit() { awk '/<testsuites/{on=1} on{print} /<\/testsuites>/{on=0}' "$1"; }
+
+_tp_legs() {   # <worktree> <tag> <command>... -> $TP_TMP/<tag>.local.xml and .box.xml; 1 when a leg could not run
+  local wt="$1" tag="$2" v="" id="" text="" rc=0
+  shift 2
+  ( cd "$wt/$pkg" && bash "$TP_HERE/ccrc-test" --local -- "$@" ) > "$TP_TMP/$tag.local.out" 2> "$TP_TMP/$tag.local.err" || :
+  ( cd "$wt/$pkg" && node "$TP_CLIENT" run --verdict "$TP_TMP/$tag.verdict" -- "$@" ) > "$TP_TMP/$tag.box.out" 2> "$TP_TMP/$tag.box.err" || :
+  [ ! -f "$TP_TMP/$tag.verdict" ] || IFS=$'\t' read -r v id text < "$TP_TMP/$tag.verdict"
+  if [ "$v" != remote ]; then
+    echo "$PROG: $tag: the box leg did not run on the box (${text:-no verdict})" >&2; rc=1
+  fi
+  _tp_junit "$TP_TMP/$tag.local.out" > "$TP_TMP/$tag.local.xml"
+  _tp_junit "$TP_TMP/$tag.box.out" > "$TP_TMP/$tag.box.xml"
+  return "$rc"
+}
+
+_tp_compare() { node -e "$TP_COMPARE" "$1" "$2"; }
+
+total=0
+for r in "${revs[@]}"; do
+  rev="${r#*:}"
+  if [ "${r%%:*}" = pr ]; then
+    rev=$(cd "$repo" && gh pr view "${r#pr:}" --json mergeCommit -q .mergeCommit.oid 2>/dev/null) && [ -n "$rev" ] \
+      || { echo "$PROG: PR #${r#pr:}: no merge commit (is it merged?)" >&2; total=$((total + 1)); continue; }
+  fi
+  tag="r${#TP_WTS[@]}"
+  wt="$TP_TMP/wt-$tag"
+  _tp_git -C "$repo" worktree add --detach --quiet "$wt" "$rev" >/dev/null 2>&1 \
+    || { echo "$PROG: $rev: cannot add a worktree" >&2; total=$((total + 1)); continue; }
+  TP_WTS+=("$wt")
+  # The lockfile install, per package (spec §2.4's parity reference; spec §6).
+  for lock in "$wt"/*/package-lock.json; do
+    [ -f "$lock" ] || continue
+    ( cd "${lock%/*}" && npm ci --no-audit --no-fund ) > "$TP_TMP/$tag.install" 2>&1 \
+      || { echo "$PROG: $rev: npm ci in ${lock%/*} failed" >&2; total=$((total + 1)); continue 2; }
+  done
+  echo "== $rev"
+  _tp_legs "$wt" "$tag" "${cmd[@]}" || total=$((total + 1))
+  _tp_compare "$TP_TMP/$tag.local.xml" "$TP_TMP/$tag.box.xml" > "$TP_TMP/$tag.cmp"
+  while IFS=$'\t' read -r f a b sa sb word; do
+    if [ "$word" = DIFFERS ]; then
+      for k in ${flaky[@]+"${flaky[@]}"}; do
+        [ "$k" = "$f" ] || continue
+        # A known-load flake: re-run alone on both sides, once; that answer counts.
+        if _tp_legs "$wt" "$tag.alone" "$@" "$f" --reporter=junit "--maxWorkers=$workers" \
+          && _tp_compare "$TP_TMP/$tag.alone.local.xml" "$TP_TMP/$tag.alone.box.xml" > "$TP_TMP/$tag.alone.cmp"; then
+          word="agree (re-run alone)"
+        fi
+      done
+    fi
+    [ "$word" = DIFFERS ] && total=$((total + 1))
+    printf '%s: local %s, box %s; skipped local %s, box %s; %s\n' "$f" "$a" "$b" "$sa" "$sb" "$word"
+  done < "$TP_TMP/$tag.cmp"
+done
+if [ "$total" -eq 0 ]; then echo "parity: every file agrees"; exit 0; fi
+echo "parity: $total disagreement(s) or leg(s) that could not run"
+exit 1

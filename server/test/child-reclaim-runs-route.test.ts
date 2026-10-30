@@ -178,10 +178,10 @@ describe('GET /api/runs composes the reclaim chip (wave 5, spec §5.9)', () => {
     vi.spyOn(h.watcher, 'currentChildReclaimDefers').mockReturnValue(new Map([[SID, {
       ...childReclaimFirstSighting(5_000, null, id, { kind: 'absent' }),
       firstDeferredAt: T_CLOSE + 9_000,
-      firstPresenceDeferredAt: 35_000,
-      lastPresenceDeferredAt: 35_000,
-      lastPresenceWallAt: T_CLOSE + 30_000,
-      presenceHeldSince: 35_000,
+      firstViewerDeferredAt: 35_000,
+      lastViewerDeferredAt: 35_000,
+      lastViewerWallAt: T_CLOSE + 30_000,
+      viewerHeldSince: 35_000,
       lastAskedAt: 35_000,
     }]]));
     expect(chipOf(await getRuns(h.app), id)).toEqual({ word: 'deferred', sentence: S.sweepDeferred, at: T_CLOSE + 9_000 });

@@ -194,9 +194,12 @@ export async function openCard(page: Page, command: string): Promise<void> {
 
 export interface Moved { before: Reading; after: Reading; scroller: number; boxTop: number; boxLeft: number }
 
-/** Put the pointer over the target's centre, prove it is there, wheel once, and read the settled before and after. */
-export async function wheelOver(page: Page, kind: Kind, dx: number, dy: number): Promise<Moved> {
-  const before = await settle(page, kind);
+/** Put the pointer over the target's centre, prove it is there, wheel once, and read the settled before and after.
+ *  `settled` is the caller's own `settle` reading when it took one just before and nothing has moved since (only reads
+ *  between): that reading is the "before", and a second eight-read window is not waited out (C12 item 11, about
+ *  0.45 s a wheel). Without it the before is settled here. */
+export async function wheelOver(page: Page, kind: Kind, dx: number, dy: number, settled?: Reading): Promise<Moved> {
+  const before = settled ?? await settle(page, kind);
   const box = await page.evaluate(([k]) => {
     const f = (window as unknown as { __c5: { find: (kind: string) => HTMLElement | null } }).__c5.find;
     const el = f(k)!;
@@ -274,7 +277,7 @@ export function tallBox(rig: Rig, view: AppView, t: Tall): Promise<void> {
     expect(start.room.down, `the transcript has room below the ${t.what}`).toBeGreaterThan(400);
 
     // First half: the box has room, so it takes the wheel and the transcript stays.
-    const first = await wheelOver(page, t.kind, 0, 300);
+    const first = await wheelOver(page, t.kind, 0, 300, start);
     expect(first.boxTop, `the ${t.what} moved by ${first.boxTop}px (wanted more than 50)`).toBeGreaterThan(50);
     expect(Math.abs(first.scroller), `the transcript moved by ${first.scroller}px while the ${t.what} had room`).toBeLessThan(2);
 
@@ -296,7 +299,7 @@ export function tallBox(rig: Rig, view: AppView, t: Tall): Promise<void> {
       }, [t.kind] as const);
       const atEnd = await settle(page, t.kind);
       expect(atEnd.room.down, `the transcript still has room below the ${t.what} ${at}`).toBeGreaterThan(400);
-      const second = await wheelOver(page, t.kind, 0, 300);
+      const second = await wheelOver(page, t.kind, 0, 300, atEnd);
       expect(Math.abs(second.boxTop), `the ${t.what} stays at its end ${at}`).toBeLessThan(2);
       expect(second.scroller, `the first wheel moved the transcript by ${second.scroller}px (wanted more than 50) ${at}`).toBeGreaterThan(50);
     }

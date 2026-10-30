@@ -9,6 +9,7 @@ TimeoutStartSec=5400
 # the reference fleet a ~52k-node tree's rebuild peaked at 2.6G and 3.3G when
 # it completed, and was OOM-killed at 4G on most of the 14 kills in a week,
 # each kill costing a ~7-minute build that the next pass retried. A ceiling,
-# not a reservation: with the session slice's aggregate MemoryMax=24G
-# (app-claude-session.slice.d/limits.conf) the two caps still sum to 30G.
+# not a reservation: with the session slice's aggregate MemoryMax (default 24G,
+# set per box by CCRC_SESSION_SLICE_MEMORY_MAX in ~/.ccrc/ccrc.env and rendered
+# into app-claude-session.slice.d/limits.conf) the two caps sum to it plus 6G.
 MemoryMax=6G

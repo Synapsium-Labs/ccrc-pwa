@@ -3,7 +3,8 @@
 //   - the identity of each target it is asked against (`T`);
 //   - the ancestry of a row's resolved spelling and of a recorded entry (`A`, `F`: every prefix stat'd, links followed);
 //   - the m1 link walk of a row's literal spelling (`P`);
-//   - the mount table (`M`) and the birth times (`B`).
+//   - the mount table (`M`) and the birth times (`B`);
+//   - whether a recorded entry's device is one this host's table carries (`D`, a box move).
 // All of it runs under ONE `_plat_timeout` of `WS_RECLAIM_WALK_S`. A walk that does not finish, that fails, or that
 // answers anything but one line per request, one per path and its `end` is unmeasured (rc 2), never "no row".
 // `_ws_ident_compose`, `_ws_ident_eq` and `_ws_path_ident` are the one identity format, the one match rule and the one
@@ -19,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { realMounts } from './wsCollectFixture.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
@@ -129,7 +130,7 @@ const devrelOf = (phys: string): string => {
 /** One function's code lines in ccd: from its `name() {` line to the first line that opens with `}`, with whole-line
  *  comments dropped. This is the call graph's own region rule. */
 const codeOf = (name: string): string => {
-  const ls = fs.readFileSync(CCD, 'utf8').split('\n');
+  const ls = ccdSource().split('\n');
   const at0 = ls.findIndex((l) => l.startsWith(`${name}() {`));
   expect(at0, `the CONTROL: ccd defines ${name}`).toBeGreaterThanOrEqual(0);
   const end = ls.findIndex((l, i) => i > at0 && l.startsWith('}'));
@@ -315,6 +316,44 @@ describe.skipIf(!LINUX)('_ws_reclaim_idwalk — M: the mount table, read inside 
   it('M: a child spelled with a space is compared encoded, as the kernel writes it', () => {
     const c = dir('c d'); realMounts(h); appendLine(MOUNT_LINE(`${c}/m`));
     expect(ask(c).lines[1]).toBe('M 0 hold point');
+  });
+});
+
+describe.skipIf(!LINUX)('_ws_reclaim_idwalk — D: is a recorded device on this host (a box move)', () => {
+  /** glibc's makedev for small numbers: what `stat -c %d` prints for major:minor. */
+  const dev = (major: number, minor: number): string => String(major * 256 + minor);
+  const ask = (d: string, mi = table()): string => walk([['D', 0, d]], { mi }).lines[0] ?? '';
+
+  it('D: the device of a fixture directory answers mounted, or anon on an anonymous one (an overlay root)', () => {
+    const c = dir('c'); realMounts(h);
+    const [maj, min] = majmin(c).split(':').map(Number);
+    expect(ask(dev(maj!, min!))).toBe(maj === 0 ? 'D 0 anon' : 'D 0 mounted');
+  });
+
+  it('D: a real device no line carries answers absent, and one line naming it answers mounted', () => {
+    realMounts(h);
+    const seen = new Set(tableLines().map((l) => l.split(' ')[2]));
+    let minor = 250; while (seen.has(`8:${minor}`)) minor -= 1;
+    expect(ask(dev(8, minor))).toBe('D 0 absent');
+    appendLine(`9997 1 8:${minor} / /zz-w3-elsewhere rw,relatime - ext4 /dev/zz rw`);
+    expect(ask(dev(8, minor))).toBe('D 0 mounted');
+  });
+
+  it('D: an anonymous device (major 0) answers anon, listed or not', () => {
+    realMounts(h);
+    expect(ask(dev(0, 77))).toBe('D 0 anon');
+  });
+
+  it('D: no table, an empty one, a malformed one, or a number that is not one answers un, never absent', () => {
+    realMounts(h);
+    expect(walk([['D', 0, dev(8, 1)]]).lines[0], 'mi empty').toBe('D 0 un unreadable');
+    expect(ask(dev(8, 1), path.join(h.home, 'no-such-table'))).toBe('D 0 un unreadable');
+    expect(ask('x1'), 'not a number').toBe('D 0 un error');
+    expect(ask('9'.repeat(25)), 'too long to be a device').toBe('D 0 un error');
+    appendLine('not a mount line');
+    expect(ask(dev(8, 1))).toBe('D 0 un malformed');
+    fs.writeFileSync(table(), '');
+    expect(ask(dev(8, 1))).toBe('D 0 un empty');
   });
 });
 
@@ -575,7 +614,7 @@ describe('the walk and the identity helpers, by their source', () => {
   });
 
   it('WS_RECLAIM_WALK_S is defined once, at 5 s', () => {
-    expect([...fs.readFileSync(CCD, 'utf8').matchAll(/^WS_RECLAIM_WALK_S=(\d+)\b/gm)].map((m) => m[1])).toEqual(['5']);
+    expect([...ccdSource().matchAll(/^WS_RECLAIM_WALK_S=(\d+)\b/gm)].map((m) => m[1])).toEqual(['5']);
   });
 
   it('the walk reads only the table its caller names: no /proc/self/mountinfo, no _ws_collect_mountinfo', () => {

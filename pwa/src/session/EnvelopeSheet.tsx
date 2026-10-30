@@ -5,32 +5,35 @@
 // D-6325: this is the ONE renderer of Claude's own question. `askSource` hands it the questions from the hook's envelope
 // (`from: 'hook'`) or, once that has aged out, the transcript's copy (`from: 'transcript'`), which carries an option's
 // `preview` too; a question the app cannot read says so and offers the terminal (`DialogSheet`'s `ask-unreadable`), and
-// the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSheet`
-// (`AskParts.tsx`) once for every kind of surface, with the header and the title worked out there (`shownQuestion`), and
-// this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
+// the scraped sheet that used to take over is gone. It draws no drawer of its own: `DialogSheet` renders `AskSurface`
+// (`AskSurface.tsx`: the Sheet below 900, an inline card at the desk, D-6326) once for every kind of surface, with the
+// header and the title worked out there (the wire's `pairing`, D-7184), and this is what goes inside it. The review screen is rendered by `DialogSheet` for every source of copy, so it is not here.
 //
 // `TerminalCta` is written once, here, and `DialogSheet` imports it for its `ask-unreadable` and `terminal-only` surfaces:
 // copy written twice drifts in a way no type catches.
 //
 // The classes stay `dlg-*`: chat.css grounds them and these are their only consumers. The shape moves, the ground stays.
-import { Fragment } from 'react';
+import { Fragment, useContext } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, DialogTabTarget } from '../../../shared/api';
 import { parseAskTabs } from '../../../shared/ask-menu';
 import { Button, OptionRow } from '@ccrc/ui';
-// C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
-// `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
+import { AskContainer } from './AskSurface';
+// C1's correspondence check (D-5089) is the SERVER's since D-7184 (`server/src/pane/askPairing.ts`): it applies it to
+// EVERY question of the envelope, the title only breaking a tie, and this content reads the answer (`view`).
 import { chatRow, freeTextSlot, headerTab, optionCopy, tabChips, type AskQuestions, type ShownQuestion } from './askLive';
 import {
   AskTabs, ChatRow, FOOT_PLAIN, FOOT_WITH_OTHER, MultiPick, OptionPreview, OtherQuestions, OwnWords,
-  SEVERAL_ANSWERS, keyed, lit, ownWordsRow, picksBusy, recommendedTag, wordsBusy,
+  SEVERAL_ANSWERS, keyed, lit, ownWordsRow, recommendedTag,
   type Picks, type Words,
 } from './AskParts';
 import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askKeys';
-import { useAskKeys } from './useAskKeys';
+import { answeringOption, busy as busyOf, inFlight, isDenying, type AnswerState } from './answerLifecycle';
+import { useAskKeys, type AskEngagement } from './useAskKeys';
 import './chat.css';
 
-/** The way out of a question this app cannot answer: open the terminal, or not now.
+/** The way out of a question this app cannot answer: open the terminal, or "Not now". "Not now" is the SHEET's only: the inline card
+ *  drops it through `AskContainer` (it covers nothing, so it has nothing to put off), and "Open terminal to answer" stays.
  *
  *  THREE CALL SITES, and none is a near-copy: this content's own dead end (a question that does not match the pane yet,
  *  an approval it cannot send), and `DialogSheet`'s `ask-unreadable` and `terminal-only` surfaces. "Open terminal to
@@ -38,14 +41,18 @@ import './chat.css';
  *  callers': this content gates the whole of its handler on a send in flight (see `openTerminal` below), while the
  *  controller's two surfaces hide the sheet and go, and those are different things on purpose. */
 export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: () => void }): ReactNode {
+  // D-6326: the inline card covers nothing, so it has nothing to put off: "Not now" is the sheet's dismissal alone.
+  const inline = useContext(AskContainer) === 'inline';
   return (
     <div className="dlg-actions">
       <Button variant="primary" onClick={onOpen}>
         Open terminal to answer
       </Button>
-      <button type="button" className="dlg-later" onClick={onLater}>
-        Not now
-      </button>
+      {!inline && (
+        <button type="button" className="dlg-later" onClick={onLater}>
+          Not now
+        </button>
+      )}
     </div>
   );
 }
@@ -60,8 +67,8 @@ export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: 
  * Fail-visible: `onSelectOption` IS the controller's `answer()`, passed down verbatim, so a tap here walks the live pane
  * exactly as every other surface's option tap does, and that walk needs `dialog` (it re-parses the PANE, which the
  * envelope has none of its own). `dialog` can be non-null and still describe a DIFFERENT question than this one, so
- * `canAnswer` below is a real correspondence check (`questionCorresponds` for questions, a Yes-first check for an
- * approval), not a bare null check. Numbered options and Allow (the same call at index 1) are tappable only when `dialog`
+ * `canAnswer` below is a real correspondence check (the server's `questionCorresponds`, read as the pairing's `live`
+ * since D-7184, for questions, a Yes-first check for an approval), not a bare null check. Numbered options and Allow (the same call at index 1) are tappable only when `dialog`
  * is non-null, parsed, AND describes the same thing; otherwise they render visibly disabled behind the "Open terminal to
  * answer"/"Not now" CTA. Deny has no such dependency: Escape has no option index to walk to, so the controller sends
  * `api.interrupt` for it (the same call SessionScreen's stop button makes), and it stays enabled regardless of `dialog`.
@@ -71,8 +78,7 @@ export function EnvelopeSheet({
   view,
   from = 'hook',
   dialog,
-  answering,
-  denying,
+  life,
   gap,
   words,
   picks,
@@ -81,14 +87,16 @@ export function EnvelopeSheet({
   onSelectOption,
   onDeny,
   onOpenTerminal,
-  tabbing = false,
   picksHeld = false,
   onTab,
+  engagement,
 }: {
   /** What `askSource` says to show: a permission request, or Claude's own questions (D-6325). */
   ask: { approval: { tool: string; summary: string } } | AskQuestions;
-  /** Which of the questions is showing (`shownQuestion`), worked out by the controller because the container's header
-   *  reads it too; null for an approval. */
+  /** Which of the questions is showing: the wire's pairing as the controller read it (D-7184, `askLive.ts#pairingFor`),
+   *  or its constant unplaced view with no dialog (D-7213), worked out by the controller because the container's header
+   *  reads it too; null for an approval. The controller never hands an unpaired question here: that is the terminal
+   *  door. */
   view: ShownQuestion | null;
   /** Where the questions came from: the hook's envelope, or the transcript's copy once that has aged out. Only the
    *  wrapper's `data-source` says which; the surface is the same. */
@@ -97,11 +105,10 @@ export function EnvelopeSheet({
    *  null means the question showed up with no matching live pane menu yet
    *  (or it moved on) — read-only until one appears. */
   dialog: Dialog | null;
-  /** The controller's in-flight option index — shared so every numbered-option
-   *  tap disables the same rows. */
-  answering: number | null;
-  /** Deny's interrupt is in flight (held by the controller, the one sender). */
-  denying: boolean;
+  /** The controller's answer lifecycle (`answerLifecycle.ts`, D-7183), the one record of what is in flight: an option's
+   *  answer (shared so every numbered-option tap disables the same rows), Deny's interrupt, an own-words send, a
+   *  multiSelect commit and a tab move. This content keeps no in-flight flag of its own. */
+  life: AnswerState;
   /** The connection is not live (`DialogSheet`'s gap, D-6325): every control that sends is disabled. A flag of its own, not
    *  part of `busy`, which also refuses the dismissal and the way to the terminal; the Other field stays as it is. */
   gap: boolean;
@@ -117,22 +124,25 @@ export function EnvelopeSheet({
   /** Decline an approval: the controller's `deny` (`api.interrupt`'s literal Escape). */
   onDeny: () => void;
   onOpenTerminal?: () => void;
-  /** Decision `ask-dialog-tab-route`: a tab move is under way (held by the parent, which sends it). */
-  tabbing?: boolean;
   /** The boxes were changed here and not committed, so a tab move waits (`picksUncommitted`). */
   picksHeld?: boolean;
   /** Move the pane to another tab: `prev`/`next`, `submit`, or question tab k with `from` the tab showing (1-based). */
   onTab?: (to: DialogTabTarget, from?: number) => void;
+  /** The ask's one keyboard engagement (R64), held by the controller and shared with its own keys (the review's, a menu's),
+   *  so the keys stay engaged from this question to the review and back. Absent, the inline focus rule never moves focus. */
+  engagement?: AskEngagement;
 }): ReactNode {
   // Every send disables the same buttons and gates the dismissal: an option's answer, Deny (held by the controller, which
   // sends it), an own-words send and a multiSelect commit, and a tab move. The open sheet is the only honest record that
   // a tap is still landing.
-  const sendingWords = wordsBusy(words.call);
-  const picking = picksBusy(picks.call);
-  const busy = answering !== null || denying || sendingWords || picking || tabbing;
+  // Each partial lock below names the sends it leaves out (a row's own send does not lock that row's own controls).
+  const busy = busyOf(life);
+  const answering = answeringOption(life);
+  const denying = isDenying(life);
   // D-5089: WHICH question, before anything about it. The hook writes every question of an ask at once and keeps the
   // envelope until the tool call ends, while the pane paints one question at a time and then the review screen. So
-  // the sheet answers the question the PANE is painting (`liveQuestion`: labels first, a unique correspondence winning
+  // the sheet answers the question the PANE is painting (the pairing's `live`, D-7184, the server's rule: labels first,
+  // a unique correspondence winning
   // on its own, the title breaking only a tie), not `questions[0]`. The review is told first (`askSource`, D-6325:
   // `DialogSheet` renders it and this sheet never sees it), because a question whose labels happen to read like its
   // two rows must never be taken for it. `shown` is what the sheet displays: the live question, else the one the pane's
@@ -165,7 +175,8 @@ export function EnvelopeSheet({
   const severalAnswers = questions !== null && named !== null && live === null
     && questions.questions[named]!.multiSelect === true;
   // C1: a real correspondence check, not a null check — see fix round 3 in
-  // the file header and `questionCorresponds` (`askLive.ts`). Approval and questions
+  // the file header and `questionCorresponds` (the server's, `pane/askPairing.ts`, read as the pairing since D-7184).
+  // Approval and questions
   // use different rules because they answer differently: Allow always types
   // index 1, so the one thing that has to be true is that index 1 on the
   // pane reads like "Yes" (the file's longstanding assumption, now asserted
@@ -236,6 +247,7 @@ export function EnvelopeSheet({
     onTab: (to) => onTab?.(to),
     // The free-text row's digit chooses `Other` (D-6325, R5): the field opens under it.
     onWords: () => words.onOpen(questions === null ? '' : questions.questions[shown]!.question),
+    engagement,
   });
   // D-6325, R3: the chips carry Claude's own headers, the pane's tab row only the count and the marks; no strip unless
   // the pane paints one tab per question (a transcript copy of one question therefore draws one only on a one-tab row).
@@ -351,7 +363,7 @@ export function EnvelopeSheet({
           dialogId={pane.id}
           copy={q.options}
           picks={picks}
-          locked={answering !== null || sendingWords || tabbing}
+          locked={busyOf(life, ['multi', 'deny'])}
           gap={gap}
           keys={keys}
         />
@@ -379,7 +391,7 @@ export function EnvelopeSheet({
                     label={label}
                     tag={recommendedTag(recommended)}
                     sublabel={o.description}
-                    disabled={!canAnswer || gap || answering !== null || sendingWords || picking || tabbing}
+                    disabled={!canAnswer || gap || busyOf(life, ['deny'])}
                     busy={waiting}
                     onClick={() => onSelectOption(idx)}
                     marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
@@ -391,13 +403,13 @@ export function EnvelopeSheet({
             })}
             {/* `Other`, through the pane's free-text row (D-5090, D-6325): the last row of the list, the field and Send
                 under it once chosen. A send under way stays on screen even if the pane stops matching mid-call. */}
-            {(pane !== null || sendingWords) && (
+            {(pane !== null || inFlight(life).has('text')) && (
               <OwnWords
                 slot={slot}
                 chat={chat !== undefined}
                 words={words}
                 question={q.question}
-                locked={answering !== null || picking || tabbing}
+                locked={busyOf(life, ['text', 'deny'])}
                 gap={gap}
                 keys={keyScreen === null ? undefined : keys}
               />

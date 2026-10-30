@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
 import { EXP_ID, expireToken, expireVerb, makeArchived } from './wsExpireFixture.js';
@@ -245,7 +245,7 @@ describe('the scan: no call of the drop in ccd/ccd discards its answer with `|| 
     ];
     expect(swallowed(planted.join('\n')), 'the CONTROL: it finds a planted one of each spelling, and passes a comment and a read answer')
       .toEqual([planted[0], planted[1]]);
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const calls = src.split('\n').filter((l) => !/^\s*#/.test(l) && l.includes('_ws_tmproot_witness_drop "$id"'));
     expect(calls.length, 'the CONTROL: the scan reads the three callers').toBeGreaterThanOrEqual(3);
     expect(swallowed(src), 'a drop call that swallows its answer').toEqual([]);

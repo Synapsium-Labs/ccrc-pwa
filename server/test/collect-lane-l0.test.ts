@@ -54,7 +54,7 @@ const DECLARATIONS: readonly string[] = [
   '^export interface CollectLaneConfirmRequired\\b',
 ];
 
-/** `peers-claims-l0.test.ts`'s ten lines. The block adds none. */
+/** `peers-claims-l0.test.ts`'s eleven lines (the eleventh is the host-pressure block, #1170). The block adds none. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
@@ -66,6 +66,7 @@ const IMPORTS = [
   "import type { AccountStateAnswer, LaneState } from './accounts.js';",
   "import type { DiskHealth } from './disk.js';",
   "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
+  "import type { HostPressureHealth } from './pressure.js';",
 ];
 
 describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () => {

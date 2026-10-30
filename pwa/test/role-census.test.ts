@@ -246,6 +246,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,
     '.shell-accounts .acct-pct': META,
+    '.shell-accounts .acct-win': META,
+    '.shell-accounts .acct-reset': META,
+    '.shell-accounts .acct-unread': META,
   },
   'chat.css': {
     '.chat-coord': META,
@@ -278,6 +281,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
   },
   // The transcript's tool rows live in @ccrc/ui's sheet, not chat.css (D-5463).
   'tool-card.css': {
+    // The word `failed` on an errored call's row (T4a, D-6387): a status word beside the dot, the same role as the
+    // row's other meta text.
+    '.tool-fail': META,
     '.tool-sum': META,
     '.tool-dur': META,
     '.tool-chev': META,

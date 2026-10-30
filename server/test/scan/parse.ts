@@ -291,6 +291,164 @@ export function scheduleFacts(p: ParsedFile): ScheduleFacts {
   return out;
 }
 
+/** D-7227 (ARCH-44; plan 2026-10-27-consolidation-arch44-retire.md, C4h): the retire censuses' facts of one parsed file,
+ *  read by a walk of their own (as `wireFacts` and `scheduleFacts` are), kept out of `ParsedFile` so the shared walk
+ *  stays unchanged. Syntax only. Offsets are into `ParsedFile.text`. */
+export interface RetireArrayElement {
+  /** The element's source text, as written. */
+  text: string;
+  start: number;
+  end: number;
+  /** The element's object literal (through `as`, `satisfies` and parentheses), else `null`. */
+  literal: RetireLiteral | null;
+}
+
+/** One member of an object literal. `name` is `null` for a computed name or a spread. `kind`: `method` for a method
+ *  (or accessor) declaration, `shorthand` for `{ a }`, `arrow` for a value that is an arrow or a function expression,
+ *  `property` for anything else (a spread included). `async` is true when its value (or the method) is an `async`
+ *  function. `elements` lists an array value's elements, else `null`; `literal` is an object-literal value (through
+ *  `as`, `satisfies` and parentheses), else `null`. */
+export interface RetireLiteralProperty {
+  name: string | null;
+  kind: 'property' | 'arrow' | 'method' | 'shorthand';
+  async: boolean;
+  start: number;
+  end: number;
+  elements: RetireArrayElement[] | null;
+  literal: RetireLiteral | null;
+}
+
+/** An object literal: its span and its members, in source order. */
+export interface RetireLiteral {
+  start: number;
+  end: number;
+  properties: RetireLiteralProperty[];
+}
+
+/** A top-level function's (or function-valued `const`'s) signature: each parameter's type annotation text (`null` when
+ *  it has none), each parameter's name (`null` for a destructured one), the declared return type's text (`null` when
+ *  none is declared), and its type parameters' text (`T extends A, U`; `null` when it has none). */
+export interface RetireSignature {
+  name: string;
+  params: Array<string | null>;
+  paramNames: Array<string | null>;
+  returnType: string | null;
+  typeParams: string | null;
+  start: number;
+  end: number;
+}
+
+/** A top-level `type X = …`, exported or not, with its right-hand side's text and its type parameters' text (`null`
+ *  when it has none), so a constraint (`<T extends A>`) is read as the alias names it. */
+export interface RetireAlias {
+  name: string;
+  exported: boolean;
+  text: string;
+  typeParams: string | null;
+}
+
+export interface RetireFacts {
+  /** Every object literal that initialises a top-level `const` (through `as`, `satisfies`, parentheses or a type
+   *  annotation), keyed `<const>`, or is the operand of a `return` in a top-level function (a declaration, or a `const`
+   *  arrow or function expression, an expression body included), keyed `<function>#return`. KNOWN WIDTH: only a
+   *  function's FIRST object-literal return is kept, and a return inside a nested function is not its own. */
+  literals: Record<string, RetireLiteral>;
+  /** Every top-level function declaration and function-valued `const`, by name. */
+  signatures: Record<string, RetireSignature>;
+  /** Every top-level type alias, by name. */
+  aliases: Record<string, RetireAlias>;
+}
+
+/** The retire censuses' facts of `p` (D-7227). */
+export function retireFacts(p: ParsedFile): RetireFacts {
+  const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true, scriptKindOf(p.path));
+  const out: RetireFacts = { literals: {}, signatures: {}, aliases: {} };
+  const unwrap = (e: ts.Expression): ts.Expression => {
+    let n = e;
+    while (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isSatisfiesExpression(n)
+      || ts.isTypeAssertionExpression(n)) n = n.expression;
+    return n;
+  };
+  const isAsync = (n: ts.Node): boolean =>
+    ts.canHaveModifiers(n) && (ts.getModifiers(n) ?? []).some((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
+  const literalOf = (e: ts.Expression | undefined): RetireLiteral | null => {
+    if (e === undefined) return null;
+    const n = unwrap(e);
+    return ts.isObjectLiteralExpression(n) ? readLiteral(n) : null;
+  };
+  const readLiteral = (o: ts.ObjectLiteralExpression): RetireLiteral => {
+    const properties: RetireLiteralProperty[] = [];
+    for (const m of o.properties) {
+      const start = m.getStart(sf);
+      const base = { start, end: m.end };
+      if (ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) {
+        properties.push({ ...base, name: nameText(m.name), kind: 'method', async: isAsync(m), elements: null, literal: null });
+      } else if (ts.isShorthandPropertyAssignment(m)) {
+        properties.push({ ...base, name: m.name.text, kind: 'shorthand', async: false, elements: null, literal: null });
+      } else if (ts.isPropertyAssignment(m)) {
+        const v = unwrap(m.initializer);
+        const fn = isFunctionValue(v);
+        const elements = ts.isArrayLiteralExpression(v)
+          ? v.elements.map((el) => ({ text: el.getText(sf), start: el.getStart(sf), end: el.end, literal: literalOf(el) }))
+          : null;
+        properties.push({ ...base, name: nameText(m.name), kind: fn ? 'arrow' : 'property', async: fn && isAsync(v),
+          elements, literal: literalOf(v) });
+      } else {
+        properties.push({ ...base, name: null, kind: 'property', async: false, elements: null, literal: null });
+      }
+    }
+    return { start: o.getStart(sf), end: o.end, properties };
+  };
+  /** The first object-literal `return` operand of a function body, nested functions excluded. */
+  const firstReturn = (body: ts.Node): RetireLiteral | null => {
+    let found: RetireLiteral | null = null;
+    const visit = (n: ts.Node): void => {
+      if (found !== null || ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+      if (ts.isReturnStatement(n) && n.expression !== undefined) found = literalOf(n.expression);
+      if (found === null) ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(body, visit);
+    return found;
+  };
+  const typeParamsOf = (tps: ts.NodeArray<ts.TypeParameterDeclaration> | undefined): string | null =>
+    tps === undefined || tps.length === 0 ? null : tps.map((t) => t.getText(sf)).join(', ');
+  const signatureOf = (name: string, fn: ts.SignatureDeclarationBase, whole: ts.Node): RetireSignature => ({
+    name,
+    params: fn.parameters.map((x) => x.type?.getText(sf) ?? null),
+    paramNames: fn.parameters.map((x) => (ts.isIdentifier(x.name) ? x.name.text : null)),
+    returnType: fn.type?.getText(sf) ?? null,
+    typeParams: typeParamsOf(fn.typeParameters),
+    start: whole.getStart(sf),
+    end: whole.end,
+  });
+  for (const st of sf.statements) {
+    if (ts.isTypeAliasDeclaration(st)) {
+      out.aliases[st.name.text] = { name: st.name.text, exported: isExported(st), text: st.type.getText(sf),
+        typeParams: typeParamsOf(st.typeParameters) };
+    } else if (ts.isFunctionDeclaration(st) && st.name !== undefined) {
+      out.signatures[st.name.text] = signatureOf(st.name.text, st, st);
+      const lit = st.body === undefined ? null : firstReturn(st.body);
+      if (lit !== null) out.literals[`${st.name.text}#return`] = lit;
+    } else if (ts.isVariableStatement(st)) {
+      const isConst = (st.declarationList.flags & ts.NodeFlags.Const) !== 0;
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name) || d.initializer === undefined) continue;
+        const name = d.name.text;
+        const v = unwrap(d.initializer);
+        if (isFunctionValue(v)) {
+          out.signatures[name] = signatureOf(name, v, st.declarationList.declarations.length === 1 ? st : d);
+          const lit = ts.isBlock(v.body) ? firstReturn(v.body) : literalOf(v.body);
+          if (lit !== null) out.literals[`${name}#return`] = lit;
+        } else if (isConst) {
+          const lit = literalOf(d.initializer);
+          if (lit !== null) out.literals[name] = lit;
+        }
+      }
+    }
+  }
+  return out;
+}
+
 const unionLiterals = (t: ts.TypeNode): string[] | null => {
   const members = ts.isUnionTypeNode(t) ? [...t.types] : [t];
   const out = members.map(literalText);

@@ -16,7 +16,8 @@ import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { workflowsFrame, type Proc } from './workflows/model.js';
 import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
-import type { Dialog, DialogAsk, DialogMulti, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { framePairing } from './pane/askPairing.js';
+import type { Dialog, DialogAsk, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
@@ -77,7 +78,8 @@ export class SessionStream implements FeedSubscriber {
   private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
   /** `applyHook`'s keep decision for an aged envelope (D-6324). */
   private agedKeep: AgedKeep = NO_AGED_KEEP;
-  /** The feed's last look at the pane failed and held the menu (under FAILED_CAPTURES_CLEAR): no reading (D-6324). */
+  /** The feed's last look at the pane this stream judged: whether it failed and held the menu (under
+   *  FAILED_CAPTURES_CLEAR). An early return in `applyDialog` keeps the previous reading's value (D-6324). */
   private captureHeld = false;
   /** The session's one reader of the pane, the plan, the hookstate and the mail (ARCH-52); null until `start()`. */
   private feed: SessionFeed | null = null;
@@ -144,6 +146,11 @@ export class SessionStream implements FeedSubscriber {
    *  (fixing round 1, I1): `ask_cleared` at minimum, confirming to a
    *  possibly-stale client that there is truly nothing pending. */
   private lastAskJson: string | null | undefined = undefined;
+  /** D-7031: the envelope and the dialog this stream last SENT (an `ask` frame's wire envelope, a `dialog` frame's
+   *  dialog), the two sides of the `pairing` field (`paired`). Each is null after its `_cleared` frame and before its
+   *  first frame. Recorded as sent, never read back for a gate: no frame is added, dropped or reordered for them. */
+  private sentAsk: HookAsk | null = null;
+  private sentDialog: Dialog | null = null;
   /** One memo per stream (§5.4): steady state is ONE stat per tick for this
    *  session, and a session with nothing at any exact address pays for a full
    *  search on a back-off rather than every two seconds. */
@@ -211,7 +218,8 @@ export class SessionStream implements FeedSubscriber {
     this.seenDialog = seen;
     if (!msg) return;
     console.log(dialogFrameLine(this.id, msg, from, startedAt === null ? null : Date.now() - startedAt));
-    this.send(msg);
+    this.sentDialog = msg.type === 'dialog' ? msg.dialog : null;
+    this.send(this.paired(msg));
   }
 
   constructor(
@@ -572,7 +580,25 @@ export class SessionStream implements FeedSubscriber {
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
     // D-5298 (spec §6.7): an approval's summary leaves redacted (`wireHookAsk`); the key is the envelope's own.
-    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask: wireHookAsk(ask), key: askKey(ask) });
+    this.sentAsk = ask === null ? null : wireHookAsk(ask);
+    // D-7211: the clear goes through `paired` too, so it carries the transcript copy's pairing when the last-sent dialog
+    // has a copy, and is today's bare frame otherwise.
+    this.send(this.paired(this.sentAsk === null ? { type: 'ask_cleared' } : { type: 'ask', ask: this.sentAsk, key: askKey(ask) }));
+  }
+
+  /** D-7031: `msg` with the pairing of the envelope and the dialog this stream last sent (`pane/askPairing.ts`), as an
+   *  optional TOP-LEVEL `pairing` field: an `ask` frame against the last dialog, a `dialog` frame against the last
+   *  envelope, an `ask_cleared` frame (no envelope) against the last dialog (D-7211). The rule is `framePairing`'s
+   *  (D-7206, D-7213): the hook's usable question envelope, else the dialog's transcript copy (`from: 'transcript'`),
+   *  else none. `msg` itself, key for key, when it pairs nothing (no dialog, an approval, no source), so such a frame
+   *  is byte for byte what it was; `dialog_cleared` never pairs. It rides a frame already being sent and never causes
+   *  one. */
+  private paired(msg: SessionStreamMsg): SessionStreamMsg {
+    if (msg.type !== 'ask' && msg.type !== 'dialog' && msg.type !== 'ask_cleared') return msg;
+    const ask = msg.type === 'ask' ? msg.ask : msg.type === 'ask_cleared' ? null : this.sentAsk;
+    const dialog = msg.type === 'dialog' ? msg.dialog : this.sentDialog;
+    const pairing = framePairing(ask, dialog);
+    return pairing === null ? msg : { ...msg, pairing };
   }
 
   stop(): void {

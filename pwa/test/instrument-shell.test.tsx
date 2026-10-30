@@ -16,6 +16,11 @@
 //   Wordmark removed from TopBar ....................... skin-boundary (a)
 //   a hex in instrument.css ............................ skin-boundary (c)
 //
+// Desktop polish G3 (D-7333): status mode draws `statusView`'s groups (statusGroups.ts); the skin scan below holds over the
+// new FleetTable. MUTATION TABLE (RUN, on the working tree, this suite alone, then restored from a saved copy, sha checked;
+// the task's other 36 rows are status-programmes.test.tsx's header):
+//   FleetTable holding Needs you open by `s.bucket === 'attention'` itself  "the status bar renders fleetSummary" (the skin scan)
+//
 // W2 Task T2e (desk-polish, D-6335): the frame's fourth track, the list column's one head, the pool-lag readout.
 // MUTATION TABLE (plan Task T2e Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
 //   the fourth track unconditional ..................... "the fourth-track attribute follows the set's Inspector part, whatever its id"
@@ -38,19 +43,203 @@
 //   `FleetHead`'s nothing-to-draw `return null` removed  "…and there is no head when they agree", "Refined at 1280 on an empty fleet with no lag draws no …", T2e's census case
 //   Refined's `Sidebar` passes `headCount={false}` ..... "Refined's desk column keeps its count line"
 //   the flag removed and `@media (min-width: 900px) { .shell-nav .fleet-count { display: none } }` in instrument.css
-//                                                       skin-boundary (j) "holds on the real tree" (and three of its siblings, which scan the real sheet), and
-//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …"
+//                                                       seven red cases (measured, T2f R51 F5), four in skin-boundary.test.ts, all under (j) "no skin stylesheet hides by width":
+//                                                         "holds on the real tree", "display: none under @container is red",
+//                                                         "a pseudo-element is exempt, but not when an element shares its selector list" and
+//                                                         "hiding outside a width block is not this case's" (the last three scan the real sheet too); and three here:
+//                                                         T2e's "at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors",
+//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …" and
+//                                                         "at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree"
 // Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
-// Rows 1, 4 and 7 also run in browser/instrument-desk.browser.test.ts (its own table).
+// Rows 1 and 4 also run in browser/instrument-desk.browser.test.ts (its own table); row 7 (`.ins-status-summary { max-width: 6ch }`, the plan's row 7) runs only there.
+//
+// W2 Task T2f (D-6371): Instrument's desk column draws no runs row; Refined keeps its own at every width (review 1117, A2).
+// MUTATION TABLE (RUN, each mutant on the working tree, this suite alone, then restored from a saved copy; the rows that
+// guard Instrument's side are in instrument-list.test.tsx and fleet-class-chooser.test.tsx):
+//   Refined's `Sidebar` passes `runsLine={false}` ...... "Refined keeps its runs row at every width (T2f, D-6371)"
+//                                                         (`900px: runs lines: expected  to have a length of 1 but got +0`; the 390 and 899 rounds pass first)
+//
+// Desk polish S5b (D-6530): the lanes fold.
+// MUTATION TABLE (plan Task S5b Step 3; the whole table RUN at 182d2ac58, whose pwa/ tree is fix round 1's last code commit
+// (856076c2e) unchanged, and the flyout rows (the R120 `strip-hover-flyout` block, the Escape and flyout-name rows, fix round 2's)
+// RUN again at dbe5e0506, whose pwa/ tree is fix round 2's last code commit (d51cbc7c1) unchanged; below, "182d2ac58" and
+// "d51cbc7c1" name those two runs; bounded and hash-checked; the logs are kept outside the repo. Each mutant was applied to the working tree as one
+// exact-once replacement and restored from a saved copy with its sha256 checked; the named jsdom suite(s) alone, and
+// browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too where a row names one; then reverted.
+// At 182d2ac58: 75 mutants run, 75 red, none survived, none invalid. At d51cbc7c1: 33 mutants run, 33 red, none survived, none
+// invalid. The counts "of 70" and "of 26" are the browser files' sizes at 182d2ac58, "of 72" lanes-row's at d51cbc7c1; the flyout rows
+// below carry the d51cbc7c1 figures, the other rows the 182d2ac58 ones):
+//   fold when it would hide one lane (`count + 1`; at the desk, the line folding when one lane would overflow)
+//                                                       strip-fold "it never folds to hide a single lane: five lanes show all five", "foldable is false at five lanes
+//                                                         and true at six, folded or expanded", "one rule at every width: …"
+//   `foldable` read from `hidden.length` ............... strip-fold "foldable is false at five lanes and true at six, folded or expanded", "expanded shows every lane, in the same order"
+//   the shown lanes taken from the end ................. strip-fold "…the fold shows the freest four, in lanesByFree's order…", "six lanes fold to four and +2"; refined-phone
+//                                                         "at 390 with 17 lanes the phone header shows four cards and '+13 more · …'"
+//   expired and never-read lanes hidden whatever their position
+//                                                       strip-fold "the fold hides by position, never by state: …"
+//   the attention counts dropped from the words ........ strip-fold "+n more counts the hidden lanes that need you: …"
+//   a critical lane (above 75%) counted ................ strip-fold "a hidden lane that is only critical is not counted"
+//   a sign-in-expired lane at its limit counted under both
+//                                                       strip-fold "a lane counts once, sign-in expired first"
+//   a never-read lane counted as needing you ........... strip-fold "a never-read lane is hidden but not counted as needing you"
+//   "sign-in expired" retyped in `stripFold.ts` ........ strip-fold "the words take SIGN_IN_EXPIRED and the state word"
+//   the limit re-tested inline instead of `stateWordFor` strip-fold "the words take SIGN_IN_EXPIRED and the state word"
+//   `FOLD_SHOWN` used at the desk too .................. strip-fold "a desk folds to one card fewer than rowFit's tracks, the last track the end cell's", "one rule at every width: …";
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
+//   the end cell's track not left (`foldShown(true, t)` is `t`)
+//                                                       strip-fold "a desk folds to one card fewer than rowFit's tracks, …", "one rule at every width: …";
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
+//   a width query in `stripFold.ts` .................... strip-fold "stripFold.ts reads no layout"
+//   `rowFit` without the gap added back ................ strip-fold "rowFit counts the tracks one line holds: …"
+//   an unmeasured row read as one card (width 0 -> 1) .. strip-fold "an unmeasured desk row folds nothing: every lane, no control"
+//   the floor's figure kept in `shell.css` ............. strip-fold "the card's floor is LANE_CARD_MIN, once"
+//   `--lane-card-min: 260px` in the strip's rule ....... strip-fold "the card's floor is LANE_CARD_MIN, once: every lanes-row rule in shell.css reads the token, and none writes the figure"
+//   `minmax(260px, 1fr)` in the flyout's rule .......... strip-fold, the same case (fix round 1: both were SURVIVED while the guard read only the strip's `grid-template-columns`)
+//   the fold applied below 900 only .................... app "one fold control per width, in both skins: refined, desk, …" and the instrument one; lanes-row "folded with 17
+//                                                         lanes at 900, 1280 and 1920 …" (RED, run filtered to the one view refined, phosphor, 1280px; the whole file is not run for this row:
+//                                                         it outran its 580 s bound, twice, in an earlier run, with every folded desk case waiting out its own timeout)
+//   hidden cards rendered and hidden by CSS ............ accounts-strip "the folded strip mounts only the shown cards", and six more
+//   the control rendered outside the end cell .......... accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
+//   the control rendered after All accounts ............ accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
+//   the tab stop left on a card that folds away ........ accounts-strip "…a stop on a card that folds away goes to the first shown card"
+//   `lanesRowLabel` called with the shown lanes ........ accounts-strip "folded, the group's name names the fullest lane, which is hidden"
+//   the control spreads `commandDoor('go-accounts')` before its own `onClick`
+//                                                       accounts-strip "a tap on the control folds and unfolds and never navigates, and the control carries no data-command …"
+//   the same spread after its own `onClick` ............ accounts-strip "a tap on the control folds and unfolds and never navigates, …", and five more
+//   an `aria-label` on the control ..................... accounts-strip "the control's name is its words (no aria-label), …", and 26 more
+//   the control keyed on its state (remounts) .......... accounts-strip "focus stays on the control across Show fewer and +n more"
+//   the control rendered iff `hidden.length > 0` ....... accounts-strip "focus stays on the control across Show fewer and +n more", "a tap on the control folds and unfolds …"
+//   the control rendered when `expanded` regardless of `foldable`
+//                                                       accounts-strip "five lanes render no fold control at all, folded or expanded: the only button in the strip is All accounts"
+//                                                         (a fix round: it was SURVIVED while the one case looked for the control by name, which a control with no words does not have)
+//   the component compares `live.length` with `FOLD_SHOWN`
+//                                                       accounts-strip "the control renders from foldLanes alone: …"
+//   the scroll run on mount ............................ accounts-strip "another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does"
+//                                                         (a fix round: it was SURVIVED while no case let a choice arrive after the load, the effect running only at mount)
+//   the sentence built inline in `AccountsStrip` ....... accounts-strip "the control's words are foldWords': the component builds no sentence of its own", and six more
+//   Show fewer's scroll call removed ................... accounts-strip "Show fewer scrolls the control into view with block nearest; …"; refined-phone browser (2 of 26)
+//                                                         "after Show fewer the control is focused and on screen: refined, phosphor, 360px" and 390px
+//   the choice kept in component state ................. strip-expanded "the choice survives a remount and a reload", and four more; refined-phone "the choice to expand is remembered across a remount"
+//   a malformed value read as expanded ................. strip-expanded "absent, malformed or unreadable storage reads folded"
+//   the read without try/catch ......................... strip-expanded "absent, malformed or unreadable storage reads folded", "unreadable storage reads folded until this page chooses, …"
+//   the in-page value dropped when storage refuses ..... strip-expanded "a choice storage refuses still holds for this page", and two more
+//   `useState` per hook instead of the shared store .... strip-expanded "two strips agree", and four more
+//   the `storage` listener removed ..................... strip-expanded "a storage event for ccrc-accounts-strip updates a mounted hook", and one more
+//   the fold applied in `PhoneHeader` only (the fleet column's mount given an unfolded prop)
+//                                                       instrument-shell "Instrument's phone fleet column folds the same strip"
+//   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 26) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
+//                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
+// Fix round 1 trimmed the browser leg's geometry matrices to one palette (lanes-row 88 -> 70 cases, refined-phone 31 -> 26);
+// the counts above are of the trimmed files, from the run at 182d2ac58.
+// R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
+//   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it", "a pointer passing over the strip while the open delay
+//                                                         that focus started is pending does not cancel the open", "an open the pointer started is cancelled when the pointer leaves, …"
+//   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …", and four more
+//   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled when the pointer leaves, …"
+//   the flyout while expanded .......................... "no flyout while expanded, and none below 900", and the moot-focus case below
+//   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
+//   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900", and the moot-focus case below
+//   a pointer leave with keyboard focus inside closing the flyout (the early return in `onLeave` removed)
+//                                                       accounts-strip "it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is",
+//                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open", and three more
+//                                                         (fix round 1: the ruled rule is "either"; the old case pinned a pointer leave closing the flyout with focus inside)
+//   the early return kept for an open flyout only (`&& flyOpen`): a pointer pass cancelling the open focus started
+//                                                       accounts-strip "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open",
+//                                                         "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
+//   the early return kept for a pending open only (`&& !flyOpen`): the pointer leaving closing an open flyout focus holds
+//                                                       accounts-strip "it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is", and two more
+//   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
+//                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
+//   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
+//   the panel's cards from `live` or `shown`, or the split off by one either way, not `fold.hidden` (Task C13)
+//                                                       accounts-strip "the flyout holds only the lanes the line folds away: …" and the cases that count the panel;
+//                                                         lanes-row (4 of 89) "hovering the folded line opens a flyout below it, …"; refined-phone browser (4 of 41) "a tap on the control opens the thirteen lanes …"
+//   the desk flyout's offset (`left`/`right` 0) ........ lanes-row (4 of 89) "hovering the folded line opens a flyout below it, … its cards in the line's tracks, …" (Task C13)
+//   focusout ignoring `relatedTarget` .................. "focus leaving the strip closes it, and focus moving between the line and the flyout does not"
+//   pointer enter not cancelling a pending close ....... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it"
+//   focus between the strip's own cards opening it again "Escape stays shut for a keyboard user: an arrow move between the line's cards does not open it again"
+//   the flyout `position: absolute` -> `static` ........ lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the flyout's `z-index` removed ..................... lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the `returningFocus` guard removed from `onGroupFocus`: no row. It was SURVIVED as a dead guard (the `relatedTarget` test above it already returns for the move the guard
+//                                                         covered), so the guard was removed from `AccountsStrip` in a fix round and the cases stay green
+//   the timers not cleared on unmount .................. accounts-strip "unmounting with the open delay pending, or the close grace pending, leaves no timer behind"  (a fix round: it was SURVIVED)
+//   `preventDefault` dropped from the flyout's Escape .. accounts-strip "an Escape that closes it is handled there: the key press is default-prevented, …", "an Escape while the open is still pending cancels the open"
+//                                                         (final review: an Escape that closes the flyout reached the desk's Escape interrupt and stopped a busy session's turn)
+//   the Escape not acting while the open is pending .... accounts-strip "an Escape while the open is still pending cancels the open"
+//   the flyout group named as the line's group is ...... accounts-strip "at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, …"
+// R120 `strip-hover-flyout`, fix round 2 (review 1106; accounts-strip alone, each mutant on the working tree and restored from a saved copy with its sha256 checked;
+// the browser rows are lanes-row's, in real Chrome). Only KEYBOARD focus (`:focus-visible`) on a card holds the flyout, and who started an open decides what a pointer does:
+//   `keyboardHeld` matching `.account-gauge` without `:focus-visible` (a click's focus on a card holds the flyout)
+//                                                       accounts-strip "focus a click leaves behind never holds the flyout: hover-open, click a card, the pointer leaves, …"
+//   `keyboardHeld` as the bare `group.contains(el)`, the rule before this round (anything focused in the strip holds it)
+//                                                       accounts-strip the same case, "nor does the end cell: hover-open, click All accounts, …" and the end-cell cases of the next row;
+//                                                         lanes-row (1 of 72) "a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes
+//                                                         within the grace: refined, phosphor, 1280px" (the flyout never closes: the wait for it times out)
+//   `keyboardHeld` testing `:focus-visible` on any element of the group, the end cell's controls too
+//                                                       accounts-strip "keyboard focus in the end cell holds nothing either", "keyboard focus moving from a card of the flyout to
+//                                                         the end cell, with the pointer outside, starts the grace", "focus arriving at the end cell from outside the strip opens nothing"
+//   `handFocusBack` without its `focus()` call (Escape drops focus to the page)
+//                                                       lanes-row (1 of 72) "Escape closes the flyout keyboard focus holds, the pointer having opened it, and hands focus to a card of the line: refined, phosphor, 1280px"
+//   `onLeave` without the `openBy` test (any keyboard focus parked in the strip saves a pointer's open)
+//                                                       accounts-strip "an open the pointer started is cancelled when the pointer leaves, whatever focus is parked in the strip: after Escape the flyout stays shut"
+//   a pending pointer open not taken over by keyboard focus arriving (the `openBy` upgrade removed)
+//                                                       accounts-strip "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
+//   `onGroupFocus` starting no close grace for focus that holds nothing
+//                                                       accounts-strip "keyboard focus moving from a card of the flyout to the end cell, with the pointer outside, starts the grace"
+//   `handFocusBack` without the `document.activeElement` guard (a stale `flyHeld` pulls focus out of a field)
+//                                                       accounts-strip "a poll that drops the lane of the flyout card holding focus: …"
+//   `handFocusBack` guarding on the body only (focus inside the strip, or nothing, not allowed)
+//                                                       accounts-strip "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled …"
+//   `handFocusBack` ignoring `flyHeld` (the reviewer's mutant (a): it always focuses)
+//                                                       accounts-strip "a hover-only flyout hands no focus to the line when it closes: …", "focus that left the flyout is not handed back: …",
+//                                                         "a window that loses focus while a flyout card holds it: …", "Escape with focus on All accounts, which a flyout card left, …"
+//   the flyout's `onBlur` not resetting `flyHeld` (the reviewer's mutant (b))
+//                                                       accounts-strip "focus that left the flyout is not handed back: …", "a window that loses focus while a flyout card holds it: …",
+//                                                         "Escape with focus on All accounts, which a flyout card left, …"
+//   `handFocusBack` ignoring both `flyHeld` and the `activeElement` guard
+//                                                       the five above and "focus outside the strip stays put when the pointer leaves and the grace runs",
+//                                                         "a window that loses focus, then a field outside the strip taking it: …" (neither mutant alone reaches these two: each guard covers the other)
+// The reset of a moot flyout is a plain effect now (a one-frame focus on the page is accepted), and no case pins "before the browser paints".
+// `useRowWidth` (final review: it had no row; each run against accounts-strip and strip-fold):
+//   the observer not disconnected on cleanup ........... accounts-strip "the desk row's observer is disconnected when the strip unmounts"  (it was SURVIVED: no case unmounted a measured strip)
+//   the column gap read without the `Number.isFinite` fallback
+//                                                       nineteen accounts-strip cases, the first "at the desk the row folds to the measured fit: three cards at 1248 px, …" (jsdom's gap is not a number)
+//   the column gap ignored (`gap: 0` in `useRowWidth`) . accounts-strip "the desk's fit counts the column gap the group computes: 1050 px with an 8 px gap holds three tracks, …"
+//                                                         (fix round 1: it was SURVIVED, every jsdom case ran with a gap of 0 and the browser leg's three desk widths count alike with 8 px or 0)
+// R120 `lanes-tie-break-soonest-reset` (lane-order alone):
+//   drop the reset key ................................. "lanes that tie on binding use sort by the binding window's reset, soonest first", and four more
+//   reset latest first ................................. the same five
+//   a lane with no reset time sorted first ............. "a tie with no reset time sorts after one with a reset time"
+//   drop the other window's key ........................ "a tie on use and reset sorts by the other window's use, lowest first", "the reset outranks the other window's use, …"
+//   the other window read as the binding pct ........... the same two
+//   the reset read from `fiveResetAt` directly ......... "the tie-break reads the reset through bindingWindow"
+//   keys 2 and 3 swapped (other window before reset) ... "the reset outranks the other window's use, and the other window's use outranks the roster"
+//   key 3 after the roster ............................. "a tie on use and reset sorts by the other window's use, lowest first", "the reset outranks the other window's use, …"
+//   the last group (never read, expired) sorted by reset "never-read and expired lanes still go last, in roster order, whatever their resets"
+// W2 Task T2d (desk-polish, D-6330): the rail's Inbox door counts what waits on the operator, as Refined's tab does.
+// MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
+// T2e's rows 1 and 2 under "T2e review R32, F5" above are retired: `unreadMailCount` is gone, and no door here counts
+// unread mail. The F5 case lives in mail-screen.test.tsx, against the Inbox's own row mark, and its two mutant rows in
+// needs-you-counts.test.ts. Fix round 1's row (review 826, F1) above is retired too: its case was renamed to the row
+// just above, "the rail's Inbox door says 'waiting for you' with Refined's count".
+//
+// W2 Task T2b (desk-polish, D-6328): no floating + at the desk; Instrument's round + mounts below 900 only.
+// MUTATION TABLE (plan Task T2b Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   `PhoneFab` mounted at every width .................. "exactly one [data-command=new-session] at 900, 1280 and 1920"
+//   `PhoneFab` with its own `onClick` that navigates ... "at 390 the round + dispatches the new-session door event"
+//   `PhoneFab` gated on a narrower width (min-width: 600px) "at 899 the round + is the one New session door"
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
-import type { FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import { api } from '../src/lib/api';
 import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
+import { seventeenLanes } from './seventeenLanes';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
 vi.mock('../src/lib/push', () => ({
@@ -136,8 +325,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
+  vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [] }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [], fleetFrameSeen: false }));
   resetAcks();
   act(() => { setSkin(REFINED); });
   localStorage.clear();
@@ -242,14 +433,13 @@ describe('the top bar', () => {
     expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeInTheDocument();
   });
 
-  it('the top bar renders the wordmark first, then the crumbs, the command field, the meters door and +', () => {
+  it('the top bar renders the wordmark first, then the crumbs, the command field and +', () => {
     mount('/');
     const bar = topBar();
     const order = [
       bar.querySelector('[data-wordmark]'),
       bar.querySelector('.ins-crumbs'),
       within(bar).getByRole('button', { name: 'Search or run a command' }),
-      bar.querySelector('.accounts-compact[data-compact="led"]'),
       within(bar).getByRole('button', { name: 'New session' }),
     ];
     for (const el of order) expect(el).not.toBeNull();
@@ -329,8 +519,64 @@ describe('the status bar', () => {
   });
 });
 
+describe('the lanes row (T2c, D-6329)', () => {
+  it("the top bar's line holds no meters, and the header's second line is the lanes row", async () => {
+    const lane = (wrapper: string, five: number): AccountUsage => ({
+      wrapper, five, seven: five, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+      disabled: false, authDead: false,
+    });
+    const lanes = ['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-f', 'lane-g', 'lane-h'].map((w, i) => lane(w, 5 + i));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    mount('/');
+    const line = topBar().querySelector<HTMLElement>('.ins-topbar')!;
+    await within(topBar()).findByText('lane-h');
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
+    expect([...topBar().children]).toEqual([line, topBar().querySelector('.accounts-strip')]);
+    expect(topBar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+});
+
+describe('the lanes fold (S5b, D-6530)', () => {
+  it("Instrument's phone fleet column folds the same strip", async () => {
+    const f = seventeenLanes(Math.floor(Date.now() / 1000));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+    stubWidth(false);
+    mount('/');
+    const fleet = screen.getByRole('region', { name: 'Fleet' });
+    const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(strip.querySelectorAll('.account-gauge')).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' })).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+  });
+
+  it("a tap on the control in Instrument's phone fleet column opens the panel holding the 13 lanes the line folds away (S5c, C13)", async () => {
+    const f = seventeenLanes(Math.floor(Date.now() / 1000));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+    stubWidth(false);
+    mount('/');
+    const fleet = screen.getByRole('region', { name: 'Fleet' });
+    const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    const more = within(strip).getByRole('button', { name: /^\+13 more/ });
+    fireEvent.click(more);
+    const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(13);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(more).toHaveAttribute('aria-controls', panel!.id);
+    // The line is still four cards: the panel is over the content, the strip is not expanded in place. No lane is drawn
+    // on both.
+    const line = [...strip.children].filter((c) => c.classList.contains('account-gauge'));
+    expect(line).toHaveLength(4);
+    const label = (c: Element): string => c.querySelector('.account-gauge-label')?.textContent ?? '';
+    const inPanel = [...panel!.querySelectorAll('.account-gauge')].map(label);
+    expect(line.map(label).filter((n) => inPanel.includes(n))).toEqual([]);
+  });
+});
+
 describe('one instance per width', () => {
-  it('one banner stack and one set of lane meters at any width', () => {
+  it('one banner stack and one full strip at any width: at 900 the full strip, in the header', () => {
     for (const desk of [false, true]) {
       stubWidth(desk);
       act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
@@ -338,9 +584,9 @@ describe('one instance per width', () => {
       render(<App />);
       const at = desk ? '900' : '899';
       expect(document.querySelectorAll('[data-banner="offline"]').length, `${at}: banner stacks`).toBe(1);
-      const meters = document.querySelectorAll('.accounts-compact, .accounts-strip');
-      expect(meters.length, `${at}: lane meters`).toBe(1);
-      expect(meters[0]!.matches('.accounts-compact[data-compact="led"]'), at).toBe(desk);
+      const meters = document.querySelectorAll('.accounts-strip');
+      expect(meters.length, `${at}: lanes`).toBe(1);
+      expect(meters[0]!.closest('header.shell-accounts') !== null, at).toBe(desk);
       // The rail and the status bar are desk parts: mounted at 900, absent at 899.
       expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${at}: rail`).toBe(desk ? 1 : 0);
       expect(document.querySelectorAll('footer.shell-status').length, `${at}: status bar`).toBe(desk ? 1 : 0);
@@ -365,8 +611,8 @@ function stubAt(width: number): void {
 
 /** The frame's doors, counted by what each one IS (its name), never by a class: the rail's and the list head's doors
  *  carry different names for one destination, and the meters' door to /accounts is not a second Accounts door. The
- *  rail's `Inbox` (`Inbox, N unread` with mail) and the list head's `Mail — N unread` are told apart, so a desk that
- *  has the second back, or a rail door that lost its count, is a different census (T2e fix round 1, F1). */
+ *  rail's `Inbox` (`Inbox, N waiting for you`) and the list head's `Mail — N waiting for you` are told apart, so a desk
+ *  that has the second back, or a rail door that lost its count, is a different census (T2e fix round 1, F1; T2d). */
 function doorCounts(): Record<string, number> {
   const named = [...document.querySelectorAll<HTMLElement>('[aria-label]')];
   const count = (re: RegExp): number => named.filter((el) => re.test(el.getAttribute('aria-label') ?? '')).length;
@@ -377,7 +623,7 @@ function doorCounts(): Record<string, number> {
     settings: count(/^Settings\b/),
     inbox: count(/^Inbox\b/),
     mail: count(/^Mail\b/),
-    unread: count(/\d+ unread/),
+    waiting: count(/\d+ waiting for you$/),
     bell: count(/^Notifications (on|off)$/),
   };
 }
@@ -413,7 +659,8 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
-      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 0, bell: 1 });
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
+      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
       // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
       expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).toBeNull();
       expect(document.querySelector('.shell-nav .fleet-head .wordmark'), `${width}px`).toBeNull();
@@ -423,79 +670,69 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     // Below 900 nothing changed: the head holds its chrome, and the rail and the bar are not mounted.
     stubAt(899);
     mount('/');
-    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 0, mail: 1, unread: 0, bell: 1 });
+    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 0, mail: 1, waiting: 0, bell: 1 });
     expect(document.querySelector('.shell-nav .fleet-head .wordmark')).not.toBeNull();
   });
 
-  /** `n` unread mail records past the feed's ack, and one the count never counts (an interrupt record). */
-  function unreadFeed(n: number): NotifyEvent[] {
+  /** `n` sessions waiting on the operator and a held child (its question is with its coordinator, so it reads
+   *  `working`), past the first fleet frame, and two unread mail records, which no door counts (T2d, D-6330). */
+  function waitingFleet(n: number): FleetSession[] {
     const stamp = Date.now();
     act(() => { ack(FEED_ACK_KEY, stamp); });
+    const feed = [1, 2].map((seq): NotifyEvent => ({ seq, at: stamp + 60_000 + seq, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null }));
+    act(() => useFleetStore.setState({ feed, fleetFrameSeen: true }));
     return [
-      ...Array.from({ length: n }, (_, i): NotifyEvent => ({ seq: i + 1, at: stamp + 60_000 + i, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null })),
-      { seq: n + 1, at: stamp + 120_000, kind: 'interrupt', sessionId: 'x', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
+      ...Array.from({ length: n }, (_, i) => fleetSession({ id: `ask-${i}`, project: 'proj', bucket: 'attention' })),
+      fleetSession({ id: 'held-child', project: 'proj', bucket: 'working' }),
     ];
   }
 
-  it("at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does", () => {
+  it("the rail's Inbox door says 'waiting for you' with Refined's count", () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
-      act(() => useFleetStore.setState({ feed: unreadFeed(2) }));
-      mount('/');
-      const door = within(rail()).getByRole('button', { name: 'Inbox, 2 unread' });
+      mount('/', waitingFleet(2));
+      const door = within(rail()).getByRole('button', { name: 'Inbox, 2 waiting for you' });
       expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
       // The tooltip says the same as the name, and the pill prints the number.
-      expect(door.querySelector('.ins-rail-tip')?.textContent, `${width}px: tooltip`).toBe('Inbox, 2 unread');
-      expect(door.textContent, `${width}px: tooltip, then the count`).toBe('Inbox, 2 unread2');
-      // Nothing else in the frame names or draws an unread count: the list head's Mail door is gone at a desk.
-      expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, unread: 1, bell: 1 });
+      expect(door.querySelector('.ins-rail-tip')?.textContent, `${width}px: tooltip`).toBe('Inbox, 2 waiting for you');
+      expect(door.textContent, `${width}px: tooltip, then the count`).toBe('Inbox, 2 waiting for you2');
+      // Nothing else in the frame names or draws the count: the list head's Mail door is gone at a desk.
+      expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 1, bell: 1 });
       expect(document.querySelector('.mail-badge'), `${width}px`).toBeNull();
       expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: count pills`).toHaveLength(1);
       cleanup();
     }
+    // Refined's tab counts the same fleet the same way (R32's F1): one function, so no skin's door counts for itself.
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/', waitingFleet(2));
+    expect(screen.getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
+    cleanup();
+    act(() => { setSkin(INSTRUMENT); });
     // The printed count is capped like the sibling doors' and the name carries the real number.
     stubAt(1280);
-    act(() => useFleetStore.setState({ feed: unreadFeed(120) }));
-    mount('/');
-    const capped = within(rail()).getByRole('button', { name: 'Inbox, 120 unread' });
-    expect(capped.textContent).toBe('Inbox, 120 unread99+');
+    mount('/', waitingFleet(120));
+    const capped = within(rail()).getByRole('button', { name: 'Inbox, 120 waiting for you' });
+    expect(capped.textContent).toBe('Inbox, 120 waiting for you99+');
   });
 
-  it('with no mail unread, the Inbox door draws no badge', () => {
+  it('with nobody waiting on the operator the Inbox door draws no badge, however much mail is unread', () => {
     for (const width of [900, 1920]) {
       stubAt(width);
-      mount('/');
+      mount('/', waitingFleet(0));
       const door = within(rail()).getByRole('button', { name: 'Inbox' });
       expect(door.textContent, `${width}px`).toBe('Inbox');
       expect(door.querySelector('.ins-rail-count'), `${width}px`).toBeNull();
       expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: no count pill anywhere`).toHaveLength(0);
-      expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, unread: 0 });
+      expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, waiting: 0 });
       cleanup();
     }
-    // Interrupt records are not unread (the ack's own stamp is the next case's).
+    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door says nothing yet.
     stubAt(1280);
-    act(() => useFleetStore.setState({ feed: unreadFeed(0) }));
-    mount('/');
+    const sessions = waitingFleet(2);
+    act(() => useFleetStore.setState({ fleetFrameSeen: false }));
+    mount('/', sessions);
     expect(within(rail()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
-  });
-
-  it('mail at the ack\'s own stamp, or before it, is not unread: the Inbox door draws no badge', () => {
-    stubAt(1280);
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    const mail = (seq: number, at: number): NotifyEvent => ({ seq, at, kind: 'mail', sessionId: 'x', title: 'seen', body: '', runId: null });
-    // The ack is the watermark: a record AT it was seen (`isUnseenAt` is a strict `>`), and so was an earlier one.
-    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(2, stamp - 1_000)] }));
-    mount('/');
-    const door = within(rail()).getByRole('button', { name: 'Inbox' });
-    expect(door.textContent).toBe('Inbox');
-    expect(door.querySelector('.ins-rail-count')).toBeNull();
-    expect(doorCounts()).toMatchObject({ inbox: 1, unread: 0 });
-    cleanup();
-    // One millisecond past the ack is unread, so the pin above is the boundary and not a feed that counts nothing.
-    act(() => useFleetStore.setState({ feed: [mail(1, stamp), mail(3, stamp + 1)] }));
-    mount('/');
-    expect(within(rail()).getByRole('button', { name: 'Inbox, 1 unread' })).toBeInTheDocument();
   });
 
   it('the pool-lag readout shows once at the desk when the epochs differ', () => {
@@ -534,6 +771,7 @@ describe('the desk (T2g): one count, in the status bar', () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/');
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
       const counts = document.querySelectorAll('.fleet-count, .ins-status-summary');
       expect(counts, `${width}px: count elements`).toHaveLength(1);
       expect(footer().contains(counts[0]!), `${width}px: inside the status bar`).toBe(true);
@@ -574,11 +812,73 @@ describe('the desk (T2g): one count, in the status bar', () => {
     expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
   });
 
+  it('Refined keeps its runs row at every width (T2f, D-6371)', () => {
+    act(() => { setSkin(REFINED); });
+    for (const width of [390, 899, 900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const columns = document.querySelectorAll<HTMLElement>('section[aria-label="Fleet"]');
+      expect(columns, `${width}px: the fleet column is mounted, once`).toHaveLength(1);
+      if (width >= 900) expect(columns[0]!.closest('.shell-nav'), `${width}px: the column is the frame's nav`).not.toBeNull();
+      const lines = columns[0]!.querySelectorAll('.fleet-runs-line');
+      expect(lines, `${width}px: runs lines`).toHaveLength(1);
+      const row = within(lines[0] as HTMLElement).getByRole('button', { name: /^Runs · / });
+      expect(row, `${width}px`).toHaveClass('fleet-runs-row');
+      const choosers = document.querySelectorAll('select[aria-label="Class"]');
+      expect(choosers, `${width}px: class choosers in the document`).toHaveLength(1);
+      expect(lines[0]!.contains(choosers[0]!), `${width}px: the chooser is on the runs line`).toBe(true);
+      cleanup();
+    }
+  });
+
   it('Refined at 1280 on an empty fleet with no lag draws no .shell-nav .fleet-head', () => {
     act(() => { setSkin(REFINED); });
     stubAt(1280);
     mount('/', []);
     expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
     expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+});
+
+// ---- Desk polish, T2b (D-6328) ----------------------------------------------------------------------------------
+
+describe('no floating + at the desk (T2b, D-6328)', () => {
+  it('exactly one [data-command=new-session] at 900, 1280 and 1920', () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const doors = document.querySelectorAll('[data-command="new-session"]');
+      expect(doors, `${width}px: marked doors`).toHaveLength(1);
+      expect(topBar().contains(doors[0]!), `${width}px: inside the top bar`).toBe(true);
+      // By name, so the legacy unmarked `.fab` counts as a second door.
+      expect(screen.getAllByRole('button', { name: 'New session' }), `${width}px: buttons named New session`).toHaveLength(1);
+      expect(document.querySelector('.fab'), `${width}px: no floating +`).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('at 390 the round + dispatches the new-session door event', async () => {
+    stubAt(390);
+    mount('/');
+    const { DOOR_EVENT } = await import('../src/command/door');
+    const seen: string[] = [];
+    const listen = (e: Event): void => { seen.push((e as CustomEvent<string>).detail); };
+    window.addEventListener(DOOR_EVENT, listen);
+    const buttons = screen.getAllByRole('button', { name: 'New session' });
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveClass('fab');
+    expect(buttons[0]).toHaveAttribute('data-command', 'new-session');
+    fireEvent.click(buttons[0]!);
+    expect(seen).toEqual(['new-session']);
+    window.removeEventListener(DOOR_EVENT, listen);
+  });
+
+  it('at 899 the round + is the one New session door', () => {
+    stubAt(899);
+    mount('/');
+    const doors = document.querySelectorAll('[data-command="new-session"]');
+    expect(doors).toHaveLength(1);
+    expect(doors[0]).toHaveClass('fab');
+    expect(screen.getAllByRole('button', { name: 'New session' })).toHaveLength(1);
   });
 });

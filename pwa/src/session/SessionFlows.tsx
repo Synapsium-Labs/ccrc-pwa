@@ -11,18 +11,19 @@
 // through the target this host publishes (`useSessionCommandTarget`), which answers whether an item is offered with
 // the menu's own gate (`sessionMenu`, the substrate fault included), so the palette can never offer what the menu
 // shows disabled.
-import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { substrateFault, type FleetSession } from '../../../shared/api';
 import { ListRow, Sheet, cn } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
+import { createTargetSlot } from '../command/targetSlot';
 import type { SessionCommandTarget } from '../command/registry';
 import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { substrateFaultText } from '../fleet/substrateWords';
 import { PrSheet } from './PrSheet';
-import { hasPrCap } from './PrKeycap';
+import { UNCHECKED_PR, hasPrCap, prDoorWord } from './PrKeycap';
 
 /** What the session screen does for each flow the menu or a door opens. */
 export interface SessionActions {
@@ -45,8 +46,8 @@ export interface SessionFlowDoors {
 
 /** One item of the ⋯ menu: its command, its words, and whether it is offered enabled. */
 export interface SessionMenuEntry {
-  id: 'session-model' | 'session-effort' | 'open-history' | 'session-docs' | 'session-swap' | 'session-archive'
-    | 'session-restore';
+  id: 'open-terminal' | 'session-pr' | 'session-model' | 'session-effort' | 'open-history' | 'session-docs'
+    | 'session-swap' | 'session-archive' | 'session-restore';
   label: string;
   enabled: boolean;
   /** The reason a gated item is disabled (the substrate chip's own words), on `title`. */
@@ -76,6 +77,12 @@ export function sessionMenu(session: FleetSession | null): SessionMenuEntry[] {
   if (docsLink !== null) {
     entries.push({ id: 'session-docs', label: 'Docs', enabled: true, docs: { href: docsLink.href, branch: docsLink.branch } });
   }
+  // The header's doors, each with its word (desktop polish T3c, D-6333): below 900 the header's doors are glyphs and this
+  // sheet is where a phone reads what each is. They run the same commands the header's doors do (`open-terminal` and
+  // `session-pr`, in the host's `run` below), at every width; at the desk they repeat a visible door. The PR door is a
+  // workspace's alone (`hasPrCap`), and its word is the cap's own (`prDoorWord`).
+  entries.push({ id: 'open-terminal', label: 'Terminal', enabled: true });
+  if (hasPrCap(session)) entries.push({ id: 'session-pr', label: prDoorWord(session.pr ?? UNCHECKED_PR), enabled: true });
   // Gated like Archive below (branch review): this item opens the SAME SwapSheet as the actions sheet's gated opener,
   // and SwapSheet's confirm fires api.swap with no substrate check of its own — so an ungated door here was a swap
   // reachable with no gate anywhere.
@@ -142,22 +149,14 @@ export function useSessionFlows(): SessionFlowDoors {
 }
 
 // THE TARGET THE COMMAND LAYER READS. The layer is mounted above the frame (D-5467) and this host inside the ladder,
-// so the host publishes its target here while it is mounted, and the layer subscribes. One slot: one session screen
-// is mounted at a time; a host clears it on unmount only if it is still the one published.
-let target: SessionCommandTarget | null = null;
-const listeners = new Set<() => void>();
-function publish(next: SessionCommandTarget | null): void {
-  target = next;
-  for (const l of listeners) l();
-}
-function subscribe(l: () => void): () => void {
-  listeners.add(l);
-  return () => { listeners.delete(l); };
-}
+// so the host publishes its target in the shared slot (`command/targetSlot.ts`) while it is mounted, and the layer
+// subscribes. One slot: one session screen is mounted at a time; a host clears it on unmount only if it is still the
+// one published.
+const slot = createTargetSlot<SessionCommandTarget>();
 
 /** The open session's command target, or null off a session screen (`CommandLayer`'s `ctx.session`). */
 export function useSessionCommandTarget(): SessionCommandTarget | null {
-  return useSyncExternalStore(subscribe, () => target, () => null);
+  return slot.useValue();
 }
 
 export interface SessionFlowsProps {
@@ -217,8 +216,8 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
   });
 
   useLayoutEffect(() => {
-    publish(mine);
-    return () => { if (target === mine) publish(null); };
+    slot.publish(mine);
+    return () => slot.clear(mine);
   }, [mine]);
 
   return (

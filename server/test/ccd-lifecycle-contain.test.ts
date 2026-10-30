@@ -5,10 +5,10 @@
 // double-quoted `bash -c` string. That second shape is what this forbids.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { LIFECYCLE_MEAS_KEYS, LIFECYCLE_DEC_KEYS } from '../../shared/api.js';
 
-const src = readFileSync(CCD, 'utf8');
+const src = ccdSource();
 const BEGIN = '# ── lifecycle journal ';
 const END = '# ── end lifecycle journal ';
 
@@ -185,7 +185,7 @@ describe('the meas key vocabulary is ONE list', () => {
   // records does not currently exist to re-state.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 35', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 36', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so — the identical failure mode `home`/`pool`/`reason`
@@ -206,7 +206,9 @@ describe('the meas key vocabulary is ONE list', () => {
     // purge failures) when it KEEPS a leaf the removal helper did not remove.
     // Declared in the SAME commit that first emits them, as wave 3's were.
     // 34 -> 35 (path-identity W2): `meas.leaf`, the collector's `done` lines; declared in the SAME commit that first emits it.
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 35').toBe(35);
+    // 35 -> 36 (D-7278): `meas.childRun`, the run marker `ws-shed-deps` journals beside its class; declared in the commit that
+    // fixes the PR emitting it, so `reviveMeas` carries it instead of dropping it.
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 36').toBe(36);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
     expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
     expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);

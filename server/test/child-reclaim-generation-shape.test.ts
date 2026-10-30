@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REG_GENERATION_SHAPE } from '../../shared/api.js';
 import { NODE_ID_RE } from '../src/coord/store.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const ccrcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 /** The four roots `single-definition.test.ts` scans, walked as it walks them: `__`-prefixed entries are a parallel
@@ -28,7 +28,7 @@ const rel = (p: string): string => path.relative(ccrcRoot, p);
 
 /** The ONE `=~` regex inside ccd's `_reg_generation_valid`, as written there. */
 const ccdGrammar = (): string => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const at = src.indexOf('\n_reg_generation_valid() {');
   if (at < 0) throw new Error('_reg_generation_valid not found in ccd/ccd');
   const end = src.indexOf('\n}\n', at);

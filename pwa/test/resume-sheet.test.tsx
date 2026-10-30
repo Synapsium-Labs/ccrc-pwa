@@ -1,5 +1,5 @@
 // The resume door — the three doors a dead coordinator leaves open. Two
-// halves, `abandon-sheet.test.tsx`'s own split: `coordPresence` as a TABLE
+// halves, `abandon-sheet.test.tsx`'s own split: `coordinatorPresence` as a TABLE
 // (it is the gate, and a gate exercised only through a render is one nobody
 // can enumerate), and `ResumeSheet` rendered with INJECTED api functions for
 // the copy and the refusals. The row control's own pins live in
@@ -10,7 +10,7 @@ import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { coordPresence } from '../src/fleet/coordWords';
+import { coordinatorPresence } from '../src/fleet/presence';
 import { ResumeSheet } from '../src/fleet/ResumeSheet';
 import { ApiError } from '../src/lib/api';
 
@@ -36,9 +36,9 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', bucket: 'working', ...over }));
 
-describe('coordPresence — three answers, because the client cannot measure what the server measures', () => {
+describe('coordinatorPresence — the server\'s word, and the two rules only the client can know', () => {
   it('answers `dead` for a dead row whose lifecycle never resolves on its own', () => {
-    expect(coordPresence('ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: 'orphan' }), true))
+    expect(coordinatorPresence('ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: 'orphan' }), true))
       .toBe('dead');
   });
 
@@ -54,15 +54,40 @@ describe('coordPresence — three answers, because the client cannot measure wha
     ['the lifecycle is unmeasurable', 'ccrc-pwa-coordinator', sess({ status: 'dead', lifecycle: 'unmeasurable' }), true],
     ['a substrate fault stands', 'ccrc-pwa-coordinator',
       sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }), true],
+    ['tmux could not be asked (the server reads the pane unknown)', 'ccrc-pwa-coordinator',
+      sess({ status: 'dead', lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' }, presence: 'unknown' }), true],
   ];
   it.each(UNKNOWN)('answers `unknown` when %s', (_why, claimedBy, session, frameSeen) => {
-    expect(coordPresence(claimedBy, session, frameSeen)).toBe('unknown');
+    expect(coordinatorPresence(claimedBy, session, frameSeen)).toBe('unknown');
   });
 
   // D-309 IS the substrate row above, and it is worth its own name: the
-  // server already turned a cannot-ask into `status:'dead'`
-  // (`server/src/fleet.ts`), so a door gated on that word alone opens
-  // during a tmux outage and offers to hand a LIVE coordinator's program away.
+  // assembly turns a cannot-ask into `status:'dead'` (`server/src/fleet.ts`),
+  // so a door gated on that word alone opens during a tmux outage and offers
+  // to hand a LIVE coordinator's program away. The server's presence reads a
+  // cannot-ask `unknown` (the row above it); a substrate stamp over a pane tmux
+  // DID call gone, which the server reads `dead`, stays `unknown` here too
+  // (D-7370, a coordinator ruling within OA-C15 (a)): Resume reclaims runs, and
+  // on a substrate fault the coordinator may be alive.
+  it('a substrate stamp over a gone pane is `unknown` under every dead lifecycle, never `dead` (D-7370)', () => {
+    for (const lifecycle of ['stopped', 'orphan', 'never-started'] as const) {
+      const s = sess({ status: 'dead', lifecycle, substrate: { at: 1, text: 'tmux: no server running' } });
+      expect(s.presence, lifecycle).toBe('dead');
+      expect(coordinatorPresence('ccrc-pwa-coordinator', s, true), lifecycle).toBe('unknown');
+    }
+  });
+
+  // D-7371 (option (i), a coordinator ruling within OA-C15 (a)): a hibernated
+  // orphan or never-started coordinator, which the server reads `dead`, stays
+  // `hibernated` (no Resume door, no "coordinator gone", D-5430), the answer
+  // the row's own sheet gives (it offers Wake, and Forget stays hidden, D-7345).
+  it.each(['orphan', 'never-started'] as const)('a hibernated %s coordinator is `hibernated`, never `dead` (D-7371)', (lifecycle) => {
+    const s = sess({ status: 'dead', lifecycle, hibernatedAt: 1_784_500_000_000 });
+    expect(s.presence).toBe('dead');
+    expect(coordinatorPresence('ccrc-pwa-coordinator', s, true)).toBe('hibernated');
+    expect(coordinatorPresence('ccrc-pwa-coordinator', { ...s, substrate: { at: 1, text: 'tmux: no server running' } }, true))
+      .toBe('hibernated');
+  });
   const ALIVE: readonly [string, FleetSession][] = [
     ['a live pane', sess({ status: 'idle', lifecycle: 'running' })],
     ['a busy pane', sess({ status: 'busy', lifecycle: 'running' })],
@@ -72,7 +97,7 @@ describe('coordPresence — three answers, because the client cannot measure wha
       sess({ status: 'idle', lifecycle: 'orphan' })],
   ];
   it.each(ALIVE)('answers `alive` for %s', (_why, session) => {
-    expect(coordPresence('ccrc-pwa-coordinator', session, true)).toBe('alive');
+    expect(coordinatorPresence('ccrc-pwa-coordinator', session, true)).toBe('alive');
   });
 });
 

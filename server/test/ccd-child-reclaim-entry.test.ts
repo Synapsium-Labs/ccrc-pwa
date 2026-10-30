@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, ghContainedEnv, installDirectEntry, type DirectEntry } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, installDirectEntry, type DirectEntry, ccdSource } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, evalOf, makeChild, type Child,
@@ -1097,7 +1097,7 @@ describe('every supported production entry crosses the installed launcher', () =
   it('the launchd job’s ProgramArguments (ccd/ccd’s plist) exec the launcher — an ordinary start', () => {
     const out = path.join(h.home, 'plist-out');
     de = installDirectEntry(h.home, { body: outBody(out) });
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(src)?.[1] ?? '';
     const argv = [...block.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]!.replace('${HOME}', h.home).replace('${id}', 'demo-x'));
     expect(argv[0], 'the job does not exec the installed entry').toBe(de.entry);

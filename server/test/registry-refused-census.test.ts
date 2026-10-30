@@ -126,6 +126,9 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/dispatch.ts | spawnFresh | readRegistryMeasured | refuses',
   'coord/dispatch.ts | resumeBound | readRegistryMeasured | gated',
   'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
+  // The dead-dispatch pass reads the registry once per pass; an unlistable registry or a refused name keeps every
+  // run (deadDispatch.ts, `registry-unmeasured`), so a refused row can never make a run look childless.
+  'coord/abandonDeadDispatch.ts | registryFacts | readRegistryMeasured | refuses',
   'coord/routes.ts | GET /api/peers | readRegistryMeasured | reports',
   'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
   'server.ts | GET /api/fleet | readRegistryMeasured | stale',
@@ -133,8 +136,10 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/routes.ts | POST /api/mail | readRegistryMeasured | refuses',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistryMeasured | refuses',
   'coord/routes.ts | attributionVerdict | readRegistryMeasured | refuses',
-  'coord/routes.ts | POST /api/approvals | readRegistry | refuses',
-  'coord/routes.ts | POST /api/approvals/:id/rule | readRegistry | refuses',
+  'coord/questions.ts | raiseApproval | readRegistry | refuses',
+  // W3 Q3f (D-7030; named exception 3): the rule handler's read moved into the claimant's core with its ladder, the
+  // same reader and the same word; only the file and the enclosing symbol change.
+  'coord/questions.ts | ruleApproval | readRegistry | refuses',
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
@@ -194,8 +199,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 20 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(20);
+  it('the classified set is exactly these 21 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(21);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -274,8 +279,15 @@ describe('tick hands its model to the lanes that would otherwise list the regist
       .toMatch(/\bthis\.sweepMail\(\s*registryRead\s*\)/);
   });
 
-  it('tick() passes registryRead to sweepAsks(', () => {
-    expect(body(), 'tick no longer hands the ask lane its model: that lane would list the registry itself')
+  // W3 Q3c (D-7027), named exception 2: tick hands the question sweep its model, and the sweep hands it to the ask
+  // half. The same fact, over the two bodies the hand-off now crosses.
+  it('tick() passes registryRead to sweepQuestions(', () => {
+    expect(body(), 'tick no longer hands the question sweep its model: the ask lane would list the registry itself')
+      .toMatch(/\bthis\.sweepQuestions\(\s*registryRead\s*\)/);
+  });
+
+  it('sweepQuestions passes registryRead to sweepAsks(', () => {
+    expect(tickCode(sourceOfSymbol(TICK_WATCH_TS, 'FleetWatcher.sweepQuestions')), 'the question sweep no longer hands the ask lane its model: that lane would list the registry itself')
       .toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
   });
 
@@ -376,7 +388,7 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
       const text = codeOnly(src);
       return [...blankQuoted(text).matchAll(/\bassembleFleet\s*\(/g)]
         .filter((m) => !isDefinition(text, m.index ?? 0))
-        .map((m) => ({ file, records: callArgs(text, (m.index ?? 0) + m[0].length - 1)[9] ?? '<absent>' }));
+        .map((m) => ({ file, records: callArgs(text, (m.index ?? 0) + m[0].length - 1)[10] ?? '<absent>' }));
     });
     expect(calls.map((c) => `${c.file} ${c.records}`).sort()).toEqual([
       'coord/routes.ts reg.listed ? reg.records : []',   // the claims conflict
@@ -402,10 +414,14 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('server.ts', 'readRegistry').map(where), 'prTasks reads one row (D-6434)').toEqual([]);
-    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the two approval routes, placed refuses').toHaveLength(2);
+    // The two approval sites, placed refuses: the raise's, which moved with its ladder into
+    // `coord/questions.ts#createQuestions`'s `raiseApproval` (D-7029; W3 Q3e, named exception 3), and the rule's, which
+    // moved with its ladder into the claimant's core, `ruleApproval` beside it (D-7030; W3 Q3f, named exception 3).
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'no readRegistry left in the routes').toHaveLength(0);
+    expect(sitesOf('coord/questions.ts', 'readRegistry'), 'the raise and the rule, placed refuses').toHaveLength(2);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
     expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(3);
-    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(17);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
   });
 });

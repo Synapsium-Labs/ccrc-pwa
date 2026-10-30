@@ -20,6 +20,10 @@ vi.mock('../src/app', () => ({
 
 let warn: MockInstance<typeof console.warn>;
 let error: MockInstance<typeof console.error>;
+/** What console.warn received while main.tsx mounted, copied out in `beforeAll`: vitest clears every spy's call
+ *  history before each test (`clearMocks`, on by default since vitest 5), so the spy itself reads empty by the time a
+ *  test asks it. */
+let warnedDuringMount: unknown[][] = [];
 /** What importing main.tsx threw, if anything. Without the boundary, React rethrows the App's error out of `act`;
  *  it is kept here so each case fails on its own assertion rather than the whole file failing in its setup. */
 let importThrew: { error: unknown } | null = null;
@@ -38,6 +42,7 @@ beforeAll(async () => {
   } catch (e) {
     importThrew = { error: e };
   }
+  warnedDuringMount = warn.mock.calls.map((args) => [...args]);
 });
 
 afterAll(() => {
@@ -57,6 +62,6 @@ describe('main.tsx wraps <App/> in the root boundary (M4.B4)', () => {
 
   it("the boundary logged the throw as the root's", () => {
     expect(importThrew, 'the throw stayed inside the root boundary').toBeNull();
-    expect(warn).toHaveBeenCalledWith('ccrc: render error in root', expect.objectContaining({ message: 'boom' }));
+    expect(warnedDuringMount).toContainEqual(['ccrc: render error in root', expect.objectContaining({ message: 'boom' })]);
   });
 });

@@ -73,6 +73,16 @@ if [[ "$_gfx_desc" != *graphify-out/* || "$_gfx_desc" != *"graphify query"* ]]; 
   echo "install-graphify-skill: WARNING — the packaged skill description (pin $PIN) no longer tells a session to treat a question as a \`graphify query\` first when graphify-out/ exists. Spec §1 credits this skill with that sentence; installing anyway — record the rewording at the pin bump." >&2
 fi
 
+# THE CCRC CLAUSE (graph revision 2 spec §6.4, D-7351): appended to the STAGED
+# SKILL.md after the package's own body, which stays byte-for-byte the
+# package's. Appended here, before the convergence diff, and never to a
+# destination: diffing the package alone against a home already carrying the
+# clause would reinstall every run (D-7359). server/test/graphifySkillFixture.ts
+# spells the same bytes.
+printf '\n## ccrc: graphify-out is a managed link\n\n%s\n' \
+  "On a ccrc box \`graphify-out\` is a ccrc-managed link to this repository's graph of main. Never delete, replace or build into it. When it is absent the graph is not ready yet: do not build one; use search, and read the session's card. For your branch's own changes, use \`git diff\` and read the files." \
+  >> "$STAGE/SKILL.md"
+
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
 else

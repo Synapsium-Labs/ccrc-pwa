@@ -90,8 +90,8 @@ import {
   viewChip,
   wrapWidth,
   writeViewOverride,
-  type StorageLike,
 } from '../src/session/drawerView';
+import type { StoragePort } from '../src/lib/storage';
 import { readModel, type ModelRow } from '../src/session/drawerModel';
 import { wrapScreen } from '../src/session/wrapScreen';
 import type { DrawerTerm, MakeTerm } from '../src/session/terminalFactory';
@@ -135,7 +135,7 @@ async function modelOf(stream: string): Promise<{ term: XTerm; model: () => Mode
 }
 
 /** A store that remembers, as localStorage does. */
-const memStore = (): StorageLike & { map: Map<string, string> } => {
+const memStore = (): StoragePort & { map: Map<string, string> } => {
   const map = new Map<string, string>();
   return {
     map,
@@ -146,7 +146,7 @@ const memStore = (): StorageLike & { map: Map<string, string> } => {
 };
 /** A store whose every access throws: a private window, a preview, a thumbnail
  *  capture, or site data the browser blocks. */
-const throwingStore: StorageLike = {
+const throwingStore: StoragePort = {
   getItem: () => { throw new Error('SecurityError'); },
   setItem: () => { throw new Error('QuotaExceededError'); },
   removeItem: () => { throw new Error('SecurityError'); },
@@ -427,7 +427,7 @@ const fakeTerm = () => {
 const nextFrame = (): Promise<void> => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
 const frame = (): Promise<void> => act(async () => { await nextFrame(); });
 
-const mount = (t: ReturnType<typeof fakeTerm>, store?: () => StorageLike, onClose = vi.fn()) => {
+const mount = (t: ReturnType<typeof fakeTerm>, store?: () => StoragePort, onClose = vi.fn()) => {
   const view = render(
     <TerminalDrawer
       id={ID} open onClose={onClose} makeSocket={makeSocket} makeTerm={t.makeTerm}
@@ -860,7 +860,7 @@ describe('the wrapped view', () => {
 describe('the not-Claude offer lasts only while the drawer is open', () => {
   const offer = (): HTMLElement | null => screen.queryByRole('button', { name: /shows no Claude Code prompt/ });
   /** Close the drawer and open it again: a new attach, a new terminal. */
-  const reopen = (view: ReturnType<typeof render>, t: ReturnType<typeof fakeTerm>, store: StorageLike): FakeSocket => {
+  const reopen = (view: ReturnType<typeof render>, t: ReturnType<typeof fakeTerm>, store: StoragePort): FakeSocket => {
     const el = (open: boolean) => (
       <TerminalDrawer id={ID} open={open} onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} viewStorage={() => store} />
     );

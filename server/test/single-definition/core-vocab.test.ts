@@ -1,9 +1,10 @@
 // Single-definition scanners, one area of the guard that used to be one file (see ./helpers.ts for the doctrine and the shared walkers).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../../shared/api.js';
-import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources } from './helpers.js';
+import { sourceOfSymbol } from '../scan/symbols.js';
+import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources, stallCode, stallCodeText } from './helpers.js';
 
 
 describe('the roots this scans', () => {
@@ -53,7 +54,7 @@ describe('integration finding 7 — one reason vocabulary', () => {
   // compiler is not watching.
 
   it('derives the runtime list from the union rather than restating it', () => {
-    // Thirteen. The tenth was `branch-drift`, added when the PR poller stopped
+    // Fifteen. The tenth was `branch-drift`, added when the PR poller stopped
     // asserting a phase for a workspace whose registry and worktree record name
     // different branches (D-178); the eleventh and twelfth are `unavailable`
     // and `truncated`, split off `error` on 2026-08-26 once a 5xx from
@@ -61,12 +62,15 @@ describe('integration finding 7 — one reason vocabulary', () => {
     // distinct, repeatable faults that `error` was describing with one sentence
     // about a third thing; the thirteenth is `cut-short`, split off
     // `agent-down` in landing-order wave 3c once a read ended by a deadline was
-    // measured as a slow lane, not a dead one. Each is recognised by the
+    // measured as a slow lane, not a dead one; the fourteenth and fifteenth
+    // are `train-unproven` and `train-unread` (D-7362, D-7378), a member closed
+    // with the landed-in-train label whose train record was read and failed,
+    // and one whose record could not be read. Each is recognised by the
     // predicate both validators use. A hand-written list would still pass (the
     // source scan below exists for that); a DERIVED list out of step with the
     // union cannot be built. The count is the ONE thing a new member touches,
     // deliberately: it is what makes adding one a decision.
-    expect(PR_REASONS).toHaveLength(13);
+    expect(PR_REASONS).toHaveLength(15);
     expect(new Set(PR_REASONS).size).toBe(PR_REASONS.length);
     for (const r of PR_REASONS) expect(isPrReason(r), r).toBe(true);
     expect(isPrReason('not-a-reason')).toBe(false);
@@ -337,6 +341,147 @@ describe('Build 7 nouns', () => {
     // so a reorder cannot slip past.
     const COPY = /Extract<\s*MailRejectCode\s*,[^>]*'stale-tip'/;
     expect(ALL.filter((f) => COPY.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+
+  // Landing order wave 4 (D-7107, annex R5). `DONE_REFUSAL_CODES` is the done-authority list LESS `lineage-unmeasured`,
+  // and every refusal count reads it (`closeRefusals`, `firstSubmission`, run health, the PWA chip). A hand-typed copy
+  // is a third spelling of the same members, and the next code added to `DONE_AUTHORITY_CODES` would be counted by one
+  // list and silently not by the other. So it is defined once, in `shared/api.ts`, and BUILT by `.filter` from
+  // `DONE_AUTHORITY_CODES`. The second scan is the hand-typed copy itself: a literal that opens with the authority
+  // list's first two members, anchored the way the case above anchors its `Extract` copy, so a reorder cannot slip past.
+  it('defines DONE_REFUSAL_CODES exactly once, built by .filter from DONE_AUTHORITY_CODES, and never as a literal copy', () => {
+    const DEF = /^\s*export const DONE_REFUSAL_CODES\b/m;
+    const BUILT = /^export const DONE_REFUSAL_CODES\b[^=]*=\s*DONE_AUTHORITY_CODES\s*\.filter\(/m;
+    const LITERAL_COPY = /\[\s*'stale-tip'\s*,\s*'tip-unmeasurable'/g;
+    // CONTROL: the scans see what they claim to see, so a green run is not an empty one.
+    expect(BUILT.test("export const DONE_REFUSAL_CODES: readonly X[] =\n  DONE_AUTHORITY_CODES.filter((c) => c !== 'y');")).toBe(true);
+    expect(BUILT.test("export const DONE_REFUSAL_CODES = ['stale-tip', 'tip-unmeasurable'] as const;")).toBe(false);
+    expect(BUILT.test('export const DONE_REFUSAL_CODES = DONE_AUTHORITY_CODES;')).toBe(false);
+    expect("const x = ['stale-tip', 'tip-unmeasurable', 'branch-unmeasurable'];".match(LITERAL_COPY)).toHaveLength(1);
+
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(BUILT.test(api), 'DONE_REFUSAL_CODES is not built by .filter from DONE_AUTHORITY_CODES').toBe(true);
+    // Exactly one literal list opens with the authority list's first two members: DONE_AUTHORITY_CODES' own.
+    const copies = ALL.flatMap((f) => (readFileSync(f, 'utf8').match(LITERAL_COPY) ?? []).map(() => rel(f)));
+    expect(copies, 'a hand-typed copy of the done-authority list').toEqual(['shared/api.ts']);
+  });
+
+  // Landing order wave 4b (D-7514, from wave 4c's review F5). The radar's files are read against ONE freshness rule on the
+  // server, `freshWithin` (D-7475), and the display has ONE clock rule of its own, `landingShown` (D-7481): a second
+  // `Date.parse` or a second `* 1000` of a window in a radar reader is a third rule that drifts. Each is defined once, in
+  // `shared/api.ts`, by a pattern that sees a function, a const and an unexported copy and not an import or a longer name.
+  // Task 2 adds the positive check that `fleet.ts` and `watch.ts` reach `freshWithin`.
+  describe('the radar files have one freshness rule (D-7514)', () => {
+    const defOf = (name: string): RegExp =>
+      new RegExp(`^\\s*(?:export\\s+)?(?:(?:async\\s+)?function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+    const holdersOfDef = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('defines freshWithin, FRESH_FUTURE_SKEW_S and landingShown once each, in shared/api.ts', () => {
+      // CONTROL: the pattern sees every spelling of a definition, and neither an import nor a longer name.
+      const d = defOf('freshWithin');
+      for (const t of ['export function freshWithin(a: unknown) {', 'function freshWithin() {', 'export const freshWithin = () => 1;',
+        '  const freshWithin = () => 1;', 'export async function freshWithin() {', 'let freshWithin;']) {
+        expect(d.test(t), t).toBe(true);
+      }
+      for (const t of ["import { freshWithin } from '../x.js';", 'const freshWithinFoo = 1;', 'function myfreshWithin() {',
+        '// function freshWithin() {', 'const x = freshWithin(a, 1, 2);']) {
+        expect(d.test(t), t).toBe(false);
+      }
+      for (const name of ['freshWithin', 'FRESH_FUTURE_SKEW_S', 'landingShown']) {
+        expect(holdersOfDef(defOf(name)), name).toEqual(['shared/api.ts']);
+      }
+    });
+
+    // Every reader listed here must exist, and the scan reads every one of them: a file missing from the list is red, never
+    // skipped (D-7538, amending D-7514), so a moved or deleted reader cannot disarm the scan.
+    const READERS = ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts', 'server/src/coord/lineageRead.ts',
+      'server/src/watch.ts', 'server/src/fleet.ts', 'server/src/server.ts',
+      'pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
+    // `1000` is spelled three ways in a window's milliseconds: `1000`, `1_000` and `1e3`.
+    const SECOND_RULE = [/Date\.parse\(/, /FRESH_FUTURE_SKEW_S/, /RADAR_PROBE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/,
+      /LINEAGE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/, /(?:1000|1_000|1e3)\s*\*\s*(?:RADAR_PROBE_FRESH_S|LINEAGE_FRESH_S)/];
+    // The PWA's two readers build no `Date` (D-7514): `at` is a fixed-width stamp, and the chip orders it as a string. The
+    // server readers build one only at the named log line below (D-7538).
+    const PWA_READERS = ['pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
+    const BUILDS_A_DATE = /\bnew Date\(/;
+    const codeOf = (f: string): string => stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8'));
+
+    it('no radar reader parses a date, names the skew, or multiplies a window by 1000 on a code line', () => {
+      // CONTROL: each pattern fires on the line it is for, and the comment filter drops a sentence ABOUT it.
+      expect(SECOND_RULE.map((re) => re.test('const t = Date.parse(at); x = RADAR_PROBE_FRESH_S * 1000; FRESH_FUTURE_SKEW_S; LINEAGE_FRESH_S*1000')))
+        .toEqual([true, true, true, true, false]);
+      expect(SECOND_RULE[4]!.test('const w = 1000 * LINEAGE_FRESH_S;')).toBe(true);
+      // CONTROL: the other spellings of 1000 are seen too, and a longer number is not.
+      for (const t of ['x = RADAR_PROBE_FRESH_S * 1_000;', 'x = RADAR_PROBE_FRESH_S*1e3;', 'x = LINEAGE_FRESH_S * 1_000', 'x = 1e3 * RADAR_PROBE_FRESH_S',
+        'x = 1_000*LINEAGE_FRESH_S']) {
+        expect(SECOND_RULE.some((re) => re.test(t)), t).toBe(true);
+      }
+      expect(SECOND_RULE.some((re) => re.test('x = RADAR_PROBE_FRESH_S * 10000;')), 'a longer number').toBe(false);
+      // CONTROL: `new Date(` is seen on a code line and dropped from a comment.
+      expect(BUILDS_A_DATE.test(stallCodeText('const ms = new Date(l.at).getTime();'))).toBe(true);
+      expect(BUILDS_A_DATE.test(stallCodeText('// orders by new Date(at) once\nconst a = 1;'))).toBe(false);
+      expect(SECOND_RULE.some((re) => re.test(stallCodeText(' * a window is Date.parse( by 1000 * LINEAGE_FRESH_S\n// FRESH_FUTURE_SKEW_S')))).toBe(false);
+
+      const present = READERS;
+      const hits = present.flatMap((f) => SECOND_RULE.filter((re) => re.test(codeOf(f))).map((re) => `${f}: ${re.source}`));
+      expect(hits, 'a radar reader with a freshness rule of its own').toEqual([]);
+      const dates = PWA_READERS.filter((f) => BUILDS_A_DATE.test(codeOf(f)));
+      expect(dates, 'a PWA radar reader that builds a Date').toEqual([]);
+    });
+
+    it('every listed radar reader exists: a moved or deleted one is red, never skipped (D-7514)', () => {
+      const missing = [...READERS].filter((f) => !existsSync(path.join(ccrcRoot, f)));
+      expect(missing, 'a listed radar reader is missing: move its row with the file').toEqual([]);
+    });
+
+    // The one `new Date(` a server reader may carry is the busy-shadow log line in `FleetWatcher.mailPass`, named by symbol,
+    // never by line number: it formats a time for a person and reads no freshness. Every other server reader builds none.
+    it('no server radar reader builds a Date on a code line, save the busy-shadow log line in FleetWatcher.mailPass (D-7514)', () => {
+      const DATE_ALLOWANCE = { file: 'server/src/watch.ts', symbol: 'FleetWatcher.mailPass' } as const;
+      const SERVER_READERS = READERS.filter((f) => f.startsWith('server/'));
+      expect(SERVER_READERS).toEqual(['server/src/coord/radar.ts', 'server/src/coord/lineage.ts', 'server/src/coord/lineageRead.ts',
+        'server/src/watch.ts', 'server/src/fleet.ts', 'server/src/server.ts']);
+      const allowed = sourceOfSymbol(path.join(ccrcRoot, DATE_ALLOWANCE.file), DATE_ALLOWANCE.symbol);
+      const at = stallCodeText(allowed).split('\n').filter((l) => BUILDS_A_DATE.test(l));
+      expect(at, 'the allowance holds exactly one new Date(, its log line').toHaveLength(1);
+      expect(at[0]).toMatch(/console\.warn\(`ccrc-server: mail-gate busy-shadow /);
+      const hits = SERVER_READERS.filter((f) => {
+        const raw = readFileSync(path.join(ccrcRoot, f), 'utf8');
+        if (f !== DATE_ALLOWANCE.file) return BUILDS_A_DATE.test(stallCodeText(raw));
+        expect(raw.includes(allowed), 'the allowed symbol is not verbatim in its file').toBe(true);
+        return BUILDS_A_DATE.test(stallCodeText(raw.replace(allowed, '')));
+      });
+      expect(hits, 'a server radar reader that builds a Date').toEqual([]);
+    });
+
+    it('radar.ts and lineage.ts each call freshWithin(, so the scan above is never vacuous', () => {
+      for (const f of ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts']) expect(codeOf(f), f).toMatch(/\bfreshWithin\(/);
+    });
+
+    // Task 2: the two places that age a landing on the server go through the same rule. `assembleFleet` drops an entry past
+    // its window, and `sweepRadar` re-ages the kept map; neither writes its own comparison.
+    it('fleet.ts (assembleFleet) and watch.ts (the lane\'s re-age) call freshWithin( too', () => {
+      const code = (file: string, symbol: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, file), symbol));
+      expect(code('server/src/fleet.ts', 'assembleFleet'), 'fleet.ts').toMatch(/\bfreshWithin\(\s*landing\.at,\s*RADAR_PROBE_FRESH_S,/);
+      expect(code('server/src/watch.ts', 'FleetWatcher.sweepRadar'), 'watch.ts').toMatch(/\bfreshWithin\(\s*l\.at,\s*RADAR_PROBE_FRESH_S,/);
+    });
+  });
+
+  // Landing order wave 5a (4b F5). `SessionRecord.projectEvidence` says how `.project` read, and `project` stays a display
+  // default (the id) when it did not measure. One reader decides on it, `radarRowsOf`: a second reader would be a second
+  // rule for which rows join a project. The writer is `registry.ts`'s `buildRecord`.
+  describe('SessionRecord.projectEvidence has one reader (landing order wave 5a, 4b F5)', () => {
+    it("is on a code line only in registry.ts, which writes it, and radar.ts's radarRowsOf, which reads it", () => {
+      const NAMED = /\bprojectEvidence\b/;
+      const COUNT = /\bprojectEvidence\b/g;
+      expect(ALL.filter((f) => NAMED.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/coord/radar.ts', 'server/src/registry.ts']);
+      const radar = path.join(ccrcRoot, 'server/src/coord/radar.ts');
+      const whole = (stallCode(radar).match(COUNT) ?? []).length;
+      const inFn = (stallCodeText(sourceOfSymbol(radar, 'radarRowsOf')).match(COUNT) ?? []).length;
+      expect(inFn).toBeGreaterThan(0);
+      expect(whole, 'a reader of projectEvidence in radar.ts outside radarRowsOf').toBe(inFn);
+    });
   });
 
   // D-1319. `runHealth`'s statement (1) reuses `DELIBERATE_CANCEL_ERRORS_SQL`

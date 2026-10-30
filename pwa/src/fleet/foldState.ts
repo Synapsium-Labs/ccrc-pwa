@@ -6,18 +6,16 @@
 // Per-browser, not per-account: two devices fold independently, which is the
 // right default for a layout preference and needs no sync.
 import { useCallback, useState } from 'react';
+import { readKey, writeKey } from '../lib/storage';
 import { NO_ROLLUP_PREFS, type ActivityClass, type RollupPrefs } from './rollup';
 
+// Read and written through the one storage port (`lib/storage.ts`, D-7190).
 const KEY = 'ccrc.fleet-folded.v1';
-
-// Always via `window.` — Node 22+ ships an experimental bare `localStorage`
-// global that shadows jsdom's working one under vitest (lib/offline.ts).
-const storage = (): Storage => window.localStorage;
 
 /** The collapsed project names. Empty on an absent, corrupt or unreadable store. */
 export function loadFolded(): ReadonlySet<string> {
   try {
-    const raw = storage().getItem(KEY);
+    const raw = readKey(KEY);
     if (!raw) return new Set();
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return new Set();
@@ -33,11 +31,7 @@ export function loadFolded(): ReadonlySet<string> {
  *  exactly as saveFleetSnapshot does. A fold that cannot be saved still folds
  *  for this session. */
 export function saveFolded(folded: ReadonlySet<string>): void {
-  try {
-    storage().setItem(KEY, JSON.stringify([...folded]));
-  } catch {
-    /* ignore */
-  }
+  writeKey(KEY, JSON.stringify([...folded]));
 }
 
 /** The collapsed set plus a toggle that persists. The initializer is lazy, so
@@ -66,7 +60,7 @@ const ROLLUP_KEY = 'ccrc.fleet-rollup.v1';
 /** The stored rollup preferences, filtered field by field: junk would round-trip back into storage and never wash out. */
 export function loadRollupPrefs(): RollupPrefs {
   try {
-    const raw = storage().getItem(ROLLUP_KEY);
+    const raw = readKey(ROLLUP_KEY);
     if (!raw) return NO_ROLLUP_PREFS;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return NO_ROLLUP_PREFS;
@@ -91,11 +85,7 @@ export function loadRollupPrefs(): RollupPrefs {
 
 /** Best-effort persist, as `saveFolded`. */
 export function saveRollupPrefs(prefs: RollupPrefs): void {
-  try {
-    storage().setItem(ROLLUP_KEY, JSON.stringify(prefs));
-  } catch {
-    /* ignore */
-  }
+  writeKey(ROLLUP_KEY, JSON.stringify(prefs));
 }
 
 /** The rollup preferences plus an updater that persists. An updater answering its input unchanged writes nothing. */

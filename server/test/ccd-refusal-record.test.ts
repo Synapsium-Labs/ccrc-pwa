@@ -153,7 +153,7 @@ describe('ws-reap — exactly TWO emits, not thirty-six', () => {
     // stdout and the token the journal records must be the same word.
     expect(out).toContain('"refused":"dirty-tree"');
     const r = refusalsOf(h.home);
-    expect(r, 'one emit covers all 35 _reap_refuse tokens').toHaveLength(1);
+    expect(r, 'one emit covers all 35 reap-family tokens').toHaveLength(1);
     expect(r[0]).toEqual({ act: 'reap', token: 'dirty-tree' });
   });
 

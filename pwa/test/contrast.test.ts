@@ -278,19 +278,6 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.msg-assist .task-list-item:has(> input:checked, > p:first-child > input:checked)',
   '.msg-assist a',
   '.msg-assist .kbd-plus',
-  '.msg-assist .hljs-comment, .msg-assist .hljs-quote',
-  '.msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
-  '.msg-assist .hljs-string, .msg-assist .hljs-regexp',
-  '.msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
-  '.msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
-  '.msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
-  '.msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
-  '.msg-assist .hljs-tag',
-  '.msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
-  '.msg-assist .hljs-meta',
-  '.msg-assist .hljs-deletion',
-  '.msg-assist .hljs-addition',
-  '.msg-assist .hljs-link',
   '.compaction-glyph',
   '.compaction-hint',
   '.compaction-head:hover .compaction-hint',
@@ -936,6 +923,25 @@ describe('token pairs the gate must keep measuring', () => {
     expect(r).toBeGreaterThanOrEqual(3);
   });
 
+  // THE EMPTY METER STAYS VISIBLE (T2c, D-6329). `Meter`'s track carries a 1px
+  // inset ring in --ink-tertiary, because no edge token clears 3:1 on a card
+  // in every palette (--edge-strong, the strongest, measures 1.43 to 2.15
+  // over the twelve palettes and both grounds; the fill-on-track pairs say
+  // nothing about a 0% bar). A non-text
+  // mark, so 3:1, on the desk card's ground (--bg-raised) and the phone
+  // card's (--bg-surface). Distinct from the 4.5 `ink-tertiary / raised`
+  // text pairs, which `measured` would otherwise find first.
+  it.each([
+    'DARK  meter track outline / raised',
+    'LIGHT meter track outline / raised',
+    'DARK  meter track outline / surface',
+    'LIGHT meter track outline / surface',
+  ])('measures %s at the 3:1 UI threshold', (label) => {
+    const { ratio: r, min } = measured(label);
+    expect(min).toBe(3);
+    expect(r).toBeGreaterThanOrEqual(3);
+  });
+
   // Build 2, attention UX: the two-glyph rule's new `done` and `cleanup`
   // buckets (StatusDot's ✓ and ♻). Both dots are non-text graphical objects
   // on the same two grounds every other status dot is measured on — a
@@ -1152,6 +1158,7 @@ describe('every stylesheet under src/ is audited', () => {
     const APP_SHEETS = [
       'src/docs/docs.css',
       'src/fleet/fleet.css',
+      'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
@@ -2187,6 +2194,144 @@ describe("the Settings cards' when-line is measured on the card, not left in the
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--ink-tertiary)');
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// ── the well hues (T4a, D-6387) ─────────────────────────────────────────────
+// Colour lives in the dark wells (spec §3.1): a code block, a tool box and its ANSI spans paint a code-palette hue on
+// --bg-well, the same in the chat transcript and the Docs reader (its body carries the prose hook class and renders the
+// same CodeBlock). Two halves. The token half is the gate's contract (a pair per hue per palette, in
+// design/contrast-check.mjs); the stylesheet half is the rules that use the hues, which left the grandfathered blind
+// spot for a registration on --bg-well in INHERITED_GROUNDS.
+describe('the well hues are gated', () => {
+  const HUES = ['comment', 'keyword', 'string', 'number', 'function', 'type', 'tag', 'attr', 'punct'] as const;
+  /** "PASS 5.24 (min 4.5) CATPPUCCIN-LATTE syn-comment / well #8b948c on #1e1e2e", keyed palette|hue. A palette's
+   *  label is its name upper-cased (DARK and LIGHT are padded in the printed column, so `\s+`). */
+  const synRows = new Map<string, { verdict: string; ratio: number; min: number }[]>();
+  for (const line of out.split('\n')) {
+    const m = /^(PASS|FAIL)\s+([\d.]+)\s+\(min ([\d.]+)\)\s+(\S+)\s+syn-(\w+) \/ well\s/.exec(line);
+    if (m === null) continue;
+    const key = `${m[4]}|${m[5]}`;
+    synRows.set(key, [...(synRows.get(key) ?? []), { verdict: m[1] as string, ratio: Number(m[2]), min: Number(m[3]) }]);
+  }
+
+  it('every --syn-* is a gated pair on the well in every palette', () => {
+    // DARK is :root; every other palette is a [data-theme] block, labelled by its upper-cased name.
+    const palettes = ['DARK', ...Object.keys(report.themes.byName).map((n) => n.toUpperCase())];
+    expect(palettes).toHaveLength(THEME_COUNT);
+    for (const palette of palettes) {
+      for (const hue of HUES) {
+        const rows = synRows.get(`${palette}|${hue}`);
+        expect(rows, `${palette} syn-${hue} / well`).toHaveLength(1);
+        const [row] = rows as { verdict: string; ratio: number; min: number }[];
+        expect(row?.min, `${palette} syn-${hue} / well`).toBe(4.5);
+        expect(row?.verdict, `${palette} syn-${hue} / well`).toBe('PASS');
+        expect(row?.ratio, `${palette} syn-${hue} / well`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    // Nothing beyond the nine hues on the well rides this label (the two diff aliases are the --diff-* pairs).
+    expect(synRows.size).toBe(THEME_COUNT * HUES.length);
+  });
+
+  it("the transcript's well hues are measured, not left in the blind spot", () => {
+    const sheets = stylesheets(ROOT).filter((rel) => /(^|\/)(prose|tool-card)\.css$/.test(rel));
+    expect(sheets, 'the two sheets that carry the well hues').toHaveLength(2);
+    const keys = sheets
+      .flatMap((rel) => rulesOf(ROOT, rel))
+      .filter((r) => declOf(r.body, 'color') !== null && /\.(hljs|ansi)-/.test(r.selector))
+      .map(ruleKey);
+    // Not a vacuous pass: the thirteen combined hljs rules and the seven ANSI hues.
+    expect(keys.filter((k) => k.includes('.hljs-')).length).toBeGreaterThanOrEqual(13);
+    expect(keys.filter((k) => k.includes('.ansi-')).length).toBeGreaterThanOrEqual(7);
+    for (const key of keys) {
+      expect(report.uncovered, key).not.toContain(key);
+      expect(GRANDFATHERED_UNCOVERED.has(key), key).toBe(false);
+      expect(INHERITED_GROUNDS[key]?.under, key).toEqual(['var(--bg-well)']);
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toMatch(/ on var\(--bg-well\)$/);
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('measures the failed word on the card and the inline-code chip on the well, in every palette', () => {
+    // Docs and compaction keep the raised pair; assistant messages use the scoped well pair.
+    for (const [key, pair] of [
+      ['.tool-fail', 'var(--status-dead-text) on var(--bg-surface)'],
+      ['.msg-assist .md-code', 'var(--ink-primary) on var(--bg-raised)'],
+      ['.msg-assist:not(.doc-body):not(.compaction-body) .md-code', 'var(--ink-on-well) on var(--bg-well)'],
+    ] as const) {
+      expect(report.uncovered, key).not.toContain(key);
+      expect(GRANDFATHERED_UNCOVERED.has(key), key).toBe(false);
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe(pair);
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+});
+
+// Task G2: a programme box borrows the four cool lane hues as the `--prog-*` aliases (tokens.css). Hue text sits on
+// the hue's own tint only in the kicker, and on the card's surface everywhere else; the coordinator band is not
+// tinted, because the session row's own inks fail on the tints in several palettes (a red pair is fixed by its
+// ground, never by the hue). These rows pin every pair in every palette, so a rule that stops naming its ground —
+// and so falls into the uncovered census — or a tint spread to another band goes red here.
+describe('the programme box\'s hues (Task G2)', () => {
+  const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
+  const palettes = loadThemes(ROOT).all;
+
+  it('aliases each --prog-* token to its lane hue and tint, in every palette', () => {
+    expect(palettes).toHaveLength(THEME_COUNT);
+    for (const [name, theme] of palettes) {
+      for (const h of PROG_HUES) {
+        expect(resolveColor(`var(--prog-${h})`, theme), `${name} ${h}`).toEqual(resolveColor(`var(--acct-${h})`, theme));
+        expect(resolveColor(`var(--prog-${h}-tint)`, theme), `${name} ${h}-tint`).toEqual(resolveColor(`var(--acct-${h}-tint)`, theme));
+      }
+    }
+  });
+
+  it('clears 4.5:1 for each hue on its own tint and on the card surface, in every palette', () => {
+    for (const [name, theme] of palettes) {
+      for (const h of PROG_HUES) {
+        expect(ratio(`var(--prog-${h})`, [`var(--prog-${h}-tint)`], theme), `${name} ${h} on its tint`).toBeGreaterThanOrEqual(4.5);
+        expect(ratio(`var(--prog-${h})`, ['var(--bg-surface)'], theme), `${name} ${h} on surface`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('measures the kicker on the tint and the workers\' slugs on the surface, through the stylesheet, in every palette', () => {
+    for (const h of PROG_HUES) {
+      for (const [key, pair] of [
+        [`.pg-kicker [as .pg-kicker[data-hue='${h}']]`, 'var(--pg) on var(--pg-tint)'],
+        [`.pg-tray [data-hue='${h}'] .sess-pw-prog [in .pg-tray]`, `var(--prog-${h}) on var(--bg-surface)`],
+        [`.pg-elsewhere [data-hue='${h}'] .sess-pw-prog [in .pg-elsewhere]`, `var(--prog-${h}) on var(--bg-surface)`],
+      ] as const) {
+        const rows = rowsFor(key);
+        expect(rows, key).toHaveLength(THEME_COUNT);
+        for (const row of rows) {
+          expect(row.detail, row.label).toBe(pair);
+          expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+    const programmeRules = rulesOf(ROOT, 'src/fleet/programmeBox.css').map(ruleKey);
+    expect(programmeRules.length).toBeGreaterThan(10);
+    for (const key of programmeRules) expect(report.uncovered, key).not.toContain(key);
+  });
+
+  it('tints only the kicker: every other band of the box sits on the card surface', () => {
+    const tinted = rulesOf(ROOT, 'src/fleet/programmeBox.css')
+      .filter((r) => /-tint\b/.test(bgOf(r.body) ?? ''))
+      .map(ruleKey);
+    expect(tinted).toEqual(['.pg-kicker']);
+    for (const band of ['.pg-coord', '.pg-tray', '.pg-foot', '.pg-elsewhere']) {
+      const rule = rulesOf(ROOT, 'src/fleet/programmeBox.css').find((r) => ruleKey(r) === band);
+      expect(bgOf(rule?.body ?? ''), band).toBe('var(--bg-surface)');
     }
   });
 });

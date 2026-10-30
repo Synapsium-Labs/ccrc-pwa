@@ -209,6 +209,8 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     // D-2605 fix round 2 (D-2782) — what a `purge-incomplete` failure could
     // not unlink; then ws-reclaim's run, WIP commit and residue (child reclamation, wave 3); then the leaves its tail KEPT (wave 6).
     unremoved: s(o, 'unremoved'), childOf: s(o, 'childOf'), wip: s(o, 'wip'), residueBytes: s(o, 'residueBytes'), tmpRootKept: s(o, 'tmpRootKept'), clipsKept: s(o, 'clipsKept'), leaf: presentAsText(o, 'leaf'),
+    // D-7278 — the run marker a deps-shed line was judged against (`LifecycleMeas.childRun`).
+    childRun: s(o, 'childRun'),
   };
 }
 

@@ -23,19 +23,29 @@ import {
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
-import { coordPresence } from '../fleet/coordWords';
+import { coordinatorPresence } from '../fleet/presence';
 import { runSpendLine } from '../fleet/runSpendWords';
 import { useRunSpend } from './useRunSpend';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
+import { sessionPath } from '../lib/routes';
 import '../fleet/fleet.css';
 
-// `memo` (D-6442): the board re-renders each second while a dispatch is pending,
+// `memo` (D-6442, D-6438): the board re-renders each second while a dispatch is pending,
 // and a finished row's props are stable between those ticks (the run object from
 // the cold read, booleans, state setters, and `nowMs` from `finishedClock`), so a
-// tick re-renders no finished row. Not stable across fleet frames: every frame
-// brings new session objects, so a fleet frame re-renders every row with a live
-// session (at most 20 finished rows, by the fold) until C6's row reuse.
+// tick inside one 30 s step re-renders no finished row. A fleet frame re-renders a
+// finished row only when its own `session` or its `coordSession` changed: the fleet
+// store keeps the object of every row that did not change (`keepRows`, C6), so an
+// identical frame after the first re-renders none, and a frame that changes one
+// session re-renders the rows holding it. The FIRST live frame re-renders every
+// mounted finished row even when it equals the hydrated snapshot: it flips
+// `fleetFrameSeen`, which reaches each row as `frameSeen` (measured 20 of 20, before
+// C6 and after it). A coordinator shared by many rows (`coordSession`) is one
+// such change: when its row changes, every finished row it claims re-renders. Before
+// C6 every frame brought new session objects and re-rendered every finished row with
+// a live session. The board mounts at most 20 finished rows until Show more
+// (`FINISHED_FOLD`), so these are counts out of at most 20.
 export const RunRow = memo(function RunRow({
   run,
   nowMs,
@@ -288,11 +298,11 @@ export const RunRow = memo(function RunRow({
     </button>
   );
 
-  // The resume door. `coordPresence` decides the FIRST half — three answers,
-  // and only `dead` opens it: `unknown` is what a substrate fault, a missing
-  // row and an unarrived frame all read as, and each of those would otherwise
-  // offer to hand a live coordinator's program to somebody else (D-309's
-  // collapse, quoted on `coordPresence`'s own docstring; D-1129). D-1146 does
+  // The resume door. `coordinatorPresence` decides the FIRST half — the
+  // server's word (D-7181, OA-C15 (a)), and only `dead` opens it: `unknown` is
+  // what a pane tmux could not ask about, a missing row and an unarrived
+  // frame all read as, and each of those would otherwise offer to hand a live
+  // coordinator's program to somebody else (D-309's collapse; D-1129). D-1146 does
   // not touch that half and it must stay exactly this strong: widening the
   // second term below is only safe because the first one still refuses to act
   // on doubt.
@@ -333,7 +343,7 @@ export const RunRow = memo(function RunRow({
   // the one that arm is stuck on. Mail naming an explicit `runId` resolves
   // through a direct row read and is unaffected, which is the path the
   // coordinator corpus already sends a resumed coordinator down.
-  const presence = coordPresence(run.claimedBy, coordSession, frameSeen);
+  const presence = coordinatorPresence(run.claimedBy, coordSession, frameSeen);
   const resumeButton = presence === 'dead' && (!isRunClosed(run) || !programHasOpenRun) ? (
     <button
       type="button"
@@ -370,7 +380,7 @@ export const RunRow = memo(function RunRow({
     ? <li className="run-row" data-inert="true" title={rowTitle}>{body}{resumeButton}{abandonButton}</li>
     : (
       <li className="run-row" title={rowTitle}>
-        <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
+        <button type="button" className="run-open" onClick={() => navigate(sessionPath(run.sessionId!))}>
           {body}
         </button>
         {resumeButton}

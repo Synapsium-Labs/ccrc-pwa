@@ -24,16 +24,18 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, TERMINAL_RUN_STATES, archiveInterrupts, inArchivedFold, isArchiveRefusal,
+  ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, archiveInterrupts, inArchivedFold, isArchiveRefusal,
   substrateFault, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { ensureSession } from '../session/useEnsure';
 import {
   CLAIMED_CONSEQUENCE, CLAIMED_TITLE, claimedSentence, isArchiveConflictRun, runPhrase,
   type ArchiveConflictRun,
 } from './ArchiveConflictSheet';
+import { claimedRunsOf } from './runWords';
 import './fleet.css';
 import { substrateFaultText } from './substrateWords';
 
@@ -47,7 +49,7 @@ export const isPutAway = (s: FleetSession): boolean => inArchivedFold(s) || s.bu
  *  ensured — `cmd_ensure` clears the stop stamp on the attempt and the row's own registry fields decide the respawn,
  *  exactly as Restart session does. ONE spelling, two callers. */
 export const restoreSession = (s: FleetSession): Promise<void> =>
-  restoreReachesEnsure(s) ? api.ensure(s.id) : api.restore(s.id);
+  restoreReachesEnsure(s) ? ensureSession(s.id) : api.restore(s.id);
 
 /** Whether this row's Restore is the SAME request as Restart session — `POST /ensure`, which a standing substrate
  *  fault refuses (spec §4): a main checkout. A workspace's Restore is `ws-restore`, a different verb, and stays
@@ -131,8 +133,7 @@ export function ArchiveSheet({
     setError(null);
     setEnded([]);
     if (!open || session === null) return;
-    const claimed = runs.filter((r) => r.claimedBy === session.id
-      && !(TERMINAL_RUN_STATES as readonly string[]).includes(r.state))
+    const claimed = claimedRunsOf(runs, session.id)
       .map((r) => ({ id: r.id, program: r.program, wave: r.wave, waveOf: r.waveOf }));
     setAsk(archiveInterrupts(session) ? { kind: 'busy' }
       : claimed.length > 0 ? { kind: 'programme', runs: claimed } : { kind: 'confirm' });

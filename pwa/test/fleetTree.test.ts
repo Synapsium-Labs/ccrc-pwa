@@ -2,8 +2,16 @@
 // PARENT, for both skins. Neutral fixture names only (public repo).
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
-import { cardsOf, coordinationLine, coordinationOf, fleetTree, workingOn } from '../src/fleet/fleetTree';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { cardsOf, coordinationLine, coordinationOf as coordinationOfTree, fleetTree as fleetTreeOf, workingOn } from '../src/fleet/fleetTree';
+import { withRunBinding } from './runBindingFixture';
+
+// The tree and the header as a current server feeds them (D-7182, C7d): each session carries the run binding the server
+// sends over the runs the case hands them (`runBindingFixture.ts`). Every assertion below reads the real model.
+const fleetTree = (sessions: FleetSession[], projects: readonly string[], rs: readonly RunSummary[]): ReturnType<typeof fleetTreeOf> =>
+  fleetTreeOf(withRunBinding(sessions, rs), projects, rs);
+const coordinationOf = (s: FleetSession, sessions: readonly FleetSession[], rs: readonly RunSummary[]): ReturnType<typeof coordinationOfTree> =>
+  coordinationOfTree(withRunBinding([s], rs)[0]!, withRunBinding(sessions, rs), rs);
 import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
 
@@ -105,7 +113,7 @@ describe('fleetTree — a child whose coordinator is missing, stopped or archive
   });
 
   it('STOPPED (a dead workspace coordinator is still a live-list row): the child stays nested under it', () => {
-    const deadCoord = sess('lane-a-project-a-old-coord', { role: 'coordinator', status: 'dead', bucket: 'dead' });
+    const deadCoord = sess('lane-a-project-a-old-coord', { role: 'coordinator', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' });
     const r = [run({ id: 41, sessionId: 'lane-b-project-b-quiet-river', claimedBy: deadCoord.id })];
     const tree = shape([deadCoord, crossChild('project-a'), projectBMain], r);
     expect(tree.find(([p]) => p === 'project-a')![1]).toEqual([[deadCoord.id, 0], ['lane-b-project-b-quiet-river', 1]]);
@@ -113,7 +121,7 @@ describe('fleetTree — a child whose coordinator is missing, stopped or archive
 
   it('ARCHIVED (in the fold, so not a live row): the child stays on the coordinator\'s card, top level', () => {
     const archived = sess('lane-a-project-a-old-coord', {
-      role: 'coordinator', status: 'dead', bucket: 'archived', archivedAt: 1_800_000_000_000,
+      role: 'coordinator', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1_800_000_000_000,
     });
     const r = [run({ id: 41, sessionId: 'lane-b-project-b-quiet-river', claimedBy: archived.id })];
     const g = fleetTree([archived, crossChild('project-a'), projectBMain], [], r).find((x) => x.project === 'project-a')!;

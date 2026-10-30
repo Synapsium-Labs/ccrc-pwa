@@ -38,6 +38,7 @@
 // `unknown`), and only `mail`, `run` and `queue` carry a run.
 import type { FleetSession, NotifyEvent, RunSummary } from '../../../shared/api';
 import { eventRunId } from '../lib/feed';
+import { sessionPath } from '../lib/routes';
 
 export type InboxTarget =
   | { readonly kind: 'session'; readonly path: string }
@@ -51,7 +52,7 @@ export function inboxTarget(
 ): InboxTarget {
   const named = ev.sessionId !== '';
   if (named && sessionsById.has(ev.sessionId)) {
-    return { kind: 'session', path: `/s/${encodeURIComponent(ev.sessionId)}` };
+    return { kind: 'session', path: sessionPath(ev.sessionId) };
   }
   const run = eventRunId(ev);
   if (run !== null && runsById.has(run)) return { kind: 'runs', path: '/runs' };

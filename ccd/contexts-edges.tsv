@@ -71,6 +71,7 @@ _pane_measurable -> _tmux_t
 _panescope_record -> _reg_set
 _pool_sync_installed -> _svc_plist
 _pr_bind_facts -> _reg_get
+_pr_num_valid -> _child_runid_valid
 _redrive_after_spawn -> _reg_get
 _redrive_after_spawn -> _tmux_at
 _reg_generation_read -> _compact_lock_same
@@ -251,6 +252,8 @@ _ws_orphan_locked -> _lc_tx
 _ws_orphan_refused -> _lc_emit
 _ws_reap_eval -> _reg_get
 _ws_reap_eval -> _ws_status
+_ws_reap_lock_run -> _lc_emit
+_ws_reap_lock_run -> _lc_refuse
 _ws_reap_locked -> _lc_emit
 _ws_reap_locked -> _reg_get
 _ws_reap_locked -> _ws_status
@@ -297,6 +300,16 @@ _ws_reclaim_tail -> _tmux
 _ws_reclaim_tail -> _tmux_t
 _ws_reclaim_tail -> _ws_unsupervise
 _ws_reclaim_workdir_shared -> _reg_read
+_ws_shed_asleep_why -> _session_probe
+_ws_shed_asleep_why -> _svc_is_active
+_ws_shed_failed -> _lc_fail
+_ws_shed_int -> _child_runid_valid
+_ws_shed_locked -> _child_runid_valid
+_ws_shed_locked -> _reg_get_to
+_ws_shed_refused -> _lc_emit
+_ws_shed_run -> _lc_done
+_ws_shed_run -> _reg_set
+_ws_shed_spawn_held -> _child_runid_valid
 _ws_status -> _cfg_dir
 _ws_status -> _reg_get
 _ws_status -> _session_verdict
@@ -344,6 +357,7 @@ cmd_forget -> _reg_retire
 cmd_forget -> _session_verdict
 cmd_forget -> _tmux_t
 cmd_forget -> _ws_unsupervise
+cmd_hibernate -> _alive
 cmd_hibernate -> _idle_for_keystroke
 cmd_hibernate -> _lc_dec_ok
 cmd_hibernate -> _lc_done
@@ -362,6 +376,7 @@ cmd_menu -> cmd_ensure
 cmd_pr_landing -> _reg_get
 cmd_pr_open -> _reg_get
 cmd_pr_state -> _reg_get
+cmd_pr_train_prove -> _reg_get
 cmd_project_pool -> _ws_project_valid
 cmd_route -> _idle_for_keystroke
 cmd_route -> _pane_for_keystroke
@@ -479,13 +494,9 @@ cmd_ws_audit -> _reg_get
 cmd_ws_audit -> _transcript_path
 cmd_ws_audit -> _ws_unit_state
 cmd_ws_collect -> _lc_dec_ok
-cmd_ws_collect -> _lc_emit
-cmd_ws_collect -> _lc_refuse
 cmd_ws_collect -> _lc_surface_norm
 cmd_ws_expire -> _child_runid_valid
 cmd_ws_expire -> _lc_dec_ok
-cmd_ws_expire -> _lc_emit
-cmd_ws_expire -> _lc_refuse
 cmd_ws_expire -> _lc_surface_norm
 cmd_ws_hold -> _lc_dec_ok
 cmd_ws_hold -> _lc_done
@@ -496,11 +507,8 @@ cmd_ws_hold -> _reg_set
 cmd_ws_orphan -> _lc_dec_ok
 cmd_ws_orphan -> _lc_refuse
 cmd_ws_orphan -> _lc_surface_norm
-cmd_ws_reap -> _lc_emit
-cmd_ws_reap -> _lc_refuse
 cmd_ws_reclaim -> _child_runid_valid
 cmd_ws_reclaim -> _lc_dec_ok
-cmd_ws_reclaim -> _lc_emit
 cmd_ws_reclaim -> _lc_refuse
 cmd_ws_reclaim -> _lc_surface_norm
 cmd_ws_release -> _lc_dec_ok
@@ -537,3 +545,7 @@ cmd_ws_rm -> _reg_get
 cmd_ws_rm -> _reg_retire
 cmd_ws_rm -> _tmux_t
 cmd_ws_rm -> _ws_unsupervise
+cmd_ws_shed_deps -> _lc_dec_ok
+cmd_ws_shed_deps -> _lc_surface_norm
+cmd_ws_shed_deps -> _reg_id_ok
+cmd_ws_shed_deps -> _reg_set

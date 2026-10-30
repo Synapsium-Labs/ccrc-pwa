@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# pre-receive — the test box mirror's one hook (D-7405; spec §2.1 "The push user and the create-only rule").
+#
+# Installed in the directory the mirror's core.hooksPath names (root's, outside the mirror). Refuses the WHOLE push
+# unless every ref it names is a creation of one of a run's scratch refs, refs/ccrc-test/<run-id>/<name> with
+# <run-id> 32 lowercase hex characters and <name> one of head, base, snap, history-base, ledger-base
+# (shared/testbox.ts TestboxRef), all under ONE run id, and no ref under that run id exists yet. So a wrapper that
+# reuses a run id, pushes a branch or updates a ref fails loudly instead of mixing two runs' state.
+#
+# git runs this hook inside the mirror with its own GIT_DIR; it reads the ref updates on stdin, one
+# `<old> <new> <ref>` line each, and reads them all before it answers.
+set -uo pipefail
+
+refuse=''
+prefix=''
+count=0
+while IFS=' ' read -r old new ref; do
+  [[ -n ${ref:-} ]] || continue
+  count=$((count + 1))
+  [[ -n $refuse ]] && continue
+  if [[ ! $ref =~ ^refs/ccrc-test/([0-9a-f]{32})/(head|base|snap|history-base|ledger-base)$ ]]; then
+    refuse="$ref is not a run's scratch ref (refs/ccrc-test/<run-id>/<name>)"
+    continue
+  fi
+  p="refs/ccrc-test/${BASH_REMATCH[1]}/"
+  if [[ ! $old =~ ^0+$ ]]; then refuse="$ref is not a creation"; continue; fi
+  if [[ $new =~ ^0+$ ]]; then refuse="$ref is a deletion"; continue; fi
+  if [[ -n $prefix && $prefix != "$p" ]]; then refuse="one push names two run ids ($prefix, $p)"; continue; fi
+  prefix=$p
+done
+
+if [[ -z $refuse && $count -gt 0 ]]; then
+  held=$(git for-each-ref --count=1 --format='%(refname)' "$prefix" 2>/dev/null) || refuse="cannot read the refs under $prefix"
+  if [[ -z $refuse && -n $held ]]; then refuse="the run id already holds a ref ($held)"; fi
+fi
+if [[ -n $refuse ]]; then
+  printf 'test box mirror: push refused whole: %s\n' "$refuse" >&2
+  exit 1
+fi
+exit 0

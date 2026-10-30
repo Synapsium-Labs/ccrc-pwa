@@ -45,6 +45,39 @@ import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from '.
  */
 export type CloseHalt = Extract<CloseOutcome, { ok: false }>;
 
+/** The three doors a done-claim is re-measured at (the work close, the advance, the review close), each with the mail it
+ *  answers a failed claim by. */
+export type DoneClaimDoor = 'work' | 'advance' | 'review';
+
+/** Each door's two subjects: the REFUSAL, and the radar-timing answer (`lineage-unmeasured`, landing order wave 4). They
+ *  differ so the mail dedupe (`queueSystemMail` keys on the subject) never lets an outstanding refusal swallow the
+ *  other, and so the sender's skill can key on the subject. Whoever sent the claim gets the mail: the worker for the
+ *  two work doors, the reviewer for the review close. */
+const DONE_CLAIM_SUBJECTS: Record<DoneClaimDoor, { rejected: string; unmeasured: string }> = {
+  work: { rejected: 'wave-done-rejected', unmeasured: 'wave-done-unmeasured' },
+  advance: { rejected: 'wave-advance-rejected', unmeasured: 'wave-advance-unmeasured' },
+  review: { rejected: 'review-done-rejected', unmeasured: 'review-done-unmeasured' },
+};
+
+/** The mail a failed done-claim is answered with: today's `<code>: <detail>` under the refusal subject, and, for
+ *  `lineage-unmeasured`, the re-send instruction under its own subject. ONE function for the three doors. */
+export function doneRejectionMail(door: DoneClaimDoor, v: { code: DoneRejectCode; detail: string }):
+  { subject: string; body: string } {
+  const subjects = DONE_CLAIM_SUBJECTS[door];
+  if (v.code !== 'lineage-unmeasured') return { subject: subjects.rejected, body: `${v.code}: ${v.detail}` };
+  return { subject: subjects.unmeasured,
+    body: `${v.code}: ${v.detail} — re-send the same claim, unchanged, after the radar's next tick (usually within 5 ` +
+      'minutes), at most twice; if it is still answered this way, report it to your coordinator' };
+}
+
+/** The `handoffCommit` a work close records (landing order wave 4, D-7102). When `verifyDone` ran, the head it
+ *  MEASURED: the claim's own tip on every ordinary close (the claim's two facts agree, and the tip matched it), and the
+ *  live tip on one accepted through the radar's lineage. Otherwise (an abandon of the claim, with nothing measured)
+ *  the plan's shape-checked claim, as before. */
+export function recordedHandoff(plan: { handoffCommit: string | null }, verdict: DoneVerdict | null): string | null {
+  return verdict !== null && verdict.ok ? verdict.measured.branchTip : plan.handoffCommit;
+}
+
 export type CloseDecision<P> =
   | { kind: 'go'; plan: P }
   | { kind: 'refused'; outcome: CloseHalt; rejection?: { code: DoneRejectCode; detail: string } }

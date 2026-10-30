@@ -52,6 +52,10 @@ export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
 /** `$REG/child-stale-reclaim-live`: arms the child reclaim's stale arm (D-6639): a kept child idle for seven days is
  *  reclaimed. Absent, the lane records "child would be reclaimed (stale)" and acts on nothing. */
 export const CHILD_STALE_RECLAIM_LIVE_MARKER = 'child-stale-reclaim-live';
+/** `$REG/deps-shed-live`: arms the deps-shed arm of the run-done row (D-7278): a sleeping session's git-ignored,
+ *  untracked dependency directories are removed once its work is finished past the age. Absent, the arm asks the box's
+ *  dry run and records "dependencies would be removed" and removes nothing. No writer in the tree: the operator arms it. */
+export const DEPS_SHED_LIVE_MARKER = 'deps-shed-live';
 /** `$REG/child-superseded-reclaim-live`: arms the child reclaim's superseded-review release (D-6922):
  *  an earlier review child is reclaimed once a later review of the same run has closed, though the reviewed run is open.
  *  Absent, the lane records "review report would be reclaimed (superseded)" and acts on nothing. */
@@ -81,6 +85,12 @@ export const DRIFT_PUSH_LIVE_MARKER = 'drift-push-live';
  *  today. Stood, it is meant to stop the child-spent reason alone, where `reclaim-paused` also stops expiry, collect and
  *  the coordinator reclaim. Touched only by hand: no writer in the tree. The child-spent reader lands with that reason's change. */
 export const CHILD_RECLAIM_DISABLED_MARKER = 'child-reclaim-disabled';
+
+/** `$REG/testbox-remote-live` (D-7404; test box spec 2026-10-28 §2.7): the test box's remote switch. Absent, every
+ *  `ccrc test` run is local; stood, a run goes to the test box when spec §2.4's checks pass. The wrapper reads it
+ *  itself, so the switch works with the server down. Its writer, `ccd testbox-remote` behind the switch route, lands
+ *  with the test box plan's TB9; its reader, the wrapper, with TB8. Until then nothing in the tree holds it. */
+export const TESTBOX_REMOTE_LIVE_MARKER = 'testbox-remote-live';
 
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
@@ -202,6 +212,11 @@ export const SWITCHES = {
     owner: 'C4', meaning: 'The stale arm acts: a kept child idle for seven days is reclaimed, its work pinned to the attic.',
     writer: 'hand-only',
   },
+  [DEPS_SHED_LIVE_MARKER]: {
+    storage: { marker: DEPS_SHED_LIVE_MARKER }, default: 'absent: shadow, the arm records what it would remove',
+    owner: 'C4', meaning: 'The deps-shed arm acts: a sleeping worker or coordinator whose work finished past the age has its ignored dependency directories removed; its worktree and every git fact stay.',
+    writer: 'hand-only',
+  },
   [CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER]: {
     storage: { marker: CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER }, default: 'absent: shadow, the lane records what it would reclaim',
     owner: 'C4', meaning: 'An earlier review child is reclaimed once a later review of the same run has closed, though the reviewed run is still open.',
@@ -248,6 +263,21 @@ export const SWITCHES = {
     storage: { setting: 'collect_lane_settings.choice' }, default: 'off', owner: 'C4',
     meaning: 'The Settings arm of the collector: only an exact live choice arms it.',
     writer: 'POST /api/coord/collect-lane',
+  },
+  'roll-idle-targets': {
+    storage: { setting: 'roll_settings.targets' }, default: 'coordinators', owner: 'C4',
+    meaning: 'Which idle sessions the automatic roll restarts onto the current release: coordinators, or off (D-7453).',
+    writer: 'POST /api/coord/roll-idle',
+  },
+  'dispatch-abandon-choice': {
+    storage: { setting: 'dispatch_abandon_settings.choice' }, default: 'on', owner: 'C5',
+    meaning: 'The server abandons a run whose dispatch never came back and mails its coordinator: on, or off (D-7319).',
+    writer: 'POST /api/coord/dispatch-abandon',
+  },
+  [TESTBOX_REMOTE_LIVE_MARKER]: {
+    storage: { marker: TESTBOX_REMOTE_LIVE_MARKER }, default: 'absent: every run is local', owner: 'C2',
+    meaning: 'Test runs go to the test box when its checks pass; any run that cannot falls back to the local tests slice and says why.',
+    writer: 'ccd testbox-remote, through POST /api/testbox/switch',
   },
 } as const satisfies Readonly<Record<string, SwitchRow>>;
 

@@ -12,8 +12,8 @@
 //   - "no page error": nothing uncaught was thrown.
 // Each view also asserts what the surface DOES show (the question's first line and the who line) and that the question
 // "reads from its top when the sheet opens": measured as the sheet settled, with nothing scrolled by the test, the body
-// is at its top and both lines lie inside the body's own rectangle. A desk view (1280, a fine pointer) holds that case
-// alone, since the open-time focus differs there.
+// is at its top and both lines lie inside the body's own rectangle. A desk view (1280, where the ask is the inline card of
+// D-6326) holds that case alone, since the open-time focus differs there.
 //
 // The fixture's data is `test/askFixtures.ts`'s (`askFixture(1)` and `longHookEnvelope()`, the forty-line variant
 // this file alone reads), so no copy is kept here; the browser config imports from `../test/` as
@@ -31,6 +31,7 @@ import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { ASKER_PROJECT, ASKER_SESSION, LONG_QUESTION, askFixture, longHookEnvelope } from '../test/askFixtures';
+import { servedSocket } from '../test/wirePairing';
 import type { HookAsk } from '../../shared/api';
 
 const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
@@ -112,6 +113,8 @@ interface Measure {
   titleScrolls: boolean;
   pageSide: number;
   panelText: string;
+  /** Is focus inside the surface as it settled? */
+  focusIn: boolean;
   /** As the sheet opened and settled, nothing scrolled by the test: the body's scroll offset, the panel's and the
    *  body's rectangles, and the question's first line and the who line as rectangles. */
   bodyScrollTop: number | null;
@@ -128,10 +131,11 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
   const opened = await openApp(browser!, view, FIXTURE);
   try {
     await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+      servedSocket(ws);
       for (const frame of FRAMES(twice)) ws.send(JSON.stringify(frame));
     });
     await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
-    await opened.page.waitForSelector('.sheet-panel .ask-who', { timeout: 30_000 });
+    await opened.page.waitForSelector('.sheet-panel .ask-who, [data-ask-surface] .ask-who', { timeout: 30_000 });
     await opened.page.waitForTimeout(800); // the sheet's entrance (vaul) and its open-time focus settle
     const shots = process.env['CCRC_SHOTS'];
     if (shots !== undefined && shots !== '') {
@@ -140,7 +144,8 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
     }
     const measured = await opened.page.evaluate(([FIRST_LINE_ARG, WHO_LINE_ARG]): Measure => {
       // The panel is found from the ask itself: the who line is the ask's own.
-      const panel = document.querySelector('.ask-who')!.closest<HTMLElement>('.sheet-panel')!;
+      // (At a desk the surface is T1c's inline card, `[data-ask-surface]`, whose one scroller is `.ask-inline-body`.)
+      const panel = document.querySelector('.ask-who')!.closest<HTMLElement>('.sheet-panel, [data-ask-surface]')!;
       const title = panel.querySelector<HTMLElement>('.sheet-title');
       const scrolls = (el: HTMLElement): boolean => {
         const oy = getComputedStyle(el).overflowY;
@@ -165,7 +170,7 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
         }
         return null;
       };
-      const body = panel.querySelector<HTMLElement>('.sheet-body');
+      const body = panel.querySelector<HTMLElement>('.sheet-body, .ask-inline-body');
       const bodyRect = body?.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
       return {
@@ -173,6 +178,7 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
         titleScrolls: title !== null && scrolls(title),
         pageSide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         panelText: panel.innerText,
+        focusIn: panel.contains(document.activeElement),
         bodyScrollTop: body?.scrollTop ?? null,
         panel: { top: panelRect.top, bottom: panelRect.bottom },
         body: bodyRect === undefined ? null : { top: bodyRect.top, bottom: bodyRect.bottom },
@@ -241,14 +247,16 @@ describe('an ask holds one vertical scroller (D-6325)', () => {
   }
 });
 
-// The open-time focus (`useAskKeys`) runs under a fine pointer, which a desk has and a phone has not: its own view,
-// with an eighty-line question so that the first option is below the fold and focusing it would scroll the body.
-describe('an ask at a desk opens at its top too (D-6325)', () => {
+// At a desk the ask is T1c's inline card (D-6326), where the open-time focus (`useAskKeys`, a fine pointer's) does not
+// run: the card opens at its top because nothing moves focus into it. Its own view, with an eighty-line question so that
+// the first option is below the fold and focusing it would scroll the body; this case also holds that nothing did.
+describe('an ask at a desk opens at its top too (D-6325, D-6326)', () => {
   const desk: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1280 };
   it(named(desk), async () => {
     const { measured, errors } = await openAndMeasure(desk, true);
     expect(measured.panelText).toContain(FIRST_LINE);
     expect(measured.scrollers.map((s) => s.cls), 'the question overflows its body').toHaveLength(1);
+    expect(measured.focusIn, 'the arriving ask takes no focus').toBe(false);
     expectReadsFromTop(measured);
     expect(errors).toEqual([]);
   }, 90_000);
@@ -276,6 +284,7 @@ describe('a reconnect keeps the open ask on screen (D-6325)', () => {
       let askAt = 0;
       let connections = 0;
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+        servedSocket(ws);
         connections += 1;
         if (connections === 1) {
           for (const frame of FRAMES(false)) ws.send(JSON.stringify(frame));

@@ -19,7 +19,7 @@ import { incarnationsOfSessions, sessionRunRead, withChildIds } from '../src/coo
 import { REPO_ROOT, callsIn, parsedFile, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import { mkTmp } from './tmpHelpers.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
-import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { bindReturnedChild, dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { clearSender } from '../src/inject/send.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
@@ -147,8 +147,9 @@ describe('a cross-build rollback with a same-id redraw (#1573 round 4)', () => {
 // over two fixtures: a worker whose birth on record `childBirthOf` places, and one whose only birth on record it cannot
 // place (its minting run's `dispatchStartedAt` does not agree). What the bind then writes on the run it binds is the
 // census. A bind that records the birth it binds to is `records`; one that leaves the run with no birth is
-// `records-nothing`. The records-nothing lists are NAMED allow-lists. Over a placeable birth: one arm, the adopted arm of
-// `spawnFresh` (D-6993, child-reclamation spec section 5.1: no birth on record for an adopted id is provably its own).
+// `records-nothing`. The records-nothing lists are NAMED allow-lists. Over a placeable birth: two arms, the adopted arm of
+// `spawnFresh` (D-6993, child-reclamation spec section 5.1: no birth on record for an adopted id is provably its own) and
+// `bindReturnedChild` (D-7563), which binds a returned child with that arm's null birth for the same reason.
 // Over an unplaceable birth: every arm but the fresh spawn, which records its own (gap 2, a residual: the stamp writes
 // placeable births only, the merge base's rule). A caller this table has no driver for reds the first case, so a new bind
 // site cannot go uncounted. Measured: this file gives the same census over the merge base (865e1833b) and this branch.
@@ -239,11 +240,17 @@ describe('every bind site records an incarnation, or is named (ARCH-60 follow-up
       { arm: 'spawnFresh fresh', session: ADOPTED, drive: wave1(false) },
       { arm: 'spawnFresh adopted', session: ADOPTED, drive: wave1(true) },
     ],
+    // D-7563: the dead-dispatch pass's bind of a returned child, the spawn arm's write with the adopted arm's null birth.
+    'coord/dispatch.ts#bindReturnedChild setSession': [{ arm: 'bindReturnedChild', session: WORKER,
+      drive: storeArm((s, id) => {
+        s.markDispatchStarted(id, BORN + 20);
+        expect(bindReturnedChild(s, { runId: id, sessionId: WORKER, claimedBy: CLAIMANT, startedAt: BORN + 20 })).toEqual({ ok: true });
+      }) }],
   };
   const ARMS = Object.values(DRIVERS).flat();
   const RECORDS_NOTHING: Record<OnRecord, readonly string[]> = {
-    placeable: ['spawnFresh adopted'],
-    unplaceable: ['open route', 'markDispatched', 'dispatchRun', 'setSession', 'spawnFresh adopted'],
+    placeable: ['spawnFresh adopted', 'bindReturnedChild'],
+    unplaceable: ['open route', 'markDispatched', 'dispatchRun', 'setSession', 'spawnFresh adopted', 'bindReturnedChild'],
   };
   const CASES = (['placeable', 'unplaceable'] as const).flatMap((kind) => ARMS.map((a) => [`${a.arm}, over a ${kind} birth on record`, a, kind] as const));
 

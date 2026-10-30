@@ -13,7 +13,12 @@
 import { describe, it, expect } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
+import { nestFleet as nest, type FleetRow } from '../src/fleet/nestFleet';
+import { withRunBinding } from './runBindingFixture';
+
+/** The helper as a current server feeds it (D-7182, C7d): each session carries the run binding the server sends over the
+ *  case's runs (`runBindingFixture.ts`), the input `attentionFirst`'s worker reader (`workerOf`) reads. */
+const nestFleet = (sessions: readonly FleetSession[], runs: readonly RunSummary[]): FleetRow[] => nest(withRunBinding(sessions, runs), runs);
 
 const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
   fleetSession({ id, project: 'ccrc-pwa', workspace: id, ...over });

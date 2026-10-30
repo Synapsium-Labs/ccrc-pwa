@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 import { BARE_ROW, CONTROL_ROW, PAGE_BODY, SELECT, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
 
@@ -36,7 +37,7 @@ function expectControlRowIsATarget(): void {
 }
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
-  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, selectorsOf, stripComments,
+  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, rulesFor, selectorsOf, stripComments,
 } from './cssRule';
 
 const css = readFileSync(
@@ -149,6 +150,62 @@ describe('fleet density and alignment', () => {
     expect(css).toMatch(/\.sess-body \{ container: sess-body \/ inline-size; \}/);
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('container-name');
+  });
+
+  it("the ⋯'s reveal sits inside the fine-pointer media query, and uses opacity only", () => {
+    // D-6332: under a mouse the row's ⋯ is transparent until its row is hovered, holds focus or is the selected row.
+    // The hiding is OPACITY and nothing else: it stays mounted, focusable, in the accessibility tree, with its 44px
+    // ::before overlay. A coarse pointer has no hover, so the transparent rule lives only inside the media query.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(declValue(ruleIn(fine, '.sess-actions'), 'opacity')).toBe('0');
+    const outside = css.replace(fine, '');
+    expect(declaredValues(outside, '.sess-actions', 'opacity'), 'no rule outside the query sets an opacity on ⋯').toEqual([]);
+    expect(declValue(ruleIn(css, '.sess-actions'), 'opacity'), 'the unconditional .sess-actions rule sets none').toBeNull();
+    // Every rule inside the query that targets ⋯ declares opacity and nothing else.
+    for (const rule of rulesFor(fine, '.sess-actions')) {
+      expect(stripComments(rule.body).match(/[\w-]+(?=\s*:)/g), `${rule.selectors.join(', ')} declares opacity only`).toEqual(['opacity']);
+    }
+    // And no rule anywhere hides it another way.
+    expect(declaredValues(css, '.sess-actions', 'display')).not.toContain('none');
+    expect(declaredValues(css, '.sess-actions', 'visibility')).not.toContain('hidden');
+    for (const prop of ['width', 'height', 'pointer-events']) {
+      expect(declaredValues(css, '.sess-actions', prop).filter((v) => /^(0(px)?|none)$/.test(v)), `${prop} never shrinks or disables ⋯`).toEqual([]);
+    }
+  });
+
+  it('a hovered, focused or selected row shows ⋯', () => {
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    for (const sel of ['.sess-line:hover .sess-actions', '.sess-line:has(:focus-visible) .sess-actions', '.sess-line--active .sess-actions']) {
+      expect(declValue(ruleIn(fine, sel), 'opacity'), `${sel} shows the button`).toBe('1');
+    }
+    // A keyboard's focus reveals ⋯, a pointer's does not: a row whose ⋯ took the focus from a click or a closing sheet
+    // must not light a second ⋯ beside the selected row's, so no reveal keys on `:focus-within`.
+    expect(rulesFor(fine, '.sess-actions').flatMap((r) => r.selectors).filter((sel) => sel.includes(':focus-within')),
+      'no ⋯ reveal keys on :focus-within').toEqual([]);
+    // One ⋯ at a time (the plan's acceptance): while any row of the fleet is hovered, every other row's ⋯ goes dark,
+    // the selected row's and a focused row's included, unless that ⋯ itself holds the keyboard's focus.
+    const elsewhere = '.fleet:has(.sess-line:hover) .sess-line:not(:hover) .sess-actions:not(:focus-visible)';
+    expect(declValue(ruleIn(fine, elsewhere), 'opacity'), 'a hover elsewhere darkens the other rows\' ⋯').toBe('0');
+  });
+
+  it('clamps only a name and a branch to two lines, never a programme or its wave (desk-rule-not-container-threshold)', () => {
+    // The desk draws the full form of a name, a branch and a programme (`Fit`) and lets the name, plain or paired,
+    // and the branch wrap on two lines, cut at the second. The programme slug and its wave tail (D-5528) are never
+    // clamped: no rule in the stylesheet may declare a line clamp on anything but those, and none outside the desk
+    // block, or a phone's short form would be clamped too.
+    const desk = atBlock(css, '@media (min-width: 900px)');
+    expect(desk).toContain('.fit-full');
+    const clampSelectors = (text: string): string[] => [...stripComments(text).matchAll(/([^{}]+)\{([^{}]*line-clamp[^{}]*)\}/g)]
+      .flatMap((m) => m[1]!.split(',').map((sel) => normSel(sel)));
+    expect(clampSelectors(css).sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit', '.sess-open > .sess-label'].sort());
+    expect(clampSelectors(css.replace(desk, '')), 'no line clamp is declared outside the desk block').toEqual([]);
+    for (const sel of ['.sess-label-fit', '.sess-open > .sess-label', ".sess-context[data-context='branch']"]) {
+      const rule = ruleIn(desk, sel);
+      expect(declValue(rule, '-webkit-line-clamp'), `${sel} clamps to two lines at the desk`).toBe('2');
+      // A name with no CSS break point (`_`- or `.`-joined) wraps inside the box instead of running out of it
+      // sideways with no ellipsis (a clamp box clips at its edge).
+      expect(declValue(rule, 'overflow-wrap'), `${sel} breaks inside a token that alone exceeds the line`).toBe('anywhere');
+    }
   });
 
   it('tightens the card padding and closes the header/body gap', () => {
@@ -331,6 +388,19 @@ describe('fleet density and alignment', () => {
     // chip is inert, so an overhang would turn a near-miss that does nothing
     // into an irreversible ack.
     expect(() => ruleFor('.bucket-head-seen::before')).toThrow();
+  });
+
+  // T3a (D-6331): the Exited and Archived chips are quiet. The quiet marker (`data-quiet`) selects ONE rule that stays
+  // SELF-GROUNDED (its own background and color, so `design/audit.mjs`'s descendant pass measures the chip's text and its
+  // count) and quiets with tokens and weight, never with `opacity`: a faded element composites its whole subtree and
+  // pulls the text under the contrast floor (the note above `.fleet-list` has the measurements).
+  it('draws a quiet chip from tokens, self-grounded, with no opacity', () => {
+    const rule = stripComments(ruleFor('.bucket-head[data-quiet]'));
+    expect(declValue(rule, 'background')).toMatch(/^var\(--bg-[a-z]+\)$/);
+    expect(declValue(rule, 'color')).toMatch(/^var\(--ink-[a-z]+\)$/);
+    expect(declValue(rule, 'font-weight')).toBe('var(--weight-regular)');
+    expect(rule).not.toMatch(/opacity/);
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
   });
 
   it('right-aligns .sess-actions in its column so it shares an edge with .proj-card-add', () => {
@@ -583,7 +653,10 @@ describe('selection is tint plus rail, status is hue (D-5101)', () => {
     // Was: the ··· re-grounded to --bg-page so it did not punch a bright chip
     // into the slab. Gone: on the tint its own --bg-raised chip is the one it
     // wears everywhere, and its ink on that is `ink-secondary / raised`.
-    expect(() => ruleFor('.sess-line--active .sess-actions')).toThrow();
+    // D-6332: the selected row's ⋯ has a rule again, but only to SHOW it under a mouse (opacity 1, inside the
+    // fine-pointer query): it re-grounds nothing, so the chip is the same one on the tint.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(stripComments(ruleIn(fine, '.sess-line--active .sess-actions')).match(/[\w-]+(?=\s*:)/g)).toEqual(['opacity']);
     expect(declValue(ruleFor('.sess-actions'), 'background')).toBe('var(--bg-raised)');
   });
 
@@ -1235,7 +1308,7 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     // FAULT 2, and the one no width could have fixed. `.fleet-head-right`'s
     // four other items — count, accounts door, mail badge, bell — need 244px
     // of min-content, and the group has 294px at 390px; the chooser's widest
-    // option, "Coordinator row", measures 167px against the ~38px left once
+    // option, then "Coordinator row" (now "Automatic"), measures 167px against the ~38px left once
     // its gap is paid. A 129px deficit is not closable by a floor, a cap or a
     // shrink factor, so the control leaves the head. Those figures are browser
     // measurements and deliberately are NOT recomputed here — an arithmetic
@@ -1255,8 +1328,16 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
       path.join(import.meta.dirname, '..', 'src', 'fleet', 'FleetHead.tsx'), 'utf8');
     expect(head, 'the fleet head is not in FleetHead.tsx — find it and re-point this read')
       .toContain('<header className="fleet-head">');
-    expect(head, 'the chooser is back inside <header>, where it never fit')
-      .not.toContain('fleet-class-select');
+    // What the chooser IS now (T2f, D-6371): the shared component, and its select's name. `fleet-class-select` is in no
+    // markup, so a check on that class name could not go red. Read in the CODE, its comments printed away, so a comment
+    // that names the chooser cannot red it, and in either quote (C12 item 18, review 1124 A-8).
+    const code = ts.createPrinter({ removeComments: true })
+      .printFile(ts.createSourceFile('FleetHead.tsx', head, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+    expect(code, 'the printed code still holds the head').toContain('className="fleet-head"');
+    expect(code, 'the chooser component is back in the fleet head, where it never fit')
+      .not.toMatch(/\bClassChooser\b/);
+    expect(code, 'a class select is back inside <header>, where it never fit')
+      .not.toMatch(/aria-label=(?:["']Class["']|\{\s*["']Class["']\s*\})/);
     const screen = readFileSync(
       path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
     expect(screen).toContain('<div className="fleet-runs-line">');
@@ -1311,9 +1392,33 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     const row = screen.slice(lineStart, lineEnd);
     expect(row, 'the runs door left the line the chooser was seated on')
       .toContain('className="fleet-runs-row"');
-    expect(row, 'the chooser left the runs line').toContain('fleet-class-select');
+    // The select itself moved into one component (T2f, D-6371); the line places it.
+    expect(row, 'the chooser left the runs line').toContain('<ClassChooser />');
+    const chooser = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'ClassChooser.tsx'), 'utf8');
+    expect(chooser, 'the component lost the measured width utilities')
+      .toContain("cn('w-auto flex-none max-w-full', className)");
     expect(row, 'HotFilesStrip was pulled inside the runs line — it renders nothing when idle')
       .not.toContain('<HotFilesStrip');
+  });
+
+  it('seats the predicted-conflict chip beside the hot-files strip, outside the runs line (wave 4b)', () => {
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const lineStart = screen.indexOf('<div className="fleet-runs-line">');
+    const strip = screen.indexOf('<HotFilesStrip />');
+    const chip = screen.indexOf('<ConflictChip sessions={sessions} />');
+    expect(lineStart).toBeGreaterThan(-1);
+    expect(strip).toBeGreaterThan(lineStart);
+    expect(chip, 'the chip left the fleet screen').toBeGreaterThan(-1);
+    expect(chip, 'the chip mounts after the strip').toBeGreaterThan(strip);
+    // Directly after the strip: nothing but the chip's own comment sits between them.
+    expect(screen.slice(strip + '<HotFilesStrip />'.length, chip)).not.toMatch(/<[A-Za-z]/);
+    // The runs line closes before the strip, so the chip, after it, is outside the line.
+    expect(screen.slice(lineStart, strip), 'the chip was pulled inside the runs line').not.toContain('<ConflictChip');
+    // It is a pill in fleet.css, on the strip's own gutters.
+    const rule = ruleFor('.chip--conflict');
+    expect(declValue(rule, 'margin')?.replace(/\s+/g, ''), 'the strip\'s own gutters').toBe('0var(--sp-4)var(--sp-2)');
   });
 
   it("lets the sheet's routing row shrink below its three selects", () => {

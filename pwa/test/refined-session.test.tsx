@@ -6,10 +6,12 @@
 //   the hints line without the pointer query .............................. "…under a fine pointer only"
 //   the column a fixed `width: var(--measure-chat)` ....................... "…reads min(var(--measure-chat), 100%)"
 //   a sheet or an Escape binding moved into the chrome ..................... "the chrome holds no sheet and no Escape effect"
+//   the crumb typed in whenever it changes, renames or not (C12 item 2) ..... "Refined's crumb, corrected by the row…"
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { Composer } from '../src/session/Composer';
 import { SessionFlows } from '../src/session/SessionFlows';
@@ -19,11 +21,12 @@ import { fleetSession } from './fleetFixture';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 
-/** `(min-width: 900px)` answers `wide`, `(pointer: fine)` answers `fine`; a query naming both needs both. */
-function stubMedia({ wide, fine }: { wide: boolean; fine: boolean }): void {
+/** `(min-width: 900px)` answers `wide`, `(pointer: fine)` answers `fine`; a query naming both needs both. Reduced
+ *  motion answers true unless `motion` is set, so only a case that asks sees a label type in. */
+function stubMedia({ wide, fine, motion = false }: { wide: boolean; fine: boolean; motion?: boolean }): void {
   vi.stubGlobal('matchMedia', (q: string) => ({
     matches: (q.includes('min-width: 900px') ? wide : true) && (q.includes('pointer: fine') ? fine : true)
-      && !q.includes('max-width') && !q.includes('pointer: coarse'),
+      && !q.includes('max-width') && !q.includes('pointer: coarse') && !(motion && q.includes('prefers-reduced-motion')),
     media: q, onchange: null,
     addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
   }));
@@ -39,13 +42,19 @@ const SESSION = fleetSession({
   model: 'model-x', effort: 'high', branch: 'feat/a-branch',
 });
 
-function renderChrome(over: Partial<SessionHeaderProps> = {}): void {
+/** Renders Refined's chrome; the returned function redraws it with other inputs, as a frame landing does. */
+function renderChrome(over: Partial<SessionHeaderProps> = {}): (next: Partial<SessionHeaderProps>) => void {
+  const base: SessionHeaderProps = {
+    session: SESSION, status: 'busy', statusUpdatedAt: Date.now(), onInterrupt: vi.fn(), onBack: vi.fn(),
+  };
+  const r = render(chromeTree({ ...base, ...over }));
+  return (next) => r.rerender(chromeTree({ ...base, ...next }));
+}
+
+function chromeTree(inputs: SessionHeaderProps): ReactNode {
   const Chrome = REFINED_SET.SessionChrome;
   if (Chrome === null) throw new Error("Refined's set places no SessionChrome");
-  const inputs: SessionHeaderProps = {
-    session: SESSION, status: 'busy', statusUpdatedAt: Date.now(), onInterrupt: vi.fn(), onBack: vi.fn(), ...over,
-  };
-  render(
+  return (
     <>
       <CommandLayer openNewSession={() => {}} />
       <SessionFlows
@@ -60,11 +69,31 @@ function renderChrome(over: Partial<SessionHeaderProps> = {}): void {
           <Chrome />
         </SessionChromeInputs>
       </SessionFlows>
-    </>,
+    </>
   );
 }
 
 describe("Refined's session chrome", () => {
+  // Refined draws the crumb above the title through the shared `HeaderCrumbText` (C12 item 2): a fallback whose
+  // crumb guessed the project wrong is corrected by the first frame, drawn, never typed in, and so is the row leaving.
+  it("Refined's crumb, corrected by the row or left by it, is drawn plainly", () => {
+    // With motion on, so a crumb that typed in would show its caret.
+    stubMedia({ wide: true, fine: true, motion: true });
+    vi.useFakeTimers();
+    try {
+      const fallback = { title: 'ws/quiet-basin', crumb: 'project', wrapper: 'lane-a' };
+      const crumb = (): Element | null => document.querySelector('.ref-session-title .chat-crumb');
+      const redraw = renderChrome({ session: null, fallback });
+      expect(crumb()?.textContent).toBe('project');
+      redraw({ session: SESSION, fallback });
+      expect(document.querySelector('.ref-session-title .typed-caret'), 'no crumb typed in').toBeNull();
+      expect(crumb()?.textContent).toBe('project-a');
+      redraw({ session: null, fallback });
+      expect(document.querySelector('.ref-session-title .typed-caret'), 'no crumb typed in as the row leaves').toBeNull();
+      expect(crumb()?.textContent).toBe('project');
+    } finally { vi.useRealTimers(); }
+  });
+
   it("Refined's chrome renders one chip rail from the view, and no esc keycap", () => {
     // A touch screen with a busy turn: exactly where the shared header draws `esc`. Refined's Stop is the send slot's.
     stubMedia({ wide: false, fine: false });
@@ -72,13 +101,19 @@ describe("Refined's session chrome", () => {
     const rails = document.querySelectorAll('.ref-chip-rail');
     expect(rails).toHaveLength(1);
     const rail = rails[0] as HTMLElement;
-    // The status, the crumb, the model and the effort, in the one rail (spec §5.3's phone row).
+    // The status, the model and the effort, in the one rail (spec §5.3's phone row). The crumb is no longer a rail
+    // chip: the project sits above the title (desktop polish T3c, D-6333).
     expect(rail.querySelector('.status-line')?.textContent).toMatch(/^working/);
     expect(within(rail).getByText('model-x')).toBeInTheDocument();
     expect(within(rail).getByText('high')).toBeInTheDocument();
-    // A workspace's crumb (its branch) is a rail chip, in full, so the title row stays one line.
-    expect(rail.textContent).toContain('feat/a-branch');
-    expect(document.querySelector('.chat-head .chat-title')?.textContent).toBe('project-a');
+    expect(rail.querySelector('.chat-crumb')).toBeNull();
+    // The title row names the session (its row's label, here the branch it was born with), and the project is a small
+    // crumb above it; the branch chip would say the title again, so it is gone.
+    expect(rail.querySelector('.metachip--branch')).toBeNull();
+    const titleRow = document.querySelector('.ref-session-title')!;
+    expect(titleRow.querySelector('.chat-crumb')?.textContent).toBe('project-a');
+    expect(titleRow.querySelector('.chat-title')?.textContent).toBe('feat/a-branch');
+    expect([...titleRow.children].map((n) => n.tagName)).toEqual(['SPAN', 'H1']);
     expect(document.querySelectorAll('.chat-meta')).toHaveLength(1);
     expect(document.querySelector('.keycap--esc')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();

@@ -15,7 +15,7 @@ const runOf = (cls: string, word: string, n: number, stuck = false): CollectRunV
   ({ tier: childReclaimTierFrom(cls, n, stuck), word, detail: null });
 const view = (over: Partial<CollectAttentionView> = {}): CollectAttentionView => ({
   witnessRun: 41, leaf: '/h/tmp-root/demo-a', failing: NO_RUN, verbFailed: NO_RUN, terminal: NO_RUN, deferral: null,
-  presenceSince: null, hold: null, changedRecentlySince: null, die: null, wouldCollect: false, ...over,
+  viewerSince: null, hold: null, changedRecentlySince: null, die: null, wouldCollect: false, ...over,
 });
 const holdOf = (why: 'run-open' | 'run-absent' | 'run-after-witness' | 'id-in-open-run'): CollectAttentionView =>
   view({ hold: { why, since: 0 } });
@@ -41,7 +41,7 @@ const STATES: readonly (readonly [string, Lane])[] = [
     'demo-b': holdOf('run-open'),
     'demo-c': holdOf('run-absent'),
     'demo-d': view({ deferral: { word: 'in-use', detail: 'pid 7', since: 0 }, wouldCollect: true }),
-    'demo-e': view({ presenceSince: 0 }),
+    'demo-e': view({ viewerSince: 0 }),
     'demo-f': view({ terminal: runOf('terminal', 'witness-mismatch', 1, true) }),
     'demo-g': view({ verbFailed: runOf('verb-failed', 'probe-unmeasured', 4) }),
     'demo-h': view({ changedRecentlySince: 0, wouldCollect: true }),

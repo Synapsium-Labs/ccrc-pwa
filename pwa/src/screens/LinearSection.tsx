@@ -25,6 +25,7 @@ import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import type { LinearPoll } from '../fleet/useLinearConnection';
 import { ResultLine, SETTINGS_CARDS, useResultLine } from '../fleet/settingsText';
 import { ApiError, api, apiErrorText } from '../lib/api';
+import { onPageHidden } from '../lib/pageClock';
 
 /** The key field's stack and the action row: named here, not copied from the passphrase step's literals. */
 const FIELD_STACK = 'flex flex-col gap-2';
@@ -137,8 +138,7 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearPoll; stepUpDe
   // A key typed into the field does not wait there in a backgrounded page.
   useEffect(() => {
     const onVisibility = (): void => { if (document.visibilityState === 'hidden') setKey(''); };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
+    return onPageHidden(onVisibility);
   }, []);
 
   /** One act: its answer becomes the state; a refusal becomes its sentence; a stale step-up shows the step. */

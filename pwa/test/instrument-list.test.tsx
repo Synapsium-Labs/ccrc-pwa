@@ -53,6 +53,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, RunSummary, SessionBucket } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import { effectiveValue, stripComments } from './cssRule';
 
 const { App } = await import('../src/app');
 const { navigate, useLocation } = await import('../src/lib/router');
@@ -60,14 +62,16 @@ const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { api } = await import('../src/lib/api');
 const { STATUS_GROUPS } = await import('../src/fleet/statusGroups');
+const { resetAcks } = await import('../src/lib/seen');
 const { GROUP_MODE_KEY } = await import('../src/skins/instrument/FleetTable');
 
 const SKIN_DIR = path.join(import.meta.dirname, '..', 'src', 'skins', 'instrument');
 const strip = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const CSS = strip(readFileSync(path.join(SKIN_DIR, 'instrument.css'), 'utf8'));
+const FLEET_CSS = stripComments(readFileSync(path.join(SKIN_DIR, '..', '..', 'fleet', 'fleet.css'), 'utf8'));
 const TABLE_SRC = readFileSync(path.join(SKIN_DIR, 'FleetTable.tsx'), 'utf8');
 
-const LABELS = ['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Dead'];
+const LABELS = ['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited'];
 
 const COORD = 'project-a-coord';
 const CHILD = 'project-a-worker';
@@ -93,6 +97,10 @@ const RUN: RunSummary = {
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
             briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
 } as RunSummary;
+/** No open run: every session is in no programme, so status mode draws today's groups exactly (Task G3, D-7333). With
+ *  `RUN`, the coordinator's open work is a programme box and its child is drawn only inside it, while it asks
+ *  (status-programmes.test.tsx). */
+const NO_PROGRAMME: RunSummary[] = [];
 
 /** A desk (or a phone), and a fine pointer (or a coarse one). */
 function stubWidth(desk: boolean, fine = true): void {
@@ -106,8 +114,9 @@ function stubWidth(desk: boolean, fine = true): void {
 let where = '/';
 function Where(): null { where = useLocation().path; return null; }
 
+/** A fleet frame and a runs frame from a current server: each session carries the run binding over `runs` (D-7182, C7d). */
 function mount(sessions: FleetSession[] = FLEET, runs: RunSummary[] = [RUN]): void {
-  act(() => useFleetStore.setState({ conn: 'open', sessions, runs, runsFrameSeen: true, fleetFrameSeen: true }));
+  act(() => useFleetStore.setState({ conn: 'open', sessions: withRunBinding(sessions, runs), runs, runsFrameSeen: true, fleetFrameSeen: true }));
   navigate('/');
   render(<><App /><Where /></>);
 }
@@ -115,7 +124,7 @@ function mount(sessions: FleetSession[] = FLEET, runs: RunSummary[] = [RUN]): vo
 const table = (): HTMLElement => document.querySelector<HTMLElement>('.ins-table')!;
 const groups = (): HTMLElement[] => [...table().querySelectorAll<HTMLElement>('[data-status-group]')];
 const head = (g: HTMLElement): HTMLElement => g.querySelector<HTMLElement>('[aria-expanded]')!;
-const groupOf = (bucket: SessionBucket): HTMLElement => table().querySelector<HTMLElement>(`[data-status-group="${bucket}"]`)!;
+const groupOf = (bucket: SessionBucket | 'programmes'): HTMLElement => table().querySelector<HTMLElement>(`[data-status-group="${bucket}"]`)!;
 const rowIds = (el: HTMLElement): string[] =>
   [...el.querySelectorAll<HTMLElement>('[data-row]')].map((r) => r.getAttribute('data-row')!);
 const toggle = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Group sessions by' });
@@ -149,6 +158,49 @@ function rulesIn(media: string | null): { selectors: string[]; decls: string }[]
   return [...scope.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((r) => ({ selectors: r[1]!.split(',').map((x) => x.trim()), decls: r[2]! }));
 }
 
+/** `sel` with every `:<name>(…)` removed, nested parentheses included. */
+function dropPseudo(sel: string, name: string): string {
+  let out = '';
+  for (let i = 0; i < sel.length;) {
+    if (!sel.startsWith(`:${name}(`, i)) { out += sel[i++]; continue; }
+    let depth = 0;
+    let j = i + name.length + 1;
+    for (; j < sel.length; j += 1) {
+      if (sel[j] === '(') depth += 1;
+      else if (sel[j] === ')' && --depth === 0) break;
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+/** Every `display` a rule of `text` (in any at-rule) gives an element that can be the context's `.sess-meta`, as
+ *  "<sheet> <selector>: <value>": a selector whose subject (its last compound, read outside parentheses) names
+ *  `.sess-meta` or `.sess-meta--context`, outside a `:not()` or `:has()`, is not a pseudo-element and does not exclude
+ *  the context with `:not(.sess-meta--context)`. */
+function contextDisplays(text: string, sheet: string): string[] {
+  const subject = (sel: string): string => {
+    let depth = 0;
+    let last = 0;
+    for (let i = 0; i < sel.length; i += 1) {
+      if (sel[i] === '(') depth += 1;
+      else if (sel[i] === ')') depth -= 1;
+      else if (depth === 0 && /[\s>+~]/.test(sel[i]!)) last = i + 1;
+    }
+    return sel.slice(last);
+  };
+  const out: string[] = [];
+  for (const [, prelude, body] of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const sel of prelude!.split(',').map((s) => s.trim())) {
+      const subj = subject(sel);
+      if (/::?(?:before|after|marker)\b/.test(subj) || subj.includes(':not(.sess-meta--context)')) continue;
+      if (!/\.sess-meta(?:--context)?(?![\w-])/.test(dropPseudo(dropPseudo(subj, 'not'), 'has'))) continue;
+      for (const [, value] of body!.matchAll(/(?:^|[;{\s])display\s*:\s*([^;]+)/g)) out.push(`${sheet} ${sel}: ${value!.trim()}`);
+    }
+  }
+  return out;
+}
+
 beforeEach(() => {
   localStorage.clear();
   document.documentElement.removeAttribute('data-skin');
@@ -170,7 +222,7 @@ afterEach(() => {
 
 describe('status mode', () => {
   it('status mode renders the groups in groupByStatus\'s order, the last four folded', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
       ['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
     expect(groups().map((g) => head(g).getAttribute('aria-expanded'))).toEqual(
@@ -184,7 +236,7 @@ describe('status mode', () => {
   });
 
   it('status mode shows Done above Working', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     const order = groups().map((g) => g.getAttribute('data-status-group'));
     expect(order.indexOf('done')).toBeGreaterThanOrEqual(0);
     expect(order.indexOf('done')).toBeLessThan(order.indexOf('working'));
@@ -197,7 +249,7 @@ describe('status mode', () => {
   });
 
   it('each group header names its status, and in project mode each row shows its word beside its lamp', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(groups().map((g) => head(g).textContent)).toEqual(LABELS.map((l) => expect.stringContaining(l)));
     // Each header carries its count in its name, so a folded group still says how many it holds.
     expect(head(groupOf('idle'))).toHaveAccessibleName(/^Idle.*1/);
@@ -220,18 +272,143 @@ describe('status mode', () => {
     for (const w of ['waiting', 'exited', 'merged', 'needs you']) expect(code).not.toContain(`'${w}'`);
   });
 
-  it('in status mode a child row carries its coordinator\'s crumb; in project mode it nests as today', () => {
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the held cell's run-board door follows the wire's binding. A child the
+  // wire binds to the open run gets the door; the same child with no binding (#746's recycled id, or an older server's
+  // frame) reads its hold as text (a door before C7d, read off the id). Since G3 (D-7333) a quiet child is drawn in
+  // status mode only while the operator has it open (its box's tray), so the case opens it.
+  it('in status mode a held child\'s cell opens the run board only when the wire binds the run to it', () => {
+    const held = 'program:port-api wave:1/3 run:41';
+    const withHeld = (over: Partial<FleetSession>): FleetSession[] => FLEET.map((s) => (s.id === CHILD ? { ...s, held, ...over } : s));
+    const heldCell = (): Element | null => table().querySelector(`[data-row="${CHILD}"] .sess-held`);
+    mount(withHeld({}));
+    act(() => navigate(`/s/${CHILD}`));
+    expect(heldCell()?.tagName).toBe('BUTTON');
+    cleanup();
+    mount(withHeld({ run: null, openRun: null }));
+    act(() => navigate(`/s/${CHILD}`));
+    expect(heldCell()?.tagName).toBe('SPAN');
+  });
+
+  it('in status mode a child is drawn only in its programme\'s box, while it asks; in project mode it nests as today (Task G3)', () => {
     mount();
-    const child = groupOf('done').querySelector<HTMLElement>(`[data-row="${CHILD}"]`)!;
-    expect(child).not.toBeNull();
-    expect(child.querySelector('.ins-coord-crumb')?.textContent).toContain('the coordinator');
-    // The coordinator itself carries no crumb.
-    expect(groupOf('working').querySelector(`[data-row="${COORD}"] .ins-coord-crumb`)).toBeNull();
-    pick('Project');
+    // The coordinator's open work is its box, in Programmes, after Needs you; the child, which does not ask, is drawn
+    // nowhere, and no row carries a coordinator crumb any more.
+    expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(
+      ['attention', 'programmes', 'idle', 'cleanup', 'archived', 'dead']);
+    const box = groupOf('programmes').querySelector<HTMLElement>('section.pg-box')!;
+    expect(rowIds(box.querySelector('.pg-coord')!)).toEqual([COORD]);
+    expect(table().querySelector(`[data-row="${CHILD}"]`)).toBeNull();
     expect(table().querySelector('.ins-coord-crumb')).toBeNull();
+    pick('Project');
     // Project mode is the shared card: the child sits under its coordinator (a nest, or the rollup's workers line).
     const nested = table().querySelector('.proj-nest[data-depth="1"]') ?? table().querySelector('.proj-children-toggle');
     expect(nested).not.toBeNull();
+  });
+});
+
+// T3a (D-6331): the counts once per screen, and no door lost. In status mode the group heads ARE the counts, so the
+// screen draws no chips above them; each badged head says "N new" and offers Mark all seen, a SIBLING of its fold row
+// (a button inside a button is not valid), through the same `markSeen.ts` the chips use. In project mode the cards carry
+// no bucket counts, so the table draws the chips itself, above them.
+describe('the counts once per screen', () => {
+  const NOW = Date.now();
+  const UNSEEN: FleetSession[] = [
+    at('project-a-asks', 'attention', { dialogPending: true, hookState: 'waiting', bucketSince: NOW }),
+    at('project-a-done-1', 'done', { bucketSince: NOW }),
+    at('project-a-done-2', 'done', { bucketSince: NOW }),
+    at('project-a-done-3', 'done', { bucketSince: null }),
+    at(COORD, 'working', { role: 'coordinator', name: 'the coordinator' }),
+    at('project-a-gone', 'dead', { bucketSince: NOW }),
+  ];
+  const words = (el: HTMLElement): string => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  beforeEach(() => { resetAcks(); });
+
+  it("status mode renders no bucket chips; each badged group head reads 'N new' and offers Mark all seen", () => {
+    mount(UNSEEN, []);
+    expect(table().querySelector('.bucket-bar')).toBeNull();
+    expect(table().querySelector('.bucket-head')).toBeNull();
+
+    const done = groupOf('done');
+    const doneHead = head(done);
+    expect(words(doneHead)).toMatch(/Done · 3 · 2 new$/);
+    expect(within(doneHead).getByLabelText('2 new')).toHaveTextContent('2 new');
+    expect(words(head(groupOf('attention')))).toMatch(/Needs you · 1 · 1 new/);
+    // A group nothing is unseen in carries no badge and no door; Exited is never badged.
+    expect(within(head(groupOf('working'))).queryByLabelText(/new$/)).toBeNull();
+    expect(within(groupOf('working')).queryByRole('button', { name: /^Mark all/ })).toBeNull();
+    expect(within(groupOf('dead')).queryByRole('button', { name: /^Mark all/ })).toBeNull();
+
+    // The door is a SIBLING of the fold row, named for its group, never a button inside the fold row's button.
+    const door = within(done).getByRole('button', { name: 'Mark all seen, Done' });
+    // Its visible words come first in its name (WCAG 2.5.3, label in name), the group after them (F8).
+    expect(door.getAttribute('aria-label')!.startsWith(door.textContent!)).toBe(true);
+    expect(doneHead.contains(door)).toBe(false);
+    expect(door.closest('.ins-group-head')).toBeNull();
+    expect(done.contains(door)).toBe(true);
+    expect(doneHead.querySelector('button')).toBeNull();
+    // The fold row takes the squeeze at 360 and 390, never the door's word (`shrink-0`, the row `min-w-0`).
+    expect(door).toHaveClass('shrink-0');
+    expect(doneHead).toHaveClass('min-w-0');
+
+    fireEvent.click(door);
+    // Every row of THAT group is acked; the other group's badge stays.
+    expect(within(doneHead).queryByLabelText(/new$/)).toBeNull();
+    expect(within(done).queryByRole('button', { name: /^Mark all/ })).toBeNull();
+    expect(within(head(groupOf('attention'))).getByLabelText('1 new')).toBeInTheDocument();
+    // Focus moves to the group's own fold row, and a region outside the control that unmounted says what happened.
+    expect(document.activeElement).toBe(doneHead);
+    expect(within(table()).getByRole('status')).toHaveTextContent('Done: 2 marked seen');
+    // The held-open Needs you head still folds nothing and keeps its door.
+    expect(within(groupOf('attention')).getByRole('button', { name: 'Mark all seen, Needs you' })).toBeInTheDocument();
+  });
+
+  it("a head's fold row is named by its visible words, in order: the count and the badge never run together", () => {
+    mount(UNSEEN, []);
+    // The badge's separator is read like the count's own: aria-hidden, "3" and "2 new" collapsed into "32 new" (F10).
+    // jsdom's name computation trims the whitespace around an inline span's text ("Done· 3·2 new"), so the pin is the
+    // order and the middot between the numbers, not the spaces a real browser keeps ("Done · 3 · 2 new").
+    expect(head(groupOf('done'))).toHaveAccessibleName(/^Done\W*3\s*·\s*2 new$/);
+    expect(head(groupOf('attention'))).toHaveAccessibleName(/^Needs you\W*1\s*·\s*1 new/);
+    // An unbadged head has no badge to separate.
+    expect(head(groupOf('working'))).toHaveAccessibleName(/^Working\W*1$/);
+  });
+
+  it('on a phone, Mark all seen in a tab acks its group, announces it and returns focus to the head', () => {
+    stubWidth(false, false);
+    mount(UNSEEN, []);
+    // The tabbed return renders the group heads too, and its own status region beside the panel.
+    fireEvent.click(screen.getByRole('tab', { name: /^Done/ }));
+    const panel = screen.getByRole('tabpanel');
+    const done = groupOf('done');
+    expect(panel.contains(done)).toBe(true);
+    expect(table().querySelector('.bucket-bar')).toBeNull();
+    fireEvent.click(within(done).getByRole('button', { name: 'Mark all seen, Done' }));
+    expect(within(done).queryByLabelText(/new$/)).toBeNull();
+    expect(document.activeElement).toBe(head(done));
+    expect(within(table()).getByRole('status')).toHaveTextContent('Done: 2 marked seen');
+  });
+
+  it('project mode renders the bucket chips', () => {
+    mount(UNSEEN, []);
+    pick('Project');
+    const bar = table().querySelector<HTMLElement>('.bucket-bar')!;
+    expect(bar).not.toBeNull();
+    // Above the cards, inside the table, one chip per non-empty bucket in the shared words.
+    expect(within(bar).getByRole('group', { name: 'Needs you' })).toBeInTheDocument();
+    expect(within(bar).getByRole('group', { name: 'Exited' })).toBeInTheDocument();
+    expect(bar.compareDocumentPosition(table().querySelector('.fleet-list, .proj-card, .proj-nest')!)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The door is the chips' own and works here: it acks that bucket, announces it and keeps focus on the chip's label.
+    const chip = within(bar).getByRole('group', { name: 'Needs you' });
+    const chipDoor = within(chip).getByRole('button', { name: 'Mark all seen, Needs you' });
+    expect(chipDoor.getAttribute('aria-label')!.startsWith(chipDoor.textContent!)).toBe(true);
+    fireEvent.click(within(chip).getByRole('button', { name: 'Mark all seen, Needs you' }));
+    expect(within(chip).queryByLabelText(/new$/)).toBeNull();
+    expect(document.activeElement).toBe(chip.querySelector('.bucket-head-label'));
+    expect(within(table()).getByRole('status')).toHaveTextContent('Needs you: 1 marked seen');
+    // Back in status mode the chips are gone again.
+    pick('Status');
+    expect(table().querySelector('.bucket-bar')).toBeNull();
   });
 });
 
@@ -269,12 +446,13 @@ describe('project mode and the doors', () => {
     pick('Status');
     const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual([
-      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Programmes/), expect.stringMatching(/^Done/),
+      expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
     expect(tabs.filter((t) => t.getAttribute('aria-selected') === 'true')).toHaveLength(1);
   });
 
   it('a fold is remembered through useFolded', () => {
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     fireEvent.click(head(groupOf('idle')));
     expect(head(groupOf('idle')).getAttribute('aria-expanded')).toBe('true');
     expect(rowIds(groupOf('idle'))).toEqual(['project-a-quiet']);
@@ -283,7 +461,7 @@ describe('project mode and the doors', () => {
     fireEvent.click(head(groupOf('working')));
     expect(head(groupOf('working')).getAttribute('aria-expanded')).toBe('false');
     cleanup();
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(head(groupOf('idle')).getAttribute('aria-expanded')).toBe('true');
     expect(head(groupOf('working')).getAttribute('aria-expanded')).toBe('false');
   });
@@ -353,7 +531,7 @@ describe('project mode and the doors', () => {
 describe('phone', () => {
   it('phone: the tabs select one group; All shows every group', () => {
     stubWidth(false, false);
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     const tab = (name: RegExp): HTMLElement => within(screen.getByRole('tablist', { name: 'Sessions by status' })).getByRole('tab', { name });
     fireEvent.click(tab(/^Working/));
     expect(tab(/^Working/).getAttribute('aria-selected')).toBe('true');
@@ -369,13 +547,14 @@ describe('phone', () => {
     expect(tab(/^Needs you/)).toHaveAccessibleName(/1/);
   });
 
-  it('the phone tabs read Needs you, Done, Working, All', () => {
+  it('the phone tabs read Needs you, Programmes, Done, Working, All (Task G3)', () => {
     stubWidth(false, false);
     mount();
     pick('Status');
     const tabs = within(screen.getByRole('tablist', { name: 'Sessions by status' })).getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual([
-      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Done/), expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
+      expect.stringMatching(/^Needs you/), expect.stringMatching(/^Programmes/), expect.stringMatching(/^Done/),
+      expect.stringMatching(/^Working/), expect.stringMatching(/^All/)]);
   });
 });
 
@@ -392,7 +571,7 @@ describe('phone', () => {
 describe('review fixes', () => {
   it('Needs you is held open while it holds a row, whatever is stored (the fleet rollup\'s rule, D-6088)', () => {
     localStorage.setItem('ccrc.fleet-folded.v1', JSON.stringify(['status::attention']));
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     const h = head(groupOf('attention'));
     expect(h.getAttribute('aria-expanded')).toBe('true');
     expect(h.getAttribute('aria-disabled')).toBe('true');
@@ -401,12 +580,12 @@ describe('review fixes', () => {
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     cleanup();
     localStorage.clear();
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     fireEvent.click(head(groupOf('attention')));
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     expect(JSON.parse(localStorage.getItem('ccrc.fleet-folded.v1') ?? '[]')).not.toContain('status::attention');
     cleanup();
-    mount();
+    mount(FLEET, NO_PROGRAMME);
     expect(rowIds(groupOf('attention'))).toEqual(['project-a-asks']);
     // Only the group holding a waiting row is held: Working still folds.
     expect(head(groupOf('working')).hasAttribute('aria-disabled')).toBe(false);
@@ -435,11 +614,11 @@ describe('review fixes', () => {
 
   it('a group with no rows is absent at a desk and under All, present under its own phone tab', () => {
     const sparse = FLEET.filter((s) => s.bucket !== 'attention' && s.bucket !== 'idle');
-    mount(sparse);
+    mount(sparse, NO_PROGRAMME);
     expect(groups().map((g) => g.getAttribute('data-status-group'))).toEqual(['done', 'working', 'cleanup', 'archived', 'dead']);
     cleanup();
     stubWidth(false, false);
-    mount(sparse);
+    mount(sparse, NO_PROGRAMME);
     const tab = (name: RegExp): HTMLElement => within(screen.getByRole('tablist', { name: 'Sessions by status' })).getByRole('tab', { name });
     fireEvent.click(tab(/^All/));
     expect(groups().map((g) => g.getAttribute('data-status-group'))).not.toContain('idle');
@@ -489,10 +668,11 @@ describe('review fixes', () => {
 describe('dense rows at the desk (T2e, D-6335)', () => {
   const DENSE = '(min-width: 900px) and (pointer: fine)';
 
-  it('under a fine pointer at a desk a status row is two lines on --row-h: name and state, then the context', () => {
+  it('under a fine pointer at a desk a status row sits on --row-h: the name and the state word share a line when they fit', () => {
     // The body is a wrapping flex row: the state word beside the name when both fit, on a line of its own when they do
-    // not (a flex line breaks on max-content sizes, so the name then has the whole line), and the context on a line of
-    // its own. Never a grid with a capped state column: that squeezed a long name into three lines beside the state.
+    // not (a flex line breaks on max-content sizes, so the name then has the whole line). That is the whole layout of a
+    // row with no context; a row with a context is a block instead (T3b, the case at the end of this block). Never a grid
+    // with a capped state column: that squeezed a long name into three lines beside the state.
     const body = declsOf('.ins-row .sess-body', DENSE);
     expect(body).toMatch(/display:\s*flex/);
     expect(body).toMatch(/flex-flow:\s*row wrap/);
@@ -515,8 +695,10 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     expect(table().querySelector('.ins-row .sess-line')!.firstElementChild, 'the first cell is the lamp').toHaveClass('sess-lamp');
     expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/margin-top:\s*0/);
     expect(declsOf('.ins-row .sess-actions', DENSE)).toMatch(/align-self:\s*center/);
-    // The group heads and the toggle sit at --row-h.
+    // The group heads, the Mark all seen door beside them (a ghost Button, whose base `min-h-tap` would otherwise make a
+    // badged head 44px among 32px ones) and the toggle sit at --row-h.
     expect(declsOf('.ins-group-head', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
+    expect(declsOf('.ins-group-seen', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     expect(declsOf('.ins-toggle-option', DENSE)).toMatch(/min-height:\s*var\(--row-h\)/);
     // Every dense value is a token or a keyword: the pattern bars a px literal and a colour literal (hex, rgb, hsl), in
     // every rule of the block (T2e review R32, F6), not in a list of selectors that a new rule would be left out of.
@@ -530,9 +712,96 @@ describe('dense rows at the desk (T2e, D-6335)', () => {
     for (const sel of ['.ins-row .sess-body', '.ins-row .sess-body > .sess-open', '.ins-row .sess-body > .sess-meta:not(.sess-meta--context)',
       '.ins-row .sess-line > :first-child', '.ins-row .sess-line:not(:has(.sess-meta--context)) > :first-child',
       '.ins-row .sess-line:not(:has(.sess-meta--context)) .sess-body > .sess-open', '.ins-row .sess-actions',
-      '.ins-row .sess-meta--context', '.ins-group-head', '.ins-toggle-option']) {
+      '.ins-row .sess-meta--context', '.ins-group-head', '.ins-group-seen', '.ins-toggle-option']) {
       expect(declsOf(sel), sel).not.toMatch(/min-height|margin-top|margin-inline|flex|display:\s*(grid|flex)|align-self/);
       for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
     }
+  });
+  it('a row with a context ends its context line with the state word only where the whole context fits, so the state never cuts it (T3b, R21 F2, D-7252)', () => {
+    // The operator's ruling (R121, Q2) and D-7252: the state word ends the context line, so a long name does not push it
+    // onto a line of its own, but never by narrowing the context. The row is a block; the name is an inline box at its
+    // own width, the state word floats to the end of the first line with room for it, and the context is as wide as its
+    // text, so a float leaves it to start below the state word when it would not fit whole beside it. That needs the
+    // context to be a formatting context of its own: it is `.sess-meta`, a flex container in fleet.css, pinned below (an
+    // ordinary block would run under the float). The row's children sit in a block, so no flex basis, `order` or
+    // `min-width` on them takes part. A row with no context keeps the flex row, so every rule names a row that HAS a
+    // context.
+    const body = '.ins-row .sess-line:has(.sess-meta--context) .sess-body';
+    const open = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open';
+    const state = '.ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context)';
+    const context = '.ins-row .sess-line:has(.sess-meta--context) .sess-meta--context';
+    expect(declsOf(body, DENSE)).toMatch(/display:\s*block/);
+    expect(declsOf(open, DENSE)).toMatch(/display:\s*inline-flex/);
+    expect(declsOf(open, DENSE)).toMatch(/max-width:\s*100%/);
+    expect(declsOf(state, DENSE)).toMatch(/float:\s*right/);
+    expect(declsOf(context, DENSE)).toMatch(/width:\s*max-content/);
+    expect(declsOf(context, DENSE)).toMatch(/max-width:\s*100%/);
+    // The context is a formatting context of its own (review 1130 E): `.sess-meta`'s display is flex, and no rule of the
+    // two sheets that style a desk row gives the context another (review 1136 F9: a more specific `display: block`
+    // would pass a read of the base rule alone). chat.css's `.chat-facts .sess-meta` is the session page's, not a row's.
+    expect(effectiveValue(FLEET_CSS, '.sess-meta', 'display'), "fleet.css's .sess-meta").toBe('flex');
+    const displays = [...contextDisplays(FLEET_CSS, 'fleet.css'), ...contextDisplays(CSS, 'instrument.css')];
+    expect(displays, 'the scan reads the base rule').toContain('fleet.css .sess-meta: flex');
+    expect(displays.filter((d) => !d.endsWith(': flex')), 'a display other than flex on the context').toEqual([]);
+    // Only at the desk under a fine pointer: a touch screen or a phone keeps the shared sheet's rows.
+    for (const sel of [body, open, state, context]) {
+      expect(declsOf(sel), sel).toBe('');
+      for (const media of ['(min-width: 900px)', '(pointer: fine)']) expect(declsOf(sel, media), `${sel} in ${media}`).toBe('');
+    }
+  });
+});
+
+// ---- Desk polish, T2f (D-6371) ----------------------------------------------------------------------------------
+
+describe("Instrument's desk column: no runs row, and the class chooser on the toggle's row in project mode (T2f)", () => {
+  /** The class chooser, by its accessible name: every one in the document. */
+  const choosers = (): HTMLElement[] => screen.queryAllByLabelText('Class');
+  /** The fleet column in the frame's nav slot; asserted present first, so an absent column never passes as "no row". */
+  const column = (): HTMLElement => {
+    const el = document.querySelector<HTMLElement>('.shell-nav section[aria-label="Fleet"]');
+    expect(el, 'the fleet column is mounted').not.toBeNull();
+    return el!;
+  };
+
+  it('status mode at the desk: no runs row and no class chooser', () => {
+    mount();
+    expect(table(), 'the table is mounted').not.toBeNull();
+    expect(column().querySelector('.fleet-runs-line'), 'the runs line').toBeNull();
+    expect(within(column()).queryByRole('button', { name: /^Runs · / }), 'a Runs · n door').toBeNull();
+    expect(choosers(), 'class choosers').toHaveLength(0);
+    // The rail's Runs is the door that stays.
+    expect(document.querySelectorAll('[data-command="go-runs"]'), 'the rail\'s Runs door').toHaveLength(1);
+  });
+
+  it("project mode at the desk: the chooser on the toggle's row", () => {
+    mount();
+    pick('Project');
+    expect(column().querySelector('.fleet-runs-line'), 'the runs line').toBeNull();
+    expect(choosers(), 'class choosers').toHaveLength(1);
+    const chooser = choosers()[0]!;
+    // Beside the toggle on its row, never inside the radiogroup (whose arrow keys would rove into it).
+    expect(toggle().contains(chooser), 'inside the radiogroup').toBe(false);
+    expect(toggle().parentElement, 'the toggle sits on a row of its own').not.toBe(table());
+    expect(toggle().parentElement!.contains(chooser), "on the toggle's row").toBe(true);
+    // It is the live chooser: the options and the value the fleet screen's had.
+    expect([...(chooser as HTMLSelectElement).options].map((o) => o.value)).toEqual(['', 'default', 'fable', 'opus', 'sonnet', 'haiku']);
+    expect((chooser as HTMLSelectElement).value).toBe('');
+    // Back to status mode: the chooser leaves with project mode.
+    pick('Status');
+    expect(choosers(), 'class choosers in status mode').toHaveLength(0);
+  });
+
+  it('below 900 the runs row is as today', () => {
+    stubWidth(false);
+    mount();
+    const line = column().querySelector('.fleet-runs-line');
+    expect(line, 'the runs line').not.toBeNull();
+    expect(within(line as HTMLElement).getByRole('button', { name: 'Runs · 1 active' })).toHaveClass('fleet-runs-row');
+    expect(choosers(), 'class choosers').toHaveLength(1);
+    expect(line!.contains(choosers()[0]!), 'the chooser on the runs line').toBe(true);
+    // Project mode adds no second chooser on the toggle's row: one control, on the runs line, at any phone width.
+    pick('Project');
+    expect(choosers(), 'class choosers in project mode').toHaveLength(1);
+    expect(column().querySelector('.fleet-runs-line')!.contains(choosers()[0]!)).toBe(true);
   });
 });

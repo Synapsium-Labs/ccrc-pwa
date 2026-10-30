@@ -11,7 +11,7 @@ import { AttachButton, AttachTray, Button, Icon, KeyHint, Sheet, Well } from '@c
 import { PALETTE_KEYS } from '../command/CommandLayer';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { ATTACH_ACCEPT, clipboardFiles, isAttachable, useStagedImages } from './useAttachImage';
-import { api } from '../lib/api';
+import { api, sendErrorText } from '../lib/api';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
@@ -36,6 +36,15 @@ export interface ComposerProps {
   /** Stop in the send slot. It reports `keycap`, the word the server already records for the on-screen control:
    *  W2 changes no wire (D-5471), so the type admits no new source. */
   onInterrupt?: (source: 'keycap') => void;
+  /** D-6326: an inline ask card is mounted, so Send is deferred LOCALLY for as long as it is: the button is DISABLED
+   *  before any click, the `dialog-open` sentence shows ABOVE the field (R93) the whole time (with a draft or without one), and
+   *  the text stays in the field. `send()`'s own guard is defence behind that, because Enter in the field calls it
+   *  directly: it makes no request either. This is the client's own rule, not the server's predicate: the server refuses
+   *  with `dialog-open` only while the pane has a menu, so an approval with no pane menu (fixture 7) would not be refused
+   *  there, yet the card still holds the send while it is mounted. It also holds through the reconnect gap, while
+   *  `DialogSheet`'s held, read-only card is up (`askInline` stays true then), so Send is held and Escape does not
+   *  interrupt until the new connection decides. Stop is unaffected: it stays enabled beside a disabled Send. */
+  askUp?: boolean;
 }
 
 /** After a send empties the draft during a busy turn, the danger Stop takes Send's spot at once; it ignores taps for
@@ -72,6 +81,7 @@ export function Composer({
   onResolve,
   busy = false,
   onInterrupt,
+  askUp = false,
 }: ComposerProps): ReactNode {
   const [value, setValue] = useState('');
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
@@ -159,6 +169,11 @@ export function Composer({
 
   const send = (): void => {
     if (!canSend) return;
+    // A local deferral while the inline card is mounted, whatever the server would say about the pane: no request is made
+    // and the text stays in the field. The Send button is disabled for the same reason (R77 F1), so this guard is the
+    // defence for Enter, which calls `send()` directly. The sentence above the field (R93) is the surface's own and shows
+    // while the card is up, not after a try.
+    if (askUp) return;
     const text = value.trim();
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
@@ -245,7 +260,10 @@ export function Composer({
 
   const closeConflict = (): void => setConflict(null);
   const resolveConflict = (text: string): void => {
-    if (!conflict) return;
+    // D-6326 (R89): both resolving buttons are sends, held while the inline ask card is mounted. The buttons are disabled
+    // for the same fact; this is the defence behind them. The conflict is NOT cleared when held, so the sheet stays open
+    // with its draft and text, and nothing is queued to go when the card leaves.
+    if (!conflict || askUp) return;
     onResolve?.(conflict.key, text, { replaceDraft: true });
     setConflict(null);
   };
@@ -305,6 +323,11 @@ export function Composer({
         </ul>
       )}
       <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
+      {/* ABOVE the field (R93): the composer is at the foot of the pane, so a line here grows it upward and the field,
+          Send and Stop stay where they were; below the field the same line pushed them up by its own height. */}
+      {askUp && (
+        <p className="composer-refusal" role="status">{sendErrorText('dialog-open')}</p>
+      )}
       <div className="inputbar">
         <span className="prompt-glyph" aria-hidden="true">
           ❯
@@ -344,7 +367,7 @@ export function Composer({
               type="button"
               className="send-btn"
               aria-label="Send"
-              disabled={!canSend}
+              disabled={!canSend || askUp}
               onClick={send}
             >
               <span aria-hidden="true">↑</span>
@@ -402,6 +425,7 @@ export function Composer({
               <div className="draft-actions">
                 <Button
                   variant="primary"
+                  disabled={askUp}
                   onClick={() => resolveConflict(conflict.text)}
                 >
                   Replace draft
@@ -410,6 +434,7 @@ export function Composer({
                     because `conflict.draft` is now the whole box. */}
                 <Button
                   variant="ghost"
+                  disabled={askUp}
                   onClick={() => resolveConflict(`${conflict.draft}\n${conflict.text}`)}
                 >
                   Append anyway

@@ -23,6 +23,7 @@ import {
   AUTO, DEVICE_QUERY, REFINED, SKIN_STORAGE_KEY, applySkin, resolveSkin, skinPreference,
   type SkinId, type SkinPreference,
 } from '@ccrc/ui';
+import { readKey, writeKey } from './storage';
 
 /** The stored choice — a skin, or AUTO ("Match this device") — and AUTO when
  *  nothing is stored, the value is unknown, or storage is unreadable. The
@@ -32,21 +33,14 @@ import {
  *  and this runs before first render — an exception here is a blank app, so
  *  the read is guarded and a failure is simply "no choice", which is AUTO. */
 export function storedSkin(): SkinPreference {
-  try {
-    return skinPreference(localStorage.getItem(SKIN_STORAGE_KEY));
-  } catch {
-    return AUTO;
-  }
+  // The port's read is guarded (a throw answers null), and `skinPreference` reads null as AUTO.
+  return skinPreference(readKey(SKIN_STORAGE_KEY));
 }
 
 /** Remember a choice. A failed write is not an error the person needs: the
  *  skin still applies for this session, it just will not survive a reload. */
 export function rememberSkin(choice: SkinPreference): void {
-  try {
-    localStorage.setItem(SKIN_STORAGE_KEY, choice);
-  } catch {
-    /* private window, blocked storage — the session keeps the skin anyway */
-  }
+  writeKey(SKIN_STORAGE_KEY, choice); // refused (private window, blocked storage): the session keeps the skin anyway
 }
 
 /** Is this a desk? DEVICE_QUERY's answer, asked once. A missing or throwing

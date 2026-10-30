@@ -32,12 +32,12 @@ import { fileURLToPath } from 'node:url';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import { POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
-import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 /** bash's absolute path, resolved ONCE under this process's real PATH. The one
  *  run below hands its child an EMPTY PATH — `_check_pools` forks nothing, and
  *  an empty PATH is the strongest statement of that — and libuv resolves the

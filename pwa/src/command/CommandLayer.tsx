@@ -13,6 +13,7 @@ import { setTheme } from '../lib/theme';
 import { focusShownLandmark } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
 import { useSessionCommandTarget } from '../session/SessionFlows';
+import { useInspectorCommandTarget } from '../inspector/inspectorShown';
 import { baseCommands, fleetOrder } from './commands';
 import {
   available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, type CommandContext, type CommandPage,
@@ -119,6 +120,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   const ordered = useMemo(() => fleetOrder(sessions, runs), [sessions, runs]);
   // The open session's flows (W2 Task S2d): its commands are offered only while a session screen hosts them.
   const session = useSessionCommandTarget();
+  // The inspector rail's flip (desktop polish T3e, D-6385), while a part places one.
+  const inspector = useInspectorCommandTarget();
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
@@ -131,7 +134,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     openPalette,
     paletteOpen: open,
     session,
-  }), [path, ordered, runs, openNewSession, openPalette, open, session]);
+    inspector,
+  }), [path, ordered, runs, openNewSession, openPalette, open, session, inspector]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
@@ -190,11 +194,14 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     }
   };
 
-  // The sheet lists what `useShortcuts` binds: the registry's own keys, plus
-  // the one chord the layer itself owns.
+  // The sheet lists the keys that act here: the registry's own keys on the
+  // commands offered in this context, plus the one chord the layer itself
+  // owns. `useShortcuts` binds every key everywhere, but a single key skips
+  // `when` and its run does nothing where its command is not offered (the
+  // inspector's `i` with no rail placed), so such a key is not listed.
   const rows: { id: string; title: string; keys: readonly string[] }[] = [
     { id: 'palette', title: 'Open the command palette', keys: PALETTE_KEYS },
-    ...commands.flatMap((c) => (c.keys === undefined ? [] : [{ id: c.id, title: c.title, keys: c.keys }])),
+    ...available(commands, ctx).flatMap((c) => (c.keys === undefined ? [] : [{ id: c.id, title: c.title, keys: c.keys }])),
   ];
 
   return (

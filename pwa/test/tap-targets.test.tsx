@@ -15,7 +15,7 @@
 //     token rather than a literal `44px` that would not follow the token;
 //   - the RENDER proves a real element still carries the class, which is what
 //     a rule with no matching element would silently stop doing.
-import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, vi, beforeEach, onTestFinished } from 'vitest';
 import type { CoordCapsView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
@@ -24,7 +24,7 @@ import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, rootBody, ruleIn, stripComments } from './cssRule';
 import { api } from '../src/lib/api';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
@@ -99,10 +99,12 @@ const wsAudit: WsAudit = {
   transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
 };
 
-/** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
-const makeStore = (): FleetStore => createFleetStore({
+/** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. `fetchFeed` is the store's feed reader,
+ *  which `MailScreen` reads through `refreshFeed()` (C7n, D-7209). */
+const makeStore = (fetchFeed?: () => Promise<{ events: NotifyEvent[] }>): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
+  ...(fetchFeed === undefined ? {} : { fetchFeed }),
 });
 
 // Build 7 Task 5 — RunSummary as PR I actually shipped it (see
@@ -382,7 +384,7 @@ describe('.mail-badge — the only door to /mail', () => {
     expect(declValue(ruleIn(fleetCss, '.mail-badge'), 'min-width')).toBe('var(--tap-min)');
   });
   it('is the class the rendered head control actually carries', () => {
-    render(<MailBadge unread={0} />);
+    render(<MailBadge waiting={0} />);
     expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
   });
 });
@@ -436,7 +438,7 @@ describe('.mail-back — the feed’s back control', () => {
     expect(backButton).not.toContain('44px');
   });
   it('is the class the rendered control actually carries', () => {
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={makeStore(async () => ({ events: [] }))} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
   });
 });
@@ -458,7 +460,7 @@ describe('.mail-chip — the feed’s programme filter', () => {
       { id: 5, program: 'build9b', programTitle: 'Build 9b' },
       { id: 6, program: 'crossrepo', programTitle: 'Cross-repo' },
     ] as unknown as RunSummary[];
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events })}
+    render(<MailScreen store={makeStore(async () => ({ events }))}
                         loadRuns={async () => ({ runs })} />);
     expect(await screen.findByRole('button', { name: 'Build 9b' })).toHaveClass('mail-chip');
     expect(screen.getByRole('button', { name: 'All' })).toHaveClass('mail-chip');
@@ -604,9 +606,10 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
     expectQuietIsATarget();
   });
   it('is the class the rendered confirm button actually carries', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
-    });
+    // The sheet reads the app-wide fleet store's projection, which that store's one /api/accounts poll writes
+    // (C8, D-6440); reset when the case ends.
+    act(() => { useFleetStore.setState({ projected: { wrapper: 'claude', score: 5 } }); });
+    onTestFinished(() => { useFleetStore.setState({ projected: undefined }); });
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
       openRunProjects={new Set<string>()}

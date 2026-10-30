@@ -1,14 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ApiError, api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
+import { SkinSetProvider } from '../src/skins/frame';
+import { REFINED_SET } from '../src/skins/refined/parts';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
 import { ICONS } from '../../ui/src/icons/lucide';
@@ -49,12 +53,19 @@ const MIN = 60_000;
  *  failed lifecycle route (`{ ok: false, stderr }`, no `error` key).
  *
  *  Unlike the sibling helper in session-card.test.tsx, this mounts the full
- *  FleetScreen tree — AccountsStrip and FleetHostBanner also call fetch on
- *  mount (api.accounts / api.fleetHealth), and a Response body can only be
- *  read once. A single shared `mockResolvedValue(response)` would let the
- *  first of those consume the body, leaving later callers (our click) with
- *  an empty, already-read stream — so this hands back a fresh Response
- *  per call instead. */
+ *  FleetScreen tree, where other reads call fetch on mount too: the fleet
+ *  store's `connect()` reads /api/accounts, the test host's
+ *  `FleetChromeProvider` polls /api/fleet/health (its /api/updates poll
+ *  starts too, but this file spies `api.updates` to a promise that never
+ *  settles, so that one never reaches fetch), `HotFilesStrip` reads
+ *  /api/claims, and the banner stack's own `usePasskeyStatus()` reads
+ *  /api/auth/status once and hands it to `PasskeyNotice` as a prop.
+ *  (`AccountsStrip` reads the store since C8, D-6440, and `FleetHostBanner`
+ *  takes its health as a prop, as it did before C8; neither fetches.) A Response
+ *  body can only be read once. A single shared `mockResolvedValue(response)`
+ *  would let the first of those consume the body, leaving later callers
+ *  (our click) with an empty, already-read stream — so this hands back a
+ *  fresh Response per call instead. */
 const stubFetch502 = (stderr: string): void => {
   vi.stubGlobal(
     'fetch',
@@ -71,9 +82,10 @@ const stubFetch502 = (stderr: string): void => {
 /** A real `AccountsResponse` for `GET /api/accounts` — the reap-flow fetch
  *  stubs below used to fall through to a bare `new Response('{}')` for it
  *  (a wire shape the server never sends, since `accounts`/`projected`/
- *  `roster` are none of them optional). AccountsStrip and the fleet store's
- *  own roster poll both hit this route on every FleetScreen mount, so those
- *  guards were load-bearing for this suite rather than a production-only
+ *  `roster` are none of them optional). The fleet store's one accounts poll
+ *  hits this route on every FleetScreen mount (its `connect()` reads it at
+ *  once; AccountsStrip reads the store and fetches nothing, C8, D-6440), so
+ *  those guards were load-bearing for this suite rather than a production-only
  *  boundary check (fix round 1). */
 const accountsRoute = (): Response =>
   new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
@@ -135,9 +147,12 @@ const latestFleetSocket = (): FleetSocket => {
   return socket;
 };
 
+/** A frame as a current server sends it (D-7182, C7d): seeded sessions carry the run binding the server sends over the
+ *  runs the store holds once the patch lands (`runBindingFixture.ts`). */
 const seed = (store: FleetStore, patch: Partial<ReturnType<FleetStore['getState']>>): void => {
   act(() => {
-    store.setState(patch);
+    store.setState(patch.sessions === undefined ? patch
+      : { ...patch, sessions: withRunBinding(patch.sessions, patch.runs ?? store.getState().runs) });
   });
 };
 
@@ -313,17 +328,22 @@ describe('FleetScreen', () => {
   // at all. Same gap in the loading branch: a fleet mid-first-connect also
   // rendered no strip.
   it('renders the accounts strip in the first-run block, not just the populated fleet', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
-      projected: { wrapper: 'claude', score: 0 },
-      roster: [],
+    // The strip reads the app-wide fleet store's accounts answer, which that store's one poll writes (C8, D-6440).
+    act(() => {
+      useFleetStore.setState({
+        usage: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
+      });
     });
+    onTestFinished(() => { useFleetStore.setState({ usage: null }); });
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [] });
 
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
-    expect(await screen.findByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
+    // With a lane to show, the strip is a group of lane doors and the strip's door to /accounts is its All accounts
+    // button at the end (T2c, D-6329).
+    const all = await screen.findByRole('button', { name: 'All accounts' });
+    expect(all).toHaveAttribute('data-command', 'go-accounts');
   });
 
   it('renders the accounts strip during the initial skeleton load, not just once sessions are known', () => {
@@ -337,7 +357,7 @@ describe('FleetScreen', () => {
 
   // Fix round 1, Task 4, finding 5: MailBadge is D-2's ENTIRE remedy — the
   // only door to /mail — and nothing pinned it at its mount point. Deleting
-  // `<MailBadge unread={unreadMail} />` from `.fleet-head-right` (and its
+  // `<MailBadge waiting={waiting} />` from `.fleet-head-right` (and its
   // import) left the full 1253-test suite green, because the door is only
   // ever rendered standalone in mail-screen.test.tsx and tap-targets.test.tsx
   // — never inside the screen that hosts it. This is the AccountsStrip pair's
@@ -361,62 +381,63 @@ describe('FleetScreen', () => {
     expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
   });
 
-  // The `unreadMail` derivation (FleetScreen.tsx, beside `countLine`) was
-  // likewise untested: replacing it with a literal `0` (badge permanently
-  // silent) or with `feed.length` (badge ignores the watermark entirely)
-  // survived the full suite too. This seeds one record either side of a
-  // `FEED_ACK_KEY` ack and reads the count off the badge's own accessible
-  // name — the same `isUnseenAt` comparison the bucket chips use.
-  it("the mail door's count is the feed filtered through the SAME isUnseenAt comparison the bucket chips use", () => {
+  // The mail door's count (FleetScreen.tsx, beside `countLine`) says what waits on the operator, never the unread mail
+  // (T2d, D-6330): replacing `waitingOnYou` with the feed's unread count, or with a literal `0`, reds this. The rows'
+  // own unread mark, `raisesUnread` and the ack's strict `>`, is pinned on the rows in mail-screen.test.tsx.
+  it("the mail door counts the sessions waiting on the operator, never the unread mail", () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     const stamp = Date.now();
     act(() => { ack(FEED_ACK_KEY, stamp); });
     seed(store, {
       conn: 'open',
-      sessions: [],
+      sessions: [
+        session({ id: 'claude:ask-a', bucket: 'attention' }),
+        session({ id: 'claude:ask-b', bucket: 'attention' }),
+        session({ id: 'claude:child', bucket: 'working', child: { kind: 'child', runId: 7 } }),
+      ],
       feed: [
-        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
-        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
+        { seq: 1, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
+        { seq: 2, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
+        { seq: 3, at: stamp + 60_002, kind: 'mail', sessionId: 'x', title: 'unread as well', body: '', runId: null },
       ],
     });
-    expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();
+    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door is named plainly, never
+    // "nothing waiting" (folding the not-yet-known `null` to 0 at FleetScreen's seam reds this).
+    expect(screen.getByRole('button', { name: /^Mail$/ })).toBeInTheDocument();
+    seed(store, { fleetFrameSeen: true });
+    expect(screen.getByRole('button', { name: /mail — 2 waiting for you/i })).toBeInTheDocument();
   });
 
-  // D-5431 (operator ruling 2026-10-18): an `interrupt` record stays in Mail but never raises the door's count, and
-  // ONLY that kind changes — the other record-only kinds (`coord`, `update`, `queue`, `nudge`) still count. The rows
-  // copy the server's own shape (`server/src/interruptlog.ts`: title `interrupt · <source>`, body
-  // `interruptEventBody`, no run), every one of them past the ack.
-  it("an interrupt record never raises the mail door's count; every other record-only kind still does (D-5431)", () => {
+  // The other side of that seam: a first frame with nobody waiting is a measured zero, and the door says so.
+  it('a first fleet frame with nobody waiting names the mail door "nothing waiting for you"', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    const after = stamp + 60_000;
-    seed(store, {
-      conn: 'open',
-      sessions: [],
-      feed: [
-        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
-        { seq: 2, at: after + 1, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · escape-key', body: 'source=escape-key outcome=not-busy', runId: null },
-        { seq: 3, at: after + 2, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · drawer-escape', body: 'source=drawer-escape outcome=sent', runId: null },
-      ],
-    });
-    expect(screen.getByRole('button', { name: /mail — nothing unread/i })).toBeInTheDocument();
+    seed(store, { conn: 'open', sessions: [session({ id: 'claude:idle', bucket: 'idle' })] });
+    expect(screen.getByRole('button', { name: /^Mail$/ })).toBeInTheDocument();
+    seed(store, { fleetFrameSeen: true });
+    expect(screen.getByRole('button', { name: /^Mail — nothing waiting for you$/ })).toBeInTheDocument();
+  });
 
+  // The runs line says what it counts (T2d, D-6330): "N active" is the runs in `ACTIVE_RUN_STATES`, "N open" is what
+  // is left when none is active but some are open.
+  it('Runs · active counts dispatched, working and unknown only', () => {
+    const store = makeStore();
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
-      sessions: [],
-      feed: [
-        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
-        { seq: 2, at: after + 1, kind: 'coord', sessionId: '', title: 'caps changed', body: 'workers 3 → 5, per day 12 → 12', runId: null },
-        { seq: 3, at: after + 2, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10', body: 'auto update from v0.0.9 to v0.0.10', runId: null },
-        { seq: 4, at: after + 3, kind: 'queue', sessionId: 'proj-a-s1', title: 'dequeued proj-a-s1', body: 'PR #42 left the merge queue without landing', runId: null },
-        { seq: 5, at: after + 4, kind: 'nudge', sessionId: 'proj-a-s1', title: '↻ Nudging after idle compaction', body: 'Nudging with a "continue" prompt after an idle compaction left open tasks (compaction k1)', runId: null },
-        { seq: 6, at: after + 5, kind: 'mail', sessionId: 'proj-a-s1', title: 'unread', body: '', runId: null },
+      sessions: [session()],
+      runs: [
+        runRow({ id: 1, state: 'dispatched' }),
+        runRow({ id: 2, state: 'working' }),
+        runRow({ id: 3, state: 'unknown' }),
+        runRow({ id: 4, state: 'planned' }),
       ],
+      runsFrameSeen: true,
     });
-    expect(screen.getByRole('button', { name: /mail — 5 unread/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Runs · 3 active$/ })).toHaveClass('fleet-runs-row');
+    seed(store, { runs: [runRow({ id: 4, state: 'planned' }), runRow({ id: 5, state: 'awaiting-review' })] });
+    expect(screen.getByRole('button', { name: /^Runs · 2 open$/ })).toHaveClass('fleet-runs-row');
   });
 
   it('renders notices as dismissible banners', () => {
@@ -474,6 +495,24 @@ describe('FleetScreen', () => {
       });
 
       await waitFor(() => expect(store.getState().projects?.[0]?.name).toBe('alpha'));
+    });
+
+    it('a malformed /api/projects answer never reaches the store\'s projects', async () => {
+      // Through the REAL adapter: fetch answers a 200 `{}` for the project list only.
+      const asked = vi.fn();
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.startsWith('/api/projects')) {
+          asked();
+          return Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+        }
+        return url === '/api/accounts' ? Promise.resolve(accountsRoute()) : new Promise<Response>(() => {});
+      }));
+      const store = makeStore();
+      renderFleet(<FleetScreen store={store} />);
+      seed(store, { conn: 'open', roster: TEST_ROSTER, pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+      await waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(store.getState().projects).toBeNull();
     });
 
     it('skips the null-state cold-load sweep, then refreshes for each pools frame only', async () => {
@@ -874,7 +913,7 @@ describe('FleetScreen', () => {
       });
 
       fireEvent.click(await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
@@ -981,7 +1020,7 @@ describe('FleetScreen', () => {
       });
 
       fireEvent.click(await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
 
@@ -1018,7 +1057,7 @@ describe('FleetScreen', () => {
       });
 
       const poolChip = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(poolChip);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
@@ -1065,14 +1104,14 @@ describe('FleetScreen', () => {
       });
 
       const poolChip = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(poolChip);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       fireEvent.click(screen.getByTestId('sheet-overlay'));
       fireEvent.click(screen.getByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       }));
       expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
         .toHaveTextContent('alpha is in pool pool-a.');
@@ -1133,7 +1172,7 @@ describe('FleetScreen', () => {
       });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       const initialPool = await screen.findByRole('button', {
-        name: 'no project pool — any account may serve this project',
+        name: 'Set pool — no project pool — any account may serve this project',
       });
       fireEvent.click(initialPool);
       fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
@@ -1222,7 +1261,7 @@ describe('FleetScreen', () => {
         expect(projects).toHaveBeenCalledTimes(2);
 
         fireEvent.click(screen.getByRole('button', {
-          name: 'no project pool — any account may serve this project',
+          name: 'Set pool — no project pool — any account may serve this project',
         }));
         fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
         await act(async () => { await Promise.resolve(); });
@@ -1842,7 +1881,7 @@ describe('FleetScreen', () => {
 // the SAME `sessions` array the project cards below iterate, so the head can
 // never disagree with its own rows.
 describe('bucket sections', () => {
-  it('renders one section per non-empty bucket, in RANK order, and none for an empty one', () => {
+  it('renders one section per non-empty bucket, in BUCKET_ORDER (Working above Idle, OA-C14 (a), D-7188), and none for an empty one', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, {
@@ -1854,12 +1893,12 @@ describe('bucket sections', () => {
       ],
     });
 
-    const heads = screen.getAllByText(/^(Attention|Working|Done|Idle|Cleanup|Archived|Dead)$/);
-    expect(heads.map((h) => h.textContent)).toEqual(['Attention', 'Idle', 'Working']);
+    const heads = screen.getAllByText(/^(Needs you|Working|Done|Idle|Cleanup|Archived|Exited)$/);
+    expect(heads.map((h) => h.textContent)).toEqual(['Needs you', 'Working', 'Idle']);
     // No section rendered for a bucket with zero members.
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(screen.queryByText('Cleanup')).not.toBeInTheDocument();
-    expect(screen.queryByText('Dead')).not.toBeInTheDocument();
+    expect(screen.queryByText('Exited')).not.toBeInTheDocument();
   });
 
   it('counts from the same array the rows render, not a second tally', () => {
@@ -1887,7 +1926,7 @@ describe('bucket sections', () => {
     });
 
     const head = screen.getByText('Idle').closest('.bucket-head') as HTMLElement;
-    expect(within(head).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(within(head).queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
   });
 
   it('badges an unseen session in a badged bucket, with a Mark all seen control', () => {
@@ -1898,9 +1937,9 @@ describe('bucket sections', () => {
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
     });
 
-    const head = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
-    expect(within(head).getByLabelText('1 unseen')).toBeInTheDocument();
-    expect(within(head).getByRole('button', { name: /^mark all .+ seen$/i })).toBeInTheDocument();
+    const head = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
+    expect(within(head).getByLabelText('1 new')).toBeInTheDocument();
+    expect(within(head).getByRole('button', { name: /^mark all seen, .+$/i })).toBeInTheDocument();
   });
 
   // `working`/`idle` are never badged, even with a fresh bucketSince — only
@@ -1914,7 +1953,67 @@ describe('bucket sections', () => {
     });
 
     const head = screen.getByText('Working').closest('.bucket-head') as HTMLElement;
-    expect(within(head).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(within(head).queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
+  });
+
+  // T3a (D-6331): one bucket vocabulary, and the Exited chip is quiet. A session that has exited asks nothing of the
+  // operator, so its chip carries no unseen badge (`seen.ts`'s BADGED holds only attention, done and cleanup) and
+  // draws in the quiet style, which the chip's `data-quiet` marker selects; Needs you keeps its weight.
+  it('Exited carries no unseen badge, and the chips read Needs you', () => {
+    const store = makeStore();
+    renderFleet(<FleetScreen store={store} />);
+    const now = Date.now();
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: now }),
+        session({ id: 'd', project: 'beta', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', bucketSince: now }),
+      ],
+    });
+
+    const needs = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
+    expect(within(needs).getByLabelText('1 new')).toHaveTextContent('1 new');
+    expect(needs).not.toHaveAttribute('data-quiet');
+
+    const exited = screen.getByText('Exited').closest('.bucket-head') as HTMLElement;
+    expect(exited).toHaveAttribute('data-quiet');
+    expect(exited.querySelector('.bucket-head-unseen')).toBeNull();
+    expect(within(exited).queryByLabelText(/^\d+ new$/)).not.toBeInTheDocument();
+    expect(within(exited).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Attention')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dead')).not.toBeInTheDocument();
+  });
+
+  // T3a (D-6331): the counts once per screen. A skin whose `FleetList` part draws its own groups carries the counts
+  // itself (Instrument's group heads), so the screen draws no chips above it; a set with no such part (Refined, or no
+  // frame at all) keeps the chips as today. A part fact, never a skin name: this stub is a set, not a skin.
+  it("with a skin's FleetList part, the screen draws no bucket chips; without one it does", () => {
+    const StubList = (): ReactNode => <div data-testid="stub-list" />;
+    const sessions = [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })];
+
+    const store = makeStore();
+    const withPart = renderFleet(
+      <SkinSetProvider set={{ ...REFINED_SET, FleetList: StubList }}>
+        <FleetScreen store={store} />
+      </SkinSetProvider>,
+      store,
+    );
+    seed(store, { conn: 'open', sessions });
+    expect(screen.getByTestId('stub-list')).toBeInTheDocument();
+    expect(withPart.container.querySelector('.bucket-bar')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
+    withPart.unmount();
+
+    const bare = makeStore();
+    const without = renderFleet(
+      <SkinSetProvider set={REFINED_SET}>
+        <FleetScreen store={bare} />
+      </SkinSetProvider>,
+      bare,
+    );
+    seed(bare, { conn: 'open', sessions });
+    expect(without.container.querySelector('.bucket-bar')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Mark all seen, Needs you' })).toBeInTheDocument();
   });
 
   it('clicking Mark all seen acks every session in THAT bucket, and only that bucket', () => {
@@ -1928,14 +2027,14 @@ describe('bucket sections', () => {
       ],
     });
 
-    const attnHead = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
-    fireEvent.click(within(attnHead).getByRole('button', { name: /^mark all .+ seen$/i }));
+    const attnHead = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
+    fireEvent.click(within(attnHead).getByRole('button', { name: /^mark all seen, .+$/i }));
 
     // The acked bucket's badge is gone…
-    expect(within(attnHead).queryByLabelText(/unseen/)).not.toBeInTheDocument();
+    expect(within(attnHead).queryByLabelText(/^\d+ new$/)).not.toBeInTheDocument();
     // …the untouched bucket's is not.
     const doneHead = screen.getByText('Done').closest('.bucket-head') as HTMLElement;
-    expect(within(doneHead).getByLabelText('1 unseen')).toBeInTheDocument();
+    expect(within(doneHead).getByLabelText('1 new')).toBeInTheDocument();
   });
 
   it('the ack survives a remount — it is written through to localStorage, not held only in state', () => {
@@ -1946,7 +2045,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
     });
-    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all seen, .+$/i }));
     first.unmount();
 
     // Same session, same bucketSince — a stale in-memory `acks` (never
@@ -1957,7 +2056,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
     });
-    expect(screen.queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
   });
 
   it('prunes an acked session that has since left the fleet — the map does not grow unbounded', () => {
@@ -1967,7 +2066,7 @@ describe('bucket sections', () => {
       conn: 'open',
       sessions: [session({ id: 'gone', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
     });
-    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all seen, .+$/i }));
     expect(loadAcks()).toHaveProperty('gone');
 
     // A fresh snapshot that no longer includes 'gone' — the effect prunes it.
@@ -2084,8 +2183,13 @@ describe('archived footer row', () => {
 // directly — so it survives, renamed to match what it actually tests.
 describe('AccountsStrip', () => {
   it('renders account usage from /api/accounts with a reset countdown, independent of sessions', async () => {
-    const nowSec = Math.floor(Date.now() / 1000);
-    vi.spyOn(api, 'accounts').mockResolvedValue({
+    // One frozen clock for the fixture and the strip's `useNow`: a live clock let the second tick between the two
+    // reads under CI load, so the 5 h window read "1h 59m" and the row failed on time, not on behaviour.
+    const nowMs = 1_800_000_000_500;
+    vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const nowSec = Math.floor(nowMs / 1000);
+    // The strip reads a fleet store's accounts answer (C8, D-6440): this one's read, made once before the mount.
+    const store = createFleetStore({ fetchAccounts: async () => ({
       accounts: [
         // gpt has NO active session, yet still shows — telemetry-driven.
         { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false },
@@ -2095,8 +2199,9 @@ describe('AccountsStrip', () => {
       // which filters `roster.homeAble`.
       projected: { wrapper: 'claude', score: 0 },
       roster: [],
-    });
-    render(<AccountsStrip />);
+    }) });
+    await act(() => store.getState().refreshAccounts());
+    render(<AccountsStrip store={store} />);
     // one account gauge → two meters (5h + 7d)
     await screen.findByText('gpt');
     expect(document.querySelectorAll('.acct-fill')).toHaveLength(2);
@@ -2120,11 +2225,11 @@ describe('the head count', () => {
     renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
-      sessions: [session({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true, bucket: 'dead' })],
+      sessions: [session({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, bucket: 'dead' })],
     });
 
     expect(screen.getByText('1 session')).toBeInTheDocument(); // not '1 session · 1 waiting'
-    expect(screen.getByText('Dead')).toBeInTheDocument();
+    expect(screen.getByText('Exited')).toBeInTheDocument();
     expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText(/waiting/)).not.toBeInTheDocument();
   });
@@ -2161,15 +2266,15 @@ describe('an ack written by another screen', () => {
     });
 
     const head = (): HTMLElement => screen.getByText('Cleanup').closest('.bucket-head') as HTMLElement;
-    expect(within(head()).getByLabelText('1 unseen')).toBeInTheDocument();
+    expect(within(head()).getByLabelText('1 new')).toBeInTheDocument();
 
     // Exactly what SessionScreen's mount effect calls — same module, other screen.
     act(() => {
       ack('a', Date.now());
     });
 
-    expect(within(head()).queryByLabelText(/unseen/)).not.toBeInTheDocument();
-    expect(within(head()).queryByRole('button', { name: /^mark all .+ seen$/i })).not.toBeInTheDocument();
+    expect(within(head()).queryByLabelText(/^\d+ new$/)).not.toBeInTheDocument();
+    expect(within(head()).queryByRole('button', { name: /^mark all seen, .+$/i })).not.toBeInTheDocument();
     // The section itself stays: the session is still in the cleanup bucket,
     // it is only no longer NEW.
     expect(within(head()).getByText('1')).toBeInTheDocument();
@@ -2184,14 +2289,14 @@ describe('an ack written by another screen', () => {
 describe('a chip never names rows that are not on the screen', () => {
   const merged = (): FleetSession => session({
     id: 'wt-merged', project: 'P', workspace: 'wt-merged',
-    status: 'dead', archivedAt: 1785300000, archivedBytes: 1_200_000_000,
+    status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, archivedBytes: 1_200_000_000,
     pr: { phase: 'merged', number: 157, url: null, title: null, checks: null, checkNames: null,
           ahead: 0, reason: null, checkedAt: null, mergedAt: 1785300000_000, retryAt: null },
     bucket: 'cleanup', bucketSince: 1785300000_000,
   });
   const plain = (): FleetSession => session({
     id: 'wt-plain', project: 'P', workspace: 'wt-plain',
-    status: 'dead', archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000,
+    status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000,
   });
 
   const seedBoth = (): FleetStore => {
@@ -2228,15 +2333,15 @@ describe('a chip never names rows that are not on the screen', () => {
     expect(screen.queryByRole('button', { name: /archived \(2\)/i })).not.toBeInTheDocument();
   });
 
-  it('a STOPPED main checkout sits behind the Archived fold while the Dead chip still counts it (workspace lifecycle §5.2)', () => {
+  it('a STOPPED main checkout sits behind the Archived fold while the Exited chip still counts it (workspace lifecycle §5.2)', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [plain(), session({
-      id: 'claude-P', project: 'P', workspace: null, status: 'dead', bucket: 'dead',
+      id: 'claude-P', project: 'P', workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead',
       stoppedBy: { at: 1785300000_000, surface: 'pwa' },
     })] });
-    const deadChip = screen.getByText('Dead').closest('.bucket-head') as HTMLElement;
-    expect(deadChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
+    const exitedChip = screen.getByText('Exited').closest('.bucket-head') as HTMLElement;
+    expect(exitedChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
     const archivedChip = screen.getByText('Archived').closest('.bucket-head') as HTMLElement;
     expect(archivedChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
     // The fold holds both — the archived workspace and the stopped main checkout (its project rolled up, D-6088).
@@ -2279,7 +2384,7 @@ describe('a chip never names rows that are not on the screen', () => {
     expect(names).toHaveLength(3);
     expect(new Set(names).size).toBe(3);
     expect(names).toEqual(expect.arrayContaining([
-      'Mark all Attention seen', 'Mark all Done seen', 'Mark all Cleanup seen',
+      'Mark all seen, Needs you', 'Mark all seen, Done', 'Mark all seen, Cleanup',
     ]));
   });
 
@@ -2300,7 +2405,7 @@ describe('a chip never names rows that are not on the screen', () => {
     // The fleet column itself is the one region (W2 Task S2b: the detail is the one main); no bucket adds another.
     expect(screen.queryAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Fleet']);
     expect(screen.getAllByRole('group').map((g) => g.getAttribute('aria-label')))
-      .toEqual(['Attention', 'Idle']);
+      .toEqual(['Needs you', 'Idle']);
   });
 
   // Finding 6. "Mark all seen" destroys the element that was activated — both
@@ -2318,8 +2423,8 @@ describe('a chip never names rows that are not on the screen', () => {
       ],
     });
 
-    const chip = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
-    const btn = within(chip).getByRole('button', { name: /^mark all .+ seen$/i });
+    const chip = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
+    const btn = within(chip).getByRole('button', { name: /^mark all seen, .+$/i });
     // fireEvent.click never establishes focus, which is why the suite never
     // exercised this path — focus it the way a keyboard user's Tab would.
     btn.focus();
@@ -2328,10 +2433,10 @@ describe('a chip never names rows that are not on the screen', () => {
 
     expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toBe(within(chip).getByText('Attention'));
+    expect(document.activeElement).toBe(within(chip).getByText('Needs you'));
     // The bucket bar's region, named by its text: since wave 19 (D-5124) the screen has a status region of its own
     // for the stale sentence, always mounted so an announcement lands in a live region that already exists.
-    expect(screen.getByText('Attention: 2 marked seen', { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(screen.getByText('Needs you: 2 marked seen', { selector: '[role="status"]' })).toBeInTheDocument();
   });
 
   // Finding 4's screen-level half: the ack stamp is floored against the
@@ -2347,10 +2452,10 @@ describe('a chip never names rows that are not on the screen', () => {
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: serverNow })],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^mark all .+ seen$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^mark all seen, .+$/i }));
 
-    const chip = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
-    expect(within(chip).queryByLabelText(/unseen/)).not.toBeInTheDocument();
+    const chip = screen.getByText('Needs you').closest('.bucket-head') as HTMLElement;
+    expect(within(chip).queryByLabelText(/^\d+ new$/)).not.toBeInTheDocument();
     expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
   });
 });
@@ -2458,13 +2563,15 @@ describe('the programme tree on the fleet screen', () => {
    *  in ms.
    *
    *  THE ADAPTATION against the runs-screen twin, which asserts on the whole
-   *  recorded array: that tree is single-interval, and this one is not.
-   *  `useProjectedHome` (20_000), `AccountsStrip` (20_000 for its poll and
-   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000),
-   *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, read by
-   *  UpdateIndicator) and `HotFilesStrip` (30_000) all start polling from this
-   *  screen's mount, and
-   *  none of them is what this gate decides — so the instrument is the
+   *  recorded array: that tree is single-interval, and this one is not. One
+   *  mount records seven, measured: the fleet store's one /api/accounts poll
+   *  (20_000, which this screen's `connect()` starts); the test host's
+   *  `FleetChromeProvider`, whose `useFleetHealth` (15_000, the one
+   *  /api/fleet/health poll) and `useUpdatesView` (60_000, the one
+   *  /api/updates poll, read by UpdateIndicator) the screen reads; a
+   *  `useNow(30_000)` each in `AccountsStrip`, `FleetHostBanner` and
+   *  `HotFilesStrip`; and `HotFilesStrip`'s own /api/claims poll (30_000).
+   *  None of them is what this gate decides — so the instrument is the
    *  PRESENCE of `1_000` among the recorded intervals, not their sequence.
    *  Measured across `pwa/src`: no other timer in this tree has a 1_000 ms
    *  period (the nearest neighbour is `TypedLabel`'s 28 ms typing timer), so a
@@ -2618,7 +2725,7 @@ describe('the programme tree on the fleet screen', () => {
     // `g.sessions` — the coordinator sits on alpha's card while the marker is
     // drawn on beta's. Nothing in project-card.test.tsx alone can catch a
     // regression at the wiring site (it passes the props directly), so this
-    // case mounts the whole screen and seeds the store the way `coordPresence`
+    // case mounts the whole screen and seeds the store the way `coordinatorPresence`
     // actually needs: a dead-measured session fleet-wide, and BOTH frame-seen
     // flags true.
     const store = makeStore();
@@ -3222,5 +3329,27 @@ describe('the Docs door (docs design 4.8, M4.L1)', () => {
     expect(door.nextElementSibling).toHaveClass('accounts-door');
     fireEvent.click(door);
     expect(location.pathname).toBe('/docs');
+  });
+});
+
+describe('the predicted-conflict chip renders after the claimed-files strip (landing order wave 5a; 4b F4 a)', () => {
+  it('puts the chip after the strip in the document, and outside it', async () => {
+    const T = Date.now();
+    vi.spyOn(api, 'claims').mockResolvedValue({ claims: [{
+      id: 1, project: 'ProjectC', paths: ['src/a.ts'], heldBy: 'lane-a-proj-a-alpha', heldByUuid: null, intent: '',
+      runId: 3, state: 'live', createdAt: T - 60_000, renewedAt: T - 60_000, expiresAt: T + 40 * 60_000,
+      hardExpiresAt: T + 8 * 3_600_000, endedAt: null, endedBy: null,
+    }] });
+    const store = makeStore();
+    renderFleet(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', roster: TEST_ROSTER, sessions: [session({ landing: {
+      at: new Date(T - 30_000).toISOString().replace(/\.\d{3}Z$/, 'Z'), pr: 12, head: 'abc1234', baseRef: 'main',
+      base: { state: 'clean' }, paired: true, conflicts: [], unmeasuredWith: [],
+      cut: { heads: false, pairs: false, unbound: false },
+    } })] });
+    const strip = await screen.findByRole('region', { name: 'Claimed files' }, { timeout: 5000 });
+    const chip = screen.getByRole('status', { name: /No predicted conflicts in 1 measured PR/ });
+    expect(strip.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING, 'the chip renders after the strip').not.toBe(0);
+    expect(strip.contains(chip), 'the chip is not inside the strip').toBe(false);
   });
 });

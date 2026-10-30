@@ -135,6 +135,24 @@ describe('with the marker a nested repository is rescued, then the tree goes', (
     expect(fs.existsSync(n.dir), 'the tree is gone').toBe(false);
   }, 180_000);
 
+  // The fixture's commits must not start git's auto-maintenance. It runs DETACHED, so it outlives the commit, and on git 2.55
+  // its default is a geometric `repack -d`: in the nested repository it can merge and delete the temporary pack of the
+  // fixture's own `gc --aggressive` before gc's cruft pass reads it ("could not find pack '.tmp-…-pack-….pack'"). Nothing in
+  // the harness git env may leave it on.
+  it('the fixture git env never starts auto-maintenance (a detached repack would race the fixture gc)', () => {
+    const r = path.join(h.home, 'no-maint');
+    fs.mkdirSync(r);
+    h.git(r, 'init', '-q');
+    fs.writeFileSync(path.join(r, 'w'), 'x');
+    h.git(r, 'add', '-A');
+    const trace = path.join(h.home, 'no-maint.trace');
+    const was = process.env['GIT_TRACE'];
+    process.env['GIT_TRACE'] = trace;
+    try { h.git(r, 'commit', '-q', '-m', 'w'); } finally { if (was === undefined) delete process.env['GIT_TRACE']; else process.env['GIT_TRACE'] = was; }
+    const spawned = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => /run_command: git (maintenance run|gc) --auto/.test(l));
+    expect(spawned).toEqual([]);
+  });
+
   it('the bound holds on what lands: a packed, delta-heavy nested repository of fewer than 100 objects grows the project store by at most the bound', () => {
     const c = makeChild(h);
     const n = plantNested(c.wt);

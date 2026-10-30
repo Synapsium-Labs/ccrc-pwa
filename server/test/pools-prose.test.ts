@@ -101,13 +101,13 @@ import { fileURLToPath } from 'node:url';
 // The path to the ccd script is spelled in exactly ONE file in this tree and
 // `single-definition.test.ts` enforces it — import the constant, never re-spell
 // it here (`readme-holds.test.ts` records the same rule).
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { readmeSizeClaim } from './readmeSizeClaim.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
 const readme = (): string => read('README.md');
-const ccd = (): string => readFileSync(CCD, 'utf8');
+const ccd = (): string => ccdSource();
 
 /** A passage sliced by its own markers. Both anchors must exist and the slice
  *  must be long enough to BE the passage: an anchor that stopped matching would

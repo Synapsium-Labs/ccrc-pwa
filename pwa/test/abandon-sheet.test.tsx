@@ -16,6 +16,7 @@ import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { ChildMark, CoordCapsView, FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -393,17 +394,13 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     vi.stubGlobal('fetch', fetchImpl);
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
 
-    // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now,
-    // whose own `useProjectedHome(open)` (review fix round 1, Minor 2) is
-    // gated on the SHEET's own `open` — never tapped here, so it never
-    // polls `/api/accounts` in this test at all. The exclusion below is
-    // defensive rather than currently load-bearing: it keeps this assertion
-    // meaning "no OTHER route at all" (review fix round 1, Minor 1) even if
-    // that gate is ever widened, rather than narrowing to "only the abandon
-    // route", which would stop catching a stray SECOND route (a prefetch, a
-    // second run's abandon) alongside the real one.
-    const otherCalls = (): [string, RequestInit][] =>
-      fetchImpl.mock.calls.filter(([url]) => !String(url).includes('/api/accounts')) as [string, RequestInit][];
+    // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now. Since C8 (D-6440) its
+    // `useProjectedHome(open)` only reads the fleet store, which this test never connects, so no sheet
+    // polls `/api/accounts` and nothing needs setting aside: every fetch counts. That keeps this
+    // assertion meaning "no OTHER route at all" (review fix round 1, Minor 1) rather than narrowing to
+    // "only the abandon route", which would stop catching a stray SECOND route (a prefetch, a second
+    // run's abandon) alongside the real one.
+    const otherCalls = (): [string, RequestInit][] => fetchImpl.mock.calls as [string, RequestInit][];
 
     // First tap: the row's own control opens the sheet. Nothing has been
     // sent to any route yet — opening is not confirming.
@@ -442,11 +439,28 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     ['no fleet row for the session', [], UNKNOWN],
   ])('the sheet the board opens says the right thing for %s', async (_name, sessions, expected) => {
     const store = makeStore();
-    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions, fleetFrameSeen: true }); });
+    // Each row carries the run binding the current server sends over the run (D-7182, C7d): the case is about the
+    // child mark, and the board finds the run's worker through its binding.
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: withRunBinding(sessions, [run()]), fleetFrameSeen: true }); });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
     expect(await screen.findByText(expected)).toBeInTheDocument();
+  });
+
+  // THE OLD-SERVER SKEW ROW (C7d, D-7182; the fixture re-point's one explicit row, PR body): a fleet frame from a
+  // server predating ARCH-61's server half carries no `run` or `openRun` key, so the board cannot tell the open run's
+  // worker from a recycled id and finds none (`workerOf`): the sheet hedges, as it does for no fleet row. Before C7d
+  // the board took the listed session by id and said the child sentence.
+  it('the sheet the board opens hedges for an older server that sends no run binding: an open run finds no worker', async () => {
+    const store = makeStore();
+    const s = sess({ child: { kind: 'child', runId: 3 } });
+    expect('run' in s || 'openRun' in s).toBe(false);
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: [s], fleetFrameSeen: true }); });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
+    expect(await screen.findByText(UNKNOWN)).toBeInTheDocument();
   });
 
   // D-287 (was D-B4-14): the fix round's own anchor — `RunsScreen.tsx:118-122` used to

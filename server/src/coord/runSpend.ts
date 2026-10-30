@@ -13,6 +13,14 @@ const REBOUND = /^session-rebound: (\S+) -> (\S+), \d+ re-issued$/;
  *  follows. The unbound id is the only trace that session ever served this run. */
 const UNBOUND = /^session-unbound: (\S+) \(/;
 
+/** The session a journal detail says was unbound from its run (`store.clearSession`'s one event), or `null`. Also read
+ *  by the dead-dispatch pass (D-7563): a session the server once unbound from a run as spent is never bound back to it. */
+export function unboundSessionOf(detail: string | null): string | null {
+  if (detail === null) return null;
+  const u = UNBOUND.exec(detail);
+  return u === null ? null : u[1]!;
+}
+
 /** Every session this run has had bound: those its rebound and unbound events
  *  name, in journal order, then the current one, each once. A session bound to a
  *  second run (a worker reused across waves) is counted in each run it served —
@@ -27,8 +35,8 @@ export function boundSessionsOf(current: string | null, events: readonly { detai
     if (e.detail === null) continue;
     const m = REBOUND.exec(e.detail);
     if (m !== null) { push(m[1]!); push(m[2]!); continue; }
-    const u = UNBOUND.exec(e.detail);
-    if (u !== null) push(u[1]!);
+    const u = unboundSessionOf(e.detail);
+    if (u !== null) push(u);
   }
   if (current !== null) push(current);
   return out;

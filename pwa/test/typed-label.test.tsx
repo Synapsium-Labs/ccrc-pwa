@@ -192,7 +192,7 @@ describe('the fleet line', () => {
 // it — `header.test.tsx` only reads settled text (`toHaveTextContent`,
 // `getAllByText`), which is identical whether the crumb is a plain span or a
 // wrapped one. This is the header's half of the fleet-line case above.
-describe('the session header crumb', () => {
+describe('the session header title', () => {
   const headerProps = (session: FleetSession): HeaderHostProps => ({
     session, status: 'idle', statusUpdatedAt: null,
     onInterrupt: () => {}, onOpenTerminal: () => {}, onBack: () => {},
@@ -200,21 +200,21 @@ describe('the session header crumb', () => {
     onArchive: () => {}, onRestore: () => {}, onOpenHistory: () => {}, onReapWorkspace: () => {},
   });
 
-  it('types the new branch in on the crumb when a rename lands', () => {
-    // workspace non-null, so the crumb renders at all (SessionHeader.tsx:191).
+  it('types the new branch in on the title when a rename lands', () => {
+    // workspace non-null, so the title is the row's label, its branch (desktop polish T3c, D-6333: the crumb is the project).
     vi.useFakeTimers();
     const { rerender, container } = render(
       <SessionHeaderHost {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/quiet-mesa' }))} />);
-    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-mesa');
+    expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/quiet-mesa');
 
     rerender(<SessionHeaderHost {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/fix-the-pr-sheet' }))} />);
     // Mid-flight: a plain span would already show the whole new value and
     // would never grow a caret — both false here, exactly as on the fleet line.
-    expect(container.querySelector('.chat-crumb')).not.toHaveTextContent('ws/fix-the-pr-sheet');
+    expect(container.querySelector('.chat-title-text')).not.toHaveTextContent('ws/fix-the-pr-sheet');
     expect(document.querySelector('.typed-caret')).not.toBeNull();
 
     act(() => { vi.advanceTimersByTime(TYPE_MS * 40); });
-    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/fix-the-pr-sheet');
+    expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/fix-the-pr-sheet');
     expect(document.querySelector('.typed-caret')).toBeNull();
   });
 });

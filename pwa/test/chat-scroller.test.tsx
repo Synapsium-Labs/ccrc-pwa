@@ -128,6 +128,29 @@ describe('what ChatList tells the scroller', () => {
     const p = mount(THREE);
     expect(p.itemContent(99)).toBeNull();
   });
+
+  it('itemContent and computeItemKey keep their identity across a parent re-render', () => {
+    // Desktop polish Task C7: virtuoso calls `itemContent` again for every rendered row when it is handed a new one, so
+    // a screen render that changes nothing the list reads must hand it the SAME two functions.
+    // The callbacks and the pending list are stable, as SessionScreen's are (its `pending` is the store's own array).
+    const onRetry = (): void => {};
+    const onDiscard = (): void => {};
+    const pending: never[] = [];
+    const view = (events: ChatEvent[]) => (
+      <ChatList id="claude:Proj" events={events} pending={pending} onRetry={onRetry} onDiscard={onDiscard} />
+    );
+    const { rerender } = render(view(THREE));
+    const before = seen.props;
+    if (before === null) throw new Error('the scroller was never rendered');
+    rerender(view(THREE));
+    const after = seen.props;
+    expect(after).not.toBe(before); // the scroller did render again
+    expect(after?.itemContent).toBe(before.itemContent);
+    expect(after?.computeItemKey).toBe(before.computeItemKey);
+    // A new events array is new items: the renderer follows it.
+    rerender(view([...THREE, assistant('d', 'fourth')]));
+    expect(seen.props?.itemContent).not.toBe(before.itemContent);
+  });
 });
 
 describe('Jump to latest', () => {

@@ -49,7 +49,6 @@ import {
   delegationTailHealPlan,
   encodeDelegationJournalRecord,
   findDelegationJsonDefect,
-  nodeDelegationFilePort,
   parseDelegationJournal,
   planDelegationJournalAppend,
   planDelegationPruning,
@@ -58,6 +57,7 @@ import {
   type DelegationFilePort,
   type DelegationJournalTail,
 } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
   DELEGATION_DURABILITY_EDGES,
@@ -3146,19 +3146,37 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     // outside the heal, or a rename of anything but the two temp files each turn them red.
     it('the journal module has no method that could rewrite it: its ONLY truncate is the port member the tail heal calls, and the writer has none', () => {
       const j = code('delegation-journal.ts');
-      expect(j).not.toMatch(/ftruncate|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
-      // wave 4 (D-7021): the ONE unlink is the port's `removeTemp` adapter, which refuses any name that is not a `.tmp` (the compaction's
-      // two temps); read from the parse (ARCH-06), not from the text
-      const journalCalls = parsedFile('server/src/coord/delegation-journal.ts').calls;
-      expect(journalCalls.filter((c) => c.name === 'unlink').map((c) => `${c.callee}(${c.args.map((a) => a.text).join(', ')})`), 'one unlink: removeTemp\'s node adapter').toEqual(['fsp.unlink(p)']);
-      expect(journalCalls.filter((c) => c.callee === 'p.endsWith').map((c) => c.args.map((a) => a.text)), 'and its guard').toEqual([['.tmp']]);
-      expect(j.match(/\btruncate\b/g), 'the port member, its node adapter and the adapter\'s fsp call: three words, no more').toHaveLength(3);
+      const parsedPort = parsedFile('server/src/coord/delegation-file-port.ts');
+      const p = stripComments(parsedPort.text);
+      const port = parsedPort.bindings.find((b) => b.name === 'nodeDelegationFilePort')!.init;
+      // wave 4 (D-7021): exempt exactly this whole named method, not the adapter. Its exact body pins the .tmp refusal BEFORE unlink,
+      // absence tolerance and propagation of every other error; the caller's two-name closed list is pinned below (W4-CM16).
+      const removeTemp = [
+        '',
+        '  removeTemp: async (p) => {',
+        "    if (!p.endsWith('.tmp')) throw new Error(`removeTemp removes a compaction temp file only, not ${p}`);",
+        '    try { await fsp.unlink(p); } catch (err) { if (!isEnoent(err)) throw err; }',
+        '  },',
+        '',
+      ].join('\n');
+      expect(port.match(/^  removeTemp:/gm), 'exactly one named method').toHaveLength(1);
+      expect(port.split(removeTemp), 'exactly one whole method with the guarded failure contract').toHaveLength(2);
+      expect(p.split(removeTemp), 'exactly one exemption in the whole source').toHaveLength(2);
+      expect(j).not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(p.replace(removeTemp, ''), 'every byte outside that one method keeps the original prohibition').not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(parsedPort.calls.filter((c) => c.name === 'unlink').map((c) => `${c.callee}(${c.args.map((a) => a.text).join(', ')})`), 'one unlink: removeTemp\'s node adapter').toEqual(['fsp.unlink(p)']);
+      expect(parsedPort.calls.filter((c) => c.callee === 'p.endsWith').map((c) => c.args.map((a) => a.text)), 'and its guard').toEqual([['.tmp']]);
+      expect(`${j}\n${p}`.match(/\btruncate\b/g), 'the port member, its node adapter and the adapter\'s fsp call: three words, no more').toHaveLength(3);
+      expect(j.match(/\btruncate\b/g), 'the port member: one word in the journal').toHaveLength(1);
+      expect(p.match(/\btruncate\b/g), "its node adapter and the adapter's fsp call: two words in the port file").toHaveLength(2);
       expect(j).toMatch(/^  truncate\(path: string, length: number\): Promise<void>;$/m);
-      expect(j).toMatch(/^  truncate: \(p, length\) => fsp\.truncate\(p, length\),$/m);
+      expect(port).toMatch(/^  truncate: \(p, length\) => fsp\.truncate\(p, length\),$/m);
       expect(j.slice(j.indexOf('export class DelegationJournalWriter')), 'the writer cannot cut').not.toMatch(/truncate/);
-      expect(j.match(/O_TRUNC/g)?.length ?? 0).toBe(1);                      // only createTemp (the checkpoint's and the quarantine copy's temp file) truncates
-      expect(j).toMatch(/createTemp:[^\n]*O_TRUNC/);
-      expect(j.match(/O_APPEND/g)?.length).toBe(1);
+      expect(j.match(/O_TRUNC/g)?.length ?? 0).toBe(0);
+      expect(p.match(/O_TRUNC/g)?.length ?? 0).toBe(1);                      // only createTemp (the checkpoint's and the quarantine copy's temp file) truncates
+      expect(port).toMatch(/createTemp:[^\n]*O_TRUNC/);
+      expect(j.match(/O_APPEND/g)?.length ?? 0).toBe(0);
+      expect(p.match(/O_APPEND/g)?.length ?? 0).toBe(1);
     });
     it('the checkpoint module cuts the journal in ONE place (the heal, at the plan\'s offset), renames only its two temp files, and opens the journal only for append or read', () => {
       const c = code('delegation-checkpoint.ts');

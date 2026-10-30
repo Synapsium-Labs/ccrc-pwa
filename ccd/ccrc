@@ -1344,6 +1344,58 @@ _launchd_class() {
 # sits inside the sentinels, so an appended-below helper is a red suite, not
 # a quiet gap.
 
+# ── _timer_period_s — a shipped .timer's period, in whole seconds (D-7053) ─
+# ARCH-69's one reader: a launchd job, or a doctor bound, that runs "as often
+# as the timer" takes the number from the shipped `deploy/systemd/<x>.timer`,
+# never from a second spelling of it. Outside the platform layer, and not named
+# `_svc_*`/`_plat_*`, because it is no platform verb: both userlands read the
+# same file the same way (`macos-platform.test.ts` refuses such a name here).
+#
+# A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h` or `OnCalendar=*:0/<n>`
+# (every <n> minutes, <n> dividing the hour, so the gap between firings is one
+# number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
+# keys), each comment and each blank is IGNORED, never refused: they sit beside
+# the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
+# one line on stderr and nothing on stdout: no readable file, no cadence line,
+# two, or a spelling the shipped files do not use. It never guesses a unit and
+# never prints the file's contents (`timer-period.test.ts`).
+_timer_period_s() {   # <timer-file>
+  local f="$1" line hit="" n=0
+  if [ -d "$f" ] || [ ! -r "$f" ]; then
+    printf '%s\n' "$PROG: cannot read a timer period from $f: not a readable file" >&2; return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in OnUnitActiveSec=*|OnCalendar=*) hit="$line"; n=$((n + 1)) ;; esac
+  done < "$f"
+  if [ "$n" -ne 1 ]; then
+    printf '%s\n' "$PROG: cannot read a timer period from $f: $n cadence lines (OnUnitActiveSec= or OnCalendar=), not one" >&2; return 1
+  fi
+  if [[ "$hit" =~ ^OnUnitActiveSec=([1-9][0-9]{0,5})(s|min|h)$ ]]; then
+    case "${BASH_REMATCH[2]}" in
+      s) echo "${BASH_REMATCH[1]}" ;; min) echo $((BASH_REMATCH[1] * 60)) ;; h) echo $((BASH_REMATCH[1] * 3600)) ;;
+    esac
+  elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
+    echo $((BASH_REMATCH[1] * 60))
+  else
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+  fi
+}
+
+# `_timer_period_words <seconds> noun|adj` — that period in a transcript's
+# words: whole minutes as `<m> minutes` / `<m>-minute` (`1 minute` for 60),
+# anything else as `<s> seconds` / `<s>-second`.
+_timer_period_words() {   # <seconds> noun|adj
+  local n="$1" u=second
+  if [ $((n % 60)) -eq 0 ]; then n=$((n / 60)); u=minute; fi
+  case "$2" in
+    adj) printf '%s-%s' "$n" "$u" ;;
+    noun) if [ "$n" -eq 1 ]; then printf '1 %s' "$u"; else printf '%s %ss' "$n" "$u"; fi ;;
+    *) return 1 ;;
+  esac
+}
+
 # `deploy/models-op.mjs` is this design's node half — a NEW file, because
 # `main` has no node helper for account state to add ops to (`deploy/
 # account-op.mjs` is the account-connections branch's and is not here).
@@ -2411,7 +2463,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|logs|passwd|expose|token|restamp|version|watchdog|history}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|logs|passwd|expose|token|restamp|version|watchdog|history|test}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2657,7 +2709,7 @@ already running).
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on the session hook's generated region) after its body changed. A file
             with no marker is refused, never adopted; so is ccd/ccd, which is
-            stamped at install time$(_usage_history_paragraph)
+            stamped at install time$(_usage_history_paragraph)$(_usage_test_paragraph)
 
   -h, --help   print this message and exit 0
 
@@ -2667,12 +2719,19 @@ EOF
 }
 
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
-# `_upd_redact <text>` — what NO die sentence, report detail, WARN or
+# `_upd_redact <text> [bare-host]` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
 # 11 and M1): a URL's userinfo (`[scheme:/…]user:pass@host` -> `[scheme:/…]host`;
-# a scheme's one or more '/' stay as written, D-6748) and this box's own absolute
-# home directory (-> `~`). TWO CHOKE POINTS, not one — review fix round 1 M1
-# found a second path that reached `update.json` and the journal unredacted:
+# a scheme's one or more '/', each maybe after a '\' as JSON escapes it, stay as
+# written, D-6748 and D-7564; with no scheme, a
+# `user:pass@` (or `user%3Apass@`) goes whatever ends the host, a `KEY=` or
+# `--flag=` before it kept, and any userinfo goes before a host, a bracketed
+# IPv6 one too, ended by `:port` and then a terminator, D-7564) and this box's
+# own absolute home directory (-> `~`). A text over 4096 bytes keeps only its
+# head, cut at whitespace, and says how many bytes it withheld (D-7564: the
+# loops rescan the text per mask, so a line of thousands took seconds).
+# TWO CHOKE POINTS, not one — review fix round 1 M1 found a second path that
+# reached `update.json` and the journal unredacted:
 # `UPD_GATE_WHY` (the gate's own failure reason, which can start with
 # `$BOX_ENV_FILE`, an absolute path) flows into `_upd_phase` details through
 # `$why`/`$gate_fail`/`$reason`, none of which passed through `_ccrc_die`.
@@ -2694,10 +2753,36 @@ EOF
 # `$gate_fail` (`cmd_update`, redacted once at its own local definition, so
 # `_upd_rollback_no_restore` and `_upd_restore` inherit it as `$reason`);
 # `$UPD_GATE_WHY` directly (`_upd_gate`'s two echoes, `cmd_update`'s exit-4
-# echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
-# with the home rule and the `://` scheme rule alone: it prints no release base.
+# echo). `ccd/ccd-update-sync`, another executable, carries a generated copy of
+# this function (`shared/hook-helpers.mjs`'s log-line region) and redacts at its
+# own `say`, with `bare-host`.
+# OUT OF SCOPE: this function masks only those two, a URL's userinfo and this
+# box's home directory. A query-string secret (`?token=…`, `&key=…`), a
+# bearer token (`Authorization: Bearer …`) and curl's credential flags
+# (`-u` / `--user` / `--proxy-user user:pass`) pass through it whole; a line that
+# may carry one needs its own masking before it reaches here. KNOWN LIMITS
+# (D-7564, the corpus's `known-limit` rows): a scheme-less userinfo inside a
+# query string or a path (`https://h/x?proxy=user:secret@host`,
+# `dir/user:secret@host`), a raw '#', '?' or '/' inside a password
+# (`user:pa#ss@host`), a token-only userinfo before a bare host while more
+# text follows (`--proxy=tok@host refused`, an empty port's `tok@h: refused`
+# too), one before a port that a letter, '-', '_' or '~' follows, or a run of
+# '.', '!' or '}' and then one of those (`tok@host:8443-x retrying`,
+# `tok@host:8443.x retrying`), and one before a host of digits only and its
+# port (`tok@2130706433:80 x`) print whole.
 _upd_redact() {
-  local s="${1:-}" LC_ALL=C
+  local s="${1:-}" mode="${2:-}" LC_ALL=C cut=""
+  # D-7564, the bound: every loop below rescans the whole text once per credential it masks, and the home walk once per
+  # home it finds, so a line of thousands of them took seconds. A text over 4096 bytes keeps only its head: its first
+  # 4001 bytes cut back to their last whitespace, so every token kept is whole, as written, and masks as it would have.
+  # The rest is withheld, never printed, and a note names how many bytes went. Head and note fit in 4096 bytes, so a
+  # second pass over the result (a die's sentence reaching `_upd_phase`) cuts nothing more.
+  if [ "${#s}" -gt 4096 ]; then
+    local head="${s:0:4001}"
+    if [[ "$head" =~ ^(.*)[[:space:]] ]]; then head="${BASH_REMATCH[1]}"; else head=""; fi
+    cut="${head:+ }[cut: $(( ${#s} - ${#head} )) more bytes withheld, over the redactor's 4096-byte cap]"
+    s="$head"
+  fi
   # The userinfo strip is bounded to characters a URL authority allows
   # before an '@' — never '/' or whitespace — so an UNRELATED '@' past the
   # authority (a query's `?email=a@example.com`) is left alone. Review fix
@@ -2708,9 +2793,54 @@ _upd_redact() {
   # whitespace, '"' or '<') whose host ends at '/', '?' or '#'; prose's
   # `user@host` stays. Past a run's first character '<' and '"' are the
   # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
-  # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
-  local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
-  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
+  # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn, and a userinfo that starts with '@'
+  # loses its leading '@'s with it (D-7564: `https://@tok@host/x` and `https://@@tok@host` read `https://host/x` and
+  # `https://host`). Each '/' may follow a '\', as JSON escapes it, and stays as written (D-7564:
+  # `https:\/\/u:secret@host\/x` reads `https:\/\/host\/x`). Each pass drops at least one '@', so the loop ends.
+  # D-7564: a run after the first may be empty, so `user:secret@@host/x` loses `user:secret@@` (curl's userinfo
+  # runs to the last '@'). Any leading '@'s go with the userinfo (`@tok@host/x` reads `host/x`), and a token may
+  # also start after a backtick, which stays (`` `tok@host/x` `` reads `` `host/x` ``). Bare-host's rule below does
+  # the same.
+  local sre=':((\\?/)+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
+  # D-7564: a token that starts `KEY=` or `--flag=` (a letter or '_' first, then letters, digits, '_' or '-') keeps that
+  # prefix when a ':' userinfo follows it, so `CCRC_X=user:secret@host` reads `CCRC_X=host`. The userinfo's first
+  # character may be neither ':' nor '=': a base64 name's padding (`dG9rZW4=:x@h`) then reads as no prefix and goes
+  # whole, by rule 1 below. A token-only userinfo (rule 2) never keeps one, for the same reason.
+  local kre='(^|[[:space:]"'"'"'<(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*=)([^:=/?#[:space:]"'"'"'<(][^/?#[:space:]]*(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $kre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[2]}"}"; done
+  local re='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  # D-7564, in both modes: two shapes are a credential whatever ends the host, so no end set is asked of them.
+  #   1. a token's userinfo holding a ':' (`user:secret@`, up to the token's last '@', a leading '@' included), its
+  #      percent-encoded `%3A` or `%3a` too: `server user:secret@host:8443 refused`, `user:secret@host: refused`, a
+  #      quote, a tab, a CR or the text's end after the host. A token starts at the text's start or after whitespace,
+  #      '"', "'", '<' or '('; past its first character the userinfo may hold '"', "'", '<' or '('.
+  #      An email address has no ':' before its '@', so it stays.
+  #   2. any userinfo, after any leading '@'s, before a host that ends in `:digits` and then the text's end, any byte but
+  #      a letter, a digit, '.', '!', '}', '_', '~' or '-' (whitespace, punctuation, '\', a non-ASCII mark or space, an
+  #      invalid byte), or a run of '.', '!' or '}' that one of those follows: `tok@host:8443 refused`,
+  #      `reach tok@host:8443.`, `connecting to tok@host:8443... retrying`, `dial tok@host:8443.) retrying`,
+  #      `"msg":"proxy tok@host:8443\" refused"`, `tok@host:8443… x` (D-7564's fifth round: the end set was a list of
+  #      what may follow a port, and anything off it printed the secret). A token may also start after a backtick,
+  #      which stays (`` `tok@host:8443` `` reads `` `host:8443` ``). The host holds a character other than a digit, so a
+  #      time's `build@10:30` stays, or is a bracketed IPv6 address, a zone id or an IPvFuture literal included
+  #      (`tok@[::1]:8443`, `tok@[fe80::1%25en0]:80`, `tok@[v1.fe80::1]:80`). A version's `x@h:1.2` is no
+  #      port and a terminator, so rule 2 leaves it (bare-host's own rule still masks it at the text's end).
+  # The cost: `mailto:a@example.com` and `npm:pkg@1.2.3` read as shape 1, a logger's `WARNING:root:bob@example.com` too;
+  # `stash@{0}:3`, `claude-session@x.service:12` and `log@[core:io]:2` read as shape 2. The corpus's `blast` rows hold
+  # each. Its `known-limit` rows hold what still prints whole: a userinfo inside a query or a path, a raw '#', '?' or
+  # '/' in a password, a token-only userinfo before a host that no port (or an empty one, `tok@h: refused`) and no
+  # path follows while more text follows (`--proxy=tok@host refused`), a port that a letter, '-', '_' or '~' follows,
+  # or a run of '.', '!' or '}' and then one of those, while more text follows (`tok@host:8443-x retrying`,
+  # `tok@host:8443a x`, `tok@host:8443.x retrying`): a host name holds those, so the text after the ':' is arguably
+  # no port. A host of digits only (`tok@2130706433:80 x`) reads as a time's `build@10:30` and stays too.
+  local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([^0-9A-Za-z.!}_~-]|$|[.!}]+([^0-9A-Za-z.!}_~-]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
+  # text's end is masked too, prose's `user@host` included, which is why no ccd/ccrc caller passes it: a systemd
+  # instance unit's `claude-session@x.service` would lose its prefix (D-7289).
+  if [ "$mode" = bare-host ]; then
+    local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
+    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  fi
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
   # `~ser2/f` (a PREFIX match with no boundary check at all), and a
@@ -2757,6 +2887,7 @@ _upd_redact() {
     done
     s="${out}${s}"
   fi
+  s+="$cut"
   printf '%s' "$s"
 }
 # `_ccrc_die` — a bare refusal: this run cannot continue. Always exits 1 —
@@ -4504,7 +4635,7 @@ cmd_wrappers() {
     || _ccrc_die "the manifest from $gen has no summary line, so there is nothing to check the wrapper records against — nothing was written"
   local f
   for f in "$sum_total" "$sum_gen" "$sum_up" "$sum_ext" "$sum_codex"; do
-    [[ "$f" =~ ^[0-9]+$ ]] \
+    [[ "$f" =~ ^[0123456789]+$ ]] \
       || _ccrc_die "the manifest from $gen has a summary whose counts are not all numbers — nothing was written"
   done
   [ "$sum_total" -eq "$((sum_gen + sum_up + sum_ext + sum_codex))" ] \
@@ -4657,7 +4788,7 @@ cmd_wrappers() {
   fi
   for ((wi = 0; wi < ${#wit_cand[@]}; wi++)); do
     wf="${wit_cand[$wi]}"; wname="${wf##*/}"; wsz="${wit_size[$wi]}"
-    [[ "$wsz" =~ ^[0-9]+$ ]] || { wit_blind="$wit_blind $wname"; continue; }
+    [[ "$wsz" =~ ^[0123456789]+$ ]] || { wit_blind="$wit_blind $wname"; continue; }
     [ "$wsz" -gt "$WRAPPER_WITNESS_MAX_BYTES" ] && continue
     # ITS OWN `-r` TEST, and this is not belt-and-braces. `_wrap_parse_shape`
     # folds "I could not read it" into "not a wrapper" (its `[ -r ]` guard),
@@ -6140,7 +6271,8 @@ _exp_ddns_units() {
   # ── THE DARWIN ARM: one plist where systemd has a unit and a timer ───────
   # systemd splits "what to run" (.service) from "when" (.timer). launchd has
   # one job with a `StartInterval`, so the pair collapses into a single plist
-  # — and `OnCalendar=*:0/5` becomes 300 seconds, the same five minutes.
+  # — and its value is the period `_timer_period_s` reads from the shipped
+  # timer (D-7053), the same five minutes.
   #
   # `Persistent=true` HAS NO COUNTERPART, and this is the one place the two
   # differ in kind: systemd runs a missed timer as soon as the box is back,
@@ -6154,7 +6286,11 @@ _exp_ddns_units() {
   # a shell that sources it, exactly as the server's plist does, and the
   # secret still never lands in this 0644 file.
   if [ "$CCD_OS" = darwin ]; then
-    local dir="$BOX_UNIT_DIR" lbl="app.ccrc.$CCRC_DDNS_UNIT" gen
+    local tree="$CCRC_HERE/.." dir="$BOX_UNIT_DIR" lbl="app.ccrc.$CCRC_DDNS_UNIT" gen period
+    # THE PERIOD BEFORE ANY WRITE (OA-C8c (a), D-7062): a tree whose timer
+    # cannot be read places no job, with no literal to fall back on.
+    period="$(_timer_period_s "$tree/deploy/systemd/$CCRC_DDNS_UNIT.timer")" \
+      || _ccrc_die "cannot place the $lbl job: the period of $CCRC_DDNS_UNIT.timer cannot be read from the shipped tree. Nothing was placed."
     mkdir -p "$dir" || _ccrc_die "cannot create $dir"
     gen="$dir/$lbl.plist.tmp.$$.new"
     cat > "$gen" <<PL || { rm -f -- "$gen"; _ccrc_die "could not generate the $lbl job"; }
@@ -6170,7 +6306,7 @@ _exp_ddns_units() {
     <string>set -a; . '$CCRC_EXPOSURE_FILE'; set +a; exec /usr/bin/curl -fsS --max-time 30 "https://www.duckdns.org/update?domains=\${CCRC_DDNS_DOMAIN}&amp;token=\${CCRC_DDNS_TOKEN}&amp;ip="</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>300</integer>
+  <key>StartInterval</key><integer>$period</integer>
   <key>ProcessType</key><string>Background</string>
 </dict>
 </plist>
@@ -6181,7 +6317,7 @@ PL
     fi
     _inst_atomic "$gen" "$dir/$lbl.plist" 644
     rm -f -- "$gen"
-    echo "expose: installed $lbl in \$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next 5-minute tick, where systemd's Persistent=true would catch up immediately)"
+    echo "expose: installed $lbl in \$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next $(_timer_period_words "$period" adj) tick, where systemd's Persistent=true would catch up immediately)"
     # ── ARMED HERE, IN THE SAME ARM THAT INSTALLED IT ────────────────────
     # The first cut of this function wrote the plist and returned; a second
     # Darwin block forty lines down held the bootstrap — BELOW this arm's
@@ -6195,7 +6331,7 @@ PL
     _svc_launchctl bootout "$(_svc_domain)/$lbl" 2>/dev/null
     if _svc_launchctl enable "$(_svc_domain)/$lbl" 2>/dev/null \
        && _svc_launchctl bootstrap "$(_svc_domain)" "$dir/$lbl.plist" 2>/dev/null; then
-      echo "expose: $lbl enabled — the DuckDNS record refreshes every 5 minutes"
+      echo "expose: $lbl enabled — the DuckDNS record refreshes every $(_timer_period_words "$period" noun)"
     else
       echo "expose: DEGRADED — could not bootstrap $lbl. The job file is installed; when you can, run: launchctl bootstrap $(_svc_domain) $dir/$lbl.plist"
     fi
@@ -6759,7 +6895,7 @@ _acct_candidates() {
     # callers already in this tree pass `-L` for the same reason (:2601,
     # ccrc-doctor-checks:2542).
     sz="$(_plat_size -L -- "$f" 2>/dev/null)" || sz=""
-    [[ "$sz" =~ ^[0-9]+$ ]] \
+    [[ "$sz" =~ ^[0123456789]+$ ]] \
       || _acct_refuse 1 unmeasurable "stat could not size $WRAPPER_BIN_DIR/$name, and a pick list that reported a launcher without its size would be inviting a choice on no evidence. Nothing was written."
     [ "$sz" -le "$WRAPPER_OVERSIZE_BYTES" ] || continue
     _wrap_is_script "$f" || continue
@@ -7466,19 +7602,52 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
   # `_plat_mv_notdir` atomically replaces every non-directory name without opening
   # it. `-f && ! -L` is then the exact postcondition: ccd reads `-f`, and accepting
   # a link here would re-introduce the write-through path on the next converge.
-  local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
-  _acct_own_temp "$tmp"
-  mkdir -p "$_SVC_REG" \
-    || _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands"
-  rm -f -- "$tmp"
-  : > "$tmp" \
-    || _acct_refuse 1 disable-marker "cannot write the staged empty marker $tmp, so this lane cannot be left switched off. Fix $_SVC_REG, then: touch $marker. $stands"
-  _plat_mv_notdir "$tmp" "$marker" \
-    || { rm -f -- "$tmp"; _acct_refuse 1 disable-marker "cannot write $marker by replacing it with an empty regular marker, so this lane cannot be left switched off. Fix that path, then: touch $marker. $stands"; }
-  { [ -f "$marker" ] && [ ! -L "$marker" ]; } \
-    || _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so this lane cannot be proved switched off. Fix that path, then: touch $marker. $stands"
+  # Those steps are `_acct_switch_write`'s `off` (D-7050); this maps its class.
+  local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$" rc=0
+  _acct_switch_write "$id" off || rc=$?
+  case "$rc" in
+    0) : ;;
+    1) _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands" ;;
+    2) _acct_refuse 1 disable-marker "cannot write the staged empty marker $tmp, so this lane cannot be left switched off. Fix $_SVC_REG, then: touch $marker. $stands" ;;
+    3) _acct_refuse 1 disable-marker "cannot write $marker by replacing it with an empty regular marker, so this lane cannot be left switched off. Fix that path, then: touch $marker. $stands" ;;
+    *) _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so this lane cannot be proved switched off. Fix that path, then: touch $marker. $stands" ;;
+  esac
 }
 
+
+# THE ONE WRITER OF `$_SVC_REG/<id>-disabled` (D-7050; ARCH-72, spec K16, §2.2 C1).
+# It refuses nothing: it answers a class, and each caller maps it onto its own
+# envelope and sentence. The switch is an operator kill switch, never projected
+# from the roster's kind fields. Three strictnesses, because the callers refuse
+# different objects (pinned in `account-markers-pin.test.ts`):
+#   off     add, declare, disable: stage + rename (D-2470, `_acct_mark_off`).
+#           1 no `$_SVC_REG`, 2 the staged empty file, 3 the rename (temp
+#           removed), 4 not a regular marker after it.
+#   on      enable: marker or absent. 5 the object is neither a regular file nor
+#           a symlink (nothing removed), 6 `rm` failed, 7 it remains after.
+#   on-any  remove: 8 absent (not listed), 5 a directory that is not a symlink
+#           (nothing removed; a FIFO or socket is removed), 6 `rm` failed. No
+#           postcondition, as remove's artefact loop has none.
+_acct_switch_write() {   # <id> off|on|on-any -> rc, see above
+  local marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
+  case "$2" in
+    off)
+      _acct_own_temp "$tmp"
+      mkdir -p "$_SVC_REG" || return 1
+      rm -f -- "$tmp"
+      : > "$tmp" || return 2
+      _plat_mv_notdir "$tmp" "$marker" || { rm -f -- "$tmp"; return 3; }
+      { [ -f "$marker" ] && [ ! -L "$marker" ]; } || return 4 ;;
+    on)
+      [ ! -e "$marker" ] || [ -f "$marker" ] || [ -L "$marker" ] || return 5
+      rm -f -- "$marker" || return 6
+      { [ ! -e "$marker" ] && [ ! -L "$marker" ]; } || return 7 ;;
+    on-any)
+      { [ -e "$marker" ] || [ -L "$marker" ]; } || return 8
+      { [ ! -d "$marker" ] || [ -L "$marker" ]; } || return 5
+      rm -f -- "$marker" || return 6 ;;
+  esac
+}
 
 # ── THE ORDERED WRITE ──────────────────────────────────────────────────────
 # Spec §5's order, and the two properties it buys.
@@ -8051,7 +8220,7 @@ _acct_marker_lock() {   # <what-still-stands> -> lock held on ACCT_MARKER_LOCK_F
 }
 
 _acct_enable() {   # [--id X]
-  local marker=""
+  local marker="" rc=0
   _acct_one_id enable "$@"
   _acct_id_or_refuse "$ACCT_ONE_ID"
   _acct_known_or_refuse "$ACCT_ONE_ID"
@@ -8062,12 +8231,14 @@ _acct_enable() {   # [--id X]
   marker="$_SVC_REG/$ACCT_ONE_ID-disabled"
   # A directory is not a disabled marker to ccd's `-f` predicate. Do not call it
   # switched off, and do not let `rm -f`'s directory refusal phrase that lie.
-  [ ! -e "$marker" ] || [ -f "$marker" ] || [ -L "$marker" ] \
-    || _acct_refuse 1 marker-conflict "$marker exists but is not a marker file, so its presence does not mean account $ACCT_ONE_ID is switched off. Move that object aside, then retry. Nothing was written."
-  rm -f -- "$marker" \
-    || _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written."
-  [ ! -e "$marker" ] && [ ! -L "$marker" ] \
-    || _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written."
+  # `_acct_switch_write`'s `on` (D-7050) tests, removes and re-tests.
+  _acct_switch_write "$ACCT_ONE_ID" on || rc=$?
+  case "$rc" in
+    0) : ;;
+    5) _acct_refuse 1 marker-conflict "$marker exists but is not a marker file, so its presence does not mean account $ACCT_ONE_ID is switched off. Move that object aside, then retry. Nothing was written." ;;
+    6) _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written." ;;
+    *) _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written." ;;
+  esac
   _acct_lane_state "$ACCT_ONE_ID"
   _acct_read_op "The marker for account $ACCT_ONE_ID was removed and the lane is switched on. Only this report failed." \
     switched --id "$ACCT_ONE_ID" --disabled false
@@ -9318,7 +9489,20 @@ _acct_remove() {
     esac
   fi
 
-  for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json" "$_SVC_REG/$id.turn.json"; do
+  # The second entry is the switch, removed by `_acct_switch_write`'s `on-any`
+  # (D-7050): this loop's test for it, a directory refused, anything else
+  # removed, no postcondition. `removed` keeps the loop's order.
+  for f in "$CCRC_LIMITS_DIR/$id.json" switch "$_SVC_REG/$id.hookstate.json" "$_SVC_REG/$id.turn.json"; do
+    if [ "$f" = switch ]; then
+      rc=0; _acct_switch_write "$id" on-any || rc=$?
+      case "$rc" in
+        0) removed+=("$_SVC_REG/$id-disabled") ;;
+        8) : ;;
+        5) _acct_refuse 1 artifact-conflict "$_SVC_REG/$id-disabled is a directory, not the ccrc-managed file its name denotes, so it was kept. The roster and projection no longer name $id; other removal effects remain. Move that directory aside or remove it by hand." ;;
+        *) _acct_refuse 1 artifact-remove "could not remove $_SVC_REG/$id-disabled. The roster and projection no longer name $id; other removal effects remain." ;;
+      esac
+      continue
+    fi
     { [ -e "$f" ] || [ -L "$f" ]; } || continue
     { [ ! -d "$f" ] || [ -L "$f" ]; } \
       || _acct_refuse 1 artifact-conflict "$f is a directory, not the ccrc-managed file its name denotes, so it was kept. The roster and projection no longer name $id; other removal effects remain. Move that directory aside or remove it by hand."
@@ -12279,7 +12463,7 @@ _codex_tier_ok() {   # <token> -> 0 iff it is one of CODEX_TIERS
 }
 
 _codex_port_ok() {   # <token> -> 0 iff it can be a TCP port
-  [[ "${1:-}" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]
+  [[ "${1:-}" =~ ^[123456789][0123456789]{0,4}$ ]] && [ "$1" -le 65535 ]
 }
 
 # THE ONE tier -> port mapping (the fix wave's ruling: four hand-written
@@ -16278,6 +16462,91 @@ _inst_atomic() {   # <src> <dest> <mode>
   rm -f -- "$dest.tmp."*
 }
 
+# ── THE SESSION SLICE'S TWO LIMITS ARE THE BOX'S, NOT THE TREE'S (D-7296) ──
+# `deploy/systemd/app-claude-session.slice.d/limits.conf` is a TEMPLATE: its `MemoryMax=24G` and `MemorySwapMax=6G`
+# are the DEFAULTS, and the bytes every box carried before these keys existed. A box sets its own in its
+# ~/.ccrc/ccrc.env (deploy/ccrc.env.example documents both), through ccrc's one settings reader, `_ccrc_knob`: the
+# environment, else that file, else the default — read ON THE BOX at install, update and deploy time, never on the
+# machine that runs deploy.sh. ONE function renders it for both lanes: `_inst_units` calls `_inst_slice_limits`, and
+# deploy.sh's AGENT_BUILD_CMD sources this file out of the rsynced ~/ccrc tree and calls the same function, so the two
+# lanes cannot disagree about what a box's limits are. A box that sets neither key renders the template byte for byte.
+#
+# A VALUE IT CANNOT USE KEEPS THE INSTALLED ONE, LOUDLY. A WARN on stderr names the key, what was set and the value it
+# keeps; the install or deploy goes on. The value kept is the one the rendered drop-in at <dest> already carries, and the
+# template's default only when nothing usable is installed yet: a box tuned above the default (most of its RAM, on a box
+# that runs nothing but the fleet) must not fall to 24G on one typo, an unreadable ccrc.env or a NUL in it, because
+# daemon-reload applies the lower memory.max to the live slice and the kernel then reclaims and OOM-kills panes across
+# the fleet. A key that is UNSET (or `KEY=`) is not a value it cannot use: it is the box choosing the default. Refusing
+# the whole step would leave a box with no aggregate ceiling for a typo, and a value systemd cannot parse would be
+# silently ignored by systemd, the same box with no ceiling at all. MemoryHigh is not one of the two: it stays
+# `infinity`, in the template and in zz-no-memoryhigh.conf, and `deploy/assert-slice-policy.sh` still refuses a deploy
+# that would enforce anything else.
+
+# _slice_limit_ok <directive> <value> — rc 0 when <value> is one this renderer writes for <directive>: a whole number
+# of bytes with an optional K, M, G, T, P or E suffix (systemd's base-1024 suffixes, upper case, no lead zero), and,
+# for MemoryMax only, a whole percentage of physical memory from 1% to 100%. MemoryMax is never 0 (a slice that kills
+# every pane) and never `infinity` (the slice exists to carry a ceiling); MemorySwapMax may be 0 (no swap) and takes
+# no percentage. A fraction (`1.5G`) is refused rather than guessed at: write `1536M`.
+# THE FLOORS. A suffix-less number is BYTES to systemd, so `24`, or `90` typed for 90%, is a ceiling of a few bytes —
+# a slice that kills every pane, the same as 0. A size is therefore at least 1G for MemoryMax and, when not 0, at least
+# 1M for MemorySwapMax, however it is spelled (`1073741824`, `1048576K` and `1G` are the same 1G). The comparison is
+# n >= 2^(floor - suffix shift), so no product is ever formed and 16 digits with any suffix stay inside 64 bits.
+_slice_limit_ok() {   # <MemoryMax|MemorySwapMax> <value>
+  local floor sh
+  case "$1" in
+    MemoryMax) [[ "$2" =~ ^([1-9][0-9]?|100)%$ ]] && return 0; floor=30 ;;
+    MemorySwapMax) [ "$2" = 0 ] && return 0; floor=20 ;;
+    *) return 1 ;;
+  esac
+  [[ "$2" =~ ^([1-9][0-9]{0,15})([KMGTPE]?)$ ]] || return 1
+  case "${BASH_REMATCH[2]}" in '') sh=0 ;; K) sh=10 ;; M) sh=20 ;; G) sh=30 ;; T) sh=40 ;; P) sh=50 ;; *) sh=60 ;; esac
+  [ "$sh" -ge "$floor" ] || [ "${BASH_REMATCH[1]}" -ge "$((1 << (floor - sh)))" ]
+}
+
+# _slice_installed <dest> <directive> — print the value <dest>'s one `<directive>=` line carries, rc 0, when <dest> is a
+# readable regular file with exactly one such line and its value is one `_slice_limit_ok` takes; else print nothing, rc 1.
+# A drop-in this renderer would itself refuse is not a value to keep.
+_slice_installed() {   # <dest> <MemoryMax|MemorySwapMax>
+  local v
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  v="$(LC_ALL=C awk -v d="$2=" 'index($0, d) == 1 { n++; v = substr($0, length(d) + 1) } END { if (n == 1) print v; exit (n == 1) ? 0 : 1 }' "$1" 2>/dev/null)" && _slice_limit_ok "$2" "$v" && printf '%s\n' "$v"
+}
+
+# _slice_limit <knob rc> <KEY> <directive> <default> <dest> — run straight after `_ccrc_knob <KEY> <default>` (the literal
+# call the settings census reads the default from), with that call's exit status: sets SLICE_LIMIT to the value the box
+# sets, else — when the value cannot be read or used — to the value installed at <dest> (`_slice_installed`), else
+# <default>, WARNing on stderr with the value it keeps and where that came from.
+_slice_limit() {   # <knob rc> <KEY> <directive> <default> <dest>
+  local which="the default" from="the environment" also=", or 0" floor="1M"
+  if [ "$1" -eq 0 ] && _slice_limit_ok "$3" "$KNOB"; then SLICE_LIMIT="$KNOB"; return 0; fi
+  if SLICE_LIMIT="$(_slice_installed "$5" "$3")"; then which="the value installed at $5"; else SLICE_LIMIT="$4"; fi
+  [ "$1" -eq 0 ] || { echo "$PROG: WARN: $KNOB_WHY — the session slice keeps $3=$SLICE_LIMIT ($which)" >&2; return 0; }
+  [ "$KNOB_FROM" != file ] || from="~/${BOX_ENV_FILE#"$HOME/"}"
+  [ "$3" != MemoryMax ] || { also=", or a whole percentage from 1% to 100%"; floor="1G"; }
+  echo "$PROG: WARN: $2='$KNOB' (from $from) is not a size the session slice takes for $3 (a whole number with an optional K, M, G, T, P or E suffix, at least $floor$also) — the session slice keeps $3=$SLICE_LIMIT ($which)" >&2
+}
+
+# _inst_slice_limits <template> <dest> — render the slice drop-in from <template> with the two values substituted, into
+# `<dest>.tmp.r<pid>`, and install that through `_inst_atomic` at 644 (temp, chmod, rename; bytes compared first, so a
+# converged box is not rewritten; its stray sweep also takes a render an aborted run left). The template must carry exactly one `MemoryMax=` and one `MemorySwapMax=` line, or nothing is
+# written and the step dies: a template this cannot read is not one to guess at.
+_inst_slice_limits() {   # <template> <dest>
+  local src="$1" dest="$2" out="$2.tmp.r$$" mm sm
+  [ -f "$src" ] || _ccrc_die "the shipped tree has no $src — is this a complete ccrc tree? (re-run after: bash install.sh)"
+  _ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 24G; _slice_limit $? CCRC_SESSION_SLICE_MEMORY_MAX MemoryMax 24G "$dest"; mm="$SLICE_LIMIT"
+  _ccrc_knob CCRC_SESSION_SLICE_SWAP_MAX 6G; _slice_limit $? CCRC_SESSION_SLICE_SWAP_MAX MemorySwapMax 6G "$dest"; sm="$SLICE_LIMIT"
+  if ! LC_ALL=C awk -v mm="$mm" -v sm="$sm" '
+      /^MemoryMax=/ { print "MemoryMax=" mm; a++; next }
+      /^MemorySwapMax=/ { print "MemorySwapMax=" sm; b++; next }
+      { print }
+      END { exit (a == 1 && b == 1) ? 0 : 3 }' "$src" > "$out"; then
+    rm -f -- "$out"
+    _ccrc_die "could not render $dest from $src (it must carry exactly one MemoryMax= and one MemorySwapMax= line) — nothing at that path was replaced"
+  fi
+  _inst_atomic "$out" "$dest" 644
+  rm -f -- "$out"
+}
+
 # ── _inst_tree_copy — `_inst_atomic` for a DIRECTORY ─────────────────────
 # `_inst_atomic` is single-file by construction (one `cmp`, one `cp`, one
 # `chmod`, one `mv`), and a skill is a DIRECTORY: a `SKILL.md` beside a
@@ -16553,6 +16822,12 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     _inst_atomic "$tree/ccd/ccrc-codex"      "$bin/ccrc-codex"      755
     lane_bins=", ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex" lane_note=""
   fi
+  # The settings reader the ccd-* sweeps source (wave 29, D-6980): generated from this file's `_ccrc_knob` closure
+  # (deploy/gen-settings-lib.mjs), 0644, beside ccd's body and off PATH, on every OS and role, and HERE, above the sweeps
+  # it serves, so no sweep this run places runs without it. Not `_inst_files`, which skips a server-role box whole.
+  mkdir -p "$HOME/.local/libexec/ccrc" || _ccrc_die "cannot create \$HOME/.local/libexec/ccrc"
+  _inst_atomic "$tree/ccd/lib/ccrc-settings.sh" "$HOME/.local/libexec/ccrc/ccrc-settings.sh" 644
+  echo "install: lib: ccrc-settings.sh (the settings reader the ccd-* sweeps source) in \$HOME/.local/libexec/ccrc"
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
   # installs no timer to run it — so placing the binary there would put a file
@@ -16603,6 +16878,13 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
     # orphan scan in `_inst_wrappers` (every role) would report it.
     _inst_atomic "$tree/ccd/ccd-scope-sweep" "$bin/ccd-scope-sweep" 755
+    # The read-only conflict radar (landing-order spec stage 3; its own header has the formats), on the temp-dir
+    # reaper's exact terms - every role, systemd only: its only runner is a timer and it takes flock(1). Placed
+    # OUTSIDE the GPT lane's `!= server` block above, because only its UNITS and the ENABLE are role-gated: a
+    # binary is never the gate (the sweep's rule), and install-census.test.ts requires an id-shaped name here, in
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` and in `_uninst_wrappers`' exclusion `case`, equally.
+    _inst_atomic "$tree/ccd/ccd-land-probe" "$bin/ccd-land-probe" 755
+    _inst_atomic "$tree/ccd/ccd-testbox-times" "$bin/ccd-testbox-times" 755   # the test box's durations (D-7413), on the radar's terms
     # D-5241: the tool-child priority's prefix, which `ccd`'s `_spawn_start`
     # names in CLAUDE_CODE_SHELL_PREFIX on Linux only — so systemd only here
     # too: macOS has no /proc/self/oom_score_adj to raise. Every role, on the
@@ -16646,9 +16928,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-land-probe, no ccd-testbox-times, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -16674,6 +16956,8 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # data for jq, never executed. Without it every transcript read answers NOT MEASURED.
   mkdir -p "$HOME/.cc-sessions/lib" || _ccrc_die "cannot create \$HOME/.cc-sessions/lib"
   _inst_atomic "$tree/ccd/lib/transcript.jq" "$HOME/.cc-sessions/lib/transcript.jq" 644
+  # `ccd carry-dedupe`'s program (#317), 0644: a script python3 runs. Without it the verb refuses by name.
+  _inst_atomic "$tree/ccd/lib/carry-dedupe.py" "$HOME/.cc-sessions/lib/carry-dedupe.py" 644
   # The approval wait's ruling verifier (coordinator-first routing, plan Task 14, D-5297), 0644 for the same reason:
   # a script `node` runs, never executed directly. The hook sends no request without it, so either order is safe.
   _inst_atomic "$tree/ccd/approval-verify.mjs" "$HOME/.cc-sessions/approval-verify.mjs" 644
@@ -17319,6 +17603,14 @@ _inst_units() {
     # server box runs none — there is no pane scope on it to sweep.
     _inst_atomic "$tree/deploy/systemd/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-scope-sweep.timer" "$dir/ccd-scope-sweep.timer" 644
+    # The conflict radar's pair (landing-order spec stage 3), role-gated for its own reason rather than by imitation:
+    # it measures the PRs and workspace branches of projects checked out on the fleet box, and a server box holds
+    # none. Gated `!= server`, so `fleet` and `both` take it.
+    _inst_atomic "$tree/deploy/systemd/ccd-land-probe.service" "$dir/ccd-land-probe.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-land-probe.timer" "$dir/ccd-land-probe.timer" 644
+    # The test box durations timer's pair (D-7413): the fleet host's gh fetches them for its own `ccrc test`, so `!= server`.
+    _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.service" "$dir/ccd-testbox-times.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.timer" "$dir/ccd-testbox-times.timer" 644
     # The account-health probe's pair, role-gated for its own reason rather than
     # by imitation: a server box holds no wrapper HOMEs and no ~/.cc-secrets, so
     # there is no credential on it to measure.
@@ -17368,8 +17660,8 @@ _inst_units() {
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
-  _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
-    "$slice/limits.conf" 644
+  # The slice drop-in is RENDERED, not copied: its two limits are the box's own (`_inst_slice_limits`, D-7296).
+  _inst_slice_limits "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" "$slice/limits.conf"
   # D-5241 (spec 2026-10-16 §5.10): the victim policy's two OOMPolicy=continue
   # drop-ins, Linux only (the Darwin arm returned above) and on every role, as
   # the two limits.conf files are: a drop-in for a scope a box never creates
@@ -17386,6 +17678,9 @@ _inst_units() {
     "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" 644
   _inst_atomic "$tree/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
     "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" 644
+  # D-7298: the slice `ccrc test` runs tests in, on every role and Linux only, as the drop-ins above (a
+  # slice nothing starts holds nothing). Its values are defaults; ccrc-test applies the box's settings on each run.
+  _inst_atomic "$tree/deploy/systemd/ccrctests.slice" "$dir/ccrctests.slice" 644
   echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME/.config/systemd/user"
 }
 
@@ -17784,6 +18079,11 @@ _inst_enable() {
   # DEGRADE-rather-than-die idiom: collecting dead scopes is housekeeping — and
   # shadowed until the operator arms it — not the guardrail `ccd-cap-scopes.timer` is.
   [ "$INST_ROLE" = server ] || _inst_enable_timer scope-sweep ccd-scope-sweep.timer
+  # Same gate as its unit files (a server box checks out no project to measure), and the same DEGRADE-rather-than-die
+  # idiom: a radar is a reading, not the guardrail `ccd-cap-scopes.timer` is, and it measures nothing until the
+  # operator opts a project in with a conf under ~/.ccrc/landing/.
+  [ "$INST_ROLE" = server ] || _inst_enable_timer land-probe ccd-land-probe.timer
+  [ "$INST_ROLE" = server ] || _inst_enable_timer testbox-times ccd-testbox-times.timer   # a reading; with no test box URL it fetches nothing
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
   # health probe is a reading, not the guardrail `ccd-cap-scopes.timer` is, so a
   # systemd that will not take this one timer must not turn an otherwise
@@ -19942,6 +20242,8 @@ cmd_update() {
   # `gate_passed` already; the UPD_FROM test is a belt with no pin claimed (its inherited-lock early return leaves UPD_BAK_FLOOR
   # empty, which would only WARN).
   if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then _bak_restamp "pruning and thinning ~/ccrc-backups"; _bak_gc update || :; fi
+  # Test box TB11 (D-7413; spec §2.10): past the health gate, and never on the restore child, the box follows this roll.
+  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then _upd_testbox_signal "$role"; fi
   # Everything from HERE is a WRITE, after the lock was released above (or,
   # on the `--from restore` branch, never taken from this run at all) — a
   # second `ccrc update` may already hold ~/.ccrc/update.json for its own
@@ -20565,8 +20867,10 @@ _upd_rerun_hint() {
 # from, or whether a step runs at all: an operator sets it once for the box, and an act run with no operator's shell (a
 # console-driven update, the watchdog, a timer) must honour it, so `_ccrc_knob` reads it from ~/.ccrc/ccrc.env too. Every
 # other CCRC_ name ccrc reads stays environment-only, in a reasoned class. This line is the one list: `_ccrc_knob` reads no
-# name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy.
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
+# name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy. The fleet box's sweeps
+# read the last four names too (wave 29, D-6981; D-7500), through ccd/lib/ccrc-settings.sh, which `node deploy/gen-settings-lib.mjs`
+# regenerates after any edit to this line, to `_ccrc_knob` or to the `_box_*` model.
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX)
 
 # ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
 # The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
@@ -20664,7 +20968,7 @@ _upd_deadline_ms() {   # [min|max]
   for f in "" ${1:+"$BOX_ENV_FILE" "$CCRC_EXPOSURE_FILE"}; do
     if [ -z "$f" ]; then _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000; else BOX_ENV_FILE="$f" _ccrc_knob CCRC_UPDATE_DEADLINE_MS 900000 file; fi && v="$KNOB" || v=""
     [ -z "$f" ] || [ "$KNOB_FROM" != default ] || continue
-    [[ "$v" =~ ^[1-9][0-9]{0,14}$ ]] || { v=900000; rc=1; }
+    [[ "$v" =~ ^[123456789][0123456789]{0,14}$ ]] || { v=900000; rc=1; }
     [ "$v" -le "$hi" ] || hi="$v"
     [ -n "$lo" ] && [ "$lo" -le "$v" ] || lo="$v"
   done
@@ -20683,7 +20987,7 @@ _upd_deadline_ms() {   # [min|max]
 _upd_watchdog_probe_gap_s() {
   local v="${CCRC_WATCHDOG_PROBE_GAP_S:-}"
   if [ -z "$v" ]; then printf '%s' 5; return 0; fi
-  if [[ "$v" =~ ^[0-9]+$ ]]; then printf '%s' "$v"; return 0; fi
+  if [[ "$v" =~ ^[0123456789]+$ ]]; then printf '%s' "$v"; return 0; fi
   echo "watchdog: CCRC_WATCHDOG_PROBE_GAP_S='$v' is not digits-only — using 5" >&2
   printf '%s' 5
 }
@@ -21896,7 +22200,7 @@ _upd_marker_unsigned() {
 # unset. The line names the file, never the value, which can carry `user:pass@`. A caller that reports the cause calls it
 # in its own shell, not `$(…)`, and reads KNOB and KNOB_WHY (`_ccrc_knob`'s), which a subshell would keep (F8).
 _upd_release_base() {
-  _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
+  _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" "${1:-}" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
   printf '%s' "$KNOB"
 }
 
@@ -21973,7 +22277,8 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   _upd_release_base >/dev/null 2>&1 && base="$KNOB" || _ccrc_die "$KNOB_WHY — nothing on this box was changed"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
-  UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
+  # UPD_STAGE_PARENT: set only by the test box's tools unit, which stages under its own <tools> (TB6, D-7408).
+  UPD_STAGE="$(if [ -n "${UPD_STAGE_PARENT:-}" ]; then mktemp -d "$UPD_STAGE_PARENT/ccd.XXXXXXXXXX"; else _plat_mktemp_d; fi)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
   _exit_add '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"'
@@ -22867,11 +23172,16 @@ _upd_backup_set() {
   # ccd is a PAIR (D-3696): its body first, then the launcher, so arm 3 of
   # `_upd_restore` — which walks these rows in order — puts the body back
   # before the launcher that names its digest.
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact.mjs" ccd-shared-redact.mjs   # the docs redactor (D-7077): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" ccd-shared-redact-cli.mjs
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" ccd-lib-disk-retention.sh   # the body's library (D-6913): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/train-proof.sh" ccd-lib-train-proof.sh   # its second library (D-7463): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
   _upd_backup_copy "$HOME/.cc-sessions/lib/transcript.jq" transcript.jq
+  _upd_backup_copy "$HOME/.cc-sessions/lib/carry-dedupe.py" carry-dedupe.py
   _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
   # R34 (final whole-branch review): since `ccrc memory --apply`,
@@ -24121,7 +24431,7 @@ _upd_sweep() {
   fi
   local -a units=() missing=() crash=() unrec=() ncfail=()
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
-  [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
+  [[ "$vjobs" =~ ^[123456789][0123456789]{0,3}$ ]] || vjobs=128
   # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
   # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
   # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
@@ -24317,6 +24627,25 @@ _upd_report_is_mine() {
 # comparison (`sort -V`) between the OLD stamp and the ARTIFACT's version —
 # both vX.Y.Z by construction — and print the restore; nothing here ever
 # writes coord.db.
+# ── _upd_testbox_signal — the test box's tools follow this roll (test box TB11, D-7413, D-7567; spec §2.10) ──
+# Called once by cmd_update, after a gate that PASSED (a failed gate exited 4 and restored; --no-gate measured nothing)
+# and never by the restore child. On a box that runs sessions (any role but server) with CCRC_TESTBOX_URL set, it makes
+# exactly ONE call, `ccrc-api testbox tools-sync` (POST /api/testbox/tools-sync, the action the Settings card's Bring
+# tools up to date button sends, D-7554): the server's agent op sends the box this host's release and freshly measured
+# versions. With no URL it does nothing at all. Every outcome prints one line and returns 0: a failed call is a WARN
+# line, never an update failure, because the box re-reads the release at its next sync and the card shows the drift.
+_upd_testbox_signal() {   # <role>
+  local api="$HOME/.local/bin/ccrc-api" out code why
+  [ "${1:-}" != server ] && _ccrc_knob CCRC_TESTBOX_URL '' file && [ -n "$KNOB" ] || return 0
+  [ -x "$api" ] || { echo "update: WARN: test box: tools sync not sent — no ccrc-api at ~/.local/bin/ccrc-api"; return 0; }
+  out=$("$api" testbox tools-sync 2>&1) || { echo "update: WARN: test box: tools sync not sent — the server did not answer (ccrc-api exited $?)"; return 0; }
+  code="${out##*http }"; code="${code:0:3}"
+  why=$(jq -r 'if .ok == true then "sent" else ([.outcome, .error, .detail] | map(select(. != null) | tostring) | join(": ")) end' <<<"${out%http *}" 2>/dev/null) || why=""
+  if [ "$code" = 200 ] && [ "$why" = sent ]; then echo "update: test box: tools sync sent"; return 0; fi
+  echo "update: WARN: test box: tools sync not sent — the server answered ${code:-nothing}${why:+: $why}"
+  return 0
+}
+
 _upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
   local old_desc="$1" old_version="$2" new_desc="unstamped" rc=0
   _box_build_fields || rc=$?
@@ -26190,10 +26519,11 @@ _uninst_units() {
       ccd-tmp-sweep.timer ccd-tmp-sweep.service \
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
+      ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
       ccrc-models.timer ccrc-models.service \
-      ccrc-update-watchdog.timer ccrc-update-watchdog.service; do
+      ccrc-update-watchdog.timer ccrc-update-watchdog.service ccrctests.slice; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -26218,11 +26548,12 @@ _uninst_units() {
     "$dir/ccd-tmp-sweep.service" "$dir/ccd-tmp-sweep.timer" \
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
+    "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
     "$dir/ccrc-update-watchdog.service" "$dir/ccrc-update-watchdog.timer" \
-    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" \
+    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" "$dir/ccrctests.slice" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
@@ -26579,7 +26910,7 @@ _uninst_wrappers() {
     # launcher (the fleet box's copy was removed by Plan 4), which the marker test
     # below already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-land-probe|ccd-testbox-times|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -26618,16 +26949,32 @@ _uninst_cc_sessions() {
   # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
   # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
-    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" \
+    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     "$reg/account-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rmdir -- "$reg/lib" 2>/dev/null || true   # the transcript reader's directory, empty once its file is gone
+  # The conflict radar's opt-in mirror (landing order wave 3b): `$reg/landing/<project>/enabled`, the one file the probe
+  # writes that a LATER reader trusts (spec 5.4). With the probe gone nothing refreshes it, so it goes with the install.
+  # ONLY a regular file named `enabled`, ONE level under a real (not symlinked) `landing` directory, in a real project
+  # directory: a symlink named `enabled` is not ours to follow, and `probe`, `main-health` and the lineage files are
+  # measurements the operator may still read, so they stay.
+  local land="$reg/landing" ldir lfile
+  if [ -d "$land" ] && [ ! -L "$land" ]; then
+    for ldir in "$land"/*/; do
+      ldir="${ldir%/}"
+      { [ -d "$ldir" ] && [ ! -L "$ldir" ]; } || continue
+      lfile="$ldir/enabled"
+      if [ -f "$lfile" ] && [ ! -L "$lfile" ]; then
+        rm -f -- "$lfile" || _ccrc_die "removing the radar's opt-in mirror $lfile failed"
+      fi
+    done
+  fi
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the four skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the four skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────
@@ -26755,6 +27102,9 @@ _uninst_tree_bins() {
   # declaration): they stay with mail.token.
   rm -f -- "$BOX_TOKEN_GENERATION_FILE" "$BOX_TOKEN_SYNC_REPORT" \
     || _ccrc_die "removing the box token's generation record and sync report failed"
+  # The settings reader `_inst_bins` places beside ccd's body (wave 29, D-6980), by name, before the libexec rmdir below.
+  rm -f -- "$HOME/.local/libexec/ccrc/ccrc-settings.sh" || _ccrc_die "removing the settings reader from \$HOME/.local/libexec/ccrc failed"
+  echo "uninstall: tree: ccrc-settings.sh removed from \$HOME/.local/libexec/ccrc"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself
@@ -26785,6 +27135,10 @@ _uninst_tree_bins() {
   # non-Darwin role and only its timer is fleet-gated, so it is removed here
   # on every role.
   #
+  # `ccd-land-probe` (landing order wave 3b, the read-only conflict radar) joins on
+  # `ccd-tmp-sweep`'s terms: `_inst_bins` places it on every non-Darwin role and only its
+  # units and timer are role-gated, so it is removed here on every role.
+  #
   # `ccd-tool-adj` (D-5241, the tool-child priority's shell prefix) joins on
   # `ccd-scope-sweep`'s terms: `_inst_bins` places it on every non-Darwin role.
   #
@@ -26809,6 +27163,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-scope-sweep" "$HOME/.local/bin/ccd-pool-sync" \
+    "$HOME/.local/bin/ccd-land-probe" "$HOME/.local/bin/ccd-testbox-times" \
     "$HOME/.local/bin/ccd-tool-adj" \
     "$HOME/.local/bin/ccd-history-sweep" \
     "$HOME/.local/bin/ccd-update-sync" \
@@ -26819,10 +27174,13 @@ _uninst_tree_bins() {
   # ccd's BODY (D-3696), the other half of the pair the launcher above named,
   # and its directory only if that leaves it empty — anything else an operator
   # keeps under ~/.local/libexec is not ccrc's to remove.
-  rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
-    || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
+  rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" \
+    "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
+    || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
+  rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
+  rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
@@ -27054,6 +27412,24 @@ _uninst_purge() {
 # ARCH-74 (#809): the hook's generated region is rewritten by shared/hook-helpers.mjs --restamp.
 # Prints regenerated | current | refused-missing (BEGIN present, region damaged) | nothere.
 _restamp_hook_region() { node --no-warnings "$1" --restamp "$2" "$3" 2>/dev/null; }
+# The generated region <file> carries, as its label (`hook helpers`, `auth-dead writers`, `server-cap reader`), a tab
+# and the repository-relative file its row is given, or nothing: each row of <module> --region-files is a BEGIN
+# prefix, its label and that file (D-7049; W5 C5i). A module from before --region-files refuses it (exit 2, nothing on
+# stdout); its --regions rows (a prefix and a label) are read instead, every region of such a module given ccd/ccd.
+_restamp_region_of() {   # module file
+  local detect label file rows
+  [ -f "$1" ] || return 0
+  rows="$(node --no-warnings "$1" --region-files 2>/dev/null)"
+  if [ -z "$rows" ]; then
+    while IFS=$'\t' read -r detect label; do
+      [ -n "$detect" ] && grep -qF -- "$detect" "$2" 2>/dev/null && { printf '%s\t%s' "$label" ccd/ccd; return 0; }
+    done < <(node --no-warnings "$1" --regions 2>/dev/null)
+    return 0
+  fi
+  while IFS=$'\t' read -r detect label file; do
+    [ -n "$detect" ] && grep -qF -- "$detect" "$2" 2>/dev/null && { printf '%s\t%s' "$label" "$file"; return 0; }
+  done <<<"$rows"
+}
 
 # After restamping ccd/ccd, say whether the sibling hook's region has gone stale.
 _restamp_hook_note() {
@@ -27101,7 +27477,7 @@ _restamp_hook_note() {
 cmd_restamp() {
   case "${1:-}" in -h|--help) echo "usage: $PROG restamp <file>"; return 0 ;; esac
   [ $# -eq 1 ] || { echo "usage: $PROG restamp <file>" >&2; exit 2; }
-  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks ccdsrc
+  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks what file srcfile
   { [ -f "$f" ] && [ ! -L "$f" ]; } || _ccrc_die "restamp: $f is not a regular file"
   # CDPATH= : `cd` consults an exported CDPATH for a relative operand, so the
   # directory resolved here could be a decoy while the write lands on $f itself.
@@ -27120,19 +27496,28 @@ cmd_restamp() {
   case "$(sed -n 2p -- "$f" 2>/dev/null)" in
     '# ccrc:stamp-at-install'*) _ccrc_die "restamp: $f is stamped at install time (ccd/ccd-entry-install.py writes its marker into the installed copy), so there is nothing to restamp; resolve its hunks as source and commit. Nothing was written." ;;
   esac
-  # A hook carrying the generated-helpers region (ARCH-74, #809) is regenerated
-  # from the TARGET'S OWN tree: its shared/hook-helpers.mjs and its sibling ccd,
-  # never this script's tree (the installed ccrc would otherwise regenerate a
-  # worktree's hook against the installed constants). Missing either is refused.
-  if grep -qF -- '# ── BEGIN GENERATED HOOK HELPERS' "$f" 2>/dev/null; then
-    hooks="$dir/../shared/hook-helpers.mjs"; ccdsrc="$dir/ccd"
-    { [ -f "$hooks" ] && [ -f "$ccdsrc" ]; } \
-      || _ccrc_die "restamp: $f carries generated hook helpers, but its own tree lacks $hooks or $ccdsrc; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
-    verdict="$(_restamp_hook_region "$hooks" "$f" "$ccdsrc")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
+  # A file carrying a generated region (ARCH-74, #809: the hook's helpers; D-7049:
+  # the probe's auth-dead writers; D-7321: ccrc-api's server-cap reader, which the
+  # module renders from the session-hook.sh beside that ccd) is regenerated from
+  # the TARGET'S OWN tree: its shared/hook-helpers.mjs and its sibling ccd, never
+  # this script's tree (the installed ccrc would otherwise regenerate a
+  # worktree's hook against the installed constants). Missing either is refused. The regions' BEGIN prefixes
+  # and the file each is given come from the module (`--region-files`, else `--regions` with every region given
+  # ccd/ccd): the target tree's, else this tree's. The given file is `ccd/<name>` in the target's own tree; any
+  # other path is refused as missing (W5 C5i).
+  hooks="$dir/../shared/hook-helpers.mjs"; [ -f "$hooks" ] || hooks="$CCRC_HERE/../shared/hook-helpers.mjs"
+  what="$(_restamp_region_of "$hooks" "$f")"
+  if [ -n "$what" ]; then
+    file="${what#*$'\t'}"; what="${what%%$'\t'*}"; srcfile=""
+    case "$file" in ccd/*/*|*..*) ;; ccd/?*) srcfile="$dir/${file#ccd/}" ;; esac
+    hooks="$dir/../shared/hook-helpers.mjs"
+    { [ -f "$hooks" ] && [ -n "$srcfile" ] && [ -f "$srcfile" ]; } \
+      || _ccrc_die "restamp: $f carries generated $what, but its own tree lacks $hooks or ${srcfile:-$file}; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
+    verdict="$(_restamp_hook_region "$hooks" "$f" "$srcfile")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
     case "$verdict" in
-      regenerated) echo "restamp: $f: hook helpers regenerated"; return 0 ;;
-      current)     echo "restamp: $f: hook helpers already current"; return 0 ;;
-      refused-*)   _ccrc_die "restamp: $f: hook helpers refused (${verdict#refused-})" ;;
+      regenerated) echo "restamp: $f: $what regenerated"; return 0 ;;
+      current)     echo "restamp: $f: $what already current"; return 0 ;;
+      refused-*)   _ccrc_die "restamp: $f: $what refused (${verdict#refused-})" ;;
     esac
   fi
   verdict="$(node --no-warnings --input-type=module -e '
@@ -27152,6 +27537,75 @@ console.log("restamped");
     foreign)         _ccrc_die "restamp: $f carries no ccrc:generated marker — restamp re-stamps a generated file, it never adopts one" ;;
     *)               _ccrc_die "restamp: $f: unexpected verdict '$verdict'" ;;
   esac
+}
+
+# ── _test_knobs — `ccrc test`'s settings (D-7298) ───────────
+# The test slice's five limits and the admission queue's three numbers, read through `_ccrc_knob` like every other
+# setting. The five limits, the slot count and the wide line hold for the WHOLE BOX (one slice, one queue), so they are
+# read in `file` mode, ~/.ccrc/ccrc.env else the default: a caller's environment that set them would change the slice
+# for every run on the box, count its own slots, or read its own wide runs as light. The pressure bound is the caller's own: the environment, else
+# ~/.ccrc/ccrc.env, else the default. One line per setting, `KEY<US>default<US>value
+# <US>from` with US the unit separator (octal 037, never in a setting; the value empty and `from` the reader's sentence when it cannot be read), for ccd/ccrc-test, which owns
+# what each value means and refuses a value that is not its shape. The defaults are deploy/systemd/ccrctests.slice's
+# own values (ccrc-test-wrapper.test.ts holds the two equal) and are no box's measurements: 6G of memory, 1G of swap,
+# CPU and IO weight 20 against app.slice's 100, four CPUs of quota, two heavy runs at once, a vitest run naming more
+# than three files counted as wide, and no pressure wait.
+_test_knob_say() {   # <KEY> <default> <rc of _ccrc_knob>
+  if [ "$3" = 0 ]; then printf '%s\037%s\037%s\037%s\n' "$1" "$2" "$KNOB" "$KNOB_FROM"
+  else printf '%s\037%s\037\037%s\n' "$1" "$2" "$KNOB_WHY"; fi
+}
+_test_knobs() {
+  _ccrc_knob CCRC_TEST_SLICE_MEMORY_MAX 6G file; _test_knob_say CCRC_TEST_SLICE_MEMORY_MAX 6G $?
+  _ccrc_knob CCRC_TEST_SLICE_SWAP_MAX 1G file; _test_knob_say CCRC_TEST_SLICE_SWAP_MAX 1G $?
+  _ccrc_knob CCRC_TEST_SLICE_CPU_WEIGHT 20 file; _test_knob_say CCRC_TEST_SLICE_CPU_WEIGHT 20 $?
+  _ccrc_knob CCRC_TEST_SLICE_CPU_QUOTA 400% file; _test_knob_say CCRC_TEST_SLICE_CPU_QUOTA 400% $?
+  _ccrc_knob CCRC_TEST_SLICE_IO_WEIGHT 20 file; _test_knob_say CCRC_TEST_SLICE_IO_WEIGHT 20 $?
+  _ccrc_knob CCRC_TEST_HEAVY_SLOTS 2 file; _test_knob_say CCRC_TEST_HEAVY_SLOTS 2 $?
+  _ccrc_knob CCRC_TEST_WIDE_FILES 3 file; _test_knob_say CCRC_TEST_WIDE_FILES 3 $?
+  _ccrc_knob CCRC_TEST_PRESSURE_MAX 0; _test_knob_say CCRC_TEST_PRESSURE_MAX 0 $?
+}
+# ── _graph_knobs [file] — the graph sweep's settings (D-7348; graph revision 2, spec §5) ──
+# The 22 graph settings of spec §5.4, in its order, read through `_ccrc_knob` like every other setting and printed one line
+# each through `_test_knob_say` (`KEY<US>default<US>value<US>from`, the same lines `_test_knobs` prints). ccd/graph-resolve
+# (`_gr_knobs`) owns what each value means and keeps the default for a value that is not its shape, as ccd/ccrc-test does
+# for `_test_knobs`. No mode is the sweep's: the environment, else ~/.ccrc/ccrc.env, else the default (its unit sets no
+# environment, so a test's fixture environment is the only one it sees). `file` is the doctor's: ccrc.env alone, which is
+# what the sweep's unit reads. The defaults are neutral, no box's measurements; three are the sweep's own today
+# (BUILD_TIMEOUT 600, MAX_WORKERS 4, HOOKSTATE_FRESH_SECS 1800). REPOS_EXCLUDE's default is the empty string, spelled `''`
+# so the settings census reads it as a default.
+_graph_knobs() {   # [file]
+  local m="${1:-}"
+  _ccrc_knob CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" ${m:+"$m"}; _test_knob_say CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" $?
+  _ccrc_knob CCRC_GRAPH_SOURCE_REF origin/HEAD ${m:+"$m"}; _test_knob_say CCRC_GRAPH_SOURCE_REF origin/HEAD $?
+  _ccrc_knob CCRC_GRAPH_REPOS_EXCLUDE '' ${m:+"$m"}; _test_knob_say CCRC_GRAPH_REPOS_EXCLUDE '' $?
+  _ccrc_knob CCRC_GRAPH_REFRESH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_REFRESH_SECS 900 $?
+  _ccrc_knob CCRC_GRAPH_FETCH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FETCH_SECS 900 $?
+  _ccrc_knob CCRC_GRAPH_FULL_REBUILD_SECS 86400 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_REBUILD_SECS 86400 $?
+  _ccrc_knob CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 $?
+  _ccrc_knob CCRC_GRAPH_FULL_FAIL_MAX 2 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_FAIL_MAX 2 $?
+  _ccrc_knob CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 $?
+  _ccrc_knob CCRC_GRAPH_BUDGET 4 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUDGET 4 $?
+  _ccrc_knob CCRC_GRAPH_BUILD_TIMEOUT 600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUILD_TIMEOUT 600 $?
+  _ccrc_knob CCRC_GRAPH_SLOT_WAIT_SECS 600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_SLOT_WAIT_SECS 600 $?
+  _ccrc_knob CCRC_GRAPH_BUILD_NICE 15 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUILD_NICE 15 $?
+  _ccrc_knob CCRC_GRAPH_MAX_WORKERS 4 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_MAX_WORKERS 4 $?
+  _ccrc_knob CCRC_GRAPH_MAX_SHRINK_PCT 20 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_MAX_SHRINK_PCT 20 $?
+  _ccrc_knob CCRC_GRAPH_KEEP_BUILDS 2 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_KEEP_BUILDS 2 $?
+  _ccrc_knob CCRC_GRAPH_BUILD_GRACE_SECS 3600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUILD_GRACE_SECS 3600 $?
+  _ccrc_knob CCRC_GRAPH_MIGRATE_BUDGET 8 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_MIGRATE_BUDGET 8 $?
+  _ccrc_knob CCRC_GRAPH_HOOKSTATE_FRESH_SECS 1800 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_HOOKSTATE_FRESH_SECS 1800 $?
+  _ccrc_knob CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 $?
+  _ccrc_knob CCRC_GRAPH_GATE_MAX_DENIALS 3 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DENIALS 3 $?
+  _ccrc_knob CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 $?
+}
+_usage_test_paragraph() {
+  printf '\n%s' \
+    '  test      run one test or typecheck inside ccrctests.slice (its memory' \
+    '            cap, swap cap, CPU and IO weight and CPU quota keep sessions' \
+    '            ahead of tests), behind the fleet-wide queue for heavy runs' \
+    '            (tsc, typecheck, full or wide vitest, browser and mutation' \
+    '            tests): ccrc test [--heavy|--light] -- <command>. --status' \
+    '            prints the slice and the queue. See README, "Test containment"'
 }
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
@@ -27223,6 +27677,7 @@ case "$VERB" in
   restamp) cmd_restamp "$@" ;;
   watchdog) cmd_watchdog "$@" ;;
   history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;
+  test)    exec bash "$CCRC_HERE/ccrc-test" "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 

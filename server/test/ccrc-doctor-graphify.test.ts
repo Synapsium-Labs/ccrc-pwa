@@ -37,6 +37,8 @@
 // is a scripted stub, same convention `ccrc-doctorFixture.ts`'s own `stubDf`
 // uses.
 import { describe, it, expect } from 'vitest';
+import { fixClock, fixedNow } from './fixedClock.js';
+import { plantShippedTimers, writeShippedTimer } from './shippedTimers.js';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync, readFileSync } from 'node:fs';
@@ -77,6 +79,8 @@ function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
+  // The shipped timers the doctor reads each cadence from (W8 Task C8b, D-7054), as `ccrc-doctorFixture.ts` plants them.
+  plantShippedTimers(join(home, 'ccrc'));
 }
 
 const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
@@ -358,6 +362,58 @@ describe('ccrc doctor: graphify', () => {
     utimesSync(census, oldSecs, oldSecs);
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^WARN graphify:/);
+  });
+
+  // W8 Task C8b's characterization pin (D-7054; ARCH-69 (#804)): the census bound is three of ccd-graph-sweep.timer's
+  // 15-minute periods, 2700 s, held one second inside and one second past, byte for byte, on a fixed clock (a real
+  // one can tick between the fixture's write and the check's read). It runs unchanged at every commit of the series.
+  const censusAged = (prefix: string, ageS: number): string => {
+    const home = healthy(prefix); graphifyHealthy(home);
+    const now = fixedNow();
+    fixClock(home, stubBin(home), now);
+    utimesSync(join(home, '.ccrc', 'graph-sweep.json'), now - ageS, now - ageS);
+    return home;
+  };
+  it('a census 2700 s old is inside three of the timer\'s cycles: the PASS, byte for byte (C8b)', () => {
+    const out = runDoctor(censusAged('ccrc-doctor-gfx-census-2700-', 2700)).stdout;
+    expect(lineFor(out, 'graphify'), out).toBe('PASS graphify: engine 0.9.9, skills converged, census ok, gate on');
+  });
+  it('a census 2701 s old is past three of the timer\'s cycles: the WARN and its remedy, byte for byte (C8b)', () => {
+    const out = runDoctor(censusAged('ccrc-doctor-gfx-census-2701-', 2701)).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN graphify: '));
+    expect(lines.slice(i, i + 2), out).toEqual([
+      'WARN graphify: the last graph-sweep pass finished 45 minutes ago — the timer may not be firing, gate on',
+      '  remedy: check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)',
+    ]);
+    expect(lines.filter((l) => /^(WARN|FAIL) graphify: /.test(l)), out).toHaveLength(1);
+  });
+
+  // C8b step 4 (OA-C8c (a), D-7062): an unreadable ccd-graph-sweep.timer leaves the census's staleness unmeasured — one
+  // WARN naming the unit, never a comparison against a literal; ccrc's reader not loaded is a FAIL naming the bug.
+  const graphifyLines = (out: string, home: string): string[] =>
+    out.split(home).join('<home>').split('\n').filter((l, i, all) => /^(PASS|WARN|FAIL) graphify: /.test(l)
+      || (/^ {2}remedy: /.test(l) && /^(WARN|FAIL) graphify: /.test(all[i - 1] ?? '')));
+  const UNREAD = (minutes: number): string[] => [
+    `WARN graphify: ccd-graph-sweep.timer's cadence could not be read from the shipped unit file (<home>/ccrc/deploy/systemd/ccd-graph-sweep.timer), so whether the last graph-sweep pass, finished ${minutes} minutes ago, is stale is unmeasured, gate on`,
+    '  remedy: the shipped tree at <home>/ccrc is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor',
+  ];
+  it.each([[2700, 45], [2701, 45], [9000, 150]])('an unreadable ccd-graph-sweep.timer makes graphify WARN unmeasured over a census %i s old, never compare against a literal (C8b)', (age, minutes) => {
+    const home = censusAged(`ccrc-doctor-gfx-census-unread-${age}-`, age);
+    writeShippedTimer(join(home, 'ccrc'), 'ccd-graph-sweep.timer', null);
+    const r = runDoctor(home);
+    expect(graphifyLines(r.stdout, home), r.stdout).toEqual(UNREAD(minutes));
+    expect(r.stderr).not.toMatch(/integer (?:expression )?expected|syntax error|unbound variable/);
+  });
+  it('ccrc\'s timer reader not loaded: graphify FAILs naming the bug (C8b)', () => {
+    const home = censusAged('ccrc-doctor-gfx-census-unloaded-', 2701);
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${JSON.stringify(CCRC_SRC)}; . ${JSON.stringify(CHECKS_SRC)}; BOX_TREE_DIR=; _check_graphify`],
+      { env: doctorEnv(home), encoding: 'utf8' });
+    expect(graphifyLines(r.stdout ?? '', home), r.stdout).toEqual([
+      'FAIL graphify: ccrc\'s own timer reader is not loaded, so whether the last graph-sweep pass, finished 45 minutes ago, is stale was never measured, gate on',
+      '  remedy: this is a bug in ccrc, not a fact about your box — _check_graphify reads ccd-graph-sweep.timer\'s cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc',
+    ]);
+    expect(r.status).toBe(1);
   });
 
   // D-1454 — A REFUSED TREE IS A FINDING FOR AN OPERATOR, NOT A ROW NOBODY READS.

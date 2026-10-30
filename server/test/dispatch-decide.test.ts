@@ -139,7 +139,7 @@ function badHold(c: CoordStore): number {
 
 describe('decideDispatch, the admit step', () => {
   const caps = (over: Partial<CapsReading> = {}): CapsReading => ({
-    caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 }, usage: { running: 0, dispatchedIn24h: 0 } as never,
+    caps: { maxConcurrentWorkers: 3 }, usage: { running: 0 },
     overConcurrency: null, ...over,
   });
   const admit = (names: readonly string[] | null, reading: CapsReading, reads: { n: number }): AdmitFacts =>
@@ -160,14 +160,14 @@ describe('decideDispatch, the admit step', () => {
       .toEqual({ ok: false, kind: 'refused', code: 'mail-disabled' });
     expect(reads.n).toBe(0);
   });
-  it('gate order: concurrency, then daily', () => {
-    const both = caps({ overConcurrency: { limit: 3, running: 3 }, usage: { running: 3, dispatchedIn24h: 99 } as never });
-    expect(outcomeOf(decideDispatch(admit([], both, { n: 0 }))))
+  // The daily cap that once followed concurrency is retired (D-7068): concurrency is the last
+  // admission gate, and past it a clean listing goes.
+  it('gate order: concurrency is the last admission gate', () => {
+    const full = caps({ overConcurrency: { limit: 3, running: 3 }, usage: { running: 3 } });
+    expect(outcomeOf(decideDispatch(admit([], full, { n: 0 }))))
       .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 3, running: 3 });
   });
-  it('the daily cap carries limit and used; a clean listing goes', () => {
-    expect(outcomeOf(decideDispatch(admit([], caps({ usage: { running: 0, dispatchedIn24h: 12 } as never }), { n: 0 }))))
-      .toEqual({ ok: false, kind: 'refused', code: 'cap-daily', limit: 12, used: 12 });
+  it('a clean listing goes', () => {
     expect(decideDispatch(admit([], caps(), { n: 0 })).kind).toBe('go');
   });
 });

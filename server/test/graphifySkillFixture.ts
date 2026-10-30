@@ -21,3 +21,13 @@ export const PKG_DESCRIPTION =
 export const skillMd = (description: string): string =>
   `---\nname: graphify\ndescription: "${description}"\n---\n\n# /graphify\n\n`
   + 'Run `graphify query "<question>"` against `graphify-out/graph.json` for a scoped subgraph.\n';
+
+// Spec §6.4 (D-7351): the one clause ccrc appends to the package's SKILL.md in
+// the staged copy (install-graphify-skill.sh), spelled here so a drift on
+// either side is red. The package's body above it is byte-for-byte its own.
+export const CCRC_SKILL_CLAUSE = '\n## ccrc: graphify-out is a managed link\n\n'
+  + "On a ccrc box `graphify-out` is a ccrc-managed link to this repository's graph of main. Never delete,"
+  + ' replace or build into it. When it is absent the graph is not ready yet: do not build one; use search,'
+  + " and read the session's card. For your branch's own changes, use `git diff` and read the files.\n";
+/** What every home's SKILL.md holds after an install: the package's body, then the clause. */
+export const installedSkillMd = (description: string): string => skillMd(description) + CCRC_SKILL_CLAUSE;

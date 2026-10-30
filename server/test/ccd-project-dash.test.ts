@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { WS_ADD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { eventsOf, readJournal } from './lifecycleHelpers.js';
 import { isTmpRootId } from '../../shared/api.js';
 
@@ -202,7 +202,7 @@ done`);
   it('_ws_tmproot_id_ok is derived from _reg_id_ok, so the dash rule has one spelling', () => {
     // A copy that spelled the dash rule inline (`!= [.-]*`) would answer every row above alike. Only this
     // line tells the derivation from a second spelling.
-    const defs = fs.readFileSync(CCD, 'utf8').split('\n').filter((l) => l.startsWith('_ws_tmproot_id_ok() {'));
+    const defs = ccdSource().split('\n').filter((l) => l.startsWith('_ws_tmproot_id_ok() {'));
     expect(defs).toHaveLength(1);
     expect(defs[0]).toContain('_ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }');
   });

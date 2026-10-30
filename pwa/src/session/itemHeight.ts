@@ -38,6 +38,7 @@
 //   - One odd row — an opened card, a turn measured mid-render — is outvoted
 //     by its neighbours rather than bending the least-squares line for the
 //     whole kind.
+import { pageStorage, readKey, removeKey, writeKey, type StoragePort } from '../lib/storage';
 
 /** Used for any kind this browser has not measured enough of. */
 export const FALLBACK_ITEM_HEIGHT = 96;
@@ -94,15 +95,10 @@ const RETIRED_KEYS = ['ccrc:chat-row-samples'] as const;
 
 /** `localStorage` throws outright in some privacy modes — on merely being
  *  named — and a thumbnailer or a preview frame can hand back a store that
- *  refuses writes. Every access goes through this, and every failure means
- *  "nothing remembered": the list renders identically, with the fallback. */
-function store(): Storage | null {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
+ *  refuses writes. Every access goes through the storage port
+ *  (`lib/storage.ts`, D-7190): its `pageStorage` is null where naming the store
+ *  throws, its reads and writes are guarded, and every failure means "nothing
+ *  remembered": the list renders identically, with the fallback. */
 
 const clampRow = (px: number): number =>
   Math.min(MAX_ROW_PX, Math.max(MIN_ROW_PX, Math.round(px)));
@@ -422,9 +418,9 @@ const emptyRecord = (): Record<HeightBucket, MeasuredRow[]> => {
  *  sighting of itself — a kind that is not an array is empty, and a refused or
  *  corrupted store is an empty record — never a throw: a hand-edited value is
  *  not a reason to render badly. */
-export function rememberedRows(s: Storage | null = store()): RowRecord {
+export function rememberedRows(s: StoragePort | null = pageStorage()): RowRecord {
   const out = emptyRecord();
-  const raw = (() => { try { return s?.getItem(ROWS_KEY) ?? null; } catch { return null; } })();
+  const raw = readKey(ROWS_KEY, () => s);
   if (raw === null) return out;
   let saved: unknown;
   try { saved = JSON.parse(raw); } catch { return out; }
@@ -474,7 +470,7 @@ function spread<T extends RowSample>(rows: readonly T[], n: number): T[] {
 export function rememberRows(
   visit: ReadonlyMap<HeightBucket, readonly MeasuredRow[]>,
   baseline: RowRecord,
-  s: Storage | null = store(),
+  s: StoragePort | null = pageStorage(),
 ): void {
   if (s === null) return;
   const fresh = new Map<HeightBucket, MeasuredRow[]>();
@@ -495,8 +491,6 @@ export function rememberRows(
     // row's number: nothing else is stored, and no text ever is.
     if (rows.length > 0) out[b] = rows.map((r) => [Math.round(r.lines * 100) / 100, Math.round(r.px), r.id]);
   }
-  try {
-    s.setItem(ROWS_KEY, JSON.stringify(out));
-    for (const k of RETIRED_KEYS) s.removeItem(k);
-  } catch { /* storage refused — keep the fallback */ }
+  // Storage refused: keep the fallback, and leave the retired keys as they are.
+  if (writeKey(ROWS_KEY, JSON.stringify(out), () => s)) for (const k of RETIRED_KEYS) removeKey(k, () => s);
 }

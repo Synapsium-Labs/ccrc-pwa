@@ -97,7 +97,9 @@ const childWord = (row: FleetRow): string => {
  *  one a narrow column pushes to a second line; the rest in the bucket order. */
 const WORD_ORDER = ['needs you', 'working', 'waiting', 'done', 'idle', 'merged', 'asleep', 'exited', 'archived', 'spawning'];
 
-function summaryParts(children: readonly FleetRow[]): SummaryPart[] {
+/** A coordinator's worker line, as counts in drawing order: the total, then each state word. A programme box's
+ *  footer counts its hidden workers with it (Task G2), so the two never word a worker differently. */
+export function summaryParts(children: readonly FleetRow[]): SummaryPart[] {
   const counts = new Map<string, number>();
   for (const c of children) counts.set(childWord(c), (counts.get(childWord(c)) ?? 0) + 1);
   const parts = [...counts].sort(([a], [b]) => WORD_ORDER.indexOf(a) - WORD_ORDER.indexOf(b)).map(([word, n]) => ({ n, word }));

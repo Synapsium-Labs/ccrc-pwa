@@ -183,6 +183,21 @@ const plantOwnerDir = (id = OWNER): void => { fs.mkdirSync(ownerDir(id), { recur
 
 /** The generation the lines are expected to carry: a test that moves the row to a new incarnation moves this too. */
 let expectGen = GENERATION;
+// THE LOOKUP IS COUNTED (#1587). The hook's pane lookup is bounded at 2 s, and one that outlasts it is an honest degrade:
+// exit 0, no line. Under shard load that happened in CI. Every stub tmux below records each lookup it ANSWERED, as one short
+// `printf >>`, so a run whose lookup went unanswered is known to be an identity skip and is never read as a lost or
+// suppressed line: `run` replays it, and the race rows count it (`assertLanded`).
+const tmuxAnswered = (): string => path.join(home, 'tmux-answered');
+const records = (f: string): string[] => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').slice(0, -1) : []);
+/**
+ * The stub tmux: answers `cc-<name>` and records the answer. `before` runs first (the race rows' slow lookup); `between` runs
+ * after the answer and before its record (only the row that cuts an answer there uses it). From the reply on, the stub ignores
+ * the bound's SIGTERM, so an answer and its record are never split (D-7449).
+ */
+const tmuxStub = (name: string, before = '', between = ''): void => {
+  fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+    `#!/bin/sh\n${before}trap '' TERM\necho "cc-${name}"\n${between}printf '%s\\n' answered >> '${tmuxAnswered()}'\n`, { mode: 0o755 });
+};
 /** `CLAUDE_CODE_EXECPATH` is blanked: the runner's own would put a `claudeVersion` in every line. */
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
   ...inherited(), HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
@@ -191,12 +206,22 @@ const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
 });
 type Ran = { stdout: string; stderr: string };
 /** One hook run. Exit 0 is asserted here, once, for every caller: the hook's contract is exit 0 on every path. */
-const run = (payload: object | string, env: Record<string, string> = {}): Ran => {
-  const r = spawnSync('bash', [HOOK], {
-    input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout: 120_000,
-  });
-  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
-  return { stdout: r.stdout, stderr: r.stderr };
+/**
+ * A run whose pane lookup went unanswered (the 2 s bound, under load) was an identity skip: it is replayed, at most four times,
+ * and said. `onReplay` undoes what the skipped run left in a row's own records (its `payload=$(cat)` came before the lookup).
+ */
+const run = (payload: object | string, env: Record<string, string> = {}, onReplay: () => void = () => {}): Ran => {
+  for (let attempt = 0; ; attempt += 1) {
+    const answered = records(tmuxAnswered()).length;
+    const r = spawnSync('bash', [HOOK], {
+      input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8', env: hookEnv(env), timeout: 120_000,
+    });
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    const skipped = hookEnv(env)['TMUX_PANE'] !== '' && records(tmuxAnswered()).length === answered;
+    if (!skipped || attempt === 4) return { stdout: r.stdout, stderr: r.stderr };
+    console.info(`delegation-spool: the pane lookup went unanswered (an identity skip), replaying the hook run (attempt ${attempt + 2})`);
+    onReplay();
+  }
 };
 
 const bucketFiles = (dir = ownerDir()): string[] =>
@@ -265,7 +290,7 @@ const setup = (): void => {
   // EXACTLY 36 BYTES, NO TERMINAL LF: the contract ccd's writer keeps.
   fs.writeFileSync(genFile(), GENERATION);
   fs.mkdirSync(path.join(home, 'bin'), { recursive: true });
-  fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${OWNER}"\n`, { mode: 0o755 });
+  tmuxStub(OWNER);
 };
 const teardown = (): void => { fs.rmSync(home, { recursive: true, force: true }); };
 
@@ -511,7 +536,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     it('an id that would name the spool root itself (dot-leading) writes nothing and traverses nothing', () => {
       one(post('Bash', { command: 'true' }, { stdout: '' }, 'toolu_ctl'));   // control: an ordinary id takes a line
       for (const evil of ['..', '.hidden']) {
-        fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${evil}"\n`, { mode: 0o755 });
+        tmuxStub(evil);
         fs.mkdirSync(path.join(spoolBase(), 'spool', evil), { recursive: true });
         fs.writeFileSync(path.join(reg(), `${evil}.generation`), GENERATION);
         run(post('Bash', { command: 'true' }, { stdout: '' }));
@@ -981,7 +1006,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
 
     it('the owner id may be the ccd shape [A-Za-z0-9._-]; the line\'s sessionId is the directory\'s name', () => {
       const id = 'acct-a.demo_x-1';
-      fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+      tmuxStub(id);
       fs.writeFileSync(path.join(reg(), `${id}.generation`), GENERATION);
       plantOwnerDir(id);
       run(pre('Agent', {}));
@@ -993,7 +1018,7 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
 
     it('an owner id at the bound writes a line; one byte over writes nothing', () => {
       for (const [id, want] of [['o'.repeat(B.ownerIdBytes), 1], ['o'.repeat(B.ownerIdBytes + 1), 0]] as const) {
-        fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+        tmuxStub(id);
         fs.writeFileSync(path.join(reg(), `${id}.generation`), GENERATION);
         plantOwnerDir(id);
         run(pre('Agent', {}));
@@ -1493,46 +1518,151 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       child.stdin.end(JSON.stringify(payload));
     });
 
-    it('sixteen hooks at once, then sixteen again: every line is whole, valid, and present exactly once', async () => {
-      for (let round = 0; round < 2; round += 1) {
-        const ids = Array.from({ length: 16 }, (_, i) => `toolu_r${round}_${i}`);
-        const codes = await Promise.all(ids.map((id) => racer(pre('Bash', { command: 'true' }, id))));
-        expect(codes.every((c) => c === 0)).toBe(true);
+    // SKIP OR LOSS (#1587). The hook has three honest degrades that exit 0 and write no line: the pane lookup times out at its
+    // 2 s bound, the one jq parse fails, or the parse yields no event. The census is their backstop. Under shard load the
+    // first one happened in CI and the row read it as a lost append, which is a different property: the append dropping
+    // or interleaving a line once the hook reached it. So the race rows count the degrades themselves: the stub tmux
+    // records each lookup it ANSWERED, and a jq shim records the status of each payload parse. A missing line is excused
+    // only while a recorded skip can explain it, and then it is replayed and must land; anything else is a lost append.
+    // Each record is one short `printf >>`, so the records cannot interleave either.
+    const JQ_STATUS = (): string => path.join(home, 'jq-status');
+    /** Installs the counting tmux and jq. `slowOnce`: exactly one lookup (the first to take the lock) outlasts the 2 s bound. */
+    const instrumentRace = (slowOnce = false): void => {
+      // `exec`: the sleep IS the bounded child, so the hook's `timeout` kills it and no orphan outlives the row.
+      const slow = slowOnce ? `if mkdir '${home}/tmux-slow' 2>/dev/null; then exec sleep 3; fi\n` : '';
+      tmuxStub(OWNER, slow);
+      // The real jq by absolute path (resolved before PATH is prefixed), so the shim never finds itself. Only the payload
+      // parse (`jq -r --arg sid ...`) is recorded: it is the one call whose failure ends the hook with no line.
+      fs.writeFileSync(path.join(home, 'bin', 'jq'),
+        `#!/bin/sh\n'${REAL_JQ}' "$@"\nrc=$?\ncase "$1 $2 $3" in '-r --arg sid') printf '%s\\n' "$rc" >> '${JQ_STATUS()}' ;; esac\nexit $rc\n`, { mode: 0o755 });
+    };
+    type Landed = { raws: string[]; skips: number; replayed: string[] };
+    /**
+     * The race rows' one assertion. Every line whole, valid, LF-terminated, one of `ids` and present once; then
+     * missing = expected - lines against skips = (hooks run - lookups answered) + (failed parses). No missing line passes;
+     * up to `skips` missing lines are replayed serially and must each land exactly one line; any other missing line throws
+     * "lost append, not an identity skip".
+     */
+    const assertLanded = (ids: string[], payloadOf: (id: string) => object, check: (raw: string) => void, env: Record<string, string> = {}): Landed => {
+      const raws = rawLines();
+      for (const raw of raws) { check(raw); expect(validate(JSON.parse(raw)), raw.slice(0, 300)).toEqual([]); }
+      const got = raws.map((r) => String(JSON.parse(r).toolUseId));
+      expect(got.length, 'no toolUseId twice: a duplicate is never a skip').toBe(new Set(got).size);
+      expect(got.filter((g) => !ids.includes(g)), 'no line this race did not run').toEqual([]);
+      const missing = ids.filter((id) => !got.includes(id));
+      const answered = records(tmuxAnswered()).length;
+      const parses = records(JQ_STATUS());
+      const failedParses = parses.filter((rc) => rc !== '0').length;
+      const skips = (ids.length - answered) + failedParses;
+      if (missing.length === 0) return { raws, skips, replayed: [] };
+      if (missing.length > skips) {
+        throw new Error(`lost append, not an identity skip: ${missing.length} line(s) missing (${missing.join(', ')}) and only ${skips} skip(s) to explain them `
+          + `(${ids.length} hooks, ${answered} lookups answered, ${parses.length} parses, ${failedParses} failed)`);
       }
-      const ls = lines();
-      expect(ls).toHaveLength(32);
-      for (const l of ls) expect(validate(l)).toEqual([]);
-      expect(new Set(ls.map((l) => l.toolUseId)).size).toBe(32);
+      console.info(`delegation-spool race: ${skips} identity skip(s) recorded, replaying ${missing.length} missing line(s): ${missing.join(', ')}`);
+      for (const id of missing) {
+        const l = one(payloadOf(id), env);
+        expect(l.toolUseId, 'the replay lands the missing line').toBe(id);
+      }
+      return { raws, skips, replayed: missing };
+    };
+    const SIXTEEN_TWICE = [0, 1].flatMap((round) => Array.from({ length: 16 }, (_, i) => `toolu_r${round}_${i}`));
+    const bashPre = (id: string): object => pre('Bash', { command: 'true' }, id);
+    const sixteenTwice = async (): Promise<void> => {
+      for (let round = 0; round < 2; round += 1) {
+        const codes = await Promise.all(SIXTEEN_TWICE.slice(round * 16, round * 16 + 16).map((id) => racer(bashPre(id))));
+        expect(codes.every((c) => c === 0), 'every hook exits 0').toBe(true);
+      }
+    };
+    const plainLine = (raw: string): void => { expect(bytes(raw) + 1).toBeLessThan(capOf({})); };
+
+    it('sixteen hooks at once, then sixteen again: every line is whole, valid, and present exactly once', async () => {
+      instrumentRace();
+      await sixteenTwice();
+      assertLanded(SIXTEEN_TWICE, bashPre, plainLine);
+    }, 180_000);
+
+    it('one pane lookup that outlasts its 2 s bound is an identity skip, not a lost append: it is counted, and its replay lands (#1587)', async () => {
+      instrumentRace(true);
+      await sixteenTwice();
+      expect(fs.existsSync(path.join(home, 'tmux-slow')), 'the slow lookup happened').toBe(true);
+      // Shard load can time out a second lookup on its own; that one is a skip too, and counted, so the exact count holds
+      // whenever the stub answered every other lookup (always, off load).
+      const answered = records(tmuxAnswered()).length;
+      expect(answered, 'the slow lookup was not answered').toBeLessThanOrEqual(31);
+      const before = rawLines().length;
+      expect(before, 'the premise: the slow hook wrote no line').toBeLessThanOrEqual(31);
+      const r = assertLanded(SIXTEEN_TWICE, bashPre, plainLine);
+      expect(r.skips, 'the slow lookup, and any other the load timed out').toBe(32 - answered);
+      if (answered === 31) expect(r.skips, 'exactly the one slow lookup').toBe(1);
+      expect(r.replayed).toHaveLength(32 - before);
+      expect(rawLines(), 'all 32 are there after the replay').toHaveLength(32);
+    }, 180_000);
+
+    it('a single run whose pane lookup outlasts its bound is replayed, not read as "no line" (#1587)', () => {
+      tmuxStub(OWNER, `if mkdir '${home}/tmux-slow' 2>/dev/null; then exec sleep 3; fi\n`);
+      expect(one(pre('Agent', {}, 'toolu_slow1')).toolUseId, 'the replayed run wrote the line').toBe('toolu_slow1');
+      expect(fs.existsSync(path.join(home, 'tmux-slow')), 'the slow lookup happened').toBe(true);
+      expect(records(tmuxAnswered()), 'one lookup answered: the replay').toHaveLength(1);
+      // And an answered run that writes no line is never replayed: the `none` it asserts is the hook's own.
+      none(ev('Stop'));
+      expect(records(tmuxAnswered()), 'answered once, run once').toHaveLength(2);
+    });
+
+    // AN ANSWER IS COUNTED WHOLE (D-7449). Under load the 2 s bound can fall after the stub's reply and before its record. The
+    // hook has its pane name and writes the line, but the record never lands. `run` then reads an identity skip, replays the run,
+    // and the replay writes a second line. That was a red "exactly one line" under load. So the stub ignores SIGTERM from just
+    // before its reply until it exits: a lookup the bound kills before the reply has no reply and no record, and one it reaches
+    // after the reply has both. This row puts a 3 s sleep between the reply and the record, so the bound always falls there.
+    it('an answer the 2 s bound cuts between the reply and its record is still counted, so its run is never replayed into a second line (D-7449)', () => {
+      tmuxStub(OWNER, '', 'sleep 3\n');
+      expect(one(pre('Agent', {}, 'toolu_cut1')).toolUseId).toBe('toolu_cut1');
+      expect(records(tmuxAnswered()), 'the cut answer is recorded, once').toHaveLength(1);
+    }, 60_000);
+
+    // THE CONTROL HOLDS UNDER LOAD (D-7450). It used to require all 32 lookups answered before it took a line out, and shard load
+    // can time one out on its own: an honest skip, and a red premise rather than a red verdict. So the control now runs WITH a
+    // skip, the one slow lookup, every time. A skip is a run with no line, so the lines missing are at least the skips recorded.
+    // Taking one more line out leaves one more missing line than any skip can explain, however many the load added.
+    it('control: a line taken out of the bucket is a lost append, even beside an honest skip (the skip count cannot excuse it) (D-7450)', async () => {
+      instrumentRace(true);
+      await sixteenTwice();
+      expect(fs.existsSync(path.join(home, 'tmux-slow')), 'the slow lookup happened').toBe(true);
+      expect(records(JQ_STATUS()).filter((rc) => rc !== '0'), 'every payload parse the shim saw succeeded').toEqual([]);
+      const raws = rawLines();
+      expect(raws.length, 'the premise: the skipped run wrote no line').toBeLessThanOrEqual(31);
+      expect(32 - raws.length, 'every missing line is a recorded skip').toBe(32 - records(tmuxAnswered()).length);
+      const [bucket] = bucketFiles();
+      const f = path.join(ownerDir(), bucket!);
+      fs.writeFileSync(f, fs.readFileSync(f, 'utf8').split('\n').slice(1).join('\n'));
+      expect(() => assertLanded(SIXTEEN_TWICE, bashPre, plainLine)).toThrow(/lost append, not an identity skip/);
     }, 180_000);
 
     // A line is one write(2) only while it fits bash's stdout buffer (D-5436): on darwin these 3.9 KiB lines were four writes each
     // and one red in four runs interleaved two of them, so the 4096 arm runs only where this bash picks 4096.
     it.skipIf(!!NO_GLIBC_ARM)(`lines near the 4096 cap do not interleave: twelve hooks at once, each writing ~3.9 KiB${NO_GLIBC_ARM ? ` (skipped: ${NO_GLIBC_ARM})` : ''}`, async () => {
+      instrumentRace();
       const filler = (n: number): string => '\u0001'.repeat(300).padEnd(300 + n, 'x');
       const ids = Array.from({ length: 12 }, (_, i) => `toolu_big${i}`);
-      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }))));
+      const big = (id: string): object => { const i = ids.indexOf(id); return pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }); };
+      const codes = await Promise.all(ids.map((id) => racer(big(id))));
       expect(codes.every((c) => c === 0)).toBe(true);
-      const raws = rawLines();
-      expect(raws).toHaveLength(12);
-      for (const raw of raws) { expect(bytes(raw) + 1).toBeLessThan(4096); expect(validate(JSON.parse(raw))).toEqual([]); }
-      expect(new Set(raws.map((r) => JSON.parse(r).toolUseId)).size).toBe(12);
+      assertLanded(ids, big, (raw) => { expect(bytes(raw) + 1).toBeLessThan(4096); });
     }, 180_000);
 
     it('lines near the small cap do not interleave: twelve hooks at once, each writing just under 1008 bytes, on every platform (D-5436)', async () => {
+      instrumentRace();
       // Two 54-control-character paths (325 bytes serialized each) and a short tail per hook: about 960 to 990 bytes a line, kept whole.
       const filler = (n: number): string => '\u0001'.repeat(54).padEnd(54 + n, 'x');
       const ids = Array.from({ length: 12 }, (_, i) => `toolu_near${i}`);
-      const codes = await Promise.all(ids.map((id, i) => racer(pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }), SMALL)));
+      const near = (id: string): object => { const i = ids.indexOf(id); return pre('Agent', {}, id, { cwd: `/${filler(i)}`, transcript_path: `/${filler(i)}` }); };
+      const codes = await Promise.all(ids.map((id) => racer(near(id), SMALL)));
       expect(codes.every((c) => c === 0)).toBe(true);
-      const raws = rawLines();
-      expect(raws).toHaveLength(12);
-      for (const raw of raws) {
+      assertLanded(ids, near, (raw) => {
         expect(bytes(raw) + 1).toBeLessThan(B.lineBytesBelowSmall);
         expect(bytes(raw) + 1, 'the premise: the line is near the cap').toBeGreaterThan(900);
-        expect(validate(JSON.parse(raw))).toEqual([]);
         expect('truncated' in JSON.parse(raw), 'and kept whole').toBe(false);
-      }
-      expect(new Set(raws.map((r) => JSON.parse(r).toolUseId)).size).toBe(12);
+      }, SMALL);
     }, 180_000);
 
     it('the bucket is named by the UTC hour of observedAt: YYYYMMDDHH.spool', () => {
@@ -1552,6 +1682,39 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       expect(run(pre('Agent', {}))).toEqual({ stdout: '', stderr: '' });
       expect(fs.statSync(path.join(ownerDir(), name)).isDirectory()).toBe(true);
     });
+
+    // THE FIRST WRITE OF AN HOUR, RACED (D-7448). The append's node gate probes the bucket's path more than once, and a racing
+    // hook can create the bucket between two probes. Probed as `-f || ! -e`, the path was "not a regular file" and then "not
+    // absent", so the gate refused a bucket that was only being born: the race rows' lost append in CI, measured as the gate's
+    // own return in a fixture. The only transition a bucket of the current hour makes is absent to regular file (prune removes
+    // older hours only), so absence must be probed FIRST. This row runs the SHIPPED gate line against that transition: a spinning
+    // checker evaluates it while a background writer creates each fresh path, and no evaluation may refuse. The control runs
+    // the same harness with the two probes in the old order and must be caught; it refused about one transition in six measured.
+    it('a bucket created by a racing hook between the gate\'s probes is a regular file to it, never a refusal (D-7448)', () => {
+      const src = fs.readFileSync(HOOK, 'utf8');
+      const body = src.slice(src.indexOf('_hook_spool_append() {'), src.indexOf('\n}\n', src.indexOf('_hook_spool_append() {')));
+      const gates = body.split('\n').filter((l) => /^\s*\[\[ ! -L "\$f" && \(.*\) \]\] \|\| return 1\b/.test(l));
+      expect(gates, 'one node gate in the append').toHaveLength(1);
+      const gate = gates[0]!.trim().replace(/ \|\| return 1\b.*$/, '');
+      const probes = gate.match(/\( (.+) \|\| (.+) \)/);
+      expect(probes, 'the gate is two probes joined by ||').not.toBeNull();
+      const reversed = gate.replace(probes![0], `( ${probes![2]} || ${probes![1]} )`);
+      expect(reversed).not.toBe(gate);
+      // One fresh path per transition; the writer is a subshell after a few ms, the checker spins until the path exists and
+      // stops at its first refusal. `STOP_AT_FIRST=1` ends the control early (it only has to be caught once).
+      const race = (expr: string, transitions: number): { refused: number; ran: number } => {
+        const dir = mkTmp('ccrc-dlgspool-gate-');
+        const script = `gate() { ${expr}; }\nrefused=0 ran=0\nfor ((i = 0; i < ${transitions}; i++)); do\n  f="$1/b$i"; ran=$((ran + 1))\n`
+          + `  ( sleep 0.00$((RANDOM % 9 + 1)); : >> "$f" ) &\n  until [[ -e "$f" ]]; do gate || { refused=$((refused + 1)); break; }; done\n  wait\n`
+          + `  (( refused > 0 && \${STOP_AT_FIRST:-0} == 1 )) && break\ndone\nprintf '%s %s\\n' "$refused" "$ran"\n`;
+        const out = execFileSync('bash', ['-c', script, 'race', dir], { encoding: 'utf8', env: { ...inherited(), STOP_AT_FIRST: expr === gate ? '0' : '1' }, timeout: 60_000 });
+        fs.rmSync(dir, { recursive: true, force: true });
+        const [refused, ran] = out.trim().split(' ').map(Number);
+        return { refused: refused!, ran: ran! };
+      };
+      expect(race(reversed, 400).refused, 'control: the old probe order refuses a bucket that is being created').toBeGreaterThan(0);
+      expect(race(gate, 300), 'the shipped gate never refuses a bucket that is being created').toEqual({ refused: 0, ran: 300 });
+    }, 120_000);
   });
 
   describe('prune: the owner\'s buckets older than 24 hours, once an hour, inside its own directory (W3-M06)', () => {
@@ -1721,18 +1884,30 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       ['UserPromptSubmit (a notification)', () => ev('UserPromptSubmit', { prompt: '<task-notification>\n<task-id>w1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n</task-notification>' })],
       ['SessionEnd', () => ev('SessionEnd', { reason: 'clear' })],
     ];
+    it('a replayed identity skip is not counted twice: the skipped run\'s own fork leaves the count (#1587)', () => {
+      const counts = shims();
+      // One lookup outlasts the bound. Absolute paths: the stub's own mkdir and sleep must not be counted as the hook's.
+      tmuxStub(OWNER, `if /bin/mkdir '${home}/tmux-slow' 2>/dev/null; then exec /bin/sleep 3; fi\n`);
+      run(pre('Agent', { prompt: 'x' }), {}, () => { fs.rmSync(path.join(home, 'forks'), { force: true }); });
+      expect(fs.existsSync(path.join(home, 'tmux-slow')), 'the slow lookup happened').toBe(true);
+      expect(rawLines(), 'the replay wrote the line').toHaveLength(1);
+      expect(counts()['cat'], 'one payload read: the replay\'s').toBe(1);
+    });
+
     it.each(cases)('%s: the same externals run whether the spool directory exists or not, so a line costs no fork', (n, mk) => {
       fs.mkdirSync(path.join(home, 'repo', '.git', 'worktrees', 'agent-a1'), { recursive: true });
       const counts = shims();
+      // A replayed identity skip forked its `cat` before the lookup: the count is the replay's alone.
+      const forget = (): void => { fs.rmSync(path.join(home, 'forks'), { force: true }); };
       const before = counts();
-      run(mk());
+      run(mk(), {}, forget);
       const withSpool = counts();
       expect(rawLines().length, 'the spool run wrote its line (anti-vacuity)').toBe(1);
       fs.rmSync(path.join(spoolBase()), { recursive: true });
       fs.rmSync(path.join(reg(), `${OWNER}.hookstate.json`), { force: true });
       fs.rmSync(path.join(reg(), `${OWNER}.turn.json`), { force: true });
       fs.rmSync(path.join(home, 'forks'));
-      run(mk());
+      run(mk(), {}, forget);
       const without = counts();
       expect(withSpool, `${n}: with a line`).toEqual(without);
       expect(before).toEqual({});

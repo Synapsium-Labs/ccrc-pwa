@@ -60,6 +60,9 @@ const NAMES = [
   // Refined's phone header (W2 Task S5, D-5471): the Inbox and Runs doors.
   'inbox',
   'list-checks',
+  // The session inspector's toggle, shown or hidden (desktop polish T3e, D-6385).
+  'panel-right-close',
+  'panel-right-open',
 ];
 
 const TAGS = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);

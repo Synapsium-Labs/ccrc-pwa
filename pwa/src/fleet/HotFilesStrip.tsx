@@ -4,19 +4,20 @@
 // once; an intent can be written every ten minutes). MailStrip's shape:
 // collapsed to one headline, expanding to rows, rendering NOTHING when no
 // claim is live — a fleet not running a program must not pay a row for it.
-// AccountsStrip's poll idiom: this strip owns its own GET /api/claims
-// cadence rather than coupling to a store no frame feeds — claims ship no
-// WS frame (the wire is additive-only and a 30 s poll is plenty for a
-// 45-minute lease).
+// This strip owns its own GET /api/claims cadence (through `usePoll`) rather than coupling to a
+// store no frame feeds — claims ship no WS frame (the wire is additive-only
+// and a 30 s poll is plenty for a 45-minute lease).
 //
 // READ-ONLY BY DESIGN: no release, no break. Release is the holding
 // SESSION's own door, and the break door is the operator's, deliberately
 // unnamed everywhere — a strip that could break a claim from a phone tap
 // would be an enforcement surface for a mechanism D12 rules advisory.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ClaimSummary } from '../../../shared/api';
 import { api } from '../lib/api';
+import { usePoll } from '../lib/usePoll';
+import { isRecord } from '../lib/wire';
 import { CollapsibleStrip, Icon, MONO_PATH, useNow } from '@ccrc/ui';
 import './fleet.css';
 
@@ -35,27 +36,32 @@ export function HotFilesStrip(): ReactNode {
   const [claims, setClaims] = useState<readonly ClaimSummary[]>([]);
   const now = useNow(30_000);
 
-  useEffect(() => {
-    let live = true;
-    const load = (): void => {
-      void api.claims().then((r) => {
-        if (!live) return;
-        // `Array.isArray`, not bare trust — AccountsStrip's own rule for a
-        // stub or an older server answering with a shape this build never
-        // asked for; keep the last good list rather than clobbering it.
-        if (Array.isArray(r.claims)) setClaims(r.claims);
-      }).catch(() => {});
-    };
-    load();
-    const t = setInterval(load, CLAIMS_POLL_MS);
-    return () => { live = false; clearInterval(t); };
-  }, []);
+  // The poll is usePoll's (W7 C7m, D-7191): its newest-issued guard drops a claims answer that lands after a newer
+  // one, so an older list is never painted over a newer one. The strip never re-polled on a return to the page, so
+  // `refetchOnVisible: false` keeps that schedule.
+  usePoll({
+    pollMs: CLAIMS_POLL_MS,
+    request: () => api.claims(),
+    onOutcome: (outcome) => {
+      if (!outcome.ok) return;
+      // `Array.isArray`, not bare trust — AccountsStrip's own rule for a
+      // stub or an older server answering with a shape this build never
+      // asked for; keep the last good list rather than clobbering it. A body
+      // that is not an object at all is kept out the same way (the hand-written
+      // poll's `.catch` swallowed the throw reading `.claims` off it).
+      const r = outcome.raw;
+      if (isRecord(r) && Array.isArray(r.claims)) setClaims(r.claims as readonly ClaimSummary[]);
+    },
+    refetchOnVisible: false,
+  });
 
   // `=== 'live'` — never a guard-map over `state`: a token a newer server
   // mints is simply not live, which is the safe direction for a strip whose
   // one question is "what is contested RIGHT NOW".
   const liveClaims = claims.filter((c) => c.state === 'live');
   if (liveClaims.length === 0) return null;
+  // Files, not claims: the headline is true when one claim holds several paths (T3a, D-6331).
+  const files = new Set(liveClaims.flatMap((c) => c.paths.map((p) => `${c.project}/${p}`))).size;
 
   return (
     <CollapsibleStrip
@@ -64,9 +70,9 @@ export function HotFilesStrip(): ReactNode {
       // No floor: `.hotfiles-head` sized to its padding and line on main
       // (`CollapsibleStrip`'s `headFloor`).
       headFloor="content"
-      label="Hot files"
+      label="Claimed files"
       mark={<Icon name="hand" />}
-      headline={liveClaims.length === 1 ? '1 hot-file claim' : `${liveClaims.length} hot-file claims`}
+      headline={files === 1 ? '1 file claimed' : `${files} files claimed`}
     >
       {liveClaims.map((c) => (
         <li key={c.id} className="hotfiles-row">

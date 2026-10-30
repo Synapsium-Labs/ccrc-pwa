@@ -31,7 +31,8 @@
 // from `mkTmp`; nothing reads or writes a live home.
 import { afterEach, describe, it, expect } from 'vitest';
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
-import { buildDelegationJournalRecord, nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
+import { buildDelegationJournalRecord } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DelegationCheckpointBuilder,
   DelegationDurability,

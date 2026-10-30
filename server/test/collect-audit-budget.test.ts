@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const readRel = (r: string): string => readFileSync(path.join(ROOT, r), 'utf8');
@@ -41,7 +42,7 @@ function collectAuditBudgetIn(ccd: string, runner: string): CollectAuditBudget {
   };
 }
 
-const ccdSrc = (): string => readRel('ccd/ccd');
+const ccdSrc = (): string => ccdSource();
 const runnerSrc = (): string => readRel('server/src/remote/runner.ts');
 const probesS = (b: CollectAuditBudget): number => b.idleS + b.usersS + b.scanS + b.walkS;
 

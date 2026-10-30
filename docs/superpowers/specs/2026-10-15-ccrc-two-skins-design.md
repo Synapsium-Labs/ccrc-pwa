@@ -114,7 +114,7 @@
 | Lamp dots, glyph plus word | `StatusDot` (`ui/src/primitives/status-dot.tsx`), `--lamp-size`, `--r-full` | A status always carries a glyph and a word. Lamps are round in both skins. |
 | Dark wells | `--bg-well`, `--ink-on-well`, the `--syn-*` palette, `Well`, the terminal drawer's glass | Terminals and code sit in wells that stay dark in every palette, in both skins. |
 | The Geist pair | `--family-ui`, `--family-mono` (Geist and Geist Mono, self-hosted, D-5095) | Both skins set every glyph in these two families. |
-| Lane hues | `--acct-*`, the `[data-acct]` rebinding, account names in mono | Same hue per lane, same mono name, never a glow. |
+| Lane hues | `--acct-*`, the `[data-acct]` rebinding, account names in mono; the `--prog-*` aliases of the four cool ones (programme boxes, desktop-polish Task G2) | Same hue per lane, same mono name, never a glow. The lane hues stay the lanes'. A programme box borrows the four cool ones (cyan, violet, magenta, blue) through `--prog-*`, always beside the programme's title in words, never as a chip, never glowing and never on a lane's own card. |
 | The twelve palettes, light and dark | `[data-theme]` blocks, `THEMES` | Every palette renders in both skins. The skin cannot add, remove or retint one. |
 | The rule of voice | mono for what the machine says, sans for prose, tabular readouts | B is more mono-forward in its chrome (tabs, counts, keys), but prose stays sans and readouts stay tabular in both. |
 | Accessibility floors | `--tap-min` (44px), `--fs-input` (16px), `--fs-2xs` (11px) as the smallest type, `prefers-reduced-motion` | B's density never goes below them: rows are 44px tall unless the primary pointer is fine, and nothing is set below 11px. |

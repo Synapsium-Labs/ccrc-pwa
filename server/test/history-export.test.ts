@@ -2229,7 +2229,7 @@ describe('the selection reaches the due rows within its budget (W1-B4 whole-bran
     expect(metaOf(box, 'export_attempt_ms'), 'a pass that ran to its end clears the attempt clock').toBeNull();
   }, 300_000);
 
-  // The export is the tick's last step and shares the run's 90 s / 512 MiB budget with ingest, the FTS backfill, nodes and
+  // The export is the tick's last step; before CP-39c it shared the run's 90 s / 512 MiB budget with ingest, the FTS backfill, nodes and
   // cards, so on a node with a backlog it starts on a budget the earlier steps already spent. Before CP-39c that pass was held before
   // it selected anything, and it recorded its attempt and said so like the two holds above, so the next step waited its interval
   // instead of re-running the bind-check read, the mkdir, the temp sweep and the statfs every tick, silently (D-5394). The pass now
@@ -4024,5 +4024,26 @@ describe('CP-39c: the export pass runs on its own slice of the run budget (D-697
     expect(metaOf(box, HEALTH_META.exportPassMs)).toBe(String(T));
     expect(lines.filter((l) => l.includes('export pass was held'))).toEqual([]);
     expect(marks(box)).toEqual({ [rid(1)]: `1.${ids.writer}.db`, [rid(2)]: `1.${ids.writer}.db` });
+  }, 300_000);
+
+  it('(g) a step whose preflight refuses makes no pass slice (999 F5, D-6974)', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-cp39c-refused-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const full = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 0, blocks: 8 * TIB });   // a filesystem under the floor
+    const reads = (statfs: typeof roomy) => {
+      const c = exportCtx(box, ids, () => T, { deps: { statfs }, limits: { maxMs: 0 } });
+      const b = budgetOf(c);
+      const real = b.now;
+      let n = 0;
+      b.now = () => { n += 1; return real(); };
+      return { c, n: () => n };
+    };
+    const refused = reads(full);
+    const r = await onStore(box, (db) => SW.exportStep(db, refused.c));
+    expect(r).toMatchObject({ state: 'paused' });
+    expect(refused.n(), '(g) a refused preflight makes no slice: it reads the run\'s clock not once').toBe(0);
+    // CONTROL: with room, the same box on the same clock makes the slice.
+    const admitted = reads(roomy);
+    await onStore(box, (db) => SW.exportStep(db, admitted.c));
+    expect(admitted.n(), 'CONTROL: an admitted step reads the clock').toBeGreaterThanOrEqual(1);
   }, 300_000);
 });

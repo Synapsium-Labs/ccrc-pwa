@@ -2,7 +2,7 @@ import {
   envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, IDLE_COMPACT_NUDGE_PROMPT, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
   type ChatEvent,
 } from '../../../shared/api.js';
-import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
+import { SHAPE_MASK } from '../accounts/shapes.js';
 import { stripSgr } from '../pane/dialog.js';
 
 const TOOL_RESULT_MAX = 20_000;
@@ -164,6 +164,21 @@ function absorbedPrompt(attachment: unknown): string | null {
   return a.prompt;
 }
 
+/** The /compact recap's opening sentence, bare or after one bracketed tag: the pattern the PWA folds a user- or
+ *  assistant-kind row by (`pwa/src/session/MessageBubble.tsx#foldsAway`), moved here UNCHANGED so the flag's verdict
+ *  is the PWA's on every row it folds today (D-7186). The PWA keeps its own copy until it reads the flag. */
+const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
+
+/** D-7186: the user and assistant events of one record carry `compaction: true` when Claude Code marked the record
+ *  `isCompactSummary`, or when the event's own text matches `COMPACTION_RE`. Absent otherwise, never `false`. Every
+ *  other kind passes through untouched (a meta summary is already a `system` row, and the arm carries no flag). */
+function flagCompaction(events: ChatEvent[], isCompactSummary: boolean): ChatEvent[] {
+  return events.map((e) =>
+    (e.kind === 'user' || e.kind === 'assistant') && (isCompactSummary || COMPACTION_RE.test(e.text))
+      ? { ...e, compaction: true }
+      : e);
+}
+
 /**
  * Parse one transcript JSONL line into zero or more ChatEvents.
  * Defensive by contract: a malformed line returns [], never throws.
@@ -176,6 +191,11 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     return [];
   }
   if (raw === null || typeof raw !== 'object') return [];
+  return flagCompaction(eventsOfRecord(raw), (raw as { isCompactSummary?: unknown }).isCompactSummary === true);
+}
+
+/** The events of one parsed record, before the compaction flag. */
+function eventsOfRecord(raw: object): ChatEvent[] {
   const env = raw as {
     type?: unknown;
     uuid?: unknown;
@@ -325,7 +345,7 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
         try {
           // D-5995: the DECODED input is masked before it is serialized and cut, so a shape a JSON escape or the cut
           // would hide is still seen; `SessionStream.send` masks the frame again with the fingerprints.
-          input = JSON.stringify(SHAPE_ONLY_MASKER.maskDeep(block.input ?? null)) ?? '';
+          input = JSON.stringify(SHAPE_MASK.maskDeep(block.input ?? null)) ?? '';
         } catch {
           input = '';
         }

@@ -19,6 +19,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { configDefaults } from 'vitest/config';
 import { loadConfigFromFile, type ConfigEnv, type Plugin, type PluginOption, type UserConfig } from 'vite';
 import { DEFAULT_CHROME, resolveChrome } from '../browser/harness';
+import { SLOW_FIRST, SlowFirstSequencer, slowFirst } from '../browser/slowFirst';
 
 const PWA = path.join(import.meta.dirname, '..');
 
@@ -63,6 +64,15 @@ describe('the hermetic run never collects the browser leg; the browser config co
     expect(browserConfig.test?.environment).toBe('jsdom');
     expect(browserConfig.test?.testTimeout).toBe(60000);
     expect(browserConfig.test?.hookTimeout).toBe(60000);
+  });
+
+  // C12 item 11: the files that set the leg's wall time start first.
+  it('the browser config starts the slowest files first, and each one it names is a browser file', () => {
+    // The config is bundled when it is loaded, so its class is a copy of the module's: compared by name.
+    expect(browserConfig.test?.sequence?.sequencer?.name).toBe(SlowFirstSequencer.name);
+    for (const name of SLOW_FIRST) expect(existsSync(path.join(PWA, 'browser', name)), name).toBe(true);
+    const files = ['browser/a.browser.test.ts', ...[...SLOW_FIRST].reverse().map((n) => `browser/${n}`), 'browser/b.browser.test.ts'];
+    expect(slowFirst(files, (f) => f)).toEqual([...SLOW_FIRST.map((n) => `browser/${n}`), 'browser/a.browser.test.ts', 'browser/b.browser.test.ts']);
   });
 
   it('vitest lists at least one file under the browser config, every one under browser/ and named *.browser.test.*', () => {

@@ -16,9 +16,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  makeCcdHarness, ghContainedEnv, CCD, BOUNDED, FIXTURE_MOUNTINFO, type CcdHarness,
-} from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, BOUNDED, FIXTURE_MOUNTINFO, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -490,7 +488,7 @@ export function runScript(h: CcdHarness, script: string, env: NodeJS.ProcessEnv 
  *  `declare -F tmux >/dev/null`. Reading it, rather than restating either, is what makes E3a a row about the shipped
  *  text. */
 function probePredicate(): string {
-  const block = fnBlock(fs.readFileSync(CCD, 'utf8'), '_session_probe');
+  const block = fnBlock(ccdSource(), '_session_probe');
   if (block === null) throw new Error('ccd/ccd defines no _session_probe');
   const lines = block.split('\n');
   const hits = lines.flatMap((l, i) => (/^\s*out=\$\(tmux has-session/.test(lines[i + 1] ?? '')

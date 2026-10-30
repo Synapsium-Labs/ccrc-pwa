@@ -70,7 +70,7 @@ describe('POST /api/runs/:id/advance — gate order over the wire (ARCH-33)', ()
 
   it('review-in-flight answers before cap-concurrency', async () => {
     const { post, coord } = await rig();
-    coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    coord.setCaps({ maxConcurrentWorkers: 1 });
     const id = storedRun(coord, { state: 'awaiting-review', sessionId: 'demo-w1', claimedBy: COORD });
     const rv = storedRun(coord, { state: 'dispatched', sessionId: 'demo-rv', claimedBy: COORD, kind: 'review', reviews: id });
     const res = await post(id, { to: 'working', fingerprint: CLAIM });
@@ -80,7 +80,7 @@ describe('POST /api/runs/:id/advance — gate order over the wire (ARCH-33)', ()
 
   it('cap-concurrency answers with limit and running', async () => {
     const { post, coord } = await rig();
-    coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    coord.setCaps({ maxConcurrentWorkers: 1 });
     const id = storedRun(coord, { state: 'awaiting-review', sessionId: 'demo-w1', claimedBy: COORD });
     storedRun(coord, { state: 'working', sessionId: 'demo-w2', claimedBy: COORD });
     const res = await post(id, { to: 'working', fingerprint: CLAIM });

@@ -66,6 +66,12 @@ describe('the journal adapter (path-identity spec 2026-10-12 §5.2, §5.3)', () 
     }
   });
 
+  it('a blank record is malformed (D-7059: the shared framer keeps blanks, and this parser refuses them)', () => {
+    for (const [text, record] of [['{"generation":1}\n\n', 2], ['\n', 1], ['{"generation":1}\n\n{"generation":2}', 2]] as const) {
+      expect(collectLaneJournalAt(planted(text).p).read(), JSON.stringify(text)).toEqual({ kind: 'malformed', fault: 'blank', record });
+    }
+  });
+
   it('a directory, a symlink to a valid file and a dangling symlink are not-regular', () => {
     const dir = fixture();
     mkdirSync(dir.p, { recursive: true });

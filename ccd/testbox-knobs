@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+# testbox-knobs — the test box's settings, through ccrc's one reader (D-7403; spec §4). SOURCED, never run.
+#
+# `_testbox_knobs host|box` prints one `KEY<US>default<US>value<US>from` line per test box key (US is octal 037, the
+# separator `_test_knobs` prints and agent/src/testbox/config.ts parses), each read through `_ccrc_knob` and checked
+# against its key's shape (`_tb_shape`). A value that is not its shape keeps the default and says so on stderr in
+# ccd/ccrc-test's `_tload` wording (D-7419), naming the file the mode read, so a typo never removes a bound. `ccrc test
+# --testbox-knobs host|box` is the one way out of this file for every other reader (the agent op on the fleet host and
+# the test service on the box, D-7430).
+#
+# THE TWO FILES (D-7451). Every test box key is box-wide, so each is read in `file` mode: an environment value is
+# ignored, with a warning when it differs, as TBOXWIDE does in ccd/ccrc-test.
+#   host — the fleet host's keys, from the fleet host's BOX_ENV_FILE (~/.ccrc/ccrc.env), as every ccrc setting is.
+#   box  — the test box's keys, from TB_BOX_ENV_FILE alone, bound as BOX_ENV_FILE for the table's read and for nothing
+#          else, whoever the caller is; never from the caller's ~/.ccrc/ccrc.env, and never sourced. The file must pass
+#          `_tb_box_file_ok`, or every box key keeps its default and the refusal is said once.
+#
+# THE OWNER SEAM (D-7456). `_tb_box_file_ok <path>` is the one check of the box file: a regular file, not a symlink,
+# owned by `_tb_box_owner_uid` (the owner read by `_tb_uid`, D-7527), not writable by group or other. The expected
+# owner is root (uid 0), except under a test's fixture root (TB_FIXTURE_ROOT, empty on a box, whose units set no
+# environment), where a test running as a non-root user names its own uid. The override therefore reaches only a file
+# under the fixture root: with the root empty the file is the real /etc/ccrc-testbox/ccrc.env and the owner is root
+# whatever the environment holds. A fixture root that is not an absolute path, or is `/`, is refused. TB6's
+# `_tb_release_base` and TB7's installer call the same check.
+#
+# Why ccd/ccrc and not ccd/lib/ccrc-settings.sh: the generated library carries `_ccrc_knob` and its closure only, and
+# this file also needs `_plat_mode` and CCD_OS, which only ccd/ccrc defines. A caller that has sourced ccd/ccrc already
+# (ccd/ccrc-test) is not made to source it twice.
+#
+# The defaults are neutral, none a measurement of any box (spec §4). No numeric threshold is compared outside this
+# table: server/test/testbox-knobs.test.ts scans the test box's code for one.
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "testbox-knobs: this is a library; source it, never run it" >&2
+  exit 2
+fi
+
+if ! declare -F _ccrc_knob >/dev/null || ! declare -F _plat_mode >/dev/null; then
+  TBK_HERE="${BASH_SOURCE[0]}"
+  [[ "$TBK_HERE" == */* ]] || TBK_HERE="./$TBK_HERE"
+  TBK_HERE="$(cd "${TBK_HERE%/*}" && pwd)"
+  # shellcheck source=ccrc
+  . "$TBK_HERE/ccrc" || { echo "testbox-knobs: cannot load $TBK_HERE/ccrc, so no setting can be read" >&2; return 1; }
+fi
+
+# The box's one config file (D-7451), named here and nowhere else; `_tb_box_env_file` prints it for every other reader.
+TB_BOX_ENV_FILE="${TB_FIXTURE_ROOT:-}/etc/ccrc-testbox/ccrc.env"
+
+_tb_box_env_file() { printf '%s\n' "$TB_BOX_ENV_FILE"; }
+
+# ── the owner seam (D-7456) ──────────────────────────────────────────────
+# D-7527: `ls -nd`'s third field is the owner's uid on GNU and BSD alike, so the read needs no `stat -c`/`stat -f`
+# dispatch, which only ccd/ccrc's platform block may spell (macos-platform.test.ts) and which has no owner wrapper.
+_tb_uid() {   # <path> -> its owner's uid
+  local l u
+  l="$(LC_ALL=C ls -nd -- "$1" 2>/dev/null)" || return 1
+  read -r _ _ u _ <<<"$l"
+  [[ "$u" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$u"
+}
+_tb_box_owner_uid() {   # -> the uid the box file must be owned by: root, or the fixture's owner under a fixture root
+  if [ -n "${TB_FIXTURE_ROOT:-}" ] && [[ "${TB_FIXTURE_OWNER_UID:-}" =~ ^[0-9]+$ ]]; then echo "${BASH_REMATCH[0]}"; else echo 0; fi
+}
+_tb_box_file_ok() {   # <path> -> 0 when the box file may be read; else TB_BOX_WHY says why
+  local p="$1" r="${TB_FIXTURE_ROOT:-}" uid want m
+  TB_BOX_WHY=""
+  case "$r" in
+    '') ;;
+    /*) if [[ "$r" =~ ^/+$ || "/$r/" == */./* || "/$r/" == */../* ]]; then
+          TB_BOX_WHY="TB_FIXTURE_ROOT=$r is the root directory or not a plain absolute path"; return 1
+        fi ;;
+    *) TB_BOX_WHY="TB_FIXTURE_ROOT=$r is not an absolute path"; return 1 ;;
+  esac
+  if [ -L "$p" ]; then TB_BOX_WHY="$p is a symlink"; return 1; fi
+  if [ ! -e "$p" ]; then TB_BOX_WHY="$p is not there"; return 1; fi
+  if [ ! -f "$p" ]; then TB_BOX_WHY="$p is not a regular file"; return 1; fi
+  uid="$(_tb_uid "$p" 2>/dev/null)" || { TB_BOX_WHY="the owner of $p could not be read"; return 1; }
+  want="$(_tb_box_owner_uid)"
+  if [ "$uid" != "$want" ]; then TB_BOX_WHY="$p is owned by uid $uid, not uid $want"; return 1; fi
+  m="$(_plat_mode "$p" 2>/dev/null)" && [[ "$m" =~ ^[0-7]+$ ]] || { TB_BOX_WHY="the mode of $p could not be read"; return 1; }
+  while [ "${#m}" -lt 3 ]; do m="0$m"; done
+  if (( (${m: -2:1} & 2) || (${m: -1} & 2) )); then TB_BOX_WHY="$p is writable by group or other (mode $m)"; return 1; fi
+  return 0
+}
+
+# ── the shapes ───────────────────────────────────────────────────────────
+_tb_shape_class() {   # <KEY> -> its class; nothing for a key this file does not know
+  case "$1" in
+    CCRC_TESTBOX_URL|CCRC_TESTBOX_GIT_URL_BASE|CCRC_TESTBOX_OS_MIRROR|CCRC_TESTBOX_REGISTRY_UPSTREAM) echo url ;;
+    CCRC_TESTBOX_TOKEN_FILE|CCRC_TESTBOX_GIT_KEY|CCRC_TESTBOX_TIMES|CCRC_TESTBOX_RUN_TMPDIR|CCRC_TESTBOX_ROOT) echo path ;;
+    CCRC_TESTBOX_REPOS|CCRC_TESTBOX_TOOLS_DIR|CCRC_TESTBOX_SERVICE_TOKEN_FILE) echo path ;;
+    CCRC_TESTBOX_UNTRACKED_FILE_MAX|CCRC_TESTBOX_SNAPSHOT_MAX|CCRC_TESTBOX_RUN_MEMORY_MAX|CCRC_TESTBOX_RUN_SWAP_MAX) echo size ;;
+    CCRC_TESTBOX_REPORT_MAX) echo size ;;
+    CCRC_TESTBOX_STATUS_DEADLINE|CCRC_TESTBOX_RECONNECT_DEADLINE|CCRC_TESTBOX_QUEUE_WAIT|CCRC_TESTBOX_BUDGET) echo duration ;;
+    CCRC_TESTBOX_POLL|CCRC_TESTBOX_FETCH_EVERY|CCRC_TESTBOX_RETENTION|CCRC_TESTBOX_PRISTINE_KEEP|CCRC_TESTBOX_UNIT_MAX) echo duration ;;
+    CCRC_TESTBOX_PRISTINE_RETRY) echo durations ;;
+    CCRC_TESTBOX_LOST_RUN) echo lostrun ;;
+    CCRC_TESTBOX_FALLBACK_INSTALL) echo fallback ;;
+    CCRC_TESTBOX_TMPFS) echo onoff ;;
+    CCRC_TESTBOX_RUN_CPU_QUOTA) echo percent ;;
+    CCRC_TESTBOX_QUEUE_LIMIT|CCRC_TESTBOX_RUNS|CCRC_TESTBOX_WORKERS|CCRC_TESTBOX_LOG_TAIL|CCRC_TESTBOX_SESSION_RUNS) echo count ;;
+    CCRC_TESTBOX_REGISTRY_PROXY|CCRC_TESTBOX_LISTEN) echo hostport ;;
+    CCRC_TESTBOX_DENY_GLOBS) echo globs ;;
+    CCRC_TESTBOX_EGRESS_ALLOW) echo hosts ;;
+    CCRC_TESTBOX_ENV_FORWARD) echo envnames ;;
+    CCRC_TESTBOX_PUSH_USER|CCRC_TESTBOX_SERVICE_USER|CCRC_TESTBOX_RUN_USER_PREFIX) echo user ;;
+  esac
+}
+# Patterns, not literals: a duration and a size are a whole number, 1 or more, with no leading zero (bash's arithmetic
+# would read one as octal), and a unit; a count is 1 to 99; a path is absolute or `~/`-relative (the reader's home)
+# with no `.` or `..` segment; a word list holds at least one word.
+_tb_shape() {   # <KEY> <value> -> 0 when the value is the key's shape
+  local v="$2" w p
+  local re_dur='^[1-9][0-9]*[smhd]$' re_path='^(/|~/)[^[:space:][:cntrl:]]*$' re_host='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+  case "$(_tb_shape_class "$1")" in
+    url) [[ "$v" =~ ^[a-z][a-z0-9+.-]*://[^[:space:][:cntrl:]]+$ ]] ;;
+    path) [[ "$v" =~ $re_path ]] && [[ "$v/" != */./* && "$v/" != */../* ]] ;;
+    size) [[ "$v" =~ ^[1-9][0-9]*[KMG]$ ]] ;;
+    duration) [[ "$v" =~ $re_dur ]] ;;
+    durations) [ -n "${v//[[:space:]]/}" ] || return 1
+      for w in $v; do [[ "$w" =~ $re_dur ]] || return 1; done ;;
+    lostrun) [ "$v" = local ] || [ "$v" = fail ] ;;
+    fallback) [ "$v" = install ] || [ "$v" = refuse ] ;;
+    onoff) [ "$v" = on ] || [ "$v" = off ] ;;
+    percent) [[ "$v" =~ ^[1-9][0-9]{0,3}%$ ]] ;;
+    count) [[ "$v" =~ ^[1-9][0-9]?$ ]] ;;
+    hostport) [[ "$v" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):([1-9][0-9]{0,4})$ ]] || return 1
+      p="${BASH_REMATCH[2]}"; (( p <= 65535 )) ;;
+    globs) [ -n "${v//[[:space:]]/}" ] && [[ "$v" != *[[:cntrl:]]* ]] ;;
+    hosts) [ -n "${v//[[:space:]]/}" ] || return 1
+      for w in $v; do [[ "$w" =~ $re_host ]] || return 1; done ;;
+    envnames) [ -n "${v//[[:space:]]/}" ] || return 1
+      for w in $v; do [[ "$w" =~ ^[A-Z_][A-Z0-9_]*$ ]] || return 1; done ;;
+    user) [[ "$v" =~ ^[a-z_][a-z0-9_-]*$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+_tb_shape_says() {   # <KEY> -> the shape, in words, for the warning
+  case "$(_tb_shape_class "$1")" in
+    url) echo "a URL such as https://testbox.invalid" ;;
+    path) echo "an absolute path, or one starting ~/, with no . or .. part" ;;
+    size) echo "a whole number with a K, M or G suffix" ;;
+    duration) echo "a whole number with an s, m, h or d suffix" ;;
+    durations) echo "a list of whole numbers each with an s, m, h or d suffix" ;;
+    lostrun) echo "local or fail" ;;
+    fallback) echo "install or refuse" ;;
+    onoff) echo "on or off" ;;
+    percent) echo "a whole percentage such as 200%" ;;
+    count) echo "a whole number from 1 to 99" ;;
+    hostport) echo "host:port, the port from 1 to 65535" ;;
+    globs) echo "a list of file name patterns" ;;
+    hosts) echo "a list of host names" ;;
+    envnames) echo "a list of environment variable names" ;;
+    user) echo "a user name (lower-case letters, digits, _ and -)" ;;
+    *) echo "a test box setting" ;;
+  esac
+}
+
+# ── the defaults table (spec §4, plus D-7420, D-7421, D-7426, D-7501) ────
+# Each line reads one key through ccrc's one reader in `file` mode and hands the answer to `_tb_got`. The defaults are
+# spelled once, here. `~/` is the reading user's home (the fleet user's on the fleet host, the service user's on the
+# box), resolved by the reader of the value; ccrc.env expands nothing. Empty (`''`) is "unset": no test box URL, no
+# mirror push base, the distribution's own OS mirror, and no listen address, which the test service refuses to start
+# without (D-7501). EGRESS_ALLOW's default names the fixed hosts; the registry upstream, the release host and the OS
+# mirror are added by name from their own settings by the installer that writes the allowlist (spec §2.0).
+# shellcheck disable=SC2088  # a `~/` default is the reader's home, spelled literally: ccrc.env expands nothing
+_tb_host_table() {
+  _ccrc_knob CCRC_TESTBOX_URL '' file; _tb_got CCRC_TESTBOX_URL '' $?
+  _ccrc_knob CCRC_TESTBOX_TOKEN_FILE '~/.ccrc/testbox.token' file; _tb_got CCRC_TESTBOX_TOKEN_FILE '~/.ccrc/testbox.token' $?
+  _ccrc_knob CCRC_TESTBOX_GIT_URL_BASE '' file; _tb_got CCRC_TESTBOX_GIT_URL_BASE '' $?
+  _ccrc_knob CCRC_TESTBOX_GIT_KEY '~/.ccrc/testbox-push.key' file; _tb_got CCRC_TESTBOX_GIT_KEY '~/.ccrc/testbox-push.key' $?
+  _ccrc_knob CCRC_TESTBOX_UNTRACKED_FILE_MAX 5M file; _tb_got CCRC_TESTBOX_UNTRACKED_FILE_MAX 5M $?
+  _ccrc_knob CCRC_TESTBOX_SNAPSHOT_MAX 64M file; _tb_got CCRC_TESTBOX_SNAPSHOT_MAX 64M $?
+  _ccrc_knob CCRC_TESTBOX_STATUS_DEADLINE 3s file; _tb_got CCRC_TESTBOX_STATUS_DEADLINE 3s $?
+  _ccrc_knob CCRC_TESTBOX_RECONNECT_DEADLINE 60s file; _tb_got CCRC_TESTBOX_RECONNECT_DEADLINE 60s $?
+  _ccrc_knob CCRC_TESTBOX_LOST_RUN local file; _tb_got CCRC_TESTBOX_LOST_RUN local $?
+  _ccrc_knob CCRC_TESTBOX_QUEUE_LIMIT 20 file; _tb_got CCRC_TESTBOX_QUEUE_LIMIT 20 $?
+  _ccrc_knob CCRC_TESTBOX_QUEUE_WAIT 10m file; _tb_got CCRC_TESTBOX_QUEUE_WAIT 10m $?
+  _ccrc_knob CCRC_TESTBOX_BUDGET 15m file; _tb_got CCRC_TESTBOX_BUDGET 15m $?
+  _ccrc_knob CCRC_TESTBOX_DENY_GLOBS "*.pem *.key .env .env.* id_* *.p12" file; _tb_got CCRC_TESTBOX_DENY_GLOBS "*.pem *.key .env .env.* id_* *.p12" $?
+  _ccrc_knob CCRC_TESTBOX_POLL 30s file; _tb_got CCRC_TESTBOX_POLL 30s $?
+  _ccrc_knob CCRC_TESTBOX_FALLBACK_INSTALL install file; _tb_got CCRC_TESTBOX_FALLBACK_INSTALL install $?
+  _ccrc_knob CCRC_TESTBOX_TIMES '~/.ccrc/testbox-times.json' file; _tb_got CCRC_TESTBOX_TIMES '~/.ccrc/testbox-times.json' $?
+}
+# shellcheck disable=SC2088  # a `~/` default is the reader's home, spelled literally: ccrc.env expands nothing
+_tb_box_table() {
+  _ccrc_knob CCRC_TESTBOX_RUNS 2 file; _tb_got CCRC_TESTBOX_RUNS 2 $?
+  _ccrc_knob CCRC_TESTBOX_WORKERS 2 file; _tb_got CCRC_TESTBOX_WORKERS 2 $?
+  _ccrc_knob CCRC_TESTBOX_RUN_TMPDIR /tmp/r file; _tb_got CCRC_TESTBOX_RUN_TMPDIR /tmp/r $?
+  _ccrc_knob CCRC_TESTBOX_RUN_MEMORY_MAX 4G file; _tb_got CCRC_TESTBOX_RUN_MEMORY_MAX 4G $?
+  _ccrc_knob CCRC_TESTBOX_RUN_SWAP_MAX 1G file; _tb_got CCRC_TESTBOX_RUN_SWAP_MAX 1G $?
+  _ccrc_knob CCRC_TESTBOX_RUN_CPU_QUOTA 200% file; _tb_got CCRC_TESTBOX_RUN_CPU_QUOTA 200% $?
+  _ccrc_knob CCRC_TESTBOX_ROOT '~/.ccrc/testbox' file; _tb_got CCRC_TESTBOX_ROOT '~/.ccrc/testbox' $?
+  _ccrc_knob CCRC_TESTBOX_REPOS '~/.ccrc/testbox-repos.d' file; _tb_got CCRC_TESTBOX_REPOS '~/.ccrc/testbox-repos.d' $?
+  _ccrc_knob CCRC_TESTBOX_FETCH_EVERY 5m file; _tb_got CCRC_TESTBOX_FETCH_EVERY 5m $?
+  _ccrc_knob CCRC_TESTBOX_RETENTION 24h file; _tb_got CCRC_TESTBOX_RETENTION 24h $?
+  _ccrc_knob CCRC_TESTBOX_PRISTINE_KEEP 7d file; _tb_got CCRC_TESTBOX_PRISTINE_KEEP 7d $?
+  _ccrc_knob CCRC_TESTBOX_PRISTINE_RETRY "2m 10m 1h 1d" file; _tb_got CCRC_TESTBOX_PRISTINE_RETRY "2m 10m 1h 1d" $?
+  _ccrc_knob CCRC_TESTBOX_REPORT_MAX 16M file; _tb_got CCRC_TESTBOX_REPORT_MAX 16M $?
+  _ccrc_knob CCRC_TESTBOX_TOOLS_DIR /opt/ccrc-testbox/tools file; _tb_got CCRC_TESTBOX_TOOLS_DIR /opt/ccrc-testbox/tools $?
+  _ccrc_knob CCRC_TESTBOX_OS_MIRROR '' file; _tb_got CCRC_TESTBOX_OS_MIRROR '' $?
+  _ccrc_knob CCRC_TESTBOX_EGRESS_ALLOW "github.com nodejs.org storage.googleapis.com" file; _tb_got CCRC_TESTBOX_EGRESS_ALLOW "github.com nodejs.org storage.googleapis.com" $?
+  _ccrc_knob CCRC_TESTBOX_PUSH_USER ccrc-tb-push file; _tb_got CCRC_TESTBOX_PUSH_USER ccrc-tb-push $?
+  _ccrc_knob CCRC_TESTBOX_ENV_FORWARD "CCRC_HISTORY_BASE CCRC_LEDGER_BASE" file; _tb_got CCRC_TESTBOX_ENV_FORWARD "CCRC_HISTORY_BASE CCRC_LEDGER_BASE" $?
+  _ccrc_knob CCRC_TESTBOX_RUN_USER_PREFIX ccrc-tb- file; _tb_got CCRC_TESTBOX_RUN_USER_PREFIX ccrc-tb- $?
+  _ccrc_knob CCRC_TESTBOX_REGISTRY_PROXY 127.0.0.2:4873 file; _tb_got CCRC_TESTBOX_REGISTRY_PROXY 127.0.0.2:4873 $?
+  _ccrc_knob CCRC_TESTBOX_REGISTRY_UPSTREAM https://registry.npmjs.org file; _tb_got CCRC_TESTBOX_REGISTRY_UPSTREAM https://registry.npmjs.org $?
+  _ccrc_knob CCRC_TESTBOX_TMPFS off file; _tb_got CCRC_TESTBOX_TMPFS off $?
+  _ccrc_knob CCRC_TESTBOX_LOG_TAIL 40 file; _tb_got CCRC_TESTBOX_LOG_TAIL 40 $?
+  _ccrc_knob CCRC_TESTBOX_SESSION_RUNS 1 file; _tb_got CCRC_TESTBOX_SESSION_RUNS 1 $?
+  _ccrc_knob CCRC_TESTBOX_SERVICE_USER ccrc-tb-svc file; _tb_got CCRC_TESTBOX_SERVICE_USER ccrc-tb-svc $?
+  _ccrc_knob CCRC_TESTBOX_LISTEN '' file; _tb_got CCRC_TESTBOX_LISTEN '' $?
+  _ccrc_knob CCRC_TESTBOX_SERVICE_TOKEN_FILE '~/.ccrc/testbox-service.token' file; _tb_got CCRC_TESTBOX_SERVICE_TOKEN_FILE '~/.ccrc/testbox-service.token' $?
+  _ccrc_knob CCRC_TESTBOX_UNIT_MAX 1h file; _tb_got CCRC_TESTBOX_UNIT_MAX 1h $?
+}
+
+# ── the validated load ───────────────────────────────────────────────────
+_tb_got() {   # <KEY> <default> <rc of _ccrc_knob>; TB_SRC names the file the mode reads
+  local k="$1" d="$2" v from="${KNOB_FROM:-default}" prog="${PROG:-ccrc test}"
+  TBK_KEYS+=("$k"); TBK_DEF["$k"]="$d"
+  if [ "$3" != 0 ]; then
+    TBK_WARN+=("$prog: WARN: ${KNOB_WHY:-$k cannot be read}; using its default ${d:-''}"); v="$d"; from=default
+  else
+    v="$KNOB"
+    if [ -n "$v" ] && ! _tb_shape "$k" "$v"; then
+      TBK_WARN+=("$prog: WARN: $k=$v (from the $TB_SRC) is not $(_tb_shape_says "$k"); using its default ${d:-''}"); v="$d"; from=default
+    fi
+  fi
+  TBK["$k"]="$v"; TBK_FROM["$k"]="$from"
+  # Box-wide: a value in the caller's environment is not read; one that differs says so.
+  [ -z "${!k:-}" ] || [ "${!k}" = "$v" ] \
+    || TBK_WARN+=("$prog: WARN: $k=${!k} in the environment is ignored: it holds for the whole box, so only $TB_SRC sets it (in use: ${v:-''})")
+}
+_tb_load() {   # host|box -> TBK[KEY] (the value), TBK_DEF, TBK_FROM, TBK_KEYS (in table order), TBK_WARN (lines)
+  declare -gA TBK=() TBK_DEF=() TBK_FROM=()
+  TBK_KEYS=(); TBK_WARN=()
+  local f=""
+  case "${1:-}" in
+    host) TB_SRC="${BOX_ENV_FILE/#"$HOME"/\~}"; _tb_host_table ;;
+    box)
+      TB_SRC="$TB_BOX_ENV_FILE"
+      if _tb_box_file_ok "$TB_BOX_ENV_FILE"; then f="$TB_BOX_ENV_FILE"
+      else TBK_WARN+=("${PROG:-ccrc test}: WARN: the test box's settings file is refused: $TB_BOX_WHY; every test box setting uses its default"); fi
+      # The one binding of BOX_ENV_FILE for box mode: the box file, or, refused, no file at all (every default).
+      BOX_ENV_FILE="$f" _tb_box_table ;;
+    *) TBK_WARN+=("${PROG:-ccrc test}: _tb_load takes host or box"); return 2 ;;
+  esac
+}
+_testbox_knobs() {   # host|box [file] -> one validated KEY<US>default<US>value<US>from line per key; warnings on stderr
+  local k w
+  case "${1:-}" in host|box) ;; *) echo "${PROG:-ccrc test}: _testbox_knobs takes host or box" >&2; return 2 ;; esac
+  # `file` is the only mode: every test box key is box-wide (the argument is accepted for `_graph_knobs`' symmetry).
+  case "${2:-file}" in file) ;; *) echo "${PROG:-ccrc test}: _testbox_knobs reads only in file mode" >&2; return 2 ;; esac
+  _tb_load "$1" || return
+  for w in ${TBK_WARN[@]+"${TBK_WARN[@]}"}; do printf '%s\n' "$w" >&2; done
+  for k in "${TBK_KEYS[@]}"; do printf '%s\037%s\037%s\037%s\n' "$k" "${TBK_DEF[$k]}" "${TBK[$k]}" "${TBK_FROM[$k]}"; done
+}
+
+# ── the release base the tools unit reads (D-7457) ───────────────────────
+# `_tb_release_base` — CCRC_RELEASE_BASE_URL from the box file, the way box mode reads every box key: the file passes
+# `_tb_box_file_ok`, and `_upd_release_base file` reads it through `_ccrc_knob` in `file` mode with BOX_ENV_FILE bound
+# to TB_BOX_ENV_FILE for that one call, so neither the caller's ~/.ccrc/ccrc.env nor its environment is read. The value
+# is then assigned to the caller's own CCRC_RELEASE_BASE_URL, so the reads `_upd_resolve` and `_upd_fetch` make
+# themselves (environment first) take it and no inherited one. rc 0: the value is set (the default when the file names
+# none). rc 1: TB_BOX_WHY says why (a refused file, or `_ccrc_knob`'s KNOB_WHY for a value it cannot measure), and the
+# caller's CCRC_RELEASE_BASE_URL is emptied, so a caller that went on anyway would not fetch from an inherited host.
+# Called in the caller's shell, never `$(…)`, so the assignment and TB_BOX_WHY reach it.
+_tb_release_base() {
+  if ! _tb_box_file_ok "$TB_BOX_ENV_FILE"; then CCRC_RELEASE_BASE_URL=""; return 1; fi
+  # The second binding of BOX_ENV_FILE in this file (D-7451, D-7457), for this one read.
+  if ! BOX_ENV_FILE="$TB_BOX_ENV_FILE" _upd_release_base file >/dev/null 2>&1; then
+    TB_BOX_WHY="${KNOB_WHY:-CCRC_RELEASE_BASE_URL cannot be read from $TB_BOX_ENV_FILE}"; CCRC_RELEASE_BASE_URL=""; return 1
+  fi
+  CCRC_RELEASE_BASE_URL="$KNOB"
+}

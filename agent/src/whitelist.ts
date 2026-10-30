@@ -357,6 +357,8 @@ export const REQUIRED_VERB_FLAG = {
   'ws-collect': '--expect',
   'ws-orphan': '--expect',
   'ws-title': '--session',
+  'ws-shed-deps': '--session',
+  'testbox-remote': '--state',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -456,6 +458,9 @@ export const EXEC_WHITELIST = {
     ['pr-state', '--project'],
     // D-6784: the checks lane's read-only PR read; the verb takes only --project and --sessions.
     ['pr-landing', '--project'],
+    // D-7378: the bounded train prover; it takes only --project (and ccd's own --max default), reads GitHub and keeps
+    // train proofs in the registry, nothing else.
+    ['pr-train-prove', '--project'],
     ['pr-open',  '--session'],
     ['ws-archive', '--session'],
     ['ws-restore', '--session'],
@@ -514,6 +519,12 @@ export const EXEC_WHITELIST = {
     // positional form the verb might grow and stay green in
     // `whitelist-subset.test.ts`'s layers 2 and 3 (g14 is the other side).
     ['reclaim-pause', '--state'],
+    // The test box switch's writer (test box plan TB9, D-7411; spec 2026-10-28 §2.7), granted on `coord-pause`'s
+    // argument exactly: `$REG/testbox-remote-live` is a registry-file write/unlink, non-destructive, and the server
+    // may write only `~/.cc-clips` here, so the marker is raised through this verb or not at all. ENROLLED in
+    // `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole argument surface, and a bare `['testbox-remote']`
+    // would admit every positional form it might grow (g24 is the other side).
+    ['testbox-remote', '--state'],
     // The project pool tag's writer (account pools, spec §5.4.2), granted on
     // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
     // write/unlink, non-destructive, and granting it widens nothing that
@@ -632,6 +643,11 @@ export const EXEC_WHITELIST = {
     ['ws-audit', '--orphans'],
     ['ws-audit', '--orphan-hex'],
     ['ws-orphan', '--expect'],
+    // THE DEPS-SHED ARM (D-7278; design note 2026-10-28 §4). `ws-shed-deps` removes a sleeping session's git-ignored,
+    // untracked dependency directories after the box re-proves the sleep, the class, its floor and git's own list, so it
+    // is ENROLLED in `REQUIRED_VERB_FLAG` on `--session`: no bare form is grantable. It carries no token (what it removes
+    // is rebuildable, and every rung is re-read at the act); `--class`, `--dry-run` and the dec trail.
+    ['ws-shed-deps', '--session'],
     // THE COLLECTOR'S LOOSE ARM (fleet disk retention spec 2026-10-23 §2.4, D-6626). Two read-only `ws-audit` modes: the
     // census of the entries directly under the scratch root (names as hex) and one such entry's audit, which mints the
     // token. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). The loose VERB

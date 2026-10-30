@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { DONE_AUTHORITY_CODES, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { DONE_AUTHORITY_CODES, DONE_REFUSAL_CODES, WAVE_DONE_SUBJECT } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -256,5 +256,53 @@ describe('CoordStore.runSignals — the worker\'s wave-done signal lines (routin
     const rebind = coord.setSession(opened.id, 'demo-heir');
     expect(rebind.rebound).toBe(true);
     expect(coord.runSignals(opened.id)).toMatchObject({ waveDoneMails: 0, signals: null });
+  });
+});
+
+// Landing order wave 4 (D-7107): `lineage-unmeasured` is a verdict code but NOT a refusal. It is the radar's timing,
+// so every refusal count (`closeRefusals`, `firstSubmission`, run health's `doneRejects` and `lastRejectCode`, and so
+// the PWA chip) reads `DONE_REFUSAL_CODES`, never `DONE_AUTHORITY_CODES`. The re-sent `wave-done` is a real mail, and
+// `waveDoneMails` counts it.
+describe('CoordStore.runSignals — lineage-unmeasured is not a refusal (D-7107)', () => {
+  const UNMEASURED = 'lineage-unmeasured';
+
+  it('two unmeasured answers and then an accepted close: closeRefusals 0, firstSubmission true, doneRejects 0', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.recordRejection({ code: UNMEASURED, runId: id, toId: 'demo-worker', detail: 'not-yet-measured' });
+    coord.recordRejection({ code: UNMEASURED, runId: id, toId: 'demo-worker', detail: 'not-yet-measured' });
+    coord.advance(id, 'working', 'demo-worker'); coord.advance(id, 'closing', 'coordinator'); coord.advance(id, 'done', 'coordinator');
+    expect(coord.runSignals(id)).toMatchObject({ closeRefusals: 0, firstSubmission: true, finalState: 'done' });
+    expect(coord.runHealth([id], []).get(id)).toMatchObject({ doneRejects: 0, lastRejectCode: null });
+  });
+
+  it('its count is exact beside a real refusal: only the refusal counts, and it is the last code', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.recordRejection({ code: REFUSAL, runId: id, toId: 'demo-worker', detail: 'the tip moved' });
+    coord.recordRejection({ code: UNMEASURED, runId: id, toId: 'demo-worker', detail: 'not-yet-measured' });
+    const signals = coord.runSignals(id)!;
+    const health = coord.runHealth([id], []).get(id)!;
+    expect(signals.closeRefusals).toBe(1);
+    expect(health.doneRejects).toBe(1);
+    expect(health.lastRejectCode).toBe(REFUSAL);
+  });
+
+  it('the rows are still recorded: the audit log keeps the unmeasured answer', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.recordRejection({ code: UNMEASURED, runId: id, toId: 'demo-worker', detail: 'lineage-stale' });
+    expect(coord.rejections().filter((r) => r.runId === id).map((r) => r.code)).toEqual([UNMEASURED]);
+  });
+
+  it('a re-sent wave-done counts in waveDoneMails, as declared in D-7107', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'demo-worker', 'suite: green\n{}');
+    coord.recordRejection({ code: UNMEASURED, runId: id, toId: 'demo-worker', detail: 'not-yet-measured' });
+    waveDone(coord, id, 'demo-worker', 'suite: green\n{}');
+    expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 2, closeRefusals: 0 });
+  });
+
+  it('DONE_AUTHORITY_CODES names it and the refusal list does not', () => {
+    expect(DONE_AUTHORITY_CODES).toContain(UNMEASURED);
+    expect(DONE_REFUSAL_CODES).not.toContain(UNMEASURED);
+    expect(DONE_REFUSAL_CODES).toEqual(DONE_AUTHORITY_CODES.filter((c) => c !== UNMEASURED));
   });
 });

@@ -2,7 +2,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { sourceOfSymbol } from '../scan/symbols.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
+import { retirePortReaders } from '../census-w4/retire.js';
+import { RETIRE_STEPS } from '../../src/retire.js';
 import { ALL, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, isBashComment, rel, sources, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -295,7 +297,7 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(code(ADAPTER)).toMatch(/^export const COLLECT_LANE_JOURNAL_BASENAME = 'collect-lane-generation\.log';$/m);
   });
 
-  it('collectLaneEffective is defined in collectLane.ts and called only in collectTempRoot and collectLaneView', () => {
+  it('collectLaneEffective is defined in collectLane.ts and called only in collectRetirePort’s lane reader and collectLaneView', () => {
     expect(definers(DEF_FN('collectLaneEffective')), 'a second definition').toEqual([LANE]);
     expect(definers(DEF_VAL('collectLaneEffective')), 'a definition as a value').toEqual([]);
     const calls = CALL('collectLaneEffective');
@@ -305,18 +307,39 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     const view = bodyAfter(lane, /^export function collectLaneView\(/m);
     expect(count(view, calls), 'collectLaneView does not resolve the switch').toBeGreaterThan(0);
     expect(count(lane, calls), 'collectLane.ts calls the resolver outside collectLaneView').toBe(count(view, calls));
-    const exec = code(EXECUTOR);
-    const job = bodyAfter(exec, /^export async function collectTempRoot\(/m);
-    expect(count(job, calls), 'the executor does not resolve the switch').toBeGreaterThan(0);
-    expect(count(exec, calls), 'collectTempRoot.ts calls the resolver outside the executor').toBe(count(job, calls));
+    // D-7168 (ARCH-44 C4k): the job's reads are its port's readers, so the one call stands in the `lane` reader of
+    // collectRetirePort's literal (scan/symbols.ts, retireFacts), and in neither the job's body nor its act.
+    const exec = path.join(ccrcRoot, EXECUTOR);
+    const resolves = parsedFile(exec).calls.filter((c) => c.name === 'collectLaneEffective');
+    expect(resolves.length, 'collectTempRoot.ts does not resolve the switch exactly once').toBe(1);
+    const reader = retirePortReaders(exec, 'collectRetirePort').find((r) => r.step === RETIRE_STEPS.lane);
+    expect(reader, 'collectRetirePort has no lane reader').toBeDefined();
+    expect(callsIn(symbolOf(exec, 'collectRetirePort')).filter((c) => c.name === 'collectLaneEffective')
+      .every((c) => reader!.start <= c.start && c.end <= reader!.end), 'the resolver is called outside the lane reader').toBe(true);
+    expect(callsIn(symbolOf(exec, 'collectRetirePort')).filter((c) => c.name === 'collectLaneEffective'), 'the port does not resolve the switch')
+      .toHaveLength(1);
+    for (const fn of ['collectTempRoot', 'collectTempRootAct']) {
+      expect(callsIn(symbolOf(exec, fn)).filter((c) => c.name === 'collectLaneEffective'), `${fn} resolves the switch`).toEqual([]);
+    }
   });
 
   it('collectRetireLatch is called only by the executor and the pass', () => {
     expect(definers(DEF_FN('collectRetireLatch')), 'a second definition').toEqual([EXECUTOR]);
     const calls = CALL('collectRetireLatch');
     expect(sitesOf(calls), 'a third caller, or a second call').toEqual([`${EXECUTOR}:1`, `${WATCH}:1`]);
-    expect(count(bodyAfter(code(EXECUTOR), /^export async function collectTempRoot\(/m), calls),
-      'the executor file’s call is not in collectTempRoot').toBe(1);
+    // D-7168 (ARCH-44 C4k): the executor file's one call stands in the `latch` reader of collectRetirePort's literal
+    // (scan/symbols.ts, retireFacts), and in neither the job's body nor its act.
+    const exec = path.join(ccrcRoot, EXECUTOR);
+    const latches = parsedFile(exec).calls.filter((c) => c.name === 'collectRetireLatch');
+    expect(latches.length, 'the executor file does not call the latch exactly once').toBe(1);
+    const reader = retirePortReaders(exec, 'collectRetirePort').find((r) => r.step === RETIRE_STEPS.latch);
+    expect(reader, 'collectRetirePort has no latch reader').toBeDefined();
+    const inPort = callsIn(symbolOf(exec, 'collectRetirePort')).filter((c) => c.name === 'collectRetireLatch');
+    expect(inPort.length === 1 && reader!.start <= inPort[0]!.start && inPort[0]!.end <= reader!.end,
+      'the executor file’s call is not in the port’s latch reader').toBe(true);
+    for (const fn of ['collectTempRoot', 'collectTempRootAct']) {
+      expect(callsIn(symbolOf(exec, fn)).filter((c) => c.name === 'collectRetireLatch'), `${fn} writes the latch`).toEqual([]);
+    }
     // D-6114: keyed on the method's symbol (scan/symbols.ts), so C1h's rewrite of the pass moves the slice with it.
     expect(count(stallCodeText(sourceOfSymbol(path.join(ccrcRoot, WATCH), 'FleetWatcher.collectPass')), calls),
       'watch.ts’s call is not in the pass').toBe(1);
@@ -397,5 +420,44 @@ describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (s
     const m = /case "\$src" in ([a-z|]+)\)/.exec(arms[0]!);
     expect(m, 'the arm spells its sources as one alternation').not.toBeNull();
     expect(m![1]!.split('|').sort()).toEqual([...members].sort());
+  });
+});
+
+
+// ── ARCH-45 C5f (D-7075; plan 2026-10-27-consolidation-w5-ccd-helpers.md, spec K2): ccd mints every token through one
+// encoding, `_ws_reclaim_fingerprint`; `_ws_fingerprint` hands it the reap's fourteen `name=value` facts and pipes
+// nothing itself. APPENDED, with no import line, for the reason the blocks above state. `tokenMinters()` counts the
+// functions whose stdout is a `printf … | _plat_sha256 | cut` hash: 2 at the base, 1 here. May only shrink.
+describe('ARCH-45 C5f: one token minter in ccd’s source, `_ws_reclaim_fingerprint` (D-7075; may only shrink)', () => {
+  it('tokenMinters() is exactly ccd/ccd#_ws_reclaim_fingerprint', async () => {
+    const census = await import('../census-w5/ccdHelpers.js');
+    expect(census.tokenMinters().map((n) => `ccd/ccd#${n}`)).toEqual(['ccd/ccd#_ws_reclaim_fingerprint']);
+  });
+});
+
+// ── ARCH-45 C5e (D-7072; plan 2026-10-27-consolidation-w5-ccd-helpers.md, spec K2): ccd's two byte-identical
+// verdict-setting refusal helpers are one, `_ws_refuse`, and a call's family is the region it sits in. APPENDED, with no
+// import line, for the reason the blocks above state. The definitions count (`refuseHelperDefs()` is exactly
+// `ccd/ccd#_ws_refuse`) is `ccd-helpers-pin.test.ts`'s row; this one holds that neither old name comes back. May only shrink.
+describe('ARCH-45 C5e: no `_reap_refuse` or `_ws_collect_refuse` definition or call stands in ccd’s source (D-7072; may only shrink)', () => {
+  it('no definition and no call of either old name, in code or in a comment', async () => {
+    const census = await import('../census-w5/ccdHelpers.js');
+    const OLD = ['_reap_refuse', '_ws_collect_refuse'];
+    const defs = census.refuseHelperDefs().filter((d) => OLD.includes(d.name)).map((d) => `definition ${d.name} (line ${d.line})`);
+    const calls = census.refuseCalls().filter((c) => OLD.includes(c.name)).map((c) => `call at ${c.line}: ${c.text.trim()}`);
+    expect([...defs, ...calls]).toEqual([]);
+  });
+});
+
+// ── ARCH-45 C5g (D-7076; plan 2026-10-27-consolidation-w5-ccd-helpers.md, spec K2 "one lock … plumbing"; OA-C10 ruled
+// (a) 2026-10-27): ws-reap, ws-reclaim, ws-expire and ws-collect take the shared `.reap-<id>.lock` through one runner,
+// `_ws_reap_lock_run`, each with its act and verb as literal words. APPENDED, with no import line, for the reason the
+// blocks above state; a named rebase point with the C5e and C5f blocks above (keep all three on a conflict).
+// `reapLockWrappers()` counts the functions that open the reap lock, try it with `flock -n` and answer a held lock with the
+// in-progress document at rc 0: 4 at the base, 1 here. May only shrink.
+describe('ARCH-45 C5g: one reap-lock runner in ccd’s source, `_ws_reap_lock_run` (D-7076; may only shrink)', () => {
+  it('reapLockWrappers() is exactly ccd/ccd#_ws_reap_lock_run', async () => {
+    const census = await import('../census-w5/ccdHelpers.js');
+    expect(census.reapLockWrappers().wrappers.map((n) => `ccd/ccd#${n}`)).toEqual(['ccd/ccd#_ws_reap_lock_run']);
   });
 });

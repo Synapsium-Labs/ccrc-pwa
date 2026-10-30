@@ -8,9 +8,10 @@
 //     line in the operator's terms (`<programme> · wave N of M`, or `· review of
 //     wave N`; for a session no run names, its PR or its branch, or nothing), at
 //     most ONE attention marker chosen by the fixed priority `MARKER_ORDER`, and
-//     the cross-project chip (D-5527). No bookkeeping ids, no fragment cut by an
-//     ellipsis: a long name or programme is shortened HERE, by whole tokens
-//     (`shortenByToken`), never mid-token, and the full text rides `title`.
+//     the cross-project chip (D-5527). No bookkeeping ids, no fragment cut mid-token:
+//     below the 900px desk a long name or programme is shortened HERE, by whole tokens
+//     (`shortenByToken`), and from 900px up the full form draws (a name or branch past
+//     two lines ends in the browser's clamp `…`, D-6332); the full text rides `title`.
 //   • The HEADER is the full set — a SUPERSET of the card: every card fact under
 //     the same key, with its full text, plus everything the card leaves out.
 //     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `card-header-facts.test.tsx`.
@@ -32,13 +33,14 @@ import { restartWords, type RestartWords } from '../lib/restart';
 import { humanBytes } from '../lib/format';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedSince, hibernatedWords } from './hibernated';
+import { paneGone } from './presence';
 import {
   childOfRunLabel, programmeWave, programmeWaveTail, runSentence,
   type ChildOfRunLabel, type ChildRunContext,
 } from './runWords';
 import { spawnChip, type SpawnChip } from './spawnWords';
 import { substrateFaultText } from './substrateWords';
-import type { CoordPresence } from './coordWords';
+import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './chips';
 
@@ -46,10 +48,12 @@ import { unmeasuredTitle } from './chips';
 export const CRITICAL = 75;
 /** Context-pressure floor (D-2011), statusline-command.sh's own. */
 export const CTX_PRESSURE = 80;
-/** The card's name budget, in characters, and its programme budget. Chosen by
- *  measurement at 360px (both skins): the card's text column is 226px — ~30
- *  label characters at 7.4px, ~31 mono characters at 7.2px — and the context
- *  line holds the programme plus its wave (` · wave 3 of 5`, 14 characters). */
+/** The PHONE's name budget, in characters, and its programme budget: the length of the token-shortened form
+ *  (`Fit`) a card draws below the 900px desk breakpoint. Chosen by measurement at 360px (both skins): the card's text
+ *  column is 226px — ~30 label characters at 7.4px, ~31 mono characters at 7.2px — and the context line holds the
+ *  programme plus its wave (` · wave 3 of 5`, 14 characters). From 900px up the full form draws instead, a name and
+ *  a branch on up to two lines and a programme slug whole (fleet.css, D-6332, `desk-rule-not-container-threshold`),
+ *  so no budget applies at the desk. */
 export const NAME_BUDGET = 28;
 export const PROGRAMME_BUDGET = 16;
 
@@ -116,7 +120,7 @@ export interface FactInput {
   readonly workingOn?: string | null;
   /** The presence of its coordinator when that coordinator is not a live row beside it
    *  (`orphanNote`'s `presence`): `dead` is "coordinator gone", `hibernated` says so. */
-  readonly coordinator?: CoordPresence | null;
+  readonly coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
   readonly coordinatorTitle?: string | null;
 }
@@ -220,7 +224,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
     coordinatorTitle = null,
   } = input;
-  const dead = session.status === 'dead';
+  const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
   const state = rowStateWord(session);
 

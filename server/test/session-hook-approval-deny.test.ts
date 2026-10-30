@@ -119,6 +119,9 @@ describe('the approval-surface deny: a child cannot reach the approval surface (
     'ccrc-api approvals rule 1 allow',
     '~/.local/bin/ccrc-api approvals rule 1 allow',
     'curl -s -X POST http://127.0.0.1:7788/api/approvals/1/rule',
+    // D-7323: the question family's doors on an approval id are the same surface.
+    'curl -s -X POST http://127.0.0.1:7788/api/questions/approval-1/rule',
+    'curl -s -X POST http://127.0.0.1:7788/api/questions/approval-1/release',
     'cat ~/.ccrc/approval-signing.key',
     'cat ~/.ccrc/approval-signing.pub',
     // The forms bash reads the same after it removes quotes, backslashes and line continuations, or expands a

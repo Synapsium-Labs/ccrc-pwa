@@ -23,7 +23,7 @@
 //     separately against the REAL generated `accounts.sh`, which is the only
 //     thing that can prove the generator and this reader agree.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD, CCD, type CcdHarness }
+import { makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD, ccdSource, type CcdHarness }
   from './ccdWsHelpers.js';
 import { POOL_RULE_CASES, POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import type { PoolRuleCase } from './fixtures/poolRule.js';
@@ -531,7 +531,7 @@ describe('the `_pool_ok` header states counts that stay honest', () => {
     // future code line with
     // `_pool_ok ` inside a trailing comment would be counted as a call site
     // — this pin would then need a real tokenizer, not a looser regex.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('THE THIRD CODE IS CONSUMED TODAY');
     expect(from, 'the _pool_ok header could not be found').toBeGreaterThan(-1);
     const block = src.slice(from, from + 400);

@@ -45,7 +45,7 @@
 # the layout. D-303 (was D-B8-7) gave the tmux server its own `ccrc-tmux-server.scope`;
 # `systemd-run` defaults a user scope to `app.slice`, and tmux derives each
 # pane scope's slice from its own, so all seventeen panes moved from
-# `app-claude\x2dsession.slice` (capped 20G/24G in aggregate) to a bare,
+# `app-claude\x2dsession.slice` (capped in aggregate: MemoryMax default 24G, the box's CCRC_SESSION_SLICE_MEMORY_MAX) to a bare,
 # uncapped `app.slice`. The per-scope caps this script applies kept working
 # throughout; the AGGREGATE ceiling silently stopped covering anything.
 # `_tmux_new_session` now passes `--slice=` explicitly, which puts the panes

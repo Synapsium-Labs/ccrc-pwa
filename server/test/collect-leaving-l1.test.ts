@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimAttentionWithLeaves } from '../src/childReclaimSweep.js';
 import type { ChildReclaimAttention } from '../../shared/api.js';
 import {
-  COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterPresence, collectAttentionItems,
+  COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterViewer, collectAttentionItems,
   collectAttentionViewOf, collectAttentionViews, collectBoxAfterPopulation, collectEvidenceOf, collectFeedCollectedBody,
   collectFirstSighting, collectForgottenActRow, collectPopulation, type CollectBoxFacts, type CollectEntry,
   type CollectJobSettled, type CollectListing, type CollectPassClass, type CollectPopulation, type CollectResult,
@@ -151,12 +151,12 @@ describe('collectAttentionViews: only a re-registered id is hidden, and memory i
 describe('an act ends presence’s continuity (spec §5.10)', () => {
   it('presence, then any act outcome, then presence: the defer starts again, one count from the later arrival', () => {
     for (const r of [refusedAct('state-changed'), refusedAct('quarantine-kept'), failedAct(), ACT_NO_DOCUMENT, DIE, COLLECTED]) {
-      let x = collectAfterPresence(collectFirstSighting(1), step(0, 2));
-      x = collectAfterPresence(x, step(C / 2, 3));
+      let x = collectAfterViewer(collectFirstSighting(1), step(0, 2));
+      x = collectAfterViewer(x, step(C / 2, 3));
       x = collectAfterAct(x, r, step(C / 2 + 1, 4));
-      expect(x.presence, `${r.kind}: the act ended it`).toBeNull();
-      x = collectAfterPresence(x, step(C, 5));
-      expect(x.presence, `${r.kind}: presence starts again`).toEqual({ count: 1, sinceMono: C, atMono: C });
+      expect(x.viewer, `${r.kind}: the act ended it`).toBeNull();
+      x = collectAfterViewer(x, step(C, 5));
+      expect(x.viewer, `${r.kind}: presence starts again`).toEqual({ count: 1, sinceMono: C, atMono: C });
     }
   });
 });

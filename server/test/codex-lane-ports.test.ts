@@ -48,7 +48,7 @@ describe('codexLaneFixture ports — a chosen port is not one the kernel hands o
   });
 
   it('the seal suite\'s fixed band is never in any slice', async () => {
-    // shutdown-seal.test.ts: `26000 + (process.pid % 3000)`.
+    // The band shutdown-seal.test.ts's fixed `26000 + (process.pid % 3000)` once took, still reserved.
     expect(SEAL_PORTS).toEqual([26_000, 29_000]);
     for (const [lo, hi] of PORT_SLICES) expect(hi <= SEAL_PORTS[0] || lo >= SEAL_PORTS[1]).toBe(true);
     for (let i = 0; i < 50; i++) {

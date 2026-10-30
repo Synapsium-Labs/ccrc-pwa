@@ -149,26 +149,27 @@ describe('a name starts a workspace on the account that was picked', () => {
     expect(label).toHaveClass('min-w-0');
   });
 
-  it('toasts the title the box gave it, and closes', async () => {
+  it('opens the session the box answered, and closes without a toast', async () => {
     vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'demo-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow' });
     const { onClose } = await openAt();
     await pickDemo();
     type('ENG-1234');
     fireEvent.click(start('Start ENG-1234 on team·max'));
-    expect(await screen.findByText('Starting ENG-1234 - Fix the login flow on team·max…')).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe('/s/demo-eng-1234'));
     expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/^Starting/)).not.toBeInTheDocument();
   });
 
-  it('the toast names the title the SERVER answered, not the one the preview showed (the server resolves again at create)', async () => {
-    // The preview said Linear's title; by the time the create landed the box answered another (the ticket was renamed).
-    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'demo-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Retitled upstream' });
+  it('opens the id the SERVER answered, whatever the preview showed', async () => {
+    // The preview said `demo-eng-1234`; the answer names another id. The sheet navigates to the id it was answered and
+    // never rebuilds one from the preview or the typed text.
+    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'demo-eng-1234-2', slug: 'eng-1234-2', title: 'ENG-1234 - Fix the login flow' });
     await openAt();
     await pickDemo();
     type('ENG-1234');
     await screen.findByText('from Linear');
     fireEvent.click(start('Start ENG-1234 on team·max'));
-    expect(await screen.findByText('Starting ENG-1234 - Retitled upstream on team·max…')).toBeInTheDocument();
-    expect(screen.queryByText('Starting ENG-1234 - Fix the login flow on team·max…')).not.toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe('/s/demo-eng-1234-2'));
   });
 
   it('an answer this build cannot read names no title at all: never the typed text, which the server may have resolved to another', async () => {

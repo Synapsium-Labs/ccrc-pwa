@@ -20,7 +20,7 @@ import {
   isChildReclaimDeferWhy, isChildReclaimKebab, parseChildReclaimAudit, reclaimChild,
   type ChildReclaimDeps, type ChildReclaimOutcome, type ChildReclaimRequest,
 } from '../src/coord/childReclaim.js';
-import { CHILD_RECLAIM_PRESENCE_DEFERS, type ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
+import { CHILD_RECLAIM_VIEWER_DEFERS, type ChildReclaimFeedQuiet } from '../src/childReclaimSweep.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetIO } from '../src/io.js';
@@ -397,7 +397,7 @@ describe('generation-changed: the server’s own defer word', () => {
     expect(isChildReclaimKebab('generation-changed')).toBe(true);
     expect(Object.keys(CHILD_RECLAIM_TOKEN_KIND)).not.toContain('generation-changed');
     expect(LC_REFUSAL_TOKENS as readonly string[]).not.toContain('generation-changed');
-    expect(CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).not.toContain('generation-changed');
+    expect(CHILD_RECLAIM_VIEWER_DEFERS as readonly string[]).not.toContain('generation-changed');
   });
 
   it('writes one feed row naming the word and its sentence wherever it is found, and none for a repeat in the same episode', async () => {

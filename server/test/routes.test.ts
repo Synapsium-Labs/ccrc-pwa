@@ -12,7 +12,7 @@ import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import {
   HOLD_ROUTE_REASON_MAX_BYTES,
-  parseCanonicalPositiveSafeInteger,
+  parseCanonicalPositiveSafeInteger, parseQuestionId, formatQuestionId,
   type SessionStreamMsg,
 } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -24,6 +24,12 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 
 const ID = 'claude-a-project-f';
+
+/** The operator's answer door, W3 Q3f's `POST /api/questions/session-<id>/answer`. W7 C7p (D-7194) retired the session
+ *  doors it replaced (`/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`); their rows below run through it, with the
+ *  family's body (`kind`, and `multi: true` for a multiSelect set), and answer what the old door answered, byte for byte
+ *  (`question-doors.test.ts`'s pairs proved it before the retirement). */
+const answerDoor = (id: string): string => `/api/questions/session-${id}/answer`;
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -134,17 +140,34 @@ function coordIdPathRoutes(): Omit<RouteSource, 'code'>[] {
     : []));
 }
 
+/** The canonical parsers of a `:id` seam: `parseCanonicalPositiveSafeInteger` everywhere, and (W3 Q3f, D-7030)
+ *  `parseQuestionId` on a `/api/questions/` path only, whose numeric arms parse `<n>` with the former. */
 function canonicalCoordIdRoutes(): Omit<RouteSource, 'code'>[] {
   const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
   const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
   return starts.flatMap((start, i) => {
     const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
-    return /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+    const canonical = /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+      || (start[2]!.startsWith('/api/questions/') && /\bparseQuestionId\s*\(/.test(code));
+    return canonical
       ? [{
           method: start[1]!.toUpperCase() as 'GET' | 'POST',
           routePath: start[2]!,
         }]
       : [];
+  });
+}
+
+/** W3 Q3f (D-7030): the `knownId` gates registered in `coord/routes.ts`, the operator's door of the question family,
+ *  which gates its session id with `buildServer`'s `knownId` exactly as the session routes do. */
+function coordKnownIdCalls(): KnownIdCall[] {
+  const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  return starts.flatMap((start, i) => {
+    const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
+    return [...code.matchAll(/\bknownId\(\s*([^\n)]*?)\s*\)/g)].map((call) => ({
+      method: start[1]!.toUpperCase() as 'GET' | 'POST', routePath: start[2]!, args: call[1]!.replace(/\s+/g, ' ').trim(),
+    }));
   });
 }
 
@@ -207,8 +230,28 @@ describe('canonical positive-safe decimal parser', () => {
   });
 });
 
+describe('the question id parser (W3 Q3f, D-7030)', () => {
+  it.each([
+    ['ask-1', { kind: 'ask', id: 1 }],
+    ['approval-42', { kind: 'approval', id: 42 }],
+    [`ask-${Number.MAX_SAFE_INTEGER}`, { kind: 'ask', id: Number.MAX_SAFE_INTEGER }],
+    ['session-project-a-quiet-basin', { kind: 'session', sessionId: 'project-a-quiet-basin' }],
+  ] as const)('accepts %s', (text, want) => {
+    expect(parseQuestionId(text)).toEqual(want);
+    expect(formatQuestionId(parseQuestionId(text)!)).toBe(text);
+  });
+
+  it.each([
+    'ask-01', 'ask-+1', 'ask-1.0', 'ask-', 'ask-0', 'ask- 1', `ask-${Number.MAX_SAFE_INTEGER + 1}`, 'approval-1e0',
+    'session-', 'session--actor', 'session-.hidden', 'session-a/b', 'session- x',
+    'question-1', 'asks-1', '-1', 'ask1', '', 1,
+  ])('refuses %j', (text) => {
+    expect(parseQuestionId(text)).toBeNull();
+  });
+});
+
 describe('canonical coordination id route census', () => {
-  it('keeps all twenty-one textual resource-id seams on the shared parser', () => {
+  it('keeps all twenty-four textual resource-id seams on a shared parser (twenty-one, plus the question family\'s three)', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -236,6 +279,10 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/approvals/:id/rule' },
       { method: 'POST', routePath: '/api/approvals/:id/release' },
       { method: 'GET', routePath: '/api/approvals/:id' },
+      // W3 Q3f (D-7030): the question door family, on `parseQuestionId`, registered after the approvals lane.
+      { method: 'POST', routePath: '/api/questions/:id/answer' },
+      { method: 'POST', routePath: '/api/questions/:id/rule' },
+      { method: 'POST', routePath: '/api/questions/:id/release' },
     ]);
   });
 
@@ -266,16 +313,8 @@ describe('knownId route census', () => {
     expect(requestGates).toEqual([
       { method: 'POST', routePath: '/api/sessions/:id/prompt', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/route', args: 'id' },
-      { method: 'POST', routePath: '/api/sessions/:id/dialog', args: 'id' },
-      // D-5047: the free-text row's own route, NOT a `text` field on `/dialog`. An older server that ignored such a
-      // field would walk onto the empty row and press Enter, rejecting the whole ask; it answers 404 to a new route.
-      { method: 'POST', routePath: '/api/sessions/:id/dialog/text', args: 'id' },
-      // D-5048: a multiSelect question's own route, for the same reason: an older server answers it 404, never with a
-      // keystroke into a menu whose Enter only toggles.
-      { method: 'POST', routePath: '/api/sessions/:id/dialog/multi', args: 'id' },
       // Decision `ask-dialog-tab-route`: moving the pane between an ask's tabs, arrows only, never Enter.
       { method: 'POST', routePath: '/api/sessions/:id/dialog/tab', args: 'id' },
-      { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/interrupt', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/submit', args: 'id' },
@@ -293,8 +332,11 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(22);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(18);
+    // W7 C7p (D-7194): 22 -> 21 and 18 -> 17 POST with `POST /api/sessions/:id/ask` retired, 20 and 16 with
+    // `/dialog/multi`, 19 and 15 with `/dialog/text`, 18 and 14 with `/dialog`; the operator's answers are gated by the
+    // same `knownId` inside the family's door (`coord/routes.ts`, through its wiring).
+    expect(requestGates).toHaveLength(18);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(14);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -314,6 +356,12 @@ describe('knownId route census', () => {
       requestGates.length,
       requestGates.filter(({ method }) => method === 'POST').length,
       requestGates.filter(({ method }) => method === 'GET').length,
+    ]);
+  });
+
+  it('gates the question family\'s operator door in coord/routes.ts, and nothing else there (W3 Q3f, D-7030)', () => {
+    expect(coordKnownIdCalls()).toEqual([
+      { method: 'POST', routePath: '/api/questions/:id/answer', args: 'qid.sessionId' },
     ]);
   });
 });
@@ -453,8 +501,8 @@ describe('write routes', () => {
       if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    // The shape `remote/io.ts` produces when one of the 31
-    // [registry-read-census:fields] field reads a session's `readRegistry` fires
+    // The shape `remote/io.ts` produces when one of the 4
+    // [registry-read-census:fields] unconditional reads (or another listed field's) a session's `readRegistry` fires
     // in parallel fails or times out: null, indistinguishable
     // at field() from a file that is not there (same idiom as hold-gate.test.ts's
     // `holdUnreadableIO`) — here on `workdir`, one of readRegistry's three
@@ -494,8 +542,8 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([menuPane(1), menuPane(2)]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog`,
-      payload: { dialogId: DIALOG_ID, optionIndex: 2 },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: DIALOG_ID, optionIndex: 2 },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -510,8 +558,8 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([menuPane(1)]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog`,
-      payload: { dialogId: 'deadbeef', optionIndex: 2 },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: 'deadbeef', optionIndex: 2 },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'stale-dialog' });
@@ -525,8 +573,8 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([pane]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog`,
-      payload: { dialogId: parseDialog(pane)!.id, optionIndex: 3 },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(pane)!.id, optionIndex: 3 },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'free-text-row' });
@@ -547,8 +595,8 @@ describe('write routes', () => {
     ]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/text`,
-      payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text: ASK_TEXT },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text: ASK_TEXT },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -566,8 +614,8 @@ describe('write routes', () => {
     for (const text of ['', '   ', 'a\nb', '\x1b[31mred', 'x'.repeat(1001)]) {
       const res = await app.inject({
         method: 'POST',
-        url: `/api/sessions/${ID}/dialog/text`,
-        payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text },
+        url: answerDoor(ID),
+        payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text },
       });
       expect(res.statusCode, JSON.stringify(text.slice(0, 12))).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-text' });
@@ -579,13 +627,15 @@ describe('write routes', () => {
   it('POST dialog/text answers 400 bad-request for a missing or mistyped field (D-5047)', async () => {
     const { app, calls } = await makeApp([ASK_OPEN]);
     const id = parseDialog(ASK_OPEN)!.id;
+    // W7 C7p (D-7194): through the family's door, where a dialog body with no `text` is the option row's answer (the
+    // first element here was `{ dialogId, optionIndex }` on the retired `/dialog/text`); its missing text is a `null`.
     for (const payload of [
-      { dialogId: id, optionIndex: 3 },
+      { dialogId: id, optionIndex: 3, text: null },
       { dialogId: id, optionIndex: 3, text: 42 },
       { dialogId: id, optionIndex: '3', text: ASK_TEXT },
       { optionIndex: 3, text: ASK_TEXT },
     ]) {
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/text`, payload });
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', ...payload } });
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     }
@@ -597,8 +647,8 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([ASK_OPEN]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/text`,
-      payload: { dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 2, text: ASK_TEXT },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 2, text: ASK_TEXT },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'not-free-text' });
@@ -616,14 +666,14 @@ describe('write routes', () => {
     const seen: unknown[] = [];
     bus.on(`answered:${ID}`, (next) => seen.push(next));
     const res = await app.inject({
-      method: 'POST', url: `/api/sessions/${ID}/dialog`, payload: { dialogId: parseDialog(q2)!.id, optionIndex: 1 },
+      method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', dialogId: parseDialog(q2)!.id, optionIndex: 1 },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, next: parseDialog(review) });
     expect(seen).toEqual([parseDialog(review)]);
     // A refusal hands nothing on.
     const stale = await app.inject({
-      method: 'POST', url: `/api/sessions/${ID}/dialog`, payload: { dialogId: 'deadbeef', optionIndex: 1 },
+      method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', dialogId: 'deadbeef', optionIndex: 1 },
     });
     expect(stale.statusCode).toBe(409);
     expect(seen).toHaveLength(1);
@@ -640,8 +690,8 @@ describe('write routes', () => {
     ]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/multi`,
-      payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', multi: true, dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
     });
     expect(res.statusCode).toBe(200);
     // Decision `ask-answer-returns-next-screen`: the 200 carries the screen the commit moved to.
@@ -658,8 +708,8 @@ describe('write routes', () => {
     for (const optionIndexes of [[], [1, 1], [0], [10], [1.5]]) {
       const res = await app.inject({
         method: 'POST',
-        url: `/api/sessions/${ID}/dialog/multi`,
-        payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes },
+        url: answerDoor(ID),
+        payload: { kind: 'dialog', multi: true, dialogId: parseDialog(MULTI_1)!.id, optionIndexes },
       });
       expect(res.statusCode, JSON.stringify(optionIndexes)).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-indexes' });
@@ -678,7 +728,7 @@ describe('write routes', () => {
       { optionIndexes: [1] },
       { dialogId: id, optionIndex: 1 },
     ]) {
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/multi`, payload });
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', multi: true, ...payload } });
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     }
@@ -692,8 +742,8 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([onText]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog/multi`,
-      payload: { dialogId: parseDialog(onText)!.id, optionIndexes: [1, 3] },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', multi: true, dialogId: parseDialog(onText)!.id, optionIndexes: [1, 3] },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'cursor-not-on-option' });
@@ -776,12 +826,16 @@ describe('write routes', () => {
     const { app } = await makeApp(['❯ \n']);
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
-      ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
-      ['/api/sessions/nope/dialog/text', { dialogId: 'x', optionIndex: 1, text: 'hi' }],
-      ['/api/sessions/nope/dialog/multi', { dialogId: 'x', optionIndexes: [1] }],
+      // W7 C7p: an option row, through the family's door since `/dialog` was retired.
+      [answerDoor('nope'), { kind: 'dialog', dialogId: 'x', optionIndex: 1 }],
+      // W7 C7p: the own words, through the family's door since `/dialog/text` was retired.
+      [answerDoor('nope'), { kind: 'dialog', dialogId: 'x', optionIndex: 1, text: 'hi' }],
+      // W7 C7p: a multiSelect set, through the family's door since `/dialog/multi` was retired.
+      [answerDoor('nope'), { kind: 'dialog', multi: true, dialogId: 'x', optionIndexes: [1] }],
       ['/api/sessions/nope/dialog/tab', { dialogId: 'x', to: 'next' }],
       ['/api/sessions/nope/interrupt', {}],
-      ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
+      // W7 C7p: the operator's ask, through the family's door since `/ask` was retired.
+      [answerDoor('nope'), { kind: 'ask', askKey: 'k', optionIndexes: [0] }],
       ['/api/sessions/nope/submit', {}],
     ] as const) {
       const res = await app.inject({ method: 'POST', url, payload });
@@ -903,8 +957,10 @@ describe('POST /api/sessions/:id/submit', () => {
 // `server.ts` actually wires them together: the registry lookup for the
 // session's uuid, `readHookState`'s freshness/identity gate, and the
 // askDeps/sendDeps shared queue. Same convention as the `/dialog` suite
-// above: 404 covered there, so this adds 400 / 409 / 200.
-describe('POST /api/sessions/:id/ask', () => {
+// above: 404 covered there, so this adds 400 / 409 / 200. W7 C7p (D-7194):
+// the operator's ask through the family's door (`answerDoor`, `{kind:'ask'}`),
+// the retired `/api/sessions/:id/ask`'s rows unchanged in what they answer.
+describe('POST /api/questions/session-<id>/answer {kind:\'ask\'} (was POST /api/sessions/:id/ask)', () => {
   const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
 
@@ -925,8 +981,8 @@ describe('POST /api/sessions/:id/ask', () => {
     seedAsk(home);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/ask`,
-      payload: { askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
+      url: answerDoor(ID),
+      payload: { kind: 'ask', askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -940,8 +996,8 @@ describe('POST /api/sessions/:id/ask', () => {
     seedAsk(home);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/ask`,
-      payload: { askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
+      url: answerDoor(ID),
+      payload: { kind: 'ask', askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
@@ -959,7 +1015,7 @@ describe('POST /api/sessions/:id/ask', () => {
       { askKey: 'k', optionIndexes: [0, '1'] },         // one entry not a number
       { askKey: 'k' },                                  // optionIndexes missing
     ]) {
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/ask`, payload });
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'ask', ...payload } });
       expect(res.statusCode).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     }

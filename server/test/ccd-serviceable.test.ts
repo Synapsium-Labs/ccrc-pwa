@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { SERVICEABILITY_CASES } from './fixtures/serviceability.js';
 import { CLASSES } from '../../shared/models.js';
 import {
@@ -19,7 +19,7 @@ import { loadConfig } from '../src/config.js';
 import { seedRoster } from './helpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const ccdSrc = fs.readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+const ccdSrc = ccdSource();
 const bashConst = (name: string): number => {
   const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(ccdSrc);
   if (!m) throw new Error(`ccd/ccd declares no ${name}= — the twin moved or was renamed`);

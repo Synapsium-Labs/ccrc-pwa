@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import {
   CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, makeChild, plantTmux,
   wideDigitLocale, type Child, type LadderAnswer,
@@ -1356,7 +1356,7 @@ describe('stash attribution — one rule in two copies, held equal', () => {
 });
 
 describe('the region', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   it('is bracketed by its two markers, once each, and its CODE never calls reap’s ladder or tail', () => {
     expect(src.split('RECLAIM-BEGIN').length - 1).toBe(1);
     expect(src.split('RECLAIM-END').length - 1).toBe(1);

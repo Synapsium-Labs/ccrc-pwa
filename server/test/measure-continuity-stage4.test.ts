@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, ccdSource } from './ccdWsHelpers.js';
 
 const TOOL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../deploy/measure-continuity.py');
 
@@ -120,7 +120,7 @@ describe('stage 4 rows count what their names say (TZ=UTC, hand-built log)', () 
     expect(r.noroom_seconds_past_their_reset_total, 's9: 14:00 - 13:30, plus s13').toBe(1800 + 6600);
     const grace = (src: string, re: RegExp): string => (re.exec(src) ?? ['', 'absent'])[1];
     expect(grace(fs.readFileSync(TOOL, 'utf8'), /^S4_GRACE = (\d+)/m), 'the instrument\'s grace is ccd\'s')
-      .toBe(grace(fs.readFileSync(CCD, 'utf8'), /^RESCUE_WAIT_GRACE=(\d+)/m));
+      .toBe(grace(ccdSource(), /^RESCUE_WAIT_GRACE=(\d+)/m));
   });
 
   it('--since is inclusive and --until exclusive, as local-time epochs, in either spelling', () => {
@@ -295,6 +295,6 @@ describe('each regex is bound to the line the real ccd writes', () => {
   });
 
   it('the landing line the carried-in row compares against is cmd_swap\'s own', () => {
-    expect(fs.readFileSync(CCD, 'utf8')).toContain(`echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"`);
+    expect(ccdSource()).toContain(`echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"`);
   });
 });

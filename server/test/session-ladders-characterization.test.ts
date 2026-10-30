@@ -18,6 +18,7 @@ import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { liveRowFor } from '../src/turnverdict.js';
@@ -150,7 +151,7 @@ interface Observed {
 const observe = async (r: Row): Promise<Observed> => {
   const w = world(r);
 
-  const fleet = await assembleFleet(w.io, w.cfg, w.tmux);
+  const fleet = await assembleFleet(w.io, w.cfg, w.tmux, liveStateReaderOver(w.io));
   const s = fleet.find((x) => x.id === w.id);
   const frame = s === undefined ? 'absent'
     : `${s.status}${s.statusUnmeasured ? '+unmeasured' : ''}/${s.lifecycle}`;

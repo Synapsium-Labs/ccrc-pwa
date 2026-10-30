@@ -9,3 +9,13 @@ export function resetClock(epochSeconds: number, now: Date = new Date()): string
   const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
   return sameDay ? hm : `${hm} · ${d.getDate()} ${d.toLocaleString('en', { month: 'short' })}`;
 }
+
+/** The viewer's local day for an epoch-MILLISECONDS instant, as `YYYY-MM-DD`: one key all day, a new one at local
+ *  midnight. The transcript's row barrier compares it for the rows whose words read the clock (`resetClock` says the
+ *  date only when it is not today), so those rows draw again when the day changes and no other row does (desktop
+ *  polish Task C7, review 1128). */
+export function dayKey(epochMs: number): string {
+  const d = new Date(epochMs);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

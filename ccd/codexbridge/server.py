@@ -772,7 +772,7 @@ class _Request:
             st.stats.header_names(up.headers)
             st.stats.name("responseHeader", _media_type(up.headers))
             st.stats.usage_headers(up.headers)
-            rid = errors.request_id_of(up.headers)  # the table's own reader of x-request-id / request-id, bounded
+            rid = errors.request_id_of(up.headers)  # the table's bounded reader of x-request-id / request-id / x-oai-request-id
             if 200 <= up.status < 300:
                 return self._reduce(turn, self._recorded(up), out, rid, reading)
             e = backend.error_of(up, now=time.time())

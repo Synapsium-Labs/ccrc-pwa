@@ -807,6 +807,23 @@ describe('hook ask envelope frames', () => {
       }
     });
 
+    // The failed capture holds the menu (captureHeld); the empty pane that follows is a reading of no menu, and the
+    // hold must end with it, or the aged envelope would outlive a pane that shows nothing. One case per pane, so each
+    // is red on its own.
+    it.each(['menu', 'review'] as const)(
+      'a successful capture after a failed one ends the hold: an empty pane clears the aged envelope (%s)',
+      async (label) => {
+        const review = fixture('cc296-ask-2q-long-review.txt');
+        const opts = label === 'menu'
+          ? { paneSequence: [MENU.pane, MENU.pane, null, ''], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }) }
+          : { paneSequence: [review, review, null, ''], hookstate: aged({ ask: GARDEN }) };
+        const { frames } = await streamWith(opts as Parameters<typeof streamWith>[0]);
+        expect(asks(frames)).toHaveLength(1);
+        expect(cleared(frames)).toHaveLength(1);
+        expect(frames.indexOf(asks(frames)[0])).toBeLessThan(frames.indexOf(cleared(frames)[0]));
+      },
+    );
+
     it('one unparsed mid-redraw capture does not clear an aged envelope; two in a row decide as today', async () => {
       const redraw = fixture('ask-2col-partial-redraw.txt');
       const one = await streamWith({

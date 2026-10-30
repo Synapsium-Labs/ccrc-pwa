@@ -17,14 +17,15 @@
 //
 // There is no `inGroup` prop. A line is always inside a project card now, so
 // the conditional that made SessionCard mean two different things is gone.
-import { useRef } from 'react';
+import { memo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectPoolWire, RosterWire } from '../../../shared/api';
 import { Icon, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import type { ChildRunContext } from './runWords';
-import type { CoordPresence } from './coordWords';
+import type { CoordinatorPresence } from './presence';
 import { SessionMeta } from './SessionMeta';
 import { cardFacts, sessionFacts } from './sessionFacts';
+import { sameLineProps } from './lineProps';
 import { actionDoor } from '../command/door';
 import './fleet.css';
 
@@ -50,7 +51,7 @@ let stamped: HTMLElement | null = null;
 
 
 
-export function SessionLine({
+function SessionLineView({
   session,
   onOpen,
   selected = false,
@@ -100,7 +101,7 @@ export function SessionLine({
   childRun?: ChildRunContext;
   /** D-5545: the presence of this row's coordinator when it is not a live row on this card (`orphanNote`):
    *  `dead` puts "coordinator gone" on the row, its one marker — the line the card used to repeat under it. */
-  coordinator?: CoordPresence | null;
+  coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanNote`'s `title`). */
   coordinatorTitle?: string;
   /** The clock, for a test; the row ticks its own otherwise. */
@@ -198,10 +199,15 @@ export function SessionLine({
           title={glance.name.short === undefined || glance.name.short === label ? undefined : label}
           onClick={open}
         >
-          {/* D-5545: the full name wherever the column holds it (wrapping at a hyphen, never an ellipsis), and
-              shortened by whole tokens only in a phone-narrow column (`Fit`, fleet.css's container query). The
+          {/* D-5545: the full name wherever the column holds it (wrapping at a hyphen or a space), and
+              shortened by whole tokens only below the desk (`Fit`: fleet.css's container query for a wide
+              tablet's track, and from 900px up the full form on up to two lines, where a longer name ends in the
+              browser's clamp `…` at the end of the second line, D-6332). The
               button's accessible name is the FULL name either way (verifier round 1): both drawn forms are
-              `aria-hidden`, and the name is spoken once. */}
+              `aria-hidden`, and the name is spoken once. `title` is set for a `Fit` pair only: a plain name that
+              the clamp cuts (mostly one unbroken token longer than two lines of its track, and at the narrowest
+              track a name of wide capitals within the budget) keeps its full text in the DOM and in the session
+              header, not in a `title`. */}
           {glance.name.short === undefined || glance.name.short === label ? (
             <TypedLabel className="sess-label" text={label} />
           ) : (
@@ -242,3 +248,6 @@ export function SessionLine({
     </div>
   );
 }
+
+// Memo'd (C9, D-6441): a one-row frame re-renders that row only; `childRun`, which its parent builds per call, by value.
+export const SessionLine = memo(SessionLineView, sameLineProps);

@@ -8,6 +8,7 @@
 // (network-only) — this snapshot is the only offline data, by design.
 import { reviveFleetSessions, unmeasuredFields, type FleetSession, type RosterWire } from '../../../shared/api';
 import { HUES } from '../../../shared/roster';
+import { readKey, writeKey } from './storage';
 
 // Stays at v1 — deliberately. A snapshot written before `tasks`/`pr`/`archivedAt`
 // existed is still usable data, and the read normalizes it (reviveFleetSessions);
@@ -16,9 +17,7 @@ import { HUES } from '../../../shared/roster';
 // for every future nullable field.
 const KEY = 'ccrc.fleet-snapshot.v1';
 
-// Always via `window.` — Node 22+ ships an experimental bare `localStorage`
-// global that shadows jsdom's working one under vitest.
-const storage = (): Storage => window.localStorage;
+// Read and written through the one storage port (`lib/storage.ts`, D-7190).
 
 export interface FleetSnapshot {
   savedAt: number; // epoch ms of the snapshot
@@ -50,6 +49,21 @@ function isRosterWireLike(v: unknown): v is RosterWire {
   return typeof o['id'] === 'string' && typeof o['label'] === 'string'
     && typeof o['homeAble'] === 'boolean'
     && typeof o['hue'] === 'string' && (HUES as readonly string[]).includes(o['hue']);
+}
+
+/** True when `saveFleetSnapshot` would refuse this frame: it is EMPTY, or carries even one row with a non-empty
+ *  `unmeasured` (the two shapes `saveFleetSnapshot`'s docblock gives its reasons for). The refusal is decided HERE,
+ *  once; the writer below uses it, and so does a caller that schedules writes (`stores/fleet.ts`), so a frame the
+ *  snapshot would refuse is never scheduled — it neither opens a throttle window nor displaces a good frame waiting
+ *  in one. Pure: no storage, no clock, no timers. */
+export function snapshotRefused(sessions: readonly FleetSession[]): boolean {
+  if (sessions.length === 0) return true;
+  // `unmeasuredFields`, not `s.unmeasured` directly (blocking review finding
+  // 2): a LIVE fleet frame never goes through `reviveFleetSession` (only this
+  // module's own persisted-snapshot read does), so a row from a server that
+  // predates this field can genuinely lack the key at runtime despite the
+  // static type — see `unmeasuredFields`'s own docstring in shared/api.ts.
+  return sessions.some((s) => unmeasuredFields(s).length > 0);
 }
 
 /** Best-effort persist — quota errors and private-mode walls are swallowed;
@@ -94,19 +108,9 @@ function isRosterWireLike(v: unknown): v is RosterWire {
  *  know what to preserve, which is a second read this function has never
  *  needed for `sessions` either. */
 export function saveFleetSnapshot(sessions: FleetSession[], roster: readonly RosterWire[] = []): void {
-  if (sessions.length === 0) return;
-  // `unmeasuredFields`, not `s.unmeasured` directly (blocking review finding
-  // 2): a LIVE fleet frame never goes through `reviveFleetSession` (only this
-  // module's own persisted-snapshot read does), so a row from a server that
-  // predates this field can genuinely lack the key at runtime despite the
-  // static type — see `unmeasuredFields`'s own docstring in shared/api.ts.
-  if (sessions.some((s) => unmeasuredFields(s).length > 0)) return;
-  try {
-    const snap: FleetSnapshot = { savedAt: Date.now(), sessions, roster: [...roster] };
-    storage().setItem(KEY, JSON.stringify(snap));
-  } catch {
-    /* ignore */
-  }
+  if (snapshotRefused(sessions)) return;
+  const snap: FleetSnapshot = { savedAt: Date.now(), sessions, roster: [...roster] };
+  writeKey(KEY, JSON.stringify(snap));
 }
 
 /** Last persisted snapshot, or null when absent/corrupt/unreadable.
@@ -127,7 +131,7 @@ export function saveFleetSnapshot(sessions: FleetSession[], roster: readonly Ros
  *  `accountLabel`/`accountColorVar` already have a fallback for. */
 export function loadFleetSnapshot(): FleetSnapshot | null {
   try {
-    const raw = storage().getItem(KEY);
+    const raw = readKey(KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;

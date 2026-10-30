@@ -58,7 +58,8 @@ function trackedFiles(): string[] {
 }
 
 // The L0 ring of shared/providers.ts and shared/base-url.ts (no import outside ./) is held by
-// server/test/rings/shared-imports.test.ts (D-6045); base-url.test.ts keeps its own stricter "imports nothing".
+// server/test/rings/shared-imports.test.ts (D-6045); base-url.test.ts keeps its own stricter "imports nothing" over
+// shared/base-url.mjs, the one implementation (D-7306).
 describe("shared/roster.ts's import list", () => {
   it('shared/roster.ts imports L0 only — the whole list, so an addition must be stated here', () => {
     const imports = read('shared/roster.ts').split('\n').filter((l) => /^import\s/.test(l));

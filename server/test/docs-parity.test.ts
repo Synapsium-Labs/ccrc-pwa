@@ -81,8 +81,9 @@ import { afterAll as afterAllT6 } from 'vitest';
 import { spawnSync as spawnSyncT6 } from 'node:child_process';
 import { writeFileSync as writeFileT6 } from 'node:fs';
 import {
-  DOCS_CCD_FAILURES as ccdFailuresT6, DOCS_REDACT_RULES as redactRulesT6, redactDocsText as redactTextT6,
+  DOCS_CCD_FAILURES as ccdFailuresT6, redactDocsText as redactTextT6,
 } from '../../shared/docs.js';
+import { pythonRedactorTables as pythonRedactorTablesT6 } from './census-w5/redactors.js';
 import { CCD as ccdScriptT6, makeCcdHarness as harnessT6 } from './ccdWsHelpers.js';
 import { REAL_PYTHON3 as realPythonT6 } from './ccdDocsHelpers.js';
 import {
@@ -90,7 +91,7 @@ import {
   unitJson as unitJsonT6,
 } from './docsHelperPy.js';
 
-describe('the helper FAILURES and REDACT_RULES equal shared/docs.ts (row 48)', () => {
+describe('the helper FAILURES equal shared/docs.ts, and its redaction is shared/redact.mjs\'s (row 48)', () => {
   const h = harnessT6('ccd-docs-');
   afterAllT6(() => h.cleanup());
   /** Read when a case runs, never at collection: a missing helper reds these cases, not the file's others. */
@@ -105,18 +106,32 @@ describe('the helper FAILURES and REDACT_RULES equal shared/docs.ts (row 48)', (
     expect(py).toHaveLength(ts.length);
   });
 
-  it('REDACT_RULES equals DOCS_REDACT_RULES, row by row and in order', () => {
-    const py = unitJsonT6<string[][]>(h.home, 'out([list(rule) for rule in H.REDACT_RULES])');
-    expect(py).toEqual(redactRulesT6.map(([pattern, suffix]) => [pattern, suffix]));
+  it('the helper has no python rule table (D-7077)', () => {
+    expect(pythonRedactorTablesT6()).toEqual([]);
+  });
+
+  it('the helper\'s redact runs the docs profile through the CLI, and without one it redacts nothing by a copy (D-7077)', () => {
+    const s = 'fatal: https://u:tok@example.invalid/x?token=t\nAuthorization: Bearer y';
+    const py = unitJsonT6<[string, string, string]>(h.home, [
+      `s = ${JSON.stringify(s)}`,
+      'class NoCli(H.Sys):',
+      '    redact_cli = None',
+      'try:',
+      '    NoCli().redact(s)',
+      "    bare = 'answered'",
+      'except H.RedactorFailed:',
+      "    bare = 'RedactorFailed'",
+      'out([H.redact(s), bare, type(H.SYS).redact_cli])',
+    ].join('\n'));
+    expect(py).toEqual([redactTextT6(s), 'RedactorFailed', path.resolve(ccdScriptT6, '..', '..', 'shared', 'redact-cli.mjs')]);
   });
 
   it('each is ONE single-line NAME= literal, between the docs-parity markers', () => {
     expect(pyLiteralT6(src(), 'FAILURES')).toMatch(/^frozenset\(\{'[a-z-]+'(?:,'[a-z-]+')*\}\)$/);
-    expect(pyLiteralT6(src(), 'REDACT_RULES')).toMatch(/^\(\(r'.*'\)\)$/);
     const lines = src().split('\n');
     const begin = lines.indexOf('# docs-parity: begin');
     const end = lines.indexOf('# docs-parity: end');
-    for (const name of ['FAILURES', 'REDACT_RULES']) {
+    for (const name of ['FAILURES']) {
       const at = lines.findIndex((l) => l.startsWith(`${name}=`));
       expect(at > begin && at < end, `${name} sits inside the block`).toBe(true);
     }
@@ -314,7 +329,7 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
   ];
   /** The block's other names, each compared in its own shape: SECTIONS as ordered pairs (below), FAILURES as a set
    *  and REDACT_RULES rule by rule (Task 6's row-48 cases above). */
-  const OTHERS = ['SECTIONS', 'FAILURES', 'REDACT_RULES'];
+  const OTHERS = ['SECTIONS', 'FAILURES'];
   /** The caps among them: each must be its own integer literal in the helper, never an expression or an alias. */
   const CAPS = ['REF_MAX_CHARS', 'PATH_MAX_BYTES', 'PATH_MAX_COMPONENT_BYTES', 'PATH_MAX_DEPTH', 'DOCS_MAX_FILE_BYTES',
     'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',

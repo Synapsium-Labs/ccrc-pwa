@@ -13,6 +13,7 @@
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import type { useProjectedHome } from './useProjectedHome';
 import { ApiError, apiErrorText } from '../lib/api';
+import { presenceOf } from './presence';
 
 /** D-291: how long the sheet waits for the freshly created session to
  *  appear in a `/ws/fleet` snapshot before giving up. Tied to the fleet
@@ -36,6 +37,13 @@ export const START_PROGRAM_WAIT_MS = 20_000;
  *  arithmetic and D-291's "never recompute the id" holds unchanged. */
 const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
   s.project === project && s.workspace === null;
+
+/** Not known to be stopped: the server reads the row alive, or cannot say (`unknown`, an older server's absent key
+ *  included). A refusal arm reads this, so doubt refuses. */
+const mayBeRunning = (s: FleetSession): boolean => {
+  const p = presenceOf(s);
+  return p === 'alive' || p === 'unknown';
+};
 
 /** D-292 (was D-B4-19)'s arm: "is a live main checkout already running in this project?"
  *
@@ -66,16 +74,19 @@ const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
  *  match sends a kickoff anywhere. The arm that ACTS is the wrapper-scoped one
  *  below.
  *
- *  `status !== 'dead'` is on THIS arm only: `cmd_start`'s idempotency test is
+ *  The liveness conjunct is on THIS arm only: `cmd_start`'s idempotency test is
  *  `_alive` (tmux has-session), whose wire mirror this is. Without it a
  *  dead-but-unreaped row refuses the sheet forever with copy false on every
  *  clause, and `ws-reap` is human-only-at-a-terminal by contract — no way out
- *  from the phone. */
+ *  from the phone. It reads the server's word (`mayBeRunning`, OA-C15 (a),
+ *  D-7181): a row the server reads `dead` or `asleep` is skipped, and a row it
+ *  DOUBTS refuses, because the refusal is what hides the Start door and doubt
+ *  hides doors (one refresh, once tmux answers). */
 export function liveMainCheckoutIn(
   sessions: readonly FleetSession[],
   project: string,
 ): FleetSession | null {
-  return sessions.find((s) => isMainCheckoutOf(s, project) && s.status !== 'dead') ?? null;
+  return sessions.find((s) => isMainCheckoutOf(s, project) && mayBeRunning(s)) ?? null;
 }
 
 /** D-291's arm: "has the session I just asked for appeared yet?"
@@ -87,6 +98,11 @@ export function liveMainCheckoutIn(
  *  wrapper` here would let a DIFFERENT live main checkout in the same project
  *  (someone else's, or a swapped one) collect this sheet's kickoff: verbatim
  *  the hijack D-292 exists to prevent, arriving through the wait instead.
+ *
+ *  LIVENESS is the server's word (`presenceOf(s) === 'alive'`, OA-C15 (a),
+ *  D-7181): this arm ACTS, so a row the server doubts never collects the
+ *  kickoff, and a pane gone under a lifecycle that resolves on its own
+ *  (`restarting`) is the session itself, alive.
  *
  *  LIVENESS + FRESHNESS, both required (coordinator review B-2). An earlier
  *  version of this docstring argued for NO liveness conjunct, on the grounds
@@ -140,7 +156,7 @@ export function startedSessionFor(
   return sessions.find((s) =>
     isMainCheckoutOf(s, project)
     && s.wrapper === wrapper
-    && s.status !== 'dead'
+    && presenceOf(s) === 'alive'
     && !preLive.has(s.id)) ?? null;
 }
 
@@ -148,9 +164,9 @@ export function startedSessionFor(
  *  snapshot. Taken from `fleet.getState()` (authoritative) rather than the
  *  render-scoped `sessions`, and taken BEFORE the create, so "was already
  *  running before I asked for anything" is a measurement and not an
- *  inference. */
+ *  inference. Alive by the same word `startedSessionFor` reads (`presenceOf`). */
 export const liveIdsIn = (sessions: readonly FleetSession[]): ReadonlySet<string> =>
-  new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
+  new Set(sessions.filter((s) => presenceOf(s) === 'alive').map((s) => s.id));
 
 /** `createSession`'s own refusals. 400 is a client-authored mistake (an
  *  unknown/empty project); apiErrorText's stderr-first priority already

@@ -8,7 +8,7 @@
 // FIXTURE HOMES ONLY: every call below runs in a harness HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -50,7 +50,7 @@ describe('_reg_retire', () => {
   });
 
   it('the five durable callers go through it and none calls _reg_purge by hand', () => {
-    const src = readFileSync(CCD, 'utf8').split('\n')
+    const src = ccdSource().split('\n')
       .filter((l) => !/^\s*#/.test(l));
     const direct = src.filter((l) => /\b_reg_purge "/.test(l));
     expect(direct, 'only the helper itself calls _reg_purge with an id').toHaveLength(1);

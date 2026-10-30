@@ -47,12 +47,13 @@ describe.skipIf(!BASE)('ccrc live e2e (cctest)', () => {
     const dialog = dialogMsgs[dialogMsgs.length - 1].dialog;
     expect(dialog.options.length).toBeGreaterThanOrEqual(3);
 
-    // Answer option 2 and expect the dialog to clear.
+    // Answer option 2 and expect the dialog to clear. W7 C7p (D-7194): through the operator's answer door, the question
+    // family's (was `POST /api/sessions/:id/dialog`, retired).
     const clearedMsgs = await wsCollect(
       `/ws/session/${ID}`,
       (m) => m.type === 'dialog_cleared',
       60_000,
-      () => { void post(`/api/sessions/${ID}/dialog`, { dialogId: dialog.id, optionIndex: 2 }); },
+      () => { void post(`/api/questions/session-${ID}/answer`, { kind: 'dialog', dialogId: dialog.id, optionIndex: 2 }); },
     );
     expect(clearedMsgs.some((m) => m.type === 'dialog_cleared')).toBe(true);
   }, 230_000);

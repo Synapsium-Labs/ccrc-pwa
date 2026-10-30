@@ -542,8 +542,8 @@ describe('the mirror\'s derived lists agree with the table it cannot import', ()
     // when the gate is merely wrong rather than merely copied.
     const src = readFileSync(path.join(ccrcRoot, 'shared/roster-json.mjs'), 'utf8');
     expect(src).toMatch(/^import \{ BASE_URL_OK \} from '\.\/base-url\.mjs';$/m);
-    // The loopback set has exactly two homes (`shared/base-url.ts` and its
-    // `.mjs` twin) and this file is neither of them.
+    // The loopback set has one home (`shared/base-url.mjs`, which
+    // `shared/base-url.ts` re-exports) and this file is not it.
     expect(src).not.toContain("'127.0.0.1'");
   });
 

@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
@@ -363,7 +363,7 @@ describe('the asks, read from the source (path-identity spec §3.5)', () => {
   /** `_ws_reclaim_tail`'s code: whole-line comments dropped, continuations joined (the six-calls census's own reading),
    *  so each two-line statement is one line. */
   const tailCode = (): string[] => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const tail = src.slice(src.indexOf('\n_ws_reclaim_tail() {'), src.indexOf('\ncmd_ws_reclaim() {'));
     expect(tail.length, 'the CONTROL: the tail was found').toBeGreaterThan(1000);
     return tail.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\s*\\\n\s*/g, ' ').split('\n');

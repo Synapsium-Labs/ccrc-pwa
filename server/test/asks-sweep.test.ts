@@ -27,6 +27,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
+import { questionsTestView } from '../src/coord/questions.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PushPayload } from '../src/push.js';
@@ -35,6 +36,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { askKey } from '../src/askkey.js';
 import { okAsk, okAsks } from './coordReadHelpers.js';
+import { doorInsOf } from './questionDoorIns.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -61,8 +63,10 @@ const ASK_ANSWERING_MAX_MS = 60_000;
  *  `(w as unknown as {...})` idiom (`sweepSettled`/`forceDue`), the
  *  codebase's established way to assert on state a public method
  *  deliberately does not expose. */
+// W3 Q3d (D-7028, named exception 1): the held asks are the watcher's `Questions` instance's, read per child through
+// its test-only view, as the private `heldAsks` map held them.
 const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number; answeringSince: number | null }> =>
-  (w as unknown as { heldAsks: Map<string, { until: number; askId: number; answeringSince: number | null }> }).heldAsks;
+  questionsTestView(w.questions).heldAsks();
 
 /** Per-session bookkeeping the registry + live-status files need — verbatim
  *  idiom from `asks-mint.test.ts`'s own `Seeded`/`seedSessions` (itself
@@ -285,7 +289,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
 
-    expect((f.w as unknown as { asksDisabled: boolean }).asksDisabled).toBe(true);
+    expect(questionsTestView(f.w.questions).asksDisabled()).toBe(true);
   });
 
   // RULING F9, branch 1: a principal has TAKEN the row (`answering`) — the
@@ -511,14 +515,14 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
     expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
 
-    f.w.answeredLate(KID, askId, MESA);
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
     const tagged = sent.filter((p) => p.tag === askTag(KID));
     expect(tagged).toHaveLength(2);
     expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
     expect(tagged[1]!.actions).toBeUndefined();
 
     // Once: the replacement is the lapse's, not a fresh notification per call.
-    f.w.answeredLate(KID, askId, MESA);
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(2);
   });
 
@@ -528,12 +532,12 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
     at(T0);
     const f = fixture({ push, sessions: [`project-a/${KID}`] });
     const askId = await mintHold(f, KID, MESA);
-    f.w.answeredLate(KID, askId, MESA);                 // still held: no push went out
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);                 // still held: no push went out
     expect(sent.filter((p) => p.tag === askTag(KID))).toEqual([]);
 
     at(T0 + ASK_GRACE_MS + 1);
     await f.w.sweepAsks();
-    f.w.answeredLate(KID, askId + 1, MESA);             // another row's answer
+    doorInsOf(f.w).answeredLate(KID, askId + 1, MESA);             // another row's answer
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
   });
 
@@ -547,7 +551,7 @@ describe('sweepAsks — late answer wins (D-5289)', () => {
     await f.w.sweepAsks();
     f.showMenu(KID, BARE_PROMPT);
     await f.tick();                                      // dialog_cleared
-    f.w.answeredLate(KID, askId, MESA);
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
     expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
   });
 });

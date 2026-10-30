@@ -6,6 +6,7 @@ import { INSTRUMENT } from '@ccrc/ui';
 import type { SkinSet } from '../types';
 import { FleetTable } from './FleetTable';
 import { ListColumn } from './ListColumn';
+import { PhoneFab } from './PhoneFab';
 import { Rail } from './Rail';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
@@ -19,9 +20,9 @@ export const INSTRUMENT_SET: SkinSet = {
   Rail,
   Nav: ListColumn,
   FleetList: FleetTable,
-  // Today's head and round `+` on a phone until S11's phone parts.
+  // Today's head on a phone until S11's phone parts; the round `+` is `PhoneFab`, below 900 only (T2b).
   Head: null,
-  Fab: null,
+  Fab: PhoneFab,
   SessionChrome: null,
   // No row part and no fold: each transcript item renders as today until S14's log rows (D-5475).
   TranscriptRow: null,

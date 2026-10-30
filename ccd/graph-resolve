@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# graph-resolve — the graph sweep's resolver library (graph revision 2, D-7348; spec §2.1, §5). SOURCED, never run.
+#
+# THIS TASK'S PART: the settings, validated. `_graph_knobs` (ccd/ccrc) reads the 22 graph settings through ccrc's one
+# reader and prints `KEY<US>default<US>value<US>from` per setting; `_gr_knobs` reads those lines into GK[KEY] and checks
+# each value against its key's shape (`_gr_shape`). A value that is not its shape keeps the default and appends one
+# GK_WARN line, `<KEY>: '<value>' from <source> is not <shape>; using <default>`, so a typo never removes a bound; a
+# setting that cannot be read at all keeps the default and appends the reader's own sentence. This is the split
+# `_test_knobs` and ccd/ccrc-test already use: the reader in ccd/ccrc, what a value means here. Later tasks add the
+# repository key, the store and the source ref to this file; every reader sources it, none re-derives them.
+#
+# The caller sources ccd/ccrc first (for `_graph_knobs` and `_ccrc_knob`), then this file, then calls
+# `_gr_knobs [file]`: no mode is the sweep's (the environment wins), `file` the doctor's (ccrc.env alone).
+#
+# No numeric threshold is written here: the shapes are patterns, and every bound a graph build obeys is a setting with
+# its default in `_graph_knobs` (graph-knobs.test.ts scans this file for a literal compared against a quantity).
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "graph-resolve: this is a library; source it (after ccd/ccrc), never run it" >&2
+  exit 2
+fi
+
+# ── _gr_shape <KEY> — the shape table: each graph setting's class ──────────
+# Intervals are whole seconds, 1 or more (FETCH_SECS may be 0: never fetch); workers are 1 to 99; percentages 0 to
+# 100; nice 0 to 19; a count is a whole number, 0 or more, except the three a 0 would break (a pass that may build
+# nothing, a backoff that starts before any failure, a store that keeps no build), which are 1 or more. No leading
+# zero anywhere, since bash's arithmetic reads one as octal. Prints nothing for a key it does not know.
+_gr_shape() {   # <KEY> -> the class
+  case "$1" in
+    CCRC_GRAPH_STORE) echo path ;;
+    CCRC_GRAPH_SOURCE_REF) echo ref ;;
+    CCRC_GRAPH_REPOS_EXCLUDE) echo repokeys ;;
+    CCRC_GRAPH_REFRESH_SECS|CCRC_GRAPH_FULL_REBUILD_SECS|CCRC_GRAPH_FAIL_BACKOFF_SECS|CCRC_GRAPH_BUILD_TIMEOUT) echo secs ;;
+    CCRC_GRAPH_SLOT_WAIT_SECS|CCRC_GRAPH_BUILD_GRACE_SECS|CCRC_GRAPH_HOOKSTATE_FRESH_SECS) echo secs ;;
+    CCRC_GRAPH_FETCH_SECS) echo secs0 ;;
+    CCRC_GRAPH_MAX_WORKERS) echo workers ;;
+    CCRC_GRAPH_MAX_SHRINK_PCT|CCRC_GRAPH_GATE_MAX_DIFF_PCT) echo pct ;;
+    CCRC_GRAPH_BUILD_NICE) echo nice ;;
+    CCRC_GRAPH_FULL_FAIL_MAX|CCRC_GRAPH_BUDGET|CCRC_GRAPH_KEEP_BUILDS) echo count1 ;;
+    CCRC_GRAPH_INCREMENTAL_MAX_FILES|CCRC_GRAPH_MIGRATE_BUDGET|CCRC_GRAPH_GATE_MAX_DENIALS|CCRC_GRAPH_CARD_DIFF_LIST_MAX) echo count0 ;;
+  esac
+}
+
+# ── _gr_fits <class> <value> -> 0 when the value is the class's shape ────────
+_gr_fits() {
+  local v="$2" w ws=()
+  case "$1" in
+    secs|count1) [[ "$v" =~ ^[1-9][0-9]{0,8}$ ]] ;;
+    secs0|count0) [[ "$v" =~ ^(0|[1-9][0-9]{0,8})$ ]] ;;
+    workers) [[ "$v" =~ ^[1-9][0-9]?$ ]] ;;
+    pct) [[ "$v" =~ ^([0-9]|[1-9][0-9]|100)$ ]] ;;
+    nice) [[ "$v" =~ ^(1?[0-9])$ ]] ;;
+    path) [[ "$v" == /* && "$v" != *$'\n'* ]] ;;
+    # A ref name git would take: a letter, digit or `_` first, then letters, digits, `.`, `_`, `-`, `/`; no `..`, `//`,
+    # `/.`, trailing `/` or `.`, no `.lock` end.
+    ref) [[ "$v" =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ && "$v" != *..* && "$v" != *//* && "$v" != */.* && "$v" != */ && "$v" != *. && "$v" != *.lock ]] ;;
+    # Space-separated repository keys, `<basename of the main checkout>-<sha8>` (spec §2.1); empty excludes none.
+    repokeys)
+      [[ "$v" != *[$'\t\n']* ]] || return 1
+      read -r -a ws <<< "$v"
+      for w in "${ws[@]}"; do [[ "$w" =~ ^[A-Za-z0-9._-]+-[0-9a-f]{8}$ ]] || return 1; done ;;
+    *) return 1 ;;
+  esac
+}
+
+_gr_says() {   # <class> -> the shape, in words, for the warning
+  case "$1" in
+    secs) echo "a whole number of seconds, 1 or more" ;;
+    secs0) echo "a whole number of seconds, 0 or more" ;;
+    count1) echo "a whole number, 1 or more" ;;
+    count0) echo "a whole number, 0 or more" ;;
+    workers) echo "a whole number from 1 to 99" ;;
+    pct) echo "a whole percentage from 0 to 100" ;;
+    nice) echo "a nice value from 0 to 19" ;;
+    path) echo "an absolute path" ;;
+    ref) echo "a ref name such as origin/HEAD" ;;
+    repokeys) echo "space-separated repository keys (<name>-<8 hex digits>)" ;;
+    *) echo "a graph setting with a shape in _gr_shape" ;;
+  esac
+}
+
+# ── _gr_knobs [file] — GK[KEY] for every graph setting, GK_WARN for each one that kept its default ──
+_gr_knobs() {
+  local k d v from cls src
+  # shellcheck disable=SC2034  # GK and GK_WARN are this library's output, read by its callers
+  declare -gA GK=()
+  GK_WARN=()
+  declare -F _graph_knobs >/dev/null || { GK_WARN+=("graph-resolve: _graph_knobs is not defined; source ccd/ccrc first"); return 1; }
+  while IFS=$'\037' read -r k d v from; do
+    [ -n "$k" ] || continue
+    case "$from" in
+      environment|file|empty|default) ;;
+      *) GK["$k"]="$d"; GK_WARN+=("${from:-$k cannot be read}; using ${d:-''}"); continue ;;
+    esac
+    cls="$(_gr_shape "$k")"
+    if ! _gr_fits "$cls" "$v"; then
+      case "$from" in environment) src="the environment" ;; *) src="${BOX_ENV_FILE/#"$HOME"/\~}" ;; esac
+      GK_WARN+=("$k: '$v' from $src is not $(_gr_says "$cls"); using ${d:-''}")
+      v="$d"
+    fi
+    # shellcheck disable=SC2034  # read by the callers
+    GK["$k"]="$v"
+  done < <(_graph_knobs "${1:-}")
+}
+
+# ── the store, the repository key and the source ref (GR3, D-7349; spec §2.1, §2.2) ──
+# The ONLY definitions of these three. The sweep, the exclude writer, the doctor and install/uninstall source this
+# file; the session hook never re-derives them (it reads the build's meta.json through its link). Each function prints
+# its answer AND leaves it in a variable (GR_STORE, GR_REPO_KEY, GR_SOURCE_REF and GR_SOURCE_COMMIT); one that refuses
+# returns 1 and leaves the reason, one sentence, in GR_WHY. Call it directly (`_gr_store >/dev/null || …"$GR_WHY"`)
+# when the reason is wanted: a `$(…)` runs it in a subshell, which keeps neither.
+#
+# Every git call here goes through `_gr_git <git dir> …`, with the caller's GIT_* environment removed, so a session's
+# GIT_DIR or GIT_COMMON_DIR can never answer for the repository named on the command line.
+
+_gr_git() {   # <git dir> <git args…>
+  local d="$1"; shift
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE GIT_TERMINAL_PROMPT=0 git --git-dir="$d" "$@"
+}
+
+# ── _gr_realpath <absolute path> — the realpath, for a path that may not exist yet ──
+# The longest existing prefix is resolved (`cd -P`, links followed) and the rest is appended as written; a missing
+# part that names `.` or `..` is refused, since it could not be resolved without existing. An existing file is spelled
+# under its directory's realpath (the store's callers then refuse it as not a directory).
+_gr_realpath() {
+  local p="$1" rest="" base d
+  [[ "$p" == /* ]] || return 1
+  while [ "$p" != / ] && [ ! -e "$p" ]; do
+    p="${p%/}"; base="${p##*/}"
+    case "$base" in .|..) return 1 ;; esac
+    [ -n "$base" ] && rest="/$base$rest"
+    p="${p%/*}"; [ -n "$p" ] || p=/
+  done
+  if [ ! -d "$p" ]; then rest="/${p##*/}$rest"; p="${p%/*}"; [ -n "$p" ] || p=/; fi   # an existing non-directory
+  d="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
+  [ "$d" = / ] && d=""
+  d="${d}${rest}"
+  printf '%s\n' "${d:-/}"
+}
+
+# ── _gr_store — the realpath of the graph store root (GK[CCRC_GRAPH_STORE]), or rc 1 with GR_WHY ──
+# Refused: a relative path, `/`, $HOME, and $HOME/projects or $HOME/worktrees or anything inside them (the roots the
+# sweep and ccd enumerate, spec §2.2). Compared as realpaths, so a link cannot smuggle the store inside a root.
+_gr_store() {
+  GR_WHY="" GR_STORE=""
+  local s="${GK[CCRC_GRAPH_STORE]:-}" r h root
+  if [ -z "$s" ]; then GR_WHY="the graph store is not set (CCRC_GRAPH_STORE; call _gr_knobs first)"; return 1; fi
+  if [[ "$s" != /* ]]; then GR_WHY="the graph store '$s' is not an absolute path"; return 1; fi
+  if ! r="$(_gr_realpath "$s")"; then GR_WHY="the graph store '$s' cannot be resolved to a real path"; return 1; fi
+  h="$(_gr_realpath "$HOME")" || h="$HOME"
+  if [ "$r" = / ]; then GR_WHY="the graph store '$s' is the filesystem root"; return 1; fi
+  if [ "$r" = "$h" ]; then GR_WHY="the graph store '$s' is the home directory"; return 1; fi
+  for root in "$HOME/projects" "$HOME/worktrees"; do
+    root="$(_gr_realpath "$root")" || continue
+    case "$r/" in
+      "$root"/*) GR_WHY="the graph store '$s' is inside ${root/#"$h"/\~}, which the sweep and ccd enumerate"; return 1 ;;
+    esac
+  done
+  GR_STORE="$r"
+  printf '%s\n' "$r"
+}
+
+# ── _gr_store_init — create the store root (0755) and its .ccrc-graph-store marker; print the root ──
+# ONE function (D-7360): the sweep calls it before a pass and `ccrc install`/`update` at install, so the doctor's
+# "store missing or unmarked" holds on a box before its first pass. A root that already holds the marker is kept as
+# it is; an existing root without it is refused unless it is an empty directory, so a typo can never adopt (and a
+# later collector never delete) someone else's directory.
+_gr_store_init() {
+  local r
+  _gr_store >/dev/null || return 1
+  r="$GR_STORE"; GR_STORE=""
+  if [ -e "$r/.ccrc-graph-store" ]; then GR_STORE="$r"; printf '%s\n' "$r"; return 0; fi
+  if [ -e "$r" ] || [ -L "$r" ]; then
+    if [ ! -d "$r" ]; then GR_WHY="the graph store '$r' exists and is not a directory"; return 1; fi
+    if [ -n "$(ls -A -- "$r" 2>/dev/null)" ]; then
+      GR_WHY="the graph store '$r' is not empty and has no .ccrc-graph-store marker; refusing to adopt it"; return 1
+    fi
+  fi
+  if ! mkdir -p "$r" || ! chmod 0755 "$r"; then GR_WHY="the graph store '$r' cannot be created"; return 1; fi
+  if ! printf 'ccrc graph store (graph revision 2); removed only by ccrc\n' > "$r/.ccrc-graph-store"; then
+    GR_WHY="the graph store's marker '$r/.ccrc-graph-store' cannot be written"; return 1
+  fi
+  GR_STORE="$r"
+  printf '%s\n' "$r"
+}
+
+# ── _gr_repo_key <common dir> — `<basename of the main checkout>-<first 8 hex of sha256(realpath(common dir))>` ──
+# The digest is of the realpath string, without a newline, so every worktree of one repository (they share the
+# common dir) and its main checkout get one key. The main checkout is the common dir's parent when the common dir is
+# `<checkout>/.git`, else the common dir itself (a bare repository, `.git` suffix dropped). A character outside the
+# key's shape (`_gr_fits repokeys`) becomes `_`.
+_gr_repo_key() {
+  GR_WHY="" GR_REPO_KEY=""
+  local c name sum
+  if [ -z "${1:-}" ] || ! c="$(cd -P -- "$1" 2>/dev/null && pwd -P)"; then
+    GR_WHY="the git common dir '${1:-}' does not exist"; return 1
+  fi
+  if [ "${c##*/}" = .git ]; then name="${c%/.git}"; name="${name##*/}"; else name="${c##*/}"; name="${name%.git}"; fi
+  name="$(printf '%s' "${name:-repo}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+  sum="$(printf '%s' "$c" | _plat_sha256)"   # ccd/ccrc's platform shim; the caller sourced ccd/ccrc first
+  sum="${sum%% *}"
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { GR_WHY="cannot hash the git common dir '$c'"; return 1; }
+  GR_REPO_KEY="$name-${sum:0:8}"
+  printf '%s\n' "$GR_REPO_KEY"
+}
+
+# ── _gr_source_ref <common dir> — `<full ref name> <commit>` of the source ref, or rc 1 (no-source) ──
+# In order: the CCRC_GRAPH_SOURCE_REF setting, origin/HEAD, origin/main, origin/master, then the local default
+# branch (the branch the common dir's HEAD names, the main checkout's). The first that names a commit wins, printed as
+# git's full name of it, which follows a symbolic ref (origin/HEAD prints as refs/remotes/origin/main).
+_gr_source_ref() {
+  GR_WHY="" GR_SOURCE_REF="" GR_SOURCE_COMMIT=""
+  local c="${1:-}" cand full commit local_head
+  if [ -z "$c" ] || [ ! -d "$c" ]; then GR_WHY="no-source: the git common dir '$c' does not exist"; return 1; fi
+  local_head="$(_gr_git "$c" symbolic-ref -q HEAD 2>/dev/null)" || local_head=""
+  for cand in ${GK[CCRC_GRAPH_SOURCE_REF]:+"${GK[CCRC_GRAPH_SOURCE_REF]}"} origin/HEAD origin/main origin/master \
+      ${local_head:+"$local_head"}; do
+    full="$(_gr_git "$c" rev-parse --verify -q --symbolic-full-name "$cand" 2>/dev/null)" || continue
+    [[ "$full" == refs/* ]] || continue
+    commit="$(_gr_git "$c" rev-parse --verify -q "$full^{commit}" 2>/dev/null)" || continue
+    # shellcheck disable=SC2034  # GR_SOURCE_REF and GR_SOURCE_COMMIT are this library's output
+    GR_SOURCE_REF="$full" GR_SOURCE_COMMIT="$commit"
+    printf '%s %s\n' "$full" "$commit"
+    return 0
+  done
+  # shellcheck disable=SC2034  # GR_WHY is read by the callers
+  GR_WHY="no-source: none of ${GK[CCRC_GRAPH_SOURCE_REF]:+${GK[CCRC_GRAPH_SOURCE_REF]}, }origin/HEAD, origin/main, origin/master or the local default branch names a commit in '$c'"
+  return 1
+}

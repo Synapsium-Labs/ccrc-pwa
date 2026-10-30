@@ -9,6 +9,7 @@ import {
   ACCOUNT_OP_DRAIN_MS, CCRC_DIR_NAME, NODE_FILES, NODE_ID_RE, type AccountOpOutcome,
 } from '../../shared/agent-protocol.js';
 import { isAccountStdin } from '../../shared/account-argv.js';
+import { boundedStdinSpawn } from '../../shared/spawn.mjs';
 import type { TokenSyncEnv } from './tokensync.js';
 
 // The builder is `shared/account-argv.ts`'s, the ONE both `AccountOps` arms call (D-5620 (4), D-5622); re-exported
@@ -20,7 +21,8 @@ export {
 /**
  * The `account` op's spawn port (accounts spec §13.2, D-5513; plan Task A8). The THIRD wire-triggered spawn outside
  * the exec whitelist, beside the `update` op's and `token-sync`'s, modelled on `./tokensync.ts`'s typed port and,
- * like it, its own bounded body (D-4390's reason: each differs on purpose):
+ * like it, its own bounded body (D-4390's reason: each differs on purpose); the body is
+ * `shared/spawn.mjs#boundedStdinSpawn` (D-7057, OA-C8a (a)), shared with the server's local arm:
  *  - argv is built from typed fields by `buildAccountArgv`, with spec §13.2's bounds and no free argv; the launcher
  *    is the absolute `updateLauncherPath(home)` (the unit's PATH lacks `~/.local/bin`).
  *  - stdin is a PIPE carrying the decoded `stdinB64` exactly (no newline added), then EOF: a secret or a code never
@@ -49,64 +51,15 @@ export function accountSpawnBounds(sub: AccountSub): AccountSpawnBounds {
   return { timeoutMs: ACCOUNT_SUB_TIMEOUT_MS[sub], killGraceMs: ACCOUNT_OP_KILL_GRACE_MS, maxOutputBytes: ACCOUNT_OP_OUTPUT_MAX_BYTES };
 }
 
-/** The bounded verb. Answers once: when the child has closed, or at ONE drain deadline after the SIGKILL. */
+/** The bounded verb. Answers once: when the child has closed, or at ONE drain deadline after the SIGKILL. The body is
+ *  `shared/spawn.mjs#boundedStdinSpawn` (D-7057, OA-C8a (a) / D-7060), which the server's local arm wraps too; this
+ *  wrapper injects `spawn` and the signal table and passes `ACCOUNT_OP_DRAIN_MS` from `shared/agent-protocol.ts`. */
 export function makeAccountOpSpawn(env: TokenSyncEnv): AccountOpSpawn {
   // Copied name by name, so a caller's object with more fields still hands the child exactly three.
   const childEnv: NodeJS.ProcessEnv = { HOME: env.HOME, PATH: env.PATH, LANG: env.LANG };
-  return (file, argv, stdin, bounds) => new Promise<AccountSpawnOutcome>((resolve) => {
-    let settled = false;
-    let stopped: AccountSpawnOutcome | null = null;
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let child: ReturnType<typeof spawn>;
-    const settle = (r: AccountSpawnOutcome): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(bound);
-      resolve(r);
-    };
-    const signalGroup = (s: NodeJS.Signals): void => {
-      if (child.pid === undefined) return;
-      try { process.kill(-child.pid, s); } catch (e) {
-        // ESRCH: the group is already gone. Anything else: the child alone rather than nothing.
-        if ((e as NodeJS.ErrnoException).code !== 'ESRCH') { try { child.kill(s); } catch { /* gone */ } }
-      }
-    };
-    /** SIGTERM to the whole group, SIGKILL after the grace, then one drain deadline: the answer is `why`. */
-    const stop = (why: AccountSpawnOutcome): void => {
-      if (stopped !== null) return;
-      stopped = why;
-      signalGroup('SIGTERM');
-      setTimeout(() => {
-        signalGroup('SIGKILL');
-        setTimeout(() => settle(why), ACCOUNT_OP_DRAIN_MS).unref();
-      }, bounds.killGraceMs).unref();
-    };
-    try {
-      child = spawn(file, [...argv], { detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv });
-    } catch {
-      resolve({ kind: 'not-started' });
-      return;
-    }
-    const bound = setTimeout(() => stop({ kind: 'timeout' }), bounds.timeoutMs);
-    child.on('error', () => settle({ kind: 'not-started' }));
-    child.stdout!.on('data', (b: Buffer) => {
-      if (stopped !== null) return;
-      bytes += b.length;
-      if (bytes > bounds.maxOutputBytes) { chunks.length = 0; stop({ kind: 'too-large' }); return; }
-      chunks.push(b);
-    });
-    // Drained so a chatty verb cannot block on a full pipe; never kept, never logged.
-    child.stderr!.on('data', () => {});
-    // A child that exits before reading its stdin makes the write fail with EPIPE; the exit is what answers.
-    child.stdin!.on('error', () => {});
-    child.on('close', (code, signal) => {
-      if (stopped !== null) { settle(stopped); return; }
-      // A signal that was not ours reads as the shell's `128 + signo`, as the token-sync port does.
-      const exit = code ?? (signal === null ? 1 : 128 + (osConstants.signals[signal] ?? 0));
-      settle({ kind: 'exited', code: exit, stdout: Buffer.concat(chunks).toString('utf8') });
-    });
-    child.stdin!.end(stdin ?? Buffer.alloc(0));
+  return (file, argv, stdin, bounds) => boundedStdinSpawn({ spawn, signals: osConstants.signals }, file, argv, stdin, {
+    env: childEnv, timeoutMs: bounds.timeoutMs, killGraceMs: bounds.killGraceMs, maxOutputBytes: bounds.maxOutputBytes,
+    drainMs: ACCOUNT_OP_DRAIN_MS,
   });
 }
 

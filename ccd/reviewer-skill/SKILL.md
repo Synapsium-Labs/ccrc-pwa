@@ -44,7 +44,7 @@ clause 9 (D-5292), which the pin spells escaped.
 
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.
 2. Ack before you act, keyed on the row's DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.
-3. Measure the reviewed tip ONCE, before you read a line: `reviewedTip` is the 40-hex sha of the worker branch the brief names, read from this repository's own ref (`git rev-parse refs/heads/ws/<worker-slug>`). Every finding cites that sha. If the ref moves while you read, say so in the report and stop — a report about two tips is a report about neither.
+3. Measure the reviewed tip ONCE, before you read a line: `reviewedTip` is the 40-hex sha of the worker branch the brief names, read from this repository's own ref (`git rev-parse refs/heads/ws/<worker-slug>`). Every finding cites that sha. If the ref moves while you read, say so in the report and stop — a report about two tips is a report about neither. In a project your brief names as opted in to the radar's lineage, a move whose only new commit is a clean merge of the radar base on top of the tip you read is not a move: keep reading at that tip.
 4. Read in YOUR OWN worktree only: `git checkout --detach <reviewedTip>` here, and never `checkout` the worker's branch, never commit, amend, rebase, cherry-pick, reset or push it, never open a PR on it, and never `git worktree add` or `remove` anything. This workspace's own branch (`ws/<slug>`) stays where dispatch left it; you land nothing on it.
 5. Run the SDD shape the brief names and nothing lighter: the review lenses over the wave's whole diff against the plan file the brief names (that plan's text governs over your recollection of the spec), then the whole-branch pass, then the suites the plan says to run, in this worktree, at `reviewedTip`.
 6. Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.
@@ -55,7 +55,9 @@ clause 9 (D-5292), which the pin spells escaped.
 
 **Clause 3 is the one the server checks.** When the coordinator closes your
 run it re-measures the worker branch's tip NOW and compares it to the
-`reviewedTip` you reported. If the worker pushed after its wave-done, the
+`reviewedTip` you reported. If the worker pushed after its wave-done (except,
+in a project your brief names as opted in to the radar's lineage, one clean
+merge of the radar base, which the close carries across), the
 close is refused `stale-review` and your report is evidence about a commit
 that is no longer the tip — the coordinator opens a fresh review run against
 the new tip. If the report path you named cannot be opened, the close is
@@ -160,8 +162,22 @@ coordinator cites it by path; you do nothing different.
   answers `$tip`): finish nothing, write what you have with a first line
   `TIP MOVED: read <tip>, now <new>`, mail it — the close will refuse
   `stale-review` and the coordinator will open a fresh run. Never re-measure
-  and continue.
+  and continue — except, in a project your brief names as opted in to the
+  radar's lineage, a move whose only new commit is a clean merge of the radar
+  base on top of the tip you read (clause 3), which is no move: keep reading at
+  that tip, and report it as read. It is that merge only when all three steps
+  hold: `git rev-list --parents -n 1 <new>` shows two parents, the first of
+  which is the tip you read; `git merge-base --is-ancestor <second> origin/<base>`
+  succeeds; and `git merge-tree --write-tree` of the two parents equals
+  `<new>^{tree}`. If any step fails, it is a move.
 - **The plan the brief names cannot be resolved**: report and stop. Never
   substitute `HEAD` or a checkout for an immutable coordinate.
 - **You cannot reach the server**: stop, say so in your pane. Nothing is done
   by hand.
+- **A `review-done-unmeasured` mail arrives** (a server mail whose body opens
+  `lineage-unmeasured: <detail>`). The server could not read the radar's lineage
+  for your `reviewedTip`, so it neither accepted nor refused your report. Do not
+  re-measure and do not touch the report: re-send the same `review-done` mail,
+  unchanged, after the radar's next tick (usually within 5 minutes), at most
+  twice, then report it to your coordinator. Sending the same mail again is not
+  rewriting the report that clause 7 freezes.
