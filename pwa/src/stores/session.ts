@@ -778,7 +778,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
     /**
      * Tell the server whether this session is on the operator's screen, so it
-     * can suppress notifications for it (`server/src/presence.ts`, read by the
+     * can suppress notifications for it (`server/src/viewer.ts`, read by the
      * watcher's `pushOne`). A notification for the pane you are looking at
      * teaches you to dismiss notifications.
      *
