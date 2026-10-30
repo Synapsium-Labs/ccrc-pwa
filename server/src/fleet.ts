@@ -6,7 +6,7 @@ import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
 import { liveSessionStatus, liveStatusCoversDelegation } from './liveVerdicts.js';
-import { readLiveStateMeasured, type LiveStateRead } from './livestate.js';
+import type { LiveStateRead } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionLanding, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
