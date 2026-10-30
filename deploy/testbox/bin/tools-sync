@@ -1,0 +1,422 @@
+#!/usr/bin/env bash
+# The test box's tool sync, `ccrc-testbox-tools.service`'s fixed root script: `tools-sync <spec file>` (D-7408, D-7422,
+# D-7423, D-7424, D-7425, D-7426, D-7457, D-7553; plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB6; spec §2.10).
+#
+# It runs from the INSTALLED release, `<tools>/release/installed/deploy/testbox/bin/tools-sync`, and takes `<tools>`
+# from that path alone. It reads only the spec the service wrote (`ccrc-testbox-tools-spec`, NUL-separated records),
+# checks each value against its format, and refuses a spec whose tools directory is not the one it runs under. Then,
+# in order, stopping at the first failure with `tool sync failed (<tool>: <detail>)` on stderr and in the report:
+#   1. the release, when its tag is not the installed one: fetched and verified EXACTLY as the fleet host's update
+#      lane does, by sourcing the installed tree's ccd/ccrc and calling `_upd_resolve <tag>` and `_upd_fetch` (never
+#      --allow-unsigned) into a staging directory under `<tools>`; so the verifier is the installed tree's
+#      deploy/verify-provenance.mjs, run under `<tools>/current/node`, and its exit 1 is a refusal while any other
+#      non-zero exit is could-not-run, as ccd/ccrc reads them. The release base comes from the box's one config file
+#      through ccd/testbox-knobs' `_tb_release_base` (D-7457), assigned to this shell's CCRC_RELEASE_BASE_URL before
+#      `_upd_resolve`, so no inherited value and no home ccrc.env is read; a refused file or an unmeasurable value
+#      fails the sync and nothing is fetched;
+#   2. node, `_tbt_node_install` (the one function TB7's bootstrap calls too, D-7424): the linux-x64 tarball and
+#      SHASUMS256.txt over HTTPS from the official host, the sha256 checked (the .sig is not, D-7425), unpacked to
+#      `<tools>/node/<version>`, then that install's root-owned `etc/npmrc` (spec §2.2's three lines);
+#   3. npm at the measured version into that prefix, through the registry proxy, checked against `dist.integrity`;
+#   4. Chrome for Testing linux64 at the measured version over HTTPS, unpacked to `<tools>/chrome/<version>`, its
+#      system libraries (the build's own `deb.deps`) from the OS mirror; no hash is compared (D-7422), the download's
+#      sha256 is recorded in the report;
+#   5. python3, git and tmux at the measured versions, strace and jq at the distribution's, through the package
+#      manager and its own signature check (never an option that skips it), from the spec's OS mirror (D-7423);
+#   6. the new set staged whole (a directory of links under `<tools>/sets/`) and the verified release copied to
+#      `<tools>/release/<tag>` (root's, no group or other write) with its server/ production dependencies installed
+#      (`npm ci --omit=dev --ignore-scripts`, through the proxy); then `<tools>/current` switched to the new set in one
+#      rename, then `<tools>/release/installed` switched to the new tree in one rename (D-7424), then the takeover file
+#      written for the service (D-7426). Both trees are complete before either name moves, so a failure at any step
+#      leaves `current` and the installed release as they were.
+# A spec whose release is the installed one and whose versions are the current set's changes nothing. A run resolves
+# `current` once, so the previous set and its versions stay until no run uses them: the spec names the sets in use
+# (`K`), and the set `current` named before the switch is kept besides; other sets, versions and staging directories
+# are removed after a sync succeeds. The release the takeover replaced is removed once the takeover has ended (the
+# next sync, or `tools-sync --takeover-ended`, which TB7's service unit runs before the new service starts).
+# It reads no config file but the box's one (for the release base), assigns no BOX_ENV_FILE, and names no test box
+# setting: every other value comes from the spec.
+set -uo pipefail
+
+TBT_PROG=ccrc-testbox-tools
+TBT_SPEC_HEADER=ccrc-testbox-tools-spec
+TBT_TOOLS_ORDER=(node npm chrome python3 git tmux)
+TBT_NODE_HOST=https://nodejs.org/dist
+TBT_CHROME_HOST=https://storage.googleapis.com/chrome-for-testing-public
+TBT_WHY=""
+
+# ── where it runs ────────────────────────────────────────────────────────
+# `<tools>/release/installed/deploy/testbox/bin/tools-sync`, read lexically: the installed link is what names the tree.
+_tbt_paths() {   # -> TBT_TOOLS, TBT_TREE; else 1 and TBT_WHY
+  local here="${BASH_SOURCE[0]}" t
+  [[ "$here" == /* ]] || { TBT_WHY="not run by an absolute path: $here"; return 1; }
+  here="${here%/*}"
+  t="${here%/deploy/testbox/bin}"
+  [ "$t" != "$here" ] || { TBT_WHY="not run from a release tree's deploy/testbox/bin: $here"; return 1; }
+  TBT_TREE="$t"
+  t="${t%/release/installed}"
+  [ "$t" != "$TBT_TREE" ] && [ -n "$t" ] || { TBT_WHY="not run from <tools>/release/installed: $TBT_TREE"; return 1; }
+  TBT_TOOLS="$t"
+}
+
+# ── small helpers ────────────────────────────────────────────────────────
+_tbt_sha256() {   # <file> -> its sha256, hex
+  local l
+  if command -v sha256sum >/dev/null 2>&1; then l="$(sha256sum -- "$1")" || return 1; else l="$(shasum -a 256 -- "$1")" || return 1; fi
+  printf '%s\n' "${l%% *}"
+}
+_tbt_clean() {   # <text> -> one printable line, at most 300 characters
+  local s="${1//[$'\t\r\n']/ }"
+  s="${s//—/-}"; s="${s//…/...}"; s="${s//→/->}"
+  s="$(LC_ALL=C; printf '%s' "${s//[^[:print:]]/?}")"
+  printf '%s' "${s:0:300}"
+}
+_tbt_curl() {   # <url> <out> [--https] -> curl's rc; bounded, fails on HTTP errors, never globs
+  local url="$1" out="$2" proto=()
+  [ "${3:-}" = --https ] && proto=(--proto "=https" --proto-redir "=https" --tlsv1.2)
+  curl -g -fsSL ${proto[@]+"${proto[@]}"} --connect-timeout 20 --speed-limit 1024 --speed-time 60 -o "$out" -- "$url"
+}
+_tbt_swap() {   # <new link> <name> -> the name replaced by the new link in one rename(2)
+  "$TBT_SWAP_NODE" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' "$1" "$2"
+}
+
+# ── the report the service reads: <tools>/sync-report, root's, written whole ─
+_tbt_report() {   # <KEY> <value> ... -> the report replaced by these lines
+  local tmp="$TBT_TOOLS/.sync-report.$$" k v
+  { while [ "$#" -ge 2 ]; do k="$1"; v="$(_tbt_clean "$2")"; shift 2; printf '%s\t%s\n' "$k" "$v"; done; } > "$tmp" 2>/dev/null \
+    && chmod 0644 "$tmp" 2>/dev/null && mv -f -- "$tmp" "$TBT_TOOLS/sync-report" 2>/dev/null
+  rm -f -- "$tmp" 2>/dev/null
+  return 0
+}
+_tbt_step() { _tbt_report result syncing step "$1"; }
+_tbt_fail() {   # <tool> <detail> -> the sync fails: the report, one stderr line, exit 1
+  local d; d="$(_tbt_clean "$2")"
+  [ -z "${TBT_TOOLS:-}" ] || _tbt_report result failed tool "$1" detail "$d"
+  printf '%s: tool sync failed (%s: %s)\n' "$TBT_PROG" "$1" "$d" >&2
+  exit 1
+}
+
+# ── the spec ─────────────────────────────────────────────────────────────
+TBT_RE_TAG='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+TBT_RE_VERSION='^[0-9]{1,9}(\.[0-9]{1,9}){0,3}[a-z]?$'
+TBT_RE_HOSTPORT='^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):([1-9][0-9]{0,4})$'
+TBT_RE_MIRROR='^https?://[^[:space:][:cntrl:]]+$'
+TBT_RE_SET='^s\.[A-Za-z0-9]{6,32}$'
+_tbt_read_spec() {   # <spec file> -> TBT_REL, TBT_V[tool], TBT_PROXY, TBT_MIRROR, TBT_KEEP; else 1 and TBT_WHY
+  local spec="$1" rec header="" dir="" t
+  declare -gA TBT_V=()
+  TBT_REL=""; TBT_PROXY=""; TBT_MIRROR=""; TBT_KEEP=()
+  [ -f "$spec" ] && [ ! -L "$spec" ] || { TBT_WHY="no spec file: $spec"; return 1; }
+  while IFS= read -r -d '' rec; do
+    if [ -z "$header" ]; then
+      [ "$rec" = "$TBT_SPEC_HEADER" ] || { TBT_WHY="not a tool sync spec: $spec"; return 1; }
+      header=1; continue
+    fi
+    case $rec in
+      T*) dir="${rec:1}" ;;
+      R*) TBT_REL="${rec:1}" ;;
+      V*=*) t="${rec:1}"; TBT_V["${t%%=*}"]="${t#*=}" ;;
+      P*) TBT_PROXY="${rec:1}" ;;
+      O*) TBT_MIRROR="${rec:1}" ;;
+      K*) TBT_KEEP+=("${rec:1}") ;;
+      *) ;;
+    esac
+  done < "$spec"
+  [ -n "$header" ] || { TBT_WHY="an empty spec: $spec"; return 1; }
+  [ "$dir" = "$TBT_TOOLS" ] || { TBT_WHY="the spec names the tools directory $(_tbt_clean "$dir"), not the one this runs under ($TBT_TOOLS)"; return 1; }
+  [[ "$TBT_REL" =~ $TBT_RE_TAG ]] || { TBT_WHY="not a release tag: $(_tbt_clean "$TBT_REL")"; return 1; }
+  for t in "${TBT_TOOLS_ORDER[@]}"; do
+    [[ "${TBT_V[$t]:-}" =~ $TBT_RE_VERSION ]] || { TBT_WHY="not a $t version: $(_tbt_clean "${TBT_V[$t]:-}")"; return 1; }
+  done
+  [ "${#TBT_V[@]}" -eq "${#TBT_TOOLS_ORDER[@]}" ] || { TBT_WHY="the spec names a tool beyond the six"; return 1; }
+  [[ "$TBT_PROXY" =~ $TBT_RE_HOSTPORT ]] && (( BASH_REMATCH[2] <= 65535 )) || { TBT_WHY="not a registry proxy host:port: $(_tbt_clean "$TBT_PROXY")"; return 1; }
+  [ -z "$TBT_MIRROR" ] || [[ "$TBT_MIRROR" =~ $TBT_RE_MIRROR ]] || { TBT_WHY="not an OS mirror URL: $(_tbt_clean "$TBT_MIRROR")"; return 1; }
+  for t in ${TBT_KEEP[@]+"${TBT_KEEP[@]}"}; do [[ "$t" =~ $TBT_RE_SET ]] || { TBT_WHY="not a tool set: $(_tbt_clean "$t")"; return 1; }; done
+}
+
+# ── what the box has ─────────────────────────────────────────────────────
+_tbt_installed_tag() { local l; l="$(readlink -- "$TBT_TOOLS/release/installed" 2>/dev/null)" || return 1; printf '%s\n' "${l##*/}"; }
+_tbt_current_set() { local l; l="$(readlink -- "$TBT_TOOLS/current" 2>/dev/null)" || return 1; printf '%s\n' "${l##*/}"; }
+_tbt_current_versions_are() {   # -> 0 when <tools>/current/versions names exactly the spec's six versions
+  local f="$TBT_TOOLS/current/versions" t v n=0
+  [ -f "$f" ] || return 1
+  while IFS=$'\t' read -r t v; do
+    [ -n "$t" ] || continue
+    [ "${TBT_V[$t]:-}" = "$v" ] || return 1
+    n=$((n + 1))
+  done < "$f"
+  [ "$n" -eq "${#TBT_TOOLS_ORDER[@]}" ]
+}
+
+# ── 1. the release, as the fleet host's update lane verifies it ──────────
+# In a subshell: ccd/ccrc's `_ccrc_die` exits, and its EXIT trap removes `_upd_resolve`'s staging directory, so the
+# verified tree is moved out to `<stage>/release` before the subshell ends. stderr carries the die's sentence.
+_tbt_release_fetch() (   # <tag> <stage dir> -> <stage>/release; rc 0, or the die on stderr
+  tag="$1" stage="$2"
+  # shellcheck source=/dev/null
+  . "$TBT_TREE/ccd/ccrc" || { echo "ccrc: the installed tree's ccd/ccrc cannot be loaded" >&2; exit 1; }
+  # shellcheck source=/dev/null
+  . "$TBT_TREE/ccd/testbox-knobs" || { echo "ccrc: the installed tree's ccd/testbox-knobs cannot be loaded" >&2; exit 1; }
+  # D-7457: the box file's value, in this shell, before `_upd_resolve` (which reads it again itself, environment first).
+  _tb_release_base || { echo "ccrc: $TB_BOX_WHY — nothing was fetched" >&2; exit 1; }
+  # The update lane's own state, pointed inside the staging directory: its `mktemp -d` honours TMPDIR, its phase file
+  # is the update report it would write on a fleet host, and every sentence it prints is redacted.
+  TMPDIR="$stage"
+  # shellcheck disable=SC2034  # read by the sourced ccd/ccrc
+  BOX_UPDATE_JSON="$stage/update.json"
+  # shellcheck disable=SC2034
+  UPD_REDACT_ACTIVE=1
+  # D-7424: the verifier's `node` is the box's current one.
+  PATH="$TBT_TOOLS/current:$PATH"
+  _upd_resolve "$tag"
+  _upd_fetch 0 >/dev/null
+  mv -- "$UPD_TREE" "$stage/release" || _ccrc_die "cannot move the verified tree out of $UPD_STAGE"
+)
+_tbt_release() {   # <tag> <stage dir> -> <stage>/release, verified; else the sync fails (release: <the die>)
+  local err="$2/release.stderr" last="" l
+  if _tbt_release_fetch "$1" "$2" 2>"$err"; then return 0; fi
+  while IFS= read -r l; do case "$l" in ccrc:\ *) last="${l#ccrc: }" ;; esac; done < "$err"
+  [ -n "$last" ] || last="$(tail -n 1 -- "$err" 2>/dev/null)"
+  _tbt_fail release "${last:-the release could not be fetched or verified}"
+}
+
+# ── 2. node (D-7424, D-7425): the one function TB7's bootstrap calls too ─
+# `_tbt_node_install <tools> <version> <proxy host:port>` -> `<tools>/node/<version>` with its root-owned etc/npmrc;
+# rc 1 and TBT_WHY on a failure, with nothing left under `<tools>/node`. An install already there is kept, its npmrc
+# rewritten. The tarball's sha256 must be the one SHASUMS256.txt names for it.
+_tbt_node_install() {
+  local tools="$1" v="$2" proxy="$3" dst="$1/node/$2" st name want got
+  name="node-v$v-linux-x64"
+  if [ ! -x "$dst/bin/node" ]; then
+    mkdir -p -- "$tools/node" || { TBT_WHY="cannot create $tools/node"; return 1; }
+    st="$(mktemp -d "$tools/node/.stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory under $tools/node"; return 1; }
+    if ! _tbt_curl "$TBT_NODE_HOST/v$v/SHASUMS256.txt" "$st/SHASUMS256.txt" --https; then
+      rm -rf -- "$st"; TBT_WHY="download failed: $TBT_NODE_HOST/v$v/SHASUMS256.txt"; return 1
+    fi
+    want="$(awk -v f="$name.tar.xz" '$2 == f { print $1; exit }' "$st/SHASUMS256.txt")"
+    [[ "$want" =~ ^[0-9a-f]{64}$ ]] || { rm -rf -- "$st"; TBT_WHY="SHASUMS256.txt names no $name.tar.xz"; return 1; }
+    if ! _tbt_curl "$TBT_NODE_HOST/v$v/$name.tar.xz" "$st/$name.tar.xz" --https; then
+      rm -rf -- "$st"; TBT_WHY="download failed: $TBT_NODE_HOST/v$v/$name.tar.xz"; return 1
+    fi
+    got="$(_tbt_sha256 "$st/$name.tar.xz")" || got=""
+    [ "$got" = "$want" ] || { rm -rf -- "$st"; TBT_WHY="checksum mismatch for $name.tar.xz (SHASUMS256.txt says $want, the download is ${got:-unreadable})"; return 1; }
+    mkdir -- "$st/x" && tar -xJf "$st/$name.tar.xz" -C "$st/x" 2>/dev/null \
+      || { rm -rf -- "$st"; TBT_WHY="unpacking $name.tar.xz failed"; return 1; }
+    [ -x "$st/x/$name/bin/node" ] && [ ! -L "$st/x/$name" ] || { rm -rf -- "$st"; TBT_WHY="$name.tar.xz holds no $name/bin/node"; return 1; }
+    chmod -R go-w "$st/x/$name" && mv -- "$st/x/$name" "$dst" || { rm -rf -- "$st"; TBT_WHY="cannot place $dst"; return 1; }
+    rm -rf -- "$st"
+  fi
+  # Spec §2.2: the settings every install on the box needs, in the global npmrc npm reads with no environment variable.
+  mkdir -p -- "$dst/etc" && printf 'registry=http://%s/\ncache=${HOME}/.npm\nnodedir=%s\n' "$proxy" "$dst" > "$dst/etc/npmrc.tmp" \
+    && chmod 0644 "$dst/etc/npmrc.tmp" && mv -f -- "$dst/etc/npmrc.tmp" "$dst/etc/npmrc" \
+    || { TBT_WHY="cannot write $dst/etc/npmrc"; return 1; }
+}
+
+# ── 3. npm, through the proxy, against dist.integrity ────────────────────
+_tbt_npm_install() {   # <node prefix> <version> <proxy> -> npm at that version in the prefix; else 1 and TBT_WHY
+  local pre="$1" v="$2" proxy="$3" node="$1/bin/node" st have line integrity tarball
+  have="$("$node" -e 'try { process.stdout.write(String(require(process.argv[1]).version)) } catch { }' "$pre/lib/node_modules/npm/package.json" 2>/dev/null)"
+  [ "$have" = "$v" ] && return 0
+  st="$(mktemp -d "$pre/.npm-stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory in $pre"; return 1; }
+  _tbt_curl "http://$proxy/npm" "$st/packument.json" || { rm -rf -- "$st"; TBT_WHY="the registry proxy gave no npm packument"; return 1; }
+  line="$("$node" -e '
+    const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const d = ((p.versions || {})[process.argv[2]] || {}).dist || {};
+    if (typeof d.integrity === "string" && typeof d.tarball === "string") process.stdout.write(d.integrity + "\t" + d.tarball);
+  ' "$st/packument.json" "$v" 2>/dev/null)"
+  integrity="${line%%$'\t'*}"; tarball="${line#*$'\t'}"
+  [ -n "$line" ] && [[ "$integrity" == sha512-* ]] || { rm -rf -- "$st"; TBT_WHY="the registry has no npm $v with a sha512 dist.integrity"; return 1; }
+  [ "$tarball" = "http://$proxy/npm/-/npm-$v.tgz" ] || { rm -rf -- "$st"; TBT_WHY="npm $v's tarball is not the proxy's: $(_tbt_clean "$tarball")"; return 1; }
+  _tbt_curl "$tarball" "$st/npm.tgz" || { rm -rf -- "$st"; TBT_WHY="download failed: $tarball"; return 1; }
+  "$node" -e '
+    const c = require("crypto"), want = process.argv[2];
+    const got = "sha512-" + c.createHash("sha512").update(require("fs").readFileSync(process.argv[1])).digest("base64");
+    process.exit(want.split(/\s+/).includes(got) ? 0 : 1);
+  ' "$st/npm.tgz" "$integrity" || { rm -rf -- "$st"; TBT_WHY="npm-$v.tgz does not match its dist.integrity"; return 1; }
+  mkdir -- "$st/x" && tar -xzf "$st/npm.tgz" -C "$st/x" 2>/dev/null && [ -f "$st/x/package/bin/npm-cli.js" ] \
+    || { rm -rf -- "$st"; TBT_WHY="npm-$v.tgz holds no package/bin/npm-cli.js"; return 1; }
+  chmod -R go-w "$st/x/package"
+  mkdir -p -- "$pre/lib/node_modules" "$pre/bin"
+  if [ -e "$pre/lib/node_modules/npm" ]; then mv -- "$pre/lib/node_modules/npm" "$st/old"; fi
+  mv -- "$st/x/package" "$pre/lib/node_modules/npm" || { rm -rf -- "$st"; TBT_WHY="cannot place npm $v"; return 1; }
+  ln -sfn ../lib/node_modules/npm/bin/npm-cli.js "$pre/bin/npm" && ln -sfn ../lib/node_modules/npm/bin/npx-cli.js "$pre/bin/npx"
+  rm -rf -- "$st"
+}
+
+# ── 4 and 5. Chrome for Testing, and the OS packages ─────────────────────
+_tbt_apt() {   # <apt-get argument>... -> apt-get from the spec's mirror (the distribution's own when it names none)
+  local o=()
+  if [ -n "$TBT_MIRROR" ]; then
+    o=(-o "Dir::Etc::SourceList=$TBT_TOOLS/apt/sources.list" -o "Dir::Etc::SourceParts=$TBT_TOOLS/apt/sources.list.d")
+  fi
+  DEBIAN_FRONTEND=noninteractive apt-get -q ${o[@]+"${o[@]}"} "$@"
+}
+_tbt_apt_cache() {
+  local o=()
+  if [ -n "$TBT_MIRROR" ]; then
+    o=(-o "Dir::Etc::SourceList=$TBT_TOOLS/apt/sources.list" -o "Dir::Etc::SourceParts=$TBT_TOOLS/apt/sources.list.d")
+  fi
+  apt-cache ${o[@]+"${o[@]}"} "$@"
+}
+_tbt_apt_sources() {   # -> the mirror's sources list, for the distribution release this box runs (D-7423)
+  local code="" l
+  [ -n "$TBT_MIRROR" ] || return 0
+  if [ -r /etc/os-release ]; then while IFS= read -r l; do case "$l" in VERSION_CODENAME=*) code="${l#VERSION_CODENAME=}"; code="${code//\"/}" ;; esac; done < /etc/os-release; fi
+  [[ "$code" =~ ^[a-z][a-z0-9-]*$ ]] || { TBT_WHY="the distribution's release name cannot be read"; return 1; }
+  mkdir -p -- "$TBT_TOOLS/apt/sources.list.d" \
+    && printf 'deb %s %s main universe\ndeb %s %s-updates main universe\ndeb %s %s-security main universe\n' \
+         "$TBT_MIRROR" "$code" "$TBT_MIRROR" "$code" "$TBT_MIRROR" "$code" > "$TBT_TOOLS/apt/sources.list" \
+    || { TBT_WHY="cannot write $TBT_TOOLS/apt/sources.list"; return 1; }
+}
+_tbt_apt_version() {   # <package> <measured version> -> the mirror's full version whose upstream part is the measured one
+  local pkg="$1" want="$2" l v up
+  while IFS= read -r l; do
+    v="$(awk -F'|' '{ gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }' <<<"$l")"
+    up="${v#*:}"; up="${up%%-*}"; up="${up%%+*}"; up="${up%%~*}"
+    [ "$up" = "$want" ] && { printf '%s\n' "$v"; return 0; }
+  done < <(_tbt_apt_cache madison "$pkg" 2>/dev/null)
+  return 1
+}
+_tbt_chrome_install() {   # <tools> <version> -> <tools>/chrome/<version>; TBT_CHROME_SHA; else 1 and TBT_WHY
+  local tools="$1" v="$2" dst="$1/chrome/$2" st url d deps=()
+  TBT_CHROME_SHA=""
+  if [ ! -x "$dst/chrome-linux64/chrome" ]; then
+    url="$TBT_CHROME_HOST/$v/linux64/chrome-linux64.zip"
+    mkdir -p -- "$tools/chrome" && st="$(mktemp -d "$tools/chrome/.stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory under $tools/chrome"; return 1; }
+    _tbt_curl "$url" "$st/chrome-linux64.zip" --https || { rm -rf -- "$st"; TBT_WHY="download failed: $url"; return 1; }
+    # D-7422: no published checksum to compare; the download's own digest goes in the report.
+    TBT_CHROME_SHA="$(_tbt_sha256 "$st/chrome-linux64.zip")" || TBT_CHROME_SHA=""
+    mkdir -- "$st/x" && unzip -q "$st/chrome-linux64.zip" -d "$st/x" >/dev/null 2>&1 && [ -x "$st/x/chrome-linux64/chrome" ] \
+      || { rm -rf -- "$st"; TBT_WHY="chrome-linux64.zip holds no chrome-linux64/chrome"; return 1; }
+    chmod -R go-w "$st/x" && mv -- "$st/x" "$dst" || { rm -rf -- "$st"; TBT_WHY="cannot place $dst"; return 1; }
+    rm -rf -- "$st"
+  fi
+  if [ -f "$dst/chrome-linux64/deb.deps" ]; then
+    while IFS= read -r d; do
+      d="${d%%[[:space:]]*}"
+      [ -n "$d" ] || continue
+      [[ "$d" =~ ^[a-z0-9][a-z0-9.+-]*$ ]] || { TBT_WHY="deb.deps names an odd package: $(_tbt_clean "$d")"; return 1; }
+      deps+=("$d")
+    done < "$dst/chrome-linux64/deb.deps"
+  fi
+  [ "${#deps[@]}" -eq 0 ] || _tbt_apt install -y --no-install-recommends "${deps[@]}" >/dev/null \
+    || { TBT_WHY="the OS mirror could not install Chrome's system libraries"; return 1; }
+}
+
+# ── 6. the switch ────────────────────────────────────────────────────────
+_tbt_make_set() {   # -> TBT_NEW_SET under <tools>/sets, a directory of links naming one version of each, and `versions`
+  local d nv="${TBT_V[node]}" cv="${TBT_V[chrome]}" t
+  mkdir -p -- "$TBT_TOOLS/sets" && d="$(mktemp -d "$TBT_TOOLS/sets/s.XXXXXXXX")" || { TBT_WHY="cannot create a tool set"; return 1; }
+  chmod 0755 "$d"
+  ln -s "../../node/$nv/bin/node" "$d/node" && ln -s "../../node/$nv/bin/npm" "$d/npm" && ln -s "../../node/$nv/bin/npx" "$d/npx" \
+    && ln -s "../../chrome/$cv/chrome-linux64/chrome" "$d/chrome" || { TBT_WHY="cannot link the tool set $d"; return 1; }
+  { for t in "${TBT_TOOLS_ORDER[@]}"; do printf '%s\t%s\n' "$t" "${TBT_V[$t]}"; done; } > "$d/versions" && chmod 0644 "$d/versions" \
+    || { TBT_WHY="cannot write $d/versions"; return 1; }
+  TBT_NEW_SET="${d##*/}"
+}
+_tbt_place_release() {   # <stage>/release -> <tools>/release/<tag>, root's, with server/'s production dependencies
+  local src="$1/release" dst="$TBT_TOOLS/release/$TBT_REL" st pre="$TBT_TOOLS/node/${TBT_V[node]}"
+  st="$(mktemp -d "$TBT_TOOLS/release/.stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory under $TBT_TOOLS/release"; return 1; }
+  mv -- "$src" "$st/tree" && chmod -R go-w "$st/tree" || { rm -rf -- "$st"; TBT_WHY="cannot stage the verified tree"; return 1; }
+  if [ -f "$st/tree/server/package.json" ]; then
+    ( cd "$st/tree/server" && PATH="$pre/bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
+      || { rm -rf -- "$st"; TBT_WHY="npm ci --omit=dev --ignore-scripts failed in the release's server/"; return 1; }
+    chmod -R go-w "$st/tree/server"
+  fi
+  if [ -e "$dst" ] || [ -L "$dst" ]; then rm -rf -- "$dst"; fi
+  mv -- "$st/tree" "$dst" || { rm -rf -- "$st"; TBT_WHY="cannot place $dst"; return 1; }
+  rm -rf -- "$st"
+}
+_tbt_link() {   # <target> <name> -> <name> a link to <target>, replaced in one rename
+  local tmp="$2.new.$$"
+  rm -f -- "$tmp"
+  ln -s "$1" "$tmp" && _tbt_swap "$tmp" "$2" || { rm -f -- "$tmp"; return 1; }
+}
+
+# ── the sweeps ───────────────────────────────────────────────────────────
+_tbt_takeover_ended() {   # the release a takeover replaced, removed once that takeover is over
+  local f="$TBT_TOOLS/takeover" k v inst
+  [ -f "$f" ] || return 0
+  inst="$(_tbt_installed_tag)" || inst=""
+  while IFS=$'\t' read -r k v; do
+    [ "$k" = previous ] && [[ "$v" =~ $TBT_RE_TAG ]] && [ "$v" != "$inst" ] && rm -rf -- "${TBT_TOOLS:?}/release/$v"
+  done < "$f"
+  rm -f -- "$f"
+}
+_tbt_prune() {   # <previous set> -> every set, node and Chrome no kept set names, and leftover staging, removed
+  local prev="$1" s d keep=" " used=" " l
+  keep+="$TBT_NEW_SET $prev ${TBT_KEEP[*]+"${TBT_KEEP[*]}"} "
+  for d in "$TBT_TOOLS/sets"/s.*; do
+    [ -d "$d" ] || continue
+    s="${d##*/}"
+    case "$keep" in *" $s "*) ;; *) rm -rf -- "$d"; continue ;; esac
+    for l in node chrome; do [ -L "$d/$l" ] && used+="$(readlink -- "$d/$l") "; done
+  done
+  for d in "$TBT_TOOLS/node"/* "$TBT_TOOLS/chrome"/*; do
+    [ -d "$d" ] || continue
+    case "$used" in *"/${d#"$TBT_TOOLS/"}/"*) ;; *) rm -rf -- "$d" ;; esac
+  done
+  rm -rf -- "$TBT_TOOLS/node"/.stage.* "$TBT_TOOLS/chrome"/.stage.* "$TBT_TOOLS/release"/.stage.* "$TBT_TOOLS"/.stage.* 2>/dev/null
+  return 0
+}
+
+# ── the sync ─────────────────────────────────────────────────────────────
+_tbt_main() {
+  local spec inst prev takeover=0 node_changed=0 t
+  _tbt_paths || { printf '%s: %s\n' "$TBT_PROG" "$TBT_WHY" >&2; exit 2; }
+  if [ "${1:-}" = --takeover-ended ] && [ "$#" -eq 1 ]; then _tbt_takeover_ended; exit 0; fi
+  [ "$#" -eq 1 ] || { printf 'usage: tools-sync <spec file> | tools-sync --takeover-ended\n' >&2; exit 2; }
+  spec="$1"
+  _tbt_read_spec "$spec" || _tbt_fail spec "$TBT_WHY"
+  # The node that renames: the box's current one until this sync has placed its own.
+  TBT_SWAP_NODE="$TBT_TOOLS/current/node"
+  # A sync is started only by a running service, so a takeover file left here is one that has ended.
+  _tbt_takeover_ended
+  inst="$(_tbt_installed_tag)" || inst=""
+  prev="$(_tbt_current_set)" || prev=""
+  if [ "$inst" = "$TBT_REL" ] && _tbt_current_versions_are; then
+    _tbt_report result noop release "$inst" set "$prev"
+    exit 0
+  fi
+  TBT_STAGE="$(mktemp -d "$TBT_TOOLS/.stage.XXXXXX")" || _tbt_fail release "cannot create a staging directory under $TBT_TOOLS"
+  trap 'rm -rf -- "$TBT_STAGE"' EXIT
+  if [ "$inst" != "$TBT_REL" ]; then
+    _tbt_step release
+    _tbt_release "$TBT_REL" "$TBT_STAGE"
+  fi
+  _tbt_step node
+  _tbt_node_install "$TBT_TOOLS" "${TBT_V[node]}" "$TBT_PROXY" || _tbt_fail node "$TBT_WHY"
+  _tbt_step npm
+  _tbt_npm_install "$TBT_TOOLS/node/${TBT_V[node]}" "${TBT_V[npm]}" "$TBT_PROXY" || _tbt_fail npm "$TBT_WHY"
+  TBT_SWAP_NODE="$TBT_TOOLS/node/${TBT_V[node]}/bin/node"
+  _tbt_step chrome
+  _tbt_apt_sources || _tbt_fail chrome "$TBT_WHY"
+  _tbt_apt update >/dev/null 2>&1 || _tbt_fail chrome "the OS mirror's package lists could not be read"
+  _tbt_chrome_install "$TBT_TOOLS" "${TBT_V[chrome]}" || _tbt_fail chrome "$TBT_WHY"
+  local pins=()
+  for t in python3 git tmux; do
+    _tbt_step "$t"
+    local full
+    full="$(_tbt_apt_version "$t" "${TBT_V[$t]}")" || _tbt_fail "$t" "the OS mirror has no $t ${TBT_V[$t]}"
+    pins+=("$t=$full")
+  done
+  _tbt_apt install -y --no-install-recommends --allow-downgrades "${pins[@]}" strace jq >/dev/null \
+    || _tbt_fail python3 "the package manager refused ${pins[*]} strace jq"
+  _tbt_step switch
+  _tbt_make_set || _tbt_fail switch "$TBT_WHY"
+  if [ "$inst" != "$TBT_REL" ]; then
+    _tbt_place_release "$TBT_STAGE" || _tbt_fail release "$TBT_WHY"
+  fi
+  [ "$(readlink -- "$TBT_TOOLS/current/node" 2>/dev/null)" = "../../node/${TBT_V[node]}/bin/node" ] || node_changed=1
+  _tbt_link "sets/$TBT_NEW_SET" "$TBT_TOOLS/current" || _tbt_fail switch "cannot switch $TBT_TOOLS/current"
+  if [ "$inst" != "$TBT_REL" ]; then
+    _tbt_link "$TBT_REL" "$TBT_TOOLS/release/installed" || _tbt_fail release "cannot switch $TBT_TOOLS/release/installed"
+    # D-7426: the service lets its runs end and is restarted on the new tree; the release it replaced stays until then.
+    printf 'previous\t%s\nrelease\t%s\n' "$inst" "$TBT_REL" > "$TBT_TOOLS/takeover.tmp" && mv -f -- "$TBT_TOOLS/takeover.tmp" "$TBT_TOOLS/takeover"
+    takeover=1
+  fi
+  _tbt_prune "$prev"
+  _tbt_report result ok release "$TBT_REL" set "$TBT_NEW_SET" takeover "$takeover" node-changed "$node_changed" chrome-sha256 "${TBT_CHROME_SHA:-}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then _tbt_main "$@"; fi

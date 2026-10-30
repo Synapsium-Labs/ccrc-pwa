@@ -255,3 +255,21 @@ _testbox_knobs() {   # host|box [file] -> one validated KEY<US>default<US>value<
   for w in ${TBK_WARN[@]+"${TBK_WARN[@]}"}; do printf '%s\n' "$w" >&2; done
   for k in "${TBK_KEYS[@]}"; do printf '%s\037%s\037%s\037%s\n' "$k" "${TBK_DEF[$k]}" "${TBK[$k]}" "${TBK_FROM[$k]}"; done
 }
+
+# ── the release base the tools unit reads (D-7457) ───────────────────────
+# `_tb_release_base` — CCRC_RELEASE_BASE_URL from the box file, the way box mode reads every box key: the file passes
+# `_tb_box_file_ok`, and `_upd_release_base file` reads it through `_ccrc_knob` in `file` mode with BOX_ENV_FILE bound
+# to TB_BOX_ENV_FILE for that one call, so neither the caller's ~/.ccrc/ccrc.env nor its environment is read. The value
+# is then assigned to the caller's own CCRC_RELEASE_BASE_URL, so the reads `_upd_resolve` and `_upd_fetch` make
+# themselves (environment first) take it and no inherited one. rc 0: the value is set (the default when the file names
+# none). rc 1: TB_BOX_WHY says why (a refused file, or `_ccrc_knob`'s KNOB_WHY for a value it cannot measure), and the
+# caller's CCRC_RELEASE_BASE_URL is emptied, so a caller that went on anyway would not fetch from an inherited host.
+# Called in the caller's shell, never `$(…)`, so the assignment and TB_BOX_WHY reach it.
+_tb_release_base() {
+  if ! _tb_box_file_ok "$TB_BOX_ENV_FILE"; then CCRC_RELEASE_BASE_URL=""; return 1; fi
+  # The second binding of BOX_ENV_FILE in this file (D-7451, D-7457), for this one read.
+  if ! BOX_ENV_FILE="$TB_BOX_ENV_FILE" _upd_release_base file >/dev/null 2>&1; then
+    TB_BOX_WHY="${KNOB_WHY:-CCRC_RELEASE_BASE_URL cannot be read from $TB_BOX_ENV_FILE}"; CCRC_RELEASE_BASE_URL=""; return 1
+  fi
+  CCRC_RELEASE_BASE_URL="$KNOB"
+}

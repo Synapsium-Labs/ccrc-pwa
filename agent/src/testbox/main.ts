@@ -20,8 +20,11 @@ import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from './hello.j
 import { gitEnv, mirrorOps, realGit, runTreeFiles } from './mirror.js';
 import { pristineSettings } from './pristine.js';
 import { registrySettings, startRegistry } from './registry.js';
+import { liveRunIds } from './runs.js';
 import { FRAME_HANDLERS, TestboxService, type Conn } from './service.js';
 import { systemctlManager } from './systemd.js';
+import { toolsSettings } from './tools.js';
+import { attachToolSync, statusOf, ToolSync, toolSyncOf } from './toolsync.js';
 import { boundedExec, SERVICE_PATH, SHORT_BOUND_MS } from './exec.js';
 
 /** WebSocket close code for a frame the service will not take (RFC 6455 "policy violation"). */
@@ -96,7 +99,8 @@ function handleConnection(ws: WebSocket, o: TestboxServerOpts): void {
       clearTimeout(helloTimer);
       if (checkHello(msg, o.token) !== 'ok') { ws.close(AUTH_CLOSE_CODE, 'unauthorized'); return; }
       authed = true;
-      send(ws, o.service.status());
+      // TB6 (D-7408): with the tool sync's state in it, when a driver serves this service.
+      send(ws, statusOf(o.service));
       return;
     }
     const r = readTestboxFrame(text);
@@ -151,23 +155,32 @@ export function readToken(file: string): string {
   return t;
 }
 
-export function serviceFor(cfg: TestboxConfig, release: string): TestboxService {
+export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: number) => void = (c) => process.exit(c)): TestboxService {
   const chromeLink = path.join(cfg.toolsDir, 'current', 'chrome');
   const chrome = existsSync(chromeLink) ? realpathSync(chromeLink) : chromeLink;
   const facts = releaseFacts(release);
   const sysEnv = { PATH: SERVICE_PATH, LANG: 'C' };
   const short = boundedExec(sysEnv, SHORT_BOUND_MS);
   const git = realGit(boundedExec(gitEnv(os.homedir()), cfg.unitMaxMs));
-  return new TestboxService({
-    settings: cfg, rows: readRepoRows(cfg.repos), sys: systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs)),
+  const sys = systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs));
+  // TB6 (D-7408, D-7426): the tool sync. Its takeover closes admissions through the run limit it hands the service.
+  const tools = new ToolSync({ sys, root: cfg.root, toolsDir: cfg.toolsDir, settings: toolsSettings(cfg.lines, durationMs), now: () => Date.now(), exit });
+  const settings = { ...cfg, get runs(): number { return tools.runLimit(cfg.runs); } };
+  const svc = new TestboxService({
+    settings, rows: readRepoRows(cfg.repos), sys,
     probe: () => reflinkProbe(cfg.root, short), mirror: mirrorOps(git),
     now: () => Date.now(), chrome, release: facts.release, serviceVersion: facts.serviceVersion,
-    // TB5 (D-7407, D-7543): the installs run under the box's node, the one this service runs under.
+    // TB6: the box's measured tool versions are the current set's.
+    tools: () => tools.versions(),
+    // TB5 (D-7407, D-7543): the installs run under the box's node, the current set's (TB6), else the one this service runs under.
     pristine: {
       settings: pristineSettings(cfg.lines, durationMs), inputs: (m, id, paths) => runTreeFiles(git, m, id, paths),
-      node: () => process.versions.node, platform: `${process.platform}-${process.arch}`,
+      node: () => tools.node() ?? process.versions.node, platform: `${process.platform}-${process.arch}`,
     },
   });
+  tools.serve({ status: () => svc.status(), idle: () => svc.idle(), tick: () => svc.tick(), liveRuns: () => liveRunIds(svc.poolNow()) });
+  attachToolSync(svc, tools);
+  return svc;
 }
 
 /** The registry proxy (TB5, D-7429): on a loopback address of its own, never the service's tailnet address. */
@@ -192,7 +205,7 @@ async function main(): Promise<void> {
   const timer = setInterval(() => {
     if (ticking) return;
     ticking = true;
-    void service.tick().finally(() => { ticking = false; });
+    void service.tick().then(() => toolSyncOf(service)?.tick()).finally(() => { ticking = false; });
   }, cfg.fetchEveryMs);
   console.log(`ccrc-testbox on ${cfg.listen.host}:${server.port}`);
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {

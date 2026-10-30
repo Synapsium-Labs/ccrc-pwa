@@ -461,4 +461,5 @@ export type FrameHandler = (svc: TestboxService, frame: TestboxFrame, conn: Conn
 export const FRAME_HANDLERS: Readonly<Partial<Record<TestboxFrameType, FrameHandler>>> = {
   'run.submit': (svc, f, conn) => svc.submit(f as RunSubmit, conn),
   'run.cancel': (svc, f) => svc.cancel((f as RunCancel).runId),
+  'tools.sync': async (svc, f, conn) => (await import('./toolsync.js')).onToolsSync(svc, f, conn),
 };

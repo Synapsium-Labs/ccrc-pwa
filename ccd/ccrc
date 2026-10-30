@@ -22126,7 +22126,7 @@ _upd_marker_unsigned() {
 # unset. The line names the file, never the value, which can carry `user:pass@`. A caller that reports the cause calls it
 # in its own shell, not `$(…)`, and reads KNOB and KNOB_WHY (`_ccrc_knob`'s), which a subshell would keep (F8).
 _upd_release_base() {
-  _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
+  _ccrc_knob CCRC_RELEASE_BASE_URL "https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases" "${1:-}" || { echo "$PROG: $KNOB_WHY" >&2; return 1; }
   printf '%s' "$KNOB"
 }
 
