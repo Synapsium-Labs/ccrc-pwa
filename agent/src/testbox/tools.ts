@@ -15,6 +15,7 @@ import {
   TESTBOX_TOOLS,
   type StatusAnswer, type TestboxSync, type TestboxTool, type TestboxToolVersions, type ToolsSync,
 } from '../../../shared/testbox.js';
+import path from 'node:path';
 import { retryDelay } from './pristine.js';
 import { degradedReasons } from './status.js';
 
@@ -173,14 +174,40 @@ export function syncNow(s: ToolsState, report: SyncReport): TestboxSync {
   return { ...s.sync, detail: report.result === 'syncing' && report.step !== null ? report.step : s.sync.detail };
 }
 
-/** Every run live now, each with the set it started under: a run first seen now started under `current`. */
-export function seenRuns(runSets: ReadonlyMap<string, string>, live: Iterable<string>, current: string | null): Map<string, string> {
+/** Every run live now, each with the set it started under: the set its spec names (`named`, read from `specs/<k>`),
+ *  else the one it was first seen under, else, for a run first seen now whose spec is not written yet, `current`. */
+export function seenRuns(
+  runSets: ReadonlyMap<string, string>, live: Iterable<string>, current: string | null, named: ReadonlyMap<string, string> = new Map(),
+): Map<string, string> {
   const out = new Map<string, string>();
   for (const id of live) {
-    const s = runSets.get(id) ?? current;
+    const s = named.get(id) ?? runSets.get(id) ?? current;
     if (s !== null) out.set(id, s);
   }
   return out;
+}
+
+/** The key `runSets` holds the pristine install's set under (no run id has this shape). */
+export const INSTALL_SETS_KEY = '(install)';
+/** A tool set's name, as the tools unit makes and checks it (`deploy/testbox/bin/tools-sync`'s `TBT_RE_SET`). */
+const SET_NAME = /^s\.[A-Za-z0-9]{6,32}$/;
+
+/** A run's or the install's spec (`specs/<k>`, `specs/install`) to its run id (`null` for the install's) and the set
+ *  its `PATH` starts at, `<tools>/sets/<set>/bin`, where `<tools>` is one of `toolsRoots` (the setting, and the path it
+ *  resolves to); `set` is `null` when the first entry is no set's. */
+export function specSet(text: string, toolsRoots: readonly string[]): { readonly runId: string | null; readonly set: string | null } {
+  let runId: string | null = null;
+  let first: string | null = null;
+  for (const r of text.split('\0')) {
+    if (r.startsWith('R') && runId === null) runId = r.slice(1);
+    else if (r.startsWith('EPATH=') && first === null) first = r.slice('EPATH='.length).split(':')[0] ?? '';
+  }
+  if (first === null || path.basename(first) !== 'bin') return { runId, set: null };
+  const setDir = path.dirname(first);
+  const set = path.basename(setDir);
+  const sets = path.dirname(setDir);
+  const ok = SET_NAME.test(set) && path.basename(sets) === 'sets' && toolsRoots.includes(path.dirname(sets));
+  return { runId, set: ok ? set : null };
 }
 
 /** The sets a live run uses, each once, in name order. */

@@ -1,4 +1,4 @@
-// D-7408, D-7426, D-7553 (plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB6; spec §2.10). L4: the tool sync's
+// D-7408, D-7426, D-7553, D-7559 (plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB6; spec §2.10). L4: the tool sync's
 // driver. It decides nothing itself (`tools.ts`, L1, does); it writes `specs/tools`, starts the static root unit
 // `ccrc-testbox-tools.service` through the system manager and reads the unit's report, `<tools>/sync-report`, and the
 // current set's `versions`. The service's frame table reaches it by one line (`service.ts#FRAME_HANDLERS`), through
@@ -18,8 +18,8 @@ import {
 } from '../../../shared/testbox.js';
 import { units, type SystemManager } from './systemd.js';
 import {
-  ended, IDLE_TOOLS, encodeToolsSpec, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, seenRuns, syncNow,
-  withSync, type BoxTools, type ToolsSettings, type ToolsState,
+  ended, IDLE_TOOLS, encodeToolsSpec, INSTALL_SETS_KEY, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, seenRuns,
+  specSet, syncNow, withSync, type BoxTools, type ToolsSettings, type ToolsState,
 } from './tools.js';
 
 /** What the driver needs of the service it serves (the service itself, in the entry point). */
@@ -67,6 +67,9 @@ export class ToolSync {
   private ticked: Promise<void> = Promise.resolve();
   /** Each submission the service was handed, by run id, while it may still be waiting (`noteSubmit`). */
   private readonly submits = new Map<string, RunSubmit>();
+  /** `<tools>/current` as resolved in this turn of the event loop (`undefined`: not yet): a prepare reads its Chrome
+   *  and its PATH in one synchronous turn, so both come from one reading, whichever it reads first. */
+  private turnSet: string | null | undefined = undefined;
 
   constructor(private readonly d: ToolSyncDeps) {}
 
@@ -90,19 +93,31 @@ export class ToolSync {
   /** The current set's node version, for the pristine store's install keys; `null` before a set is in place. */
   node(): string | null { return this.versions()?.node ?? null; }
 
-  /** `<tools>/current/chrome` resolved now, for the prepare that starts now (spec §2.10: the next prepare picks the new
-   *  set; a sync prunes the Chrome a set no run uses, so a path resolved once at the service's start goes stale). */
-  chrome(): string {
-    const link = path.join(this.d.toolsDir, 'current', 'chrome');
-    try { return realpathSync(link); } catch { return link; }
+  /** `<tools>/current` resolved to its set directory, once per turn (`turnSet`); `null` before a set is in place. */
+  private currentSetDir(): string | null {
+    if (this.turnSet === undefined) {
+      try { this.turnSet = realpathSync(path.join(this.d.toolsDir, 'current')); } catch { this.turnSet = null; }
+      queueMicrotask(() => { this.turnSet = undefined; });
+    }
+    return this.turnSet;
   }
 
-  /** `<tools>/current` resolved now to its set, and that set's `bin/` (node, npm, npx): the first `PATH` entry of the
-   *  spec built now (spec §2.10: a run resolves `current` once, when its prepare starts, and keeps those versioned
-   *  paths for its whole life). Before a set is in place, the link path. */
+  /** The current set's Chrome resolved now, for the prepare that starts now (spec §2.10: the next prepare picks the
+   *  new set; a sync prunes the Chrome a set no run uses, so a path resolved once at the service's start goes stale).
+   *  Before a set is in place, or a set with no Chrome, the link path. */
+  chrome(): string {
+    const set = this.currentSetDir();
+    const link = path.join(this.d.toolsDir, 'current', 'chrome');
+    if (set === null) return link;
+    try { return realpathSync(path.join(set, 'chrome')); } catch { return link; }
+  }
+
+  /** The current set's `bin/` (node, npm, npx): the first `PATH` entry of the spec built now (spec §2.10: a run
+   *  resolves `current` once, when its prepare starts, and keeps those versioned paths for its whole life). Before a
+   *  set is in place, the link path. */
   bin(): string {
-    const link = path.join(this.d.toolsDir, 'current');
-    try { return path.join(realpathSync(link), 'bin'); } catch { return path.join(link, 'bin'); }
+    const set = this.currentSetDir();
+    return set === null ? path.join(this.d.toolsDir, 'current', 'bin') : path.join(set, 'bin');
   }
 
   /** The service's timer work, after any in progress: the timer's tick and a node change's never run at once. */
@@ -142,6 +157,8 @@ export class ToolSync {
       const r = text === null ? null : readTestboxFrame(text.trim());
       if (r === null || !r.ok || r.value.t !== 'run.submit') { console.error(`ccrc-testbox: a handed-over run (${name}) does not read as a run.submit; dropped`); continue; }
       const id = r.value.runId;
+      // Noted as the WebSocket door notes a submission, so a later takeover hands it over again while it waits.
+      this.noteSubmit(r.value);
       svc.submit(r.value, { send: () => undefined, refuse: (why) => console.error(`ccrc-testbox: the handed-over run ${id} was refused: ${why}`) });
       n++;
     }
@@ -175,10 +192,35 @@ export class ToolSync {
     return withSync(this.svc.status(), this.sync());
   }
 
-  /** The live runs, each with the set it started under (spec §2.10: a run resolves `current` once). */
+  /** The sets the specs in `specs/` name: each run's by its run id, and the pristine install's. */
+  private specSets(): { named: Map<string, string>; install: string | null } {
+    const dir = path.join(this.d.root, 'specs');
+    let real = this.d.toolsDir;
+    try { real = realpathSync(this.d.toolsDir); } catch { /* not there yet */ }
+    const roots = [this.d.toolsDir, real];
+    const named = new Map<string, string>();
+    let install: string | null = null;
+    for (const name of listDir(dir)) {
+      if (name !== 'install' && !/^[0-9]+$/.test(name)) continue;
+      const text = readText(path.join(dir, name));
+      if (text === null) continue;
+      const r = specSet(text, roots);
+      if (r.set === null) continue;
+      if (name === 'install') install = r.set;
+      else if (r.runId !== null) named.set(r.runId, r.set);
+    }
+    return { named, install };
+  }
+
+  /** The live runs, each with the set its spec names, and the pristine install's (spec §2.10: a run resolves `current`
+   *  once, at its prepare; the previous version of each tool is kept until no run uses it). The install's spec stays
+   *  until the next build replaces it, so its set is kept until then. */
   private noteRuns(): void {
     if (this.svc === null) return;
-    this.state = { ...this.state, runSets: seenRuns(this.state.runSets, this.svc.liveRuns(), this.box().set) };
+    const { named, install } = this.specSets();
+    const runSets = seenRuns(this.state.runSets, this.svc.liveRuns(), this.box().set, named);
+    if (install !== null) runSets.set(INSTALL_SETS_KEY, install);
+    this.state = { ...this.state, runSets };
   }
 
   /** A `tools.sync` frame. */
@@ -226,6 +268,8 @@ export class ToolSync {
 
   private async runUnit(f: ToolsSync): Promise<number> {
     try {
+      // The sets in use now, for this unit's `K` records: a frame that waited for a sync runs after runs started.
+      this.noteRuns();
       const dir = path.join(this.d.root, 'specs');
       mkdirSync(dir, { recursive: true, mode: 0o755 });
       const file = path.join(dir, 'tools');

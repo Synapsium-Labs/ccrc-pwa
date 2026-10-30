@@ -1035,7 +1035,7 @@ function slowService() {
   return { served, c, release: () => { for (const g of gates.splice(0)) g(); } };
 }
 
-describe('the sets in use are the ones the specs name (spec §2.10: a run resolves current once, at its prepare; the previous version of each tool is kept until no run uses it)', () => {
+describe('the sets in use are the ones the specs name (D-7559; spec §2.10: a run resolves current once, at its prepare; the previous version of each tool is kept until no run uses it)', () => {
   const [RUN_A, RUN_B] = ['4'.repeat(32), '5'.repeat(32)];
   const chromeBuilds = (): void => { for (const v of [CHROME_2, CHROME_3]) W.dl.files.set(`/chrome-for-testing-public/${v}/linux64/chrome-linux64.zip`, chromeZip(v)); };
   const svcOf = (b: Box): TestboxService => serviceFor(cfgFor(b), path.join(b.tools, 'release', 'installed'), () => undefined);
