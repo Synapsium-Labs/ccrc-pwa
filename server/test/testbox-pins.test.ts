@@ -255,8 +255,15 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'agent/src/testbox/runs.ts', 'agent/src/testbox/service.ts', 'agent/src/testbox/spec.ts', 'agent/src/testbox/systemd.ts',
     'agent/test/testbox-live.test.ts', 'agent/test/testbox-service.test.ts',
   ];
-  const HOLDERS = [...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
-  it('the tracked readers are exactly the literal list (TB2: the switch row and its two pins; TB3: the transport; TB4: the test service)', () => {
+  // TB1 (D-7403) adds the settings: their one list in ccd/ccrc and its generated copy, the table and its reader, the two
+  // example files, the settings census that documents the box keys from the box's example, the graph settings' count
+  // that leaves them out of GR2's number, and TB1's own test.
+  const TB1_HOLDERS = [
+    'ccd/ccrc', 'ccd/lib/ccrc-settings.sh', 'ccd/testbox-knobs', 'deploy/ccrc.env.example', 'deploy/testbox/ccrc.env.example',
+    'server/test/ccrc-settings-census.test.ts', 'server/test/graph-knobs.test.ts', 'server/test/testbox-knobs.test.ts',
+  ];
+  const HOLDERS = [...TB1_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);
