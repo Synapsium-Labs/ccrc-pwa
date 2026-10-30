@@ -8,6 +8,12 @@
 // Each value is what the tree printed when the row was added (characterization), and a later commit may move a value
 // only where it names the move.
 //
+// KNOWN LIMIT. The rows whose rule is `known-limit` (each carries the same `note`) record a gap, not a rule: scheme-less
+// userinfo that no '/' follows, ended instead by ':port', ':', a quote, a tab, a CR, a second '@', or led by an '@'
+// (`server user:secret@host:8443 refused`, `@user:secret@host`, …). Every column prints such a line whole today, and
+// the rows hold that output unchanged. They are characterization only: this change does not touch the redactor for
+// them, and a separate follow-up closes the gap, moving these rows in its own diff.
+//
 // Every call goes through ONE fixed driver: the definitions are written to a temporary file and the input to
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
 // one of the literal calls in `SCRIPTS`. No path and no environment value ever reaches a script's text. The input
@@ -26,6 +32,7 @@ const read = (f: string): string => readFileSync(join(REPO, f), 'utf8');
 
 interface Row {
   readonly rule: string;
+  readonly note?: string;
   readonly input?: string; readonly inputHex?: string;
   readonly home: string;
   readonly locale: 'C' | 'utf8';
@@ -120,6 +127,17 @@ describe('the log-line redaction corpus (D-7078)', () => {
     for (const r of ROWS) for (const c of COLUMNS) want(r, c);
     const defs = definitions();
     expect(shown(run(defs, 'updateSync', Buffer.from('plain words'), '/home/u', 'C')).text).toBe('plain words');
+  });
+
+  it('CONTROL: the known-limit rows are the eight recorded shapes, each labelled with the follow-up note', () => {
+    const limit = ROWS.filter((r) => r.rule === 'known-limit');
+    expect(limit.map((r) => r.input)).toEqual([
+      'server user:secret@host:8443 refused', 'user:secret@host: refused', "user:secret@host' failed",
+      'user:secret@host" failed', 'user:secret@host\tfailed', 'user:secret@host\rfailed', 'user:secret@@host/x',
+      '@user:secret@host',
+    ]);
+    for (const r of limit) expect(r.note, r.input).toMatch(/^KNOWN LIMIT: .*closed by a separate follow-up$/);
+    expect(ROWS.filter((r) => r.note !== undefined && r.rule !== 'known-limit')).toEqual([]);
   });
 
   it.each(ROWS.map((r, i) => [i, r.rule, r.locale, r.input ?? `<hex ${r.inputHex}>`, r] as const))(

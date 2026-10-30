@@ -710,6 +710,86 @@
       "ccrcHex": "68747470733a2f2f682f72",
       "bareHostHex": "68747470733a2f2f682f72",
       "updateSyncHex": "68747470733a2f2f682f72"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "server user:secret@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "server user:secret@host:8443 refused",
+      "bareHost": "server user:secret@host:8443 refused",
+      "updateSync": "server user:secret@host:8443 refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "user:secret@host: refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:secret@host: refused",
+      "bareHost": "user:secret@host: refused",
+      "updateSync": "user:secret@host: refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "user:secret@host' failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:secret@host' failed",
+      "bareHost": "user:secret@host' failed",
+      "updateSync": "user:secret@host' failed"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "user:secret@host\" failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:secret@host\" failed",
+      "bareHost": "user:secret@host\" failed",
+      "updateSync": "user:secret@host\" failed"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "user:secret@host\tfailed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:secret@host\tfailed",
+      "bareHost": "user:secret@host\tfailed",
+      "updateSync": "user:secret@host\tfailed"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "user:secret@host\rfailed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:secret@host\rfailed",
+      "bareHost": "user:secret@host\rfailed",
+      "updateSync": "user:secret@host\rfailed"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "user:secret@@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:secret@@host/x",
+      "bareHost": "user:secret@@host/x",
+      "updateSync": "user:secret@@host/x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "input": "@user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "@user:secret@host",
+      "bareHost": "@user:secret@host",
+      "updateSync": "@user:secret@host"
     }
   ]
 }
