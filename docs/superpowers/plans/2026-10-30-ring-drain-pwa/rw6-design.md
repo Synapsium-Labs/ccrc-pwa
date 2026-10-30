@@ -17,7 +17,7 @@
 - **The pair:** `pwa/src/docs/docsLinks.ts -> pwa/src/lib/markdown.tsx`. `docsLinks.ts` is L1 ("no outer-ring fact") and `markdown.tsx` is L4 ("a .tsx file"). Both measured.
 - **The names that cross:** `codeLanguage`, `inScanPageBudget` and `inMarkdownPageBudget`, on one import line, `import { codeLanguage, inMarkdownPageBudget, inScanPageBudget } from '../lib/markdown';`. All three are read only in `detachUrls`' `pre` branch: `const language = codeLanguage(preCodeClass(node));`, `const scan = inScanPageBudget(language);`, `const md = inMarkdownPageBudget(language);`. No other line of `docsLinks.ts` names them, except the `detachUrls` docstring's prose.
 - **Who else reads them:** `codeLanguage` is read by `markdown.tsx#CodeBlock` and `docsLinks.ts`. The two predicates are read by `docsLinks.ts` and by `pwa/test/markdown-bounds.test.tsx`, which imports them from `../src/lib/markdown`. Nothing in `server/test`, `ui/src` or `shared` names them.
-- **`detachUrls` call sites (measured: 27 text matches, 1 definition, 26 calls).**
+- **`detachUrls` call sites (measured: 28 text matches, 1 definition, 27 calls).**
 
 | File | Calls | Where |
 |---|---|---|
@@ -26,7 +26,7 @@
 | `pwa/test/docs-highlight-budget.test.tsx` | 9 | 6 rows, two `decisions` helpers and the review 460 F10 `run` helper |
 | `pwa/test/docs-images.test.tsx` | 2 | one module helper and one row |
 
-  So there is 1 production call and 25 test calls, 26 in all. One more text match is the definition in `docsLinks.ts`. Comment mentions and the `it(...)` titles that name `detachUrls` are not counted. No file names `typeof detachUrls`, `Parameters<typeof detachUrls>`, `.call`, `.bind` or `.length`, and none passes `detachUrls` as a value.
+  So there is 1 production call and 26 test calls, 27 in all. One more text match is the definition in `docsLinks.ts`. Comment mentions and the `it(...)` titles that name `detachUrls` are not counted. No file names `typeof detachUrls`, `Parameters<typeof detachUrls>`, `.call`, `.bind` or `.length`, and none passes `detachUrls` as a value.
 - **The other imports of `docsLinks.ts`, and their rings (measured):** `../lib/markdownLimits` L1, `./docsText` L1, `./DocLink` (type only, erased), `./useDocsVisit` for `pinFor`, a **runtime** import of a file that is **L4 ("exports a hook")**. The rule's forbidden targets are a `.tsx` file, a store and `lib/api.ts`, so this L1 → L4 edge is not in the set and the rule cannot see it. It is outside RW6. §6 names it as a follow-up.
 
 ### 1.2 Route (b): a port on `detachUrls`, measured
@@ -36,7 +36,7 @@
 | Files edited | 5: `docsLinks.ts`, `DocMarkdown.tsx`, and the three docs tests. Plus the two ring data files at the drain. |
 | Lines moved | **0** |
 | Production lines changed | `docsLinks.ts`: the import line goes (−1), the interface is added (+5 with its docstring line), the signature changes (1), the three reads change (3), and the docstring gains one sentence. `DocMarkdown.tsx`: one import line widens, one type import widens, the constant is added (+2 with its docstring), and the `useMemo` call changes (1). |
-| Call sites edited | 26 at today's count (25 tests and the root). 27 after the build's Step 1, which adds one `decisions` helper (§3). |
+| Call sites edited | 27 at today's count (26 tests and the root). 28 after the build's Step 1, which adds one `decisions` helper (§3): 27 tests and the root. |
 | `markdown.tsx` | untouched |
 | Rule 6 | clean (§4) |
 
@@ -67,15 +67,15 @@ A scratch extraction of the region the plan names gives **189 lines**. Those are
 2. **Rule 6.** (b) leaves `markdown.tsx` alone, so #1610 rebases cleanly. (a) deletes the region #1610 edits (§4).
 3. **It is the codebase's own pattern** (D-6387, `toolWell.ts`), and the plan already recommends it.
 4. **The guarantee it relocates is pinned.** Under (b), the root's constant decides whether the Docs page counts the real grammars. §2's pin holds that constant through the real render. Every mutant of the root that was tried turned it red (§4.4).
-5. **The 26 call-site edits are mechanical** (band 1). The type checker refuses a missed one once the parameter is required.
+5. **The 27 test call-site edits are mechanical** (band 1). The type checker refuses a missed one once the parameter is required.
 
 Route (a) is not taken. The note records its measurements (§1.3) in case a later task wants one owner for the grammar facts, for a reason of its own.
 
 ### 1.5 Where this note refines the plan's sketch
 
-- **The port lands in strangler order (spec §5.1 rule 2), in three commits, not one.** Commit 2 (the port) gives `detachUrls` the parameter as **optional**, with a transitional fallback built from the existing import, and the root passes its constant. Commit 3 (band 1) moves every test call to its file's `LANGS` constant. Commit 4 (the drain) makes the parameter **required**, deletes the fallback and the import, and deletes the entry. The end state is the plan's: required, no default. A single commit would also work, but it would mix the band-3 signature change with the 26 band-1 edits. The split keeps the band-1 commit on its own, so it can be handed off and reviewed alone.
+- **The port lands in strangler order (spec §5.1 rule 2), in three commits, not one.** Commit 2 (the port) gives `detachUrls` the parameter as **optional**, with a transitional fallback built from the existing import, and the root passes its constant. Commit 3 (band 1) moves every test call to its file's `LANGS` constant. Commit 4 (the drain) makes the parameter **required**, deletes the fallback and the import, and deletes the entry. The end state is the plan's: required, no default. A single commit would also work, but it would mix the band-3 signature change with the 27 band-1 edits. The split keeps the band-1 commit on its own, so it can be handed off and reviewed alone.
 - **The composition pin lives in `docs-highlight-budget.test.tsx` and renders `DocMarkdown`** (§2), as the plan asks. No existing row of that file renders `DocMarkdown` (measured), so the pin is a new row.
-- **Step 1 adds one `detachUrls` call** (the new characterization `decisions` helper), so the build edits 27 call sites, not 26.
+- **Step 1 adds one `detachUrls` call** (the new characterization `decisions` helper), so the build edits 28 call sites (27 tests and the root), not 27.
 
 ## 2. Open problem 2: the composition pin
 
@@ -155,7 +155,7 @@ Under (b) no text moves, so §Global constraints' allowed edits (ii) and (iii) d
 - [ ] **Step 0: Re-ground** on the tree the build starts from, and report any count that differs before any commit:
   - the rings: `docsLinks.ts` L1, `DocMarkdown.tsx` and `markdown.tsx` L4;
   - `docsLinks.ts`' import block (the one runtime import of `../lib/markdown` and its three names; `./useDocsVisit` is still the unseen L4 edge of §1.1, which is not touched);
-  - every `detachUrls(` call (26: 1, 15, 9, 2; no value use) and every reader of the three names;
+  - every `detachUrls(` call (27: 1, 15, 9, 2; no value use) and every reader of the three names;
   - the set's size and stamp, and so whether this drain empties it (it does only if every other RW task has landed first; if so, the stamp reads `size: 0, reason: 'empty since D-7574 (ARCH-05, #551)'`, and §Global constraints' "The commit that takes the set to 0" CONTROL check runs);
   - the import-closure walk of §1.2 (the test files that stop loading `lib/markdown.tsx`);
   - rule 6 (`gh pr list --state open --json number,files`, and #1610's state).
@@ -200,7 +200,7 @@ Under (b) no text moves, so §Global constraints' allowed edits (ii) and (iii) d
 **Counted exits (the PR body prints them, base and tip):**
 - the set's keys and the stamp;
 - `docsLinks.ts`' runtime imports;
-- the `detachUrls` call sites by file (26, then 27 after Step 1, every one passing a `DocsHighlightLanguages`);
+- the `detachUrls` call sites by file (27, then 28 after Step 1, every one passing a `DocsHighlightLanguages`);
 - the readers of `codeLanguage`, `inScanPageBudget` and `inMarkdownPageBudget` by file and symbol (base: `docsLinks.ts#detachUrls`, `markdown.tsx#CodeBlock`, `markdown-bounds.test.tsx`; tip: `DocMarkdown.tsx#DOCS_HIGHLIGHT_LANGUAGES` and the three tests' `LANGS` in place of `docsLinks.ts`).
 
 **Exit (GATE):**
