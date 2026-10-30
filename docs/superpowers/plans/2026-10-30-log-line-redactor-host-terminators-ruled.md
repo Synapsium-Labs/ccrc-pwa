@@ -113,21 +113,25 @@ and asked that every gap left be named:
    its cost is one `blast` row, `log@[core:io]:2 ok`, which now reads `[core:io]:2 ok`. A bracket with no ':', as in
    `ref@[main]:2 ok`, was already read as an ordinary host, and a second `blast` row records that.
 
-**Known limits, the complete list** (as the fifth round below left it). Thirteen `known-limit` rows, each with a note
-and printed whole in every column, and the file's own note name what this PR does not close. The CONTROL test pins
-exactly these thirteen:
+**The known limits** (as the sixth round below left them). Seventeen `known-limit` rows, each with a note and printed
+whole in every column, and the file's own note name what this PR does not close. The CONTROL test pins exactly these
+seventeen:
 
 - a userinfo inside a query string or a path: `https://h/x?proxy=user:secret@host`, `GET /p?u=user:secret@host:8443`,
   `dir/user:secret@host`;
 - a raw '#', '?' or '/' inside a password: `user:pa#ss@host refused`, `user:pa?ss@host refused`,
   `user:pa/ss@host refused`;
-- a token-only userinfo (no ':') before a host that no port and no path follows, while more text follows the host:
-  `--proxy=tok@host refused`, `--proxy tok@host refused`. Prose's `user@host` has the same shape, and bare-host's rule
+- a token-only userinfo (no ':') before a host that no port (or an empty one, as in `tok@h: refused`) and no path
+  follows, while more text follows the host: `--proxy=tok@host refused`, `--proxy tok@host refused`. Prose's `user@host` has the same shape, and bare-host's rule
   masks it only at ')' or the end of the text;
 - a port followed by a letter, '-', '_' or '~' while more text follows: `tok@host:8443-x retrying`,
   `tok@host:8443- x`, `tok@host:8443a x`, `tok@host:8443_x y`, `tok@host:8443~ x`. A host name holds those characters,
   so the text after the ':' is arguably not a port at all. Bare-host's rule still masks the shape when the token runs
-  to the end of the text.
+  to the end of the text;
+- a port followed by a run of '.', '!' or '}' and then a letter, while more text follows: `tok@host:8443.x retrying`,
+  `tok@host:8443!x retrying`, `tok@host:8443}x retrying`;
+- a token-only userinfo before a host of digits only and its port: `tok@2130706433:80 x`, which reads as a time's
+  `build@10:30`.
 
 The fourth round's list ended with a port followed by a non-ASCII punctuation mark (`tok@host:8443… x`,
 `tok@host:8443” x`); the fifth round closed it, and those two rows are `R8` rows now.
@@ -135,7 +139,7 @@ The fourth round's list ended with a port followed by a non-ASCII punctuation ma
 **Bound, fourth round.** A second `bound` row keeps a head dense with masks: about 98 KB of ` u:secret@h:1` three
 times and then ` /home/u/x`, so the 4001-byte head masks 244 credentials and 81 homes. BOUND now checks both rows
 against the same 3 s limit in every column, and that one of them masks at least 200 credentials and 50 homes, so the
-Linux CI legs measure the worst case the cap leaves. Locally it returns in under 0.1 s a call.
+Linux CI legs measure a dense row against it. Locally it returns in under 0.1 s a call.
 
 **Corpus, fourth round.** 7 more `R8` rows, 2 `blast` rows, 4 `known-limit` rows and the dense `bound` row. Red
 first: 8 of 187 before the change (the 7 `R8` rows and `log@[core:io]:2 ok`), 187 of 187 after.
@@ -158,3 +162,11 @@ two escaped JSON quotes and a literal `\n`), the two non-ASCII `known-limit` row
 after. The red commit's expected value for `proxy=\"tok@host:8443\" failed` was corrected in the fix commit to what the
 redactor prints, `host:8443\" failed`: the token starts at the text's start, and a token-only userinfo keeps no
 `KEY=` prefix (the prefix rule asks for a ':' userinfo), so the userinfo is `proxy=\"tok@`. The secret is gone either way.
+
+**Sixth round, same PR, same ruling.** A scheme's '/' may now follow a '\', as JSON escapes it, and stays as written:
+the scheme rule is `:((\\?/)+)@*[^/@?#[:space:]]+@`, its userinfo class unchanged, so `https:\/\/u:secret@host\/x`,
+`https:\/\/tok@host` and `"url":"https:\/\/u:secret@host"` mask in every mode (three `R8` rows), and each pass still
+drops at least one '@'. Four `known-limit` rows join the list above (a '.', '!' or '}' run and then a letter after a
+port, and a host of digits only), and `_upd_redact`'s OUT OF SCOPE comment names curl's credential flags (`-u` /
+`--user` / `--proxy-user user:pass`). Red first: 3 of 209 before the change, 209 of 209 after. The coordinator ended
+the regex rounds here: the shapes that still print a secret are the labelled known limits above.
