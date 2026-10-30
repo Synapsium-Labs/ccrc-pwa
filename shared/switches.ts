@@ -269,6 +269,11 @@ export const SWITCHES = {
     meaning: 'Which idle sessions the automatic roll restarts onto the current release: coordinators, or off (D-7453).',
     writer: 'POST /api/coord/roll-idle',
   },
+  'dispatch-abandon-choice': {
+    storage: { setting: 'dispatch_abandon_settings.choice' }, default: 'on', owner: 'C5',
+    meaning: 'The server abandons a run whose dispatch never came back and mails its coordinator: on, or off (D-7319).',
+    writer: 'POST /api/coord/dispatch-abandon',
+  },
   [TESTBOX_REMOTE_LIVE_MARKER]: {
     storage: { marker: TESTBOX_REMOTE_LIVE_MARKER }, default: 'absent: every run is local', owner: 'C2',
     meaning: 'Test runs go to the test box when its checks pass; any run that cannot falls back to the local tests slice and says why.',
