@@ -387,6 +387,33 @@ describe('the returned child (D-7563): a run whose one child came back live is b
     expect(f.binds(id)).toEqual([]);
   });
 
+  it("a same-project row whose child marker cannot be read (a possible second child) stops the bind: kept planned and unbound", async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    returned(f, id);
+    f.plant('demo-w8', { workspace: 'w8', branch: 'ws/w8', child: 'not-a-run-id', started: '1' });
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.calls).toEqual([]);
+    expect(f.mail()).toEqual([]);
+  });
+
+  it('a hibernated child (its pane gone, `.hibernated` stamped) never binds: kept planned and unbound, as before', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    f.live.delete(sid);
+    f.plant(sid, { stopped: '1755700000 ccd', hibernated: '1755700000 7' });
+    await f.pass();
+    expect(f.asked).toContain(sid);
+    expect(f.stateOf(id)).toBe('planned');
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.mail()).toEqual([]);
+  });
+
   it('a child session a run already names never binds', async () => {
     const f = await fixture();
     const id = f.stalled(BOUND * 2);

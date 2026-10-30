@@ -91,6 +91,12 @@ const CENSUS: readonly Row[] = [
       + '`ARCHIVE_CONTRADICTS`: a sleeper is not live, so it contradicts no archive stamp' },
   { source: 'tmux-verdict', file: 'server/src/coord/peers.ts', hits: 1, stances: ['consults'],
     why: '`PeerProbe.tmux`: the hibernated rung answers before it is read' },
+  { source: 'tmux-verdict', file: 'server/src/coord/abandonDeadDispatch.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the returned-child bind (D-7563) asks tmux for the one child\'s pane: a hibernated child\'s pane is gone, which '
+      + 'is true, so it is never bound and its run is kept as before (`child-workspace`)' },
+  { source: 'tmux-verdict', file: 'server/src/coord/deadDispatch.ts', hits: 1, stances: ['true-of-pane'],
+    why: '`ReturnedChildFacts.pane`: only `live` binds; a hibernated child reads `gone`, which is true of its pane, so '
+      + 'the verdict keeps the run (`child-workspace`) as before' },
   { source: 'tmux-verdict', file: 'server/src/exec.ts', hits: 1, stances: ['true-of-pane'],
     why: '`hasSession`: whether a pane is live, which a sleeper\'s is not' },
   { source: 'tmux-verdict', file: 'server/src/server.ts', hits: 1, stances: ['true-of-pane'],

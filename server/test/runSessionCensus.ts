@@ -171,6 +171,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'the series fetch itself (bindingRunsOf, one of the four counted readers): it selects the rows bindingOf and childrenOf decide over' },
   { file: 'server/src/coord/dispatch.ts', text: 'run.claimedBy !== b.claimedBy',
     why: "bindReturnedChild's compare-and-set (D-7563): the claimant of ONE re-read run against the one the dead-dispatch pass measured, whichever session works it" },
+  { file: 'server/src/coord/abandonDeadDispatch.ts', text: 'v.sessionId !== gated',
+    why: "the returned-child bind's re-measure (D-7563): the REGISTRY row the re-measured verdict names against the row the child bind gate passed, two row ids compared, no run is asked which session is its" },
   { file: 'server/src/coord/store.ts', text: 'row.claimedBy !== input.expectClaimedBy',
     why: "closeRun's compare-and-set: the claimant of ONE re-read run against the one the caller measured, whichever session works it" },
   { file: 'server/src/coord/store.ts', text: 'predecessor !== sessionId',

@@ -28,9 +28,11 @@
 // Every other shape keeps today's answer, `child-workspace`: two such rows, a pane not live or not asked, a session some
 // run already names (or whose runs could not be read), a row not of the run's project or not measured, a row with a
 // hold (a claim someone placed, or a hold that could not be read: a run that never bound placed none, so a hold is
-// someone else acting on it, the adopted arm's own `held === null`), and a session this run's journal says was once
+// someone else acting on it, the adopted arm's own `held === null`), a session this run's journal says was once
 // unbound from it (`session-unbound:`, the resume arm's workspace-spent unbind: binding it back would ping-pong with
-// that arm). The executor then asks the child bind gate (`childBind.ts`) before it writes: a spent child never binds.
+// that arm), and a run whose project holds another row step 5 doubts (an unreadable marker, an unmeasured identity,
+// a cut-short `ws-add`'s shape: each could be a second child no marker proves, and two children never bind). The
+// executor then asks the child bind gate (`childBind.ts`) before it writes: a spent child never binds.
 // A marker that names ANOTHER run is not this run's child at all, exactly as before. Every guard above step 5 still
 // comes first, so a bind needs the switch on, the pause clear, the bound passed, a marking box and a registry read whole.
 import type { ChildMark } from '../../../shared/api.js';
@@ -156,13 +158,26 @@ export function deadDispatchVerdict(f: DeadDispatchFacts): DeadDispatchVerdict {
       && back.namedBy === 0 && !back.unboundBefore && c.held === null
       && c.project === run.project && c.workspace !== null && c.identityMeasured;
     if (!bindable) return keep('child-workspace', children.map((r) => r.id).join(', '));
+    // A row of the run's project that could be a SECOND child (step 5's own doubts) makes the one child ambiguous.
+    const doubt = projectDoubt(f.registry.records, run.project);
+    if (doubt !== null) return keep('child-workspace', `${c.id} (beside ${doubt.why}: ${doubt.id})`);
     return { kind: 'bind', sessionId: c.id, claimedBy: run.claimedBy, startedAt: run.dispatchStartedAt };
   }
-  for (const r of f.registry.records) {
-    if (r.project !== run.project) continue;
-    if (!r.identityMeasured) return keep('registry-unmeasured', r.id);
-    if (r.child.kind === 'unreadable') return keep('marker-unreadable', r.id);
-    if (r.child.kind === 'none' && r.workspace !== null && r.held === null && !r.spawned) return keep('possible-target', r.id);
-  }
+  const doubt = projectDoubt(f.registry.records, run.project);
+  if (doubt !== null) return keep(doubt.why, doubt.id);
   return { kind: 'dead', claimedBy: run.claimedBy, startedAt: run.dispatchStartedAt };
+}
+
+/** Step 5's second half, once for both answers: the first row of `project` that could be a workspace of the run no marker
+ *  proves: an unmeasured identity, an unreadable marker, or a cut-short `ws-add`'s shape.
+ *  For `dead` it keeps the run; for `bind` (D-7563) it is a possible second child, so the one child does not bind. */
+function projectDoubt(records: readonly DeadDispatchRecord[], project: string):
+  { readonly why: 'registry-unmeasured' | 'marker-unreadable' | 'possible-target'; readonly id: string } | null {
+  for (const r of records) {
+    if (r.project !== project) continue;
+    if (!r.identityMeasured) return { why: 'registry-unmeasured', id: r.id };
+    if (r.child.kind === 'unreadable') return { why: 'marker-unreadable', id: r.id };
+    if (r.child.kind === 'none' && r.workspace !== null && r.held === null && !r.spawned) return { why: 'possible-target', id: r.id };
+  }
+  return null;
 }

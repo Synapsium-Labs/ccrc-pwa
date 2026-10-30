@@ -133,6 +133,25 @@ describe('the returned child (D-7563): a run whose one child workspace came back
     expect(why({ ...withRecords([{ ...child, project: 'project-b' }]), returned: live })).toBe('child-workspace');
   });
 
+  it('a same-project row that could be a second child never lets the one child bind: an unreadable marker, an unmeasured identity, a cut-short ws-add', () => {
+    const beside = (r: DeadDispatchRecord): DeadDispatchFacts => ({ ...withRecords([child, r]), returned: live });
+    expect(why(beside(ws({ id: 'project-a-w8', workspace: 'w8', child: { kind: 'unreadable' } })))).toBe('child-workspace');
+    expect(why(beside(ws({ id: 'project-a-w8', workspace: 'w8', identityMeasured: false })))).toBe('child-workspace');
+    expect(why(beside(ws({ id: 'project-a-w8', workspace: 'w8', spawned: false })))).toBe('child-workspace');
+    // The detail names the sibling and why it stops the bind.
+    const v = deadDispatchVerdict(beside(ws({ id: 'project-a-w8', workspace: 'w8', child: { kind: 'unreadable' } })));
+    expect(v).toEqual({ kind: 'keep', why: 'child-workspace', detail: 'project-a-w9 (beside marker-unreadable: project-a-w8)' });
+  });
+
+  it('a sibling that is no possible second child still lets it bind: another run\'s child, a spawned or held workspace, any row of another project', () => {
+    const beside = (r: DeadDispatchRecord): DeadDispatchFacts => ({ ...withRecords([child, r]), returned: live });
+    const bind = { kind: 'bind', sessionId: 'project-a-w9', claimedBy: 'project-a-coord', startedAt: NOW - BOUND };
+    expect(deadDispatchVerdict(beside(ws({ id: 'project-a-w8', workspace: 'w8', child: { kind: 'child', runId: 8 } })))).toEqual(bind);
+    expect(deadDispatchVerdict(beside(ws({ id: 'project-a-w8', workspace: 'w8' })))).toEqual(bind);
+    expect(deadDispatchVerdict(beside(ws({ id: 'project-a-w8', workspace: 'w8', spawned: false, held: 'run:8' })))).toEqual(bind);
+    expect(deadDispatchVerdict(beside(ws({ id: 'project-b-w8', project: 'project-b', workspace: 'w8', child: { kind: 'unreadable' } })))).toEqual(bind);
+  });
+
   it('every guard before the child still wins: switch off, paused, bound, in flight, unmarked box', () => {
     expect(why(returned({ armed: false }))).toBe('switch-off');
     expect(why(returned({ registry: { listed: true, refused: 0, pause: 'set', records: [coordRow, child] } }))).toBe('paused');
