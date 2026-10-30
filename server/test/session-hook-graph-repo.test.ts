@@ -220,6 +220,8 @@ describe('the diff list leaves room for the subjects after it (CARD_MAX_CHARS)',
     expect(text).toContain(`main at ${r.graph.slice(0, 8)}`);
     expect(text).toContain(`Your tree differs from it in 21 files, 20 of them your branch's own: ${files[0]}, `);
     expect(text).toMatch(/ and \d+ more — read those directly\. Answer codebase questions/);
+    // it STOPS at the first name that does not fit: skipping on to the short main-line name would break the order
+    expect(text, 'a main-line name was said before the branch\'s own').not.toContain('a-main.txt');
     expect(text).toContain(ADVICE + GATE_ARMED);
     // the hold, held case A naming a run, whole
     expect(text).toContain(`ccrc-program: the workspace \`${LONG_ID}\` (\`${wd}\`) is claimed — `
