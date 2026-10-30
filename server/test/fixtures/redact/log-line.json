@@ -1,4 +1,5 @@
 {
+  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string or a path (https://h/x?proxy=user:secret@host, GET /p?u=user:secret@host:8443, dir/user:secret@host) and a raw '#', '?' or '/' inside a password. A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
   "rows": [
     {
       "rule": "R5",
@@ -1079,6 +1080,268 @@
       "ccrc": "example.com",
       "bareHost": "example.com",
       "updateSync": "example.com"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443.",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443.",
+      "bareHost": "reach host:8443.",
+      "updateSync": "reach host:8443."
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443! retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443! retrying",
+      "bareHost": "host:8443! retrying",
+      "updateSync": "host:8443! retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443}",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443}",
+      "bareHost": "host:8443}",
+      "updateSync": "host:8443}"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[::1]:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[::1]:8443 refused",
+      "bareHost": "[::1]:8443 refused",
+      "updateSync": "[::1]:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[fe80::1]:443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[fe80::1]:443 refused",
+      "bareHost": "[fe80::1]:443 refused",
+      "updateSync": "[fe80::1]:443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[::1]:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[::1]:8443",
+      "bareHost": "[::1]:8443",
+      "updateSync": "[::1]:8443"
+    },
+    {
+      "rule": "R8",
+      "input": "@tok@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443 refused",
+      "bareHost": "host:8443 refused",
+      "updateSync": "host:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user%3Asecret@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host refused",
+      "bareHost": "host refused",
+      "updateSync": "host refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user%3asecret@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host refused",
+      "bareHost": "host refused",
+      "updateSync": "host refused"
+    },
+    {
+      "rule": "R8",
+      "input": "CCRC_X=user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "CCRC_X=host",
+      "bareHost": "CCRC_X=host",
+      "updateSync": "CCRC_X=host"
+    },
+    {
+      "rule": "R8",
+      "input": "CCRC_X=user:secret@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "CCRC_X=host/x",
+      "bareHost": "CCRC_X=host/x",
+      "updateSync": "CCRC_X=host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "--proxy=user:secret@host:8080",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "--proxy=host:8080",
+      "bareHost": "--proxy=host:8080",
+      "updateSync": "--proxy=host:8080"
+    },
+    {
+      "rule": "R8",
+      "input": "dG9rZW4=:x@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "prose",
+      "input": "use x@h:1.2 now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "use x@h:1.2 now",
+      "bareHost": "use x@h:1.2 now",
+      "updateSync": "use x@h:1.2 now"
+    },
+    {
+      "rule": "prose",
+      "input": "@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "@host:8443 refused",
+      "bareHost": "@host:8443 refused",
+      "updateSync": "@host:8443 refused"
+    },
+    {
+      "rule": "blast",
+      "input": "x@h:1.2",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x@h:1.2",
+      "bareHost": "h:1.2",
+      "updateSync": "h:1.2"
+    },
+    {
+      "rule": "blast",
+      "input": "npm:pkg@1.2.3",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "1.2.3",
+      "bareHost": "1.2.3",
+      "updateSync": "1.2.3"
+    },
+    {
+      "rule": "blast",
+      "input": "WARNING:root:bob@example.com",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "example.com",
+      "bareHost": "example.com",
+      "updateSync": "example.com"
+    },
+    {
+      "rule": "blast",
+      "input": "stash@{0}:3",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "{0}:3",
+      "bareHost": "{0}:3",
+      "updateSync": "{0}:3"
+    },
+    {
+      "rule": "blast",
+      "input": "claude-session@x.service:12",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x.service:12",
+      "bareHost": "x.service:12",
+      "updateSync": "x.service:12"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
+      "input": "https://h/x?proxy=user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/x?proxy=user:secret@host",
+      "bareHost": "https://h/x?proxy=user:secret@host",
+      "updateSync": "https://h/x?proxy=user:secret@host"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
+      "input": "GET /p?u=user:secret@host:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "GET /p?u=user:secret@host:8443",
+      "bareHost": "GET /p?u=user:secret@host:8443",
+      "updateSync": "GET /p?u=user:secret@host:8443"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
+      "input": "dir/user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "dir/user:secret@host",
+      "bareHost": "dir/user:secret@host",
+      "updateSync": "dir/user:secret@host"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a raw '#', '?' or '/' in a password ends the userinfo, so no '@' follows it and nothing is masked",
+      "input": "user:pa#ss@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:pa#ss@host refused",
+      "bareHost": "user:pa#ss@host refused",
+      "updateSync": "user:pa#ss@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a raw '#', '?' or '/' in a password ends the userinfo, so no '@' follows it and nothing is masked",
+      "input": "user:pa?ss@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:pa?ss@host refused",
+      "bareHost": "user:pa?ss@host refused",
+      "updateSync": "user:pa?ss@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a raw '#', '?' or '/' in a password ends the userinfo, so no '@' follows it and nothing is masked",
+      "input": "user:pa/ss@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:pa/ss@host refused",
+      "bareHost": "user:pa/ss@host refused",
+      "updateSync": "user:pa/ss@host refused"
+    },
+    {
+      "rule": "bound",
+      "inputRuns": [
+        {
+          "text": "fetch failed: u:secret@h ",
+          "times": 1
+        },
+        {
+          "text": "x",
+          "times": 9000
+        },
+        {
+          "text": " u:secret@h /home/u",
+          "times": 4000
+        }
+      ],
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]",
+      "bareHost": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]",
+      "updateSync": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]"
     }
   ]
 }

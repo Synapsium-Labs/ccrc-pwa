@@ -18,6 +18,17 @@
 // hold what must stay whole: an email address, a time such as `10:30`, a URL or a host with a port and no userinfo.
 // One `blast` row records the cost: `mailto:a@example.com` reads as `user:pass@host` and loses its `mailto:a@`.
 //
+// D-7564's second round closed four more shapes under R8: a port followed by '.', '!' or '}' and then whitespace or the
+// text's end (`reach tok@host:8443.`; a version's `x@h:1.2` stays), a bracketed IPv6 host (`tok@[::1]:8443`), a
+// leading '@' before a token-only userinfo (`@tok@host:8443 refused`) and a percent-encoded ':' (`user%3Asecret@host`).
+// A ':' userinfo after `KEY=` or `--flag=` keeps that prefix (`CCRC_X=host`, `--proxy=host:8080`). More `blast` rows
+// record what is still over-masked (`npm:pkg@1.2.3`, `WARNING:root:bob@example.com`, `stash@{0}:3`,
+// `claude-session@x.service:12`). KNOWN LIMITS: the rows labelled `known-limit`, each with a `note`, hold lines whose
+// secret still prints whole, on purpose: a userinfo inside a query string or a path, and a raw '#', '?' or '/' inside a
+// password. The file's own `note` says the same. The `bound` row is a line of about 85 KB, written as `inputRuns`
+// (runs of text, each repeated `times` times): a text over 4096 bytes keeps only a head cut back to its last
+// whitespace, so a line of thousands of credentials returns in milliseconds, not seconds.
+//
 // Every call goes through ONE fixed driver: the definitions are written to a temporary file and the input to
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
 // one of the literal calls in `SCRIPTS`. No path and no environment value ever reaches a script's text. The input
@@ -40,6 +51,7 @@ interface Row {
   readonly rule: string;
   readonly note?: string;
   readonly input?: string; readonly inputHex?: string;
+  readonly inputRuns?: ReadonlyArray<{ readonly text: string; readonly times: number }>;
   readonly home: string;
   readonly locale: 'C' | 'utf8';
   readonly ccrc?: string; readonly ccrcHex?: string;
@@ -116,7 +128,10 @@ function run(defs: Record<Column, string>, col: Column, input: Buffer, home: str
   return line.subarray(PREFIX.length, line.length - 1);
 }
 
-const inputOf = (r: Row): Buffer => (r.inputHex !== undefined ? Buffer.from(r.inputHex, 'hex') : Buffer.from(r.input!, 'utf8'));
+const inputOf = (r: Row): Buffer => {
+  if (r.inputRuns !== undefined) return Buffer.from(r.inputRuns.map((x) => x.text.repeat(x.times)).join(''), 'utf8');
+  return r.inputHex !== undefined ? Buffer.from(r.inputHex, 'hex') : Buffer.from(r.input!, 'utf8');
+};
 const want = (r: Row, col: Column): Buffer => {
   const hex = r[`${col}Hex` as const];
   const text = r[col];
@@ -128,7 +143,8 @@ const shown = (b: Buffer): { text: string; hex: string } => ({ text: b.toString(
 describe('the log-line redaction corpus (D-7078)', () => {
   it('CONTROL: the corpus is whole, every row distinct, and both definitions are found', () => {
     expect(ROWS.length).toBeGreaterThan(70);
-    const keys = ROWS.map((r) => JSON.stringify([r.input ?? r.inputHex, r.home, r.locale]));
+    const keys = ROWS.map((r) => JSON.stringify([r.input ?? r.inputHex ?? r.inputRuns, r.home, r.locale]));
+    for (const r of ROWS) expect([r.input, r.inputHex, r.inputRuns].filter((v) => v !== undefined).length, JSON.stringify(r).slice(0, 80)).toBe(1);
     expect(new Set(keys).size).toBe(keys.length);
     for (const r of ROWS) for (const c of COLUMNS) want(r, c);
     const defs = definitions();
@@ -136,8 +152,8 @@ describe('the log-line redaction corpus (D-7078)', () => {
   });
 
   // D-7564: the eight shapes once recorded as `known-limit` are R8 rows now, and in every column their output no longer
-  // carries the secret. No row is a known limit, and no row carries a note.
-  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and no known limit is left', () => {
+  // carries the secret. The known limits left are exactly the six lines below, each with a note, each printed whole.
+  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and only the six recorded known limits are left', () => {
     const former = [
       'server user:secret@host:8443 refused', 'user:secret@host: refused', "user:secret@host' failed",
       'user:secret@host" failed', 'user:secret@host\tfailed', 'user:secret@host\rfailed', 'user:secret@@host/x',
@@ -148,20 +164,48 @@ describe('the log-line redaction corpus (D-7078)', () => {
       expect(r?.rule, input).toBe('R8');
       for (const c of COLUMNS) expect(want(r!, c).toString('utf8'), `${input} (${c})`).not.toContain('secret');
     }
-    expect(ROWS.filter((r) => r.rule === 'known-limit')).toEqual([]);
-    expect(ROWS.filter((r) => r.note !== undefined)).toEqual([]);
+    const limits = [
+      'https://h/x?proxy=user:secret@host', 'GET /p?u=user:secret@host:8443', 'dir/user:secret@host',
+      'user:pa#ss@host refused', 'user:pa?ss@host refused', 'user:pa/ss@host refused',
+    ];
+    expect(ROWS.filter((r) => r.rule === 'known-limit').map((r) => r.input)).toEqual(limits);
+    for (const r of ROWS.filter((x) => x.rule === 'known-limit')) {
+      expect(r.note, r.input).toMatch(/^known limit: /);
+      for (const c of COLUMNS) expect(want(r, c).toString('utf8'), `${r.input} (${c})`).toBe(r.input);
+    }
+    expect(ROWS.filter((r) => r.note !== undefined && r.rule !== 'known-limit')).toEqual([]);
     for (const r of ROWS.filter((x) => x.rule === 'R8')) {
       for (const c of COLUMNS) expect(want(r, c).toString('utf8'), `${r.input} (${c})`).not.toMatch(/secret|\bp@|tok@/);
     }
   });
 
-  it.each(ROWS.map((r, i) => [i, r.rule, r.locale, r.input ?? `<hex ${r.inputHex}>`, r] as const))(
+  const title = (r: Row): string => r.input ?? (r.inputHex !== undefined ? `<hex ${r.inputHex}>`
+    : `<runs ${r.inputRuns!.map((x) => `${JSON.stringify(x.text)}x${x.times}`).join(' + ')}>`);
+  it.each(ROWS.map((r, i) => [i, r.rule, r.locale, title(r), r] as const))(
     'row %i (%s, %s): %s', (_i, _rule, _loc, _shown, r) => {
       const defs = definitions();
       for (const c of COLUMNS) {
         expect(shown(run(defs, c, inputOf(r), r.home, r.locale)), c).toEqual(shown(want(r, c)));
       }
     });
+
+  // D-7564, the bound: each loop rescans the whole text once per credential it masks, so the `bound` row's line (about
+  // 85 KB, 4000 credentials and homes past one long token) took seconds a call. Capped at 4096 bytes it returns at once,
+  // in every column, with no secret and no more than 4096 bytes.
+  it('BOUND: the bound row returns within 3 s in each column, with no secret and at most 4096 bytes', () => {
+    const r = ROWS.find((x) => x.rule === 'bound');
+    expect(r?.inputRuns, 'the corpus has a bound row').toBeDefined();
+    expect(inputOf(r!).length).toBeGreaterThan(80_000);
+    const defs = definitions();
+    for (const c of COLUMNS) {
+      const t0 = performance.now();
+      const out = run(defs, c, inputOf(r!), r!.home, r!.locale);
+      const ms = performance.now() - t0;
+      expect(ms, `${c} took ${Math.round(ms)} ms`).toBeLessThan(3000);
+      expect(out.toString('utf8'), c).not.toContain('secret');
+      expect(out.length, c).toBeLessThanOrEqual(4096);
+    }
+  });
 
   // MUTANT: bash runs a function's LAST definition, and `ccdFunctionDefinition` returns the FIRST. A second, hand-written
   // `_upd_redact` below `say` is what bash would run, so the column must refuse the file rather than copy the generated one.
