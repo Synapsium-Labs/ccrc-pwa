@@ -313,3 +313,88 @@ describe('each generated region names the file it is given (C5i)', () => {
     expect(b.stdout).toBe('');
   });
 });
+
+// C5i: `ccrc restamp` takes the file a region is given from the module's `--region-files` (detect, label, file), and
+// from `--regions` (detect, label; every region given ccd/ccd) when the module predates that mode. `--regions` keeps
+// its two columns byte for byte: an installed ccrc from before C5i reads it with `read -r b l`.
+describe('`ccrc restamp` gives each region the file its row names (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const realModule = read('shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-restamp-');
+  const cli = (mod: string, ...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync('node', [mod, ...args], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  /** A planted tree: the given files under ccd/ and shared/, the real mark.mjs, and `module` as its engine. */
+  const planted = (module: string, files: Record<string, string>): string => {
+    const t = mkTmp('ccrc-restamp-c5i-');
+    mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
+    copyFileSync(join(root, 'shared/mark.mjs'), join(t, 'shared/mark.mjs'));
+    writeFileSync(join(t, 'shared/hook-helpers.mjs'), module);
+    for (const [rel, body] of Object.entries(files)) writeFileSync(join(t, rel), body);
+    return t;
+  };
+  const restamp = (f: string): { code: number; stdout: string; stderr: string } => {
+    const home = mkTmp('ccrc-restamp-c5i-home-');
+    const r = spawnSync('bash', [join(root, 'ccd', 'ccrc'), 'restamp', f], { env: ghContainedEnv(home, { ...process.env, HOME: home }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  /** The real module with the auth-dead row given `file` instead of ccd/ccd. */
+  const authdeadGiven = (file: string): string => {
+    const at = "file: 'ccd/ccd', render: renderAuthdeadBody";
+    expect(realModule).toContain(at);
+    return realModule.replace(at, `file: '${file}', render: renderAuthdeadBody`);
+  };
+
+  it('--regions prints exactly each row\'s detect prefix and label, two columns, nothing more', () => {
+    const r = cli(MODULE, '--regions');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(REGIONS.map((x) => `${x.detect}\t${x.label}\n`).join(''));
+  });
+
+  it('--region-files prints each row\'s detect prefix, label and given file, three columns, and exits 0', () => {
+    const r = cli(MODULE, '--region-files');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(REGIONS.map((x) => `${x.detect}\t${x.label}\t${x.file}\n`).join(''));
+    for (const n of ['hook', 'authdead', 'apicap']) {
+      const row = REGIONS.find((x) => x.name === n)!;
+      expect(r.stdout.split('\n'), n).toContain(`${row.detect}\t${row.label}\tccd/ccd`);
+    }
+  });
+
+  it('a region whose row names ccd/ccd-alt is regenerated from ccd/ccd-alt, then answers current', () => {
+    const alt = ccd.replace('t=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 1', 't=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 3');
+    expect(alt).not.toBe(ccd);
+    const t = planted(authdeadGiven('ccd/ccd-alt'), { 'ccd/ccd': ccd, 'ccd/ccd-alt': alt, 'ccd/ccd-account-health': probe });
+    const f = join(t, 'ccd/ccd-account-health');
+    const r = restamp(f);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('auth-dead writers regenerated');
+    expect(readFileSync(f, 'utf8')).toContain('|| return 3');
+    const c = cli(join(t, 'shared/hook-helpers.mjs'), '--check', f, join(t, 'ccd/ccd-alt'));
+    expect(c.stdout.trim()).toBe('hook-helpers: current');
+    expect(c.code).toBe(0);
+  });
+
+  it('a region whose row names a file outside ccd/ is refused, naming that file, and nothing is written', () => {
+    const t = planted(authdeadGiven('shared/x'), { 'ccd/ccd': ccd, 'ccd/ccd-account-health': probe.replace('rm -f -- "$t"; return 2', 'return 2') });
+    const f = join(t, 'ccd/ccd-account-health');
+    const before = readFileSync(f);
+    const r = restamp(f);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('carries generated auth-dead writers, but its own tree lacks');
+    expect(r.stderr).toContain('or shared/x;');
+    expect(r.stderr).toContain('Nothing was written');
+    expect(readFileSync(f)).toEqual(before);
+  });
+
+  it('a module with no --region-files branch still regenerates the hook region from the tree\'s ccd', () => {
+    const old = realModule.replaceAll("'--region-files'", "'--no-such-mode'");
+    const t = planted(old, { 'ccd/ccd': ccd, 'ccd/session-hook.sh': hook.replace('CCRC_ID_MAX=128', 'CCRC_ID_MAX=1') });
+    const f = join(t, 'ccd/session-hook.sh');
+    const r = restamp(f);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('hook helpers regenerated');
+    expect(readFileSync(f, 'utf8')).toBe(hook);
+  });
+});
