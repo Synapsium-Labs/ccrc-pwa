@@ -184,4 +184,23 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd ws-archive'],
     collector: 'ccd ws-expire, asked by the server\'s expiry lane (children included, a child only under its own capability and marker)',
     bound: '7 days after the archive', tier: 'one worktree per archived row', ruling: null },
+  // Test box TB11 (D-7413; spec 2026-10-28 §2.5, §2.10, §4): the fleet host's test box files. The token and the push key
+  // are the operator's (placed when the box is installed, Part B); the durations file and its rows are the daily
+  // timer's and the operator's; the runs log is the wrapper's alone (D-7445), its one writer and its collector.
+  { name: 'testbox-token', root: '~/.ccrc/testbox.token (CCRC_TESTBOX_TOKEN_FILE)', pattern: 'O',
+    creators: ['the operator, when the test box is installed'], collector: null,
+    bound: 'the test box\'s lifetime', tier: 'one token line',
+    ruling: 'operator-placed secret the fleet agent\'s testbox op reads; nothing in the tree writes or removes it; removed by hand when the test box is retired.' },
+  { name: 'testbox-push-key', root: '~/.ccrc/testbox-push.key (CCRC_TESTBOX_GIT_KEY)', pattern: 'O',
+    creators: ['the operator, when the test box is installed'], collector: null,
+    bound: 'the test box\'s lifetime', tier: 'one ssh private key',
+    ruling: 'operator-placed key the wrapper pushes run snapshots with; nothing in the tree writes or removes it; removed by hand when the test box is retired.' },
+  { name: 'testbox-times', root: '~/.ccrc/testbox-times.json (CCRC_TESTBOX_TIMES), its rows in testbox-times.sources beside it, and the writer\'s temp <file>.tmp.<pid> while one is written', pattern: 'R',
+    creators: ['ccd-testbox-times (the daily timer)', 'the operator (the .sources rows)'],
+    collector: 'ccd-testbox-times (replaced whole by a rename each day; a failed pass keeps the previous file and removes its temp)',
+    bound: 'one file: the newest trusted testtimes artifact per row', tier: 'about 70 KB per repository row', ruling: null },
+  { name: 'testbox-runs-log', root: '$REG/testbox-runs/<UTC date>.log', pattern: 'R',
+    creators: ['ccd/ccrc-test (the wrapper, the runs log\'s one writer, D-7445)'],
+    collector: 'ccd/ccrc-test (the append that creates today\'s file removes the day files older than two days, by name)',
+    bound: 'two day files (today\'s and yesterday\'s), the 24 hours the card counts', tier: 'at most 128 B per test run', ruling: null },
 ];

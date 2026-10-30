@@ -209,7 +209,7 @@ CCRC_DOCTOR_CHECKS=(
   build
   provenance
   fleet
-  memory test-slice   # one line, as `flock timeout`: _check_test-slice follows _check_scopes
+  memory test-slice testbox   # one line, as `flock timeout`: _check_test-slice follows _check_scopes, _check_testbox follows it (D-7413)
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
   models codex docs history secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   # ten entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), update-sweep and delegation-hooks before it, each pinned; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups checks (A11b) after them
 )
@@ -1244,6 +1244,59 @@ _check_test-slice() {
   _dr_warn test-slice "${line:-ccrc-test --status answered nothing (exit $rc)}" \
     "systemctl --user daemon-reload, then re-run; if it persists, ccrc update (or ccrc install) re-places ~/.config/systemd/user/ccrctests.slice"
   return 2
+}
+
+# ── testbox (test box TB11, D-7413, D-7444, D-7567) ───────────────────────
+# THE TEST BOX, AS THE SERVER DECIDED IT. The server's poll asks the fleet agent's `testbox` op and decides the block
+# (`server/src/testbox.ts`): the STATE (`off` only with no test box URL; else `ok`, `degraded`, `down` or
+# `unreachable`) and the SWITCH (`$REG/testbox-remote-live`) are two fields, never folded into one (D-7444). This check
+# reads that block through the closed client (`ccrc-api testbox status`, `GET /api/testbox`, which takes the box
+# token, D-7554), so it decides nothing the card does not: it names the state, the switch, the box's queue depth and
+# the version cells that differ. SKIP with no URL in `~/.ccrc/ccrc.env` (state `off`), and, D-7567, when the block
+# cannot be read at all (no client, no answer, or a server that has not polled yet): the server's reachability is the
+# `build` and `fleet` checks' finding. WARN on `degraded`, `down` or `unreachable` with the switch on, because every
+# `ccrc test` run then falls back to the local slice; PASS otherwise, so `ok, switch off` and a degraded box nobody
+# has armed are PASS lines that still say what the box is. Never FAIL: remote runs are optional, the slice is today.
+_check_testbox() {
+  local api="$HOME/.local/bin/ccrc-api" out code body fields st sw summary queue differ
+  if ! _ccrc_knob CCRC_TESTBOX_URL '' file; then _dr_skip testbox "$KNOB_WHY"; return 3; fi
+  if [ -z "$KNOB" ]; then
+    _dr_skip testbox "off: no test box is configured (CCRC_TESTBOX_URL is unset in ~/.ccrc/ccrc.env)"
+    return 3
+  fi
+  if [ ! -x "$api" ]; then
+    _dr_skip testbox "no ccrc-api at ~/.local/bin/ccrc-api, so the server's test box block cannot be read"
+    return 3
+  fi
+  out=$("$api" testbox status 2>&1) || { _dr_skip testbox "the server did not answer GET /api/testbox (ccrc-api exited $?)"; return 3; }
+  code="${out##*http }"; code="${code:0:3}"; body="${out%http *}"
+  fields=$(jq -r 'if .ok == true and .testbox == null then "pending" elif (.testbox | type) == "object" then
+      [.testbox.state, .testbox.switch, .testbox.summary, (.testbox.box.queueDepth // "unknown" | tostring),
+       (if .testbox.box == null then "unknown" else ([.testbox.cells[] | select(.differs) | .tool] | join(", ")) end)]
+      | map(tostring) | join("\u001f") else empty end' <<<"$body" 2>/dev/null) || fields=""
+  if [ "$code" != 200 ] || [ -z "$fields" ]; then
+    _dr_skip testbox "the server's answer to GET /api/testbox is not a test box block (http ${code:-none})"
+    return 3
+  fi
+  if [ "$fields" = pending ]; then
+    _dr_skip testbox "the server has not polled the test box yet"
+    return 3
+  fi
+  IFS=$'\037' read -r st sw summary queue differ <<<"$fields"
+  case "$st" in off|ok|degraded|down|unreachable) ;; *) _dr_skip testbox "the server's test box block names no known state ($st)"; return 3 ;; esac
+  if [ "$st" = off ]; then
+    _dr_skip testbox "off: the server's test box answer reads no URL (a CCRC_TESTBOX_URL that is not a URL keeps its unset default)"
+    return 3
+  fi
+  case "$differ" in unknown) differ="versions unknown" ;; '') differ="versions match" ;; *) differ="versions differ: $differ" ;; esac
+  local line="$summary, switch $sw; queue $queue; $differ"
+  if [ "$sw" = on ] && [ "$st" != ok ]; then
+    _dr_warn testbox "$line" \
+      "every ccrc test run falls back to the local slice while the box is $st: read the Test box card (Settings › Automation) for the reason; when tools differ, Bring tools up to date there; turn the switch off while it is fixed"
+    return 2
+  fi
+  _dr_pass testbox "$line"
+  return 0
 }
 
 # The pids of `$1` (an absolute cgroup directory) currently parked in the

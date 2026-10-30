@@ -744,6 +744,8 @@ if [ "$TARGET" = "agent" ]; then
   # The read-only conflict radar (landing-order spec stage 3), beside the sweeps and on their terms; it measures
   # nothing until the operator opts a project in with a conf under ~/.ccrc/landing/.
   install_atomic ccd/ccd-land-probe .local/bin/ccd-land-probe 755
+  # The test box's daily durations fetch (D-7413), on the radar's terms; with no test box configured it fetches nothing.
+  install_atomic ccd/ccd-testbox-times .local/bin/ccd-testbox-times 755
   # D-5241: the tool-child priority's shell prefix, which `ccd` names in
   # CLAUDE_CODE_SHELL_PREFIX on Linux. Unconditional here: this lane IS a
   # session host.
@@ -869,6 +871,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.service ~/.config/systemd/user/ccd-land-probe.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.timer ~/.config/systemd/user/ccd-land-probe.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.service ~/.config/systemd/user/ccd-testbox-times.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.timer ~/.config/systemd/user/ccd-testbox-times.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.service ~/.config/systemd/user/ccrc-codex-usage@.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.timer ~/.config/systemd/user/ccrc-codex-usage@.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
@@ -1029,6 +1033,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-history-sweep.timer \
     && systemctl --user enable --now ccd-scope-sweep.timer \
     && systemctl --user enable --now ccd-land-probe.timer \
+    && systemctl --user enable --now ccd-testbox-times.timer \
     && systemctl --user restart ccrc-agent.service \
     && { bash ~/ccrc/deploy/assert-protect-chain.sh || [ $? -eq 2 ]; } \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
