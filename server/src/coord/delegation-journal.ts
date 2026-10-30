@@ -751,9 +751,7 @@ export function planDelegationPruning(input: { state: DelegationRecoveryState; v
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // IMPURE SHELL: from here down the module touches the filesystem, and only through the injected `DelegationFilePort`.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// (The shell's imports sit here, below the banner, so the split is literal: nothing above names the filesystem.)
-import { constants as fsConstants } from 'node:fs';
-import fsp from 'node:fs/promises';
+// (The port's node adapter, `nodeDelegationFilePort`, lives in `delegation-file-port.ts`: this module imports no filesystem at all.)
 
 /** An open file for writing. `write` returns the byte count the OS accepted. */
 export interface DelegationFileHandle {
@@ -794,53 +792,6 @@ export interface DelegationFilePort {
   /** A file's size and modification time, or null when it does not exist (a proven ENOENT); any other failure throws. */
   statFile(path: string): Promise<{ size: number; mtimeMs: number } | null>;
 }
-
-const isEnoent = (err: unknown): boolean => typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
-
-const wrapHandle = (fh: fsp.FileHandle): DelegationFileHandle => ({
-  write: async (bytes) => (await fh.write(bytes, 0, bytes.length, null)).bytesWritten,
-  sync: () => fh.sync(),
-  close: () => fh.close(),
-});
-
-/** The real filesystem. */
-export const nodeDelegationFilePort: DelegationFilePort = {
-  openAppend: async (p) => wrapHandle(await fsp.open(p, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT, 0o600)),
-  createTemp: async (p) => wrapHandle(await fsp.open(p, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC, 0o600)),
-  rename: (from, to) => fsp.rename(from, to),
-  fsyncDir: async (dir) => {
-    const fh = await fsp.open(dir, fsConstants.O_RDONLY);
-    try { await fh.sync(); } finally { await fh.close(); }
-  },
-  readFile: async (p) => {
-    try { return new Uint8Array(await fsp.readFile(p)); } catch (err) { if (isEnoent(err)) return null; throw err; }
-  },
-  openRead: async (p) => {
-    let fh: fsp.FileHandle;
-    try { fh = await fsp.open(p, fsConstants.O_RDONLY); } catch (err) { if (isEnoent(err)) return null; throw err; }
-    return {
-      size: async () => (await fh.stat()).size,
-      read: async (position, length) => {
-        const buf = new Uint8Array(length);
-        const { bytesRead } = await fh.read(buf, 0, length, position);
-        return buf.subarray(0, bytesRead);
-      },
-      close: () => fh.close(),
-    };
-  },
-  mkdirp: async (dir) => { await fsp.mkdir(dir, { recursive: true, mode: 0o700 }); },
-  truncate: (p, length) => fsp.truncate(p, length),
-  fsyncFile: async (p) => {
-    const fh = await fsp.open(p, fsConstants.O_RDONLY);
-    try { await fh.sync(); } finally { await fh.close(); }
-  },
-  listDir: async (dir) => {
-    try { return await fsp.readdir(dir); } catch (err) { if (isEnoent(err)) return null; throw err; }
-  },
-  statFile: async (p) => {
-    try { const st = await fsp.stat(p); return { size: st.size, mtimeMs: st.mtimeMs }; } catch (err) { if (isEnoent(err)) return null; throw err; }
-  },
-};
 
 /**
  * SHA-256 of raw bytes, lowercase hex. It uses the platform's Web Crypto digest rather than `node:crypto`: a pin in
