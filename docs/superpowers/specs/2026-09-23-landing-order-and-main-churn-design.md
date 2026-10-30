@@ -622,7 +622,8 @@ flowchart TD
 *Figure 1. The landing route chosen from the repository's own rules. Every arrow into STOP goes to the operator,
 never to another route. A required check that is red and the PR's own goes to the fix-round rule on routes Q and G,
 not to STOP. Amended 2026-10-28: routes G and U never pass `--admin`, and a missing required approval on either is
-a STOP.*
+a STOP. Amended 2026-10-30 (D-7588): a red that is `main`'s own and already fixed on `main` is not a STOP for the
+operator; the coordinator takes the new-head route itself.*
 
 #### 5.7.5 Stops
 
@@ -642,7 +643,7 @@ changes nothing. The coordinator says in its turn's text which stop fired and wh
 | Auto-merge is off under a queue rule | a `merge_queue` rule applies and `allow_auto_merge` is false. A PRECAUTION, not measured: gh 2.45 reaches a required queue through the auto-merge mutation (read statically from the binary, not run), so the enqueue may be refused, but no enqueue has been tried with auto-merge off, since every recorded enqueue ran with it allowed. It holds until measured on a scratch repository. The wave 2 plan's Task 7 runbook, stop rule 4 (`docs/superpowers/plans/2026-09-24-landing-order-wave2-native-queue.md`), was conditional for the same reason |
 | A required check cannot be verified | a required name pinned to an App shows on the head only as a commit status |
 | A required check has not reported within the bound | the wait of 5.7.3 has ended, and a fresh read 5 still shows a required name as not reported |
-| A red required check nothing here can reach | a required check red on the head that is not the PR's own and is not a GitHub Actions run, or one still red after the one rerun |
+| A red required check nothing here can reach | a required check red on the head that is not the PR's own and is not a GitHub Actions run, or one still red after the one rerun. (Amended 2026-10-30, D-7588, the operator's answer to D-7536's question: where that red is `main`'s own and already fixed on `main`, the coordinator takes the new-head route itself, a fix round for one clean merge of `main` and then a review run scoped to that merge. Where either fact cannot be shown, it stays this stop.) |
 | A required approval is missing (`approval-missing`; amended 2026-10-28, replacing "The approval licence fails") | on route G or U only, never on route Q: any `pull_request` rule of read 2, or read 3's classic protection, has `required_approving_review_count` above 0, and read 1's `reviewDecision` is anything but exactly `APPROVED`, empty or absent included. It is decided after read 5, so a `WAIT` or `RED` line comes first. A standing request for changes stops earlier (`changes-requested`); once the operator has answered ignore to that stop, a missing approval still stops here. The line is `STOP approval-missing: route G needs an approval the fleet cannot give, and --admin is never used` (or `route U`). It means the merge needs an approval the fleet cannot give, and with no `--admin` GitHub could only refuse it (5.7.4) |
 | GitHub refuses the merge | any rule GitHub enforces at merge (reviews, signatures, deployments, code scanning, required workflows) and the coordinator does not. No route passes `--admin`, so the coordinator never works around a refusal. Under read 3b it is also the stop for an approval kept in classic protection, which that read cannot show (amended 2026-10-28) |
 
