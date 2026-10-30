@@ -653,6 +653,8 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
  */
 export const ACT_LISTING_METHODS: readonly string[] = [
   'FleetWatcher.mailPass', 'FleetWatcher.divergencesPass', 'FleetWatcher.sleepRunDone', 'FleetWatcher.sleepIdleHours',
+  // D-7452: the automatic roll's act-time switch read (D-7047's), a row of the same sleep executor.
+  'FleetWatcher.sweepRoll',
 ];
 export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
 export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';

@@ -159,7 +159,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -273,6 +273,11 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // cover of these two lanes the operator ruled on 2026-10-26 (D-7052).
   { name: 'sleepRunDone', cadenceMs: STOP_DONE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'sleepIdleHours', cadenceMs: HIBERNATE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  // D-7452: the automatic coordinator roll runs inside hibernation's clock (binary-lifecycle spec §7.4), one pass at a time.
+  {
+    name: 'rollIdle', cadenceMs: HIBERNATE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
+    derivedFrom: { name: 'sleepIdleHours', reason: 'the roll shares hibernation\'s gate and its clock' },
+  },
 ];
 
 export function laneRow(name: string): LaneRow {

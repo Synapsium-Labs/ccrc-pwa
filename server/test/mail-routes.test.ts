@@ -23,6 +23,7 @@ import { isDigestKebab } from '../src/coord/digest.js';
 import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
 import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
 import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
+import { isAutoRollKebab } from '../src/coord/rollTarget.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -1026,8 +1027,11 @@ describe('the rejection table is total, in both directions', () => {
         // (`'in-flight'`, `'child-workspace'`) and the switch door's refusals (`'state-unreadable'`) as literals. A keep
         // reason rides a log line and the arm's re-measure, never a mail rejection or a run refusal. Admitted through the
         // exported guard, derived from `DEAD_DISPATCH_KEEPS` and `DISPATCH_ABANDON_REFUSALS`, never NOT_CODES.
-        || isDeadDispatchKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word or dead-dispatch word`).toBe(true);
+        || isDeadDispatchKebab(tok)
+        // THE AUTOMATIC ROLL'S VERDICT (D-7452): `coord/rollTarget.ts` names its skip words, its opt-out suffix and its
+        // actor as literals. A word names a skip in the lane's journal, never a `refused` or `reject.code`.
+        || isAutoRollKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word or automatic-roll word`).toBe(true);
     }
   });
 });

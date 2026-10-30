@@ -108,6 +108,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(Object.fromEntries(settingRows.map(([k, r]) => [k, 'setting' in r.storage ? r.storage.setting : null]))).toEqual({
       'stall-watch-level': 'stall_settings.level',
       'collect-lane-choice': 'collect_lane_settings.choice',
+      'roll-idle-targets': 'roll_settings.targets',
     });
   });
 
@@ -120,7 +121,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, two settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, three settings routes, the rest by hand', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -128,6 +129,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'stall-watch-level': 'POST /api/coord/stall-watch',
       'collect-lane-choice': 'POST /api/coord/collect-lane',
       'testbox-remote-live': 'ccd testbox-remote, through POST /api/testbox/switch',
+      'roll-idle-targets': 'POST /api/coord/roll-idle',
     });
   });
 
@@ -180,8 +182,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 31 rows: 29 markers and 2 settings (30 at the test box contract\'s base)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([31, 29, 2]);
+  it('the table has 32 rows: 29 markers and 3 settings (30 at the test box contract\'s base; roll-idle-targets the third setting)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([32, 29, 3]);
   });
 
   it('a listing with reclaim-paused is set for it and clear for every other marker row', () => {

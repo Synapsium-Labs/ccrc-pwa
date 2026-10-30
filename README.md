@@ -5104,6 +5104,27 @@ for `VIEWER_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat 
 (`visible:false`, which leaves notifications as they were), and for that long after a server start every session counts
 as viewed.
 
+**The automatic coordinator roll (D-7452 to D-7454).** An idle coordinator is restarted onto the node's current ccrc
+release, its conversation resumed, so a new release or new skill text reaches it. It is **behind** when its Claude Code
+process started (the live file's `startedAt`) before the node's current install completed (`~/.ccrc/installed`'s
+modification time). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
+`server/src/coord/rollTarget.ts`). It is skipped, by name, when hibernation is armed and will take it within 30 minutes
+(the wake brings the release), when its live status moved in the last 10 minutes (`compacting`), or when it carries
+`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). A session that is not a coordinator (an unreadable `.child` counts as
+a child) is never rolled. It picks the release up when it next starts for another reason. The act is a row of the
+sleep executor (`server/src/rollLane.ts`) and ONE ccd verb, `ccd hibernate --roll` (D-7458): ccd re-measures, sleeps
+the session and wakes it at once, for at most one session a sweep, on the serialiser and the session's queue, behind
+the wake budget as an automatic wake, and only on a box whose `ccd caps` lists `hibernate-roll`. ccd's refusal (a draft
+in the input, `esc to interrupt`, an attached terminal, `.no-roll`) is a skip, and nothing is woken; a failed wake
+exits 4 (`roll-wake-failed`) after ccd puts the session back to sleep (hibernated, unit stopped, the wake's `.woke`
+stamp put back), so mail or an open screen wakes it; a failed wake ccd cannot put back to sleep (its `.hibernated`
+could not be written again) exits 5 (`roll-wake-unrestored`) and journals `not restored` with the session to check; a
+call cut short, never answered or with an unmeasured ending journals `outcome unknown` and names the session to check. Every skip is a `ccrc-server:
+roll-skip <id>: <reason>` line. **Settings › Automation › Roll idle sessions** (`GET`/`POST /api/coord/roll-idle`, one
+`roll_settings` row) is `Coordinators` (the default) or `Off`. `$REG/hibernate-disabled` stops it too. The Claude
+Code binary trigger comes with `ccd roll` (binary-lifecycle wave 2). `ccrc update`'s supervisor sweep is unchanged: it
+restarts supervisors, never Claude Code.
+
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
 `git fetch origin`: the branch conflicts —

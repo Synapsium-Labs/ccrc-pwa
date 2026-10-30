@@ -131,6 +131,17 @@ export async function turnVerdictFor(d: TurnReadDeps, rec: SessionRecord, uuid: 
  * `readTurnMarkMeasured`. Anything that could not be read is `unmeasured`, never a marker taken on trust. The
  * stop-done lane's `marker` and `marker-background` reads (D-5370), hibernation's own (§5.11).
  */
+/** When the pane's Claude Code process started (D-7454): the live file's numeric `startedAt`, epoch ms, read through
+ *  the same three reads `turnMarkFor` makes. Null when any of them could not be made or the file carries none. */
+export async function processStartedAtFor(d: TurnReadDeps, rec: SessionRecord): Promise<number | null> {
+  const cfgDir = configDirFor(d.cfg, rec.wrapper);
+  if (cfgDir === undefined) return null;
+  const pid = await d.tmux.panePid(rec.id);
+  if (pid === null) return null;
+  const live = await readLiveStateMeasured(d.io, cfgDir, pid);
+  return live.ok ? live.state.startedAt : null;
+}
+
 export async function turnMarkFor(d: TurnReadDeps, rec: SessionRecord): Promise<TurnMarkRead> {
   const cfgDir = configDirFor(d.cfg, rec.wrapper);
   if (cfgDir === undefined) return { ok: false, reason: 'unmeasured' };

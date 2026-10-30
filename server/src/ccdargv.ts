@@ -79,6 +79,10 @@ const looseHex = (hex: string): string => {
  *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
 const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
 
+/** `ccd hibernate --roll` (D-7458): the automatic roll's one act, the sleep and the wake in one verb. Sent only behind
+ *  `HIBERNATE_ROLL_CAP`; an older ccd binds the bare flag as a second positional and dies on its arity rule. */
+const rollFlags = (roll: boolean): string[] => (roll ? ['--roll'] : []);
+
 /**
  * The DECLARED half of a provenance record (spec D2's `dec`), as the three ccd
  * flags carry it. Self-asserted by construction — ccd cannot authenticate a
@@ -399,9 +403,12 @@ export const CCD_ARGV = {
    *  attached terminal) and refuses `session-busy: <reason>` at exit 3 otherwise, touching nothing. ONE positional, the
    *  id, then the dec — stripped by ccd before its arity rule, as `ws-archive`'s are (`ccdargv-dec-parity.test.ts`;
    *  `hibernate-verb-dec-and-idempotence` (D-5424)).
-   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. */
-  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null) =>
-    argv(['hibernate', ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
+   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. `roll` (D-7458)
+   *  makes it the automatic roll's act: `.no-roll` refuses instead of `.no-hibernate`, and ccd wakes it in the same
+   *  verb, exiting 4 with `ccd: roll-wake-failed` when the wake fails and the row is back asleep, 5 with
+   *  `ccd: roll-wake-unrestored` when it could not be put back. */
+  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null, roll = false) =>
+    argv(['hibernate', ...rollFlags(roll), ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
@@ -1179,6 +1186,12 @@ export const WS_WRAPPER_CAP = 'ws-wrapper-v1';
  *  `capSupported` (false on no evidence), so a box without it keeps today's `held`. ccd's `echo hibernate-hold-ok` and
  *  `server/test/ccdCapTokens.ts` are the other two spellings. */
 export const HIBERNATE_HOLD_OK_CAP = 'hibernate-hold-ok';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--roll` (D-7458): the automatic coordinator roll's
+ *  one act, the sleep and the wake in one verb. It gates the roll lane: with no token the lane is unarmed and rolls
+ *  nothing (`capSupported`, false on no evidence). ccd's `echo hibernate-roll` and `server/test/ccdCapTokens.ts` are
+ *  the other two spellings. */
+export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

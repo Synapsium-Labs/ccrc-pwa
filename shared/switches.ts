@@ -264,6 +264,11 @@ export const SWITCHES = {
     meaning: 'The Settings arm of the collector: only an exact live choice arms it.',
     writer: 'POST /api/coord/collect-lane',
   },
+  'roll-idle-targets': {
+    storage: { setting: 'roll_settings.targets' }, default: 'coordinators', owner: 'C4',
+    meaning: 'Which idle sessions the automatic roll restarts onto the current release: coordinators, or off (D-7453).',
+    writer: 'POST /api/coord/roll-idle',
+  },
   [TESTBOX_REMOTE_LIVE_MARKER]: {
     storage: { marker: TESTBOX_REMOTE_LIVE_MARKER }, default: 'absent: every run is local', owner: 'C2',
     meaning: 'Test runs go to the test box when its checks pass; any run that cannot falls back to the local tests slice and says why.',

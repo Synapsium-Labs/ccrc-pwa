@@ -121,6 +121,13 @@ describe('per-verb timeouts', () => {
     // cover. A verb whose worst case exceeds its budget should say so here.
     [['start', 'demo-quiet-basin'], 300_000],
     [['enable', 'demo-quiet-basin'], 300_000],
+    // D-7458: `ccd hibernate --roll` runs `cmd_ensure` inside the same verb, so it carries ensure's budget. At the flat
+    // 90 s a cold wake would be killed after the sleep, leaving the coordinator hibernated and the answer a failure.
+    [['hibernate', '--roll', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:roll'], 300_000],
+    // D-7541: only the roll carries that bound. A plain hibernate (the two sleep lanes) is a re-measure and a kill, and
+    // its lanes hold the coordination serialiser across the call, so it keeps the flat 90 s.
+    [['hibernate', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate'], 90_000],
+    [['hibernate', '--hold-ok', 'wave 3', 'project-a-quiet-basin'], 90_000],
     // The four Docs verbs (spec 2026-10-01 section 2 (a), Budgets): each outlasts ccd's own helper deadline plus
     // its 2 s kill grace plus 5 s, which `docs-budget.test.ts` holds against ccd's source. Without these rows a
     // missing entry silently inherits the flat 90 s and nothing here reds.

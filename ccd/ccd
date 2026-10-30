@@ -4303,8 +4303,12 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # (the message this replaced); routing all five call sites through one
   # choke point must not mean the warning stops firing for any of them. Mirrors
   # _ws_supervise's own warning on the same failure, one function up.
+  # The status stays 0 (the intent is recorded either way). The refusal is ALSO left in `_WS_UNSUPERVISE_DISABLED`
+  # (1 the unit was disabled, 0 it was not) for the one caller that must not claim a stopped unit it did not get: the
+  # roll's put-back-to-sleep (`cmd_hibernate --roll`). Every other caller ignores it.
+  _WS_UNSUPERVISE_DISABLED=1
   _svc_disable_now "claude-session@$id" 2>/dev/null \
-    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
+    || { _WS_UNSUPERVISE_DISABLED=0; echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2; }
 }
 
 _session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started
@@ -9014,6 +9018,7 @@ EOF
   # rotted, and nothing reds when they do.)
   echo stop-surface
   echo hibernate-hold-ok   # D-6091: `cmd_hibernate --hold-ok <text>`; the server passes it only on this token (`capSupported`)
+  echo hibernate-roll      # D-7458: `cmd_hibernate --roll`, the automatic roll's one act; the server sends it only on this token (`capSupported`)
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
@@ -29843,7 +29848,7 @@ _hib_hold_ok() {   # id text -> 0 iff `$REG/<id>.hold` may be passed for the run
   cmp -s -- "$f" <(printf '%s' "$2")
 }
 
-cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
+cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
   # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
   # are stripped BEFORE it, as `cmd_stop`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`), and land on the
@@ -29851,10 +29856,29 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   # (`hibernate-refuses-a-dash-leading-id`): the server composes the id FIRST, so an id `--actor` would take `--surface`
   # as its value, leaving the surface word as the id. A dash-led value gets the usage line; the id passes `_reg_id_ok`.
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  #
+  # `--roll` (D-7458, the automatic coordinator roll's ONE act): the same re-measure and the same act, then the wake
+  # (`cmd_ensure`) in the same verb, so the session resumes its conversation on the release the node now runs. It
+  # differs from a plain hibernate in exactly three places: `.no-roll` refuses `opted-out` and `.no-hibernate` does
+  # NOT (the operator's opt-out of sleep is not an opt-out of the roll, U4); a row already hibernated is not taken as
+  # done (a roll needs a live pane to measure, so the re-measure below refuses it); and a failed wake exits 4 with
+  # `ccd: roll-wake-failed — …` AFTER putting the row back to sleep: `cmd_ensure` clears `.hibernated` and enables the
+  # unit before its spawn can fail, which would leave a row neither hibernated nor running with a Restart=always unit
+  # retrying it, so the act is repeated (the marker re-stamped, the unit stopped, any late pane killed, the `.woke`
+  # stamp the wake wrote put back) and the row is the sanctioned hibernated one that mail, an open screen or a
+  # re-dispatch wakes. When the marker cannot be written again the row is NOT restored: exit 5,
+  # `ccd: roll-wake-unrestored — …`, a phrase of its own, since that row may be neither running nor hibernated. The same exit
+  # when the unit cannot be stopped again, or when a pane is still live after the put-back's kill. A pane kill that fails on a pane still live exits 6, `ccd: roll-kill-failed — …`:
+  # nothing was rolled and no wake is tried. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
+  # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
+  # line, which is pinned. `ccd caps` says `hibernate-roll`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
+  local lc_roll=0
   while (( $# )); do
     case "$1" in
+      --roll)      lc_roll=1; shift ;;
+      --roll=*)    die "$usage" ;;
       --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) [[ ${1#--surface=} != -* ]] || die "$usage"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
       --actor)     [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
@@ -29881,12 +29905,15 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
     [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
     _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
   fi
+  (( lc_roll && ! lc_gr )) && lc_reason=roll   # the roll names itself on its one journal row
   [[ $# -eq 1 ]] || die "$usage"
   local id="$1"
   _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
   # Idempotent on a row already asleep: no pane, the marker standing (D-5424: a sweep may retry a lost answer).
-  if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
+  # Not for a roll: a sleeping row is not on the release a wake brings until it wakes, and that is mail's or an
+  # open screen's act, so a roll on it falls through to the re-measure, which finds no pane and refuses.
+  if (( ! lc_roll )) && [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
   # ── the re-measure, cheapest first ──
   # `-e` not `-f`, the hold readers' polarity: a hold or an opt-out that cannot be read still holds.
   # D-6091: `--hold-ok <text>` lets ONE kind of hold pass — a programme hold the server read, classified and named
@@ -29895,7 +29922,11 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
     (( lc_gh )) && _hib_hold_ok "$id" "$lc_holdok" \
       || _hib_refuse held "$id is held: a program has declared it is mid-flight here"
   fi
-  [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
+  if (( lc_roll )); then
+    [[ -e "$REG/$id.no-roll" ]] && _hib_refuse opted-out "$id carries a no-roll marker"
+  else
+    [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
+  fi
   local now last
   _now_s_to now; _reg_get_to last "$id" lastswap
   # A `.lastswap` that stands but does not read as an epoch is unmeasured, and an unmeasured read holds (`-e`/`-L`, the hold polarity; D-5242).
@@ -29949,8 +29980,54 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
   _ws_unsupervise "$id" ccd
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
-  echo "$(date '+%F %T') hibernate $id: idle ${hours}h" >> "$REG/swap.log"
+  # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
+  # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.
+  if (( lc_roll )) && _alive "$id"; then
+    echo "$(date '+%F %T') hibernate $id: roll kill failed, pane still live" >> "$REG/swap.log"
+    echo "ccd: roll-kill-failed — $id's pane could not be killed and is still live, so it was not rolled: it still runs the release it started on, with $REG/$id.hibernated written and its unit stopped; check it" >&2
+    exit 6
+  fi
+  local lc_tag=''; (( lc_roll )) && lc_tag=' (roll)'
+  echo "$(date '+%F %T') hibernate $id: idle ${hours}h$lc_tag" >> "$REG/swap.log"
   echo "hibernated $id"
+  (( lc_roll )) || return 0
+  # 3. The roll's wake (D-7458): `cmd_ensure` clears `.hibernated`, writes `.woke` and starts the unit, whose spawn
+  #    resumes the conversation. In a subshell, so its `die` ends the wake and not this verb's answer.
+  #    `.woke` is read first: the wake stamps it, and a wake that failed did not wake anything (below).
+  local wrc=0 lc_woke='' lc_had_woke=0
+  if [[ -e "$REG/$id.woke" || -L "$REG/$id.woke" ]]; then lc_had_woke=1; IFS= read -r lc_woke < "$REG/$id.woke" 2>/dev/null || true; fi
+  ( cmd_ensure "$id" ) || wrc=$?
+  if (( wrc != 0 )); then
+    # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
+    # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
+    # it takes the unrestored branch below, never "put back to sleep".
+    local lc_unrestored=''
+    if ! _reg_set "$id" hibernated "$now $hours"; then
+      lc_unrestored="$REG/$id.hibernated could not be written again"
+    elif _ws_unsupervise "$id" ccd; (( ! _WS_UNSUPERVISE_DISABLED )); then
+      lc_unrestored="its unit claude-session@$id could not be stopped again"
+      tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+    elif tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true; _alive "$id"; then
+      # A pane the failed wake raised (a spawn that timed out after tmux made the session) that outlives this kill is
+      # not the sanctioned hibernated row either, as the act's own kill check (exit 6) says of a pane that survives it.
+      lc_unrestored="a pane is still live after the put-back"
+    else
+      # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
+      # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
+      if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
+      echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
+      echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
+      exit 4
+    fi
+    # NOT RESTORED: the marker could not be written again, or the unit could not be stopped again, so the row is not
+    # the sanctioned hibernated one. Its own exit (5) and its own phrase, never `roll-wake-failed`: a caller that reads
+    # exit 4 as "stays hibernated" must not read this as that. `.woke` is left as the wake wrote it (a registry that
+    # refused the marker is not trusted with a second write here).
+    echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), NOT restored: $lc_unrestored" 2>/dev/null >> "$REG/swap.log" || true
+    echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $lc_unrestored: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
+    exit 5
+  fi
+  echo "rolled $id"
 }
 
 cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry.

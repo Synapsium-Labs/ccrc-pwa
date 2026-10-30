@@ -103,6 +103,8 @@ import {
   CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
   type ApprovalView,
 } from '../../../shared/api.js';
+import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import { rollTargetsOf } from './rollTarget.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -2712,6 +2714,35 @@ export function registerCoordRoutes(
       'record-only', { degraded: 'dispatch abandon switch written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/roll-idle` — Settings › Automation › "Roll idle sessions" (D-7453, the operator's rulings of
+   *  2026-10-29): `coordinators` (the default, ON) or `off`. Session-gated when sign-in is armed, open dark, as the
+   *  stall-watch door is: no machine lane calls it, and turning it on releases nothing a signed-in operator has not
+   *  already ruled. The one writer is `CoordStore.setRollTargets`; a change is a record-only feed row naming the actor. */
+  const rollIdleView = (coord: NonNullable<typeof deps.coord>): { targets: ClaudeRollTargets | null; default: ClaudeRollTargets; choices: readonly ClaudeRollTargets[] } =>
+    ({ targets: rollTargetsOf(coord.rollSettings()), default: CLAUDE_ROLL_TARGETS_DEFAULT, choices: CLAUDE_ROLL_TARGETS });
+
+  app.get('/api/coord/roll-idle', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
+  });
+
+  app.post('/api/coord/roll-idle', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { targets?: unknown } | null | undefined;
+    const targets = body !== null && typeof body === 'object' ? body.targets : undefined;
+    if (!isClaudeRollTargets(targets)) {
+      return refuseRoute(reply, 'bad-request', { detail: `targets must be one of ${CLAUDE_ROLL_TARGETS.join(', ')}` });
+    }
+    const w = deps.coord.setRollTargets(targets, Date.now());
+    const before = rollTargetsOf(w.before);
+    if (before !== targets && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'roll idle sessions changed', body: `roll idle sessions: ${before ?? 'unreadable'} -> ${targets}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'roll idle sessions written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
   });
 
   /**
