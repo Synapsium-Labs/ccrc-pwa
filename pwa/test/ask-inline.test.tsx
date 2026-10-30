@@ -216,6 +216,29 @@ describe('the ask is one container at each width', () => {
     expect(section, 'the h2 is the card\'s accessible name').toHaveAccessibleName(QUESTION);
     expect(section.getAttribute('aria-labelledby')).toBe(heading.id);
   });
+
+  // Task T1d: the question region scrolls and holds nothing focusable, so it is a Tab stop of its own, named, between the
+  // header and the options: a keyboard scrolls a long question in an engine that does not make a scroller focusable.
+  it('the question region is a named Tab stop between the header and the options', () => {
+    media(true);
+    const { arrive } = mount();
+    arrive(1);
+    const section = card();
+    const question = section.querySelector<HTMLElement>('.ask-inline-question')!;
+    expect(question.tabIndex, 'the region is in the Tab order').toBe(0);
+    expect(question, 'and named').toHaveAccessibleName('Question');
+    expect(question.getAttribute('role')).toBe('group');
+    // The sequential focus order inside the card (no positive tabindex is drawn, so it is document order).
+    const stops = Array.from(section.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]'))
+      .filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled);
+    const at = stops.indexOf(question);
+    const eyebrow = section.querySelector('.ask-inline-eyebrow')!;
+    const surface = section.querySelector('.ask-inline-surface')!;
+    expect(at, 'premise: the region is among the stops').toBeGreaterThanOrEqual(0);
+    expect(stops.slice(at + 1).some((el) => el.matches('.opt')), 'premise: an option follows').toBe(true);
+    expect(stops.slice(0, at).every((el) => eyebrow.contains(el)), 'only the header\'s stops come before it').toBe(true);
+    expect(stops.slice(at + 1).every((el) => surface.contains(el)), 'only the surface\'s stops come after it').toBe(true);
+  });
 });
 
 describe('Escape at the desk', () => {

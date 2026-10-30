@@ -236,39 +236,49 @@ describe('the inline ask scrolls in its question region and leaves the transcrip
   }
 });
 
-// Task T1d (desktop-polish plan; the operator's report of 2026-10-30): at the desk a long question's card was squeezed to
+// Task T1d (the operator's report of 2026-10-30): at the desk a long question's card was squeezed to
 // two clipped lines of large semibold text with no option in view, because the card's one scroller held the question AND
 // the options and the transcript kept its third. Now the card is its header, then the QUESTION region
 // (`.ask-inline-question`), then the SURFACE (`.ask-inline-surface`: the tab row, the options, Other and the controls), and
 // the question reads at the prose size, regular weight.
 //
-// Who gives way, in the operator's order of 2026-10-30 (ask 212, measured): the header and the answer rows never shrink
-// first; the question region is at most 40% of the pane and shrinks first, to two lines; the transcript, the pane's
-// remainder, keeps at least 48px; and only past both floors does the surface scroll, on its own, from its top. Fixture 1's
-// surface is about 560px (the tab row and five rows about 375, then the list of the ask's other questions) and the header,
-// strips and composer take about 230px of the pane, so: at 1920x1080 every answer row is in view; at 1280x900 and
-// 1280x600 the header, two question lines, the tab row and the first option are, and the other rows are in the surface's
-// own scroll. In a window under 700px tall (THE SHORT-WINDOW RULE, the operator's ruling on the measured 1280x600, where two
-// lines and 48px left about 4px of the first option) the floors yield: the transcript to none and the question to one line,
-// so the header, a line of the question, the tab row and the first option are whole there. Each skin and palette, at 1280
-// and 1920 in a 900px window, 1920x1080 and 1280x600.
+// Who gives way, in Task T1d's order: the header and the answer rows never shrink first; the question region is at most 40%
+// of the pane and shrinks first, to two lines; the transcript, the pane's remainder, keeps at least 48px; and only past
+// both floors does the surface scroll, on its own, from its top. Fixture 1's surface is about 560px (the tab row and five
+// rows about 375, then the list of the ask's other questions) and the header, strips and composer take about 230px of the
+// pane, so: at 1920x1080 every answer row is in view (and the surface is whole, but for the end of the list of other
+// questions in Refined); in every shorter window the header, the question's floor, the tab row and the first option are,
+// and the other rows are in the surface's own scroll, every one of them reachable there. In a window under 700px tall
+// (THE SHORT-WINDOW RULE, Task T1d: at 1280x600 two lines and 48px left about 4px of the first option) the floors yield: the transcript to none and the question to one line, so the header, a
+// line of the question, the tab row and the first option are whole there; 1280x699 and 1280x700 stand on either side of
+// that bound. Each skin and palette, at 1280 and 1920 in a 900px window, 1920x1080, 1280x700, 1280x699 and 1280x600.
 interface T1dView extends AppView {
   readonly height: number;
-  /** Every answer row in view (1080), or the tab row and the first option (900, 600). */
+  /** Every answer row in view (1080), or the tab row and the first option (every shorter window). */
   readonly every: boolean;
+  /** Whether fixture 1's surface scrolls: in every window but 1920x1080, and there in Refined alone. */
+  readonly scrolls: boolean;
 }
 const T1D_VIEWS: T1dView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme): T1dView[] => [
-  { skin, theme, width: 1280, height: 900, every: false },
-  { skin, theme, width: 1920, height: 900, every: false },
-  { skin, theme, width: 1920, height: 1080, every: true },
-  { skin, theme, width: 1280, height: 600, every: false },
+  { skin, theme, width: 1280, height: 900, every: false, scrolls: true },
+  { skin, theme, width: 1920, height: 900, every: false, scrolls: true },
+  // Refined's rows are taller than Instrument's: its surface is whole but for the end of the list of the ask's other
+  // questions (about 7px), which its own scroll shows; every answer row is in view in both.
+  { skin, theme, width: 1920, height: 1080, every: true, scrolls: skin === REFINED },
+  { skin, theme, width: 1280, height: 700, every: false, scrolls: true },
+  { skin, theme, width: 1280, height: 699, every: false, scrolls: true },
+  { skin, theme, width: 1280, height: 600, every: false, scrolls: true },
 ]));
 const t1dNamed = (v: T1dView): string => `${v.skin}, ${v.theme}, ${v.width}x${v.height}`;
 /** The floors: the question's, in lines at the prose size, and the transcript's, in px (`--sp-12`); under the short-window
  *  rule (chat.css, `@media (height < 700px)`) one line and none. */
 const SHORT_WINDOW = 700;
 const floors = (v: T1dView): { lines: number; transcript: number } => (v.height < SHORT_WINDOW ? { lines: 1, transcript: 0 } : { lines: 2, transcript: 48 });
-const SHORT_QUESTION = 'Line 1 of a short question.\nLine 2 of a short question.';
+/** A question that wraps to two lines at the card's width in every view (the reading measure binds the card at 1280 and
+ *  at 1920 alike); the cells that read it assert that premise. `.ask-inline-title` collapses a newline, so the second
+ *  line is made by the wrap, never by a line break. */
+const SHORT_QUESTION = 'Should the nightly report keep its current layout, with the summary table first and the per-project '
+  + 'details after it, or move the details first and the summary to the end?';
 
 /** Fixture 1 (the hook envelope, three questions) with `question` as its first. */
 const hookFrames = (question: string): object[] => {
@@ -302,7 +312,18 @@ interface T1dMeasure {
   scrollers: string[];
   question: Region | null;
   surface: Region | null;
+  /** The question's own lines (the h2's height over its line height). */
+  titleLines: number;
+  /** The surface's own scroll, tried and then put back: scrolled until its last answer row's bottom meets the surface's
+   *  bottom, that row and the surface (`last`, `surface`); and scrolled to its end, the box that reaches lowest of all it
+   *  draws (`end`, whose bottom is the end of the list of the ask's other questions on fixture 1) and the surface
+   *  (`endSurface`). So a row the surface hides is reachable, and so
+   *  is all of what it holds. */
+  reach: { last: Box; surface: Box; end: Box; endSurface: Box } | null;
   tabs: Box | null;
+  /** What clips the question inside the card: the bottom of the card's inner edge (its border box less its bottom
+   *  border), and the card's body, `.ask-inline-body`, with its computed `overflow-y`. */
+  paint: { cardInner: number; body: Box; overflowY: string };
   options: Array<{ label: string } & Box>;
   title: Font;
   /** The same declaration resolved by Chrome on a probe: what "the prose size, regular weight" computes to here. */
@@ -358,6 +379,24 @@ async function openT1d(view: T1dView, frames: object[], shot: string): Promise<T
       el.appendChild(probe);
       const prose = font(probe);
       probe.remove();
+      const h2 = el.querySelector<HTMLElement>('h2')!;
+      const surfaceEl = el.querySelector<HTMLElement>('.ask-inline-surface');
+      const rows = Array.from(el.querySelectorAll<HTMLElement>('.opt')).filter((o) => o.closest('.ask-envelope-more') === null);
+      let reach: T1dMeasure['reach'] = null;
+      if (surfaceEl !== null && rows.length > 0) {
+        const was = surfaceEl.scrollTop;
+        const lastRow = rows[rows.length - 1]!;
+        surfaceEl.scrollTop = was + lastRow.getBoundingClientRect().bottom - surfaceEl.getBoundingClientRect().bottom
+          + parseFloat(getComputedStyle(surfaceEl).paddingBottom);
+        const last = box(lastRow)!;
+        const surface = box(surfaceEl)!;
+        surfaceEl.scrollTop = surfaceEl.scrollHeight;
+        // The bottom of what the surface draws: the lowest bottom of its boxes (its last child can be an empty node).
+        const drawn = Array.from(surfaceEl.querySelectorAll('*')).map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0);
+        const lowest = drawn.reduce((a, r) => (r.bottom > a.bottom ? r : a));
+        reach = { last, surface, end: { top: lowest.top, bottom: lowest.bottom }, endSurface: box(surfaceEl)! };
+        surfaceEl.scrollTop = was;
+      }
       return {
         vh: window.innerHeight,
         chat: chat.getBoundingClientRect().height,
@@ -367,10 +406,17 @@ async function openT1d(view: T1dView, frames: object[], shot: string): Promise<T
         head: box(el.querySelector('.ask-inline-eyebrow'))!,
         scrollers: [el, ...el.querySelectorAll<HTMLElement>('*')].filter(scrolls).map((e) => e.getAttribute('class') ?? e.tagName),
         question: region(el.querySelector<HTMLElement>('.ask-inline-question')),
-        surface: region(el.querySelector<HTMLElement>('.ask-inline-surface')),
+        surface: region(surfaceEl),
+        titleLines: h2.getBoundingClientRect().height / parseFloat(getComputedStyle(h2).lineHeight),
+        reach,
         tabs: box(el.querySelector('.ask-tabs')),
+        paint: {
+          cardInner: el.getBoundingClientRect().bottom - parseFloat(getComputedStyle(el).borderBottomWidth),
+          body: box(el.querySelector('.ask-inline-body'))!,
+          overflowY: getComputedStyle(el.querySelector('.ask-inline-body')!).overflowY,
+        },
         // The question's own rows (the read-only list of the ask's other questions, `.ask-envelope-more`, is `.opt` rows too).
-        options: Array.from(el.querySelectorAll<HTMLElement>('.opt')).filter((o) => o.closest('.ask-envelope-more') === null).map((o) => ({
+        options: rows.map((o) => ({
           label: o.querySelector('.opt-label')?.textContent ?? o.textContent ?? '', ...box(o)!,
         })),
         title: font(el.querySelector<HTMLElement>('h2')!),
@@ -421,7 +467,8 @@ describe('the inline ask keeps its options in view and reads its question at pro
         expect(m.errors).toEqual([]);
       });
 
-      it('the question region is the card\'s scroller and the surface does not scroll', () => {
+      it(view.scrolls ? 'the question region scrolls, and the surface scrolls only past both floors, inside the card, to its last row'
+        : 'the question region scrolls and the surface does not', () => {
         const m = long!;
         expect(m.question, 'the question has its own region').not.toBeNull();
         expect(m.surface, 'the options have their own surface').not.toBeNull();
@@ -430,12 +477,20 @@ describe('the inline ask keeps its options in view and reads its question at pro
         expect(m.question!.bottom, 'the question region sits above the surface').toBeLessThanOrEqual(m.surface!.top + 1);
         expect(m.question!.clientHeight, `the question region is at most 40% of the pane (${m.chat}px)`).toBeLessThanOrEqual(0.4 * m.chat + 1);
         // The surface gives way last: it scrolls only once the question is down to its floor AND the transcript to its own,
-        // and then from its top. (Fixture 1's surface does that at every one of these windows, so this branch runs.)
-        if (m.surface!.scrollHeight > m.surface!.clientHeight + 1) {
-          expect(m.question!.clientHeight, `the surface scrolls (${m.surface!.clientHeight} of ${m.surface!.scrollHeight}px) only once the question is at its floor`)
+        // and then from its top, inside the card, with its last row in reach of its scroll. Whether it scrolls is the view's
+        // (`scrolls`), so each branch is asserted where it runs.
+        const scrolls = m.surface!.scrollHeight > m.surface!.clientHeight + 1;
+        expect(scrolls, `the surface (${m.surface!.clientHeight} of ${m.surface!.scrollHeight}px) ${view.scrolls ? 'scrolls' : 'is whole'} at this window`).toBe(view.scrolls);
+        if (view.scrolls) {
+          expect(m.question!.clientHeight, `the surface scrolls only once the question is at its floor`)
             .toBeLessThanOrEqual(QUESTION_FLOOR_LINES * m.proseLine + 2);
           expect(m.transcript, 'and the transcript at its floor').toBeLessThanOrEqual(TRANSCRIPT_FLOOR + 1);
           expect(m.surface!.scrollTop, 'a scrolling surface rests at its top').toBe(0);
+          expect(inside(m.surface!, m.card), `the surface ${JSON.stringify([m.surface!.top, m.surface!.bottom])} lies inside the card ${JSON.stringify(m.card)}`).toBe(true);
+          expect(m.reach, 'premise: the surface was scrolled').not.toBeNull();
+          expect(inside(m.reach!.last, m.reach!.surface), `scrolled to it, the surface shows its last answer row ${JSON.stringify(m.reach!.last)} inside ${JSON.stringify(m.reach!.surface)}`).toBe(true);
+          const { end, endSurface } = m.reach!;
+          expect(end.bottom >= endSurface.top && end.bottom <= endSurface.bottom + 1, `scrolled to its end, the surface shows the end of what it holds (${end.bottom}) inside ${JSON.stringify(endSurface)}`).toBe(true);
         }
       });
 
@@ -455,10 +510,19 @@ describe('the inline ask keeps its options in view and reads its question at pro
           .toBeGreaterThanOrEqual(room - 2);
       });
 
-      it('with a 2-line question, the question region has no scrollbar', () => {
+      it(QUESTION_FLOOR_LINES === 2 ? 'with a 2-line question, the question region has no scrollbar'
+        : 'with a 2-line question, the question region gives way to its one-line floor and scrolls', () => {
         const m = brief!;
-        expect(m.question!.scrollHeight, 'the two lines fit their region').toBeLessThanOrEqual(m.question!.clientHeight + 1);
-        expect(m.scrollers.filter((c) => !c.startsWith('ask-inline-surface')), 'nothing but a surface past both floors scrolls').toEqual([]);
+        expect(Math.round(m.titleLines), `premise: the question wraps to two lines (${m.titleLines.toFixed(2)})`).toBe(2);
+        if (QUESTION_FLOOR_LINES === 2) {
+          expect(m.question!.scrollHeight, 'the two lines fit their region').toBeLessThanOrEqual(m.question!.clientHeight + 1);
+          expect(m.scrollers.filter((c) => !c.startsWith('ask-inline-surface')), 'nothing but a surface past both floors scrolls').toEqual([]);
+        } else {
+          expect(Math.abs(m.question!.clientHeight - m.proseLine), `the region (${m.question!.clientHeight}px) is one line (${m.proseLine}px)`).toBeLessThanOrEqual(1);
+          expect(m.question!.scrollHeight, 'and the second line is in its scroll').toBeGreaterThan(m.question!.clientHeight + 1);
+          expect(inside(m.options[0]!, m.surface!), 'the first option is still in the surface').toBe(true);
+          expect(inside(m.options[0]!, { top: 0, bottom: m.vh }), 'and in the window').toBe(true);
+        }
         expect(m.errors).toEqual([]);
       });
 
@@ -481,8 +545,8 @@ describe('the inline ask keeps its options in view and reads its question at pro
 describe('the question region is at most 40% of the pane (T1d)', () => {
   const EIGHTY = `${LONG_QUESTION}\n${LONG_QUESTION}`;
   for (const view of [
-    { skin: REFINED, theme: PHOSPHOR, width: 1920, height: 1440, every: false },
-    { skin: INSTRUMENT, theme: 'light', width: 1920, height: 1440, every: false },
+    { skin: REFINED, theme: PHOSPHOR, width: 1920, height: 1440, every: false, scrolls: false },
+    { skin: INSTRUMENT, theme: 'light', width: 1920, height: 1440, every: false, scrolls: false },
   ] satisfies T1dView[]) {
     it(`${t1dNamed(view)}: a long question takes 40% of the pane and the transcript the rest`, async () => {
       const m = await openT1d(view, agedFrames(EIGHTY), '80lines-aged');
@@ -490,6 +554,34 @@ describe('the question region is at most 40% of the pane (T1d)', () => {
       expect(Math.abs(m.question!.clientHeight - 0.4 * m.chat), `the question region (${m.question!.clientHeight}px) is 40% of the pane (${m.chat}px)`).toBeLessThanOrEqual(2);
       expect(m.transcript, 'the transcript keeps more than its floor').toBeGreaterThan(48 + 1);
       expect(m.scrollers, 'only the question scrolls; the surface is whole').toEqual([expect.stringMatching(/^ask-inline-question/)]);
+      expect(m.errors).toEqual([]);
+    }, 90_000);
+  }
+});
+
+// The clip (Task T1d). In a very short window the card's room is less than its header and the question's one-line floor, so
+// the question's slot overflows the card's body; the body clips it at its own edge, which lies inside the card, so the
+// question never paints past the card's border. What shows of the question is its region cut at the body's edge, and its
+// bottom is inside the card's. Measured in Chrome with fixture 1: at 1280x500 the card still holds the line (the region
+// ends about 65px above the card's edge), so the case holds there with or without the clip; at 1280x425 the region runs
+// past the card's edge (by about 8px in Refined and 13px in Instrument) while the header still sits inside the card, so
+// only the clip holds it. (Below about 415px the header itself, which never shrinks, runs past the card.)
+describe('in a very short window the question never paints past the card (T1d)', () => {
+  for (const view of [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme): T1dView[] => [500, 425].map((height) => (
+    { skin, theme, width: 1280, height, every: false, scrolls: true }))))) {
+    const binds = view.height === 425;
+    it(`${t1dNamed(view)}: what shows of the question ends inside the card's border`, async () => {
+      const m = await openT1d(view, hookFrames(LONG_QUESTION), `40lines-${view.height}`);
+      if (binds) {
+        expect(m.question!.bottom, `premise: the question region (to ${m.question!.bottom}) runs past the card's inner edge (${m.paint.cardInner})`)
+          .toBeGreaterThan(m.paint.cardInner + 1);
+        expect(m.head.bottom, 'premise: the header is inside the card').toBeLessThanOrEqual(m.paint.cardInner);
+      }
+      const clipped = m.paint.overflowY === 'clip' || m.paint.overflowY === 'hidden';
+      const shows = clipped ? Math.min(m.question!.bottom, m.paint.body.bottom) : m.question!.bottom;
+      expect(shows, `what shows of the question ends at ${shows} (the body ${m.paint.overflowY}), inside the card's border (${m.paint.cardInner})`)
+        .toBeLessThanOrEqual(m.paint.cardInner + 1);
+      expect(m.paint.overflowY, 'and the card\'s body is no scroller').not.toMatch(/auto|scroll/);
       expect(m.errors).toEqual([]);
     }, 90_000);
   }
@@ -675,8 +767,9 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
     ring: number;
     ringStyle: string;
   }
-  /** What must not move across the click: the composer's box and every scroller but the card's surface. */
-  interface Stand { composer: { left: number; top: number; width: number }; page: number; chat: number; chatBody: number; question: number }
+  /** What must not move across the click: the composer's box and every scroller but the card's surface; and the surface's
+   *  own scroll, which the reveal may move. */
+  interface Stand { composer: { left: number; top: number; width: number }; page: number; chat: number; chatBody: number; question: number; surface: number }
   const STAND = (card: string): Stand => {
     const chat = document.querySelector<HTMLElement>(card)!.closest<HTMLElement>('.chat')!;
     const r = chat.querySelector<HTMLElement>('.composer')!.getBoundingClientRect();
@@ -686,6 +779,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
       chat: chat.scrollTop,
       chatBody: chat.querySelector<HTMLElement>(':scope > .chat-body')!.scrollTop,
       question: document.querySelector<HTMLElement>(`${card} .ask-inline-question`)!.scrollTop,
+      surface: document.querySelector<HTMLElement>(`${card} .ask-inline-surface`)!.scrollTop,
     };
   };
   const MEASURE = (card: string): Geometry => {
@@ -704,8 +798,9 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
       scroller: [Math.round(br.top), Math.round(br.bottom)], option: [Math.round(ar.top), Math.round(ar.bottom)],
     };
   };
-  /** Open `frames` at `view` with the call in the transcript, park focus on the body, click Go to question, and measure. */
-  async function goTo(view: AppView, frames: object[]): Promise<{ g: Geometry; before: Stand; after: Stand; errors: string[] }> {
+  /** Open `frames` at `view` with the call in the transcript, park focus on the body, click Go to question, and measure.
+   *  `away` first scrolls the surface to its end and the question region a little way down, as a reader might have. */
+  async function goTo(view: AppView, frames: object[], away = false): Promise<{ g: Geometry; before: Stand; after: Stand; errors: string[] }> {
     const opened = await openApp(browser!, view, FIXTURE);
     try {
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
@@ -716,6 +811,15 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
       await opened.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      if (away) {
+        await opened.page.evaluate((card) => {
+          const el = document.querySelector<HTMLElement>(card)!;
+          const surface = el.querySelector<HTMLElement>('.ask-inline-surface')!;
+          surface.scrollTop = surface.scrollHeight;
+          el.querySelector<HTMLElement>('.ask-inline-question')!.scrollTop = 24;
+        }, CARD);
+        await opened.page.waitForTimeout(100);
+      }
       const before = await opened.page.evaluate(STAND, CARD);
       await opened.page.locator('.tool-ask .ask-state button', { hasText: 'Go to question' }).click();
       await opened.page.waitForTimeout(300);
@@ -756,6 +860,23 @@ describe('Go to question reveals the focused option (R69 F3, D-6326, T1d)', () =
         .toBeLessThanOrEqual(g.scroller[1] - g.ring + 1);
       expect(g.option[0], `ring room: the option's top ${g.option[0]} is at least ${g.ring}px below the surface's top ${g.scroller[0]}`)
         .toBeGreaterThanOrEqual(g.scroller[0] + g.ring - 1);
+      expect(errors).toEqual([]);
+    }, 90_000);
+  }
+
+  // The cases above open with the surface at its top, where the first option is already in view, so they hold with or
+  // without the reveal. Here the surface was scrolled to its end first (the first option above its top), so only the
+  // reveal brings the option back: the surface's scroll moves up to it and the question region's stays where it stood.
+  for (const view of GOTO_VIEWS) {
+    it(`${named(view)}: with the surface scrolled away, Go to question scrolls the surface back to the focused option and leaves the question region where it stood`, async () => {
+      const { g, before, after, errors } = await goTo(view, FRAMES(), true);
+      expect(g.inCard && g.focusIsFirst, 'premise: focus is on the first option').toBe(true);
+      expect(before.surface, 'premise: the surface was scrolled away from its top').toBeGreaterThan(0);
+      expect(before.question, 'premise: the question region was scrolled a little way down').toBeGreaterThan(0);
+      expect(after.surface, `the surface's scroll moved up to the option (${before.surface} -> ${after.surface})`).toBeLessThan(before.surface);
+      expect(inside(g.option, g.scroller), `the option ${JSON.stringify(g.option)} lies inside the surface ${JSON.stringify(g.scroller)}`).toBe(true);
+      expect(inside(g.option, [0, g.vh]), `the option ${JSON.stringify(g.option)} lies inside the window (0-${g.vh})`).toBe(true);
+      expect(after.question, 'the question region did not scroll across the click').toBe(before.question);
       expect(errors).toEqual([]);
     }, 90_000);
   }
@@ -1622,21 +1743,31 @@ describe('after a send the keys in the card are fenced in real Chrome (R102)', (
     });
   }, 90_000);
 
-  // The card holds ONE tab stop (the roving row), so Tab from the card section reaches the row, Tab from the row leaves the
-  // card, and Shift+Tab from the row leaves it the other way. None of those is stopped by the fence, none unlocks.
-  it('Tab moves focus: from the card section to its row, out of the card from the row, and Shift+Tab from the first tabbable leaves it; a digit inside sends nothing', async () => {
+  // The card holds TWO tab stops: the question region (a scroller with nothing focusable in it, Task T1d) and the roving row.
+  // So Tab from the card section reaches the question region, Tab from there the row, Tab from the row leaves the card,
+  // and Shift+Tab from the row reaches the question region and from there leaves the card the other way. None of those is
+  // stopped by the fence, none unlocks.
+  it('Tab moves focus: from the card section to its question region, then its row, out of the card from the row, and Shift+Tab back through the region leaves it; a digit inside sends nothing', async () => {
     await withAged(async (a) => {
       await a.answered();
       await a.page.evaluate((c) => document.querySelector<HTMLElement>(c)!.focus(), CARD);
+      const onQuestion = (): Promise<boolean> => a.page.evaluate(() => document.activeElement?.matches('.ask-inline-question') ?? false);
+      await a.page.keyboard.press('Tab');
+      expect(await onQuestion(), 'Tab moved focus from the card section to its question region').toBe(true);
+      await a.page.keyboard.press('2');
+      await a.page.waitForTimeout(300);
+      expect((await a.snap()).posts, 'a digit on the question region sends nothing: Tab unlocked nothing').toBe(1);
       await a.page.keyboard.press('Tab');
       const into = await a.snap();
-      expect(into.inCard && into.activeTag === 'BUTTON', `Tab moved focus from the card section to a control inside it (${into.activeTag})`).toBe(true);
+      expect(into.inCard && into.activeTag === 'BUTTON', `Tab moved focus from the question region to a control in the card (${into.activeTag})`).toBe(true);
       await a.page.keyboard.press('2');
       await a.page.waitForTimeout(300);
       expect((await a.snap()).posts, 'a digit inside the card sends nothing: Tab unlocked nothing').toBe(1);
       await a.page.keyboard.press('Tab');
       expect((await a.snap()).inCard, 'Tab from the card\'s last tabbable moved focus out of the card').toBe(false);
       await a.first.focus();
+      await a.page.keyboard.press('Shift+Tab');
+      expect(await onQuestion(), 'Shift+Tab from the row reached the question region').toBe(true);
       await a.page.keyboard.press('Shift+Tab');
       expect((await a.snap()).inCard, 'Shift+Tab from the card\'s first tabbable moved focus OUTSIDE the card').toBe(false);
     });
@@ -1730,6 +1861,9 @@ describe('a screen change this client did not send fences the card in real Chrom
     await withAged(async (a) => {
       await otherAsk(a);
       await a.page.evaluate((c) => document.querySelector<HTMLElement>(c)!.focus(), CARD);
+      // The question region first (a Tab stop of its own, Task T1d), then the row.
+      await a.page.keyboard.press('Tab');
+      expect(await a.page.evaluate(() => document.activeElement?.matches('.ask-inline-question') ?? false), 'Tab reached the question region').toBe(true);
       await a.page.keyboard.press('Tab');
       const into = await a.snap();
       expect(into.inCard && into.activeTag === 'BUTTON', `Tab moved focus to a control in the card (${into.activeTag})`).toBe(true);
