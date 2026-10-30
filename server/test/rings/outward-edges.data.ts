@@ -9,5 +9,4 @@
 import type { EntrySet } from './exemptions.js';
 
 export const OUTWARD_EDGE_EXEMPTIONS: EntrySet = {
-  'server/src/accounts/ops.ts -> server/src/remote/client.ts': { reason: "L3 -> L4: the account op's agent lane takes FleetClient and matches its error classes", since: '2026-10-20' },
 };
