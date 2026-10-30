@@ -189,7 +189,7 @@ function startedAsScript() {
 }
 
 if (startedAsScript()) {
-  const [mode, targetPath, ccdPath] = process.argv.slice(2);
+  const [mode, targetPath, givenPath] = process.argv.slice(2);
   if (mode === '--regions') {
     // For `ccrc restamp`: each region's detect prefix and label, one tab-separated row per line.
     process.stdout.write(REGIONS.map((r) => `${r.detect}\t${r.label}\n`).join(''));
@@ -201,15 +201,24 @@ if (startedAsScript()) {
     process.stdout.write(REGIONS.map((r) => `${r.detect}\t${r.label}\t${r.file}\n`).join(''));
     process.exit(0);
   }
-  if ((mode !== '--write' && mode !== '--check' && mode !== '--restamp') || !targetPath || !ccdPath) {
-    process.stderr.write('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <ccd> | --regions\n');
+  if ((mode !== '--write' && mode !== '--check' && mode !== '--restamp') || !targetPath || !givenPath) {
+    process.stderr.write('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <file> | --regions | --region-files\n');
     process.exit(2);
   }
   const target = readFileSync(targetPath, 'utf8');
-  const ccd = readFileSync(ccdPath, 'utf8');
+  const ccd = readFileSync(givenPath, 'utf8');
   const row = regionOf(target);
-  // The `apicap` row renders from the hook beside the given ccd; no other row reads it.
-  const hook = row?.source === 'hook' ? readFileSync(fileURLToPath(new URL('session-hook.sh', pathToFileURL(ccdPath))), 'utf8') : undefined;
+  // The given file must be the one the target's row names (W5 C5i), compared by basename (a caller may know only that
+  // its file is named `ccd`), once, before any mode renders or writes. `--restamp` on a file with no region checks
+  // nothing: it prints `nothere`. `--write` and `--check` on such a file use the hook row, as below.
+  const checked = row ?? (mode === '--restamp' ? null : HOOK);
+  const base = (p) => p.slice(p.lastIndexOf('/') + 1);
+  if (checked !== null && base(givenPath) !== base(checked.file)) {
+    process.stderr.write(`hook-helpers: ${targetPath} carries the ${checked.label} region, whose file is ${checked.file}; ${givenPath} is not that file\n`);
+    process.exit(2);
+  }
+  // The `apicap` row renders from the hook beside the given file; no other row reads it.
+  const hook = row?.source === 'hook' ? readFileSync(fileURLToPath(new URL('session-hook.sh', pathToFileURL(givenPath))), 'utf8') : undefined;
   if (mode === '--restamp') {
     // One line for `ccrc restamp`: nothere | refused-missing | current | regenerated.
     let v;
