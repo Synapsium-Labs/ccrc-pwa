@@ -42,7 +42,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import {
   SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, RUNS_PER_CHUNK, MAX_CHUNKS,
 } from '../src/accounts/mask.js';
-import { shapeMatchers } from '../src/accounts/shapes.js';
+import { SHAPE_MASK, shapeMatchers } from '../src/accounts/shapes.js';
 import { approvalsFixture, CHILD, PARENT } from './approvalsHarness.js';
 import { saveSnapshot } from '../src/fleetstate.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -2134,6 +2134,15 @@ describe('the transcript parse masks tool input as the shape-only masker does, o
     inputs().forEach((v, i) => {
       const want = new SecretMasker().maskDeep(v);
       if (!isDeepStrictEqual(SHAPE_ONLY_MASKER.maskDeep(v), want)) bad.push(`#${i} (${masks(JSON.stringify(want) ?? '')} masks)`);
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('SHAPE_MASK, the shape-only mask with no masker behind it, answers every input as the shape-only singleton does', () => {
+    const bad: string[] = [];
+    inputs().forEach((v, i) => {
+      const want = SHAPE_ONLY_MASKER.maskDeep(v);
+      if (!isDeepStrictEqual(SHAPE_MASK.maskDeep(v), want)) bad.push(`#${i} (${masks(JSON.stringify(want) ?? '')} masks)`);
     });
     expect(bad).toEqual([]);
   });

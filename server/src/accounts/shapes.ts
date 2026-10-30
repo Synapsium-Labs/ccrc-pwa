@@ -6,6 +6,9 @@
  * `accounts/mask.ts#SecretMasker` reads them for its shape half and for its exact-bytes candidates, so there is one
  * copy of each and one view memo.
  *
+ * `SHAPE_MASK` is the shape-only mask of a decoded value, a plain function of it: what the masker's keyless instance
+ * answers, read without the masker, so an inner module (the transcript parse) masks with it (D-7513).
+ *
  * Ring L1: this module holds no timer, no clock, no database and no route.
  */
 import { CREDENTIAL_MASKS, SECRET_MASK, type CredentialMask } from '../../../shared/api.js';
@@ -313,3 +316,52 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
   }
   return { spans, carry };
 }
+
+// ── the splice and the walk ────────────────────────────────────────────────
+
+/** `text` up to `limit`, each run of overlapping or touching `spans` (original spans, in any order; sorted here) as one
+ *  `SECRET_MASK`: `accounts/mask.ts#SecretMasker`'s splice, and the shape-only mask's (D-7513). */
+export function spliceMasked(text: string, spans: [number, number][], limit: number): string {
+  spans.sort((x, y) => x[0] - y[0]);
+  // Parts joined once (D-5995): appending to a string and testing its end on every span flattens it each time.
+  const out: string[] = []; let at = 0; let masked = false;
+  for (const [a0, b0] of spans) {
+    if (a0 >= limit) break;
+    const a = Math.max(a0, at); const b = Math.min(b0, limit);
+    if (b <= at) continue;
+    if (a > at) { out.push(text.slice(at, a)); masked = false; }
+    if (!masked) { out.push(SECRET_MASK); masked = true; }
+    at = b;
+  }
+  if (at < limit) out.push(text.slice(at, limit));
+  return out.join('');
+}
+
+/** A structured answer or frame with every string replaced by `mask`'s answer, before it is serialized
+ *  (`accounts/mask.ts#SecretMasker`'s `maskDeep`, and `SHAPE_MASK`'s; D-7513). A copy: the input (which a caller may
+ *  hold or cache) is never mutated. */
+export function walkStrings(v: unknown, mask: (s: string) => string): unknown {
+  if (typeof v === 'string') return mask(v);
+  if (Array.isArray(v)) return v.map((x) => walkStrings(x, mask));
+  if (v !== null && typeof v === 'object') {
+    if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer || v instanceof Date) return v;   // bytes or a time
+    // Anything else serializes through `toJSON` or its own enumerable fields, so those are walked (D-5995): a class
+    // instance is never passed through unmasked.
+    const toJSON = (v as { toJSON?: unknown }).toJSON;
+    if (typeof toJSON === 'function') return walkStrings((toJSON as () => unknown).call(v), mask);
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k] = walkStrings(x, mask);
+    return out;
+  }
+  return v;
+}
+
+/** One string with its shapes masked: what the masker's keyless, row-less, context-less pass answers (D-7513). */
+const maskShapes = (text: string): string =>
+  (text === '' ? text : spliceMasked(text, shapeSpans(text, false, SHAPES).spans, text.length));
+
+/** The shape-only mask of a decoded value, every string field masked before it is serialized (D-7513): the same
+ *  answer as `accounts/mask.ts#SecretMasker`'s keyless instance, with no timer, clock or database behind it. */
+export const SHAPE_MASK: { maskDeep<T>(value: T): T } = {
+  maskDeep: <T>(value: T): T => walkStrings(value, maskShapes) as T,
+};

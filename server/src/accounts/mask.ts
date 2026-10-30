@@ -45,7 +45,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
 import {
   RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
-  rowTextEnd, shapeSpans, spanIn, viewOf, type View,
+  rowTextEnd, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
 } from './shapes.js';
 
 /** The fingerprint's domain prefix, fed to the HMAC ahead of the secret. */
@@ -667,20 +667,8 @@ export class SecretMasker {
     // A cut inside the lookahead is the next slice's: this text is whole (its budget is spent, so that one is cut).
     const cutAt = fp.cut !== null && fp.cut - off < text.length ? fp.cut : null;
     const limit = cutAt === null ? text.length : Math.max(0, cutAt - off);
-    spans.sort((x, y) => x[0] - y[0]);
-    // Parts joined once (D-5995): appending to a string and testing its end on every span flattens it each time.
-    const out: string[] = []; let at = 0; let masked = false;
-    for (const [a0, b0] of spans) {
-      if (a0 >= limit) break;
-      const a = Math.max(a0, at); const b = Math.min(b0, limit);
-      if (b <= at) continue;
-      if (a > at) { out.push(text.slice(at, a)); masked = false; }
-      if (!masked) { out.push(SECRET_MASK); masked = true; }
-      at = b;
-    }
-    if (at < limit) out.push(text.slice(at, limit));
-    if (cutAt !== null) out.push(SECRET_MASK_TOO_LARGE);
-    return { text: out.join(''), carry: cutAt === null && shapes.carry, cut: cutAt !== null };
+    const masked = spliceMasked(text, spans, limit);
+    return { text: cutAt === null ? masked : masked + SECRET_MASK_TOO_LARGE, carry: cutAt === null && shapes.carry, cut: cutAt !== null };
   }
 
   /** A long text (pane history) masked in slices at line breaks, yielding to the event loop between them, so no slice
@@ -716,23 +704,8 @@ export class SecretMasker {
   /** A structured answer or frame with every string field masked, before it is serialized, under ONE exact-bytes
    *  budget (D-5995). A copy: the input (which a caller may hold or cache) is never mutated. */
   maskDeep<T>(value: T): T {
-    return this.walk(value, newBudget()) as T;
-  }
-
-  private walk(v: unknown, budget: MaskBudget): unknown {
-    if (typeof v === 'string') return this.maskWithCarry(v, { budget }).text;
-    if (Array.isArray(v)) return v.map((x) => this.walk(x, budget));
-    if (v !== null && typeof v === 'object') {
-      if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer || v instanceof Date) return v;   // bytes or a time
-      // Anything else serializes through `toJSON` or its own enumerable fields, so those are walked (D-5995): a class
-      // instance is never passed through unmasked.
-      const toJSON = (v as { toJSON?: unknown }).toJSON;
-      if (typeof toJSON === 'function') return this.walk((toJSON as () => unknown).call(v), budget);
-      const out: Record<string, unknown> = {};
-      for (const [k, x] of Object.entries(v)) out[k] = this.walk(x, budget);
-      return out;
-    }
-    return v;
+    const budget = newBudget();
+    return walkStrings(value, (s) => this.maskWithCarry(s, { budget }).text) as T;
   }
 
   /** A drawer's per-connection streamer over this masker. */
