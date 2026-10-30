@@ -44,6 +44,10 @@ The ruling's example gloss was "the path the region lives in". For `apicap` that
 `ccd/session-hook.sh`. That value would refuse today's `--check ccd/ccrc-api ccd/ccd` and change `cmd_restamp`'s
 `apicap` refusal sentence. Only the given-file reading keeps those callers byte for byte, so this file uses it.
 
+**The coordinator confirmed this reading.** `file` means the file the row is given, so `apicap`'s `file` is `ccd/ccd`.
+That keeps every existing `apicap` caller and every `cmd_restamp` refusal sentence byte for byte. It is part of the
+D-7525 ruling.
+
 ## Differences from the old note
 
 Each item names the old note's section, what changed, and why. Items 1 to 9 come from the ruling (R) or from the new
@@ -94,8 +98,10 @@ base (B). Items 10 to 15 are clarifications (C) or follow this repository's test
 6. **(R) The names pin becomes `['hook', 'authdead', 'apicap', 'log-line']`.** The old note had
    `['hook', 'authdead', 'log-line']`. The log-line row is appended **last**. That keeps `REGIONS[0]` the hook row for
    `regionOf(hook)` in the pinned test and for `census-w3/claimant.test.ts`'s `const [REGION] = REGIONS`.
-7. **(B) The engine's signatures are `main`'s four-argument ones.** The old note said `renderRegion`, `applyRegion` and
-   `checkRegion` take three. They keep `main`'s signatures, `hookSrc` included. The log-line row never reads `hookSrc`.
+7. **(B) The engine's signatures are `main`'s.** The old note gave `renderRegion`, `applyRegion` and `checkRegion` one
+   argument fewer. They keep `main`'s signatures, `hookSrc` included: `renderRegion(row, ccdSrc, hookSrc)`,
+   `applyRegion(row, src, ccdSrc, hookSrc)` and `checkRegion(row, src, ccdSrc, hookSrc)`. The log-line row never reads
+   `hookSrc`.
    Their doc comments name the third parameter "the given text" in place of "ccd's".
 8. **(B) The gate is met, and option A is ruled.**
    - #1578 merged as `25393a0d7`. Its `ccd-update-sync#redact` is byte-identical to the head the old note measured,
@@ -164,7 +170,9 @@ Base `origin/main` `789dfdad1`, re-checked on `e38a2d5f1` and again on `ea20812b
 and it changes nothing under `ccd/`, `shared/` or `README.md`, and no test file this note names. Between `e38a2d5f1`
 and `ea20812bf` the only change under `ccd/` is to `ccd/session-hook.sh`'s join-record and history-spool guards,
 outside every generated region. `ccd/ccrc`, `ccd/ccd-update-sync`, `ccd/ccrc-api` and `shared/hook-helpers.mjs` are
-unchanged, and items 11 and 12 below were re-run on `ea20812bf` with the same results.
+unchanged, and items 11 and 12 below were re-run on `ea20812bf` with the same results. On `b6ab62c9f`, the base of
+this file's last revision, nothing under `ccd/`, `shared/`, `server/test/` or `README.md` differs from `ea20812bf`.
+There, `cmd_restamp`'s dies go through `_ccrc_die`, whose stderr line starts with `ccrc: ` (`PROG=ccrc`).
 The engine was last changed by #1866 (`b8855f8d4`). Run under macOS bash 5.3.20, `LC_ALL=C`, `HOME=/home/u`, with the
 engine's own `ccdFunctionDefinition`. Open PRs were read with `gh pr list --state open --json number,files` the same day.
 
@@ -265,8 +273,9 @@ engine's own `ccdFunctionDefinition`. Open PRs were read with `gh pr list --stat
       stdout. Step 2b-red's `--region-files` row is therefore red on Step 2a's tree.
     - `node shared/hook-helpers.mjs --check ccd/ccd-update-sync ccd/ccrc` prints `hook-helpers: missing` and exits 1:
       the file carries no region, so the CLI falls back to the hook row. Step 2d-red's row is red on Step 2c's tree.
-    - `bash ccd/ccrc restamp ccd/ccd-update-sync` dies with `restamp: ccd/ccd-update-sync carries no ccrc:generated
-      marker — restamp re-stamps a generated file, it never adopts one`, exit 1, and writes nothing.
+    - `bash ccd/ccrc restamp ccd/ccd-update-sync` dies through `_ccrc_die` with the stderr line `ccrc: restamp:
+      ccd/ccd-update-sync carries no ccrc:generated marker — restamp re-stamps a generated file, it never adopts one`,
+      exit 1, and writes nothing.
     - `node shared/hook-helpers.mjs --write <copy> ccd/ccrc`, where `<copy>` is a copy of `ccd/session-hook.sh` with
       one line added inside its hook region, prints `hook-helpers: regenerated`, exits 0, and rewrites `<copy>` to the
       shipped hook's bytes. `ccd/ccrc` renders the same hook region as `ccd/ccd`. So without an identity check in
@@ -343,6 +352,10 @@ once the log-line row exists. Its only consumer is `_restamp_region_of`'s fallba
 - It then refuses, writing nothing, when `$hooks` or `$srcfile` is missing, with today's sentence and the file it lacks:
   `restamp: $f carries generated $what, but its own tree lacks $hooks or ${srcfile:-$file}; restamp it from a full
   checkout (the tree holding both ccd/ and shared/). Nothing was written.`
+- Every refusal and die in `cmd_restamp` goes through `_ccrc_die`, so its stderr line is `ccrc: ` followed by the
+  sentence. Each row that pins one matches the sentence with `toContain`, so the prefix is neither required nor
+  forbidden by the row; the verdict lines (`restamp: $f: $what regenerated`, `… already current`) go to stdout with no
+  prefix.
 - For `hook`, `authdead` and `apicap`, `srcfile` is `$dir/ccd`. Their refusal, verdict and "could not be read or
   written" lines are therefore byte-identical to today's.
   - `apicap` still needs `$dir/ccd`, and still reads `$dir/session-hook.sh` through the module.
@@ -566,11 +579,20 @@ are imported only from the green step on. CLI rows spawn the module, so they nee
    - Keep-green rows, green here and on every later commit:
      - `--regions` prints exactly `${r.detect}\t${r.label}\n` per row (the byte pin for the pre-C5i reader);
      - a planted module with no `--region-files` branch regenerates the hook region from `$dir/ccd` (on 2a's tree
-       every module is such a module; from 2b it pins the fallback).
+       every module is such a module; from 2b it pins the fallback). The planted module is the real module's text
+       with every occurrence of the quoted mode literal `'--region-files'` replaced by `'--no-such-mode'`, a mode no
+       caller passes. Its `--region-files` call then takes the unknown-mode path: exit 2, empty stdout. On 2a's tree the
+       literal is absent, so the replace leaves the text unchanged and the row runs the real module. Step 2b adds one
+       assertion to this row, that the replace changed the module text (`planted !== real`), so from 2b on a renamed
+       literal cannot quietly turn the row into a copy of the real module. That assertion strengthens the row and
+       moves no other.
    - The existing `ccrc restamp ccd/ccrc-api` row stays green unedited.
 4. **Step 2b, restamp reads each region's file** (`feat(restamp): …`, behaviour).
-   - The change: `--region-files`, `_restamp_region_of` with its fallback, and `cmd_restamp`.
-   - 2b-red's red rows turn green. No other row moves.
+   - The change: `--region-files`, `_restamp_region_of` with its fallback, and `cmd_restamp`. The module's new branch
+     tests `mode === '--region-files'`, the one place the quoted literal `'--region-files'` appears in the module (the
+     usage line names the mode inside a longer string).
+   - 2b-red's red rows turn green. No other row moves. The module-without-`--region-files` row gains its
+     "the replace changed the module text" assertion here (Step 2b-red), green on this tree and every later one.
    - **The output change is exactly this:**
      - `--region-files` goes from exit 2 with the usage line on stderr to exit 0 with one `detect\tlabel\tfile` row per
        region;
@@ -608,11 +630,25 @@ are imported only from the green step on. CLI rows spawn the module, so they nee
        region path instead of the marker path. No shipped file carries that line at this commit, so no call over a
        shipped file changes.
 7. **Step 2d-red, red for the region in `ccd-update-sync`** (`test(update-sync): red, …`).
-   - Red rows, each red on Step 2c's tree, where the shipped file carries no region:
-     - the shipped region is `current` against `ccd/ccrc`;
+   - Red rows, each red on Step 2c's tree, where the shipped file carries no region. They are the old note's Step 2d
+     rows, restated word for word; only the commit they land in changes (§Differences, item 15):
+     - **the outside-it row:** the shipped `ccd-update-sync` carries the log-line region, `current` against `ccd/ccrc`,
+       and holds no `_upd_redact() {` outside it;
      - `--check ccd/ccd-update-sync ccd/ccrc` prints `hook-helpers: current`, exit 0. On 2c's tree it prints
        `hook-helpers: missing` and exits 1 (§What was measured, item 12);
-     - the region's place.
+     - **the region's-place row:** the region's place (its BEGIN line after the `export LC_ALL=C` line, and between its
+       END line and `say() {` only blank or comment lines, no function definition and no command; in this commit that
+       also puts it after `redact()`). The row is byte-identical from 2d to the tip: Step 6's comment above `say` is a
+       comment line, and Step 6 deleting `redact()` (above the region) moves nothing between END and `say() {`;
+     - **the first-line row:** `set +x` is the file's first line of code and the region lies after it.
+   - The outside-it, region's-place and first-line rows each find the region by its BEGIN line, and each asserts that
+     line is present before it compares positions. So on 2c's tree each reds on that assertion, never by passing
+     vacuously over an absent region.
+   - The outside-it row is a security row. A later bash definition wins, so a hand-written `_upd_redact` defined
+     outside the region (below it, or below `say`) would be the function `say` calls, and the region's `current`
+     check would still pass. The mutation table's "a hand-written `_upd_redact` defined outside the region" row pins
+     it.
+   - All four rows are byte-identical from 2d-red to the tip.
    - Keep-green: the anchored section lookup in `ccd-update-sync.test.ts`, a named re-point, green with or without the
      region.
 8. **Step 2d, the region in `ccd-update-sync`** (`feat(update-sync): …`, behaviour). The content stands as the old
@@ -620,8 +656,10 @@ are imported only from the green step on. CLI rows spawn the module, so they nee
    - 2d-red's red rows turn green. Census at this commit: `logLineRedactors()` 2, `inlineUserinfoStrips()` 1.
    - **The output change is exactly this:**
      - `--check ccd/ccd-update-sync ccd/ccrc` goes from `missing`, exit 1, to `current`, exit 0;
-     - `bash ccd/ccrc restamp ccd/ccd-update-sync` goes from the "carries no ccrc:generated marker" die, exit 1
-       (§What was measured, item 12), to `restamp: ccd/ccd-update-sync: log-line redactor already current`, exit 0.
+     - `bash ccd/ccrc restamp ccd/ccd-update-sync` goes from the stderr line `ccrc: restamp: ccd/ccd-update-sync
+       carries no ccrc:generated marker — restamp re-stamps a generated file, it never adopts one`, exit 1 (§What was
+       measured, item 12), to the stdout line `restamp: ccd/ccd-update-sync: log-line redactor already current`,
+       exit 0.
    - `ccd-update-sync`'s own output does not change: the region only defines `_upd_redact`, which nothing calls until
      Step 6. Every corpus `updateSync` row equals Step 1's.
 9. **Step 2e, red for the identity check** (`test(hook-helpers): red, …`).
@@ -680,6 +718,7 @@ are imported only from the green step on. CLI rows spawn the module, so they nee
 | the corpus `bareHost` column and the scope pin | Step 3, green in Step 4 | `_upd_redact` ignores a second argument | the union's values |
 | the corpus `updateSync` column on R7 | Step 5, green in Step 6 | the switch masks them | `)h/r`, ` )<?` |
 | `hook-helpers-generated.test.ts`, the `REGIONS` names pin | 2c-red, green in 2c | a fourth row | `['hook', 'authdead', 'apicap', 'log-line']` |
+| `hook-helpers-generated.test.ts`, the `source` pin (added in 2a as `['ccd', 'ccd', 'hook']`) | 2c-red, green in 2c | a fourth row | `['ccd', 'ccd', 'hook', 'ccd']` in 2c-red, green from 2c |
 | `census-w5/redactors.test.ts` REAL rows | would, in 2d, under C5d's rule | the copy is compared with `ccd/ccd` | the census switch to `file` lands in 2a |
 | `census-w3/claimant.test.ts` | none | it reads `begin`/`end` only, and `REGIONS[0]` stays the hook row | none; re-run in 2c and 2d |
 | `rings/mjs-node.test.ts` | would, on a `node:path` import | the `.mjs` carve-out | `lastIndexOf('/')` |
@@ -733,8 +772,9 @@ column is the shipped `redact`, and its "Today's `_upd_redact`" column is unchan
 | `cmd_restamp`'s `ccd/<name>` check removed | the `shared/x` refusal row |
 | the census compares with `ccd/ccd` again | the 2a/2c FIXTURE rows and the ratchet |
 | the log-line row placed anywhere but last | the names pin (and, placed first, `regionOf(hook)`'s `REGIONS[0]` assertion) |
-| the region moved above `set +x` | the first-line row |
-| the region moved away from `say` | the region's-place row |
+| the region moved above `set +x` | the first-line row (Step 2d-red) |
+| the region moved away from `say` | the region's-place row (Step 2d-red) |
+| a hand-written `_upd_redact` defined outside the region | the outside-it row (Step 2d-red). A later bash definition wins, so this is a security row: the outside copy, not the region, is what `say` would call |
 | `say` calls a reinstated local `redact` (the base's) | the ratchet, and Step 5's R7 corpus rows |
 | `_upd_redact`'s home boundary check removed (both files, restamped) | the corpus R5 rows, both columns |
 | its scheme loop cut to one pass | the R2 rows |
@@ -755,7 +795,8 @@ column is the shipped `redact`, and its "Today's `_upd_redact`" column is unchan
    - Quote the sentence above `_upd_redact` that names how `ccd-update-sync` redacts, as item 6 of §What was measured
      quotes it.
 2. **The engine's shape**, as item 1 of §What was measured lists it: three rows, `source` values `ccd`, `ccd`, `hook`,
-   the four-argument signatures, and `--regions`' two columns. Any other shape is reported first. A fourth row merged
+   the signatures `renderRegion(row, ccdSrc, hookSrc)`, `applyRegion(row, src, ccdSrc, hookSrc)` and
+   `checkRegion(row, src, ccdSrc, hookSrc)`, and `--regions`' two columns. Any other shape is reported first. A fourth row merged
    since this note is reported first too: the names pin, the append position and the `file` table are re-decided.
 3. **The readers and callers**, as item 2 lists them, by grep over `ccd/`, `shared/`, `server/`, `deploy/` and
    `.github/`:
