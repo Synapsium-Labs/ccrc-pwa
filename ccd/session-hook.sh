@@ -189,8 +189,10 @@ _hook_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
 #      census branch, which the gate has nothing to say about
 #   2  no tree at all: no cwd anywhere, or a cwd that is not a directory
 # 1 and 2 collapsed would hand the card a `$GM_CWD` it must not speak about.
-_hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRESH GM_BEHIND
+_hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRESH GM_BEHIND, GM_LINKED's set, GM_MAX_DENIALS
   GM_CWD=""; GM_BUILT=""; GM_NODES=""; GM_ENGINE=""; GM_PIN=""; GM_FRESH=""; GM_BEHIND=""
+  GM_LINKED=""; GM_FILES=""; GM_REF=""; GM_AGE=""; GM_STORE=""; GM_DIFF=""; GM_BRANCH=""; GM_MAIN_MOVED=""; GM_DIFF_LIST=""
+  GM_MAX_DENIALS="$GRAPH_GATE_MAX_DENIALS"
   local tip="" lr="" ahead="" behind="" bcommit="" cwd=""
   cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
   # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
@@ -199,6 +201,15 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
   [ -n "$cwd" ] || return 2
   [ -d "$cwd" ] || return 2
   GM_CWD="$cwd"
+  # A LINKED TREE (graph revision 2 spec §6.3, D-7351): graphify-out is a link
+  # to the repository's published build, whose meta.json names the commit, the
+  # engine, the counts and the store. A link that dangles, or a meta.json that
+  # is not schema 1, falls to the old arm, which finds no graph.json through a
+  # dangling link and so prints the census row. A real directory is measured
+  # the old way until its migration (GR1's pins).
+  if [ -L "$cwd/graphify-out" ] && _hook_graph_meta "$cwd"; then
+    GM_LINKED=1
+  else
   [ -f "$cwd/graphify-out/graph.json" ] || return 1
 
   GM_BUILT=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
@@ -221,6 +232,7 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
   [[ "$GM_NODES" =~ ^[0-9]+$ ]] || GM_NODES=""
 
   GM_ENGINE=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || GM_ENGINE=""
+  fi
   GM_PIN=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || GM_PIN=""
 
   # STALENESS IS MEASURED OR IT IS NOT CLAIMED. A tree with no git, or a
@@ -296,6 +308,84 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
       fi
     fi
   fi
+  [ -z "$GM_LINKED" ] || _hook_graph_diff "$cwd"
+  return 0
+}
+
+# ── THE LINKED TREE'S READS (spec §2.3, §5.3, §6.2; D-7351) ─────────────
+# meta.json is about 1 KB and is read whole, `head -c` bounded, in ONE jq call;
+# every field is shape-checked before it is spent, and one that fails its shape
+# is dropped (its clause omitted), except the commit, without which nothing here
+# is datable and the tree is measured the old way. The age is computed in the
+# same call (`fromdateiso8601`), so no `date -d` dialect is involved.
+_hook_graph_meta() {   # <tree> -> 0 and GM_BUILT GM_ENGINE GM_NODES GM_FILES GM_REF GM_AGE GM_STORE, or 1
+  local m
+  m=$(head -c 8192 "$1/graphify-out/meta.json" 2>/dev/null | jq -r 'select(.schema == 1)
+    | [.commit, .engine, .nodes, .files, .ref, (try ((now - (.built_at | fromdateiso8601)) | floor) catch ""), .store]
+    | map(if . == null then "" else tostring | gsub("[\u0000-\u001f]"; "") end) | join("\u001f")' 2>/dev/null) || return 1
+  IFS=$'\x1f' read -r GM_BUILT GM_ENGINE GM_NODES GM_FILES GM_REF GM_AGE GM_STORE <<<"$m"
+  [[ "$GM_BUILT" =~ ^[0-9a-f]{40}$ ]] || { GM_BUILT=""; return 1; }
+  GM_ENGINE="${GM_ENGINE:0:64}"; GM_ENGINE="${GM_ENGINE//[[:space:]]/}"
+  [[ "$GM_NODES" =~ ^(0|[1-9][0-9]{0,11})$ ]] || GM_NODES=""
+  [[ "$GM_FILES" =~ ^(0|[1-9][0-9]{0,11})$ ]] || GM_FILES=""
+  [[ "$GM_REF" =~ ^refs/[A-Za-z0-9._/-]{1,200}$ ]] || GM_REF=""
+  [[ "$GM_AGE" =~ ^-?[0-9]{1,12}$ ]] || GM_AGE=""; [[ "$GM_AGE" != -* ]] || GM_AGE=0
+  [[ "$GM_STORE" == /* ]] || GM_STORE=""
+  _hook_load_graph_settings "$GM_STORE"
+  GM_MAX_DENIALS="$GS_MAX_DENIALS"
+  return 0
+}
+
+# The store's settings.json (spec §5.3), found through meta.json's `store`: the
+# hook never reads ccrc.env (ccd keeps it out of sessions) and never re-derives
+# the store (ccd/graph-resolve is its one definition). Absent, unparsable, of
+# another schema, or a key not its shape (ccd/graph-resolve's `pct`/`count0`):
+# that key keeps its default, and the defaults are ccd/ccrc's `_graph_knobs`'
+# (a test holds the line below equal to them).
+_hook_load_graph_settings() {   # <store> -> GS_MAX_DIFF_PCT GS_MAX_DENIALS GS_DIFF_LIST_MAX
+  local s="" a="" b="" c=""
+  GS_MAX_DIFF_PCT=25; GS_MAX_DENIALS=3; GS_DIFF_LIST_MAX=20
+  [ -n "$1" ] || return 0
+  s=$(head -c 4096 "$1/settings.json" 2>/dev/null | jq -r 'select(.schema == 1)
+    | [.gate_max_diff_pct, .gate_max_denials, .card_diff_list_max] | map(tostring) | join(" ")' 2>/dev/null) || s=""
+  read -r a b c <<<"$s"
+  if [[ "$a" =~ ^(0|[1-9][0-9]?|100)$ ]]; then GS_MAX_DIFF_PCT="$a"; fi
+  if [[ "$b" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then GS_MAX_DENIALS="$b"; fi
+  if [[ "$c" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then GS_DIFF_LIST_MAX="$c"; fi
+  return 0
+}
+
+# Spec §6.2's two distances. GM_DIFF counts the files differing between the
+# graph's commit and HEAD; GM_BRANCH, the share of those that are the branch's
+# own (changed since merge-base(graph, HEAD)); GM_DIFF_LIST names up to
+# CARD_DIFF_LIST_MAX of them, the branch's own FIRST, so main-line drift never
+# crowds them out, and stops at the first name that would take the list past
+# CARD_DIFF_LIST_MAX_CHARS (argued beside CARD_MAX_CHARS): a count alone let
+# real paths grow this card until the shared clip cut the hold after it. It
+# stops rather than skipping to a shorter name, so the order still holds and
+# "and N more" counts every name not said. GM_MAIN_MOVED counts what main gained since the refresh. A
+# git that will not answer leaves its value empty and its clause unsaid.
+_hook_graph_diff() {   # <tree>
+  local all="" mb="" br="" f="" n=0
+  local -A own=()
+  local -a first=() rest=()
+  all=$(git -C "$1" diff --no-renames --name-only "$GM_BUILT" HEAD 2>/dev/null) || return 0
+  mb=$(git -C "$1" merge-base "$GM_BUILT" HEAD 2>/dev/null) || mb=""
+  [ -z "$mb" ] || br=$(git -C "$1" diff --no-renames --name-only "$mb" HEAD 2>/dev/null) || br=""
+  while IFS= read -r f; do [ -z "$f" ] || own["$f"]=1; done <<<"$br"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -n "${own["$f"]:-}" ]; then first+=("$f"); else rest+=("$f"); fi
+  done <<<"$all"
+  GM_BRANCH=${#first[@]}; GM_DIFF=$(( GM_BRANCH + ${#rest[@]} ))
+  for f in "${first[@]}" "${rest[@]}"; do
+    [ "$n" -lt "$GS_DIFF_LIST_MAX" ] || break
+    (( ${#GM_DIFF_LIST} + 2 + ${#f} <= CARD_DIFF_LIST_MAX_CHARS )) || break
+    GM_DIFF_LIST+="${GM_DIFF_LIST:+, }$f"; n=$((n + 1))
+  done
+  [ "$GM_DIFF" -le "$n" ] || GM_DIFF_LIST+="${GM_DIFF_LIST:+ and }$(( GM_DIFF - n )) more"
+  [ -z "$GM_REF" ] || GM_MAIN_MOVED=$(git -C "$1" rev-list --count "$GM_BUILT..$GM_REF" 2>/dev/null) || GM_MAIN_MOVED=""
+  [[ "$GM_MAIN_MOVED" =~ ^[0-9]+$ ]] || GM_MAIN_MOVED=""
   return 0
 }
 
@@ -306,12 +396,22 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
 # GM_BEHIND is set only where a stamp the tail read accepted could be dated
 # against HEAD, so its emptiness carries condition 2's failure as well as the
 # freshness states that do not gate.
+# A LINKED tree (spec §6.3, D-7351) is gated by SHARE, not by commits: armed when
+# the files differing from the graph's commit are at most GATE_MAX_DIFF_PCT of
+# the graph's files and the graph's engine is the pin; the bound comes from the
+# store's settings.json, never from the constants below, which are the real
+# directory's until its migration.
 _hook_gate_tree() {   # -> 0 iff the measured tree carries a graph fresh enough to gate on
+  if [ -n "$GM_LINKED" ]; then
+    [ -n "$GM_DIFF" ] && [ -n "$GM_FILES" ] && [ -n "$GM_PIN" ] && [ "$GM_ENGINE" = "$GM_PIN" ] \
+      && [ $(( GM_DIFF * 100 )) -le $(( GS_MAX_DIFF_PCT * GM_FILES )) ]
+    return
+  fi
   [ -n "$GM_BEHIND" ] && [ "$GM_BEHIND" -le "$GRAPH_GATE_MAX_BEHIND" ]
 }
 
 _hook_graph_card() {
-  local row="" line="" rc=0
+  local row="" line="" rc=0 gcd="" src="" age=""
   _hook_graph_measure || rc=$?
   [ "$rc" -ne 2 ] || return 0
 
@@ -322,9 +422,18 @@ _hook_graph_card() {
     # its census carries one — a session that knows the tree was REFUSED does
     # not go hunting for a graph that is never going to appear. The census is
     # `{passes:[…]}`, last 10, newest LAST.
-    row=$(jq -r --arg p "$GM_CWD" \
-      '(.passes // []) | last | (.trees // [])
-       | map(select(.path == $p and ((.reason // "") != "")))
+    # A pass holding `repos[]` (graph revision 2 spec §7, D-7351) is read by the
+    # repository: the row whose `source` is the realpath of this tree's common
+    # dir, so every worktree and the main checkout share it. A pass of the old
+    # shape, which the sweep writes until its rewrite (GR4), is still read by
+    # path, so a tree the old sweep refused keeps its reason meanwhile.
+    gcd=$(git -C "$GM_CWD" rev-parse --git-common-dir 2>/dev/null) || gcd=""
+    [ -z "$gcd" ] || src=$(cd -- "$GM_CWD" >/dev/null 2>&1 && cd -- "$gcd" >/dev/null 2>&1 && pwd -P) || src=""
+    row=$(jq -r --arg p "$GM_CWD" --arg s "$src" \
+      '(.passes // []) | last | (. // {})
+       | if has("repos") then [(.repos // [])[] | select($s != "" and .source == $s)]
+         else (.trees // []) | map(select(.path == $p)) end
+       | map(select((.reason // "") != ""))
        | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
       "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
     [ -n "$row" ] || return 0
@@ -352,14 +461,29 @@ _hook_graph_card() {
   fi
 
   line="graphify: this tree has a knowledge graph — graphify-out/"
+  [ -z "$GM_LINKED" ] || line="$line is the graph of this repository's main at ${GM_BUILT:0:8}"
   [ -z "$GM_NODES" ] || line="$line, $GM_NODES nodes"
-  [ -z "$GM_BUILT" ] || line="$line, built at ${GM_BUILT:0:8}"
-  [ -z "$GM_FRESH" ] || line="$line ($GM_FRESH)"
+  [ -n "$GM_LINKED" ] || [ -z "$GM_BUILT" ] || line="$line, built at ${GM_BUILT:0:8}"
+  [ -n "$GM_LINKED" ] || [ -z "$GM_FRESH" ] || line="$line ($GM_FRESH)"
   # The engine/pin pair earns its place: sessions were measured running an
   # unversioned July copy of graphify against 0.9.9 graphs, and that drift is
   # invisible until a query fails strangely.
   [ -z "$GM_ENGINE" ] || line="$line, engine $GM_ENGINE"
   [ -z "$GM_PIN" ]    || line="$line (pin $GM_PIN)"
+  # Spec §6.3's sentence (R1, D-7351): the two distances of §6.2, the branch's
+  # own files named first. Each clause is said only where it was measured.
+  if [ -n "$GM_LINKED" ]; then
+    age="$GM_AGE"
+    if [ -z "$age" ]; then :; elif [ "$age" -lt 120 ]; then age="${age}s"
+    elif [ "$age" -lt 7200 ]; then age="$((age / 60))m"
+    elif [ "$age" -lt 172800 ]; then age="$((age / 3600))h"; else age="$((age / 86400))d"; fi
+    [ -z "$age" ] || line="$line, refreshed $age ago"
+    [ -z "$GM_MAIN_MOVED" ] || line="$line; main has moved $GM_MAIN_MOVED commit$([ "$GM_MAIN_MOVED" = 1 ] || echo s) since"
+    if [ "$GM_DIFF" = 0 ]; then line="$line. Your tree does not differ from it"
+    elif [ -n "$GM_DIFF" ]; then
+      line="$line. Your tree differs from it in $GM_DIFF file$([ "$GM_DIFF" = 1 ] || echo s), $GM_BRANCH of them your branch's own: $GM_DIFF_LIST — read those directly"
+    fi
+  fi
   # Single-quoted: the sentence carries backticks and double quotes verbatim.
   line="$line"'. Answer codebase questions with `graphify query "<question>"` first; `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for one concept; read `graphify-out/GRAPH_REPORT.md` only for broad architecture. Do not run `graphify update` or any build here — the ccrc sweep owns the write side.'
   # R5 (D-1613): the card says what the gate will DO in this tree, and it says
@@ -2441,6 +2565,25 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # fields that ARE gated. Raising the bound is the cheap answer;
 # drop-whole-subject logic on the hot path is not, and was refused.
 CARD_MAX_CHARS=2400
+# THE LINKED TREE'S DIFF LIST HAS ITS OWN CHARACTER BOUND, DERIVED FROM THE ONE
+# ABOVE (GR5 fix round, D-7351). The linked graphify sentence (spec §6.3) quotes
+# repository paths, whose number `card_diff_list_max` bounds but whose length
+# nothing did: 20 paths of about 65 characters made the graph card about 2150
+# characters, and since graphify is joined FIRST the clip above cut held case
+# A mid-sentence, losing its `mail list` and `runs list` instructions. So the
+# list gets what the structural worst case leaves, and never more:
+#   903  the linked graphify sentence with NO name in the list: a 12-digit node
+#        count (the meta read's own gate), engine and pin at 64, the age's
+#        12-digit gate as 8 digits of days, "main has moved", the differing
+#        and the branch counts and "and N more" each MODELLED at 7 digits (as
+#        `$id` and `$CT_N` are above), the advice and the armed-gate sentence
+#        (longer than the kill-switch one)
+#   1107 held case A 860 + co-tenant 245 + the two joins, as argued above (the
+#        role subject is shorter than case A and never beside it)
+# 2400 - 903 - 1107 = 390 characters of names. The list stops before a name
+# that would pass it, so every subject after graphify is said whole; the
+# real-directory arm has no list and is unchanged at 719.
+CARD_DIFF_LIST_MAX_CHARS=$(( CARD_MAX_CHARS - 903 - 1107 ))
 # ── THE COMPACTION CARD (spec 2026-09-09-graphify-compaction-card-design.md) ──
 # Three registry files per session, every suffix DOT-FREE so `_reg_purge`'s
 # loop (`ccd/ccd`: every dot-free `$REG/<id>.<suffix>` except `archived` and
@@ -3132,7 +3275,8 @@ case "$event" in
     # ONCE PER CONTEXT, BY SOURCE (D-5359): a `resume` or `fork` carries the transcript that already received it, so
     # it says nothing there (no "shown" marker exists or is added); startup, clear, compact and a
     # source-less start are fresh or rebuilt contexts. Mutually exclusive with every held sentence, so
-    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged.
+    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
+    # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
     # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
     # (D-3615), and every line added up there moves the frozen compaction-card corpus's anchors.
     _hook_role_card() {
@@ -3804,8 +3948,9 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # The cheap conjuncts run first: the counters are already in hand, the
 # kill-switch is one stat, the tool name was read by the arm above, and only a
 # GATED call in an ARMED session pays for the jq that reads the command or the
-# git that dates the graph. A session that has queried once, or that has spent
-# its three denials, never pays anything again.
+# git that dates the graph. A session that has queried once never pays anything
+# again; one that has spent its denials pays the measurement on a gated call,
+# since a linked tree's bound is the store's setting, read by that measurement.
 # R6 (D-1745) shares this arm rather than copying it: the nudge's conditions
 # ARE the gate's 1-4 (kill-switch, a datable graph, freshness inside the bound,
 # `graphQueries` 0), and only the fifth — the denial bound — is the gate's
@@ -3818,8 +3963,7 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 pre_json=""
 if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
    && [ ! -e "$GRAPH_GATE_OFF" ]; then
-  gated=0 nudged=0 bounded=0 fpath=""
-  [[ "$gd" -lt "$GRAPH_GATE_MAX_DENIALS" ]] && bounded=1
+  gated=0 nudged=0 fpath=""
   case "${tool:-}" in
     Grep|Glob) gated=1 ;;
     Read)
@@ -3866,10 +4010,12 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
   # well, which made THIS conjunct redundant and left the shell copy pinned by
   # nothing (measured: dropping it stayed green). One site now, so the bound
   # test — three denials on `Grep`, then a `Grep` AND a shell search silent —
-  # reds the moment the conjunct goes. The price is one jq per shell search
-  # for a session that has spent its three denials and still never queried,
-  # which is the rare shape by design.
-  if [[ "$gated" -eq 1 && "$bounded" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree; then
+  # reds the moment the conjunct goes. It is the LAST conjunct, after the
+  # measurement, because the bound is the measured tree's (GM_MAX_DENIALS: the
+  # constant for a real directory, settings.json's for a linked tree, D-7351);
+  # the price is one measurement per gated call for a session that has spent
+  # its denials and still never queried, which is the rare shape by design.
+  if [[ "$gated" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree && [[ "$gd" -lt "$GM_MAX_DENIALS" ]]; then
     # The card's own vocabulary — node count and freshness word, measured by the
     # card's own function — plus the act, plus the bound. A session that cannot
     # run Bash at all still gets through on its fourth search, and the board
@@ -3878,7 +4024,7 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
     [ -z "$GM_NODES" ] || greason+="$GM_NODES nodes, "
     greason+="$GM_FRESH) and this session has not queried it yet."
     greason+=' Search tools open after one graph query — run: `graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a relationship, `graphify explain "<concept>"` for one concept).'
-    greason+=" Denial $((gd + 1)) of $GRAPH_GATE_MAX_DENIALS; after $GRAPH_GATE_MAX_DENIALS the gate opens anyway."
+    greason+=" Denial $((gd + 1)) of $GM_MAX_DENIALS; after $GM_MAX_DENIALS the gate opens anyway."
     # COUNTED ONLY IF IT CAN BE SAID, SAID ONLY ONCE IT IS COUNTED (D-1689).
     # A builder that could not make its JSON has denied nothing, and charging
     # the session for it would spend the bound on denials it never saw. And the

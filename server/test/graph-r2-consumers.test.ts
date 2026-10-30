@@ -76,12 +76,14 @@ const TREES_CEILING: Record<string, number> = {
 };
 /** Files that name the census and read no per-tree row: documentation of the
  *  path (README), GR1's hook pins (their census fixture is written by the
- *  sweep's own writer), the vocabulary scan that names it, and the lifecycle
+ *  sweep's own writer), GR5's linked-tree rows (their census rows are the
+ *  repository rows), the vocabulary scan that names it, and the lifecycle
  *  row that declares it. A new consumer of the census is added to one of the two
  *  lists in the PR that adds it, so a reviewer sees it. */
 const NAMES_ONLY = [
   'README.md',
   'server/test/session-hook-graph-pins.test.ts',
+  'server/test/session-hook-graph-repo.test.ts',
   'server/test/single-definition/vocabularies.test.ts',
   'shared/lifecycle.ts',
 ];
@@ -385,6 +387,7 @@ const GRAPH_READERS_BASE = [
   'ccd/session-hook.sh#_hook_graph_measure: graph.json',
   'ccd/session-hook.sh#_hook_graph_measure: GRAPH_REPORT.md',
   'ccd/session-hook.sh#_hook_graph_measure: .graphify_engine',
+  'ccd/session-hook.sh#_hook_graph_meta: meta.json',   // GR5 (D-7351): the linked tree's one read
   'ccd/session-hook.sh#_hook_compact_pre: graph.json',
   'ccd/session-hook.sh#_hook_compact_pre: .graphify_labels.json',
 ];
