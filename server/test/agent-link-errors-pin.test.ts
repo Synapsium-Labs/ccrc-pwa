@@ -4,6 +4,7 @@ import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
 import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import { UPDATE_OP_DETAIL_MAX } from '../../shared/agent-protocol.js';
 import { TOKEN } from './remoteHelpers.js';
+import { parsedFile, symbolOf } from './scan/symbols.js';
 
 // D-7507 (ARCH-05): the agent link's two error classes, `AgentOpError` (D-3373, D-3391) and `LinkNotSentError`
 // (D-3555), held by what a caller can see of them, so the move to `remote/errors.ts` is proven not to change one.
@@ -101,5 +102,49 @@ describe('what a FleetClient request rejects with (D-7507)', () => {
     const e = await rejection(fleet.client.request({ t: 'req', op: 'update', tag: 'v0.0.9' }));
     expect(e).toBeInstanceOf(AgentOpError);
     expect(e).toMatchObject({ code: 'busy', detail: null });
+  });
+});
+
+// The identity row (D-7507; Review focus 3): `instanceof` across the codebase sees ONE class per name. Read by a fixed
+// rule through `scan/symbols.ts`, so it holds unedited both while `remote/client.ts` re-exports the classes and after
+// D-7508 deletes that re-export: (iii) then holds over no edge.
+describe('the link error classes have one definition, in remote/errors.ts (D-7507)', () => {
+  const CLIENT = 'server/src/remote/client.ts';
+  const CLASSES = ['AgentOpError', 'LinkNotSentError'];
+  let fleet: ConnectedFleet | undefined;
+  let wss: WebSocketServer | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (wss) {
+      for (const client of wss.clients) client.terminate();
+      await new Promise<void>((resolve) => wss!.close(() => resolve()));
+    }
+    wss = undefined;
+  });
+
+  it('(i) what FleetClient throws is instanceof the classes imported from remote/errors.js', async () => {
+    fleet = connectFleet({ url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    expect(await rejection(fleet.client.request({ t: 'req', op: 'caps' }))).toBeInstanceOf(LinkNotSentError);
+    await fleet.close();
+    const agent = await fakeAgent(() => ({ ok: false, err: 'busy' }));
+    wss = agent.wss;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${agent.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(await rejection(fleet.client.request({ t: 'req', op: 'update', tag: 'v0.0.9' }))).toBeInstanceOf(AgentOpError);
+  });
+
+  it('(ii) remote/client.ts declares no symbol named either class', () => {
+    expect(parsedFile(CLIENT).symbols.filter((s) => CLASSES.includes(s.name)).map((s) => s.name)).toEqual([]);
+  });
+
+  it("(iii) every export-from edge of remote/client.ts that names either class re-exports it from './errors.js'", () => {
+    const edges = parsedFile(CLIENT).imports.filter((e) => e.kind === 'export-from' && e.names.some((n) => CLASSES.includes(n)));
+    expect(edges.map((e) => e.specifier).filter((s) => s !== './errors.js')).toEqual([]);
+  });
+
+  it('(iv) remote/errors.ts declares each class as a class', () => {
+    for (const name of CLASSES) expect(symbolOf('server/src/remote/errors.ts', name).kind, name).toBe('class');
   });
 });
