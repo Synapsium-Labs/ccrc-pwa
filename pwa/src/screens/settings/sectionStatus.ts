@@ -15,7 +15,7 @@ import type { SettingsSectionId } from '../../lib/routes';
 import type { PushState, SettingsView } from './SettingsDataProvider';
 import { boxTokenSummary } from './boxTokenWords';
 import { unarmedExposure } from './signInGate';
-import { AUTO_LABELS, CHANNEL_SENTENCES } from './UpdatesSection';
+import { AUTO_LABELS, CHANNEL_SENTENCES } from './updatesWords';
 
 /** `attention` is a release waiting (the word and `↑`); amber and red are the page's own warn tones. */
 export type StatusTone = 'calm' | 'attention' | 'amber' | 'red';
