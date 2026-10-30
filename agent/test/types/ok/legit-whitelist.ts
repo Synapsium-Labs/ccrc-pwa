@@ -81,6 +81,10 @@ export type WinSizeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['win
  *  subset test still green; asserted here, losing it stops this project
  *  compiling. `g14-reclaim-pause-without-state.ts` is the other side. */
 export type ChildReclaimPauseNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['reclaim-pause'], '--state'>>;
+/** The test box switch (test box plan TB9, D-7411). Deleting this ENROLMENT turns `['testbox-remote','--state']` into a
+ *  bare `['testbox-remote']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g24-testbox-remote-without-state.ts` is the other side. */
+export type TestboxRemoteNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['testbox-remote'], '--state'>>;
 /** Child reclamation (wave 3). The destructive verb the server composes with no
  *  human in the path is enrolled on its confirmation token; losing the
  *  enrolment stops this project compiling. `g13-ws-reclaim-without-expect.ts`
