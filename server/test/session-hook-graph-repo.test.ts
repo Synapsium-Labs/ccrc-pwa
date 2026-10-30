@@ -17,7 +17,7 @@
 //
 // THE CENSUS ROWS ARE HAND-WRITTEN `repos[]` ROWS, deliberately and for now: no
 // writer of `repos[]` exists until GR4 rewrites the sweep, and the hook's old
-// `trees[]` reader is pinned against the sweep's OWN writer in GR1's pins and
+// per-tree-row reader is pinned against the sweep's OWN writer in GR1's pins and
 // session-hook.test.ts (D-1337). GR4 re-points these rows to its writer.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
