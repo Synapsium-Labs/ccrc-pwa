@@ -1422,6 +1422,48 @@ carries it (spec §5.1, amended 2026-09-24).
     written but stops a flake cleared by a rerun from landing without a new head, or the stop paragraph is restated as
     the rule over the latest run of each name, which is the gate every landing so far has used. It is the companion of
     D-7536's question (may the coordinator take the new-head route unasked): both decide what clears a red.
+- **2026-10-30 10:50 — the operator's answers; waves 3b and 2b proven live; the mail latency measured.**
+  - **The operator answered (about 10:40):**
+    - **D-7536:** the coordinator may take the new-head route on its own when a red is `main`'s own. The skill's
+      sentence for it goes in wave 5, with review 1232's F9 (b).
+    - **Wave 5, question 1:** `ccd land-candidate` is left out of wave 5.
+    - **Question 4:** wave 5's PR proposes the text of the three CLAUDE.md amendments, for the operator to apply.
+    - **Question 5:** the mail-latency measurement is run (below).
+    - **Deploys and switches** are the coordinator's to make.
+  - **Still open, with the coordinator's recommendation:**
+    - **Question 2, the two private repositories.** The options are (a) a direct merge once the PR's own checks pass
+      (route G), (b) the combination test of `ccd land-candidate`, or (c) leaving them out of the landing line. The
+      coordinator recommends (a) now, with `main`'s breakage there measured before (b) is built.
+    - **Question 3, where `lander:coordinator` is declared.** The coordinator recommends a `lander=` key in the
+      project's landing conf, the one per-project file for landing switches, which the radar already reads.
+    - **D-7546.** The coordinator recommends restating the stop paragraph as the rule over the latest attempt of each
+      name, which is GitHub's own rule, and keeping the every-attempt read as a report, not a stop.
+    - **D-7472.** The coordinator recommends building the re-proof in wave 5, measured in a fresh scratch clone
+      fetched from GitHub with a clean environment rather than in a shared checkout, and arming `lineage=on` after it.
+      Until then `lineage=on` is not set, because it changes how every coordinator's wave-dones on this project are
+      accepted.
+  - **The deploy.** The fleet box runs v0.0.862 (`c69ad880`), which carries waves 2b, 4, 4c, 4b and 5a. The server
+    box's version was not measured from the fleet box.
+  - **Wave 3b's live proof** (its plan's Task 4 Step 4) holds. The conf `~/.ccrc/landing/ccrc-pwa.conf` was written at
+    10:45 with `base=main` and `lineage=off`. The tick at 10:46 took 4 s:
+    - `probe` is `measured`: 15 open PRs, 15 pairs of 6 heads, no cut;
+    - all 30 answers reproduce exactly (9 of the 15 base answers and 11 of the 15 pair answers are conflicts) with
+      `git merge-tree --write-tree --name-only --no-messages` in a scratch repository;
+    - `main-health` reads `green` at `main`'s tip, and GitHub reports the four required checks passing there;
+    - `enabled` is absent;
+    - the project's store is unchanged by the tick (0 objects added);
+    - doctor's `land-probe` line passes.
+  - **Wave 2b's live check** (its plan's Task 3 Step 4) holds. The installed hook is byte-equal to the release tree's.
+    Fed from a fixture HOME, it denies `gh pr merge 1 --admin` and a `gh api` enqueue, and passes clause 15's spelling
+    and a verdict read. The operator's allowance file for the one project allowed to keep admin merges (D-7249) is
+    absent, so that project's sessions are refused an admin merge until the operator writes it.
+  - **The mail latency** (spec §10's prerequisite), measured from 2026-10-16 to 2026-10-29 with
+    `deploy/measure-landing.py mail-latency`, over 14 coordinators:
+    - 1161 mails: median 0.2 min, 90th percentile 8.8 min, maximum 1651.8 min;
+    - none unmatched and 14 undelivered;
+    - 6 coordinators' pages came back full, so their mail is left out, and the closed-run read reached its cap of
+      500. The figure covers 8 of the 14 coordinators.
+  - **Wave 4b's live read** waits. The plan's read is `GET /api/fleet`, and the fleet box has no read of it.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1861,8 +1903,7 @@ shipped in #1383; its plan's measurement of the 30 s sweep cadence's cost is lef
 **Wave 3b is merged** (#1740 `3ca67389`; Decisions, 2026-10-29 06:01): `ccd-land-probe`, the read-only conflict radar.
 - **Deploy.** The fleet box's installed release read v0.0.811 on 2026-10-29, the first release that carries it. Doctor's `services` and
   `land-probe` lines are expected to read SKIP while no project has a conf.
-- **The live proof needs one operator act:** writing `~/.ccrc/landing/ccrc-pwa.conf` with `lineage=off`. After the
-  next tick, the coordinator reads what the plan's Task 4 Step 4 names, read-only.
+- **Proven live** on 2026-10-30, with `lineage=off` (Decisions, 2026-10-30 10:50).
 - **The proof never sets `lineage=on`.** That is wave 4's to arm.
 
 **Wave 4 is merged** (#1884 `f6b67a5b`; Decisions, 2026-10-29 17:38). A clean merge of `main` keeps its wave-done and
@@ -1878,9 +1919,8 @@ its review, for a project the operator opts in.
 **Wave 2b is merged** (#1863 `d3250900`; Decisions, 2026-10-29 09:41): `--admin` and `gh api` merges are refused in every
 fleet session, with the operator's per-project allowance (D-7249).
 - **Deploy.** ccrc's updater carries the hook to every home (AGENT-FIRST).
-- **The live check, plan Task 3 Step 4,** is the coordinator's after the deploy. It feeds four payloads to the INSTALLED
-  hook from a fixture HOME and never types a bypass into a live session: an admin merge and a `gh api` enqueue are
-  denied, and clause 15's spelling and one verdict read pass.
+- **The live check, plan Task 3 Step 4,** holds (Decisions, 2026-10-30 10:50). The operator's allowance file
+  (D-7249) is not yet written.
 - **From then on,** the landing verdict, the checks gate and the enqueue run as separate commands (D-7314).
 
 **Wave 4c is merged** (#1911 `9ec4fc54`; Decisions, 2026-10-29 22:55): the lineage parser refuses the docs the radar's
@@ -1900,7 +1940,8 @@ past its window, and the chip ages a frame it already holds.
   `landing` for that project's bound sessions, and the chip. The ledger then records the release, the rollout date
   (which starts §10's stage 3 clock for the operator's view only, D-7483) and the first fresh landing seen.
 
-**Waiting on the operator:** the coordinator-side re-proof's stopping line (D-7472).
+**Waiting on the operator:** the re-proof (D-7472), wave 5's questions 2 and 3, D-7546, and the allowance file of
+D-7249.
 
 **Wave 5a is merged** (#1960 `d196d8b3`; Decisions, 2026-10-30 08:16). It carries the hardening that the reviews of
 waves 4c and 4b, and three older review items, left for wave 5:
@@ -1913,6 +1954,6 @@ waves 4c and 4b, and three older review items, left for wave 5:
 
 Deploy: ccrc's updater carries the server, the PWA and the skill text.
 
-**Wave 5**, the landing line, is run 1227. Its scope waits on five operator answers (Decisions, 2026-10-30 03:40), and
-on the operator's ruling on whether the coordinator may take the new-head route unasked (D-7536), and on whether
-read 5 judges every run of a name or the latest (D-7546).
+**Wave 5**, the landing line, is run 1227. Questions 1, 4 and 5 and D-7536 are answered (Decisions, 2026-10-30
+10:50). Its plan waits on questions 2 and 3, on D-7546 (whether read 5 judges every run of a name or the latest), and
+on D-7472.
