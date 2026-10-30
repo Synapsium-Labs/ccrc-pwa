@@ -214,14 +214,33 @@ export function hibernateSleepInput(i: HibernateInput, now: number, afterMs: num
   };
 }
 
+/** The idle gate's options (D-7562). `claims: 'hold'`, every caller's but one: an open run it claims holds
+ *  `run-claimant` and a live claim holds `claim`, as the ladder reads them. `claims: 'pass'` is the automatic roll's
+ *  alone (`coord/rollTarget.ts`, the operator's ruling of 2026-10-30): every live coordinator claims at least one open
+ *  run, stale planned ones included, so those two holds kept every coordinator from ever rolling, and a roll comes
+ *  straight back as the same session with its runs and claims standing in the coordination store. It passes those two
+ *  holds and no other: an unreadable store, an open run naming it as worker, mail and every live hold still hold. */
+export interface IdleGateOptions { readonly claims: 'hold' | 'pass' }
+export const IDLE_GATE_HOLDS_CLAIMS: IdleGateOptions = { claims: 'hold' };
+
+/** The input the gate's options leave: under `claims: 'pass'` the store reads as claiming nothing and holding no claim;
+ *  an unreadable store stays unreadable. */
+function gatedInput(i: HibernateInput, o: IdleGateOptions): HibernateInput {
+  if (o.claims === 'hold' || !i.store.ok) return i;
+  return { ...i, store: { ...i.store, openClaimant: false, claim: false } };
+}
+
 /**
  * Put this session to sleep? The holds run cheapest first and the live reads come last: `measure` asks the sweep to
  * read them for a row nothing else holds. Every read the verdict could not make HOLDS — never an unmeasured sleep.
  * `afterMs` is N; `idleMs` on a `hibernate` answer is how long ago the marker's clock last moved.
  * D-7040 (ARCH-43): the ladder is the one `decideSleep` (`sleep.ts`) runs for both sleep policies, under this lane's row,
- * `IDLE_HOURS_POLICY`; this function keeps its name, its signature and its answer.
+ * `IDLE_HOURS_POLICY`; this function keeps its name, its signature and its answer. `options` (D-7562) is the automatic
+ * roll's alone; every other caller leaves it at its default, which holds claims.
  */
-export function hibernateVerdict(i: HibernateInput, now: number, afterMs: number): HibernateVerdict {
-  const v = decideSleep(hibernateSleepInput(i, now, afterMs), IDLE_HOURS_POLICY);
+export function hibernateVerdict(
+  i: HibernateInput, now: number, afterMs: number, options: IdleGateOptions = IDLE_GATE_HOLDS_CLAIMS,
+): HibernateVerdict {
+  const v = decideSleep(hibernateSleepInput(gatedInput(i, options), now, afterMs), IDLE_HOURS_POLICY);
   return v.act === 'hibernate' ? { act: 'hibernate', idleMs: v.idleMs } : v;
 }
