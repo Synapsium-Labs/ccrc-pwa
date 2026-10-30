@@ -50,3 +50,34 @@ natively and not handed off.
 **Still out of scope.** A query-string secret and a bearer token are still not masked, as the redactor's header
 says. A non-credential `user@host` that ends any way other than '/', '?', '#' or a port is still treated as prose in
 the default mode.
+
+**Second round, same PR, same ruling.** Review found four more shapes that printed a secret whole, in every column:
+
+1. A port followed by '.', '!' or '}' (`reach tok@host:8443.`, `tok@host:8443! retrying`, `tok@host:8443}`). Rule 2 now
+   also ends at one of those three when whitespace or the end of the text follows it, so a version such as `x@h:1.2`
+   stays whole.
+2. A bracketed IPv6 host (`tok@[::1]:8443 refused`, `tok@[fe80::1]:443 refused`, `tok@[::1]:8443` at the end of the
+   text). Rule 2's host may now be `[` hex digits, ':' and '.' `]`.
+3. A leading '@' before a token-only userinfo (`@tok@host:8443 refused`). Rule 2 now allows any number of leading '@'s.
+4. A percent-encoded ':' in the userinfo (`user%3Asecret@host refused`). Rule 1 reads `%3A` and `%3a` as ':'.
+
+Two smaller changes keep context or bound the cost:
+
+- A ':' userinfo after `KEY=` or `--flag=` keeps that prefix, so `CCRC_X=user:secret@host` reads `CCRC_X=host` and
+  `--proxy=user:secret@host:8080` reads `--proxy=host:8080`. The prefix is a letter or '_' and then letters, digits,
+  '_' or '-', and the userinfo after it may not start with ':' or '='. So a base64 name's padding
+  (`dG9rZW4=:x@host`) is not read as a prefix, and the whole userinfo goes. A token-only userinfo never keeps a prefix.
+- Every loop rescans the whole text for each credential it masks, and the home walk does the same for each home it
+  finds, so a line of 85 KB took about 9.5 s a call. A text over 4096 bytes now keeps only a head: its first 4001
+  bytes, cut back to their last whitespace, so every token kept is whole and masks as it would have. A note
+  `[cut: N more bytes withheld, over the redactor's 4096-byte cap]` replaces the rest. Head and note fit in 4096
+  bytes, so a second pass cuts nothing more. Under the cap the worst shape measured takes about 0.12 s.
+
+**Corpus, second round.** 13 more `R8` rows (12 of them red before the change), 2 `prose` rows, 5 `blast` rows that
+record the remaining over-masking (`npm:pkg@1.2.3`, `WARNING:root:bob@example.com`, `stash@{0}:3`,
+`claude-session@x.service:12`, and bare-host's `x@h:1.2`), and a `bound` row of about 85 KB written as `inputRuns`
+with a BOUND test (each call under 3 s, no secret, at most 4096 bytes). Six `known-limit` rows, each with a note, and
+a note at the head of the file record what this PR does not close: a userinfo inside a query string or a path
+(`https://h/x?proxy=user:secret@host`, `GET /p?u=user:secret@host:8443`, `dir/user:secret@host`) and a raw '#', '?' or
+'/' inside a password. The CONTROL test pins exactly those six. Red first: 14 of 154 before the change, 154 of 154
+after.
