@@ -84,11 +84,16 @@
 //   the quiet time a constant 2 h in the view ................... status-groups' two quiet-time cases, "reads the frame's own quiet time…",
 //                                                                  "with no quiet time on the runs frame…" (4)
 //   the quiet time a constant 2 h in the table ................ "reads the frame's own quiet time…", "with no quiet time…" (2)
-//   the moves ignored (`programmeBoxes(…, () => null, …)`) ...... 7 cases, status-groups' four movement cases among them
+//   the moves ignored (`programmeBoxes(…, () => null, …)`) ...... 7 cases, status-groups' three movement cases among them
 //   the clock not passed to `statusView` ........................ "turns from moving to stalled…", "under the coord frame's pause…" (2)
 //   `boxNow` frozen at first render (memo deps `[]`) ............ "turns from moving to stalled…", "under the coord frame's pause…" (2)
 //   the orphan marker asking no box (`keepers` an empty list) ... "a hibernated claimant's worker the operator has open…" and the R123
 //                                                                  nested-coordinator case (2)
+// Task G1d (D-7380; review 1279 F5) moved the table's clock into the shared `useBoxClock` and added three cases here, each RUN red
+// on its dependency dropped from the hook's `boxNow` memo (the same mutants over useBoxClock.test.tsx and programme-box-card):
+//   `activeRuns` dropped ...................................... "a runs frame that ages a box reads it stalled while the clock waits…" (1)
+//   `coordPaused` dropped ..................................... "a box that crossed under the pause reads stalled once the pause clears…" (1)
+//   `stallQuietMs` dropped .................................... "a quiet time that changes with no boundary moving reads the boxes…" (1)
 // programme-box-card (review 1253's F5): the folded hold key over-firing (`-${kept}@${boxNow}`) or bare (`-`) ... both new key cases, in both
 // skins (4 each).
 import { readFileSync } from 'node:fs';
@@ -513,7 +518,7 @@ describe('a box in the Status view reads stalled or paused (Task G1c, D-7380)', 
     act(() => { vi.advanceTimersByTime(MIN + 1_000); });
     expect(stateB()).toBe('stalled');
     expect(movedB()).toBe('no move 2h');
-    // Stalled outranks moving: the box is still in Programmes, now ahead of the rows it was behind.
+    // The box is still in Programmes, now stalled; the group draws no lone row, so no order is seen here (statusGroups' case pins it).
     expect(boxes(groupOf('programmes')).map((b) => b.getAttribute('data-state'))).toEqual(['stalled']);
   });
 
@@ -539,6 +544,61 @@ describe('a box in the Status view reads stalled or paused (Task G1c, D-7380)', 
     clockedMount(quiet(NOW - 150 * MIN, 3 * HOUR));
     expect(stateB()).toBe('moving');
     expect(movedB()).toBe('moved 2h 30m ago');
+  });
+
+  // Task G1d (D-7380; review 1279 F5): every input the table's `boxNow` is read over, each pinned through the real table. Each
+  // case is built so the clock's `next` does NOT move at the event, since a move of `next` re-reads `boxNow` by itself and
+  // would hide a dependency dropped from the memo: no boundary is ahead before or after it, or the one ahead is the same.
+  const runAt = (id: number, claimedBy: string, sessionId: string, project: string, at: number, over: Partial<RunSummary> = {}): RunSummary =>
+    run(id, claimedBy, sessionId, { program: `prog-${claimedBy}`, programTitle: `Programme ${claimedBy}`, project, lastMoveAt: at, ...over });
+
+  it('a box that crossed under the pause reads stalled once the pause clears, with no boundary ahead (review 1279 F5)', () => {
+    // Every other box is long past its threshold, so nothing is ahead once the pause clears: `next` is null before and after.
+    const runs = RUNS.map((r) => ({ ...r, lastMoveAt: r.claimedBy === 'coord-b' ? NOW - QUIET + MIN : NOW - 3 * HOUR }));
+    clockedMount({ runs, sessions: withRunBinding(SESSIONS, runs), stallQuietMs: QUIET, ...coordFrame('set') });
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(stateB()).toBe('paused');
+    act(() => { useFleetStore.setState(coordFrame('clear')); });
+    expect(stateB()).toBe('stalled');
+  });
+
+  it('a runs frame that ages a box reads it stalled while the clock waits on another box (review 1279 F5)', () => {
+    const at = (m: number): number => NOW - m * MIN;
+    const runs = [
+      ...['a1', 'a2', 'a3'].map((id, i) => runAt(i + 1, 'coord-a', id, 'project-a', at(100))),   // coord-a's boundary: 20 minutes out
+      runAt(4, 'coord-b', 'b1', 'project-b', at(115)),
+      runAt(5, 'coord-b', 'b2', 'project-b', at(30)),   // coord-b's newest move: its boundary is 90 minutes out
+    ];
+    clockedMount({ runs, sessions: withRunBinding(SESSIONS, runs), stallQuietMs: QUIET });
+    expect(stateB()).toBe('moving');
+    act(() => { vi.advanceTimersByTime(10 * MIN); });
+    // The newest run closes: coord-b last moved 125 minutes ago, and the clock still waits on coord-a's boundary.
+    act(() => { useFleetStore.setState({ runs: runs.map((r) => (r.id === 5 ? { ...r, state: 'done' as const } : r)) }); });
+    expect(stateB()).toBe('stalled');
+  });
+
+  it('a quiet time that changes with no boundary moving reads the boxes against the new one (review 1279 F5)', () => {
+    const at = (m: number): number => NOW - m * MIN;
+    const extra = [
+      coordinator('coord-c', 'project-b', { bucket: 'idle', status: 'idle' }), sess('c1', 'project-b', { bucket: 'idle' }),
+      coordinator('coord-d', 'project-b', { bucket: 'idle', status: 'idle' }), sess('d1', 'project-b', { bucket: 'idle' }),
+    ];
+    const runs = [
+      ...['a1', 'a2', 'a3'].map((id, i) => runAt(i + 1, 'coord-a', id, 'project-a', at(300))),
+      runAt(4, 'coord-b', 'b1', 'project-b', at(100)),   // Y
+      runAt(5, 'coord-b', 'b2', 'project-b', at(100)),
+      runAt(6, 'coord-c', 'c1', 'project-b', at(180)),   // V
+      runAt(7, 'coord-d', 'd1', 'project-b', at(60)),    // W
+    ];
+    // At 4 h the earliest boundary is V's, 60 minutes out. At 2 h, 40 minutes on, V and Y have crossed and W's, the same
+    // instant, is the earliest: `next` is the same, and only a `boxNow` re-read tells Y it has crossed (it moved 140 minutes ago).
+    clockedMount({ runs, sessions: withRunBinding([...SESSIONS, ...extra], runs), stallQuietMs: 4 * HOUR });
+    expect(stateB()).toBe('moving');
+    vi.setSystemTime(NOW + 40 * MIN);
+    act(() => { useFleetStore.setState({ stallQuietMs: QUIET }); });
+    expect(stateB()).toBe('stalled');
+    expect(boxOf(table(), 'coord-c').getAttribute('data-state')).toBe('stalled');
+    expect(boxOf(table(), 'coord-d').getAttribute('data-state')).toBe('moving');
   });
 });
 
