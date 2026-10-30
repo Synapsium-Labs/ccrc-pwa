@@ -113,8 +113,9 @@ and asked that every gap left be named:
    its cost is one `blast` row, `log@[core:io]:2 ok`, which now reads `[core:io]:2 ok`. A bracket with no ':', as in
    `ref@[main]:2 ok`, was already read as an ordinary host, and a second `blast` row records that.
 
-**Known limits, the complete list.** Ten `known-limit` rows, each with a note and printed whole in every column, and
-the file's own note name what this PR does not close. The CONTROL test pins exactly these ten:
+**Known limits, the complete list** (as the fifth round below left it). Thirteen `known-limit` rows, each with a note
+and printed whole in every column, and the file's own note name what this PR does not close. The CONTROL test pins
+exactly these thirteen:
 
 - a userinfo inside a query string or a path: `https://h/x?proxy=user:secret@host`, `GET /p?u=user:secret@host:8443`,
   `dir/user:secret@host`;
@@ -123,7 +124,13 @@ the file's own note name what this PR does not close. The CONTROL test pins exac
 - a token-only userinfo (no ':') before a host that no port and no path follows, while more text follows the host:
   `--proxy=tok@host refused`, `--proxy tok@host refused`. Prose's `user@host` has the same shape, and bare-host's rule
   masks it only at ')' or the end of the text;
-- a port followed by a non-ASCII punctuation mark: `tok@host:8443… x`, `tok@host:8443” x`.
+- a port followed by a letter, '-', '_' or '~' while more text follows: `tok@host:8443-x retrying`,
+  `tok@host:8443- x`, `tok@host:8443a x`, `tok@host:8443_x y`, `tok@host:8443~ x`. A host name holds those characters,
+  so the text after the ':' is arguably not a port at all. Bare-host's rule still masks the shape when the token runs
+  to the end of the text.
+
+The fourth round's list ended with a port followed by a non-ASCII punctuation mark (`tok@host:8443… x`,
+`tok@host:8443” x`); the fifth round closed it, and those two rows are `R8` rows now.
 
 **Bound, fourth round.** A second `bound` row keeps a head dense with masks: about 98 KB of ` u:secret@h:1` three
 times and then ` /home/u/x`, so the 4001-byte head masks 244 credentials and 81 homes. BOUND now checks both rows
@@ -132,3 +139,22 @@ Linux CI legs measure the worst case the cap leaves. Locally it returns in under
 
 **Corpus, fourth round.** 7 more `R8` rows, 2 `blast` rows, 4 `known-limit` rows and the dense `bound` row. Red
 first: 8 of 187 before the change (the 7 `R8` rows and `log@[core:io]:2 ok`), 187 of 187 after.
+
+**Fifth round, same PR, same ruling.** Review found that the fourth round's list was not complete. Rule 2's port
+terminator was a list of what may follow a port (whitespace, `)`, `]`, `,`, `;`, `:`, `|`, a quote, a backtick, `<`,
+`>`), so a token-only userinfo before a port that anything else followed printed whole: non-ASCII whitespace
+(`proxy tok@host:8443<U+00A0>x`, `<U+3000>`), an invalid byte, ASCII `(`, `&`, `\`, `=` and more, an escaped JSON quote
+(`"msg":"proxy tok@host:8443\" refused"`) and a literal backslash-n (`connect to tok@host:8443\nretry`). Several of
+those printed whole in all three modes, the rest in plain mode, which every ccd/ccrc caller uses.
+
+Rule 2 now lists the bytes that do NOT end a port: both of its terminator classes are `[^0-9A-Za-z.!}_~-]`, which `LC_ALL=C`
+reads byte by byte, so every other byte ends it, a non-ASCII one included. The `.`, `!` and `}` run before a
+terminator or the text's end is kept, so a version's `x@h:1.2`, `v pkg@h:1.2.3 ok` and a time's `build@10:30` stay
+whole in plain mode. No `blast` or `prose` row moved.
+
+**Corpus, fifth round.** 10 more `R8` rows (two non-ASCII spaces, an invalid byte as `inputHex`, `(`, `&`, `\`, `=`,
+two escaped JSON quotes and a literal `\n`), the two non-ASCII `known-limit` rows moved to `R8`, and 5 new
+`known-limit` rows for a port followed by a letter, '-', '_' or '~'. Red first: 12 of 202 before the change, 202 of 202
+after. The red commit's expected value for `proxy=\"tok@host:8443\" failed` was corrected in the fix commit to what the
+redactor prints, `host:8443\" failed`: the token starts at the text's start, and a token-only userinfo keeps no
+`KEY=` prefix (the prefix rule asks for a ':' userinfo), so the userinfo is `proxy=\"tok@`. The secret is gone either way.
