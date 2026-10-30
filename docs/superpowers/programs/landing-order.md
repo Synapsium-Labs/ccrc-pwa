@@ -29,7 +29,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); run 1189 (the run's wave 9) dispatched 2026-10-29, block 7433–7442, with the coordinator's rulings on where the plan had drifted from `main` (Decisions, 2026-10-29 09:41); PR #1884; fix round 1 after review 1212; accepted on `5aa30a97` after review run 1216 and merged through the native queue as `f6b67a5b` (Decisions, 2026-10-29 17:38); D-7433–D-7442 and D-7464–D-7467 defined after the merge; deploy, arming (the operator's) and the live proof wait (Next-wave brief) |
 | 4b | 3, the console half | the radar's server reader, its wire field `FleetSession.landing` and the PWA predicted-conflict chip (moved out of wave 3b, D-4329) | server, pwa | waves 4 and 4c | #1923 (plan #1906) | planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4b-radar-console.md`, D-7477 to D-7484; Decisions, 2026-10-29 18:40); run 1224 (the run's wave 12) opened and dispatched after wave 4c merged, before run 1219 closed (Decisions, 2026-10-29 22:55); sent back once after review run 1225, accepted on `38bcaf1e` after review run 1226, and merged through the native queue as `85d61aa8` (Decisions, 2026-10-30 02:32); D-7514–D-7523 defined in its departures note, and D-7526 after the merge |
 | 4c | 4, hardening | the lineage hardening carried from wave 4's reviews (Carried constraints), kept apart from 4b so that no PR mixes an acceptance change with a display change (D-4329's reason) | server, skills | wave 4 | #1911 | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed, under the title "wave 4b: lineage hardening" given before this row was split from 4b (Decisions, 2026-10-29 17:38); planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4c-lineage-hardening.md`, D-7469 to D-7476); the coordinator-side re-proof moved to the operator (Decisions, 2026-10-29 18:40); accepted on `0a9ff1b2` after review run 1220, then one clean merge of `main` reviewed alone (run 1223), and merged through the native queue as `9ec4fc54` (Decisions, 2026-10-29 22:55); D-7486–D-7495 defined after the merge |
-| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan; run 1227 (the run's wave 13) opened 2026-10-30, before run 1224 closed (Decisions, 2026-10-30 02:32) |
+| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan; run 1227 (the run's wave 13) opened 2026-10-30, before run 1224 closed (Decisions, 2026-10-30 02:32); its scope waits on the operator's answers (Decisions, 2026-10-30 03:40) |
+| 5a | 3 and 4, hardening | the hardening that the reviews of waves 4c and 4b, and three older review items (1141, 1216, 1222), carried forward: the lineage parser, the radar lane, the chip's words, and text and pins (Carried constraints). Kept apart from 5 so that the landing line's PR carries only its own data, routes and verb (D-4329's reason) | server, pwa, skills | waves 4c and 4b | — | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, D-7528 to D-7539; Decisions, 2026-10-30 03:40); run 1228 (the run's wave 14) opened 2026-10-30 |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -1358,6 +1359,42 @@ carries it (spec §5.1, amended 2026-09-24).
     required-checks gate exited `0`. PR #1923 was enqueued at `38bcaf1e` and merged as `85d61aa8`, with no dequeue.
   - **Wave 5** is run 1227 (the run's wave 13). It was opened as planned before run 1224 closed, so the programme keeps
     an open run.
+- **2026-10-30 03:40 — wave 5 split; wave 5a planned.**
+  - **Stage 5 is unbuilt.** A read-only survey of `main` found no code for the landing line yet: no landing tables,
+    routes, `land-candidate` verb, PR-keyed `pr-state` form or `main-health` reader. Every dependency row 5 names is
+    merged. Its scope still has open questions that are the operator's (below).
+  - **Wave 5a** takes what the reviews of waves 4c and 4b carried to wave 5, apart from the landing line, and three
+    older review items (1141, 1216 and 1222). Every item is
+    minor, fails closed, is a gap in a test or guard, or is text. It is run 1228 (the run's wave 14), and its plan,
+    `docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, defines D-7528 to D-7539. Each task was drafted against `main` and checked against `main` by a second
+    reader. Three Opus lenses then reviewed the plan, a Sonnet refuter checked each serious finding, and each finding
+    that held is answered.
+  - **D-7495's carried question is ruled (D-7536).** The landing verdict keeps its strict rule. A red that is `main`'s
+    own ends as the `red-unreachable` stop, and its report names the new-head route. Spec §5.7.5 makes a red that is
+    not the PR's own a stop once it is still red after the one rerun, or at once when it is not a GitHub Actions run, so
+    the coordinator does not take the route unasked. Whether it may, as wave 4c's landing did, is put to the operator.
+  - **Closed:** wave 4's "lenient chains and times" item. Cycles, duplicate entries and `p2 === p1` are refused on
+    `main`. Wave 4c kept `Date.parse` through `freshWithin` and dropped the strict time format on purpose (its plan's
+    review).
+  - **Not in 5a, and carried on.** These stay carried to the next wave that edits each file:
+    - the items in `ccd/ccd`, `ccd/session-hook.sh` and `ccd/ccd-land-probe`;
+    - `deploy/measure-landing.py`'s single-page read.
+
+    Three items are left for stage 5, whose PR-keyed landed reader (spec §5.5) may serve them:
+    - wave 3d's backstop for an open PR read as landed;
+    - wave 2's closed-unmerged PR reading `unmeasured`;
+    - review 1216's first item, a train-landed spent producer's proof after its row is reclaimed.
+  - **Put to the operator for stage 5.**
+    1. On this repository the native queue is the composition test, so `ccd land-candidate` has no consumer here.
+       Does wave 5 ship the line (entries, intents, holds, the PWA doors, the next-to-land mail) and leave
+       `land-candidate` until a project lands without a queue?
+    2. How do the two private repositories land (ruling 3 left it open)?
+    3. Where is `lander:coordinator` declared? The spec uses it three times and never defines it.
+    4. The spec names three CLAUDE.md amendments: the coord.db invariant, the box-token bullet and the ccd-verb rule
+       (§5.5, §6 and §7). §7 says the ccd-verb rule's wording is the operator's. Should the wave's PR propose the text
+       of all three for the operator to apply?
+    5. The plan prerequisite of spec §10, the coordinator's mail latency, has a measuring tool, but no recorded
+       result since wave 1's plan. May the coordinator run its read-only measurement?
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1670,7 +1707,8 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
     - the allowance header and README list fewer refusals than the code makes;
     - the `\u` listed pass pairs `--input -` with `-f query=`, where gh encodes the value, so that call cannot merge.
   - **jq 1.6 and 1.7** are unmeasured; only 1.8.1 was installed where the wave was measured.
-- **From wave 4's reviews (1212 and 1216), carried to wave 4c** (landed in #1911, except the re-proof, which is the operator's (D-7472), the review-cap ask, which is another programme's, the close after a second merge, the lenient chains and times, and the header's restatement, carried to wave 5). None of them accepts wrongly a doc the radar writes:
+- **From wave 4's reviews (1212 and 1216), carried to wave 4c** (landed in #1911, except the re-proof, which is the operator's (D-7472), the review-cap ask, which is another programme's, the close after a second merge, carried to wave 5; the lenient chains and times, closed 2026-10-30; and the header's
+restatement, taken by wave 5a). None of them accepts wrongly a doc the radar writes:
   each fails closed, or needs a hand-written file within the attribution-grade reach the plan states.
   - **The parser header** says the parser reads only the radar's shapes. But a measured doc with no `branch`, a cut walk
     with no `why`, a measured doc with a `why`, and an `unmeasured` doc with an 8-entry chain still accept. Require
@@ -1695,8 +1733,8 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
     later dequeued could print the earlier episode's head.
   - **A close after a second merge following the wave-done** records a third sha. Clause 9 forbids that merge, and the
     MERGED proof comes first.
-  - **Lenient chains and times:** a cycle, duplicate entries, `p2 === p1` and `Date.parse`'s leniency all accept. None
-    adds reach beyond the forgery.
+  - **Lenient chains and times:** closed (Decisions, 2026-10-30 03:40). Cycles, duplicate entries and `p2 === p1` are
+    refused on `main`, and wave 4c kept `Date.parse` through `freshWithin` on purpose.
 - **From wave 4c's review (1220) and its landing, carried to wave 5.** Each fails closed or is text.
   - **F2.** The unmeasured half of the `state`/`stop` rule (wave 4 fix round 1) can no longer go red: wave 4c's two
     unmeasured rules refuse every doc it refuses. Delete it, or keep it as a stated belt with a measured red.
@@ -1811,4 +1849,8 @@ past its window, and the chip ages a frame it already holds.
 
 **Waiting on the operator:** the coordinator-side re-proof's stopping line (D-7472).
 
-**Wave 5** is run 1227, to plan. It takes the items carried from waves 4c and 4b (Carried constraints).
+**Wave 5a is planned** (run 1228; `docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`; Decisions, 2026-10-30 03:40). It carries the hardening that the reviews of waves 4c
+and 4b, and three older review items, left for wave 5, and it is dispatched once its plan is on `main`.
+
+**Wave 5**, the landing line, is run 1227. Its scope waits on five operator answers (Decisions, 2026-10-30 03:40), and
+on the operator's ruling on whether the coordinator may take the new-head route unasked (D-7536).
