@@ -56,6 +56,12 @@
 // no port (`tok@host:8443-x retrying`, `tok@host:8443a x`): five `known-limit` rows, printed whole in every column. No
 // `blast` or `prose` row moved; `v pkg@h:1.2.3 ok`, `x@h:1.2` and `build@10:30` stay whole in plain mode.
 //
+// D-7564's sixth and last round: a scheme's '/' may follow a '\', as JSON escapes it, so `https:\/\/u:secret@host\/x`,
+// `https:\/\/tok@host` and `"url":"https:\/\/u:secret@host"` mask in every column (three R8 rows; the slashes stay as
+// written). Four more `known-limit` rows, printed whole in every column: a port followed by a run of '.', '!' or '}' and
+// then a letter (`tok@host:8443.x retrying`, `tok@host:8443!x retrying`, `tok@host:8443}x retrying`), and a host of
+// digits only before its port (`tok@2130706433:80 x`), which reads as a time's `build@10:30`.
+//
 // Every call goes through ONE fixed driver: the definitions are written to a temporary file and the input to
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
 // one of the literal calls in `SCRIPTS`. No path and no environment value ever reaches a script's text. The input
@@ -179,8 +185,8 @@ describe('the log-line redaction corpus (D-7078)', () => {
   });
 
   // D-7564: the eight shapes once recorded as `known-limit` are R8 rows now, and in every column their output no longer
-  // carries the secret. The known limits left are exactly the thirteen lines below, each with a note, each printed whole.
-  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and only the thirteen recorded known limits are left', () => {
+  // carries the secret. The known limits left are exactly the seventeen lines below, each with a note, each printed whole.
+  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and only the seventeen recorded known limits are left', () => {
     const former = [
       'server user:secret@host:8443 refused', 'user:secret@host: refused', "user:secret@host' failed",
       'user:secret@host" failed', 'user:secret@host\tfailed', 'user:secret@host\rfailed', 'user:secret@@host/x',
@@ -195,7 +201,8 @@ describe('the log-line redaction corpus (D-7078)', () => {
       'https://h/x?proxy=user:secret@host', 'GET /p?u=user:secret@host:8443', 'dir/user:secret@host',
       'user:pa#ss@host refused', 'user:pa?ss@host refused', 'user:pa/ss@host refused',
       '--proxy=tok@host refused', '--proxy tok@host refused', 'tok@host:8443-x retrying', 'tok@host:8443- x',
-      'tok@host:8443a x', 'tok@host:8443_x y', 'tok@host:8443~ x',
+      'tok@host:8443a x', 'tok@host:8443_x y', 'tok@host:8443~ x', 'tok@host:8443.x retrying',
+      'tok@host:8443!x retrying', 'tok@host:8443}x retrying', 'tok@2130706433:80 x',
     ];
     expect(ROWS.filter((r) => r.rule === 'known-limit').map((r) => r.input)).toEqual(limits);
     for (const r of ROWS.filter((x) => x.rule === 'known-limit')) {
@@ -221,8 +228,8 @@ describe('the log-line redaction corpus (D-7078)', () => {
   // D-7564, the bound: each loop rescans the whole text once per credential it masks, so the first `bound` row's line
   // (about 85 KB, 4000 credentials and homes past one long token) took seconds a call. Capped at 4096 bytes it returns at
   // once, in every column, with no secret and no more than 4096 bytes. The second row's kept head is dense with masks
-  // (about 4000 bytes of `u:secret@h:1` and `/home/u/x`), the most work the cap leaves each loop, so a slow runner's legs
-  // measure the worst case against the same limit.
+  // (about 4000 bytes of `u:secret@h:1` and `/home/u/x`), a dense row, so a slow runner's legs measure it against the
+  // same limit.
   it('BOUND: both bound rows return within 3 s in each column, with no secret and at most 4096 bytes', () => {
     const bounds = ROWS.filter((x) => x.rule === 'bound');
     expect(bounds.length, 'the corpus has two bound rows').toBe(2);
