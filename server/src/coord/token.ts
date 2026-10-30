@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+// D-7506: the constant-time slot matcher from its L1 home, which the claim door reads too.
+import { matchDigestSlots } from '../token/digestSlots.js';
 
 /** The header every box->server POST carries. Lowercase because Fastify
  *  normalises incoming header names, and a mixed-case constant here would read
@@ -190,31 +192,6 @@ const SLOT_DUMMIES: readonly Buffer[] = TOKEN_SLOTS.map(() => randomBytes(32));
 
 /** The retired-presentation warning's cap: at most one line a minute. */
 const RETIRED_WARN_EVERY_MS = 60_000;
-
-/**
- * The index of the first slot equal to `presented`, or -1. CONSTANT TIME over
- * the slots: every slot is compared on every call, and each result is folded
- * into numbers with `|=`, so neither which slot matched nor whether any did
- * changes how many compares run. The combine below carries no `||`, `&&`,
- * `||=`, `&&=`, ternary, `return`, `break`, `some` or `find`;
- * `coord-token.test.ts` scans the region between its two markers for each.
- * Every slot and `presented` must be the same length (sha256 digests, 32
- * bytes), which `timingSafeEqual` requires. `compare` is injected by tests to
- * count calls.
- */
-export function matchDigestSlots(presented: Buffer, slots: readonly Buffer[],
-  compare: (a: Buffer, b: Buffer) => boolean = timingSafeEqual): number {
-  let index = 0;
-  let found = 0;
-  // combine:begin
-  for (let i = 0; i < slots.length; i++) {
-    const hit = Number(compare(presented, slots[i]!));
-    index |= (i + 1) * (hit & (found ^ 1));
-    found |= hit;
-  }
-  // combine:end
-  return index - 1;
-}
 
 /**
  * The box token's accept-set, held in memory and mutated in place by the boot

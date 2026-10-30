@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
-import { matchDigestSlots } from '../src/coord/token.js';
+import { matchDigestSlots } from '../src/token/digestSlots.js';
 import { REPO_ROOT, parsedFile } from './scan/symbols.js';
 
 const sha = (s: string): Buffer => createHash('sha256').update(s).digest();

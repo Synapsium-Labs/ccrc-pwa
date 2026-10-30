@@ -2,7 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 // D-5896: `NODE_ID_RE` straight from its L0 home; through `coord/store.ts` it loaded the store and `node:sqlite`.
 import { NODE_ID_RE, isClaimCode } from '../../../shared/agent-protocol.js';
 import type { ClaimRefusal } from '../../../shared/box-token.js';
-import { matchDigestSlots } from '../coord/token.js';
+// D-7506: the slot matcher from its L1 home; through `../coord/token.js` it loaded the L3 holder's module.
+import { matchDigestSlots } from './digestSlots.js';
 import {
   BURNED_CODES_KEPT, CLAIM_ALERT_EVERY_MS, MAX_PENDING, claimVerdict, codeExpiresAt, keepBurned,
   type ClaimDoorState, type ClaimMatch,
