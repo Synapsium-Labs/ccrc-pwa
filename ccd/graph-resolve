@@ -198,8 +198,7 @@ _gr_repo_key() {
   fi
   if [ "${c##*/}" = .git ]; then name="${c%/.git}"; name="${name##*/}"; else name="${c##*/}"; name="${name%.git}"; fi
   name="$(printf '%s' "${name:-repo}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
-  if command -v sha256sum >/dev/null 2>&1; then sum="$(printf '%s' "$c" | sha256sum)"
-  else sum="$(printf '%s' "$c" | shasum -a 256)"; fi
+  sum="$(printf '%s' "$c" | _plat_sha256)"   # ccd/ccrc's platform shim; the caller sourced ccd/ccrc first
   sum="${sum%% *}"
   [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { GR_WHY="cannot hash the git common dir '$c'"; return 1; }
   GR_REPO_KEY="$name-${sum:0:8}"
