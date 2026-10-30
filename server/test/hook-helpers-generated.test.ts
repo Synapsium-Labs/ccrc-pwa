@@ -629,6 +629,23 @@ describe('the engine refuses a given file that is not the target row\'s (C5i)', 
     expect(readFileSync(f)).toEqual(before);
   });
 
+  // A target that carries no region has no row, so there is no file to compare: `--check` and `--write` keep the base's
+  // output (the hook row's `missing`, and its uncaught "no region" throw), whatever the given file is named.
+  it('keep-green: a target with no region keeps the base output for --check and --write, given ccd/ccrc', () => {
+    const target = at('ccd/ccrc-doctor-checks');
+    expect(regionOf(read('ccd/ccrc-doctor-checks')), 'ccd/ccrc-doctor-checks carries no region').toBeNull();
+    const c = cli('--check', target, at('ccd/ccrc'));
+    expect(c).toEqual({ code: 1, stdout: 'hook-helpers: missing\n', stderr: '' });
+    const copy = join(mkTmp('hook-helpers-c5i-noregion-'), 'ccrc-doctor-checks');
+    copyFileSync(target, copy);
+    const before = readFileSync(copy);
+    const w = cli('--write', copy, at('ccd/ccrc'));
+    expect(w.code).toBe(1);
+    expect(w.stdout).toBe('');
+    expect(w.stderr).toContain('Error: the file carries no generated hook helpers region to regenerate');
+    expect(readFileSync(copy)).toEqual(before);
+  });
+
   it('the usage line names <file> and --region-files', () => {
     const r = cli('--check');
     expect(r.stderr).toBe('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <file> | --regions | --region-files\n');
