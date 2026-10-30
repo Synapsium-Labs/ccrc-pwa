@@ -593,6 +593,8 @@ repository's pre-queue configuration (5.7.7), which a queue rollback restores, s
 stops `approval-missing` instead of landing.
 
 On every route the merge is proven the same way it is today: MERGED, with `headRefOid` equal to `handoffCommit`.
+(Amended 2026-10-30, D-7537: a PR a merge train landed reads `CLOSED`, and it is proven by `wave-lifecycle.md` §5
+step 3's train-landed proof: `CLOSED`, `headRefOid` equal to `handoffCommit`, and `landedInTrain: true` on its row.)
 A refused merge on route G or U is read, reported and stopped on. It is never retried with another method, with
 `--admin` or with `--auto`.
 
@@ -631,7 +633,7 @@ changes nothing. The coordinator says in its turn's text which stop fired and wh
 |---|---|
 | A source is unreadable | read 1, 2, 4 or 5 is not a 200; read 3 is anything but a 200, the `Branch not protected` 404, or a 401/403 that read 3b answered with a 200 |
 | Read 3b leaves the route unknowable | read 3b stands in for read 3, and, on a direct route (G or U), the head is behind the base, or, on any route, the method is `merge` (5.7.1; amended 2026-10-28) |
-| The PR is not at the reviewed head | read 1's `headRefOid` is not `handoffCommit`, or its `state` is `CLOSED`. A `state` of `MERGED` is not a stop: it goes to the existing merge proof (MERGED with `headRefOid` equal to `handoffCommit`) |
+| The PR is not at the reviewed head | read 1's `headRefOid` is not `handoffCommit`, or its `state` is `CLOSED`. A `state` of `MERGED` is not a stop: it goes to the existing merge proof (MERGED with `headRefOid` equal to `handoffCommit`). (Amended 2026-10-30, D-7537: for a `CLOSED` PR the coordinator runs the train-landed proof (5.7.4) before it reports this stop, and where the proof holds the PR is landed.) |
 | An unknown rule type | read 2 carries a rule type 5.7.3 does not list |
 | The method set is empty | settings, every `pull_request` rule and linear history leave no method |
 | Rebase is the only method | a stop (§11, item 8) |
