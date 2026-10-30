@@ -123,6 +123,18 @@ describe('the log-line redaction corpus (D-7078)', () => {
         expect(shown(run(defs, c, inputOf(r), r.home, r.locale)), c).toEqual(shown(want(r, c)));
       }
     });
+
+  // MUTANT: bash runs a function's LAST definition, and `ccdFunctionDefinition` returns the FIRST. A second, hand-written
+  // `_upd_redact` below `say` is what bash would run, so the column must refuse the file rather than copy the generated one.
+  it('MUTANT: a second hand-written _upd_redact below say reds the updateSync column', () => {
+    const sync = read('ccd/ccd-update-sync');
+    const sayLine = /^say\(\) \{[^\n]*\n/m.exec(sync);
+    expect(sayLine, 'ccd-update-sync defines say on one line').not.toBeNull();
+    const at = sayLine!.index + sayLine![0].length;
+    const mutant = `${sync.slice(0, at)}_upd_redact() { printf '%s' "$1"; }\n${sync.slice(at)}`;
+    expect(() => sayDefinitions(sync)).not.toThrow();
+    expect(() => sayDefinitions(mutant)).toThrow('ccd/ccd-update-sync defines _upd_redact 2 times');
+  });
 });
 
 /** The number of shell words after `_upd_redact` at `from` in `code`, up to the end of its command (an unquoted `)`,
