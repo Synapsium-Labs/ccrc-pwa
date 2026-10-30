@@ -196,6 +196,26 @@ describe('the ask is one container at each width', () => {
     expect(composer(), 'the composer is the same node').toBe(box);
     expect(box.isConnected).toBe(true);
   });
+
+  // Task T1d: the card is its header, then the question in a region of its own, then the surface in its own, so the
+  // question alone can scroll and the options never shrink for it (the geometry is `ask-inline.browser.test.ts`'s).
+  it('the question sits in its own region above the surface, and the h2 still names the card', () => {
+    media(true);
+    const { arrive } = mount();
+    arrive(1);
+    const section = card();
+    const question = section.querySelector<HTMLElement>('.ask-inline-question');
+    const surface = section.querySelector<HTMLElement>('.ask-inline-surface');
+    expect(question, 'the question has a region of its own').not.toBeNull();
+    expect(surface, 'the answer surface has a region of its own').not.toBeNull();
+    const heading = within(question!).getByRole('heading', { level: 2, name: QUESTION });
+    expect(within(surface!).queryByRole('heading', { level: 2 }), 'the question is not in the surface').toBeNull();
+    expect(opt(surface!, /^Redis/), 'the options are in the surface').toBeInTheDocument();
+    expect(within(question!).queryAllByRole('button'), 'no control is in the question region').toEqual([]);
+    expect(question!.compareDocumentPosition(surface!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the question comes before the surface').toBeTruthy();
+    expect(section, 'the h2 is the card\'s accessible name').toHaveAccessibleName(QUESTION);
+    expect(section.getAttribute('aria-labelledby')).toBe(heading.id);
+  });
 });
 
 describe('Escape at the desk', () => {
