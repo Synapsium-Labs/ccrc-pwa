@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { UpdatesView } from '../../../../shared/api';
-import { Button, Section, Skeleton, elapsedShort, useNow } from '@ccrc/ui';
+import { Button, Section, Skeleton, useNow } from '@ccrc/ui';
 import { BOX_TOKEN_CARD, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_WHEN, useResultLine } from '../../fleet/settingsText';
 import type { UpdatesPoll } from '../../fleet/useUpdatesView';
 import { isPlaceableInstant } from '../../fleet/updatesRead';
@@ -16,7 +16,7 @@ import { ApiError, api, apiErrorText, readBoxTokenView } from '../../lib/api';
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
 // box-token card landed on main while that move was happening on this branch,
 // and it reads two of the same clocks.
-import type { BoxTokenView, RotateAnswer, TokenHold } from '../../../../shared/box-token';
+import type { RotateAnswer } from '../../../../shared/box-token';
 import { TOKEN_ROTATION_INTERVAL_MS } from '../../../../shared/box-token';
 // The update plane's reading surface moved to a file of its own; this screen
 // composes it. `ACK_UNREADABLE_TEXT`/`canAck` come THROUGH it because
@@ -29,6 +29,10 @@ import { LinearSection } from '../LinearSection';
 import { SignInGateCard } from './SignInGateCard';
 import { ThisSessionCard } from './ThisSessionCard';
 import { YourSignInCard } from './YourSignInCard';
+import {
+  BOX_TOKEN_FLEET_TEXT, BOX_TOKEN_TEXT, boxTokenHoldText, boxTokenStateText, boxTokenSummary, boxTokenTransportText, spanWords,
+  type BoxTokenTone,
+} from './boxTokenWords';
 
 // ── The box-token card (box-token lifecycle wave 1, Task B6; spec 4.7, D-4392) ──
 // A THIRD section, over the same one /api/updates poll: `view.boxToken`, read
@@ -42,56 +46,6 @@ import { YourSignInCard } from './YourSignInCard';
 //   * NO VALUE, CODE OR HASH. The view carries none, and nothing here derives one.
 // "Rotate now" is the session-only `POST /api/token/rotate`; its refusals are
 // answers said in place, and the card re-polls after every tap.
-
-const BOX_TOKEN_HOLD_TEXT: Record<TokenHold, (node: string | null) => string> = {
-  'update-in-flight': (n) => `an update is in flight on ${n ?? 'a node'}`,
-  'agent-predates-op': () => 'fleet agent predates token-sync',
-  'verb-missing': (n) => `release not yet on ${n ?? 'the fleet box'} (its ccrc has no token verb)`,
-  'stale-client': (n) => `a stale ccrc-api on ${n ?? 'the fleet box'}`,
-  'fleet-rows': () => 'not exactly one reachable fleet node',
-  'node-id-unmeasured': (n) => `the node id of ${n ?? 'the fleet box'} is not measured`,
-  'link-down': () => 'the agent link is down',
-  'pending-cap': () => 'the handed-out values at the cap still await confirmation',
-  'no-coord': () => 'no coordination database',
-  'role-unrecorded': () => "this box's role is not recorded as both (CCRC_ROLE in ~/.ccrc/ccrc.env)",
-  'mint-failed': () => 'the server could not mint a value',
-};
-
-/** "held: …", the card's spelling of the server's hold word (spec 4.7's own examples). */
-export function boxTokenHoldText(hold: TokenHold, node: string | null): string {
-  return `held: ${BOX_TOKEN_HOLD_TEXT[hold](node)}`;
-}
-
-export function boxTokenStateText(v: BoxTokenView): string {
-  switch (v.phase) {
-    case 'unconfigured': return 'no current value';
-    case 'idle': return 'idle';
-    case 'staged': return 'rotating (a new value is staged)';
-    case 'handed-out': return 'rotating (handed out, awaiting the fleet box)';
-    case 'promoting': return 'rotating (promoting)';
-    case 'grace': return 'grace (the previous value is still accepted)';
-    case 'held': return v.hold !== null ? boxTokenHoldText(v.hold, v.holdNode) : 'held';
-    case 'failed': return `failed (${v.lastFailure ?? 'unknown'})`;
-  }
-}
-
-/** Plain http is said as unencrypted and still rotates (R2); `unmeasured` is never folded into https. */
-export function boxTokenTransportText(t: BoxTokenView['fleetTransport']): string {
-  if (t === null) return 'transport: no sync yet';
-  if (t === 'unmeasured') return 'transport: not measured';
-  return t === 'http' ? 'transport: http (unencrypted)' : 'transport: https';
-}
-
-const BOX_TOKEN_FLEET_TEXT: Record<BoxTokenView['fleetConfirmed'], string> = {
-  current: 'confirmed the current generation',
-  // `behind` says only what the server's word means: the fleet's generation read is not the current id (review 362 F3).
-  // It may hold an older generation or, mid-promotion, a newer one; the card never says which.
-  behind: 'not on the current generation',
-  absent: 'no generation recorded on the fleet box',
-  unreadable: "the fleet box's generation file could not be read",
-  'own-write': 'this box writes the fleet copy itself',
-  unknown: 'not yet measured',
-};
 
 const BOX_TOKEN_ABSENT_TEXT = 'This server reports no box-token state.';
 const BOX_TOKEN_UNREADABLE_TEXT = "Box-token state: not reported (the server's answer could not be read).";
@@ -107,76 +61,15 @@ function rotateAnswerText(a: RotateAnswer | 'unreadable'): string {
 
 // ── Settings Task R1d: the card's shape (spec §5.5; D-5503's words, D-5507's rule that Rotate stays one tap) ──
 // A definition, one summary sentence, today's key/value lines folded behind "Details", and Rotate now alone at the
-// foot after a hairline, with its note, its when-line and its answer as the card's result line. The hold, state and
-// answer sentences above are read by name, never retyped. Rotate now opens no 401 window and keeps the old key until
-// the fleet box confirms (box-token design G3), so it stays a one-tap ghost: no confirm, no danger tone.
-
-const SPAN_UNIT: Readonly<Record<string, string>> = { m: 'minute', h: 'hour', d: 'day' };
-
-/** "2 days", "5 hours", "40 minutes", "moments": `elapsedShort`'s one-unit ladder, said in words. */
-function spanWords(ms: number): string {
-  const short = elapsedShort(ms);
-  if (short === null) return 'moments';
-  const n = Number(short.slice(0, -1));
-  return `${n} ${SPAN_UNIT[short.slice(-1)] ?? short.slice(-1)}${n === 1 ? '' : 's'}`;
-}
-
-/** The card's words (spec §5.5). The interval is `TOKEN_ROTATION_INTERVAL_MS`, said in words at render, never typed:
- *  `box-token-card.test.tsx` runs against a 3-day fixture of it. The note names no interval (D-5615). */
-const BOX_TOKEN_TEXT = {
-  purpose: (interval: string): string => 'The key that sessions and tools on the fleet box use to call this server, '
-    + `for mail and coordination. The server makes a new one every ${interval} and hands it to the fleet box itself. `
-    + 'The old key keeps working until the fleet box confirms the new one, so nothing restarts or drops.',
-  handedOut: 'Rotating: waiting for the fleet box to confirm. The old key still works.',
-  rotateNote: 'Starts a rotation now instead of waiting for the next scheduled one. Nothing restarts; the old key keeps '
-    + 'working until the fleet box confirms.',
-  rotateWhen: 'You think the key has leaked.',
-} as const;
-
-const sentenceCase = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+// foot after a hairline, with its note, its when-line and its answer as the card's result line. The hold and state
+// sentences (`boxTokenWords.ts`) and the answer sentences above are read by name, never retyped. Rotate now opens no
+// 401 window and keeps the old key until the fleet box confirms (box-token design G3), so it stays a one-tap ghost:
+// no confirm, no danger tone.
 
 /** The summary's ink, from classes the page already carries: the note's secondary, the inline-refusal amber, and the
  *  page's one red sentence (`.settings-unarmed`, self-grounded), so no colour-bearing rule is added. */
-const SUMMARY_CLASS = { calm: 'settings-note', amber: SETTINGS_AMBER_NOTE, red: 'settings-unarmed' } as const;
-
-/** One sentence from the view. "Healthy" only in `idle` with the fleet confirmed (`current`, or `own-write`: this box
- *  writes the fleet copy itself) and nothing owed, stalled, failing, tampered with or leaked. Amber for `held` or `behind`, red for `failed`,
- *  each with its word, from today's state sentences. */
-export function boxTokenSummary(v: BoxTokenView, now: number): { text: string; tone: keyof typeof SUMMARY_CLASS } {
-  if (v.phase === 'failed') return { text: sentenceCase(boxTokenStateText(v)), tone: 'red' };
-  if (v.phase === 'held') return { text: sentenceCase(boxTokenStateText(v)), tone: 'amber' };
-  if (v.phase === 'handed-out') return { text: BOX_TOKEN_TEXT.handedOut, tone: 'calm' };
-  if (v.phase !== 'idle') return { text: sentenceCase(boxTokenStateText(v)), tone: 'calm' };
-  if (v.fleetConfirmed === 'behind') return { text: `Behind: fleet ${BOX_TOKEN_FLEET_TEXT.behind}`, tone: 'amber' };
-  // A tamper or leak signal is never folded under "Healthy" (D-5503: never optimistic; R1d review). The driver owes no
-  // rotation for a file problem and bounds a retired presentation's owed rotation to one an hour, so an idle,
-  // confirmed card can carry either; each names its fact here, in amber, as well as in Details.
-  const check: string[] = [];
-  if (v.fileProblem !== null) check.push(`server token file ${v.fileProblem.file} ${v.fileProblem.word} on re-read`);
-  if (v.retiredPresented > 0) {
-    check.push(`retired value presented ${v.retiredPresented} time${v.retiredPresented === 1 ? '' : 's'}`);
-  }
-  if (check.length > 0) return { text: `Check: ${check.join(' · ')}`, tone: 'amber' };
-  const confirmed = v.fleetConfirmed === 'current' || v.fleetConfirmed === 'own-write';
-  if (!confirmed || v.rotationOwed || v.stalled !== null || v.banner) {
-    const parts = ['Idle'];
-    if (v.rotationOwed) parts.push(`rotation owed: ${v.owedWhy ?? 'unspecified'}`);
-    parts.push(`fleet: ${BOX_TOKEN_FLEET_TEXT[v.fleetConfirmed]}`);
-    return { text: parts.join(' · '), tone: 'calm' };
-  }
-  const parts = ['Healthy'];
-  parts.push(v.lastRotationAt !== null && isPlaceableInstant(v.lastRotationAt)
-    ? `rotated ${spanWords(now - v.lastRotationAt)} ago` : 'never rotated');
-  // `nextRotationAt` is optional and additive (an older server omits it), and `readBoxTokenView` passes it through
-  // unread, so it is checked here: anything but a placeable instant says nothing about the next rotation.
-  const next: unknown = v.nextRotationAt;
-  if (typeof next === 'number' && isPlaceableInstant(next)) {
-    parts.push(next > now ? `next in ${spanWords(next - now)}` : 'next due now');
-  }
-  // Plain http still rotates (R2), but the key travels unencrypted: said beside the verdict, not only in Details.
-  if (v.fleetTransport === 'http') parts.push('transport http (unencrypted)');
-  return { text: parts.join(' · '), tone: 'calm' };
-}
+const SUMMARY_CLASS = { calm: 'settings-note', amber: SETTINGS_AMBER_NOTE, red: 'settings-unarmed' } as const satisfies
+  Record<BoxTokenTone, string>;
 
 /** "key: value" said as a key and a value: today's lines, split at their first ": ". */
 const keyValue = (line: string): [string, string] => {

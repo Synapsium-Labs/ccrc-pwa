@@ -21,13 +21,12 @@ import type {
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_GATE_CAP } from '../../shared/api';
 import { LOOPBACK_HOSTS } from '../../shared/base-url';
 import {
-  AUTO_LABELS,
   AUTO_NOTES,
   autoGateMissing,
   CHANNEL_NOTES,
-  CHANNEL_SENTENCES,
   UNCONFIRMED_TEXT,
 } from '../src/screens/settings/UpdatesSection';
+import { AUTO_LABELS, CHANNEL_SENTENCES } from '../src/screens/settings/updatesWords';
 import { NOTIFY_LABELS } from '../src/screens/settings/NotificationsSection';
 import { unarmedExposure } from '../src/screens/settings/SignInGateCard';
 import { renderSettings } from './settingsHost';
