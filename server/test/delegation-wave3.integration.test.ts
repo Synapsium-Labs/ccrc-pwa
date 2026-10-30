@@ -55,6 +55,7 @@ import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { parsedFile } from './scan/symbols.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -1380,7 +1381,7 @@ describe('8. the closed scope census', () => {
     expect(cuts, 'every truncating call in a file that can reach a file (a new string helper there needs listing here)').toEqual([
       'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
       'server/src/coord/delegation-checkpoint.ts: this.port.truncate(',
-      'server/src/coord/delegation-journal.ts: fsp.truncate(',
+      'server/src/coord/delegation-file-port.ts: fsp.truncate(',
       'server/src/coord/delegation-journal.ts: truncate(',
     ]);
 
@@ -1445,15 +1446,18 @@ describe('8. the closed scope census', () => {
     expect(jr.match(/^.*(?:DELEGATION_JOURNAL_FILE|delegation-events\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names its file once').toEqual(
       ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';"]);
     // every `fsp.` call of the module is inside the node port's own literal (the adapter), never a free function
-    const portAt = jr.indexOf('export const nodeDelegationFilePort');
-    const portEnd = jr.indexOf('\n};\n', portAt);
+    const portFile = parsedFile('server/src/coord/delegation-file-port.ts');
+    const portBinding = portFile.bindings.find((b) => b.name === 'nodeDelegationFilePort');
+    const portAt = portBinding?.initStart ?? -1;
+    const portEnd = portAt + (portBinding?.init.length ?? 0);
     expect(portAt, 'the node port literal').toBeGreaterThan(-1);
-    expect((jr.slice(0, portAt) + jr.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
+    expect(code(portFile.text.slice(0, portAt) + portFile.text.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
+    expect(code(parsedFile('server/src/coord/delegation-journal.ts').text).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call in the journal module').toEqual([]);
     // and the node port is reached, across the server, only by its declaration and the composition root (`watch.ts`'s import and its applier's `port:` argument)
     const portUses = SRC.flatMap((f) => (code(read(f)).match(/^.*\bnodeDelegationFilePort\b.*$/gm) ?? []).map((l) => `${f}: ${l.trim()}`));
     expect(portUses, 'every use of the node file port in the server').toEqual([
-      'server/src/coord/delegation-journal.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
-      "server/src/watch.ts: import { nodeDelegationFilePort } from './coord/delegation-journal.js';",
+      'server/src/coord/delegation-file-port.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
+      "server/src/watch.ts: import { nodeDelegationFilePort } from './coord/delegation-file-port.js';",
       'server/src/watch.ts: port: nodeDelegationFilePort,',
     ]);
 

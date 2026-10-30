@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { nodeDelegationFilePort as port } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort as port } from '../src/coord/delegation-file-port.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);

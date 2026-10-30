@@ -40,7 +40,7 @@ import {
   type DelegationCheckpointChange,
   type DelegationDurabilityDeps,
 } from '../src/coord/delegation-checkpoint.js';
-import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_BUCKET_REPLACED,
   DELEGATION_EVENT_ID_DOMAIN,

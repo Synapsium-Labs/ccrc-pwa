@@ -779,7 +779,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/delegation-checkpoint.ts': 33,
       'server/src/coord/delegation-correlation.ts': 4,
       'server/src/coord/delegation-ingest.ts': 5,
-      'server/src/coord/delegation-journal.ts': 14,
+      'server/src/coord/delegation-journal.ts': 10,
       'server/src/coord/delegation-model.ts': 5,
       'server/src/coord/delegation-policy.ts': 6,
       'server/src/coord/digest.ts': 2,

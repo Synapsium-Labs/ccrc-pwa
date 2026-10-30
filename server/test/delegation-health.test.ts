@@ -37,7 +37,7 @@ import {
   type DelegationObservationInterval,
 } from '../src/coord/delegation-model.js';
 import { DelegationDurability, type DelegationProjectionPort } from '../src/coord/delegation-checkpoint.js';
-import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import type { DelegationHealthInput } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 

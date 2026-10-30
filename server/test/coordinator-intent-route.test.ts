@@ -32,7 +32,7 @@ import {
   type DelegationDurabilityDeps,
   type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
-import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   COORDINATOR_INTENT_ACTIONS,
   declareCoordinatorIntent,
