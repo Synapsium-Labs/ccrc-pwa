@@ -2788,14 +2788,16 @@ _upd_redact() {
   # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
   # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
   # D-7564: a run after the first may be empty, so `user:secret@@host/x` loses `user:secret@@` (curl's userinfo
-  # runs to the last '@').
+  # runs to the last '@'). Any leading '@'s go with the userinfo (`@tok@host/x` reads `host/x`), and a token may
+  # also start after a backtick, which stays (`` `tok@host/x` `` reads `` `host/x` ``). Bare-host's rule below does
+  # the same.
   local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   # D-7564: a token that starts `KEY=` or `--flag=` (a letter or '_' first, then letters, digits, '_' or '-') keeps that
   # prefix when a ':' userinfo follows it, so `CCRC_X=user:secret@host` reads `CCRC_X=host`. The userinfo's first
   # character may be neither ':' nor '=': a base64 name's padding (`dG9rZW4=:x@h`) then reads as no prefix and goes
   # whole, by rule 1 below. A token-only userinfo (rule 2) never keeps one, for the same reason.
   local kre='(^|[[:space:]"'"'"'<(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*=)([^:=/?#[:space:]"'"'"'<(][^/?#[:space:]]*(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $kre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[2]}"}"; done
-  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  local re='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   # D-7564, in both modes: two shapes are a credential whatever ends the host, so no end set is asked of them.
   #   1. a token's userinfo holding a ':' (`user:secret@`, up to the token's last '@', a leading '@' included), its
   #      percent-encoded `%3A` or `%3a` too: `server user:secret@host:8443 refused`, `user:secret@host: refused`, a
@@ -2803,19 +2805,21 @@ _upd_redact() {
   #      '"', "'", '<' or '('; past its first character the userinfo may hold '"', "'", '<' or '('.
   #      An email address has no ':' before its '@', so it stays.
   #   2. any userinfo, after any leading '@'s, before a host that ends in `:digits` and then whitespace, `)`, `]`, `,`,
-  #      `;`, `:`, `|`, a quote, `<`, `>`, the text's end, or a '.', '!' or '}' that whitespace or the text's end
-  #      follows: `tok@host:8443 refused`, `reach tok@host:8443.`. The host holds a character other than a digit, so a
+  #      `;`, `:`, `|`, a quote, a backtick, `<`, `>`, the text's end, or a run of '.', '!' or '}' that one of those
+  #      follows: `tok@host:8443 refused`, `reach tok@host:8443.`, `connecting to tok@host:8443... retrying`,
+  #      `dial tok@host:8443.) retrying`. A token may also start after a backtick, which stays
+  #      (`` `tok@host:8443` `` reads `` `host:8443` ``). The host holds a character other than a digit, so a
   #      time's `build@10:30` stays, or is a bracketed IPv6 address (`tok@[::1]:8443`). A version's `x@h:1.2` is no
   #      port and a terminator, so rule 2 leaves it (bare-host's own rule still masks it at the text's end).
   # The cost: `mailto:a@example.com` and `npm:pkg@1.2.3` read as shape 1, a logger's `WARNING:root:bob@example.com` too;
   # `stash@{0}:3` and `claude-session@x.service:12` read as shape 2. The corpus's `blast` rows hold each.
   local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
-  local ptre='(^|[[:space:]"'"'"'<(])((@*[^/@?#[:space:]"'"'"'<(][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Fa-f:.]+\]):[0-9]+([]),;:|"'"'"'<>[:space:]]|$|[.!}]([[:space:]]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Fa-f:.]+\]):[0-9]+([]),;:|"'"'"'<>`[:space:]]|$|[.!}]+([]),;:|"'"'"'<>`[:space:]]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
   # text's end is masked too, prose's `user@host` included, which is why no ccd/ccrc caller passes it: a systemd
   # instance unit's `claude-session@x.service` would lose its prefix (D-7289).
   if [ "$mode" = bare-host ]; then
-    local bre='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
+    local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
     while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   fi
   # Review fix round 1, M6: the OLD blind substring replace was not anchored

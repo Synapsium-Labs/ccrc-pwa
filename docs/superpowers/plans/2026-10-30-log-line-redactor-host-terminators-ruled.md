@@ -81,3 +81,23 @@ a note at the head of the file record what this PR does not close: a userinfo in
 (`https://h/x?proxy=user:secret@host`, `GET /p?u=user:secret@host:8443`, `dir/user:secret@host`) and a raw '#', '?' or
 '/' inside a password. The CONTROL test pins exactly those six. Red first: 14 of 154 before the change, 154 of 154
 after.
+
+**Third round, same PR, same ruling.** Review found three more shapes that printed a secret whole:
+
+1. A port followed by more than one '.', '!' or '}', or by one of them and then another terminator (`connecting to
+   tok@host:8443... retrying`, `dial tok@host:8443.) retrying`, `error: "dial tok@host:8443."`, `tok@host:8443}.`,
+   `reach tok@host:8443!! now`). Rule 2 now ends at a run of '.', '!' or '}' when any of its other terminators or the
+   end of the text follows the run. A version such as `x@h:1.2`, `v pkg@h:1.2.3 ok` or `see a@b:3.x` still stays
+   whole in the default mode, because a digit or a letter follows its '.'.
+2. A backtick around the token (`` failed to reach `tok@host:8443` (refused) ``, `` see `user@host:8443`. ``). A token
+   may now start after a backtick, in rule 2, in the '/'-ended rule and in bare-host's rule, and a backtick ends rule
+   2's port. The backticks stay in the output (`` `host:8443` ``).
+3. A leading '@' before a userinfo whose host a '/' ends (`@tok@host/x refused`), or, in bare-host mode, the end of
+   the text (`@tok@host`). The '/'-ended rule and bare-host's rule now allow any number of leading '@'s, as rule 2
+   already did. In bare-host mode a handle such as `@alice@example.social` at the end of the text now reads
+   `example.social`; the default mode leaves it whole.
+
+**Corpus, third round.** 14 more `R8` rows, 2 `R1` rows (`` see `tok@host/x` now ``, `@tok@host/x refused`), 1 `R6`
+row (`@tok@host`), 1 `prose` row (`v pkg@h:1.2.3 ok`) and 1 `blast` row (bare-host's `see a@b:3.x`). The six
+`known-limit` rows are unchanged. Red first: 17 of 173 before the change, 173 of 173 after. The region in
+`ccd/ccd-update-sync` was regenerated with `node shared/hook-helpers.mjs --write ccd/ccd-update-sync ccd/ccrc`.
