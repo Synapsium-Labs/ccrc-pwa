@@ -1590,9 +1590,9 @@
       "input": "proxy=\\\"tok@host:8443\\\" failed",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "proxy=\\\"host:8443\\\" failed",
-      "bareHost": "proxy=\\\"host:8443\\\" failed",
-      "updateSync": "proxy=\\\"host:8443\\\" failed"
+      "ccrc": "host:8443\\\" failed",
+      "bareHost": "host:8443\\\" failed",
+      "updateSync": "host:8443\\\" failed"
     },
     {
       "rule": "R8",
