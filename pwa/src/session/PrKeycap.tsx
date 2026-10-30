@@ -13,6 +13,7 @@ import { Keycap, elapsedShort } from '@ccrc/ui';
 import type { PrChecks, PrReason, PrState } from '../../../shared/api';
 import { UNCHECKED_PR } from '../../../shared/api';
 import { UNSUPPORTED_VERB_TEXT } from '../lib/api';
+import { prDoorWord } from './prCap';
 import './chat.css';
 
 /** Integration finding 6: "we have not looked yet" is defined ONCE, in
@@ -23,12 +24,6 @@ import './chat.css';
  *  import keeps working and so the cap and the sheet still demonstrably share
  *  one object; `server/test/single-definition.test.ts` fails on a fourth. */
 export { UNCHECKED_PR };
-
-/** A workspace session has a PR cap; a main checkout has none. ONE predicate: the header's cap renders where it holds
- *  and the palette offers `session-pr` where it holds, so neither offers a PR the other hides (W2 Task S2d). */
-export function hasPrCap<S extends { workspace: string | null }>(session: S | null): session is S {
-  return session !== null && session.workspace !== null;
-}
 
 /** '2m' | '3h' | '5d', or null under a minute — `elapsedShort`'s own answer
  *  there, which is why this cap needs nothing of its own for that case. */
@@ -41,19 +36,6 @@ function rel(then: number | null): string | null {
  *  hold would be a second loss on top of the failed read. */
 export function prLegend(pr: PrState): string {
   return pr.number === null ? 'PR' : `#${pr.number}`;
-}
-
-/** The word on the PR door at the desk (desktop polish T3c, D-6333): the number once we have one, otherwise what
- *  tapping it does — a tap always opens the sheet, and the sheet is where a PR is opened, checked or retried. Below
- *  900 the cap shows `prLegend` as it always did; the More sheet's PR row carries this word at every width. */
-export function prDoorWord(pr: PrState): string {
-  if (pr.number !== null) return `#${pr.number}`;
-  switch (pr.phase) {
-    case 'none': return 'Open PR';
-    case 'unchecked': return 'Check PR';
-    case 'unknown': return 'Retry PR';
-    default: return 'PR';
-  }
 }
 
 /** Status is never colour-only: this glyph rides beside the dot, and the sheet

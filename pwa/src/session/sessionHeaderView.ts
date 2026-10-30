@@ -16,9 +16,9 @@ import { hibernatedSince } from '../fleet/hibernated';
 import { headerStatusWord } from '../fleet/sessionFacts';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
-import { hasPrCap } from './PrKeycap';
+import { hasPrCap } from './prCap';
 import { liveStatus } from './liveStatus';
-import { sessionMenu, type SessionMenuEntry } from './SessionFlows';
+import { sessionMenu, type SessionMenuEntry } from './sessionMenu';
 
 /** The effort chip's word before the pane reports an effort. The inspector's routing line says the same word on its
  *  effort door (`routingLine.ts`), so it is spelled here once. The header draws the chip only while it has meta to show
