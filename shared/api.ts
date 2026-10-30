@@ -4596,7 +4596,7 @@ export interface Dialog {
 
 /**
  * A multiSelect AskUserQuestion question as `parseDialog` reads it off the pane (D-5048), the shape
- * `POST /api/sessions/:id/dialog/multi` answers. Measured on Claude Code 2.1.300 (2.1.280 paints the same): rows
+ * the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) answers. Measured on Claude Code 2.1.300 (2.1.280 paints the same): rows
  * `k. [ ] Label`, then `n+1. [ ] Type something`, then an unnumbered `Next` row (`Submit` on the last question), a
  * rule, and `n+2. Chat about this`. A box reads `[✔]` once ticked. The dialog's id does not change as boxes are ticked
  * or the cursor moves, so it names the question, never its ticks: a reader takes the ticks from here, fresh.
@@ -4692,7 +4692,7 @@ export type SessionStreamMsg =
    *  one is right and sends both exactly as read. The CLIENT is where the
    *  preference lives: it prefers this envelope over the scraped `dialog`
    *  when both are present. */
-  | { type: 'ask'; ask: HookAsk; key: string | null; pairing?: AskPairing }   // key: answerable via POST /api/sessions/:id/ask; null for approval envelopes; pairing: D-7031, never on an approval
+  | { type: 'ask'; ask: HookAsk; key: string | null; pairing?: AskPairing }   // key: answerable via POST /api/questions/session-<id>/answer {kind:'ask'}; null for approval envelopes; pairing: D-7031, never on an approval
   | { type: 'ask_cleared'; pairing?: AskPairing } // the hook's ask went null, stale, or its hookstate file is gone; pairing: D-7211, the transcript copy's
   | { type: 'tasks'; tasks: TaskItem[];          // the session's task list changed (or first read)
       /** D-5372: the newest task file `mtimeMs`, epoch ms. OPTIONAL: absent when
@@ -10992,7 +10992,8 @@ export interface CollectLaneConfirmRequired {
   };
 }
 
-/** The 200 answer of the three answer routes (`POST /api/sessions/:id/dialog`, `/dialog/text`, `/dialog/multi`):
+/** The 200 answer of the three dialog answers (an option row, the own words, a multiSelect set; all on
+ *  `POST /api/questions/session-<id>/answer` since W7 C7p retired `/api/sessions/:id/dialog`, `/dialog/text` and `/dialog/multi`):
  *  the screen the pane settled on after the answer's last key (decision `ask-answer-returns-next-screen`).
  *  - `next` a Dialog: the pane moved to that menu (the next question, or the review screen an ask ends on);
  *  - `next: null`: no menu is on screen any more (the ask was submitted or declined);
@@ -11005,7 +11006,7 @@ export interface DialogAnswered {
   readonly next?: Dialog | null;
 }
 
-/** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
+/** Every refusal the option-row answer (`POST /api/questions/session-<id>/answer`) answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
  *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
  *  without a row here, is a compile error.
  *  - `not-alive`: the pane could not be captured.
@@ -11017,7 +11018,7 @@ export interface DialogAnswered {
  *    typed text.
  *  - `unparsed-dialog`: the menu on screen (before the walk, or where it landed) did not parse (`parsed: false`), so
  *    nothing proves where the cursor is. A multiSelect AskUserQuestion is one: Enter there toggles or commits rather
- *    than answering, so it is refused with no key; `POST /api/sessions/:id/dialog/multi` answers it (D-5048). */
+ *    than answering, so it is refused with no key; the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) answers it (D-5048). */
 export type DialogRefuseCode = 'not-alive' | 'stale-dialog' | 'walk-failed' | 'free-text-row' | 'unparsed-dialog';
 const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
   'not-alive': true, 'stale-dialog': true, 'walk-failed': true, 'free-text-row': true, 'unparsed-dialog': true,
@@ -11068,11 +11069,11 @@ const DIALOG_TEXT_REFUSE_CODE_MAP: Readonly<Record<DialogTextRefuseCode, true>> 
 export const DIALOG_TEXT_REFUSE_CODES: readonly DialogTextRefuseCode[] =
   Object.keys(DIALOG_TEXT_REFUSE_CODE_MAP) as DialogTextRefuseCode[];
 
-/** The highest digit `POST /api/sessions/:id/dialog/multi` sends (D-5048). A box is toggled by its own digit, and an
+/** The highest digit the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) sends (D-5048). A box is toggled by its own digit, and an
  *  AskUserQuestion question has at most four options, so 9 is never the binding limit. */
 const DIALOG_MULTI_MAX_INDEX = 9;
 
-/** Will `POST /api/sessions/:id/dialog/multi` send `indexes` (D-5048)? A non-empty list of distinct whole numbers, each
+/** Will the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) send `indexes` (D-5048)? A non-empty list of distinct whole numbers, each
  *  from 1 to 9: the printed digits of the boxes to leave ticked. Empty is refused because Tab on a question with no box
  *  ticked skips it (measured), which is not an answer. The route answers 400 `bad-indexes` otherwise, before it captures
  *  the pane. Whether each index is one of the question's own options is the pane's to say (409 `not-an-option`). */
@@ -11082,7 +11083,7 @@ export function isDialogMultiIndexes(indexes: readonly number[]): boolean {
     indexes.every((i) => Number.isInteger(i) && i >= 1 && i <= DIALOG_MULTI_MAX_INDEX);
 }
 
-/** Every refusal `POST /api/sessions/:id/dialog/multi` answers with (`answerDialogMulti`, `server/src/inject/send.ts`,
+/** Every refusal the multiSelect answer (`POST /api/questions/session-<id>/answer`, `multi: true`) answers with (`answerDialogMulti`, `server/src/inject/send.ts`,
  *  D-5048). `bad-indexes` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
  *  - `bad-indexes`: `isDialogMultiIndexes` refuses the set. Nothing was captured or pressed.
  *  - `not-alive`: the pane could not be captured.
@@ -11979,7 +11980,7 @@ export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; rea
  *              and the hook stops (D-5440). Terminal.
  *  `released`  minted released (a `releaseReason`: forbidden, truncated, unparseable, or no claimant to hold it for,
  *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
- *  `operator`  the operator answered the dialog (`POST /api/sessions/:id/dialog`), or the painted dialog closed with
+ *  `operator`  the operator answered the dialog (the option-row answer (`POST /api/questions/session-<id>/answer`)), or the painted dialog closed with
  *              no ruling taken: every approval has an answering principal. Terminal.
  *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal. Terminal.
  *  `unknown`   a token this build does not know, read off disk; never written.

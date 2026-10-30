@@ -1879,11 +1879,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // D-7026: this server's ONE owner of question state, the watcher's own when it is given one (`index.ts` hands it
   // one, so production has exactly one instance), and its own otherwise; never module scope.
   const questions = watcher?.questions ?? createQuestions(deps);
-  // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to both the old operator
-  // doors below and the family's `POST /api/questions/:id/answer` in `coord/routes.ts`, so the two read the same wiring:
-  // the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's hookstate as the
-  // watcher last read it. `coord`, `io` and `cfg` are read at the call, as the old doors read them. The emit and
-  // `knownId` are declared below, beside the session routes, so both are read lazily, at a request.
+  // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to the family's
+  // `POST /api/questions/:id/answer` in `coord/routes.ts` (the old operator doors that read it too were retired in W7
+  // C7p, D-7194): the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's
+  // hookstate as the watcher last read it. `coord`, `io` and `cfg` are read at the call, as the old doors read them. The
+  // emit and `knownId` are declared below, beside the session routes, so both are read lazily, at a request.
   const operatorDoorDeps: OperatorDoorDeps = {
     get coord() { return deps.coord; }, get io() { return deps.io; }, get cfg() { return deps.cfg; }, notice,
     pressAsk: (id, key, optionIndexes) => answerAsk(askDeps, id, key, optionIndexes),
@@ -2162,7 +2162,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 19 request-id routes (15 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's floor is 97 agent-WS operations [registry-read-census:fleet]
@@ -2438,20 +2438,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     if (res.next !== undefined) bus.emit(`answered:${id}`, res.next);
   };
-
-  app.post('/api/sessions/:id/dialog', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown };
-    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // W3 Q3f (D-7030): an ALIAS from here on. D-5298's approval marking (the operator recorded on the child's open
-    // approval rows BEFORE any key, gated on the watcher's hookstate, D-5491) and the press are the operator's core,
-    // `questions.answer`, which `POST /api/questions/session-<id>/answer` calls too.
-    const out = await questions.answer({ kind: 'dialog', form: 'row', sessionId: id, dialogId: body.dialogId, optionIndex: body.optionIndex }, operatorDoorDeps);
-    return reply.code(out.status).send(out.body);
-  });
 
   /**
    * Decision `ask-dialog-tab-route`: move an AskUserQuestion's pane to another tab with ←/→ (the sheet's arrow keys and

@@ -894,24 +894,24 @@ const markInKeys = (f: Approvals): void => {
 const OP_DIALOG_ROWS: Row[] = [
   ['POST /api/sessions/:id/dialog | 1 | an unknown session', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
-    return dialogOutcome(s, await op(s.f, '/api/sessions/project-a-nobody-here/dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }));
+    return dialogOutcome(s, await opDialog(s.f, 'row', 'project-a-nobody-here', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }));
   }],
   ['POST /api/sessions/:id/dialog | 2 | a bad body', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: 7, optionIndex: 1 }));
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: 7, optionIndex: 1 }));
   }],
   ['POST /api/sessions/:id/dialog | press refused | another dialog id: 409, nothing pressed', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: 'not-this-one', optionIndex: 1 }));
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: 'not-this-one', optionIndex: 1 }));
   }],
   ['POST /api/sessions/:id/dialog | success | the cursor\'s row confirmed with Enter', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }));
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }));
   }],
   ['POST /api/sessions/:id/dialog | approval marking | a held approval row is marked operator before the key, even when the press refuses', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
     expect((await s.f.request(requestBody(ORDINARY))).statusCode).toBe(201);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: 'not-this-one', optionIndex: 1 }), 1);
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: 'not-this-one', optionIndex: 1 }), 1);
   }],
   // The hookstate gate: with the watcher holding the child's hookstate, only an approval envelope marks the rows. An
   // operator's answer to an AskUserQuestion, or under a hookstate that carries no ask, leaves a claimant's held
@@ -922,7 +922,7 @@ const OP_DIALOG_ROWS: Row[] = [
     expect('questions' in (s.f.watcher.currentHookStates().get(CHILD)?.ask ?? {})).toBe(true);
     expect((await s.f.request(requestBody(ORDINARY))).statusCode).toBe(201);
     markInKeys(s.f);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
   }],
   ['POST /api/sessions/:id/dialog | approval marking | the hookstate carries no ask: the held approval row stays held', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
@@ -933,7 +933,7 @@ const OP_DIALOG_ROWS: Row[] = [
     expect(hs?.ask).toBeNull();
     expect((await s.f.request(requestBody(ORDINARY))).statusCode).toBe(201);
     markInKeys(s.f);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
   }],
   ['POST /api/sessions/:id/dialog | approval marking | the hookstate is an approval: the held approval row is marked operator before the key', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
@@ -942,12 +942,12 @@ const OP_DIALOG_ROWS: Row[] = [
     expect('approval' in (s.f.watcher.currentHookStates().get(CHILD)?.ask ?? {})).toBe(true);
     expect((await s.f.request(requestBody(ORDINARY))).statusCode).toBe(201);
     markInKeys(s.f);
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }), 1);
   }],
   ['POST /api/sessions/:id/dialog | approval marking | the store throws: answered anyway', async () => {
     const s = await dialogFixture([PERMISSION_PANE]);
     vi.spyOn(s.f.coord, 'markApprovalOperator').mockImplementation(() => { throw new Error('fixture: disk I/O error'); });
-    return dialogOutcome(s, await op(s.f, `/api/sessions/${CHILD}/dialog`, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }));
+    return dialogOutcome(s, await opDialog(s.f, 'row', CHILD, { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }));
   }],
 ];
 
@@ -1364,9 +1364,9 @@ describe('question-doors pin: each door\'s auth posture', () => {
     'POST /api/approvals': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/rule': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/release': { exempt: true, originCheck: false },
-    // W7 C7p (D-7194): `POST /api/sessions/:id/ask` retired; the door that answers its rows above holds its posture.
+    // W7 C7p (D-7194): `POST /api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi` retired; the door that
+    // answers their rows above holds their posture.
     'POST /api/questions/:id/answer': { exempt: false, originCheck: true },
-    'POST /api/sessions/:id/dialog': { exempt: false, originCheck: true },
     'POST /api/sessions/:id/dialog/tab': { exempt: false, originCheck: true },
   };
   it.each(Object.entries(POSTURE))('%s', (route, want) => {

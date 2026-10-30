@@ -224,9 +224,10 @@ describe('W3 question census (slug question-census)', () => {
     expect(doors.map((s) => s.route), 'the cited door is found').toContain('POST /api/approvals/:id/rule');
     // 9 at the base (4 claimant, 4 operator, 1 navigation); 12 since Q3f (D-7030): 9 + the 3 routes of the family.
     // W7 C7p (D-7194) retires the operator aliases one per commit: 11 (4 operator) with `/api/sessions/:id/ask` gone,
-    // 10 (3 operator) with `/dialog/multi`, 9 (2 operator) with `/dialog/text`.
+    // 10 (3 operator) with `/dialog/multi`, 9 (2 operator) with `/dialog/text`, 8 (1 operator, the family's `/answer`
+    // alone) with `/dialog`.
     const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
-    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([9, 6, 2, 1]);
+    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([8, 6, 1, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
     // W3 Q3f (D-7030; slug q3f-door-in-repoint), at the target, may only shrink: no route calls the watcher for a question, and the four
     // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the

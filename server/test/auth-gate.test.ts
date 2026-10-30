@@ -244,7 +244,9 @@ describe('the scanner is looking at something', () => {
     // `POST /api/questions/:id/answer` answers it.
     // 57 since W7 C7p (D-7194) retired the operator answer alias `POST /api/sessions/:id/dialog/text`: the question family's
     // `POST /api/questions/:id/answer` answers it.
-    expect(scanRoutes('server.ts').length).toBe(57);
+    // 56 since W7 C7p (D-7194) retired the operator answer alias `POST /api/sessions/:id/dialog`: the question family's
+    // `POST /api/questions/:id/answer` answers it.
+    expect(scanRoutes('server.ts').length).toBe(56);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -445,7 +447,9 @@ describe('the scanner is looking at something', () => {
     // half 128 -> 127, the gated count 84 -> 83, the exempt-HTTP count stays 44.
     // 129 since W7 C7p (D-7194) retired `POST /api/sessions/:id/dialog/text` (session-gated, NOT EXEMPT, no box token): 57 in `server.ts`, the HTTP
     // half 127 -> 126, the gated count 83 -> 82, the exempt-HTTP count stays 44.
-    expect(ROUTES.length).toBe(129);
+    // 128 since W7 C7p (D-7194) retired `POST /api/sessions/:id/dialog` (session-gated, NOT EXEMPT, no box token): 56 in `server.ts`, the HTTP
+    // half 126 -> 125, the gated count 82 -> 81, the exempt-HTTP count stays 44.
+    expect(ROUTES.length).toBe(128);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -595,7 +599,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 129 scanned + the static wildcard when the bundle is built.
+    // 128 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1173,7 +1177,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 126 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 125 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1237,7 +1241,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 126 HTTP routes, not the 44 exempt.
+          //    is not itself flag-aware — the assertion that covers all 125 HTTP routes, not the 44 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

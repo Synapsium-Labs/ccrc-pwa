@@ -246,19 +246,6 @@ const PAIRS: Pair[] = [
   ['release approval | not the stored parent', approvalSide, ...releaseApproval({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
   ['release approval | not held', approvalSide, ...releaseApproval(P), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
   ['release approval | success: declined, the door-in fires', approvalSide, ...releaseApproval(P)],
-  // The operator's dialog answers.
-  ['answer dialog | an unknown session', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }, 'project-a-nobody-here')],
-  ['answer dialog | a bad body', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 7, optionIndex: 1 })],
-  ['answer dialog | another dialog id: 409', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 })],
-  ['answer dialog | success', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 })],
-  ['answer dialog | a held approval row is marked operator before the key', () => dialogSide([PERMISSION_PANE]),
-    ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 }), async (s) => {
-      const res = await s.f.request(requestBody(ORDINARY));
-      expect(res.statusCode).toBe(201);
-      s.id = (res.json() as { id: number }).id;
-    }],
-  ['answer dialog | the marking throws: answered anyway', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }),
-    (s) => { vi.spyOn(s.f.coord, 'markApprovalOperator').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
 ];
 
 /** The pairs whose old door W7 C7p retired, each unchanged from its PAIRS row. */
@@ -277,6 +264,7 @@ const RETIRED_PAIRS: Pair[] = [
     (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
   ['answer ask | the take throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
     (s) => { vi.spyOn(s.f.coord, 'takeAskForAnswer').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
+  // The operator's dialog answers: the row, the own words and the multiSelect set.
   ['answer dialog multi | a bad body', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: ['1'] })],
   ['answer dialog multi | bad-indexes is a 400', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [1, 1] })],
   ['answer dialog multi | another dialog id is a 409', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: 'not-this-one', optionIndexes: [3, 1] })],
@@ -287,6 +275,18 @@ const RETIRED_PAIRS: Pair[] = [
   ['answer dialog text | bad-text is a 400', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' })],
   ['answer dialog text | another dialog id is a 409', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: 'not-this-one', optionIndex: 3, text: TEXT })],
   ['answer dialog text | success', () => dialogSide([SAME_LABELS_Q2, FOCUSED, TYPED]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT })],
+  ['answer dialog | an unknown session', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }, 'project-a-nobody-here')],
+  ['answer dialog | a bad body', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 7, optionIndex: 1 })],
+  ['answer dialog | another dialog id: 409', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 })],
+  ['answer dialog | success', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 })],
+  ['answer dialog | a held approval row is marked operator before the key', () => dialogSide([PERMISSION_PANE]),
+    ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 }), async (s) => {
+      const res = await s.f.request(requestBody(ORDINARY));
+      expect(res.statusCode).toBe(201);
+      s.id = (res.json() as { id: number }).id;
+    }],
+  ['answer dialog | the marking throws: answered anyway', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }),
+    (s) => { vi.spyOn(s.f.coord, 'markApprovalOperator').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
   // (a row moves here from PAIRS in the commit that retires its door)
 ];
 
@@ -329,6 +329,18 @@ const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
     {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "answer dialog text | success":
     {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin Down", "project-a-quiet-basin Down", "project-a-quiet-basin -l - only in staging, sampled 10%", "project-a-quiet-basin Enter"], "feed": [], "pushes": []}},
+  "answer dialog | an unknown session":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-session\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog | another dialog id: 409":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog | success":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin Enter"], "feed": [], "pushes": []}},
+  "answer dialog | a held approval row is marked operator before the key":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"ask": null, "approval": {"state": "operator", "answeredBy": "operator", "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer dialog | the marking throws: answered anyway":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin Enter"], "feed": [], "pushes": []}},
   // (each row's old-door outcome, recorded on the base before the commit that retired its door)
 };
 
