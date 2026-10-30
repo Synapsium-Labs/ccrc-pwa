@@ -1,11 +1,14 @@
 // The one clock the programme boxes are read against (Task G1d, D-7380; review 1279 F3, F5): `useBoxClock` composes the
 // rollup's clock (`useRollupClock`), the runs frame's stall watch quiet time and the coord frame's pause, and holds `boxNow`,
 // the time read when the clock's `next` last moved. The project cards (`FleetCards`) and the Status view (`StatusTable`)
-// both call it, and nothing else reads those three inputs.
+// both call it, and nothing else reads those three inputs as the boxes' clock (the coord banner and the start-a-programme
+// sheet read the pause for their own words).
 //
-// Every dependency of `boxNow` is pinned twice here, on the hook itself and through the real cards; the Status view's three
-// cases are status-programmes.test.tsx's (Task G1d). Each case is built so `next` does NOT move at its event, because a move
-// of `next` re-reads `boxNow` by itself and would hide a dependency dropped from the memo.
+// Every dependency of `boxNow` but `roll.next` is pinned twice here, on the hook itself and through the real cards; the Status
+// view's three cases are status-programmes.test.tsx's (Task G1d). Each case is built so `next` does NOT move at its event,
+// because a move of `next` re-reads `boxNow` by itself and would hide a dependency dropped from the memo. The `roll.next` key is
+// pinned on the hook and in status-programmes, and through the cards in programme-box-card's boundary cases (six a skin), not in
+// this file's FleetCards cases. The pause the hook hands the CLOCK (review 1289 F1) is pinned by the hook's case of that name.
 //
 // MUTATION TABLE (Task G1d; each mutant RUN on `useBoxClock.ts`, one at a time, over this suite, status-programmes and
 // programme-box-card (91 cases), then restored from a saved copy with its sha256 checked; the counts are red cases):
@@ -16,7 +19,10 @@
 //   `boxNow` frozen (keys `[]`) ..................... 28
 //   `boxNow` unmemoised (`roll.now`) ................ 1: "holds `boxNow` while `next` and its inputs hold…", on the hook alone
 //   the pause read as "not clear" (`!== 'clear'`) .... 32: an unmeasurable pause pauses every box
-//   the quiet time a constant 2 h ................... 6
+//   the quiet time a constant 2 h, null kept ....... 6 (`s.stallQuietMs === null ? null : 7_200_000`; the literal constant
+//                                                    `store(() => 7_200_000)` is red 10, review 1289 F5)
+//   the clock handed `false` for the pause ......... 1 (review 1289's M-A, green over all 91 cases before the case named
+//                                                    "hands the clock the pause"; measured red below)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { FleetSession, RunSummary, UpdatesView } from '../../shared/api';
@@ -109,6 +115,17 @@ describe('useBoxClock', () => {
     act(() => { store.setState(coordFrame('clear')); });
     expect(result.current.roll.next).toBeNull();
     expect(result.current.boxNow).toBe(NOW + MIN);
+  });
+
+  it('hands the clock the pause: no wake at a boundary while paused, the boundary once the pause clears (review 1289 F1)', () => {
+    const store = newStore();
+    act(() => { store.setState({ stallQuietMs: QUIET, ...coordFrame('set') }); });
+    const { result } = mountHook(store, [runOf(1, 100)]);   // its boundary, 20 minutes out, is ahead
+    expect(result.current.roll.next).toBeNull();
+    act(() => { store.setState(coordFrame('clear')); });
+    expect(result.current.roll.next).toBe(NOW + 20 * MIN);
+    act(() => { store.setState(coordFrame('set')); });
+    expect(result.current.roll.next).toBeNull();
   });
 
   it('re-reads `boxNow` when the runs change, with the same boundary ahead', () => {

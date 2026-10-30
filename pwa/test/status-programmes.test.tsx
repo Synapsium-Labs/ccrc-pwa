@@ -73,7 +73,8 @@
 //                                                                  "a hibernated claimant's worker the operator has open…" (it draws
 //                                                                  `coordinator-hibernated`; D-7377 as amended rules no marker there)
 // Task G1c (D-7380, D-7373, D-7376; review 1239's S1, R1 and C1) added the movement rows, each RUN red on its new cases and
-// green restored, over this suite, status-groups, instrument-list and programme-box-card (the three counts above, refreshed
+// green restored (the counts of the G1c rows below are AS MEASURED AT G1c: G1d's three cases, further down, add red cases to
+// some of them, by reading and unmeasured: moves ignored, clock not passed, `boxNow` frozen, the pause ignored), over this suite, status-groups, instrument-list and programme-box-card (the three counts above, refreshed
 // from a run on the tree after G1c, are cases over this suite, status-groups and instrument-list). The new cases were RED FIRST
 // on main (87cfba3dd): 8 of them (4 here, 4 in status-groups), the Status view's `() => null` and `boxState(…, 0, null, false)`;
 // the case with no quiet time in status-groups and the R123 pin pass on main by design (they pin what main already does).
@@ -606,7 +607,8 @@ describe('a box in the Status view reads stalled or paused (Task G1c, D-7380)', 
 // `coordinator-hibernated` marker anywhere, because the hibernated box the view draws says it. Besides a box's members one
 // row reaches that rule: a coordinator that is itself a worker of a hibernated head's run elsewhere (nested), drawn as its
 // own box's head. The other shape review 1239's C1 named, an archived worker whose run a hibernated head still claims, draws
-// no coordinator marker at all (measured with `keepers` emptied: the line shows only its lifecycle word), so no case pins it.
+// no coordinator marker while it has a lifecycle word (measured with `keepers` emptied: the line shows only that word), so no
+// case pins it; an archived row still carrying `hibernatedAt` has none and relies on `keepers`, which no case pins either.
 describe('a hibernated claimant\'s workers carry no marker anywhere in the Status view (R123)', () => {
   const hibernated = sess('hc', 'project-b', {
     role: 'coordinator', status: 'dead', presence: 'dead', bucket: 'dead', lifecycle: 'stopped', hibernatedAt: Date.now() - 3_600_000,

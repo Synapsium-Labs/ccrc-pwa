@@ -8,7 +8,8 @@
 // (a memo'd card's props, the Status view's groups) changes only at a boundary or with a frame (C9). The memo's keys are
 // exactly the boundary's inputs, so a change of any of them re-reads it even when `next` does not move: a pause that clears
 // with no box ahead, a runs frame that ages a box, a quiet time that leaves the earliest boundary where it was.
-// The Status view passes no sessions: it draws no rollup window, so the clock adds none.
+// The Status view passes no sessions: it draws no rollup window, so the clock adds none. A caller passes a memoised
+// `activeRuns`, because `boxNow` keys on its identity: a fresh array each render would re-read it on every render.
 import { useMemo } from 'react';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import type { FleetStore } from '../stores/fleet';

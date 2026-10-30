@@ -38,8 +38,9 @@
 // hibernated box the view draws says it, so the marker is dropped from the members in its tray and, as ruled for review
 // 1239's C1, from the row outside any tray that `keepers` reaches too: a coordinator that is itself a worker of that
 // claimant's run on another card, drawn as its own box's head (pinned in status-programmes). An archived worker of that
-// run is a lone row too, and its line draws no coordinator marker either way, by marker precedence and not by this rule: a
-// card row draws only the first of its markers (`markers(f)[0]`), and its lifecycle word outranks `coordinator-hibernated`.
+// run is a lone row too, and while it has a lifecycle word its line draws no coordinator marker either way, by marker
+// precedence and not by this rule: a card row draws only the first of its markers (`markers(f)[0]`), and that word outranks
+// `coordinator-hibernated`. An archived row still carrying `hibernatedAt` has no lifecycle word and relies on `keepers`.
 // Project mode marks one whose claimant is not on its card "coordinator hibernated". A row whose hibernated claimant is NOT
 // drawn in this view still gets the marker: that is a gap to raise, never a silent rule.
 //
