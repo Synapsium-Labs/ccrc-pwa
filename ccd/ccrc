@@ -2722,7 +2722,8 @@ EOF
 # `_upd_redact <text> [bare-host]` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
 # 11 and M1): a URL's userinfo (`[scheme:/…]user:pass@host` -> `[scheme:/…]host`;
-# a scheme's one or more '/' stay as written, D-6748; with no scheme, a
+# a scheme's one or more '/', each maybe after a '\' as JSON escapes it, stay as
+# written, D-6748 and D-7564; with no scheme, a
 # `user:pass@` (or `user%3Apass@`) goes whatever ends the host, a `KEY=` or
 # `--flag=` before it kept, and any userinfo goes before a host, a bracketed
 # IPv6 one too, ended by `:port` and then a terminator, D-7564) and this box's
@@ -2756,15 +2757,19 @@ EOF
 # this function (`shared/hook-helpers.mjs`'s log-line region) and redacts at its
 # own `say`, with `bare-host`.
 # OUT OF SCOPE: this function masks only those two, a URL's userinfo and this
-# box's home directory. A query-string secret (`?token=…`, `&key=…`) and a
-# bearer token (`Authorization: Bearer …`) pass through it whole; a line that
+# box's home directory. A query-string secret (`?token=…`, `&key=…`), a
+# bearer token (`Authorization: Bearer …`) and curl's credential flags
+# (`-u` / `--user` / `--proxy-user user:pass`) pass through it whole; a line that
 # may carry one needs its own masking before it reaches here. KNOWN LIMITS
 # (D-7564, the corpus's `known-limit` rows): a scheme-less userinfo inside a
 # query string or a path (`https://h/x?proxy=user:secret@host`,
 # `dir/user:secret@host`), a raw '#', '?' or '/' inside a password
 # (`user:pa#ss@host`), a token-only userinfo before a bare host while more
-# text follows (`--proxy=tok@host refused`) and one before a port that a
-# letter, '-', '_' or '~' follows (`tok@host:8443-x retrying`) print whole.
+# text follows (`--proxy=tok@host refused`, an empty port's `tok@h: refused`
+# too), one before a port that a letter, '-', '_' or '~' follows, or a run of
+# '.', '!' or '}' and then one of those (`tok@host:8443-x retrying`,
+# `tok@host:8443.x retrying`), and one before a host of digits only and its
+# port (`tok@2130706433:80 x`) print whole.
 _upd_redact() {
   local s="${1:-}" mode="${2:-}" LC_ALL=C cut=""
   # D-7564, the bound: every loop below rescans the whole text once per credential it masks, and the home walk once per
@@ -2790,12 +2795,13 @@ _upd_redact() {
   # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
   # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn, and a userinfo that starts with '@'
   # loses its leading '@'s with it (D-7564: `https://@tok@host/x` and `https://@@tok@host` read `https://host/x` and
-  # `https://host`). Each pass drops at least one '@', so the loop ends.
+  # `https://host`). Each '/' may follow a '\', as JSON escapes it, and stays as written (D-7564:
+  # `https:\/\/u:secret@host\/x` reads `https:\/\/host\/x`). Each pass drops at least one '@', so the loop ends.
   # D-7564: a run after the first may be empty, so `user:secret@@host/x` loses `user:secret@@` (curl's userinfo
   # runs to the last '@'). Any leading '@'s go with the userinfo (`@tok@host/x` reads `host/x`), and a token may
   # also start after a backtick, which stays (`` `tok@host/x` `` reads `` `host/x` ``). Bare-host's rule below does
   # the same.
-  local sre=':(/+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
+  local sre=':((\\?/)+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   # D-7564: a token that starts `KEY=` or `--flag=` (a letter or '_' first, then letters, digits, '_' or '-') keeps that
   # prefix when a ':' userinfo follows it, so `CCRC_X=user:secret@host` reads `CCRC_X=host`. The userinfo's first
   # character may be neither ':' nor '=': a base64 name's padding (`dG9rZW4=:x@h`) then reads as no prefix and goes
@@ -2821,10 +2827,11 @@ _upd_redact() {
   # The cost: `mailto:a@example.com` and `npm:pkg@1.2.3` read as shape 1, a logger's `WARNING:root:bob@example.com` too;
   # `stash@{0}:3`, `claude-session@x.service:12` and `log@[core:io]:2` read as shape 2. The corpus's `blast` rows hold
   # each. Its `known-limit` rows hold what still prints whole: a userinfo inside a query or a path, a raw '#', '?' or
-  # '/' in a password, a token-only userinfo before a host that no port and no path follows while more text follows
-  # (`--proxy=tok@host refused`), and a port that a letter, '-', '_' or '~' follows while more text follows
-  # (`tok@host:8443-x retrying`, `tok@host:8443a x`): a host name holds those, so the text after the ':' is arguably
-  # no port.
+  # '/' in a password, a token-only userinfo before a host that no port (or an empty one, `tok@h: refused`) and no
+  # path follows while more text follows (`--proxy=tok@host refused`), a port that a letter, '-', '_' or '~' follows,
+  # or a run of '.', '!' or '}' and then one of those, while more text follows (`tok@host:8443-x retrying`,
+  # `tok@host:8443a x`, `tok@host:8443.x retrying`): a host name holds those, so the text after the ':' is arguably
+  # no port. A host of digits only (`tok@2130706433:80 x`) reads as a time's `build@10:30` and stays too.
   local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
   local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([^0-9A-Za-z.!}_~-]|$|[.!}]+([^0-9A-Za-z.!}_~-]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
