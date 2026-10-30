@@ -85,6 +85,8 @@ import { CHECKS_MAIL_TOKEN, mergingAtDetail, type ChecksMode } from '../../../sh
 import { readSwitches } from '../../../shared/switches.js';
 import { checksModeAt } from './landing.js';
 import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
+import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
+import { notRanSentence } from '../unmeasured.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
@@ -2178,11 +2180,18 @@ export function registerCoordRoutes(
   app.post('/api/testbox/switch', async (req, reply) => {
     const body = req.body as { on?: unknown } | null | undefined;
     if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
+      return refuseRoute(reply, 'bad-request');
     }
-    if (!ccdCan(deps.fleetState, 'testboxRemote')) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    if (!ccdCan(deps.fleetState, 'testboxRemote')) return refuseRoute(reply, 'unsupported');
     const res = await deps.runCcd(CCD_ARGV.testboxRemote(body.on ? 'on' : 'off'));
-    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    // D-6840: the not-ran arm FIRST. A verb that never ran, or may not have, said nothing, so its forged code is not
+    // read as the verb's refusal: the answer is the one not-ran sentence (`notRanSentence`), since whether the switch
+    // moved is unmeasured, and the pass forced here re-reads the block's `switch`, the authoritative answer either way.
+    if (res.ran === false) {
+      void watcher?.testboxLane.sweep(true);
+      return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd testbox-remote', res) });
+    }
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
     // `requested`, never the switch: the authoritative answer is the block's `switch`, re-read by a pass now.
     void watcher?.testboxLane.sweep(true);
     return reply.code(200).send({ ok: true, requested: body.on });
@@ -2192,10 +2201,13 @@ export function registerCoordRoutes(
       && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/testbox/tools-sync') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
     const body = req.body as unknown;
     if (body !== undefined && body !== null && !(typeof body === 'object' && Object.keys(body).length === 0)) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
+      return refuseRoute(reply, 'bad-request');
     }
     const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync();
-    if (!r.ok) return reply.code(r.reason === 'no-op' ? 501 : 502).send({ ok: false, error: r.reason === 'no-op' ? 'unsupported' : 'unanswered' });
+    if (!r.ok) {
+      const refusal = TESTBOX_SYNC_REFUSAL[r.reason];
+      return refuseRoute(reply, refusal.error, { detail: refusal.detail });
+    }
     return reply.code(200).send({ ok: r.reply.outcome === 'sent', ...r.reply });
   });
 

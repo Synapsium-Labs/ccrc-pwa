@@ -34,6 +34,8 @@ describe('FleetIO — every member states its failure contract (D-5969)', () => 
       'readFileMeasured', 'readFile', 'readFileFromMeasured', 'readFileFrom', 'readFileFromBytesMeasured',
       'readFileB64Measured', 'readdirMeasured', 'readdir', 'statMeasured', 'stat', 'lstatMeasured', 'realpath',
       'writeFileB64', 'tailFile', 'statfsMeasured', 'pressureMeasured',
+      // The test box's two agent ops (test box plan TB9, D-7411): the measured status and the tools sync.
+      'testboxMeasured', 'testboxToolsSync',
     ]);
   });
 

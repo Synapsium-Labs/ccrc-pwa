@@ -13,6 +13,7 @@
 // format's one reader (`parseRunsLine`); a line in the last 24 hours is counted by its outcome and its
 // `TestboxFallbackId`, and a line the reader refuses is counted `unreadable`, never guessed at.
 import type { TestboxHostMeasure, TestboxOpReply } from '../../shared/agent-protocol.js';
+import type { RouteRefusal } from '../../shared/refusal.js';
 import { readSwitches, TESTBOX_REMOTE_LIVE_MARKER } from '../../shared/switches.js';
 import {
   parseRunsLine, TESTBOX_TOOLS, type StatusAnswer, type TestboxFallbackId, type TestboxState, type TestboxTool,
@@ -25,6 +26,17 @@ export type TestboxSwitch = 'on' | 'off' | 'unknown';
 export type TestboxAnswer =
   | { readonly ok: true; readonly reply: TestboxOpReply }
   | { readonly ok: false; readonly reason: 'no-op' | 'unanswered' };
+
+/** Why the seam answered no op reply: an agent without the op (never sent it), or one that did not answer. */
+export type TestboxNoReply = Extract<TestboxAnswer, { ok: false }>['reason'];
+
+/** The tools sync door's refusal for a seam that answered no reply (D-7411): `unsupported` (501) for an agent without
+ *  the op, `fleetFailed` (502) for one that did not answer, each with the sentence the block's `unreachable` reason
+ *  uses. Decided here, so `POST /api/testbox/tools-sync` answers it through `refuseRoute` and spells no reason. */
+export const TESTBOX_SYNC_REFUSAL: Readonly<Record<TestboxNoReply, { readonly error: RouteRefusal; readonly detail: string }>> = {
+  'no-op': { error: 'unsupported', detail: 'agent has no testbox-tools-sync op' },
+  unanswered: { error: 'fleetFailed', detail: 'the fleet agent did not answer the testbox-tools-sync op' },
+};
 
 /** One row of the card's versions table: the fleet host's measured value and the box's, and whether they differ. */
 export interface TestboxCell {

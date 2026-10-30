@@ -20,6 +20,7 @@ import type { FleetWatcher } from '../src/watch.js';
 import type { Runner } from '../src/exec.js';
 import type { MeasuredTestbox, TestboxSyncAsked } from '../src/io.js';
 import { TestboxLane } from '../src/testboxLane.js';
+import { notRanSentence } from '../src/unmeasured.js';
 import { TESTBOX_PROTO, type StatusAnswer } from '../../shared/testbox.js';
 import { TESTBOX_REMOTE_LIVE_MARKER } from '../../shared/switches.js';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -60,11 +61,11 @@ const realCcd = (h: CcdHarness, argvs: string[][]): Runner => (_cmd, args) => ne
 
 interface Setup { app: FastifyInstance; h: CcdHarness; argvs: string[][]; syncs: () => number; marker: string }
 
-async function setup(o: { armed?: boolean; session?: boolean; watcher?: boolean; verbs?: string[] | null; sync?: TestboxSyncAsked } = {}): Promise<Setup> {
+async function setup(o: { armed?: boolean; session?: boolean; watcher?: boolean; verbs?: string[] | null; sync?: TestboxSyncAsked; runner?: Runner } = {}): Promise<Setup> {
   const h = makeCcdHarness('ccrc-testbox-routes-');
   harnesses.push(h);
   const argvs: string[][] = [];
-  const base = testDeps(h.home, realCcd(h, argvs));
+  const base = testDeps(h.home, o.runner ?? realCcd(h, argvs));
   let syncs = 0;
   const io = { ...base.io, testboxMeasured: async () => MEASURED, testboxToolsSync: async () => { syncs += 1; return o.sync ?? SENT; } };
   const deps: Deps = {
@@ -134,6 +135,18 @@ describe('POST /api/testbox/switch: the marker through the verb (D-7411)', () =>
     expect(r.json().stderr).toMatch(/could not raise the test box switch/);
     expect(readdirSync(path.join(s.h.home, '.cc-sessions')).filter((n) => n.includes('testbox-remote-live.'))).toEqual([]);
   });
+
+  it('a verb that never ran answers its own reason, never the forged code\'s words (D-6840)', async () => {
+    // The not-ran arm forges `code: 1` and a stderr: the route reads `ran` first, so neither reaches the answer.
+    const s = await setup({ runner: async () => ({ ran: false, reason: 'transport', detail: 'the link dropped', code: 1, stdout: '', stderr: 'forged' }) });
+    const r = await post(s.app, '/api/testbox/switch', { on: true });
+    expect(r.statusCode).toBe(502);
+    expect(r.json()).toEqual({
+      ok: false, error: 'fleetFailed',
+      detail: notRanSentence('ccd testbox-remote', { ran: false, reason: 'transport', detail: 'the link dropped' }),
+    });
+    expect(existsSync(s.marker)).toBe(false);
+  });
 });
 
 describe('GET /api/testbox and POST /api/testbox/tools-sync', () => {
@@ -161,7 +174,14 @@ describe('GET /api/testbox and POST /api/testbox/tools-sync', () => {
     const s = await setup({ sync: { ok: true, reply: { outcome: 'unconfigured', detail: null, frame: null } } });
     expect((await post(s.app, '/api/testbox/tools-sync')).json()).toEqual({ ok: false, outcome: 'unconfigured', detail: null, frame: null });
     const t = await setup({ sync: { ok: false, reason: 'no-op' }, watcher: false });
-    expect((await post(t.app, '/api/testbox/tools-sync')).statusCode).toBe(501);
+    const noOp = await post(t.app, '/api/testbox/tools-sync');
+    expect([noOp.statusCode, noOp.json()]).toEqual([501, { ok: false, error: 'unsupported', detail: 'agent has no testbox-tools-sync op' }]);
+  });
+
+  it('an agent that did not answer the sync is 502 fleetFailed, through the refusal table', async () => {
+    const s = await setup({ sync: { ok: false, reason: 'unanswered' }, watcher: false });
+    const r = await post(s.app, '/api/testbox/tools-sync');
+    expect([r.statusCode, r.json()]).toEqual([502, { ok: false, error: 'fleetFailed', detail: 'the fleet agent did not answer the testbox-tools-sync op' }]);
   });
 });
 
