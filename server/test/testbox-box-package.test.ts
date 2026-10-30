@@ -38,6 +38,34 @@ const SPEC = path.join(REPO, 'docs', 'superpowers', 'specs', '2026-10-28-test-bo
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 const unit = (n: string): string[] => unitProps(read(path.join(SYSTEMD, n)));
 
+/** The packages `entry`'s module graph imports at run time: every bare specifier (not `node:`) of a value import in
+ *  the files it reaches through relative imports, `import type` left out (the emit drops it), by package name. */
+function bareImports(entry: string): string[] {
+  const IMPORT = /(?:^|[\s;])(import|export)(\s+type)?\s[^'"`;]*?from\s*['"]([^'"]+)['"]|(?:^|[\s;])import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
+  const seen = new Set<string>();
+  const pkgs = new Set<string>();
+  const todo = [entry];
+  while (todo.length > 0) {
+    const f = todo.pop()!;
+    if (seen.has(f)) continue;
+    seen.add(f);
+    const src = readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    for (const m of src.matchAll(IMPORT)) {
+      const spec = m[3] ?? m[4] ?? m[5];
+      if (spec === undefined || m[2] !== undefined) continue;
+      if (spec.startsWith('.')) {
+        const abs = path.resolve(path.dirname(f), spec);
+        const hit = [abs.replace(/\.js$/, '.ts'), abs, `${abs}.ts`, path.join(abs, 'index.ts')].find((c) => existsSync(c) && statSync(c).isFile());
+        expect(hit, `${f} imports ${spec}`).toBeDefined();
+        todo.push(hit!);
+      } else if (!spec.startsWith('node:')) {
+        pkgs.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!);
+      }
+    }
+  }
+  return [...pkgs].sort();
+}
+
 let W: World;
 beforeAll(async () => { W = await makeWorld(); }, 180_000);
 afterAll(async () => { await W?.close(); });
@@ -100,7 +128,7 @@ describe('the static units equal spec §2.3, literally (D-7409, D-7451, D-7501)'
       '[Unit] Description=ccrc test box: clean %i', '[Service] Type=exec', '[Service] ExecStart=@@TREE@@/deploy/testbox/bin/clean @@ROOT@@/specs/%i',
     ]);
     expect(unit('ccrc-testbox-tools.service')).toEqual([
-      '[Unit] Description=ccrc test box: the tool sync', '[Service] Type=exec',
+      '[Unit] Description=ccrc test box: the tool sync', '[Unit] Requires=nftables.service', '[Unit] After=nftables.service', '[Service] Type=exec',
       '[Service] ExecStart=@@TREE@@/deploy/testbox/bin/tools-sync @@ROOT@@/specs/tools', '[Service] NFTSet=cgroup:inet:ccrc_testbox:tools_cg',
     ]);
     const svc = unit('ccrc-testbox.service');
@@ -109,6 +137,12 @@ describe('the static units equal spec §2.3, literally (D-7409, D-7451, D-7501)'
     expect(svc).toContain('[Service] ExecStart=@@TOOLS@@/current/node @@TREE@@/agent/dist/agent/src/testbox/main.js');
     expect(svc).toContain('[Service] NFTSet=cgroup:inet:ccrc_testbox:service_cg');
     expect(unit('ccrc-testbox-egress.service')).toContain('[Service] ExecStart=@@TREE@@/deploy/testbox/bin/egress @@ETC@@/egress');
+    // The firewall's load is ExecStartPost= of nftables.service: a failed load fails that unit, and the units the
+    // firewall fences out of the network do not start without it (D-7568).
+    for (const f of ['ccrc-testbox.service', 'ccrc-testbox-tools.service', 'ccrc-testbox-egress.service']) {
+      expect(unit(f), f).toContain('[Unit] Requires=nftables.service');
+      expect(unit(f).filter((l) => /^\[Unit\] After=/.test(l)).join(' '), f).toContain('nftables.service');
+    }
     expect(unit('ccrc-testbox-egress.timer')).toContain('[Timer] Unit=ccrc-testbox-egress.service');
   });
 
@@ -203,6 +237,61 @@ const ROW_SET: [RegExp, string][] = [
   [/storage\.googleapis\.com/, 'chrome'], [/OS package mirror/, 'osmirror'],
 ];
 
+/** The firewall file's statements and rules, every non-comment line trimmed, in order: the closed census (D-7568). The
+ *  first table block declares the sets and the two chains with their hooks and adds to what a box already holds; the
+ *  two flushes empty the chains only, so a reload keeps every set's elements; the second block is the rules. */
+const ROW_RULES = (cg: string, set: string, ports = '443'): string[] => [
+  `socket cgroupv2 level 2 @${cg} ip daddr @${set}_v4 tcp dport ${ports} accept`, `socket cgroupv2 level 2 @${cg} ip6 daddr @${set}_v6 tcp dport ${ports} accept`,
+];
+const FIREWALL: string[] = [
+  'table inet ccrc_testbox {',
+  ...['service_cg', 'tools_cg', 'tailnet_cg', 'dns_cg', 'ntp_cg'].map((c) => `set ${c} { type cgroupsv2; }`),
+  ...['github', 'registry', 'release', 'nodejs', 'chrome', 'osmirror'].flatMap((r) => [
+    `set ${r}_v4 { type ipv4_addr; flags interval; }`, `set ${r}_v6 { type ipv6_addr; flags interval; }`,
+  ]),
+  'chain output {', 'type filter hook output priority filter; policy drop;', '}',
+  'chain input {', 'type filter hook input priority filter; policy drop;', '}',
+  '}',
+  'flush chain inet ccrc_testbox output',
+  'flush chain inet ccrc_testbox input',
+  'table inet ccrc_testbox {',
+  'chain output {',
+  'oifname "lo" accept',
+  'ct state established,related accept',
+  'icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, mld2-listener-report } accept',
+  'udp sport 68 udp dport 67 accept',
+  'socket cgroupv2 level 2 @dns_cg udp dport 53 accept',
+  'socket cgroupv2 level 2 @dns_cg tcp dport 53 accept',
+  'socket cgroupv2 level 2 @ntp_cg udp dport 123 accept',
+  'socket cgroupv2 level 2 @tailnet_cg accept',
+  ...ROW_RULES('service_cg', 'github'), ...ROW_RULES('service_cg', 'registry'),
+  ...ROW_RULES('tools_cg', 'release'), ...ROW_RULES('tools_cg', 'nodejs'), ...ROW_RULES('tools_cg', 'chrome'),
+  ...ROW_RULES('tools_cg', 'osmirror', '{ 80, 443 }'),
+  '}',
+  'chain input {',
+  'iifname "lo" accept',
+  'ct state established,related accept',
+  'meta l4proto { icmp, ipv6-icmp } accept',
+  'udp sport 67 udp dport 68 accept',
+  'socket cgroupv2 level 2 @tailnet_cg accept',
+  '@@LISTEN_MATCH@@ tcp dport { 22, @@LISTEN_PORT@@ } accept',
+  '}',
+  '}',
+];
+/** A firewall file against the pinned list: `+ <line>` for each line it holds beyond the list, `- <line>` for each line
+ *  of the list it lacks or holds elsewhere; empty when the file is the list, line for line. */
+function firewallFindings(text: string, pinned: string[] = FIREWALL): string[] {
+  const got = text.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
+  if (got.length === pinned.length && got.every((l, i) => l === pinned[i])) return [];
+  const count = (xs: string[]): Map<string, number> => { const m = new Map<string, number>(); for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1); return m; };
+  const g = count(got);
+  const p = count(pinned);
+  const out: string[] = [];
+  for (const [l, n] of g) for (let i = p.get(l) ?? 0; i < n; i++) out.push(`+ ${l}`);
+  for (const [l, n] of p) for (let i = g.get(l) ?? 0; i < n; i++) out.push(`- ${l}`);
+  return out.length > 0 ? out : ['the pinned lines, out of order'];
+}
+
 describe('the firewall names every row of spec §2.0\'s table, from the unit the table names, and no other destination (D-7409, D-7568)', () => {
   const NFT = read(path.join(PKG, 'nft', 'ccrc-testbox.nft'));
   const code = NFT.split('\n').filter((l) => !/^\s*#/.test(l));
@@ -231,7 +320,38 @@ describe('the firewall names every row of spec §2.0\'s table, from the unit the
     const daddrs = code.flatMap((l) => [...l.matchAll(/\b(?:ip6?) daddr (\S+)/g)].map((m) => m[1]!));
     expect(daddrs.filter((d) => !/^@(github|registry|release|nodejs|chrome|osmirror)_v[46]$/.test(d))).toEqual([]);
     expect(code.join('\n')).not.toMatch(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
-    expect(code.filter((l) => /tcp dport/.test(l) && !/@\w+_v[46]|@@LISTEN_MATCH@@|dport 53/.test(l))).toEqual([]);
+  });
+
+  it('a closed census: the file\'s every statement and rule is the pinned list, so no accept beyond it can be added (D-7568)', () => {
+    expect(firewallFindings(NFT)).toEqual([]);
+  });
+
+  it('the census reds on every broadening: a bare protocol accept, an interface accept, a uid accept, a cgroup path, a widened set rule, a rule added from outside the chains', () => {
+    const at = NFT.indexOf('    oifname "lo" accept\n');
+    expect(at, 'the output chain\'s first rule').toBeGreaterThan(0);
+    const insert = (line: string): string => `${NFT.slice(0, at)}    ${line}\n${NFT.slice(at)}`;
+    for (const line of ['meta l4proto udp accept', 'oifname "eth0" accept', 'meta skuid 0 accept', 'socket cgroupv2 level 2 "system.slice" accept', 'udp dport 53 accept', 'meta l4proto { icmp, ipv6-icmp } accept']) {
+      expect(firewallFindings(insert(line)), line).toEqual([`+ ${line}`]);
+    }
+    const widened = NFT.replace('socket cgroupv2 level 2 @service_cg ip daddr @github_v4', 'socket cgroupv2 level 2 @tools_cg ip daddr @github_v4');
+    expect(widened).not.toBe(NFT);
+    expect(firewallFindings(widened).sort()).toEqual([
+      '+ socket cgroupv2 level 2 @tools_cg ip daddr @github_v4 tcp dport 443 accept', '- socket cgroupv2 level 2 @service_cg ip daddr @github_v4 tcp dport 443 accept',
+    ]);
+    expect(firewallFindings(`${NFT}add rule inet ccrc_testbox output accept\n`)).toEqual(['+ add rule inet ccrc_testbox output accept']);
+  });
+
+  it('no rule names a literal cgroup path: each unit\'s cgroup comes through a set its unit fills (NFTSet=), so a boot order or a restart cannot make it stale (D-7568)', () => {
+    expect(code.filter((l) => /socket cgroupv2 level \d+ "/.test(l))).toEqual([]);
+    for (const [unitFile, set] of [['ccrc-testbox.service', 'service_cg'], ['ccrc-testbox-tools.service', 'tools_cg']] as const) {
+      expect(unit(unitFile), unitFile).toContain(`[Service] NFTSet=cgroup:inet:ccrc_testbox:${set}`);
+    }
+  });
+
+  it('the load keeps every set: the file never deletes or flushes the table or a set, only its two chains (D-7568)', () => {
+    expect(code.filter((l) => /^\s*(delete|flush|destroy) /.test(l)).map((l) => l.trim())).toEqual([
+      'flush chain inet ccrc_testbox output', 'flush chain inet ccrc_testbox input',
+    ]);
   });
 
   it('the output and input policies drop; inbound is ssh and the service port on the tailnet address only', () => {
@@ -272,6 +392,15 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     expect(nft).toBeGreaterThan(lastIndexOf(l, /etc\/systemd\/system\/.*\.(service|slice|timer|conf)$/));
     expect(start).toBeGreaterThan(nft);
     expect(lastIndexOf(l, /etc\/ccrc-testbox\/installed$/)).toBe(l.length - 1);
+    // The box's own network units are running already, so their cgroups go into the sets now; NFTSet= adds each
+    // later start's (D-7568).
+    expect(l.filter((x) => x.startsWith('nft '))).toEqual([
+      `nft -f ${path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft')}`,
+      'nft add element inet ccrc_testbox tailnet_cg { "system.slice/tailscaled.service" }',
+      'nft add element inet ccrc_testbox dns_cg { "system.slice/systemd-resolved.service" }',
+      'nft add element inet ccrc_testbox ntp_cg { "system.slice/systemd-timesyncd.service" }',
+    ]);
+    expect(indexOf(l, /^nft add element /)).toBeLessThan(start);
     expect(l.filter((x) => x.startsWith('systemctl '))).toEqual([
       'systemctl daemon-reload', 'systemctl enable nftables.service', 'systemctl enable --now ccrc-testbox.service ccrc-testbox-egress.timer',
       'systemctl start ccrc-testbox-egress.service',
@@ -301,6 +430,20 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     const npm = read(path.join(W.log, 'npm-argv')).split('\n').filter((l) => l.startsWith(path.join(b.tools, 'release', BOOT_TAG, 'server')));
     expect(npm).toEqual([`${path.join(b.tools, 'release', BOOT_TAG, 'server')}\tci --omit=dev --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org`]);
     expect(existsSync(path.join(b.tools, 'release', BOOT_TAG, 'server', 'node_modules', '.fixture-ci'))).toBe(true);
+  });
+
+  it('the release\'s agent/ dependencies too: npm ci --omit=dev --ignore-scripts in agent/, and every package the test service imports resolves from the placed tree (D-7568)', () => {
+    const tree = path.join(b.tools, 'release', BOOT_TAG);
+    const npm = read(path.join(W.log, 'npm-argv')).split('\n').filter((l) => l.startsWith(`${path.join(tree, 'agent')}\t`));
+    expect(npm).toEqual([`${path.join(tree, 'agent')}\tci --omit=dev --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org`]);
+    const pkgs = bareImports(path.join(REPO, 'agent', 'src', 'testbox', 'main.ts'));
+    expect(pkgs).toContain('ws');
+    // --ignore-scripts leaves node-pty unbuilt; the test service must never reach it.
+    expect(pkgs).not.toContain('node-pty');
+    // agent/dist/agent/src/testbox/main.js and agent/dist/shared/*.js look a bare name up in agent/node_modules.
+    for (const p of pkgs) expect(existsSync(path.join(tree, 'agent', 'node_modules', p, 'package.json')), p).toBe(true);
+    expect((statSync(path.join(tree, 'agent', 'node_modules')).mode & 0o022)).toBe(0);
+    expect(lines(b)).toContain(`chown -R -h root:root ${path.join(tree, 'agent')}`);
   });
 
   it('the users, the groups and the owners and modes the installer gives (phase 5), the box file\'s chown and chmod through TB_SYS (D-7451)', () => {
@@ -363,8 +506,14 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     for (const s of ['ccrc-testbox-run-.slice', 'ccrc-testbox-install.slice']) {
       expect(drop(s)).toEqual(['[Slice] MemoryMax=4G', '[Slice] MemorySwapMax=1G', '[Slice] CPUQuota=200%']);
     }
+    // The box's own network units add their cgroups to the firewall's sets when they start, after the firewall's load.
+    expect(drop('tailscaled.service')).toEqual(['[Unit] After=nftables.service', '[Service] NFTSet=cgroup:inet:ccrc_testbox:tailnet_cg']);
+    expect(drop('systemd-resolved.service')).toEqual(['[Unit] After=nftables.service', '[Service] NFTSet=cgroup:inet:ccrc_testbox:dns_cg']);
+    expect(drop('systemd-timesyncd.service')).toEqual(['[Unit] After=nftables.service', '[Service] NFTSet=cgroup:inet:ccrc_testbox:ntp_cg']);
     expect(readFileSync(path.join(b.root, 'etc', 'polkit-1', 'rules.d', '50-ccrc-testbox.rules'), 'utf8')).toContain('subject.user !== "ccrc-tb-svc"');
-    expect(readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft'), 'utf8')).toContain('    ip daddr 127.0.0.9 tcp dport { 22, 7443 } accept\n');
+    const nft = readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft'), 'utf8');
+    expect(nft).toContain('    ip daddr 127.0.0.9 tcp dport { 22, 7443 } accept\n');
+    expect(firewallFindings(nft, FIREWALL.map((l) => l.replace('@@LISTEN_MATCH@@', 'ip daddr 127.0.0.9').replace('@@LISTEN_PORT@@', '7443')))).toEqual([]);
     expect(readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'egress'), 'utf8')).toBe([
       'github\tgithub.com', 'nodejs\tnodejs.org', 'chrome\tstorage.googleapis.com', 'registry\tregistry.npmjs.org', 'release\tgithub.com',
       'osmirror\tmirror.testbox.invalid', '',
@@ -378,7 +527,7 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     const written = sysLog(b).filter((a) => a[0] === 'install' && !a.includes('-d')).map((a) => a[a.length - 1]!);
     expect(written.filter((p) => /\.config\/systemd\/user|\/ccrc(-agent)?\.service$|ccrc-server/.test(p))).toEqual([]);
     expect(written.filter((p) => p.includes(`${path.sep}systemd${path.sep}`)).map((p) => path.basename(p.endsWith('.conf') ? path.dirname(p) : p))
-      .filter((n) => !n.startsWith('ccrc-testbox') && n !== 'nftables.service.d')).toEqual([]);
+      .filter((n) => !n.startsWith('ccrc-testbox'))).toEqual(['nftables.service.d', 'tailscaled.service.d', 'systemd-resolved.service.d', 'systemd-timesyncd.service.d']);
   });
 
   it('systemd-analyze verify accepts the rendered units, where it is installed', () => {
@@ -514,7 +663,8 @@ describe('the installer: a node checksum mismatch stops before <tools>/current, 
     const b = makeBox(W);
     const r = await install(b, { staging: W.staging, node: v });
     expect(r.code).toBe(1);
-    expect(r.stderr.trim().split('\n').at(-1)).toMatch(new RegExp(`^ccrc-testbox-install: failed: node: checksum mismatch for node-v${v.replace(/\./g, '\\.')}-linux-x64\\.tar\\.xz `));
+    const mismatch = `ccrc-testbox-install: failed: node: checksum mismatch for node-v${v}-linux-x64.tar.xz `;
+    expect(r.stderr.trim().split('\n').at(-1)!.slice(0, mismatch.length)).toBe(mismatch);
     expect(existsSync(path.join(b.tools, 'current'))).toBe(false);
     expect(existsSync(path.join(b.tools, 'node', v))).toBe(false);
     expect(lines(b).filter((x) => /^(nft|systemctl|useradd) /.test(x))).toEqual([]);
@@ -620,6 +770,36 @@ describe('egress: the allowlist\'s names into the firewall\'s sets, in one trans
       'flush set inet ccrc_testbox osmirror_v4', 'flush set inet ccrc_testbox osmirror_v6', '',
     ].join('\n'));
     expect(lines(b).filter((x) => x.startsWith('nft '))).toEqual(['nft -f -']);
+  });
+
+  it('a name that resolves only to addresses its row already holds is resolved: a repeated host, and two hosts that share an address', async () => {
+    const b = makeBox(W);
+    const names = path.join(b.fx, 'egress');
+    writeFileSync(names, 'osmirror\tmirror.testbox.invalid\nosmirror\tmirror.testbox.invalid\nchrome\ta.testbox.invalid\nchrome\tb.testbox.invalid\n');
+    const hosts = b.env.TBS_HOSTS!;
+    writeFileSync(path.join(hosts, 'ahostsv4-mirror.testbox.invalid'), '192.0.2.20      STREAM mirror.testbox.invalid\n');
+    writeFileSync(path.join(hosts, 'ahostsv4-a.testbox.invalid'), '192.0.2.30      STREAM a.testbox.invalid\n');
+    writeFileSync(path.join(hosts, 'ahostsv6-a.testbox.invalid'), '2001:db8::30    STREAM a.testbox.invalid\n');
+    writeFileSync(path.join(hosts, 'ahostsv6-b.testbox.invalid'), '2001:db8::30    STREAM b.testbox.invalid\n');
+    const r = await exec(EGRESS, [names], b.env);
+    expect([r.code, r.stderr]).toEqual([0, '']);
+    const tx = readFileSync(`${b.sysLog}.nft`, 'utf8').split('\n');
+    expect(tx).toContain('add element inet ccrc_testbox osmirror_v4 { 192.0.2.20 }');
+    expect(tx).toContain('add element inet ccrc_testbox chrome_v4 { 192.0.2.30 }');
+    expect(tx).toContain('add element inet ccrc_testbox chrome_v6 { 2001:db8::30 }');
+  });
+
+  it('the installer writes each name once: apt sources that name one host on several lines give one osmirror line', async () => {
+    const b = makeBox(W);
+    writeFileSync(path.join(b.root, 'etc', 'apt', 'sources.list'), [
+      'deb http://mirror.testbox.invalid/ubuntu noble main universe', 'deb http://mirror.testbox.invalid/ubuntu noble-updates main universe',
+      'deb http://mirror.testbox.invalid/ubuntu noble-backports main universe', 'deb http://security.testbox.invalid/ubuntu noble-security main', '',
+    ].join('\n'));
+    const r = await install(b, { staging: W.staging });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'egress'), 'utf8').split('\n').filter((l) => l.startsWith('osmirror\t'))).toEqual([
+      'osmirror\tmirror.testbox.invalid', 'osmirror\tsecurity.testbox.invalid',
+    ]);
   });
 
   it('refuses a row that is not in the table, before any nft call', async () => {

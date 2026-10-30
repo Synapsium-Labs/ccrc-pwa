@@ -30,13 +30,17 @@
 #      writable by group or other.
 #   3. the verifier's node: TB6's `_tbt_node_install` (the one function the tool sync calls too), then the bootstrap
 #      set <tools>/sets/s.bootstrap holding the one link `node`, and <tools>/current naming it in one rename.
-#   4. the verifier's dependencies: `npm ci --omit=dev --ignore-scripts` in <tools>/release/<tag>/server under that
-#      node, straight from CCRC_TESTBOX_REGISTRY_UPSTREAM (the firewall is not loaded yet).
+#   4. the release's dependencies: `npm ci --omit=dev --ignore-scripts` in <tools>/release/<tag>/server (the verifier's)
+#      and <tools>/release/<tag>/agent (the test service's: agent/src/testbox/main.ts imports ws, and a bare import in
+#      agent/dist resolves from agent/node_modules) under that node, straight from CCRC_TESTBOX_REGISTRY_UPSTREAM (the
+#      firewall is not loaded yet). --ignore-scripts leaves node-pty unbuilt; the test service never imports it.
 #   5. the users and groups, the box file's group and mode (the service user's, 0640), CCRC_TESTBOX_ROOT's
-#      directories, the repository rows and their mirrors, the units with their drop-ins, the polkit rule, the firewall
-#      file and the egress names.
-#   6. last: the firewall loaded, the service and the egress timer enabled and started, and the installed marker
-#      (<etc>/installed: the tag and the box file's sha256) written.
+#      directories, the repository rows and their mirrors, the units with their drop-ins (the box's own tailnet client,
+#      resolver and time client among them: each adds its cgroup to the firewall's set when it starts), the polkit
+#      rule, the firewall file and the egress names, each name once.
+#   6. last: the firewall loaded, the running tailnet client's, resolver's and time client's cgroups added to its sets,
+#      the service and the egress timer enabled and started, and the installed marker (<etc>/installed: the tag and
+#      the box file's sha256) written.
 # A re-run with the installed marker present changes nothing when the box file's sha256 and the tag are the marker's;
 # otherwise it runs phase 5 again, reloads the firewall and the system manager, restarts the service, refreshes the
 # egress sets and records the new tag and sha256.
@@ -155,6 +159,13 @@ else
   done < <(cat -- "$SYSROOT/etc/apt/sources.list" "$SYSROOT"/etc/apt/sources.list.d/*.list "$SYSROOT"/etc/apt/sources.list.d/*.sources 2>/dev/null | grep -E '^[[:space:]]*(deb|URIs:)[[:space:]]' | grep -Eo '[a-z]+://[^[:space:]]+')
 fi
 
+# Each name once: package sources name one host on several lines (a release, its updates, its backports), and the
+# egress resolver reads every line.
+declare -A seen_egress=()
+EGRESS_ONCE=()
+for e in "${EGRESS[@]}"; do [ -n "${seen_egress[$e]:-}" ] || { seen_egress[$e]=1; EGRESS_ONCE+=("$e"); }; done
+EGRESS=("${EGRESS_ONCE[@]}")
+
 ROW_NAMES=() ROW_MIRRORS=() ROW_URLS=() ROW_FILES=()
 row_field() {   # <json> <field> -> the one string member of that name (push-command's reading of mirrorPath)
   local rest=${1#*\""$2"\"}
@@ -243,14 +254,15 @@ if [ -z "$MARK_TAG" ]; then
     mv -- "$TOOLS/.current.new" "$TOOLS/current" || fail "cannot link $TOOLS/current"
   fi
 
-  # ── phase 4: the verifier's dependencies ───────────────────────────────
-  say "phase 4: the release's server/ production dependencies"
-  if [ -f "$dst/server/package.json" ]; then
-    ( cd -- "$dst/server" && PATH="$TOOLS/node/$A_NODE/bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
-        --registry="$(k CCRC_TESTBOX_REGISTRY_UPSTREAM)" ) >/dev/null || fail "npm ci --omit=dev --ignore-scripts failed in $dst/server"
-    chmod -R go-w "$dst/server" || fail "cannot remove group and other write under $dst/server"
-    _sys chown -R -h root:root "$dst/server" || fail "cannot give $dst/server to root"
-  fi
+  # ── phase 4: the release's dependencies (the verifier's and the test service's) ──
+  say "phase 4: the release's server/ and agent/ production dependencies"
+  for pkg in server agent; do
+    [ -f "$dst/$pkg/package.json" ] || continue
+    ( cd -- "$dst/$pkg" && PATH="$TOOLS/node/$A_NODE/bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+        --registry="$(k CCRC_TESTBOX_REGISTRY_UPSTREAM)" ) >/dev/null || fail "npm ci --omit=dev --ignore-scripts failed in $dst/$pkg"
+    chmod -R go-w "$dst/$pkg" || fail "cannot remove group and other write under $dst/$pkg"
+    _sys chown -R -h root:root "$dst/$pkg" || fail "cannot give $dst/$pkg to root"
+  done
 fi
 
 # ── phase 5: users, directories, rows, mirrors, units, rule, firewall file ─
@@ -341,6 +353,11 @@ dropin ccrc-testbox-run-.slice "$caps"
 dropin ccrc-testbox-install.slice "$caps"
 # The firewall is loaded at boot after the distribution's own rules (nftables.service), and by phase 6 now.
 dropin nftables.service $'[Service]\n'"ExecStartPost=/usr/sbin/nft -f $ETC/ccrc-testbox.nft"
+# The box's own network units, each matched by a cgroup set it adds itself to when it starts, after that load (D-7568).
+INFRA=("tailscaled tailnet_cg" "systemd-resolved dns_cg" "systemd-timesyncd ntp_cg")
+for u in "${INFRA[@]}"; do
+  dropin "${u% *}.service" $'[Unit]\nAfter=nftables.service\n[Service]\n'"NFTSet=cgroup:inet:ccrc_testbox:${u#* }"
+done
 
 RULEDIR=$SYSROOT/etc/polkit-1/rules.d
 dir 0755 root root "$RULEDIR"
@@ -354,6 +371,11 @@ put 0644 "$WORK/egress" "$ETC/egress"
 # ── phase 6: the firewall, the service, the marker ───────────────────────
 say "phase 6: the firewall, the service and the marker"
 _sys nft -f "$ETC/ccrc-testbox.nft" || fail "nft refused $ETC/ccrc-testbox.nft"
+# The network units run already, so NFTSet= has not added them: their cgroups now (nft resolves each path once, here).
+for u in "${INFRA[@]}"; do
+  _sys nft add element inet ccrc_testbox "${u#* }" "{ \"system.slice/${u% *}.service\" }" \
+    || say "${u% *}.service is not running; its cgroup joins ${u#* } when it starts"
+done
 _sys systemctl daemon-reload || fail "systemctl daemon-reload failed"
 if [ -z "$MARK_TAG" ]; then
   _sys systemctl enable nftables.service || fail "cannot enable nftables.service"

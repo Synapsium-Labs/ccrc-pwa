@@ -4,6 +4,7 @@
 [Unit]
 Description=ccrc test box: resolve the egress allowlist
 After=network-online.target nftables.service
+Requires=nftables.service
 Wants=network-online.target
 
 [Service]

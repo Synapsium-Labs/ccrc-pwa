@@ -74,8 +74,8 @@ export function writeManifest(tree: string): void {
   writeFileSync(path.join(tree, 'MANIFEST'), files.map((f) => `${sha256(readFileSync(path.join(tree, f)))}  ${f}\n`).join(''));
 }
 
-/** The release payload: the checkout's ccd/, shared/ and deploy/ (no mail token), install.sh, server/'s manifests, the
- *  shipped stamp and the MANIFEST. */
+/** The release payload: the checkout's ccd/, shared/ and deploy/ (no mail token), install.sh, server/'s and agent/'s
+ *  manifests (deploy/build-release.sh ships both), the shipped stamp and the MANIFEST. */
 export function releaseTree(dir: string, version: string): string {
   const tree = path.join(dir, `staging-${version}`);
   cpSync(path.join(REPO, 'ccd'), path.join(tree, 'ccd'), { recursive: true });
@@ -84,20 +84,24 @@ export function releaseTree(dir: string, version: string): string {
   copyFileSync(path.join(REPO, 'install.sh'), path.join(tree, 'install.sh'));
   mkdirSync(path.join(tree, 'server'), { recursive: true });
   for (const f of ['package.json', 'package-lock.json']) copyFileSync(path.join(REPO, 'server', f), path.join(tree, 'server', f));
+  mkdirSync(path.join(tree, 'agent'), { recursive: true });
+  for (const f of ['package.json', 'package-lock.json']) copyFileSync(path.join(REPO, 'agent', f), path.join(tree, 'agent', f));
   writeFileSync(path.join(tree, 'build.json'), `{"sha":"${'b'.repeat(40)}","ref":"release","builtAt":"2026-10-30T00:00:00Z","dirty":false,"version":"${version}"}\n`);
   writeManifest(tree);
   return tree;
 }
 
 /** node's release tarball: `bin/node` runs this process's node, `bin/npm` records its cwd and argv and lays out a
- *  `node_modules`, and node's headers. */
+ *  `node_modules` holding a stub package for each of package.json's `dependencies`, and node's headers. */
 export function nodeTarball(dir: string, version: string, log: string): Buffer {
   const top = path.join(dir, `nodepkg-${version}`, `node-v${version}-linux-x64`);
   mkdirSync(path.join(top, 'bin'), { recursive: true });
   mkdirSync(path.join(top, 'include', 'node'), { recursive: true });
   writeFileSync(path.join(top, 'include', 'node', 'node.h'), '/* fixture */\n');
   writeFileSync(path.join(top, 'bin', 'node'), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
-  writeFileSync(path.join(top, 'bin', 'npm'), `#!/bin/sh\nprintf '%s\\t%s\\n' "$(pwd)" "$*" >> '${path.join(log, 'npm-argv')}'\n[ "$1" = ci ] && mkdir -p node_modules/.fixture-ci\nexit 0\n`, { mode: 0o755 });
+  const layout = 'const fs = require("fs"); const d = JSON.parse(fs.readFileSync("package.json", "utf8")).dependencies || {};'
+    + ' for (const n of Object.keys(d)) { fs.mkdirSync("node_modules/" + n, { recursive: true }); fs.writeFileSync("node_modules/" + n + "/package.json", JSON.stringify({ name: n }) + "\\n"); }';
+  writeFileSync(path.join(top, 'bin', 'npm'), `#!/bin/sh\nprintf '%s\\t%s\\n' "$(pwd)" "$*" >> '${path.join(log, 'npm-argv')}'\n[ "$1" = ci ] || exit 0\nmkdir -p node_modules/.fixture-ci\nexec '${process.execPath}' -e '${layout}'\n`, { mode: 0o755 });
   const out = path.join(dir, `node-v${version}-linux-x64.tar.xz`);
   run('tar', ['-cJf', out, '-C', path.dirname(top), path.basename(top)]);
   return readFileSync(out);

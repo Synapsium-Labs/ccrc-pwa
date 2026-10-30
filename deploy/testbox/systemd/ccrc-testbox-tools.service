@@ -1,8 +1,11 @@
 # The tool sync (D-7408, D-7409, D-7553; spec §2.10): root, from the installed release, reading only specs/tools and,
 # for the release base, the box's one config file (D-7457). The firewall lets it out only to its rows of spec §2.0's
-# table, matched through the cgroup set NFTSet= adds it to (D-7568). No environment file (D-7451).
+# table, matched through the cgroup set NFTSet= adds it to (D-7568); it does not start when the firewall's load (an
+# ExecStartPost= of nftables.service) fails. No environment file (D-7451).
 [Unit]
 Description=ccrc test box: the tool sync
+Requires=nftables.service
+After=nftables.service
 
 [Service]
 Type=exec

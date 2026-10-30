@@ -1,18 +1,26 @@
 #!/usr/sbin/nft -f
 # The test box's firewall (D-7409, D-7568; spec §2.0, §2.3 "Network"). Installed by deploy/testbox/install.sh, which
 # writes the match of the tailnet listen address (`ip daddr <v4>` or `ip6 daddr <v6>`) and the service port for @@LISTEN_MATCH@@ and @@LISTEN_PORT@@ (CCRC_TESTBOX_LISTEN)
-# and loads it in its last phase. Egress is one named address set per row of spec §2.0's table, each reachable only
-# from the unit the table names: the service (the mirror fetch, the registry proxy's upstream) and the tools unit (the
-# release, node, Chrome for Testing, the OS mirror), matched by the cgroup set each unit adds itself to (NFTSet=). The
-# address sets are filled by ccrc-testbox-egress.service from the names the installer wrote, never by this file. The
-# tailnet client's own coordination traffic is let out by its cgroup. The rest is the box's own infrastructure (D-7568):
-# loopback, replies, ICMP, the DHCP lease, DNS and NTP. Inbound, only ssh and the service port on the tailnet address.
-table inet ccrc_testbox
-delete table inet ccrc_testbox
-
+# and loads it in its last phase and, at boot, through a drop-in for nftables.service. Egress is one named address set
+# per row of spec §2.0's table, each reachable only from the unit the table names: the service (the mirror fetch, the
+# registry proxy's upstream) and the tools unit (the release, node, Chrome for Testing, the OS mirror). Every unit is
+# matched by a cgroup set it adds itself to when it starts (NFTSet=), never by a cgroup path, which nft would resolve
+# once, at the load, to an id a later start of that unit no longer has: the service (service_cg), the tools unit
+# (tools_cg), the tailnet client (tailnet_cg, its coordination traffic), the system resolver (dns_cg, the only sender
+# of DNS: every other process asks it on loopback) and the time client (ntp_cg). The address sets are filled by
+# ccrc-testbox-egress.service from the names the installer wrote, never by this file. The rest is the box's own
+# infrastructure (D-7568): loopback, replies, the ICMPv6 the kernel sends for neighbour and router discovery and
+# multicast listening, and the DHCP lease's renewal. Inbound, only ssh and the service port on the tailnet address.
+#
+# A load adds to what the box holds: the first block declares the sets and the two chains (a set or a chain already
+# there is kept, with its elements), the two flushes empty the chains, and the second block is their rules. So a reload
+# keeps every set's addresses and cgroups, and the whole file is one transaction: a load that fails changes nothing.
 table inet ccrc_testbox {
   set service_cg { type cgroupsv2; }
   set tools_cg { type cgroupsv2; }
+  set tailnet_cg { type cgroupsv2; }
+  set dns_cg { type cgroupsv2; }
+  set ntp_cg { type cgroupsv2; }
 
   # spec §2.0's table: one v4 and one v6 set per row.
   set github_v4 { type ipv4_addr; flags interval; }
@@ -30,14 +38,23 @@ table inet ccrc_testbox {
 
   chain output {
     type filter hook output priority filter; policy drop;
+  }
+  chain input {
+    type filter hook input priority filter; policy drop;
+  }
+}
+flush chain inet ccrc_testbox output
+flush chain inet ccrc_testbox input
+table inet ccrc_testbox {
+  chain output {
     oifname "lo" accept
     ct state established,related accept
-    meta l4proto { icmp, ipv6-icmp } accept
+    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, mld2-listener-report } accept
     udp sport 68 udp dport 67 accept
-    udp dport 53 accept
-    tcp dport 53 accept
-    udp dport 123 accept
-    socket cgroupv2 level 2 "system.slice/tailscaled.service" accept
+    socket cgroupv2 level 2 @dns_cg udp dport 53 accept
+    socket cgroupv2 level 2 @dns_cg tcp dport 53 accept
+    socket cgroupv2 level 2 @ntp_cg udp dport 123 accept
+    socket cgroupv2 level 2 @tailnet_cg accept
     socket cgroupv2 level 2 @service_cg ip daddr @github_v4 tcp dport 443 accept
     socket cgroupv2 level 2 @service_cg ip6 daddr @github_v6 tcp dport 443 accept
     socket cgroupv2 level 2 @service_cg ip daddr @registry_v4 tcp dport 443 accept
@@ -51,14 +68,12 @@ table inet ccrc_testbox {
     socket cgroupv2 level 2 @tools_cg ip daddr @osmirror_v4 tcp dport { 80, 443 } accept
     socket cgroupv2 level 2 @tools_cg ip6 daddr @osmirror_v6 tcp dport { 80, 443 } accept
   }
-
   chain input {
-    type filter hook input priority filter; policy drop;
     iifname "lo" accept
     ct state established,related accept
     meta l4proto { icmp, ipv6-icmp } accept
     udp sport 67 udp dport 68 accept
-    socket cgroupv2 level 2 "system.slice/tailscaled.service" accept
+    socket cgroupv2 level 2 @tailnet_cg accept
     @@LISTEN_MATCH@@ tcp dport { 22, @@LISTEN_PORT@@ } accept
   }
 }
