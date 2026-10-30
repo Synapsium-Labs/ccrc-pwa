@@ -105,8 +105,6 @@ function handleConnection(ws: WebSocket, o: TestboxServerOpts): void {
     }
     const r = readTestboxFrame(text);
     if (!r.ok) { conn.refuse(r.reason); return; }
-    // TB6 (D-7426): the driver keeps each submission while it may wait, so a takeover can hand it to the next service.
-    if (r.value.t === 'run.submit') toolSyncOf(o.service)?.noteSubmit(r.value);
     const handler = FRAME_HANDLERS[r.value.t];
     if (handler === undefined) { conn.refuse(`${r.value.t} is not a frame the service takes`); return; }
     Promise.resolve(handler(o.service, r.value, conn)).catch((e: unknown) => conn.refuse(e instanceof Error ? e.message : String(e)));
@@ -166,17 +164,18 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
   const short = boundedExec(sysEnv, SHORT_BOUND_MS);
   const git = realGit(boundedExec(gitEnv(os.homedir()), cfg.unitMaxMs));
   const sys = seams.sys ?? systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs));
-  // TB6 (D-7408, D-7426): the tool sync. Its takeover closes admissions through the run limit it hands the service.
+  // TB6 (D-7408, D-7426): the tool sync. Its takeover closes admissions (`admitting`), never the run limit the service
+  // reports, so every status answer during it still reads as the frame family's.
   const tools = new ToolSync({ sys, root: cfg.root, toolsDir: cfg.toolsDir, settings: toolsSettings(cfg.lines, durationMs), now: () => Date.now(), exit });
   // TB6 (spec §2.10): each spec's PATH names the set current when it is built, never the link a sync switches.
-  const settings = { ...cfg, get runs(): number { return tools.runLimit(cfg.runs); }, get toolsBin(): string { return tools.bin(); } };
+  const settings = { ...cfg, get toolsBin(): string { return tools.bin(); } };
   const svc = new TestboxService({
     settings, rows: readRepoRows(cfg.repos), sys,
     probe: () => reflinkProbe(cfg.root, short), mirror: mirrorOps(git),
     // TB6 (spec §2.10): `<tools>/current/chrome` resolved when each prepare starts, so the next prepare picks the new set.
     now: () => Date.now(), get chrome(): string { return tools.chrome(); }, release: facts.release, serviceVersion: facts.serviceVersion,
     // TB6: the box's measured tool versions are the current set's.
-    tools: () => tools.versions(),
+    tools: () => tools.versions(), admitting: () => tools.admitting(),
     // TB5 (D-7407, D-7543): the installs run under the box's node, the current set's (TB6), else the one this service runs under.
     pristine: {
       settings: pristineSettings(cfg.lines, durationMs), inputs: (m, id, paths) => runTreeFiles(git, m, id, paths),
@@ -185,7 +184,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
   });
   tools.serve({
     status: () => svc.status(), idle: () => svc.idle(), tick: () => svc.tick(), liveRuns: () => liveRunIds(svc.poolNow()),
-    waiting: () => svc.positions().keys(), submit: (f, conn) => svc.submit(f, conn),
+    waiting: () => svc.waitingSubmits(), submit: (f, conn) => svc.submit(f, conn),
   });
   attachToolSync(svc, tools);
   return svc;

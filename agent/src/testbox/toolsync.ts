@@ -4,10 +4,11 @@
 // current set's `versions`. The service's frame table reaches it by one line (`service.ts#FRAME_HANDLERS`), through
 // the driver attached to that service here (`attachToolSync`, by the entry point).
 //
-// The takeover (D-7426): a sync that replaced the release closes the service's admissions (the entry point hands the
-// service a run limit this driver sets to 0), waits for the runs in progress to end, hands every queued run to the
-// next service (`<root>/handover/`, which that service queues at its start, in the same order) and exits 0, so the
-// service manager restarts the service on the new tree and queued runs wait for it. A new node version queues every
+// The takeover (D-7426, D-7559): a sync that replaced the release closes the service's admissions (`admitting()`, which
+// the entry point hands the service; submissions still queue, and the status answer keeps the configured run limit),
+// waits for the runs in progress to end, hands every queued run, as the service queued it, to the next service
+// (`<root>/handover/`, which that service queues at its start, in the same order) and exits 0, so the service manager
+// restarts the service on the new tree and queued runs wait for it. A new node version queues every
 // pristine key's rebuild at once, by one tick of the service's timer work (the pristine store reads the box's node
 // from this driver); that tick and the timer's own run one after the other, never at once (`serviceTick`).
 import { mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -31,8 +32,8 @@ export interface ServedService {
   tick(): Promise<void>;
   /** The run ids that hold a run user now. */
   liveRuns(): Iterable<string>;
-  /** The ids waiting in the queue, in queue order. */
-  waiting(): Iterable<string>;
+  /** The submissions waiting in the queue, in queue order, each as the service queued it. */
+  waiting(): Iterable<RunSubmit>;
   /** A submission, as a connection's `run.submit` reaches the service. */
   submit(f: RunSubmit, conn: { send(frame: RunLog | RunSummary): void; refuse(reason: string): void }): void;
 }
@@ -65,8 +66,6 @@ export class ToolSync {
   private running: Promise<void> | null = null;
   /** The service's timer work in progress or last run: each `serviceTick` runs after it. */
   private ticked: Promise<void> = Promise.resolve();
-  /** Each submission the service was handed, by run id, while it may still be waiting (`noteSubmit`). */
-  private readonly submits = new Map<string, RunSubmit>();
   /** `<tools>/current` as resolved in this turn of the event loop (`undefined`: not yet): a prepare reads its Chrome
    *  and its PATH in one synchronous turn, so both come from one reading, whichever it reads first. */
   private turnSet: string | null | undefined = undefined;
@@ -129,19 +128,9 @@ export class ToolSync {
     return p;
   }
 
-  /** A `run.submit` a connection hands the service (the entry point calls this first): kept while it may wait, so a
-   *  takeover can hand it over. */
-  noteSubmit(f: RunSubmit): void { this.submits.set(f.runId, f); }
-
-  /** The submissions still waiting in the service's queue, in its order; the rest are forgotten. */
-  queuedFrames(): RunSubmit[] {
-    if (this.svc === null) return [];
-    const out: RunSubmit[] = [];
-    for (const id of this.svc.waiting()) { const f = this.submits.get(id); if (f !== undefined) out.push(f); }
-    const keep = new Set(out.map((f) => f.runId));
-    for (const id of [...this.submits.keys()]) if (!keep.has(id)) this.submits.delete(id);
-    return out;
-  }
+  /** The submissions waiting in the service's queue, in its order, each the frame the service queued: the service's
+   *  own record, so a refused submission (a duplicate run id) is never one. */
+  queuedFrames(): RunSubmit[] { return this.svc === null ? [] : [...this.svc.waiting()]; }
 
   /** At the service's start, after its own: the runs a takeover handed over are queued, in their order, each with no
    *  connection (its summary is the service's `results/<id>`, as for any run whose link dropped); returns how many. */
@@ -157,8 +146,7 @@ export class ToolSync {
       const r = text === null ? null : readTestboxFrame(text.trim());
       if (r === null || !r.ok || r.value.t !== 'run.submit') { console.error(`ccrc-testbox: a handed-over run (${name}) does not read as a run.submit; dropped`); continue; }
       const id = r.value.runId;
-      // Noted as the WebSocket door notes a submission, so a later takeover hands it over again while it waits.
-      this.noteSubmit(r.value);
+      // Queued as the WebSocket door queues a submission, so a later takeover hands it over again while it waits.
       svc.submit(r.value, { send: () => undefined, refuse: (why) => console.error(`ccrc-testbox: the handed-over run ${id} was refused: ${why}`) });
       n++;
     }
@@ -181,8 +169,9 @@ export class ToolSync {
     });
   }
 
-  /** The run limit the service admits under: its own, or 0 once a takeover has begun. */
-  runLimit(own: number): number { return this.state.takeover ? 0 : own; }
+  /** Whether the service may start a waiting run: not once a takeover has begun (D-7426). Submissions still queue, and
+   *  the run limit the status answer reports is the configured one. */
+  admitting(): boolean { return !this.state.takeover; }
 
   sync(): TestboxSync { return syncNow(this.state, parseReport(this.state.running ? readText(this.reportFile) : null)); }
 
@@ -235,7 +224,6 @@ export class ToolSync {
    *  (`main.ts#timerWork`): a sync runs a unit for minutes, and a takeover waits for every run. */
   async tick(): Promise<void> {
     this.noteRuns();
-    this.queuedFrames();
     const f = retryDue(this.state, this.d.now());
     if (f === null) return;
     this.state = retryStarted(this.state, utcSecond(this.d.now()));

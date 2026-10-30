@@ -61,6 +61,9 @@ export interface ServiceDeps {
   readonly tools?: () => TestboxToolVersions | null;
   /** The pristine installs (TB5, D-7543); absent, every run installs nothing beyond its prepare. */
   readonly pristine?: PristineDeps;
+  /** Whether a waiting run may start now (TB6, D-7426: a tool-sync takeover closes admissions while submissions still
+   *  queue); absent, always. The run limit the status answer reports stays the configured one. */
+  readonly admitting?: () => boolean;
 }
 
 /** What the pristine store needs from outside (D-7543). */
@@ -180,6 +183,15 @@ export class TestboxService {
   /** Each waiting run's position (spec §2.8). */
   positions(): ReadonlyMap<string, number> { return positions(this.queue); }
 
+  /** The submissions waiting in the queue, in queue order, each the frame the service queued (TB6, D-7426: what a
+   *  takeover hands to the next service); a refused submission is never one. */
+  waitingSubmits(): RunSubmit[] {
+    return this.queue.waiting.flatMap((e) => {
+      const run = e.kind === 'run' ? this.runs.get(e.id) : undefined;
+      return run === undefined ? [] : [run.submit];
+    });
+  }
+
   private runIdUsed(id: string): boolean {
     return this.runs.has(id) || existsSync(path.join(this.s.root, 'results', id)) || existsSync(path.join(this.s.root, 'logs', id));
   }
@@ -219,7 +231,8 @@ export class TestboxService {
 
   /** Start every run the queue admits. */
   private pump(): void {
-    const limits = { runs: Math.max(0, this.s.runs - this.held()), sessionRuns: this.s.sessionRuns };
+    const open = this.d.admitting?.() ?? true;
+    const limits = { runs: open ? Math.max(0, this.s.runs - this.held()) : 0, sessionRuns: this.s.sessionRuns };
     const { state, started } = admit(this.queue, limits);
     this.queue = state;
     for (const e of started) {

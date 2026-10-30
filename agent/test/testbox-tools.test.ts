@@ -794,7 +794,7 @@ function driver(b: Box, o: { live?: string[]; now?: () => number; beforeUnit?: (
   let release: () => void = () => undefined;
   const idle = new Promise<void>((r) => { release = r; });
   const live = o.live ?? [];
-  const waiting: string[] = [];
+  const waiting: RunSubmit[] = [];
   const submitted: { f: RunSubmit; conn: { send(f: unknown): void; refuse(r: string): void } }[] = [];
   const served: ServedService = {
     status: okStatus, idle: () => idle, tick: async () => { ticks++; }, liveRuns: () => live, waiting: () => waiting,
@@ -814,8 +814,7 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     const d = driver(b, { live: ['r1'] });
     // One run waits in the queue when the sync starts (D-7426: queued runs wait for the new service); its log
     // directory is the empty one a submission makes.
-    d.t.noteSubmit(submitOf(Q1));
-    d.waiting.push(Q1);
+    d.waiting.push(submitOf(Q1));
     mkdirSync(path.join(d.svcRoot, 'logs', Q1), { recursive: true });
     // The run resolved the tool set when its prepare started.
     await d.t.tick();
@@ -828,14 +827,13 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     for (let i = 0; i < 1200 && !existsSync(path.join(b.tools, 'takeover')); i++) await new Promise((r) => setTimeout(r, 50));
     await new Promise((r) => setTimeout(r, 50));
     expect(d.exits).toEqual([]);
-    expect(d.t.runLimit(2), 'the takeover admits no run').toBe(0);
+    expect(d.t.admitting(), 'the takeover admits no run').toBe(false);
     expect(linkOf(path.join(b.tools, 'release', 'installed'))).toBe(NEW_TAG);
     expect(realpathSync(path.join(b.tools, 'current', 'node'))).not.toBe(oldNode);
     expect(existsSync(oldNode), 'the run\'s node is kept while it runs').toBe(true);
     expect(readFileSync(path.join(d.svcRoot, 'specs', 'tools'), 'utf8').split('\0')).toContain('Ks.bootstrap');
-    // A submission during the takeover queues behind the first, since the run limit is 0.
-    d.t.noteSubmit(submitOf(Q2));
-    d.waiting.push(Q2);
+    // A submission during the takeover queues behind the first, since no run is admitted.
+    d.waiting.push(submitOf(Q2));
     expect(existsSync(path.join(d.svcRoot, HANDOVER_DIR)), 'nothing is handed over while a run is in progress').toBe(false);
     d.release();
     await p;
@@ -865,28 +863,6 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     expect(d.t.resume()).toBe(1);
     expect(d.submitted.map((x) => x.f.runId)).toEqual([Q3]);
     expect(readdirSync(dir)).toEqual([]);
-  });
-
-  it('the WebSocket door notes each run.submit for the driver attached to the service, before the service takes it', async () => {
-    const b = makeBox();
-    const d = driver(b);
-    const svc = { status: okStatus, submit: (f: RunSubmit) => { d.waiting.push(f.runId); } } as unknown as TestboxService;
-    attachToolSync(svc, d.t);
-    const srv = await startTestboxServer({ host: '127.0.0.1', port: 0, token: 'tok', service: svc });
-    try {
-      const ws = new WebSocket(`ws://127.0.0.1:${srv.port}`);
-      const frames: string[] = [];
-      ws.on('message', (m) => frames.push(m.toString()));
-      await new Promise<void>((r, j) => { ws.once('open', () => r()); ws.once('error', j); });
-      ws.send(JSON.stringify({ t: 'hello', token: 'tok' }));
-      await expect.poll(() => frames.length).toBe(1);
-      ws.send(JSON.stringify(submitOf(Q1)));
-      await expect.poll(() => d.waiting.length).toBe(1);
-      expect(d.t.queuedFrames()).toEqual([submitOf(Q1)]);
-      ws.close();
-    } finally {
-      await srv.close();
-    }
   });
 
   it('a run\'s Chrome is the current set\'s when its prepare starts: after two Chrome-only syncs it names the newest, which exists', async () => {
@@ -1149,8 +1125,9 @@ describe('the sets in use are the ones the specs name (D-7559; spec §2.10: a ru
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, `000000000000001-000001-${Q1}.json`), `${JSON.stringify(submitOf(Q1))}\n`);
     expect(d.t.resume()).toBe(1);
-    d.waiting.push(Q1);
-    expect(d.t.queuedFrames().map((f) => f.runId)).toEqual([Q1]);
+    // The service queues it as it queues any submission; the next takeover hands over what the service queued.
+    d.waiting.push(...d.submitted.map((x) => x.f));
+    expect(d.t.queuedFrames()).toEqual([submitOf(Q1)]);
   });
 });
 
