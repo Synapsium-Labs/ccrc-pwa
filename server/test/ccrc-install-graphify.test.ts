@@ -29,7 +29,7 @@ import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { FIXTURE_DF_INODES_LINES } from './fixtureDfInodes.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
-import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
+import { PKG_DESCRIPTION, installedSkillMd, skillMd } from './graphifySkillFixture.js';
 import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1646,7 +1646,7 @@ describe('ccrc install: EVERY rostered home, measured against two of them (D-145
       // The graphify skill's body is the PACKAGE's, copied verbatim — so this
       // asserts the assembled bytes, not merely a file at a path.
       expect(readFileSync(join(d, 'skills', 'graphify', 'SKILL.md'), 'utf8'),
-        `${d}'s graphify SKILL.md is not the package's body`).toBe(skillMd(PKG_DESCRIPTION));
+        `${d}'s graphify SKILL.md is not the package's body plus the ccrc clause`).toBe(installedSkillMd(PKG_DESCRIPTION));
       expect(readFileSync(join(d, 'skills', 'graphify', '.graphify_version'), 'utf8').trim(),
         `${d} carries no version stamp`).toBe('0.9.9');
     }
