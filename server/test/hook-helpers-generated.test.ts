@@ -299,7 +299,10 @@ describe('each generated region names the file it is given (C5i)', () => {
     for (const n of ['hook', 'authdead', 'apicap']) {
       expect(REGIONS.find((r) => r.name === n)?.file, n).toBe('ccd/ccd');
     }
-    expect(REGIONS.map((r) => r.source)).toEqual(['ccd', 'ccd', 'hook', 'ccd']);
+    // Keyed by row name, not a bare list: two adjacent quoted `ccd` literals are the split-path spelling of the
+    // script that core-vocab's one-path-to-the-ccd-script scan forbids outside ccdWsHelpers.ts.
+    expect(Object.fromEntries(REGIONS.map((r) => [r.name, r.source])))
+      .toEqual({ hook: 'ccd', authdead: 'ccd', apicap: 'hook', 'log-line': 'ccd' });
   });
 
   it('CONTROL: an absent target or an absent given file exits non-zero, naming the path', () => {
