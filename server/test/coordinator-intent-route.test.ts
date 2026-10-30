@@ -32,6 +32,7 @@ import {
   type DelegationDurabilityDeps,
   type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
 import {
   COORDINATOR_INTENT_ACTIONS,
   declareCoordinatorIntent,
@@ -121,7 +122,7 @@ async function world(opts: WorldOptions = {}): Promise<World> {
   };
   const durable = await DelegationDurability.open({
     dir, projection: opts.faults.projection === undefined ? real : opts.faults.projection(real),
-    now: () => Date.now(), randomUUID: () => randomUUID(), ...(opts.faults.onEdge === undefined ? {} : { onEdge: opts.faults.onEdge }),
+    now: () => Date.now(), randomUUID: () => randomUUID(), port: nodeDelegationFilePort, ...(opts.faults.onEdge === undefined ? {} : { onEdge: opts.faults.onEdge }),
   });
   // `stop` is what `buildServer` calls when the app closes.
   const standIn = { stop: () => undefined, serverCapsSettled: async () => {}, ...((opts.faults.watcher?.(durable) ?? { delegationApplier: () => Promise.resolve(durable) }) as object) } as unknown as FleetWatcher;
@@ -656,7 +657,7 @@ describe('POST /api/coordinators/:session/intent: SQLite is repairable output', 
     const fresh = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-intent-fresh-'), 'coord.db')));
     expect(fresh.readDelegationProjection().sessions, 'the fresh database knows nothing').toEqual([]);
     const reopened = await DelegationDurability.open({
-      dir: w.dir, now: () => Date.now(), randomUUID: () => randomUUID(),
+      dir: w.dir, now: () => Date.now(), randomUUID: () => randomUUID(), port: nodeDelegationFilePort,
       projection: { project: (cp) => fresh.projectDelegationCheckpoint(cp), projectChanged: (prior, next) => fresh.projectDelegationCheckpointChanges(prior, next), insertEvents: (rows) => fresh.insertDelegationEvents(rows), eventStats: () => fresh.delegationEventStats() },
     });
     closers.push(() => reopened.close());

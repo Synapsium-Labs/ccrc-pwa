@@ -82,6 +82,7 @@ import { PressureLane } from './pressureLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
+import { nodeDelegationFilePort } from './coord/delegation-journal.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
   unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
@@ -10411,6 +10412,7 @@ class DelegationLane {
         try {
           const d = await DelegationDurability.open(this.timedPort({                  // D-5692: the port's calls are timed as `rewrite`
             dir: this.deps.cfg.ccrcDir,
+            port: nodeDelegationFilePort,
             projection: coord === undefined ? null : {
               project: (cp) => coord.projectDelegationCheckpoint(cp),
               projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),

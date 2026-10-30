@@ -40,6 +40,7 @@ import {
   type DelegationCheckpointChange,
   type DelegationDurabilityDeps,
 } from '../src/coord/delegation-checkpoint.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_BUCKET_REPLACED,
   DELEGATION_EVENT_ID_DOMAIN,
@@ -1206,7 +1207,7 @@ async function openDurability(over: Partial<DelegationDurabilityDeps> = {}): Pro
   const dir = over.dir ?? mkTmp('ccrc-deleg-ingest-');
   const clock = { ms: Date.UTC(2026, 9, 14, 12, 30) };
   const now = (): number => clock.ms;
-  const dur = await DelegationDurability.open({ dir, projection: null, now, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', ...over });
+  const dur = await DelegationDurability.open({ dir, projection: null, now, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', port: nodeDelegationFilePort, ...over });
   opened.push(dur);
   return { dir, dur, now, clock };
 }

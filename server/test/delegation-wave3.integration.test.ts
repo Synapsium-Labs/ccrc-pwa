@@ -1449,12 +1449,12 @@ describe('8. the closed scope census', () => {
     const portEnd = jr.indexOf('\n};\n', portAt);
     expect(portAt, 'the node port literal').toBeGreaterThan(-1);
     expect((jr.slice(0, portAt) + jr.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
-    // and the node port is reached, across the server, only by its declaration and the applier's default
+    // and the node port is reached, across the server, only by its declaration and the composition root (`watch.ts`'s import and its applier's `port:` argument)
     const portUses = SRC.flatMap((f) => (code(read(f)).match(/^.*\bnodeDelegationFilePort\b.*$/gm) ?? []).map((l) => `${f}: ${l.trim()}`));
     expect(portUses, 'every use of the node file port in the server').toEqual([
-      'server/src/coord/delegation-checkpoint.ts: nodeDelegationFilePort,',
-      'server/src/coord/delegation-checkpoint.ts: this.port = deps.port ?? nodeDelegationFilePort;',
       'server/src/coord/delegation-journal.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
+      "server/src/watch.ts: import { nodeDelegationFilePort } from './coord/delegation-journal.js';",
+      'server/src/watch.ts: port: nodeDelegationFilePort,',
     ]);
 
     // 4. Outside the server: the deploy helper reads the live journal (capture) and replaces it whole from a validated snapshot (restore),

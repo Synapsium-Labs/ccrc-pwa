@@ -95,7 +95,6 @@ import {
   planDelegationJournalAppend,
   planDelegationPruning,
   readDelegationJournalRecords,
-  nodeDelegationFilePort,
   type DelegationAppendItem,
   type DelegationAppendPlan,
   type DelegationFilePort,
@@ -1705,7 +1704,9 @@ export interface DelegationDurabilityDeps {
   monotonicMs?: () => number;
   /** INJECTED randomness: called ONLY by `createLease`, exactly once, after deduplication. */
   randomUUID: () => string;
-  port?: DelegationFilePort;
+  /** Every filesystem operation, through the injected port: REQUIRED, so this module never loads the node adapter itself. The composition
+   *  root (the delegation applier in `watch.ts`) passes the node port; a test passes the node port or a faulting one. */
+  port: DelegationFilePort;
   onEdge?: (edge: DelegationDurabilityEdge, when: 'before' | 'after') => void | Promise<void>;
   /** Server log line sink (`console.warn('ccrc-server: …')` in production). */
   warn?: (message: string) => void;
@@ -1807,7 +1808,7 @@ export class DelegationDurability {
   private quarantineUnmeasured = false;
 
   private constructor(private readonly deps: DelegationDurabilityDeps) {
-    this.port = deps.port ?? nodeDelegationFilePort;
+    this.port = deps.port;
     this.journalPath = path.join(deps.dir, DELEGATION_JOURNAL_FILE);
     this.checkpointPath = path.join(deps.dir, DELEGATION_CHECKPOINT_FILE);
     this.tempPath = `${this.checkpointPath}.tmp`;

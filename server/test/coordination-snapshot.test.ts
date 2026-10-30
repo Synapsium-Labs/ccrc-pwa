@@ -2165,7 +2165,7 @@ describe('8C: a snapshot taken past a torn tail restores as a valid pair, and th
     const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target));
     expect(report.failure).toBeNull();
     expect(report.tailHeal, 'the restored journal has no tail').toBeNull();
-    const dur = await DelegationDurability.open({ dir: liveDir(target), projection: null, now: () => Date.now(), randomUUID: () => 'u' });
+    const dur = await DelegationDurability.open({ dir: liveDir(target), projection: null, now: () => Date.now(), randomUUID: () => 'u', port: nodeDelegationFilePort });
     try {
       expect(dur.failure()).toBeNull();
       expect(dur.state().phase).toBe('ready');
