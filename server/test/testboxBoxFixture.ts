@@ -169,6 +169,23 @@ export interface Box {
   readonly env: NodeJS.ProcessEnv;
 }
 
+/** The box's own network units, running on a fixture box before the installer starts. */
+export const INFRA_UNITS = ['tailscaled.service', 'systemd-resolved.service', 'systemd-timesyncd.service'];
+
+/** The fixture firewall's state (testbox-sys-driver.sh's `nft` lines): `table` when loaded, then `<set> <cgroup>`
+ *  for each cgroup its sets hold, sorted. */
+export function nftState(b: Box): string[] {
+  return existsSync(path.join(b.fx, 'sys.db'))
+    ? readFileSync(path.join(b.fx, 'sys.db'), 'utf8').split('\n').filter((l) => l.startsWith('nft ')).map((l) => l.slice(4)).sort()
+    : [];
+}
+
+/** The fixture system manager called as a unit of the box would call it (no installer around it). */
+export function sysCall(b: Box, args: string[]): Ran {
+  const r = spawnSync(SYS_DRIVER, args, { env: b.env, encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
+}
+
 /** The fixture box's own paths, which the box file names. */
 export function boxPaths(root: string): { tbRoot: string; repos: string; tools: string } {
   return { tbRoot: path.join(root, 'srv', 'testbox'), repos: path.join(root, 'srv', 'testbox-repos.d'), tools: path.join(root, 'opt', 'ccrc-testbox', 'tools') };
@@ -206,6 +223,8 @@ export function makeBox(w: World, o: { boxLines?: string[]; paths?: boolean; fin
   writeFileSync(path.join(fx, 'findmnt'), o.findmnt ?? 'xfs /srv\n');
   writeFileSync(path.join(fx, 'xfs_info'), o.xfs ?? XFS_OK);
   const sysLog = path.join(fx, 'sys.log');
+  // The fixture system manager's state: the box's own tailnet client, resolver and time client run already.
+  writeFileSync(path.join(fx, 'sys.db'), INFRA_UNITS.map((u) => `active ${u}\n`).join(''));
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LANG: 'C', TMPDIR: process.env.TMPDIR ?? '/tmp',
     TB_FIXTURE_ROOT: root, TB_FIXTURE_OWNER_UID: String(UID), TB_SYS: SYS_DRIVER,

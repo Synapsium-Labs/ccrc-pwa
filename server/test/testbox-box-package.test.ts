@@ -25,7 +25,7 @@ import path from 'node:path';
 import { units, UNIT_NAME } from '../../agent/src/testbox/systemd.js';
 import { encodeSpec, type RunSpec } from '../../agent/src/testbox/spec.js';
 import {
-  BOOT_NODE, BOOT_TAG, makeBox, makeWorld, install, exec, REPO, releaseTree, run, sysLog, treeOf, unitProps, UID, writeManifest,
+  BOOT_NODE, BOOT_TAG, makeBox, makeWorld, install, exec, nftState, REPO, releaseTree, run, sysCall, sysLog, treeOf, unitProps, UID, writeManifest,
   type Box, type World,
 } from './testboxBoxFixture.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -269,6 +269,7 @@ const FIREWALL: string[] = [
   ...ROW_RULES('tools_cg', 'osmirror', '{ 80, 443 }'),
   '}',
   'chain input {',
+  'iifname "lo" tcp dport { 22, @@LISTEN_PORT@@ } drop',
   'iifname "lo" accept',
   'ct state established,related accept',
   'meta l4proto { icmp, ipv6-icmp } accept',
@@ -326,7 +327,7 @@ describe('the firewall names every row of spec §2.0\'s table, from the unit the
     expect(firewallFindings(NFT)).toEqual([]);
   });
 
-  it('the census reds on every broadening: a bare protocol accept, an interface accept, a uid accept, a cgroup path, a widened set rule, a rule added from outside the chains', () => {
+  it('the census reds on every broadening: a bare protocol accept, an interface accept, a uid accept, a cgroup path, a widened set rule, a rule added from outside the chains, loopback\'s drop of ssh and the service port removed', () => {
     const at = NFT.indexOf('    oifname "lo" accept\n');
     expect(at, 'the output chain\'s first rule').toBeGreaterThan(0);
     const insert = (line: string): string => `${NFT.slice(0, at)}    ${line}\n${NFT.slice(at)}`;
@@ -339,6 +340,9 @@ describe('the firewall names every row of spec §2.0\'s table, from the unit the
       '+ socket cgroupv2 level 2 @tools_cg ip daddr @github_v4 tcp dport 443 accept', '- socket cgroupv2 level 2 @service_cg ip daddr @github_v4 tcp dport 443 accept',
     ]);
     expect(firewallFindings(`${NFT}add rule inet ccrc_testbox output accept\n`)).toEqual(['+ add rule inet ccrc_testbox output accept']);
+    const loOpen = NFT.replace('    iifname "lo" tcp dport { 22, @@LISTEN_PORT@@ } drop\n', '');
+    expect(loOpen).not.toBe(NFT);
+    expect(firewallFindings(loOpen)).toEqual(['- iifname "lo" tcp dport { 22, @@LISTEN_PORT@@ } drop']);
   });
 
   it('no rule names a literal cgroup path: each unit\'s cgroup comes through a set its unit fills (NFTSet=), so a boot order or a restart cannot make it stale (D-7568)', () => {
@@ -358,7 +362,19 @@ describe('the firewall names every row of spec §2.0\'s table, from the unit the
     expect(code.filter((l) => /policy/.test(l)).map((l) => l.trim())).toEqual([
       'type filter hook output priority filter; policy drop;', 'type filter hook input priority filter; policy drop;',
     ]);
-    expect(code.filter((l) => /dport \{ 22/.test(l)).map((l) => l.trim())).toEqual(['@@LISTEN_MATCH@@ tcp dport { 22, @@LISTEN_PORT@@ } accept']);
+    expect(code.filter((l) => /dport \{ 22/.test(l)).map((l) => l.trim())).toEqual([
+      'iifname "lo" tcp dport { 22, @@LISTEN_PORT@@ } drop', '@@LISTEN_MATCH@@ tcp dport { 22, @@LISTEN_PORT@@ } accept',
+    ]);
+  });
+
+  it('loopback reaches neither ssh nor the service port: sshd binds every address, and a prepare or install unit shares the box\'s loopback, so the input chain drops both ports on lo before it accepts lo (spec §2.0, D-7568)', () => {
+    // The second `chain input {` is the rules block (the first declares the hook and the policy).
+    const at = code.map((l) => l.trim()).lastIndexOf('chain input {');
+    expect(code[at + 1], 'the rules block').not.toContain('hook');
+    const input = code.slice(at);
+    const rules = input.slice(1, input.findIndex((l) => l.trim() === '}')).map((l) => l.trim());
+    expect(rules[0]).toBe('iifname "lo" tcp dport { 22, @@LISTEN_PORT@@ } drop');
+    expect(rules.indexOf('iifname "lo" accept')).toBe(1);
   });
 });
 
@@ -367,6 +383,11 @@ describe('the firewall names every row of spec §2.0\'s table, from the unit the
 // ---------------------------------------------------------------------------------------------------------------
 
 const lines = (b: Box): string[] => sysLog(b).map((l) => l.join(' '));
+/** The fixture firewall after an install: the table, the three network units that ran before it, and the service. */
+const RUNNING_SETS = [
+  'dns_cg system.slice/systemd-resolved.service', 'ntp_cg system.slice/systemd-timesyncd.service', 'service_cg system.slice/ccrc-testbox.service',
+  'table', 'tailnet_cg system.slice/tailscaled.service',
+];
 const indexOf = (l: string[], re: RegExp): number => l.findIndex((x) => re.test(x));
 const lastIndexOf = (l: string[], re: RegExp): number => { for (let i = l.length - 1; i >= 0; i--) if (re.test(l[i]!)) return i; return -1; };
 /** The TB_SYS lines phase 1 makes (its two queries) and nothing else. */
@@ -386,28 +407,41 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     expect(first.code, first.stderr).toBe(0);
     expect(first.stderr.split('\n').filter((l) => / phase \d:/.test(l)).map((l) => /phase (\d)/.exec(l)![1])).toEqual(['2', '3', '4', '5', '6']);
     const l = lines(b);
-    const nft = indexOf(l, /^nft -f /);
-    const start = indexOf(l, /^systemctl enable --now ccrc-testbox\.service ccrc-testbox-egress\.timer$/);
-    expect(nft).toBeGreaterThan(lastIndexOf(l, /^(useradd|groupadd|usermod|chown) /));
-    expect(nft).toBeGreaterThan(lastIndexOf(l, /etc\/systemd\/system\/.*\.(service|slice|timer|conf)$/));
-    expect(start).toBeGreaterThan(nft);
+    const reload = indexOf(l, /^systemctl daemon-reload$/);
+    expect(reload).toBeGreaterThan(lastIndexOf(l, /^(useradd|groupadd|usermod|chown) /));
+    expect(reload).toBeGreaterThan(lastIndexOf(l, /etc\/systemd\/system\/.*\.(service|slice|timer|conf)$/));
+    expect(reload).toBeGreaterThan(lastIndexOf(l, /usr\/local\/sbin\/ccrc-testbox-firewall$/));
     expect(lastIndexOf(l, /etc\/ccrc-testbox\/installed$/)).toBe(l.length - 1);
-    // The box's own network units are running already, so their cgroups go into the sets now; NFTSet= adds each
-    // later start's (D-7568).
-    expect(l.filter((x) => x.startsWith('nft '))).toEqual([
-      `nft -f ${path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft')}`,
-      'nft add element inet ccrc_testbox tailnet_cg { "system.slice/tailscaled.service" }',
-      'nft add element inet ccrc_testbox dns_cg { "system.slice/systemd-resolved.service" }',
-      'nft add element inet ccrc_testbox ntp_cg { "system.slice/systemd-timesyncd.service" }',
-    ]);
-    expect(indexOf(l, /^nft add element /)).toBeLessThan(start);
-    expect(l.filter((x) => x.startsWith('systemctl '))).toEqual([
-      'systemctl daemon-reload', 'systemctl enable nftables.service', 'systemctl enable --now ccrc-testbox.service ccrc-testbox-egress.timer',
+    expect(l.slice(0, reload).filter((x) => /^(nft|systemctl) /.test(x)), 'nothing touches the firewall or a unit before phase 6').toEqual([]);
+    // Phase 6, in order: nftables.service started first (the fixture's first start runs the distribution's flush and
+    // then the drop-in's load step), the load step again, and only then the service. The box's own network units run
+    // already, so the load step adds their cgroups; NFTSet= adds each later start's (D-7568).
+    const nftFile = path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft');
+    const LOAD = [
+      `nft -f ${nftFile}`,
+      'systemctl show -P ControlGroup tailscaled.service', 'nft add element inet ccrc_testbox tailnet_cg { "system.slice/tailscaled.service" }',
+      'systemctl show -P ControlGroup systemd-resolved.service', 'nft add element inet ccrc_testbox dns_cg { "system.slice/systemd-resolved.service" }',
+      'systemctl show -P ControlGroup systemd-timesyncd.service', 'nft add element inet ccrc_testbox ntp_cg { "system.slice/systemd-timesyncd.service" }',
+      'systemctl show -P ControlGroup ccrc-testbox.service', 'systemctl show -P ControlGroup ccrc-testbox-tools.service',
+      'systemctl start --no-block ccrc-testbox-egress.service',
+    ];
+    expect(l.slice(reload).filter((x) => /^(nft|systemctl) |^\[nftables\.service\]/.test(x))).toEqual([
+      'systemctl daemon-reload',
+      'systemctl enable --now nftables.service', '[nftables.service] flush ruleset', ...LOAD,
+      ...LOAD,
+      'systemctl enable --now ccrc-testbox.service ccrc-testbox-egress.timer',
       'systemctl start ccrc-testbox-egress.service',
     ]);
     expect(readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'installed'), 'utf8')).toBe(
       `release\t${BOOT_TAG}\nbox-sha256\t${run('shasum', ['-a', '256', b.boxFile]).split(' ')[0]}\n`,
     );
+  });
+
+  it('ends with the firewall loaded and every running unit in its set, though nftables.service\'s first start flushes the ruleset (D-7568)', () => {
+    // The fixture system manager starts nftables.service the first time a unit that requires it starts, and that start
+    // runs the distribution's `flush ruleset` before the drop-in's load.
+    expect(lines(b).filter((x) => x === '[nftables.service] flush ruleset').length).toBeGreaterThan(0);
+    expect(nftState(b)).toEqual(RUNNING_SETS);
   });
 
   it('the release lands root\'s at <tools>/release/<tag>, named by installed, with no group or other write anywhere in it', () => {
@@ -506,6 +540,13 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     for (const s of ['ccrc-testbox-run-.slice', 'ccrc-testbox-install.slice']) {
       expect(drop(s)).toEqual(['[Slice] MemoryMax=4G', '[Slice] MemorySwapMax=1G', '[Slice] CPUQuota=200%']);
     }
+    // nftables.service runs the one load step after the distribution's start and after its reload, each of which may
+    // flush the ruleset; the step is on the root filesystem, root's, the release's deploy/testbox/bin/firewall (D-7568).
+    const fw = path.join(b.root, 'usr', 'local', 'sbin', 'ccrc-testbox-firewall');
+    const nftFile = path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft');
+    expect(drop('nftables.service')).toEqual([`[Service] ExecStartPost=${fw} ${nftFile}`, `[Service] ExecReload=${fw} ${nftFile}`]);
+    expect(readFileSync(fw, 'utf8')).toBe(read(path.join(PKG, 'bin', 'firewall')));
+    expect((statSync(fw).mode & 0o7777).toString(8)).toBe('755');
     // The box's own network units add their cgroups to the firewall's sets when they start, after the firewall's load.
     expect(drop('tailscaled.service')).toEqual(['[Unit] After=nftables.service', '[Service] NFTSet=cgroup:inet:ccrc_testbox:tailnet_cg']);
     expect(drop('systemd-resolved.service')).toEqual(['[Unit] After=nftables.service', '[Service] NFTSet=cgroup:inet:ccrc_testbox:dns_cg']);
@@ -513,6 +554,7 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     expect(readFileSync(path.join(b.root, 'etc', 'polkit-1', 'rules.d', '50-ccrc-testbox.rules'), 'utf8')).toContain('subject.user !== "ccrc-tb-svc"');
     const nft = readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft'), 'utf8');
     expect(nft).toContain('    ip daddr 127.0.0.9 tcp dport { 22, 7443 } accept\n');
+    expect(nft).toContain('    iifname "lo" tcp dport { 22, 7443 } drop\n');
     expect(firewallFindings(nft, FIREWALL.map((l) => l.replace('@@LISTEN_MATCH@@', 'ip daddr 127.0.0.9').replace('@@LISTEN_PORT@@', '7443')))).toEqual([]);
     expect(readFileSync(path.join(b.root, 'etc', 'ccrc-testbox', 'egress'), 'utf8')).toBe([
       'github\tgithub.com', 'nodejs\tnodejs.org', 'chrome\tstorage.googleapis.com', 'registry\tregistry.npmjs.org', 'release\tgithub.com',
@@ -549,6 +591,16 @@ describe('the installer: a first install into a fixture root (D-7409, D-7424)', 
     const r = spawnSync('systemd-analyze', ['verify', '--man=no', ...files], { encoding: 'utf8', env: { ...process.env, SYSTEMD_UNIT_PATH: `${dir}:` } });
     console.log(`testbox-box-package: systemd-analyze verify: exit ${String(r.status)}\n${r.stdout}${r.stderr}`);
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+  });
+
+  it('a reload and a restart of nftables.service, each of which flushes the ruleset, end where the install ended: the table and every running unit in its set (D-7568)', () => {
+    for (const verb of ['reload', 'restart']) {
+      const n = sysLog(b).length;
+      const r = sysCall(b, ['systemctl', verb, 'nftables.service']);
+      expect(r.code, `${verb}: ${r.stderr}`).toBe(0);
+      expect(lines(b).slice(n), verb).toContain('[nftables.service] flush ruleset');
+      expect(nftState(b), verb).toEqual(RUNNING_SETS);
+    }
   });
 
   it('a second run with the same tag and an unchanged box file changes nothing: the same tree, owners and modes, and only phase 1\'s two queries', async () => {
@@ -746,6 +798,38 @@ describe('prepare: the prepare unit\'s fixed ExecStart (D-7409, D-7501, D-7568)'
     const r = spawnSync(PREPARE, [f], { encoding: 'utf8' });
     expect([r.status, r.stderr.trim()]).toEqual([2, `ccrc-testbox-prepare: not a test box spec: ${f}`]);
     expect(read(PREPARE)).not.toMatch(/CCRC_TESTBOX_|ccrc\.env|BOX_ENV_FILE/);
+  });
+});
+
+describe('firewall: the one load step the installer and nftables.service\'s start and reload run (D-7568)', () => {
+  it('loads the file first, then adds the cgroup of each unit it lets out that runs now and skips one that does not, then asks for the address sets', async () => {
+    const b = makeBox(W);
+    mkdirSync(path.join(b.root, 'etc', 'systemd', 'system'), { recursive: true });
+    // tailscaled is not running; the resolver, the time client and the tools unit are.
+    writeFileSync(path.join(b.fx, 'sys.db'), ['systemd-resolved.service', 'systemd-timesyncd.service', 'ccrc-testbox-tools.service'].map((u) => `active ${u}\n`).join(''));
+    const file = path.join(b.root, 'etc', 'ccrc-testbox', 'ccrc-testbox.nft');
+    const r = await exec(path.join(PKG, 'bin', 'firewall'), [file], b.env);
+    expect([r.code, r.stderr]).toEqual([0, '']);
+    expect(lines(b)).toEqual([
+      `nft -f ${file}`,
+      'systemctl show -P ControlGroup tailscaled.service',
+      'systemctl show -P ControlGroup systemd-resolved.service', 'nft add element inet ccrc_testbox dns_cg { "system.slice/systemd-resolved.service" }',
+      'systemctl show -P ControlGroup systemd-timesyncd.service', 'nft add element inet ccrc_testbox ntp_cg { "system.slice/systemd-timesyncd.service" }',
+      'systemctl show -P ControlGroup ccrc-testbox.service',
+      'systemctl show -P ControlGroup ccrc-testbox-tools.service', 'nft add element inet ccrc_testbox tools_cg { "system.slice/ccrc-testbox-tools.service" }',
+      'systemctl start --no-block ccrc-testbox-egress.service',
+    ]);
+    expect(nftState(b)).toEqual([
+      'dns_cg system.slice/systemd-resolved.service', 'ntp_cg system.slice/systemd-timesyncd.service', 'table', 'tools_cg system.slice/ccrc-testbox-tools.service',
+    ]);
+  });
+
+  it('takes exactly one argument, and reads no config file and no test box variable', async () => {
+    const b = makeBox(W);
+    const r = await exec(path.join(PKG, 'bin', 'firewall'), [], b.env);
+    expect([r.code, r.stderr.trim()]).toEqual([2, 'ccrc-testbox-firewall: usage: firewall <nft file>']);
+    expect(sysLog(b)).toEqual([]);
+    expect(read(path.join(PKG, 'bin', 'firewall')).split('\n').filter((l) => !l.startsWith('#')).join('\n')).not.toMatch(/CCRC_TESTBOX_|ccrc\.env|_tb_load/);
   });
 });
 

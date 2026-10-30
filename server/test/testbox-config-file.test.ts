@@ -241,7 +241,7 @@ describe('(d) the tools unit\'s release base is the box file\'s, through _tb_rel
   });
 });
 
-describe('a change to the box file is applied by a re-run: one reload and one restart; an unchanged re-run does neither (D-7451)', () => {
+describe('a change to the box file is applied by a re-run: one reload and one restart; an unchanged re-run does neither (D-7451, D-7568)', () => {
   it('the edited value reaches the drop-ins, the printer and the spec, with one daemon-reload and one restart; then nothing', async () => {
     const v = { ...V2(), CCRC_TESTBOX_RUN_MEMORY_MAX: '5G', CCRC_TESTBOX_WORKERS: '7', CCRC_TESTBOX_RUN_TMPDIR: '/tmp/r5' };
     writeFileSync(F.b.boxFile, envFile({ ...v, CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${F.hosts.a.port}/releases` }));
@@ -249,7 +249,15 @@ describe('a change to the box file is applied by a re-run: one reload and one re
     const r = await install(F.b, { staging: W.staging, env: F.env });
     expect(r.code, r.stderr).toBe(0);
     const calls = sysLog(F.b).slice(n).map((a) => a.join(' ')).filter((l) => l.startsWith('systemctl '));
-    expect(calls).toEqual(['systemctl daemon-reload', 'systemctl restart ccrc-testbox.service', 'systemctl start ccrc-testbox-egress.service']);
+    // nftables.service runs already, so its enable --now starts nothing (no flush); the load step reloads the file and
+    // re-adds the running units' cgroups (D-7568), and the service restarts once.
+    expect(calls).toEqual([
+      'systemctl daemon-reload', 'systemctl enable --now nftables.service',
+      ...['tailscaled', 'systemd-resolved', 'systemd-timesyncd', 'ccrc-testbox', 'ccrc-testbox-tools'].map((u) => `systemctl show -P ControlGroup ${u}.service`),
+      'systemctl start --no-block ccrc-testbox-egress.service',
+      'systemctl restart ccrc-testbox.service', 'systemctl start ccrc-testbox-egress.service',
+    ]);
+    expect(sysLog(F.b).slice(n).map((a) => a.join(' ')).filter((l) => l.startsWith('[nftables.service]'))).toEqual([]);
     expect(dropIns(F.b)).toEqual(expectedDropIns(v));
     expect((await printed(F.b)).get('CCRC_TESTBOX_WORKERS')).toEqual({ value: '7', from: 'file' });
     const recs = specRecords(await config(F.b));

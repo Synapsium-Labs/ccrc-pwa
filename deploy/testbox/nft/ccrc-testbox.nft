@@ -1,7 +1,9 @@
 #!/usr/sbin/nft -f
 # The test box's firewall (D-7409, D-7568; spec §2.0, §2.3 "Network"). Installed by deploy/testbox/install.sh, which
 # writes the match of the tailnet listen address (`ip daddr <v4>` or `ip6 daddr <v6>`) and the service port for @@LISTEN_MATCH@@ and @@LISTEN_PORT@@ (CCRC_TESTBOX_LISTEN)
-# and loads it in its last phase and, at boot, through a drop-in for nftables.service. Egress is one named address set
+# and loads it through deploy/testbox/bin/firewall, the one load step, which the installer's last phase and a drop-in
+# for nftables.service (after its start and after its reload, either of which may flush the ruleset) run; the step
+# then adds the running units' cgroups to their sets. Egress is one named address set
 # per row of spec §2.0's table, each reachable only from the unit the table names: the service (the mirror fetch, the
 # registry proxy's upstream) and the tools unit (the release, node, Chrome for Testing, the OS mirror). Every unit is
 # matched by a cgroup set it adds itself to when it starts (NFTSet=), never by a cgroup path, which nft would resolve
@@ -10,7 +12,9 @@
 # of DNS: every other process asks it on loopback) and the time client (ntp_cg). The address sets are filled by
 # ccrc-testbox-egress.service from the names the installer wrote, never by this file. The rest is the box's own
 # infrastructure (D-7568): loopback, replies, the ICMPv6 the kernel sends for neighbour and router discovery and
-# multicast listening, and the DHCP lease's renewal. Inbound, only ssh and the service port on the tailnet address.
+# multicast listening, and the DHCP lease's renewal. Inbound, only ssh and the service port on the tailnet address:
+# sshd binds every address, and a prepare or install unit shares the box's loopback, so the input chain's first rule
+# drops both ports on loopback (a local process reaching the tailnet address comes in on lo too) before it accepts lo.
 #
 # A load adds to what the box holds: the first block declares the sets and the two chains (a set or a chain already
 # there is kept, with its elements), the two flushes empty the chains, and the second block is their rules. So a reload
@@ -69,6 +73,7 @@ table inet ccrc_testbox {
     socket cgroupv2 level 2 @tools_cg ip6 daddr @osmirror_v6 tcp dport { 80, 443 } accept
   }
   chain input {
+    iifname "lo" tcp dport { 22, @@LISTEN_PORT@@ } drop
     iifname "lo" accept
     ct state established,related accept
     meta l4proto { icmp, ipv6-icmp } accept

@@ -36,11 +36,14 @@
 #      firewall is not loaded yet). --ignore-scripts leaves node-pty unbuilt; the test service never imports it.
 #   5. the users and groups, the box file's group and mode (the service user's, 0640), CCRC_TESTBOX_ROOT's
 #      directories, the repository rows and their mirrors, the units with their drop-ins (the box's own tailnet client,
-#      resolver and time client among them: each adds its cgroup to the firewall's set when it starts), the polkit
-#      rule, the firewall file and the egress names, each name once.
-#   6. last: the firewall loaded, the running tailnet client's, resolver's and time client's cgroups added to its sets,
-#      the service and the egress timer enabled and started, and the installed marker (<etc>/installed: the tag and
-#      the box file's sha256) written.
+#      resolver and time client among them: each adds its cgroup to the firewall's set when it starts; nftables.service's
+#      runs the load step after its start and its reload), the load step, the polkit rule, the firewall file and the
+#      egress names, each name once.
+#   6. last: nftables.service enabled and started (its start may flush the ruleset, then runs the load step), then the
+#      load step (deploy/testbox/bin/firewall, installed in phase 5 as /usr/local/sbin/ccrc-testbox-firewall: the
+#      file, the running tailnet client's, resolver's and time client's cgroups added to its sets, the address sets
+#      asked for), then the service and the egress timer enabled and started, and the installed marker
+#      (<etc>/installed: the tag and the box file's sha256) written.
 # A re-run with the installed marker present changes nothing when the box file's sha256 and the tag are the marker's;
 # otherwise it runs phase 5 again, reloads the firewall and the system manager, restarts the service, refreshes the
 # egress sets and records the new tag and sha256.
@@ -351,8 +354,13 @@ dropin ccrc-testbox-install.service $'[Service]\n'"User=${PREFIX}install"$'\n'"I
 caps=$'[Slice]\n'"MemoryMax=$(k CCRC_TESTBOX_RUN_MEMORY_MAX)"$'\n'"MemorySwapMax=$(k CCRC_TESTBOX_RUN_SWAP_MAX)"$'\n'"CPUQuota=$(k CCRC_TESTBOX_RUN_CPU_QUOTA)"
 dropin ccrc-testbox-run-.slice "$caps"
 dropin ccrc-testbox-install.slice "$caps"
-# The firewall is loaded at boot after the distribution's own rules (nftables.service), and by phase 6 now.
-dropin nftables.service $'[Service]\n'"ExecStartPost=/usr/sbin/nft -f $ETC/ccrc-testbox.nft"
+# The firewall's one load step (deploy/testbox/bin/firewall): the file, then the running units' cgroups, then the
+# address sets. On the root filesystem, so nftables.service can run it early in boot. nftables.service runs it after
+# the distribution's own start and reload, each of which may begin with `flush ruleset`, and phase 6 runs it now.
+FIREWALL=$SYSROOT/usr/local/sbin/ccrc-testbox-firewall
+dir 0755 root root "$SYSROOT/usr/local/sbin"
+put 0755 "$TREE/deploy/testbox/bin/firewall" "$FIREWALL"
+dropin nftables.service $'[Service]\n'"ExecStartPost=$FIREWALL $ETC/ccrc-testbox.nft"$'\n'"ExecReload=$FIREWALL $ETC/ccrc-testbox.nft"
 # The box's own network units, each matched by a cgroup set it adds itself to when it starts, after that load (D-7568).
 INFRA=("tailscaled tailnet_cg" "systemd-resolved dns_cg" "systemd-timesyncd ntp_cg")
 for u in "${INFRA[@]}"; do
@@ -370,15 +378,14 @@ put 0644 "$WORK/egress" "$ETC/egress"
 
 # ── phase 6: the firewall, the service, the marker ───────────────────────
 say "phase 6: the firewall, the service and the marker"
-_sys nft -f "$ETC/ccrc-testbox.nft" || fail "nft refused $ETC/ccrc-testbox.nft"
-# The network units run already, so NFTSet= has not added them: their cgroups now (nft resolves each path once, here).
-for u in "${INFRA[@]}"; do
-  _sys nft add element inet ccrc_testbox "${u#* }" "{ \"system.slice/${u% *}.service\" }" \
-    || say "${u% *}.service is not running; its cgroup joins ${u#* } when it starts"
-done
 _sys systemctl daemon-reload || fail "systemctl daemon-reload failed"
+# nftables.service first: on a box where it is not running yet (Debian and Ubuntu ship it disabled), its start runs
+# the distribution's file, which may flush the whole ruleset, and then the load step. Only after that does the load
+# step run here (a second time on such a box, the only time on a box where nftables.service ran already), so the
+# network units that run already are in their sets when the service starts, and no later start flushes them (D-7568).
+_sys systemctl enable --now nftables.service || fail "cannot start nftables.service"
+"$FIREWALL" "$ETC/ccrc-testbox.nft" || fail "the firewall's load failed: $ETC/ccrc-testbox.nft"
 if [ -z "$MARK_TAG" ]; then
-  _sys systemctl enable nftables.service || fail "cannot enable nftables.service"
   _sys systemctl enable --now ccrc-testbox.service ccrc-testbox-egress.timer || fail "cannot start the test service"
 else
   _sys systemctl restart ccrc-testbox.service || fail "cannot restart the test service"
