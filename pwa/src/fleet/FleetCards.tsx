@@ -23,6 +23,7 @@ import { isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
 import { useHoldView } from './useHoldView';
 import { useRollupClock } from './useRollupClock';
+import { markerState } from './coordWords';
 import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from './rollup';
 import type { FleetSession } from '../../../shared/api';
 import { useProjectedHome } from './useProjectedHome';
@@ -62,7 +63,16 @@ export function FleetCards({ selectedId, onOpen }: {
   // end only (`useRollupClock`), and the rollup reads `roll.now` only when it is rebuilt. A folded card's "active … ago"
   // runs its own 30 s interval (`ProjectCardHead`'s `LastActive`), so a quiet fleet runs that, and no one-second timer.
   const [rollupPrefs, updateRollup] = useRollupPrefs();
-  const roll = useRollupClock(sessions);
+  // Task G1b (D-7380, D-7373, D-7376): a programme box's threshold is the stall watch's own quiet time (the runs frame's,
+  // read once in the store), its pause the coord frame's, and its clock this one: the timer also wakes when a box
+  // crosses its threshold (`nextStallBoundary`). The cards are handed the time read when `next` last moved (`boxNow`):
+  // with the same runs, quiet time and pause no box crosses between two moves of `next`, so that time reads every box's
+  // state as the real time would, and a memo'd card's props change only at a boundary or with a frame (C9).
+  const stallQuietMs = useStore((s) => s.stallQuietMs);
+  const coordPaused = useStore((s) => markerState(s.coord?.pause) === 'set');
+  const roll = useRollupClock(sessions, activeRuns, stallQuietMs, coordPaused);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`, as for the rollup below.
+  const boxNow = useMemo(() => roll.now, [roll.next, activeRuns, stallQuietMs, coordPaused]);
   // The tree the cards draw, once, and its rollup over the same groups (D-6088). Memoised (C9): the rollup reads the
   // time when it is rebuilt, which is on a new tree, a new preference or selection, or a window's end (`roll.next`).
   const tree = useMemo(
@@ -120,6 +130,10 @@ export function FleetCards({ selectedId, onOpen }: {
           /* D-6088: the project fold and the worker lines are the rollup's (`rollup.ts`); the Released and
              Archived sub-folds keep `useFolded`. */
           rollup={rollup.cards.get(g.project)}
+          /* Task G1b: the programme boxes' clock, threshold and pause (above). */
+          boxNow={boxNow}
+          stallQuietMs={stallQuietMs}
+          coordPaused={coordPaused}
           onToggle={onToggle}
           onToggleChildren={onToggleChildren}
           onActions={onActions}

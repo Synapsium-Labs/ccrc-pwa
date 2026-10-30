@@ -5,14 +5,23 @@
 // `next` is that boundary (C9, D-6441): with the same fleet it moves only when a window ends, whether this hook's timer
 // woke the list or some other render read the clock first (which moves `next` and clears the timer), so a list that
 // memoises its rollup keys on it, and on the tree, never on the clock itself. One clock, one timer.
+// Task G1b (D-7380; review 1152 F1): the same timer also wakes at the next instant a programme box crosses the stall
+// watch's quiet time (`nextStallBoundary`, over the open runs, the frame's `stallQuietMs` and the operator's pause), so
+// a box reads stalled at its boundary with no frame, and `next` is the earlier of the two boundaries.
 import { useEffect, useReducer } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, RunSummary } from '../../../shared/api';
+import { nextStallBoundary } from './programmeBoxes';
 import { nextRollupBoundary } from './rollup';
+import { runLastMove } from './runWords';
 
-export function useRollupClock(sessions: readonly FleetSession[]): { readonly now: number; readonly next: number | null } {
+const earliest = (a: number | null, b: number | null): number | null => (a === null ? b : b === null ? a : Math.min(a, b));
+
+export function useRollupClock(
+  sessions: readonly FleetSession[], runs: readonly RunSummary[], stallQuietMs: number | null, paused: boolean,
+): { readonly now: number; readonly next: number | null } {
   const [, wake] = useReducer((n: number) => n + 1, 0);
   const now = Date.now();
-  const next = nextRollupBoundary(sessions, now);
+  const next = earliest(nextRollupBoundary(sessions, now), nextStallBoundary(runs, runLastMove, now, stallQuietMs, paused));
   useEffect(() => {
     if (next === null) return undefined;
     // A millisecond past the boundary, so the re-render reads the window as closed.

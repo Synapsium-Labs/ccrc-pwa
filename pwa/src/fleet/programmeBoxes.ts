@@ -13,9 +13,9 @@
 //
 // STATE. `boxState` is one decider, in this order: needs (a drawn member is the operator's ask, `operatorAsk`), the
 // operator's pause, stalled (no move within the stall watch's quiet threshold), moving. Movement is an INPUT
-// (`lastMoveOf`, the run's last move, the threshold and the card's clock): until Task G1 supplies the moves, the
-// threshold and a boundary clock, the card passes `() => null`, `null` and no clock, so a box shows no movement
-// readout and never reads stalled.
+// (`lastMoveOf`, the run's last move, the threshold and the card's clock): the card passes `runLastMove`, the runs
+// frame's `stallQuietMs`, the coord frame's pause and the list's clock (Task G1b, D-7380). `nextStallBoundary` is the
+// next instant a box crosses that threshold, which the list's one timer wakes at (`useRollupClock`).
 //
 // HUE. Each programme carries one of four cool hues (`assignHues`): the `--prog-*` aliases of the lane hues, always
 // beside the programme's title in words. The map is the FLEET's (`fleetHues`), assigned once per runs frame over every
@@ -118,12 +118,10 @@ export function programmeBoxes(
   const farIds = new Set(far.map((r) => r.id));
   const byId = new Map<number, RunSummary>();
   for (const r of runs) byId.set(r.id, r);
-  // Each session's claimed runs through the one coordinator-side reader (`claimedRunsOf`, D-7182); a run a session
-  // claims for itself is no box. The runs here are the open runs frame's, so its open filter keeps every one of them.
   const all = [...byId.values()];
   const claims = new Map<string, RunSummary[]>();
   for (const id of onCard) {
-    const list = claimedRunsOf(all, id).filter((r) => r.claimedBy !== r.sessionId);
+    const list = boxRunsOf(all, id);
     if (list.length > 0) claims.set(id, list);
   }
 
@@ -151,6 +149,31 @@ export function programmeBoxes(
   const hueOf = (slug: string): ProgHue => hues.get(slug) ?? PROG_HUES[fnv1a(slug) % PROG_HUES.length]!;
   const boxes = drafts.map(({ slug, title, ...d }) => ({ ...d, lead: { slug, title, hue: hueOf(slug) } }));
   return { boxes, elsewhere, lone, hues };
+}
+
+/** The runs that make a session a box: its claimed runs through the one coordinator-side reader (`claimedRunsOf`,
+ *  D-7182), less a run it claims for itself, which is no box. The runs here are the open runs frame's, so its open
+ *  filter keeps every one of them. Written once for `programmeBoxes` and `nextStallBoundary`. */
+const boxRunsOf = (runs: readonly RunSummary[], id: string): RunSummary[] =>
+  claimedRunsOf(runs, id).filter((r) => r.claimedBy !== r.sessionId);
+
+/** The next instant a box crosses the quiet threshold with no new frame (Task G1b, D-7380; review 1152 F1): per
+ *  claimant, its box's last move (`newest` over `boxRunsOf`, the box's own rule) plus `quietMs`, the earliest still
+ *  ahead of `now`. `null` with no threshold, under the operator's pause (nothing stalls), or with none ahead. The
+ *  rollup's clock folds it into its one timer, as it does `nextRollupBoundary`. Fleet-wide: a claimant on no card
+ *  costs one wake that changes nothing. */
+export function nextStallBoundary(
+  runs: readonly RunSummary[], lastMoveOf: (r: RunSummary) => number | null, now: number, quietMs: number | null,
+  paused: boolean,
+): number | null {
+  if (quietMs === null || paused) return null;
+  let next: number | null = null;
+  for (const id of new Set(runs.flatMap((r) => (r.claimedBy === null ? [] : [r.claimedBy])))) {
+    const moved = newest(boxRunsOf(runs, id).map(lastMoveOf));
+    if (moved === null || moved + quietMs <= now) continue;
+    next = next === null ? moved + quietMs : Math.min(next, moved + quietMs);
+  }
+  return next;
 }
 
 const newest = (at: readonly (number | null)[]): number | null => {
