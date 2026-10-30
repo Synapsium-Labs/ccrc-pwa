@@ -136,7 +136,9 @@ function InlineCard({ eyebrow, title, raise, onInline, children }: Omit<AskSurfa
       <p className={`ask-inline-eyebrow ${EYEBROW}`}>{eyebrow}</p>
       <div className="ask-inline-body">
         <div className="ask-inline-question-slot">
-          <div className="ask-inline-question">
+          {/* A scroller with nothing focusable in it: a keyboard reaches it as a Tab stop of its own, between the header and
+              the options, so a long question scrolls by its keys in any engine (Task T1d). */}
+          <div className="ask-inline-question" tabIndex={0} role="group" aria-label="Question">
             <h2 id={titleId} className="ask-inline-title">{title}</h2>
           </div>
         </div>

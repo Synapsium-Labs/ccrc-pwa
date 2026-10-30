@@ -1979,11 +1979,11 @@ button.metachip:active {
  *  it has no scrim and no ✕.                                          *
  * ------------------------------------------------------------------ */
 /* ONE bordered surface on --bg-surface, which also grounds every `.dlg-*` and `.opts` rule inside it (the audit's
-   GROUNDS name it where a selector names no painted ancestor). Task T1d (amending D-6326 at the desk; the order the
-   operator's ruling of 2026-10-30 set): the card comes first while a question is up. It takes the height it needs, its
-   question at most 40% of the pane, and shrinks only once the transcript is down to its floor (`flex: 0 1 auto`,
-   `min-height: 0`, and the floor below). Inside it the question gives way first, down to two lines, and only then the
-   surface, which scrolls on its own; so a short question has no scrollbar and a 40-line one keeps its options in view. */
+   GROUNDS name it where a selector names no painted ancestor). Task T1d (amending D-6326 at the desk): the card comes
+   first while a question is up. It takes the height it needs, its question at most 40% of the pane, and shrinks only
+   once the transcript is down to its floor (`flex: 0 1 auto`, `min-height: 0`, and the floor below). Inside it the
+   question gives way first, down to two lines, and only then the surface, which scrolls on its own; so a short question
+   has no scrollbar and a 40-line one keeps its options in view. */
 .ask-inline {
   /* The pane's height, which `InlineCard` measures onto the card's own style (a percentage in these rules would be of the
      card); until it has, the window's. */
@@ -2026,19 +2026,27 @@ button.metachip:active {
   overflow-wrap: anywhere;
 }
 /* Below the header: the QUESTION region, then the SURFACE (the tab row, the options, Other and the answer controls). This
-   box does not scroll. It hands its flexed height to the two, so the surface's share below has a definite height to be
-   taken from. `--ask-question-floor` is the question's floor: two lines at the prose size.
+   box does not scroll. `--ask-question-floor` is the question's floor: two lines at the prose size.
 
-   WHO SHRINKS, AND IN WHAT ORDER. Each region sits in a SLOT: a flex item that is not a scroll container, so its
-   automatic minimum height is the smaller of its content and its `height`, while `flex-basis: content` keeps its size
-   its content's. Each slot's region is the scroller inside it.
-     - The question's slot: content or the floor, whichever is less. A short question never shrinks; a long one keeps
-       its floor. It is never taller than 40% of the pane (`--ask-pane`, the pane's height, which `InlineCard` measures:
-       a percentage here would be of the card, not of the pane).
-     - The surface's slot: content or what the card leaves it below the question's floor, whichever is less. A surface
-       that fits never shrinks; a taller one keeps all but that floor and scrolls, on its own, from its top.
-   So when the card is capped the question takes the loss first, down to its floor, and only then the surface, with no
-   sub-pixel share for either: a clamp to an exact content height is not a proportion. */
+   WHO SHRINKS, AND IN WHAT ORDER (Task T1d). Each region sits in a SLOT, and each slot's region is the scroller inside
+   it. Nothing here is a percentage: this box's height is the card's flexed height, which an engine may treat as
+   indefinite for a percentage (flexbox §9.8), so the order is set by flex factors and lengths alone, which every engine
+   flexes alike.
+     - The question's slot: `flex-basis: content` sizes it to its question, and it is not a scroll container, so its
+       automatic minimum is the smaller of that content and its `height`, the floor. A short question never shrinks; a
+       long one keeps its floor. It is never taller than 40% of the pane (`--ask-pane`, the pane's height, which
+       `InlineCard` measures in px: a percentage here would be of the card, not of the pane).
+     - The surface's slot: sized to its surface, and free to shrink to nothing (`min-height: 0`).
+   The question's shrink factor dwarfs the surface's, so when the card is capped the question takes the loss: down to its
+   floor, where flexing freezes it at its minimum and hands every remaining pixel of the loss to the surface. Before that
+   the surface's share is its base size over a million times the question's, under a thousandth of a pixel, which no
+   engine lays out (Chrome's unit is 1/64px, Firefox's 1/60px).
+
+   THE CLIP. When the card's room is less than the header and the question's floor (measured in Chrome: a window of about
+   435px or less), the question would paint past the card's border; this box clips it (`overflow: clip`, which is not a
+   scroll container, so nothing can scroll it). An option's focus ring draws 4px outside its row, and the surface sits
+   flush with this box's content edges, so this box pads by --sp-1 within a matching negative margin, and the clip, at its
+   padding edge, falls outside every ring. */
 .ask-inline-body {
   --ask-question-floor: calc(2 * var(--lh-normal) * var(--fs-prose));
   flex: 0 1 auto;
@@ -2046,9 +2054,12 @@ button.metachip:active {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
+  margin: calc(-1 * var(--sp-1));
+  padding: var(--sp-1);
+  overflow: clip;
 }
 .ask-inline-question-slot {
-  flex: 0 1 content;
+  flex: 0 1000000 content;
   height: var(--ask-question-floor);
   max-height: max(var(--ask-question-floor), 0.4 * var(--ask-pane));
   display: flex;
@@ -2062,7 +2073,7 @@ button.metachip:active {
 }
 .ask-inline-surface-slot {
   flex: 0 1 content;
-  height: calc(100% - var(--ask-question-floor) - var(--sp-4));
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -2081,7 +2092,7 @@ button.metachip:active {
   overscroll-behavior: contain;
   scroll-padding-block: var(--sp-1);
 }
-/* THE SHORT-WINDOW RULE (the operator's ruling of 2026-10-30 on ask 212's follow-up, measured). In a window under 700px tall
+/* THE SHORT-WINDOW RULE (Task T1d). In a window under 700px tall
    both floors leave the first option out of view (at 1280x600 the card is about 208px: the header takes 80, two lines and
    the gap 61, and the option needs about 64 under the tab row), so they yield there and nowhere else: the transcript's
    floor drops to none and the question's to one line, which keeps the header, a line of the question, the tab row and the
