@@ -388,7 +388,7 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
       const text = codeOnly(src);
       return [...blankQuoted(text).matchAll(/\bassembleFleet\s*\(/g)]
         .filter((m) => !isDefinition(text, m.index ?? 0))
-        .map((m) => ({ file, records: callArgs(text, (m.index ?? 0) + m[0].length - 1)[9] ?? '<absent>' }));
+        .map((m) => ({ file, records: callArgs(text, (m.index ?? 0) + m[0].length - 1)[10] ?? '<absent>' }));
     });
     expect(calls.map((c) => `${c.file} ${c.records}`).sort()).toEqual([
       'coord/routes.ts reg.listed ? reg.records : []',   // the claims conflict

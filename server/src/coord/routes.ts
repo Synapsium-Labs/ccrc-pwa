@@ -88,7 +88,7 @@ import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../ref
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
-import { readLiveStateMeasured } from '../livestate.js';
+import { liveStateReaderOver, readLiveStateMeasured } from '../livestate.js';
 import { heldFor } from './heldFor.js';
 import {
   approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
@@ -3179,7 +3179,7 @@ export function registerCoordRoutes(
     }
     const names = reg.names;
     const recById = new Map(reg.records.map((r) => [r.id, r]));
-    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
       undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
 
     let project: string;
@@ -3378,7 +3378,7 @@ export function registerCoordRoutes(
         // [registry-refused:reports]
         const reg = await readRegistryMeasured(deps.io, deps.cfg);
         const names = reg.listed ? reg.names : null;
-        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
           undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);

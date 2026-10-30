@@ -810,7 +810,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/io.ts': 8,
       'server/src/limits.ts': 1,
       'server/src/linear/client.ts': 2,
-      'server/src/livestate.ts': 2,
+      'server/src/livestate.ts': 1,
       'server/src/localcaps.ts': 3,
       'server/src/pane/dialog.ts': 4,
       'server/src/poolrule.ts': 6,

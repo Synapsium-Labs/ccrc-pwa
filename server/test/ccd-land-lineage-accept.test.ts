@@ -19,6 +19,7 @@ import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { readRegistry } from '../src/registry.js';
 import { testDeps, withFakeClock } from './helpers.js';
 
@@ -241,7 +242,7 @@ describe('the fleet frame carries what the shipped radar measured (wave 4b)', ()
       });
 
       const frame = await assembleFleet(
-        deps.io, deps.cfg, deps.tmux, undefined, undefined, undefined, undefined, undefined, undefined, records,
+        deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io), undefined, undefined, undefined, undefined, undefined, undefined, records,
         undefined, undefined, undefined, undefined, watcher.currentLandings());
       expect(frame.find((r) => r.id === ID)?.landing).toEqual(alpha);
       expect(frame.find((r) => r.id === OTHER_ID)?.landing).toMatchObject({ pr: 2, conflicts: [{ pr: 1, paths: ['src/x.ts'] }] });

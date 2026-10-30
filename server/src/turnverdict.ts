@@ -17,7 +17,7 @@ import { assembleFleet } from './fleet.js';
 import type { FleetWatcherView } from './coord/ports.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
-import { readLiveStateMeasured } from './livestate.js';
+import { liveStateReaderOver, readLiveStateMeasured } from './livestate.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import type { TurnMarkRead } from './coord/stall.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -64,7 +64,7 @@ export async function liveRowFor(d: TurnReadDeps, rec: SessionRecord, uuid: stri
 export async function liveRowWithHookFor(d: TurnReadDeps, rec: SessionRecord, uuid: string):
 Promise<{ row: FleetSession | null; hookUpdatedAt: number | null; hookEvent: string | null }> {
   const hs = await readHookState(d.io, d.cfg.registryDir, rec.id, uuid, Date.now());
-  const [row] = await assembleFleet(d.io, d.cfg, d.tmux, undefined, d.pendingDialogs(),
+  const [row] = await assembleFleet(d.io, d.cfg, d.tmux, liveStateReaderOver(d.io), undefined, d.pendingDialogs(),
     d.statuslines(), undefined, undefined, new Map(hs === null ? [] : [[rec.id, hs]]), [rec]);
   return { row: row ?? null, hookUpdatedAt: hs?.updatedAt ?? null, hookEvent: hs?.event ?? null };
 }

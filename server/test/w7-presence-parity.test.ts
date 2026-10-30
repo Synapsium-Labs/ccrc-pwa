@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { SESSION_LIFECYCLES, type FleetSession, type Presence, type SessionLifecycle } from '../../shared/api.js';
 import { readSession, type SessionFacts } from '../src/sessionReading.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -125,7 +126,7 @@ describe('the PWA presence table equals assembleFleet (the bucket.test.ts seam)'
       const pane = r.facts.pane as 'live' | 'gone' | 'unknown';
       const home = mkTmp('ccrc-w7-presence-');
       const io = seed(home, r.facts.lifecycle!, r.facts.hibernatedAt !== null, r.substrate);
-      const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), tmuxSaying(pane), NOW_S);
+      const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), tmuxSaying(pane), liveStateReaderOver(io), NOW_S);
       const s = fleet.find((x) => x.id === ID);
       expect(s, r.name).toBeDefined();
       // The seed reached the row the table names: its lifecycle, its stamp, its fault, the assembly's status.
@@ -165,7 +166,7 @@ describe('the PWA fleet fixture derives the presence the assembly sends (C7c Ste
     for (const r of t.tableRows().filter((x) => x.group === 'server' && x.facts.pane !== 'unknown')) {
       const home = mkTmp('ccrc-w7-fixture-');
       const io = seed(home, r.facts.lifecycle!, r.facts.hibernatedAt !== null, r.substrate);
-      const s = (await assembleFleet(io, loadConfig({ CCRC_HOME: home }), tmuxSaying(r.facts.pane as 'live' | 'gone'), NOW_S)).find((x) => x.id === ID)!;
+      const s = (await assembleFleet(io, loadConfig({ CCRC_HOME: home }), tmuxSaying(r.facts.pane as 'live' | 'gone'), liveStateReaderOver(io), NOW_S)).find((x) => x.id === ID)!;
       const built = fx.fleetSession({ status: s.status, bucket: s.bucket, lifecycle: s.lifecycle, stoppedBy: s.stoppedBy, hibernatedAt: s.hibernatedAt, substrate: s.substrate });
       expect(built.presence, r.name).toBe(s.presence);
       held.push(r.name);
