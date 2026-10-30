@@ -15,7 +15,7 @@
 # `DIFFERS`; a file named by `--flaky` (the known-load-flake list) that differs is re-run alone on both sides once, and
 # that answer counts. Exit 0 when every file agrees, 1 when one differs or a leg could not run, 2 on a usage error.
 #
-# WHY JUNIT, NOT JSON (D-TBD-tb8-seams). The box's runner adds its own JSON reporter with `--outputFile.json=` in the run's
+# WHY JUNIT, NOT JSON. The box's runner adds its own JSON reporter with `--outputFile.json=` in the run's
 # directory (agent/src/testbox/spec.ts#reporterArgv), and vitest writes every JSON reporter to that file, so a JSON
 # reporter of the session's never reaches stdout on the box; junit on stdout carries per-test skips on both sides.
 #

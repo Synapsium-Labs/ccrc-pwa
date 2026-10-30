@@ -7,19 +7,19 @@
 // median of the package's known files; a wide run (no file named, a directory, a glob or a name filter) at every
 // duration the package has, or, with no durations, at the package's test files on disk. The sum is divided by the
 // run's worker count: the session's own `--maxWorkers=<n>` or `VITEST_MAX_WORKERS`, else one, since the box's count
-// is a box setting the fleet host cannot read (D-TBD-tb8-seams). A whole suite through the package manager (`npm test`,
+// is a box setting the fleet host cannot read (D-7558). A whole suite through the package manager (`npm test`,
 // `npm run test…`) is a wide run. Any other command (a typecheck) names no test file and estimates zero: the budget
 // is about test file sets (spec §2.5).
 //
 // NO DURATIONS. With no durations file, or one that does not parse, every file counts at `DEFAULT_FILE_SECONDS`, the
 // per-file default spec §2.5 and D-7421 give the repository row. The row (`shared/testbox.ts#TestboxRepoRow`) has no
-// such field and the fleet host holds no row, so the default is spelled here, once (D-TBD-tb8-seams), and the summary says
+// such field and the fleet host holds no row, so the default is spelled here, once (D-7558), and the summary says
 // `estimate: no durations (<why>)`.
 //
 // THE DURATIONS FILE. `.github/ci/shards.mjs times` writes `{ "<repo-relative path>": <ms>, … }`. A file of
 // several repositories nests that map under each repository's name (`{ "<repository>": { … } }`); both are read.
 
-/** The per-file default, in seconds, when there are no durations (D-7421, D-TBD-tb8-seams). Neutral: CI's full server suite,
+/** The per-file default, in seconds, when there are no durations (D-7421, D-7558). Neutral: CI's full server suite,
  *  about 16,000 file-seconds over about 1,100 files (spec §1.1), rounded up. */
 export const DEFAULT_FILE_SECONDS = 15;
 
@@ -89,7 +89,7 @@ export function fileSet(argv: readonly string[]): FileSet {
 }
 
 /** The run's worker count, for the division: the session's own numeric `--maxWorkers`, else `VITEST_MAX_WORKERS`, else
- *  one (D-TBD-tb8-seams). */
+ *  one (D-7558). */
 export function workerCount(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): number {
   let n: number | null = null;
   for (let i = 0; i < argv.length; i++) {

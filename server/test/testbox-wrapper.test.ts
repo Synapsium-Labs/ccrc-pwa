@@ -1,4 +1,4 @@
-// The test box, Part A, TB8 (D-7410, D-TBD-tb8-seams; spec §2.4, §2.5, §5, §6; plan #1874): the wrapper's remote arm.
+// The test box, Part A, TB8 (D-7410, D-7558; spec §2.4, §2.5, §5, §6; plan #1874): the wrapper's remote arm.
 //
 // `ccd/ccrc-test` sends a run to the test box when the switch marker is in the registry and CCRC_TESTBOX_URL is set;
 // the client (`agent/src/testbox/client.ts`, built here into a fixture release beside a link to `ccd/`) checks spec
@@ -672,7 +672,7 @@ describe('TB8: the three refusals, exit 75, nothing run (spec §2.5; D-7417)', (
     expect(runsRows(w)).toEqual([expect.objectContaining({ outcome: 'refused', fallback: 'lost-run', exit: 75 })]);
   }, T);
 
-  it('a reconnect inside the deadline still loses the run (proto 1 cannot re-attach) and cancels it on the box (D-TBD-tb8-seams)', async () => {
+  it('a reconnect inside the deadline still loses the run (proto 1 cannot re-attach) and cancels it on the box (D-7558)', async () => {
     const w = await world({ settings: { CCRC_TESTBOX_RECONNECT_DEADLINE: '10s' } });
     writeFileSync(path.join(w.flags, 'prepare-hold'), '');
     const p = wrap(w, VITEST_A);

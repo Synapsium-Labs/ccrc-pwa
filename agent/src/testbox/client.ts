@@ -1,4 +1,4 @@
-// D-7410, D-TBD-tb8-seams (plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB8; spec §2.4, §2.5). L5: the test box's
+// D-7410, D-7558 (plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB8; spec §2.4, §2.5). L5: the test box's
 // CLIENT, the agent package's third entry point (compiled to `agent/dist/agent/src/testbox/client.js`). `ccd/ccrc-test`
 // runs it with the fleet host's `node` once the switch marker is present and `CCRC_TESTBOX_URL` is set; `ccd/testbox-parity`
 // runs it directly, so its remote leg runs with the switch off. Nothing the fleet agent's entry point loads imports it
@@ -24,7 +24,7 @@
 //
 // THE DROP (spec §2.4 "The box drops mid-run"). A connection that ends before the summary, other than a refusal, is a
 // drop: the client tries to reconnect within `CCRC_TESTBOX_RECONNECT_DEADLINE`. TESTBOX_PROTO 1 has no frame that
-// re-attaches a connection to a run (D-TBD-tb8-seams), so a reconnected link cannot resume the stream either: the run is lost
+// re-attaches a connection to a run (D-7558), so a reconnected link cannot resume the stream either: the run is lost
 // either way. Then it prints `test box: lost the run`, sends one `run.cancel` within `CCRC_TESTBOX_STATUS_DEADLINE`, and
 // takes `CCRC_TESTBOX_LOST_RUN`'s arm: `local` falls back; `fail` refuses with 75 when no output had come (nothing ran),
 // and exits 1 when some had (the run started and its answer was lost).
