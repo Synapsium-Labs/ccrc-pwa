@@ -6,7 +6,7 @@
 //      through the clock (a fleet view through `lib/usePoll.ts`, which re-imports it).
 //  (3) ARCH-49: no `status === 'dead'` outside `pwa/src/fleet/presence.ts`, and no `coordPresence` (the block at the end).
 import { describe, expect, it } from 'vitest';
-import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
+import { identifierReferences, parseFile, parseSource, stringPieces, type ParsedFile } from '../scan/parse.js';
 import { REPO, walkSrc } from './walkSrc.js';
 import { DEAD_CHECK_OWNER, accountsReaders, answerPaths, coordPresenceSites, dialogSheetStates, inlineDeadChecks, inlineDeadChecksIn, requestPolls, transcriptCopyRules } from '../census-w7/pwa.js';
 import path from 'node:path';
@@ -364,5 +364,51 @@ describe('the PWA reaches storage through one port (C7l, D-7190)', () => {
 
   it('storageTypes() 1 -> 0 outside lib/storage.ts', () => {
     expect(storageTypes().filter((s) => s.file !== PORT).map((s) => `${s.file}#${s.symbol}`)).toEqual([]);
+  });
+});
+
+// Landing order wave 5a (4b review F4 d; D-7481): `landingOf` in conflictWords.ts is the PWA's one reader of
+// FleetSession.landing. Outside it, the one allowance is ConflictChip's clock gate, `s.landing !== undefined`, a presence
+// test that reads no content. Any identifier named `landing` and any string 'landing' counts: the owner itself reads the
+// key as a string through `reviveSessionLanding`, and a destructure or an element access is a read too.
+const LANDING_OWNER = 'pwa/src/fleet/conflictWords.ts';
+interface LandingSite { file: string; line: number; context: string }
+const landingSitesIn = (text: string, file: string): LandingSite[] => [
+  ...identifierReferences(text, file, new Set(['landing'])).map((r) => ({ file, line: r.line, context: r.context })),
+  ...stringPieces(text, file).filter((s) => s.text === 'landing').map((s) => ({ file, line: s.line, context: "'landing'" })),
+].sort((a, b) => a.line - b.line);
+const CHIP_NAMES = new Set(['CHIP_PATHS_MAX', 'CHIP_LINES_MAX']);
+const chipDefinitionsIn = (text: string, file: string): string[] => identifierReferences(text, file, CHIP_NAMES)
+  .filter((r) => r.role === 'other' && new RegExp(`^${r.name}\\s*(?:=(?!=)|:)`).test(r.context)).map((r) => r.name);
+
+describe('landingOf is the PWA\'s one reader of FleetSession.landing; the chip caps are defined once (wave 5a)', () => {
+  it('CONTROL: the scans see each shape of a read and a definition, and not a comment, a longer name or a use', () => {
+    expect(landingSitesIn('const a = s.landing;', 'x.ts').map((x) => x.context)).toEqual(['s.landing']);
+    expect(landingSitesIn("const a = s['landing'];", 'x.ts').map((x) => x.context)).toEqual(["'landing'"]);
+    expect(landingSitesIn('const { landing } = s;', 'x.ts')).toHaveLength(1);
+    expect(landingSitesIn("reviveSessionLanding(s, 'landing');", 'x.ts').map((x) => x.context)).toEqual(["'landing'"]);
+    expect(landingSitesIn('// s.landing\nconst a = landingOf(s, 1); type T = SessionLanding;', 'x.ts')).toEqual([]);
+    expect(chipDefinitionsIn('export const CHIP_LINES_MAX = 5;', 'x.ts')).toEqual(['CHIP_LINES_MAX']);
+    expect(chipDefinitionsIn("import { CHIP_LINES_MAX } from './w'; const n = CHIP_LINES_MAX + 1;", 'x.ts')).toEqual([]);
+    expect(chipDefinitionsIn('if (CHIP_LINES_MAX === 5) {}', 'x.ts')).toEqual([]);
+  });
+
+  it('no pwa/src file but conflictWords.ts reads a landing; the chip\'s clock gate is the one allowance', () => {
+    const owner = landingSitesIn(parse(LANDING_OWNER).text, LANDING_OWNER);
+    expect(owner.map((s) => s.context), 'the owner reads the key through the wire revive').toContain("'landing'");
+    const outside = files().filter((f) => f !== LANDING_OWNER).flatMap((f) => landingSitesIn(parse(f).text, f));
+    expect(outside.map(({ file, context }) => ({ file, context })))
+      .toEqual([{ file: 'pwa/src/fleet/ConflictChip.tsx', context: 's.landing' }]);
+    const gate = outside[0]!;
+    expect(parse(gate.file).text.split('\n')[gate.line - 1], 'the allowance is a presence test only')
+      .toContain('s.landing !== undefined');
+  });
+
+  it('defines CHIP_PATHS_MAX and CHIP_LINES_MAX once each, in conflictWords.ts', () => {
+    const where: Record<string, string[]> = {};
+    for (const f of walkSrc({ roots: ['pwa/src', 'ui/src', 'shared'], min: 200 })) {
+      for (const n of chipDefinitionsIn(parse(f).text, f)) (where[n] ??= []).push(f);
+    }
+    expect(where).toEqual({ CHIP_PATHS_MAX: [LANDING_OWNER], CHIP_LINES_MAX: [LANDING_OWNER] });
   });
 });

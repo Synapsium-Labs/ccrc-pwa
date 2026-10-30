@@ -1411,6 +1411,7 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     expect(lineStart).toBeGreaterThan(-1);
     expect(strip).toBeGreaterThan(lineStart);
     expect(chip, 'the chip left the fleet screen').toBeGreaterThan(-1);
+    expect(chip, 'the chip mounts after the strip').toBeGreaterThan(strip);
     // Directly after the strip: nothing but the chip's own comment sits between them.
     expect(screen.slice(strip + '<HotFilesStrip />'.length, chip)).not.toMatch(/<[A-Za-z]/);
     // The runs line closes before the strip, so the chip, after it, is outside the line.
