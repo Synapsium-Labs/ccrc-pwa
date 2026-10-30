@@ -646,7 +646,7 @@
       "locale": "C",
       "ccrc": ")h/r",
       "bareHost": ")h/r",
-      "updateSync": "u:p@)h/r"
+      "updateSync": ")h/r"
     },
     {
       "rule": "R7",
@@ -655,7 +655,7 @@
       "locale": "C",
       "ccrc": " )<?",
       "bareHost": " )<?",
-      "updateSync": " S@)<?"
+      "updateSync": " )<?"
     },
     {
       "rule": "blast",
