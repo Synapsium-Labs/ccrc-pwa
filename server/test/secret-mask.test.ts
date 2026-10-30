@@ -4,7 +4,7 @@
 // every web-push payload.
 //
 // Every credential here is ASSEMBLED at run time from neutral filler, so no file in the tree holds a whole shape.
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -49,6 +49,9 @@ import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStrea
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
+import { isDeepStrictEqual } from 'node:util';
+import { parseTranscriptLine } from '../src/transcript/parse.js';
+import type { ChatEvent } from '../../shared/api.js';
 
 // ── assembled credentials ──────────────────────────────────────────────────
 const fill = (n: number, salt: string, alphabet = 'base64url'): string => {
@@ -2050,5 +2053,139 @@ describe('the final audit: a row joined to the next row never hides a key that r
         expect(o, ln).toContain(run.slice(0, 3));
       }
     }
+  });
+});
+
+// ── the transcript parse's tool input, over this file's corpus (D-7513) ────
+// APPENDED, and LAST on purpose. While the file is collected, `SecretMasker.prototype.maskWithCarry` and `maskDeep`
+// are wrapped by hand-written pass-through recorders (never `vi.spyOn`: vitest's `clearMocks` empties a spy's calls
+// before each test), so by the time the block below runs, every input the rows above fed any masker is recorded. The
+// block's `beforeAll` stops the recorder and copies the corpus; a file-level `afterAll` puts the originals back.
+const recorded: { strings: string[]; deep: unknown[] } = { strings: [], deep: [] };
+let recording = true;
+const ORIGINAL_MASK_WITH_CARRY = SecretMasker.prototype.maskWithCarry;
+const ORIGINAL_MASK_DEEP = SecretMasker.prototype.maskDeep;
+SecretMasker.prototype.maskWithCarry = function (this: SecretMasker, ...args: Parameters<SecretMasker['maskWithCarry']>) {
+  if (recording) recorded.strings.push(args[0]);
+  return ORIGINAL_MASK_WITH_CARRY.call(this, ...args);
+};
+SecretMasker.prototype.maskDeep = function <T>(this: SecretMasker, value: T): T {
+  if (recording) recorded.deep.push(value);
+  return ORIGINAL_MASK_DEEP.call(this, value) as T;
+};
+afterAll(() => {
+  SecretMasker.prototype.maskWithCarry = ORIGINAL_MASK_WITH_CARRY;
+  SecretMasker.prototype.maskDeep = ORIGINAL_MASK_DEEP;
+});
+
+describe('the transcript parse masks tool input as the shape-only masker does, over this file\'s corpus (D-7513)', () => {
+  const corpus: { strings: string[]; deep: unknown[] } = { strings: [], deep: [] };
+  const inputs = (): unknown[] => [...corpus.strings, ...corpus.deep];
+  beforeAll(() => {
+    recording = false;
+    corpus.strings = [...new Set(recorded.strings)];
+    corpus.deep = [...recorded.deep];
+  });
+  /** An assistant record whose one content block is a `tool_use` holding `input`. */
+  const toolUseLine = (input: unknown): string => JSON.stringify({
+    type: 'assistant', uuid: 'u', timestamp: 't',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Bash', input }] },
+  });
+  const toolUseOf = (line: string): Extract<ChatEvent, { kind: 'tool_use' }> => {
+    const evs = parseTranscriptLine(line).filter((e): e is Extract<ChatEvent, { kind: 'tool_use' }> => e.kind === 'tool_use');
+    expect(evs.length).toBe(1);
+    return evs[0]!;
+  };
+  const masks = (s: string): number => s.split(SECRET_MASK).length - 1;
+
+  it('CONTROL: the recorded corpus is not thin', () => {
+    const changed = inputs().filter((v) => !isDeepStrictEqual(new SecretMasker().maskDeep(v), v)).length;
+    const counts = {
+      strings: corpus.strings.length, deep: corpus.deep.length, changed,
+      esc: corpus.strings.filter((s) => s.includes('\x1b')).length,
+      long: corpus.strings.filter((s) => s.length > 4000).length,
+    };
+    expect(counts.strings, JSON.stringify(counts)).toBeGreaterThanOrEqual(2000);
+    expect(counts.deep, JSON.stringify(counts)).toBeGreaterThanOrEqual(40);
+    expect(counts.changed, JSON.stringify(counts)).toBeGreaterThanOrEqual(1000);
+    expect(counts.esc, JSON.stringify(counts)).toBeGreaterThanOrEqual(500);
+    expect(counts.long, JSON.stringify(counts)).toBeGreaterThanOrEqual(40);
+  });
+
+  it('every tool input the parse emits is what a fresh keyless SecretMasker masks it to, cut at 4,000 units', () => {
+    const bad: string[] = [];
+    inputs().forEach((v, i) => {
+      const line = toolUseLine(v);
+      const decoded = (JSON.parse(line) as { message: { content: { input?: unknown }[] } }).message.content[0]!.input;
+      const want = JSON.stringify(new SecretMasker().maskDeep(decoded ?? null)) ?? '';
+      const ev = toolUseOf(line);
+      const ok = want.length <= 4000
+        ? ev.input === want && ev.truncatedBytes === 0
+        : want.startsWith(ev.input) && ev.input.length <= 4000
+          && Buffer.byteLength(want) - Buffer.byteLength(ev.input) === ev.truncatedBytes;
+      if (!ok) bad.push(`#${i} (${masks(want)} masks)`);
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('the shape-only singleton keeps no state: it masks every input as a fresh keyless SecretMasker does', () => {
+    const bad: string[] = [];
+    inputs().forEach((v, i) => {
+      const want = new SecretMasker().maskDeep(v);
+      if (!isDeepStrictEqual(SHAPE_ONLY_MASKER.maskDeep(v), want)) bad.push(`#${i} (${masks(JSON.stringify(want) ?? '')} masks)`);
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('the shape-only pass is keyless: no fingerprint, no timer and no clock while the corpus is masked and parsed', () => {
+    expect(SHAPE_ONLY_MASKER.fingerprintMax()).toBeNull();
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      for (const v of inputs()) {
+        SHAPE_ONLY_MASKER.maskDeep(v);
+        parseTranscriptLine(toolUseLine(v));
+      }
+      expect(timers.mock.calls.length).toBe(0);
+      expect(clock.mock.calls.length).toBe(0);
+    } finally {
+      timers.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
+  it('overlapping shape spans give one mask, in both maskers and through the parse', () => {
+    const GEN = [SK, fill(20, 'g', 'hex')].join('-');
+    const a = '{"access_token": "' + GEN + '\\u0041' + fill(10, 'b', 'hex') + '"}';
+    const b = '{"id_token": "' + JWT + '\\"q"}';
+    const maskedA = '{"access_token": "' + SECRET_MASK + '"}';
+    const maskedB = '{"id_token": "' + SECRET_MASK + '"}';
+    for (const m of [SHAPE_ONLY_MASKER, new SecretMasker()]) {
+      expect(m.maskText(a)).toBe(maskedA);
+      expect(m.maskText(b)).toBe(maskedB);
+    }
+    expect(toolUseOf(toolUseLine({ command: a, other: [b] })).input).toBe(JSON.stringify({ command: maskedA, other: [maskedB] }));
+  });
+
+  it('maskDeep passes bytes and times through as the same instances, and walks a toJSON answer, not the fields', () => {
+    const d = new Date(0);
+    const u8 = new Uint8Array([1, 2]);
+    const ab = new ArrayBuffer(2);
+    const tj = { hidden: OAT, toJSON() { return { k: 'x ' + OAT + ' y' }; } };
+    for (const m of [SHAPE_ONLY_MASKER, new SecretMasker()]) {
+      const out = m.maskDeep({ d, u8, ab, tj, n: null, b: true, k: 3, s: OAT });
+      expect(out.d).toBe(d);
+      expect(out.u8).toBe(u8);
+      expect(out.ab).toBe(ab);
+      expect(out).toEqual({ d, u8, ab, tj: { k: 'x ' + SECRET_MASK + ' y' }, n: null, b: true, k: 3, s: SECRET_MASK });
+    }
+  });
+
+  it('the too-large notice comes last, after the spliced shape and the runs ahead of the cut', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const ceiling = RUNS_PER_CHUNK * MAX_CHUNKS;
+    const runs = Array.from({ length: ceiling + 10 }, (_, i) => `filler${String(i).padStart(CMP.length - 6, '0')}`);
+    expect(m.maskText(OAT + ' ' + runs.join(' ') + ' ' + CMP + ' after'))
+      .toBe(SECRET_MASK + ' ' + runs.slice(0, ceiling).join(' ') + ' ' + SECRET_MASK_TOO_LARGE);
   });
 });
