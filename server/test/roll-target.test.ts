@@ -4,7 +4,7 @@
 // hibernation will take within 30 minutes, is skipped by name; the setting off rolls nothing. Pure: no fixture HOME,
 // no process, no network.
 import { describe, expect, it } from 'vitest';
-import { PRESENCE_OPEN_TTL_MS, sessionRoleOf, type ChildMark } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, sessionRoleOf, type ChildMark } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets } from '../../shared/claudeVersion.js';
 import {
   AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, rollTargetsOf,
@@ -34,7 +34,7 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
   optedOut: false,
   store: { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
   viewer: o.viewer ?? false,
-  sinceStartMs: PRESENCE_OPEN_TTL_MS + HOUR,
+  sinceStartMs: VIEWER_OPEN_TTL_MS + HOUR,
   live: o.unread ? { kind: 'unread' } : { kind: 'read', word: { ok: true, word: o.word ?? 'idle' }, mark: o.mark ?? mark(ageMs) },
 });
 

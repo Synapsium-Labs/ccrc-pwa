@@ -234,6 +234,24 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
     expect(eventsOf(h.home, 'hibernate'), 'still ONE deliberate act').toHaveLength(1);
   });
 
+  it('a failed wake whose pane is still live after the put-back\'s kill exits 5 with roll-wake-unrestored, never "put back to sleep"', () => {
+    idle();
+    fs.writeFileSync(path.join(h.home, 'wake-fails'), '');
+    // The act's kill lands (the pane is gone for the act's own check); the failed wake raised a pane that survives the
+    // put-back's kill, so `has-session` is live again from the second `kill-session` on.
+    const survives = 'eval "$(declare -f tmux | sed \'1s/^tmux/_tmux_stub/\')"; '
+      + 'tmux() { if [[ "${1:-}" == has-session ]]; then echo "tmux $*" >> "$HOME/ccd-calls"; '
+      + 'local k; k=$(grep -c kill-session "$HOME/ccd-calls" 2>/dev/null); '
+      + '[[ "${k:-0}" == 1 ]] && { echo "can\'t find session"; return 1; }; return 0; fi; _tmux_stub "$@"; };';
+    const r = roll('', survives);
+    expect(calls().filter((l) => /kill-session/.test(l)), 'the act\'s kill and the put-back\'s kill').toHaveLength(2);
+    expect(r.rc, r.err).toBe(5);
+    expect(r.err).toMatch(new RegExp(`ccd: roll-wake-unrestored — ${ID} was hibernated and its wake exited 5, and a pane is still live after the put-back: ${ID} may be neither running nor hibernated`));
+    expect(r.err).not.toContain('roll-wake-failed');
+    expect(r.err).not.toContain('put back to sleep');
+    expect(r.out).not.toContain('rolled');
+  });
+
   it('a pane kill that fails on a live session exits 6 with roll-kill-failed: never rolled, and no wake is tried', () => {
     idle();
     // tmux refuses the kill and the pane is still there afterwards.

@@ -74,7 +74,7 @@ export interface RollSweepDeps {
   /** `$REG/hibernate-after-hours`'s body; called only when the listing names it. */
   readonly readAfterHours: () => Promise<string | null>;
   readonly log: (line: string) => void;
-  /** When this server started (presence is never believed before `PRESENCE_OPEN_TTL_MS`). */
+  /** When this server started (presence is never believed before `VIEWER_OPEN_TTL_MS`). */
   readonly startedAt: number;
   readonly now: () => number;
   /** Null: the lane journals what it would roll and rolls nothing. */

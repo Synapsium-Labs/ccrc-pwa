@@ -29868,7 +29868,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # stamp the wake wrote put back) and the row is the sanctioned hibernated one that mail, an open screen or a
   # re-dispatch wakes. When the marker cannot be written again the row is NOT restored: exit 5,
   # `ccd: roll-wake-unrestored — …`, a phrase of its own, since that row may be neither running nor hibernated. The same exit
-  # when the unit cannot be stopped again. A pane kill that fails on a pane still live exits 6, `ccd: roll-kill-failed — …`:
+  # when the unit cannot be stopped again, or when a pane is still live after the put-back's kill. A pane kill that fails on a pane still live exits 6, `ccd: roll-kill-failed — …`:
   # nothing was rolled and no wake is tried. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
   # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
   # line, which is pinned. `ccd caps` says `hibernate-roll`.
@@ -30007,8 +30007,11 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     elif _ws_unsupervise "$id" ccd; (( ! _WS_UNSUPERVISE_DISABLED )); then
       lc_unrestored="its unit claude-session@$id could not be stopped again"
       tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+    elif tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true; _alive "$id"; then
+      # A pane the failed wake raised (a spawn that timed out after tmux made the session) that outlives this kill is
+      # not the sanctioned hibernated row either, as the act's own kill check (exit 6) says of a pane that survives it.
+      lc_unrestored="a pane is still live after the put-back"
     else
-      tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
       # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
       # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
       if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi

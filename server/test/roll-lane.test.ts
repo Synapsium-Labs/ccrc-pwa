@@ -3,7 +3,7 @@
 // keeps every argv; nothing runs ccd, tmux or a process. `ccd-hibernate-roll.test.ts` pins the verb itself.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
 import { ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
@@ -22,7 +22,7 @@ import type { FleetState } from '../src/fleetstate.js';
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
-const STARTED = NOW - PRESENCE_OPEN_TTL_MS - MIN;
+const STARTED = NOW - VIEWER_OPEN_TTL_MS - MIN;
 const INSTALLED = NOW - 2 * HOUR;
 const COORD = 'lane-a-project-a';
 const COORD2 = 'lane-a-project-b';

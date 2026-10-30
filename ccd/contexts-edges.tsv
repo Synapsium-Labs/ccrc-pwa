@@ -357,6 +357,7 @@ cmd_forget -> _reg_retire
 cmd_forget -> _session_verdict
 cmd_forget -> _tmux_t
 cmd_forget -> _ws_unsupervise
+cmd_hibernate -> _alive
 cmd_hibernate -> _idle_for_keystroke
 cmd_hibernate -> _lc_dec_ok
 cmd_hibernate -> _lc_done
