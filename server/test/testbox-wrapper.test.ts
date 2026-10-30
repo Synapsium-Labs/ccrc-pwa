@@ -695,6 +695,25 @@ describe('TB8: the three refusals, exit 75, nothing run (spec §2.5; D-7417)', (
     expect(runsRows(w)).toEqual([expect.objectContaining({ outcome: 'refused', fallback: 'lost-run', exit: 75 })]);
   }, T);
 
+  // D-7561 departure 7: 75 means only that nothing ran. Once the run's output has reached the session the run started,
+  // so a lost answer is a red run (exit 1, logged `remote`), never the refusal status.
+  it('CCRC_TESTBOX_LOST_RUN=fail after output: `test box: lost the run`, exit 1 (not 75), logged remote, nothing run locally (D-7561)', async () => {
+    const w = await world({ settings: { CCRC_TESTBOX_LOST_RUN: 'fail' } });
+    writeFileSync(path.join(w.pkg, 'test', 'h.test.ts'), 'HOLD\n');
+    let seen = '';
+    const p = wrapAsync(w, ['--', './node_modules/.bin/vitest', 'run', 'test/h.test.ts'], { onSpawn: (c) => { c.stdout!.on('data', (d: Buffer) => { seen += d.toString(); }); } });
+    await until('the run\'s output to reach the session', () => seen.includes('HOLDING'));
+    await w.server!.close();
+    w.server = null;
+    const r = await p;
+    await w.mgr.stop('ccrc-testbox-run@1.service');   // the held run, whose cancel had no box to reach
+    expect(r.stdout).toContain('HOLDING test/h.test.ts');
+    expect(r.stderr).toContain('test box: lost the run');
+    expect(r.status).toBe(1);
+    expect(log(w, 'systemd-run.log')).toBe('');
+    expect(runsRows(w)).toEqual([{ at: expect.any(String), outcome: 'remote', fallback: null, exit: 1 }]);
+  }, T);
+
   it('a reconnect inside the deadline still loses the run (proto 1 cannot re-attach) and cancels it on the box (D-7558)', async () => {
     const w = await world({ settings: { CCRC_TESTBOX_RECONNECT_DEADLINE: '10s' } });
     writeFileSync(path.join(w.flags, 'prepare-hold'), '');

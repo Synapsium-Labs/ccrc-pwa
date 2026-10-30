@@ -51,9 +51,11 @@ export function readDurations(text: string | null, why: string, repository: stri
  *  to it by server/test/testbox-wrapper.test.ts's parity row (a flag added to one side only reds it). */
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   '-c', '--config', '-r', '--root', '--dir', '--project', '--reporter', '--reporters', '--outputFile', '--environment', '--env',
-  '-t', '--testNamePattern', '--testPathPattern', '--testPathIgnorePatterns', '--shard', '--pool', '--maxWorkers', '--minWorkers',
+  '--testNamePattern', '--testPathPattern', '--testPathIgnorePatterns', '--shard', '--pool', '--maxWorkers', '--minWorkers',
   '--exclude', '--mode', '--selectProjects', '--rootDir', '--testRegex', '--testTimeout', '--workspace',
-]);
+  // `-t` stays last with no comma after it: server/test/ccd-tmux-anchor.test.ts's census reads a quoted `-t` followed
+  // by a comma and another word as a tmux `-t` target.
+  '-t']);
 /** The vitest subcommands the wrapper's argv reading skips as the first word (ccd/ccrc-test's `_targv_heavy`), pinned
  *  the same way. */
 export const SUBCOMMANDS: ReadonlySet<string> = new Set(['run', 'watch', 'dev', 'related', 'bench']);
