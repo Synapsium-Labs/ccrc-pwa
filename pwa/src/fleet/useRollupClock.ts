@@ -2,9 +2,10 @@
 // fleet frame always meets the real time, and one timer is set for the next instant a project leaves the window
 // (`nextRollupBoundary`), so the list re-renders there with no frame. A quiet fleet sets no timer. A ticking interval
 // that stops while quiet would keep its last tick and hold a gone-quiet project open (the review's stale clock).
-// `next` is that boundary (C9, D-6441): with the same fleet it moves only when a window ends, whether this hook's timer
-// woke the list or some other render read the clock first (which moves `next` and clears the timer), so a list that
-// memoises its rollup keys on it, and on the tree, never on the clock itself. One clock, one timer.
+// `next` is that boundary (C9, D-6441): with the same fleet it moves only at a boundary (a window's end, or since Task
+// G1b a box's stall boundary, below), whether this hook's timer woke the list or some other render read the clock first
+// (which moves `next` and clears the timer), so a list that memoises its rollup keys on it, and on the tree, never on
+// the clock itself. One clock, one timer.
 // Task G1b (D-7380; review 1152 F1): the same timer also wakes at the next instant a programme box crosses the stall
 // watch's quiet time (`nextStallBoundary`, over the open runs, the frame's `stallQuietMs` and the operator's pause), so
 // a box reads stalled at its boundary with no frame, and `next` is the earlier of the two boundaries.

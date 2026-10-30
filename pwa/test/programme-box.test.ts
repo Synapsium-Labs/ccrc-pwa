@@ -388,6 +388,11 @@ describe('nextStallBoundary', () => {
     expect(nextStallBoundary([moved(4, 'coord', 'w4', NOW - QUIET)], runLastMove, NOW, QUIET, false)).toBeNull();
   });
 
+  it('is the earliest boundary whatever the order the claimants come in (fix round 1, F6 i)', () => {
+    const runs = [moved(1, 'coord-c', 'w3', NOW - 10 * MIN), moved(2, 'coord-b', 'w2', NOW - 90 * MIN)];
+    expect(nextStallBoundary(runs, runLastMove, NOW, QUIET, false)).toBe(NOW + 30 * MIN);
+  });
+
   it('is the instant the box over the same runs turns stalled, not a millisecond later', () => {
     const sessions = [coord, kid('w1'), kid('w2')];
     const runs = [moved(1, 'coord', 'w1', NOW - 90 * MIN), moved(2, 'coord', 'w2', NOW - 100 * MIN)];

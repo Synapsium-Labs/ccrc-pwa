@@ -13,9 +13,10 @@
 //
 // STATE. `boxState` is one decider, in this order: needs (a drawn member is the operator's ask, `operatorAsk`), the
 // operator's pause, stalled (no move within the stall watch's quiet threshold), moving. Movement is an INPUT
-// (`lastMoveOf`, the run's last move, the threshold and the card's clock): the card passes `runLastMove`, the runs
-// frame's `stallQuietMs`, the coord frame's pause and the list's clock (Task G1b, D-7380). `nextStallBoundary` is the
-// next instant a box crosses that threshold, which the list's one timer wakes at (`useRollupClock`).
+// (`lastMoveOf`, the run's last move, the threshold and the card's clock): `cardBoxes` reads the moves by `runLastMove`,
+// and the card hands it the runs frame's `stallQuietMs`, the coord frame's pause and the list's clock (Task G1b,
+// D-7380). `nextStallBoundary` is the next instant a box crosses that threshold, which the list's one timer wakes at
+// (`useRollupClock`).
 //
 // HUE. Each programme carries one of four cool hues (`assignHues`): the `--prog-*` aliases of the lane hues, always
 // beside the programme's title in words. The map is the FLEET's (`fleetHues`), assigned once per runs frame over every
@@ -24,7 +25,7 @@ import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
 import type { FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
 import { operatorAsk, summaryParts, type RolledRow } from './rollup';
-import { RUN_WORD, boundOpenRun, claimedRunsOf, programWave, programmeTitle } from './runWords';
+import { RUN_WORD, boundOpenRun, claimedRunsOf, programWave, programmeTitle, runLastMove } from './runWords';
 
 export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
 export type ProgHue = (typeof PROG_HUES)[number];
@@ -138,7 +139,7 @@ export function programmeBoxes(
     if (head.kind === 'session' && claimed !== undefined) {
       drafts.push({ ...lead(claimed), coordinatorId: head.session.id, coordinator: head.session, children: kids,
         abroad: claimed.filter((r) => farIds.has(r.id)).sort((a, b) => a.id - b.id),
-        lastMoveAt: newest(claimed.map(lastMoveOf)) });
+        lastMoveAt: boxLastMove(claimed, lastMoveOf) });
       continue;
     }
     const by = rowRun(head, runs)?.claimedBy ?? null;
@@ -157,8 +158,12 @@ export function programmeBoxes(
 const boxRunsOf = (runs: readonly RunSummary[], id: string): RunSummary[] =>
   claimedRunsOf(runs, id).filter((r) => r.claimedBy !== r.sessionId);
 
+/** A box's last move: the newest over its runs. Written once for `programmeBoxes` and `nextStallBoundary`. */
+const boxLastMove = (runs: readonly RunSummary[], lastMoveOf: (r: RunSummary) => number | null): number | null =>
+  newest(runs.map(lastMoveOf));
+
 /** The next instant a box crosses the quiet threshold with no new frame (Task G1b, D-7380; review 1152 F1): per
- *  claimant, its box's last move (`newest` over `boxRunsOf`, the box's own rule) plus `quietMs`, the earliest still
+ *  claimant, its box's last move (`boxLastMove` over `boxRunsOf`, the box's own rules) plus `quietMs`, the earliest still
  *  ahead of `now`. `null` with no threshold, under the operator's pause (nothing stalls), or with none ahead. The
  *  rollup's clock folds it into its one timer, as it does `nextRollupBoundary`. Fleet-wide: a claimant on no card
  *  costs one wake that changes nothing. */
@@ -169,7 +174,7 @@ export function nextStallBoundary(
   if (quietMs === null || paused) return null;
   let next: number | null = null;
   for (const id of new Set(runs.flatMap((r) => (r.claimedBy === null ? [] : [r.claimedBy])))) {
-    const moved = newest(boxRunsOf(runs, id).map(lastMoveOf));
+    const moved = boxLastMove(boxRunsOf(runs, id), lastMoveOf);
     if (moved === null || moved + quietMs <= now) continue;
     next = next === null ? moved + quietMs : Math.min(next, moved + quietMs);
   }
@@ -245,6 +250,17 @@ export function rankBoxes(
   return boxes
     .map((view) => ({ view, state: boxState(view, boxNeeds(view), now ?? 0, now === null ? null : quietMs, paused) }))
     .sort(boxOrder);
+}
+
+/** A card's boxes and their ranked states at `now`, over the card's tree (`fleetTree`'s rows, runs, claimed runs and
+ *  hues), with the moves read by `runLastMove`: the one composition `ProjectCard` draws and `FleetCards`' view hold
+ *  counts a folded card's kept boxes by (D-6090), so the two never disagree about what a folded card shows. */
+export function cardBoxes(
+  rows: readonly FleetRow[], here: readonly RunSummary[], far: readonly RunSummary[], hues: ReadonlyMap<string, ProgHue>,
+  now: number | null, quietMs: number | null, paused: boolean,
+): { prog: ProgrammeBoxes; ranked: { state: BoxState; view: ProgrammeBoxView }[] } {
+  const prog = programmeBoxes(rows, here, far, runLastMove, hues);
+  return { prog, ranked: rankBoxes(prog.boxes, now, quietMs, paused) };
 }
 
 /** A folded project card (spec §2.3): the boxes that need the operator or have stalled stay drawn, and the rest of

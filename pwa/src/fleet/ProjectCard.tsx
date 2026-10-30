@@ -33,9 +33,9 @@ import { nestFleet, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
-import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, runLastMove, waveLabel } from './runWords';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
 import {
-  cardAbroad, fleetHues, foldedCard, programmeBoxes, rankBoxes, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
+  cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
 } from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine } from './SessionLine';
@@ -293,9 +293,9 @@ function ProjectCardView({
   // The fleet's hue map, this card's entries (`fleetTree`). A group drawn without the tree has no fleet to read, so its
   // own runs are the whole of what it knows.
   const hues = 'hues' in group ? (group as FleetTreeGroup).hues : fleetHues(boxRuns);
-  // Task G1b: the moves (`runLastMove`, the one reader), the stall watch's threshold, the pause and the list's clock.
-  const prog = programmeBoxes(tree, runs, claimed, runLastMove, hues);
-  const ranked = rankBoxes(prog.boxes, boxNow ?? null, stallQuietMs, coordPaused);
+  // Task G1b: the moves (`runLastMove`, the one reader), the stall watch's threshold, the pause and the list's clock, in
+  // the one composition the list's view hold counts too (`cardBoxes`).
+  const { prog, ranked } = cardBoxes(tree, runs, claimed, hues, boxNow ?? null, stallQuietMs, coordPaused);
   const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
   const shownAbroad = cardAbroad(abroad, prog.boxes);
   const rowKey = (row: FleetRow): string => (row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`);

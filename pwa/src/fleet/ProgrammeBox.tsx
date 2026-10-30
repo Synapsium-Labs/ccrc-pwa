@@ -15,6 +15,9 @@ import {
 } from './programmeBoxes';
 import './programmeBox.css';
 
+/** Keyed on the box's state where it is drawn, so when the state turns (a box crossing its stall boundary, Task G1b) its
+ *  clock starts again at that instant: the readout agrees with the state from the boundary on (spec §2.5), never "no
+ *  move 1h 59m" on a stalled box for up to 30 s. */
 function Movement({ view, state, nowMs }: { view: ProgrammeBoxView; state: BoxState; nowMs: number | undefined }): ReactNode {
   const tick = useNow(30_000, nowMs === undefined && view.lastMoveAt !== null);
   const words = movementWords(view, state, nowMs ?? tick);
@@ -59,7 +62,7 @@ export function ProgrammeBox({ view, state, tray, drawRow, drawAbroad, hueOf, on
       </div>
       <div className="pg-coord">
         {drawRow({ kind: 'session', depth: 0, session: view.coordinator })}
-        <Movement view={view} state={state} nowMs={nowMs} />
+        <Movement key={state} view={view} state={state} nowMs={nowMs} />
       </div>
       {(tray.rows.length > 0 || view.abroad.length > 0) && (
         <div className="pg-tray">
