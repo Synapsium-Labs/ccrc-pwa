@@ -1,0 +1,636 @@
+{
+  "rows": [
+    {
+      "rule": "R5",
+      "input": "/srv/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u/x",
+      "updateSync": "/srv/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u:/usr/bin",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u:/usr/bin",
+      "updateSync": "/srv/home/u:/usr/bin"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u",
+      "updateSync": "/srv/home/u"
+    },
+    {
+      "rule": "R5",
+      "input": "cannot read /home/u/.ccrc/agent.env",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "cannot read ~/.ccrc/agent.env",
+      "updateSync": "cannot read ~/.ccrc/agent.env"
+    },
+    {
+      "rule": "R5",
+      "input": "K=/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "K=~/x",
+      "updateSync": "K=~/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~",
+      "updateSync": "~"
+    },
+    {
+      "rule": "R5",
+      "input": "http://h/p",
+      "home": "/",
+      "locale": "C",
+      "ccrc": "http://h/p",
+      "updateSync": "http://h/p"
+    },
+    {
+      "rule": "R2",
+      "input": "https://u:p@x@host",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host",
+      "updateSync": "https://host"
+    },
+    {
+      "rule": "R1",
+      "input": "u:p@x@host/path",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "host/path",
+      "updateSync": "host/path"
+    },
+    {
+      "rule": "authority",
+      "input": "https://host/path@x",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host/path@x",
+      "updateSync": "https://host/path@x"
+    },
+    {
+      "rule": "authority",
+      "input": "https://host?a@b",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host?a@b",
+      "updateSync": "https://host?a@b"
+    },
+    {
+      "rule": "authority",
+      "input": "https://host#a@b",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host#a@b",
+      "updateSync": "https://host#a@b"
+    },
+    {
+      "rule": "authority",
+      "input": "https://u:p@host?a@b#c@d",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host?a@b#c@d",
+      "updateSync": "https://host?a@b#c@d"
+    },
+    {
+      "rule": "plain",
+      "input": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS",
+      "updateSync": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS"
+    },
+    {
+      "rule": "plain",
+      "input": "https://example.com/path?email=a@example.com&x=1",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://example.com/path?email=a@example.com&x=1",
+      "updateSync": "https://example.com/path?email=a@example.com&x=1"
+    },
+    {
+      "rule": "scheme",
+      "input": "http://user:s3cretTOKEN@127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS",
+      "updateSync": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/floor",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/.ccrc/floor",
+      "updateSync": "~/.ccrc/floor"
+    },
+    {
+      "rule": "R1",
+      "input": "fetching user:s3cretTOKEN@127.0.0.1:1/rel/x and \"tok@h/r\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetching 127.0.0.1:1/rel/x and \"h/r\"",
+      "updateSync": "fetching 127.0.0.1:1/rel/x and \"h/r\""
+    },
+    {
+      "rule": "R1",
+      "input": "see <u:p<w@h/r> and u:p\"w@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see <h/r> and h/r",
+      "updateSync": "see <h/r> and h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "fetching http:/u:s3cretTOKEN@h/r and https:///u:s3cretTOKEN@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetching http:/h/r and https:///h/r",
+      "updateSync": "fetching http:/h/r and https:///h/r"
+    },
+    {
+      "rule": "R6",
+      "input": "curl: (6) user@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "curl: (6) user@host",
+      "updateSync": "curl: (6) host"
+    },
+    {
+      "rule": "R6",
+      "input": "mail a@example.com today",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "mail a@example.com today",
+      "updateSync": "mail a@example.com today"
+    },
+    {
+      "rule": "authority",
+      "input": "https://h/r?email=a@example.com/y",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r?email=a@example.com/y",
+      "updateSync": "https://h/r?email=a@example.com/y"
+    },
+    {
+      "rule": "prose",
+      "input": "@scope/pkg",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "@scope/pkg",
+      "updateSync": "@scope/pkg"
+    },
+    {
+      "rule": "R5",
+      "input": "cmd http://h/p",
+      "home": "/",
+      "locale": "C",
+      "ccrc": "cmd http://h/p",
+      "updateSync": "cmd http://h/p"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/floor",
+      "home": "/home/u/",
+      "locale": "C",
+      "ccrc": "~/.ccrc/floor",
+      "updateSync": "~/.ccrc/floor"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/user2/f",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/home/user2/f",
+      "updateSync": "/home/user2/f"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/f",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/f",
+      "updateSync": "~/f"
+    },
+    {
+      "rule": "R5",
+      "input": "path \"/home/u\" here",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "path \"~\" here",
+      "updateSync": "path \"~\" here"
+    },
+    {
+      "rule": "R5",
+      "input": "PATH=/home/u:/usr/bin",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "PATH=~:/usr/bin",
+      "updateSync": "PATH=~:/usr/bin"
+    },
+    {
+      "rule": "R5",
+      "input": "(cd /home/u)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "(cd ~)",
+      "updateSync": "(cd ~)"
+    },
+    {
+      "rule": "authority",
+      "input": "https://h?a@b",
+      "home": "",
+      "locale": "C",
+      "ccrc": "https://h?a@b",
+      "updateSync": "https://h?a@b"
+    },
+    {
+      "rule": "authority",
+      "input": "https://h#a@b",
+      "home": "",
+      "locale": "C",
+      "ccrc": "https://h#a@b",
+      "updateSync": "https://h#a@b"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u/x and /home/u/y",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u/x and ~/y",
+      "updateSync": "/srv/home/u/x and ~/y"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/x",
+      "updateSync": "~/x"
+    },
+    {
+      "rule": "R5",
+      "input": "cd /home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "cd ~/x",
+      "updateSync": "cd ~/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/usr/bin:/home/u/bin",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/usr/bin:~/bin",
+      "updateSync": "/usr/bin:~/bin"
+    },
+    {
+      "rule": "R5",
+      "input": "\"/home/u/x\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"~/x\"",
+      "updateSync": "\"~/x\""
+    },
+    {
+      "rule": "R5",
+      "input": "file:///home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "file://~/x",
+      "updateSync": "file://~/x"
+    },
+    {
+      "rule": "R1",
+      "input": "user:s3cret@127.0.0.1:1/rel/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "127.0.0.1:1/rel/x",
+      "updateSync": "127.0.0.1:1/rel/x"
+    },
+    {
+      "rule": "R1",
+      "input": "\"tok@h/r\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"h/r\"",
+      "updateSync": "\"h/r\""
+    },
+    {
+      "rule": "R2",
+      "input": "https://u:p@x@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R2",
+      "input": "https://a@b@c@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R2",
+      "input": "https://u@//v@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https:////h/r",
+      "updateSync": "https:////h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "http:/u:s3cret@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http:/h/r",
+      "updateSync": "http:/h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "https:///u:s3cret@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https:///h/r",
+      "updateSync": "https:///h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "file:///u@/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "file:////home/u/x",
+      "updateSync": "file:////home/u/x"
+    },
+    {
+      "rule": "R3",
+      "input": "note:/x@y/z",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "note:/y/z",
+      "updateSync": "note:/y/z"
+    },
+    {
+      "rule": "R3",
+      "input": "x:///u@/home/u/f",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x:////home/u/f",
+      "updateSync": "x:////home/u/f"
+    },
+    {
+      "rule": "R3",
+      "input": "x:///u@/home/u/f",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "x:////home/u/f",
+      "updateSync": "x:////home/u/f"
+    },
+    {
+      "rule": "R4",
+      "input": "https://a b@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R4",
+      "input": "https://a b@h/r",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R4",
+      "input": "https://u :p@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R4",
+      "input": "https://u :p@h/r",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/.ccrc/x",
+      "updateSync": "~/.ccrc/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "~/.ccrc/x",
+      "updateSync": "~/.ccrc/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "/srv/home/u/x",
+      "updateSync": "/srv/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/user2/f",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "/home/user2/f",
+      "updateSync": "/home/user2/f"
+    },
+    {
+      "rule": "R5",
+      "input": "é/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "é/home/u/x",
+      "updateSync": "é/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "é/home/u/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "é/home/u/x",
+      "updateSync": "é/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/ué",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/home/ué",
+      "updateSync": "/home/ué"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/ué",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "/home/ué",
+      "updateSync": "/home/ué"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "ff2f686f6d652f752f78",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "ff2f686f6d652f752f78",
+      "updateSyncHex": "ff2f686f6d652f752f78"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "ff2f686f6d652f752f78",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrcHex": "ff2f686f6d652f752f78",
+      "updateSyncHex": "ff2f686f6d652f752f78"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "2f686f6d652f75ff",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "2f686f6d652f75ff",
+      "updateSyncHex": "2f686f6d652f75ff"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "2f686f6d652f75ff",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrcHex": "2f686f6d652f75ff",
+      "updateSyncHex": "2f686f6d652f75ff"
+    },
+    {
+      "rule": "R5",
+      "input": "file:///home/u/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "file://~/x",
+      "updateSync": "file://~/x"
+    },
+    {
+      "rule": "R6",
+      "input": "could not resolve host in u:hunter2@h.invalid:9)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "could not resolve host in u:hunter2@h.invalid:9)",
+      "updateSync": "could not resolve host in h.invalid:9)"
+    },
+    {
+      "rule": "R6",
+      "input": "mail a@b",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "mail a@b",
+      "updateSync": "mail b"
+    },
+    {
+      "rule": "R6",
+      "input": "x (a@b)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x (a@b)",
+      "updateSync": "x b)"
+    },
+    {
+      "rule": "R6",
+      "input": "h@\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "h@\"",
+      "updateSync": "\""
+    },
+    {
+      "rule": "R7",
+      "input": "u:p@)h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": ")h/r",
+      "updateSync": "u:p@)h/r"
+    },
+    {
+      "rule": "R7",
+      "input": " S@)<?",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": " )<?",
+      "updateSync": " S@)<?"
+    },
+    {
+      "rule": "blast",
+      "input": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@demo-gone.service); read: systemctl --user status claude-session@demo-gone.service",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@demo-gone.service); read: systemctl --user status claude-session@demo-gone.service",
+      "updateSync": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: demo-gone.service); read: systemctl --user status demo-gone.service"
+    },
+    {
+      "rule": "blast",
+      "input": "see claude-session@abc.service",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see claude-session@abc.service",
+      "updateSync": "see abc.service"
+    },
+    {
+      "rule": "blast",
+      "input": "sets CCRC_MAIL_FROM=ops@example.com",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "sets CCRC_MAIL_FROM=ops@example.com",
+      "updateSync": "sets example.com"
+    },
+    {
+      "rule": "blast",
+      "input": "ssh root@box",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "ssh root@box",
+      "updateSync": "ssh box"
+    },
+    {
+      "rule": "blast",
+      "input": "git HEAD@{1}",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "git HEAD@{1}",
+      "updateSync": "git {1}"
+    },
+    {
+      "rule": "control",
+      "inputHex": "68747470733a2f2f753a53336372ff6574544f4b454e40682f72",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "68747470733a2f2f682f72",
+      "updateSyncHex": "68747470733a2f2f682f72"
+    }
+  ]
+}
