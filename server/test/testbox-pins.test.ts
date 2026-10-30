@@ -244,6 +244,9 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   // TB2 (D-7404) adds the switch row: its definer and the two tests that pin it name the marker; none of them reads it
   // (single-definition's switch pin holds that no shell line and no TypeScript writer names it until TB8 and TB9).
   const TB2_HOLDERS = ['server/test/single-definition/switches-history.test.ts', 'server/test/switches.test.ts', 'shared/switches.ts'];
+  // TB3 (D-7405) adds the transport: ccd/testbox-snap and the forced command name the settings their caller passes
+  // in (neither reads one), and the transport test names them in its fixtures.
+  const TB3_HOLDERS = ['ccd/testbox-snap', 'deploy/testbox/git/push-command', 'server/test/testbox-transport.test.ts'];
   // TB4 (D-7406) adds the test service: its settings reader (config.ts) and the files that read the settings it parsed
   // or name a key in a comment, and its tests. The unit scripts under deploy/testbox/bin/ name none (they read only
   // specs/<k>). In `git grep -l` order, which is path order.
@@ -252,8 +255,8 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'agent/src/testbox/runs.ts', 'agent/src/testbox/service.ts', 'agent/src/testbox/spec.ts', 'agent/src/testbox/systemd.ts',
     'agent/test/testbox-live.test.ts', 'agent/test/testbox-service.test.ts',
   ];
-  const HOLDERS = [...TB4_HOLDERS, ...TB2_HOLDERS].sort();
-  it('the tracked readers are exactly the literal list (TB2: the switch row and its two pins; TB4: the test service)', () => {
+  const HOLDERS = [...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
+  it('the tracked readers are exactly the literal list (TB2: the switch row and its two pins; TB3: the transport; TB4: the test service)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);
