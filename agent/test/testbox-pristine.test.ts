@@ -16,8 +16,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunSubmit, RunSummary, RunLog, TestboxRepoRow } from '../../shared/testbox.js';
-import { durationMs, hostPort, type KnobLine } from '../src/testbox/config.js';
+import { durationMs, hostPort, type KnobLine, type TestboxConfig } from '../src/testbox/config.js';
 import { boundedExec, SHORT_BOUND_MS } from '../src/testbox/exec.js';
+import { registryFor } from '../src/testbox/main.js';
 import { gitEnv, realGit, runTreeFiles, type MirrorOps } from '../src/testbox/mirror.js';
 import {
   adopt, buildEnded, buildQueued, copyEnded, due, emptyStore, expire, installKey, nodeChanged, pristineLists, pristineSettings, retryDelay, seen,
@@ -551,12 +552,15 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
     expect(st.state).toBe('ok');
   }, ROW_TIMEOUT_MS);
 
-  it('a key unused for the keep time leaves the list, and the next install\'s first step removes it', async () => {
+  it('a key unused for the keep time leaves the list once the runs that cloned it are done, and the next install\'s first step removes it, once', async () => {
     const box = makeBox();
     await box.svc.start();
     await runOne(box);
     const old = keyOf(box);
     expect(existsSync(path.join(box.root, 'pristine', old))).toBe(true);
+    // A second run clones the key: its prepare's copy ends with the prepare, so the key can still expire.
+    await runOne(box);
+    expect(box.cpCalls().filter((c) => c.includes('--reflink') && c.includes(path.join('pristine', old)))).toHaveLength(1);
     box.clock.now += PS.keepMs;
     await box.svc.tick();
     await box.svc.idle();
@@ -565,6 +569,29 @@ describe('spec §5 row 4: a run with no pristine install for its key', () => {
     await runOne(box);
     expect(existsSync(path.join(box.root, 'pristine', old))).toBe(false);
     expect(existsSync(path.join(box.root, 'pristine', keyOf(box)))).toBe(true);
+    const doomedIn = (): string[] => readFileSync(path.join(box.root, 'specs', 'install'), 'utf8').split('\0').filter((r) => r.startsWith('Z')).map((r) => r.slice(1));
+    expect(doomedIn(), 'the build that removed it named it').toEqual([old]);
+    // Removed once: the next build's spec names no doomed key.
+    writeFileSync(path.join(box.template, 'server', 'package-lock.json'), LOCK('four'));
+    await runOne(box);
+    expect(existsSync(path.join(box.root, 'pristine', keyOf(box)))).toBe(true);
+    expect(doomedIn(), 'a removed key is not named again').toEqual([]);
+  }, ROW_TIMEOUT_MS);
+
+  it('a build the service lost mid-flight (install/run left behind) is cleaned before the next build, which succeeds', async () => {
+    const box = makeBox();
+    mkdirSync(path.join(box.root, 'install', 'run', 'build', 'server'), { recursive: true });
+    writeFileSync(path.join(box.root, 'install', 'run', 'build', 'server', 'package-lock.json'), LOCK('lost'));
+    await box.svc.start();
+    const r = await runOne(box);
+    expect(r.summary.exit).toBe(0);
+    expect(box.mgr.log.filter((u) => u.includes('install'))).toEqual([
+      'ccrc-testbox-clean@install.service', 'ccrc-testbox-install.service', 'ccrc-testbox-clean@install.service',
+    ]);
+    expect(box.svc.status().failedKeys).toEqual([]);
+    expect(box.svc.status().pristine).toEqual([{ repository: 'project-a', package: 'server', key: keyOf(box) }]);
+    expect(existsSync(path.join(box.root, 'pristine', keyOf(box), 'dep', 'index.js'))).toBe(true);
+    expect(existsSync(path.join(box.root, 'install', 'run'))).toBe(false);
   }, ROW_TIMEOUT_MS);
 
   it('a new node version queues the key\'s rebuild, and a restarted service adopts what is on disk', async () => {
@@ -627,6 +654,31 @@ describe('mirror.ts#runTreeFiles: the inputs at the run\'s tree', () => {
     expect(await runTreeFiles(g, mirror, a, ['server/package-lock.json', 'server/absent.json'])).toBeNull();
     expect(await runTreeFiles(g, mirror, runId(), ['server/package-lock.json'])).toBeNull();
   });
+  it('fails closed: a blob past the exec\'s capture, or one whose bytes do not round-trip, is null, never empty bytes; an empty blob is read as empty', async () => {
+    const root = mkTmp('ccrc-tb-pristine-git-');
+    const work = path.join(root, 'work');
+    mkdirSync(path.join(work, 'server'), { recursive: true });
+    git(root, 'init', '-q', work);
+    // Past the bounded spawner's 1 MiB capture: the exec answers status 0 with no stdout.
+    writeFileSync(path.join(work, 'server', 'package-lock.json'), Buffer.alloc(2 * 1024 * 1024, 0x61));
+    // Not UTF-8: a decode and re-encode would change its bytes, and its key.
+    writeFileSync(path.join(work, 'server', 'latin1.json'), Buffer.from([0x7b, 0xe9, 0xff, 0x7d, 0x0a]));
+    writeFileSync(path.join(work, 'server', 'empty.json'), '');
+    writeFileSync(path.join(work, 'server', 'package.json'), '{"name":"server"}\n');
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', 'head');
+    const head = git(work, 'rev-parse', 'HEAD');
+    const mirror = path.join(root, 'mirror.git');
+    git(root, 'clone', '-q', '--bare', work, mirror);
+    const a = runId();
+    git(mirror, 'update-ref', `refs/ccrc-test/${a}/head`, head);
+    const g = realGit(boundedExec({ ...gitEnv(root), PATH: process.env.PATH ?? '' }, SHORT_BOUND_MS));
+    expect(await runTreeFiles(g, mirror, a, ['server/package-lock.json']), 'a 2 MiB blob').toBeNull();
+    expect(await runTreeFiles(g, mirror, a, ['server/package.json', 'server/package-lock.json']), 'one over the capture fails the set').toBeNull();
+    expect(await runTreeFiles(g, mirror, a, ['server/latin1.json']), 'a non-UTF-8 blob').toBeNull();
+    const ok = await runTreeFiles(g, mirror, a, ['server/empty.json', 'server/package.json']);
+    expect(ok?.map((x) => Buffer.from(x.bytes).toString('utf8'))).toEqual(['', '{"name":"server"}\n']);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -643,19 +695,30 @@ describe('registry.ts: the caching read-only registry proxy', () => {
   let proxy: RunningRegistry;
   let base = '';
   let cache = '';
+  /** The upstream's state: down answers 500 for every packument; `newer` lists a version published since. */
+  const up = { down: false, newer: false };
 
   const start = async (): Promise<void> => {
     upstream = createServer((req, res) => {
       hits.push(`${req.method} ${req.url}`);
+      if (up.down && !(req.url ?? '').includes('/-/')) { res.writeHead(500).end(); return; }
       if (req.url === '/dep') {
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
           name: 'dep', versions: {
             '1.0.0': { dist: { tarball: `${upstreamUrl}/dep/-/dep-1.0.0.tgz`, integrity: sri(GOOD) } },
             '1.0.1': { dist: { tarball: `${upstreamUrl}/dep/-/dep-1.0.1.tgz`, integrity: sri(GOOD) } },
+            ...(up.newer ? { '1.0.2': { dist: { tarball: `${upstreamUrl}/dep/-/dep-1.0.2.tgz`, integrity: sri(GOOD) } } } : {}),
           },
         }));
         return;
       }
+      if (req.url === '/@scope%2fdep') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          name: '@scope/dep', versions: { '2.0.0': { dist: { tarball: `${upstreamUrl}/@scope/dep/-/dep-2.0.0.tgz`, integrity: sri(GOOD) } } },
+        }));
+        return;
+      }
+      if (req.url === '/@scope/dep/-/dep-2.0.0.tgz') { res.writeHead(200).end(GOOD); return; }
       if (req.url === '/dep/-/dep-1.0.0.tgz') { res.writeHead(200).end(GOOD); return; }
       if (req.url === '/dep/-/dep-1.0.1.tgz') { res.writeHead(200).end(BAD); return; }
       res.writeHead(404).end();
@@ -733,5 +796,70 @@ describe('registry.ts: the caching read-only registry proxy', () => {
     expect(integrityMatches(GOOD, null, null)).toBe(false);
     expect(distFor({ versions: { '1.0.0': { dist: { tarball: 'x/-/dep-1.0.0.tgz', integrity: 'i' } } } }, 'dep-1.0.0.tgz')).toEqual({ integrity: 'i', shasum: null });
     expect(distFor({ versions: {} }, 'dep-1.0.0.tgz')).toBeNull();
+  });
+
+  it('a packument is asked of the upstream on every request, and the kept copy answers only while the upstream fails', async () => {
+    const asked = (): number => hits.filter((h) => h === 'GET /dep').length;
+    const n = asked();
+    expect((await fetch(`${base}/dep`)).status).toBe(200);
+    expect((await fetch(`${base}/dep`)).status).toBe(200);
+    expect(asked() - n, 'each GET reaches the upstream, though a copy is kept').toBe(2);
+    up.newer = true;
+    const seenNew = await fetch(`${base}/dep`);
+    expect(await seenNew.text(), 'a version published since is seen').toContain(`${base}/dep/-/dep-1.0.2.tgz`);
+    up.down = true;
+    try {
+      const m = asked();
+      const kept = await fetch(`${base}/dep`);
+      expect(kept.status, 'the kept copy answers').toBe(200);
+      const text = await kept.text();
+      expect(text).toContain(`${base}/dep/-/dep-1.0.2.tgz`);
+      expect(text).not.toContain(upstreamUrl);
+      expect(asked() - m, 'the upstream was asked first').toBe(1);
+      expect((await fetch(`${base}/never-kept`)).status, 'nothing kept and the upstream down').toBe(502);
+    } finally {
+      up.down = false;
+    }
+  });
+
+  it('a scoped packument reaches the upstream as /@scope%2fdep, and its tarball as /@scope/dep/-/<file>', async () => {
+    const r = await fetch(`${base}/@scope%2fdep`);
+    expect(r.status).toBe(200);
+    expect(await r.text()).toContain(`${base}/@scope/dep/-/dep-2.0.0.tgz`);
+    expect(hits).toContain('GET /@scope%2fdep');
+    const t = await fetch(`${base}/@scope/dep/-/dep-2.0.0.tgz`);
+    expect(t.status).toBe(200);
+    expect(Buffer.from(await t.arrayBuffer())).toEqual(GOOD);
+    expect(hits).toContain('GET /@scope/dep/-/dep-2.0.0.tgz');
+    expect(existsSync(path.join(cache, 'tarballs', encodeURIComponent('@scope/dep'), 'dep-2.0.0.tgz'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The service's entry point starts the proxy on a loopback address only (D-7543).
+// ---------------------------------------------------------------------------------------------------------------
+
+describe('main.ts#registryFor: the proxy binds a loopback address of its own, never another', () => {
+  const cfgWith = (proxy: string): TestboxConfig => {
+    const lines = new Map(LINES);
+    lines.set('CCRC_TESTBOX_REGISTRY_PROXY', line('CCRC_TESTBOX_REGISTRY_PROXY', proxy)[1]);
+    return { lines, root: mkTmp('ccrc-tb-registry-for-'), unitMaxMs: SHORT_BOUND_MS } as unknown as TestboxConfig;
+  };
+  it('refuses a non-loopback CCRC_TESTBOX_REGISTRY_PROXY before it binds, and starts on a loopback one', async () => {
+    for (const bad of ['198.51.100.1:4873', '192.0.2.1:4873', '[2001:db8::1]:4873', '0.0.0.0:4873', '[::]:4873']) {
+      await expect(registryFor(cfgWith(bad)), bad).rejects.toThrow(/^CCRC_TESTBOX_REGISTRY_PROXY: .* is not a loopback address$/);
+    }
+    // A port the kernel just handed out and released, so the row never collides with another file's.
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', () => r()));
+    const a = probe.address();
+    const port = typeof a === 'object' && a !== null ? a.port : 0;
+    await new Promise<void>((r) => probe.close(() => r()));
+    const running = await registryFor(cfgWith(`127.0.0.1:${port}`));
+    try {
+      expect((await fetch(`http://127.0.0.1:${port}/dep`, { method: 'POST' })).status).toBe(405);
+    } finally {
+      await running.close();
+    }
   });
 });
