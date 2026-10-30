@@ -97,6 +97,14 @@ export class ToolSync {
     try { return realpathSync(link); } catch { return link; }
   }
 
+  /** `<tools>/current` resolved now to its set, and that set's `bin/` (node, npm, npx): the first `PATH` entry of the
+   *  spec built now (spec §2.10: a run resolves `current` once, when its prepare starts, and keeps those versioned
+   *  paths for its whole life). Before a set is in place, the link path. */
+  bin(): string {
+    const link = path.join(this.d.toolsDir, 'current');
+    try { return path.join(realpathSync(link), 'bin'); } catch { return path.join(link, 'bin'); }
+  }
+
   /** The service's timer work, after any in progress: the timer's tick and a node change's never run at once. */
   serviceTick(): Promise<void> {
     const svc = this.svc;

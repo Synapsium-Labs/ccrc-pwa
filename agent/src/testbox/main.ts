@@ -165,7 +165,8 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
   const sys = systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs));
   // TB6 (D-7408, D-7426): the tool sync. Its takeover closes admissions through the run limit it hands the service.
   const tools = new ToolSync({ sys, root: cfg.root, toolsDir: cfg.toolsDir, settings: toolsSettings(cfg.lines, durationMs), now: () => Date.now(), exit });
-  const settings = { ...cfg, get runs(): number { return tools.runLimit(cfg.runs); } };
+  // TB6 (spec §2.10): each spec's PATH names the set current when it is built, never the link a sync switches.
+  const settings = { ...cfg, get runs(): number { return tools.runLimit(cfg.runs); }, get toolsBin(): string { return tools.bin(); } };
   const svc = new TestboxService({
     settings, rows: readRepoRows(cfg.repos), sys,
     probe: () => reflinkProbe(cfg.root, short), mirror: mirrorOps(git),
