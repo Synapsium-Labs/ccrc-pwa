@@ -142,9 +142,6 @@ export function readReadyOps(raw: unknown): string[] {
   return validCapWords(raw) ?? [];
 }
 
-// Transitional, for accounts/ops.ts until D-7508 re-points it, then deleted.
-export { AgentOpError, LinkNotSentError } from './errors.js';
-
 /**
  * Owns exactly one logical connection to the agent — a fresh `WebSocket` per
  * attempt, hello/ready handshake, a request table keyed by numeric id
