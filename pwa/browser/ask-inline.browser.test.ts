@@ -20,7 +20,9 @@
 // R41's F4 is measured at the desk (1280, Refined, Phosphor & Ink): the card is a `<section>`, not a dialog, so its keys
 // act only when the event's target is inside it. A click on the fleet column's empty space moves focus out, and `2` then
 // makes no answer request; a click on the card's own text moves it back in, and `2` answers (a POST to the session's
-// `/dialog` route, which this file records from the page's own requests: `app.ts` fulfils every `/api` call itself).
+// question door, `POST /api/questions/session-<id>/answer`, which this file records from the page's own requests:
+// `app.ts` fulfils every `/api` call itself). Until W7 C7p that POST went to the old `/dialog` on this harness, whose
+// `/health` advertises no `questions-v1`; since C7p (D-7194, D-7540) the family's door is the only one.
 //
 // The fixture's data is `test/askFixtures.ts`'s (`askFixture(1)` and `longHookEnvelope()`), as `ask-surface.browser.test.ts`
 // reads it, so no copy is kept here.
@@ -272,7 +274,7 @@ describe('the inline ask\'s keys at the desk (R41 F4, D-6326)', () => {
     try {
       const answers: string[] = [];
       opened.page.on('request', (r) => {
-        if (r.method() === 'POST' && new URL(r.url()).pathname === `/api/sessions/${SESSION.id}/dialog`) answers.push(r.postData() ?? '');
+        if (r.method() === 'POST' && new URL(r.url()).pathname === `/api/questions/session-${SESSION.id}/answer`) answers.push(r.postData() ?? '');
       });
       await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
         servedSocket(ws);
@@ -496,7 +498,7 @@ describe('Go to question reveals the focused option (R69 F3, D-6326)', () => {
 
 // R69 F7: with an answer in flight every option is `disabled` (the roving tab stop, `tabindex="0"`, stays on the first row,
 // which is a disabled button), and a disabled button cannot take focus. Measured in real Chrome before the fix (fixtures 1
-// and 2, an answer click on option 2 whose `/dialog` request never resolves, focus parked on the body, a click on Go to
+// and 2, an answer click on option 2 whose answer request never resolves, focus parked on the body, a click on Go to
 // question): `document.activeElement` was the Go to question button itself, outside the card. So the raise focused nothing in
 // the card. The raise now takes an ENABLED highlighted row, else the first enabled option, else the card section (`tabindex
 // -1`), and the in-flight card stays read-only: nothing is enabled and no second request is made.
@@ -510,7 +512,7 @@ describe('Go to question with an answer in flight (R69 F7, D-6326)', () => {
       });
       const answers: string[] = [];
       // A later page route wins over `openApp`'s context route: this one never fulfils, so the answer stays in flight.
-      await opened.page.route('**/api/sessions/*/dialog', (route) => { answers.push(route.request().postData() ?? ''); });
+      await opened.page.route('**/api/questions/*/answer', (route) => { answers.push(route.request().postData() ?? ''); });
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
       await opened.page.waitForTimeout(800);
@@ -620,7 +622,7 @@ describe('Go to question draws a keyboard focus indicator on the card section (R
       const answers: string[] = [];
       if (o.inFlight === true) {
         // A later page route wins over `openApp`'s context route: this one never fulfils, so the answer stays in flight.
-        await opened.page.route('**/api/sessions/*/dialog', (route) => { answers.push(route.request().postData() ?? ''); });
+        await opened.page.route('**/api/questions/*/answer', (route) => { answers.push(route.request().postData() ?? ''); });
       }
       await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
       await opened.page.waitForSelector(`${CARD} .ask-who`, { timeout: 30_000 });
@@ -1149,8 +1151,9 @@ describe('R89 S1: a held Retry looks disabled (D-6326)', () => {
 // fence exists for.
 //
 // The answer's request is a page-side `fetch` the page controls (an init script wraps `window.fetch` for the session's
-// `/dialog` POST only): it records the bodies, can be held, and is answered with `{ok: true, next: aged question 2}` by
-// `__reply()`. That lets a case deliver the reply in the same task as a click, on the next microtask, or after one frame,
+// answer POST only, `/api/questions/<id>/answer` since W7 C7p, the old `/dialog` before it): it records the bodies, can
+// be held, and is answered with `{ok: true, next: aged question 2}` by `__reply()`.
+// That lets a case deliver the reply in the same task as a click, on the next microtask, or after one frame,
 // which a route fulfilled from the test process cannot. The page also logs every click and every `focusin` inside the card.
 //
 // WHAT CHROME DOES WITH A DISABLED FOCUSED BUTTON decides the shape of the "reused node" cases. While an answer is in flight the
@@ -1203,7 +1206,7 @@ async function openAged() {
     };
     window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (init?.method === 'POST' && /\/api\/sessions\/[^/]+\/dialog$/.test(new URL(url, location.href).pathname)) {
+      if (init?.method === 'POST' && /\/api\/questions\/[^/]+\/answer$/.test(new URL(url, location.href).pathname)) {
         w.__posts.push(String(init.body));
         return new Promise<Response>((resolve) => {
           const done = (): void => {
@@ -1629,8 +1632,9 @@ describe('the kept Other on a return to its question, desk and phone (R102)', ()
 
 // W7 C7g (D-7185, D-7485; ARCH-57 #792, PWA half): on a server that advertises `questions-v1` in `GET /health`'s `caps`,
 // a tapped row answers through W3 Q3f's `POST /api/questions/session-<id>/answer` with the family's body, and nothing
-// goes to the old `/dialog`. Every other row in this file runs against the harness's `/health`, which is the app's own
-// page (no such word), so they are the old-server rows: their answers still go to `/dialog`, as before.
+// goes to the old `/dialog`. Until C7p every other row in this file, run against the harness's `/health` (the app's own
+// page, no such word), was an old-server row whose answers went to `/dialog`; since C7p (D-7194, D-7540) they answer
+// through the family's door too, and this row is the one with the word.
 describe('a tapped row answers through the question family\'s door on a questions-v1 server (W7 C7g)', () => {
   const DOOR_VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
     [360, 390, 1280, 1920].map((width) => ({ skin, theme, width }))));
@@ -1671,30 +1675,25 @@ describe('a tapped row answers through the question family\'s door on a question
   }
 });
 
-// W7 C7g (D-7185, D-7485): a tap never waits on the `GET /health` read. The sheet read the door when it mounted; then
-// `/health` stops answering (a stalled server), and the tap's POST must still be issued at once, on the last door the
-// server gave: the family's door when the sheet has been open past the read's lease (the page's `Date` is moved past
-// `SERVER_CAPS_HOLD_MS`), and the old `/dialog` when the mount read failed. Before the fix both taps waited on the hung
-// re-read and posted nothing.
-describe('a tap\'s answer is issued at once, never one /health read behind it (W7 C7g)', () => {
+// W7 C7g (D-7185, D-7485) read `GET /health` when the sheet mounted to choose the door, and these rows held a tap's POST
+// issued at once, never behind a stalled re-read. Since C7p (D-7194, D-7540) there is one door and no read: whatever
+// `/health` does (it stalls, or it fails), the sheet never reads it, and the tap's POST goes at once to the family's door.
+describe('a tap\'s answer is issued at once on the family\'s door, and /health is never read (W7 C7p)', () => {
   const HOLD_VIEWS: AppView[] = [
     { skin: REFINED, theme: PHOSPHOR, width: 390 }, { skin: REFINED, theme: PHOSPHOR, width: 1280 },
     { skin: INSTRUMENT, theme: 'light', width: 390 }, { skin: INSTRUMENT, theme: 'light', width: 1280 },
   ];
-  const V1 = JSON.stringify({ ok: true, build: null, caps: ['ask-pairing-v1', 'questions-v1'] });
-  for (const mount of ['past the lease', 'after a failed mount read'] as const) {
+  for (const health of ['a stalled /health', 'a failed /health'] as const) {
     for (const view of HOLD_VIEWS) {
-      it(`${mount}: ${named(view)}`, async () => {
+      it(`${health}: ${named(view)}`, async () => {
         const opened = await openApp(browser!, view, FIXTURE);
         try {
-          await opened.page.clock.setFixedTime(NOW * 1000);
           let healthReads = 0;
-          let stalled = false;
           await opened.page.route('**/health', (route) => {
+            if (new URL(route.request().url()).pathname !== '/health') { void route.fallback(); return; }
             healthReads += 1;
-            if (stalled) return; // never answered
-            if (mount === 'after a failed mount read') { void route.abort('connectionrefused'); return; }
-            void route.fulfill({ status: 200, contentType: 'application/json', body: V1 });
+            if (health === 'a failed /health') void route.abort('connectionrefused');
+            // a stalled /health is never answered
           });
           const family: string[] = [];
           await opened.page.route(`**/api/questions/session-${SESSION.id}/answer`, (route) => {
@@ -1712,22 +1711,12 @@ describe('a tap\'s answer is issued at once, never one /health read behind it (W
           await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
           const option = view.width >= 1280 ? `${CARD} button.opt` : '.sheet-panel button.opt';
           await opened.page.waitForSelector(option, { timeout: 30_000 });
-          await expect.poll(() => healthReads, { timeout: 10_000, interval: 50 }).toBeGreaterThanOrEqual(1);
           await opened.page.waitForTimeout(800);
-          stalled = true;
-          if (mount === 'past the lease') await opened.page.clock.setFixedTime(NOW * 1000 + 60_001);
-          const before = healthReads;
           await opened.page.locator(option).nth(1).click();
-          if (mount === 'past the lease') {
-            await expect.poll(() => family.length, { timeout: 3_000, interval: 50 }).toBe(1);
-            expect(JSON.parse(family[0]!), 'the second row answers option 2, on the family\'s door').toMatchObject({ kind: 'dialog', optionIndex: 2 });
-            expect(old, 'nothing goes to the old door').toEqual([]);
-          } else {
-            await expect.poll(() => old.length, { timeout: 3_000, interval: 50 }).toBe(1);
-            expect(JSON.parse(old[0]!), 'the second row answers option 2, on the old door').toMatchObject({ optionIndex: 2 });
-            expect(family, 'nothing goes to the family\'s door').toEqual([]);
-          }
-          expect(healthReads, 'the tap re-read /health behind the answer').toBeGreaterThan(before);
+          await expect.poll(() => family.length, { timeout: 3_000, interval: 50 }).toBe(1);
+          expect(JSON.parse(family[0]!), 'the second row answers option 2, on the family\'s door').toMatchObject({ kind: 'dialog', optionIndex: 2 });
+          expect(old, 'nothing goes to the old door').toEqual([]);
+          expect(healthReads, 'the sheet reads no /health').toBe(0);
           expect(opened.errors).toEqual([]);
         } finally {
           await opened.ctx.close();

@@ -547,7 +547,8 @@ export const oldAnswerWriters = (): W7Site[] => overPwa(oldAnswerWritersIn);
 
 /** The old operator answer doors' path endings. `/dialog/tab` is not one: Q3f keeps it a session door (D-7485). */
 const OLD_ANSWER_DOOR = /\/(?:ask|dialog|dialog\/text|dialog\/multi)$/;
-/** The one place C7g keeps the old doors' paths: the skew row's table, deleted by C7p with the aliases. */
+/** The one place C7g kept the old doors' paths: the skew row's table, deleted by C7p (D-7194, D-7540) with the aliases.
+ *  The census still names it, so a table of that name brought back counts as `skew-table`. */
 export const LEGACY_ANSWER_DOORS_NAME = 'LEGACY_ANSWER_DOORS';
 
 /** Every string expression in `pwa/src`, and in `pwa/public/push-sw.js`, whose text ends with an old operator answer
@@ -556,7 +557,8 @@ export const LEGACY_ANSWER_DOORS_NAME = 'LEGACY_ANSWER_DOORS';
  *  server without `questions-v1` is answered through); `region`, a string between push-sw.js's generated markers (its
  *  render of that table's `/ask`); `door`, any other. The base counts 9 (`lib/api.ts`'s four writers,
  *  `answerLifecycle.ts#answerRequest`'s three and `ASK_REQUEST`'s `/ask`, and the region's render); C7g's tip counts
- *  the table's 4 and the region's 1, and no `door`. KNOWN WIDTH: a path assembled from a variable suffix is not seen. */
+ *  the table's 4 and the region's 1, and no `door`; C7p's tip counts 0 (the table and the region's render are gone). KNOWN
+ *  WIDTH: a path assembled from a variable suffix is not seen. */
 export function oldAnswerDoorPathsIn(p: ParsedFile, file: string): W7Site[] {
   const table = p.bindings.find((b) => b.name === LEGACY_ANSWER_DOORS_NAME);
   const b = p.text.indexOf(GEN_BEGIN);
@@ -569,3 +571,25 @@ export function oldAnswerDoorPathsIn(p: ParsedFile, file: string): W7Site[] {
 }
 export const oldAnswerDoorPaths = (): W7Site[] =>
   [...overPwa(oldAnswerDoorPathsIn), ...oldAnswerDoorPathsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];
+
+// ─── C7p. the retired operator answer doors (D-7194, D-7540) ────────────────────────────────────────────────────────
+
+/** The four old operator answer doors W3 Q3f's family replaced, which W7 C7p's server half retires after its PWA half
+ *  (D-7540). `/dialog/tab` is not one: it answers nothing and stays a session door. */
+export const RETIRED_ANSWER_DOORS: readonly string[] = ['/ask', '/dialog', '/dialog/text', '/dialog/multi'];
+
+/** A retired door's path: one of the four at the end of a string's text, or before its query or fragment. */
+const RETIRED_ANSWER_DOOR = /\/(?:ask|dialog|dialog\/text|dialog\/multi)(?=$|[?#])/;
+
+/** Every string expression in the PWA bundle's sources (`pwa/src`, and `pwa/public/push-sw.js`, generated region
+ *  included) that names a retired operator answer door, whatever surrounds it: a whole path, a template's static part
+ *  (`${sid(id)}/dialog` is one), a bare suffix (`'/ask'`, the shape C7g's skew table held), or a path with a query.
+ *  Wider than `oldAnswerDoorPaths`, which matched only a string ENDING with a door, and classes nothing: C7p's tip
+ *  counts 0, and any site is a reference to a path C7p's server half retires. KNOWN WIDTH: a path assembled from a
+ *  variable suffix is not seen, and a comment is not code. */
+export function retiredAnswerPathRefsIn(p: ParsedFile, file: string): W7Site[] {
+  return stringExpressions(p.text, file).filter((x) => RETIRED_ANSWER_DOOR.test(x.text))
+    .map((x) => site(p, file, x.start, x.line, p.text.slice(x.start, x.end).slice(0, 140), 'reference'));
+}
+export const retiredAnswerPathRefs = (): W7Site[] =>
+  [...overPwa(retiredAnswerPathRefsIn), ...retiredAnswerPathRefsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];

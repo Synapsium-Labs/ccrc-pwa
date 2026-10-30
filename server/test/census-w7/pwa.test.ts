@@ -533,14 +533,41 @@ describe('W7 PWA census: the operator answer doors (C7g, D-7185, D-7485)', () =>
     held('oldAnswerWriters', oldAnswerWriters(), 0);
   });
 
-  it('REAL oldAnswerDoorPaths(): 5 (from 9): the skew table\'s 4 and the region\'s 1; no door anywhere else', async () => {
+  // C7p (D-7194, D-7540; slug c7p-pwa-fallback-retired): the skew table and the region's render went with the old doors.
+  // Held 5 at C7g's tip (the table's 4 and the region's 1); 9 on the base before C7g.
+  it('REAL oldAnswerDoorPaths(): 0 (from 5 at C7g, 9 before it): no old door in the skew table, the region or anywhere else', async () => {
     const { oldAnswerDoorPaths } = await import('./pwa.js');
     const sites = oldAnswerDoorPaths();
-    held('oldAnswerDoorPaths', sites, 5);
-    expect(sites.map((s) => [s.kind, s.file])).toEqual([
-      ['skew-table', 'pwa/src/session/answerLifecycle.ts'], ['skew-table', 'pwa/src/session/answerLifecycle.ts'],
-      ['skew-table', 'pwa/src/session/answerLifecycle.ts'], ['skew-table', 'pwa/src/session/answerLifecycle.ts'],
-      ['region', PUSH_SW],
-    ]);
+    held('oldAnswerDoorPaths', sites, 0);
+    expect(sites.map((s) => [s.kind, s.file])).toEqual([]);
+  });
+});
+
+// C7p (D-7194, D-7540; slug c7p-pwa-fallback-retired): the PWA bundle (`pwa/src` and `push-sw.js`) names none of the
+// four old operator answer doors, which C7p's server half retires after its PWA half lands. Its counted exit: 0
+// references. Imported in the block, as C7g's are.
+describe('W7 PWA census: the retired operator answer doors (C7p, D-7194, D-7540)', () => {
+  it('FIXTURE retiredAnswerPathRefs: a door at a string\'s end, before a query, in a template or as a bare suffix counts; /dialog/tab, /asks, the family and a comment do not', async () => {
+    const { retiredAnswerPathRefsIn } = await import('./pwa.js');
+    const ts = [
+      'export const a = (id: string) => post(`${sid(id)}/dialog`, {});',
+      "export const b = '/api/sessions/x/ask?y=1';",
+      "export const c = { multi: '/dialog/multi', text: '/dialog/text' } as const;",
+      'export const tab = (id: string) => post(`${sid(id)}/dialog/tab`, {});',
+      "export const asks = '/api/asks'; export const family = '/api/questions/session-x/answer';",
+      "// post(`/api/sessions/${id}/ask`) in a comment",
+    ].join('\n');
+    expect(run(retiredAnswerPathRefsIn, ts, 'pwa/src/fixture.ts').map((s) => s.line)).toEqual([1, 2, 3, 3]);
+    const sw = [
+      '// ccrc:generated answer-lifecycle BEGIN',
+      "const r = '/api/sessions/' + encodeURIComponent(sid) + '/ask';",
+      '// ccrc:generated answer-lifecycle END',
+    ].join('\n');
+    expect(run(retiredAnswerPathRefsIn, sw, PUSH_SW).length).toBeGreaterThan(0);
+  });
+
+  it('REAL retiredAnswerPathRefs(): 0 (from 5 at C7g\'s tip): the PWA bundle names no retired door', async () => {
+    const { retiredAnswerPathRefs } = await import('./pwa.js');
+    held('retiredAnswerPathRefs', retiredAnswerPathRefs(), 0);
   });
 });

@@ -10,7 +10,6 @@ import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
-import { createServerCaps } from './serverCaps';
 import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, answered, linearViewOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
@@ -135,8 +134,6 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
-  // W7 C7g (D-7185, D-7485): which door an operator's answer takes, read from `GET /health`'s `questions-v1`.
-  const caps = createServerCaps(fetchImpl);
 
   return {
     /**
@@ -565,11 +562,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
       answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
     /** Answer session `id`'s question (W7 C7g, D-7185, D-7485): an option row, the own words, a multiSelect set or a
-     *  hooked ask by option index, as `body` (`shared/api.ts#QuestionAnswerBody`). On a server that advertises
-     *  `questions-v1` (`serverCaps.ts`) it is W3 Q3f's `POST /api/questions/session-<id>/answer`; on any other, the old
-     *  door the body names, with that door's bytes (`answerLifecycle.ts#questionAnswerRequest`). Either answers the
-     *  same: the same core, its refusals by code (`DialogRefuseCode` and the rest, plus the family's `kind-mismatch`),
-     *  and a 200 whose `next` is read as a tapped row's is.
+     *  hooked ask by option index, as `body` (`shared/api.ts#QuestionAnswerBody`), to W3 Q3f's
+     *  `POST /api/questions/session-<id>/answer` (`answerLifecycle.ts#questionAnswerRequest`), the only door since C7p
+     *  (D-7194, D-7540), which retired the old ones and the `GET /health` read that chose between them. Its refusals
+     *  come by code (`DialogRefuseCode` and the rest, plus the family's `kind-mismatch`), and a 200's `next` is read as
+     *  a tapped row's is.
      *
      *  What each answer carries, as the four writers it replaced said (they went in C7g): an option row is answered by
      *  INDEX, with the dialog it was shown. The own words (D-5047) are typed only once a capture proves the cursor on
@@ -579,13 +576,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  (`isDialogMultiIndexes`: empty, repeated, or outside 1..9). An ask's `askKey` is minted server-side and carried
      *  verbatim: the server re-reads the CURRENT envelope and refuses unless the key still matches, so this can only
      *  ever answer the question the client was shown. */
-    /** Which door an answer takes now: true on a server that advertises `questions-v1` (`serverCaps.ts`). Once any
-     *  read has settled it resolves at once with the last door the server gave, re-reading behind it when that is past
-     *  its lease; the sheet reads it when it mounts and when the page comes back into view, so a tap's request is
-     *  never one `GET /health` behind the tap. */
-    questionsDoor: (): Promise<boolean> => caps.questionsDoor(),
     answerQuestion: async (id: string, body: QuestionAnswerBody): Promise<DialogAnswered> => {
-      const req = questionAnswerRequest(id, body, await caps.questionsDoor());
+      const req = questionAnswerRequest(id, body);
       return answered(await postRead<unknown>(req.path, ANSWERED, req.payload));
     },
     /** One verified Enter on a box that already holds text — the rescue for a

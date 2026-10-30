@@ -5,8 +5,8 @@
 /* global self, fetch */
 
 // ccrc:generated answer-lifecycle BEGIN
-// Rendered by pwa/test/answerRegion.ts from pwa/src/session/answerLifecycle.ts#ASK_REQUEST,
-// pwa/src/lib/serverCaps.ts#SERVER_CAPS_READ and pwa/src/lib/refusalWords.ts; push-sw.test.ts holds it byte-equal.
+// Rendered by pwa/test/answerRegion.ts from pwa/src/session/answerLifecycle.ts#ASK_REQUEST and
+// pwa/src/lib/refusalWords.ts; push-sw.test.ts holds it byte-equal.
 // Never edit it by hand: change the source, then run `CCRC_WRITE_ANSWER_REGION=1 npx vitest run test/push-sw.test.ts`
 // in pwa/.
 
@@ -44,35 +44,14 @@ function askOf(action, sessionId) {
 }
 
 /**
- * Does this server advertise the question door family (`questions-v1` in `GET /health`'s `caps`)? Matched by the word,
- * never by counting. A request that fails, a non-200 or an unreadable body is false: the old door, which every server
- * still answers until its aliases are retired.
+ * The request that answers `ask`: the question door family's operator door and its body, the one door there is.
  */
-async function questionsDoor() {
-  try {
-    const res = await fetch('/health', { cache: 'no-store' });
-    if (!res.ok) return false;
-    const health = await res.json();
-    return typeof health === 'object' && health !== null && Array.isArray(health.caps) && health.caps.includes('questions-v1');
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The request that answers `ask`: the family's door and body when `questions` (the server advertises it), else the
- * old door and its body.
- */
-function askRequestOf(ask, questions) {
+function askRequestOf(ask) {
   return {
     method: 'POST',
-    path: questions
-      ? '/api/questions/' + encodeURIComponent('session-' + ask.sessionId) + '/answer'
-      : '/api/sessions/' + encodeURIComponent(ask.sessionId) + '/ask',
+    path: '/api/questions/' + encodeURIComponent('session-' + ask.sessionId) + '/answer',
     headers: { 'content-type': 'application/json' },
-    body: questions
-      ? JSON.stringify({ kind: ask.kind, askKey: ask.askKey, optionIndexes: ask.optionIndexes })
-      : JSON.stringify({ askKey: ask.askKey, optionIndexes: ask.optionIndexes }),
+    body: JSON.stringify({ kind: ask.kind, askKey: ask.askKey, optionIndexes: ask.optionIndexes }),
   };
 }
 // ccrc:generated answer-lifecycle END
@@ -210,9 +189,9 @@ self.addEventListener('notificationclick', (event) => {
 
   notification.close();
   event.waitUntil((async () => {
-    // The door: the question family's on a server that advertises it, the
-    // old one otherwise (an older server, or a /health that could not be read).
-    const req = askRequestOf(ask, await questionsDoor());
+    // The door: the question family's operator door, the only one (W7 C7p
+    // retired the old /ask and the /health read that chose between them).
+    const req = askRequestOf(ask);
     let res;
     try {
       res = await fetch(req.path, { method: req.method, headers: req.headers, body: req.body });

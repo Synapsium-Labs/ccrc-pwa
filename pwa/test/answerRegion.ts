@@ -2,17 +2,16 @@
 // `docs/superpowers/plans/2026-10-28-w7-operator-acts-ruled.md`). `push-sw.js` is a classic script the service worker
 // `importScripts`, so it cannot import the answer lifecycle; the things it shares with it are rendered here as source
 // text and held byte-equal by `push-sw.test.ts`:
-//  - the action's parser, `askOf(action, sessionId)`, and the request, `askRequestOf(ask, questions)`, rendered from
+//  - the action's parser, `askOf(action, sessionId)`, and the request, `askRequestOf(ask)`, rendered from
 //    `answerLifecycle.ts#ASK_REQUEST`, the `ask` arm's declared shape that `answerRequest` also reads (a row evaluates
-//    both over one action corpus and holds them equal, so the text never depends on how a bundler prints a function);
-//  - the door's choice, `questionsDoor()`, rendered from `serverCaps.ts#SERVER_CAPS_READ` (W7 C7g, D-7185, D-7485;
-//    slug `c7g-notification-cap-read-rendered`), held equal to `serverCaps.ts#advertisesQuestions` over one corpus;
+//    both over one action corpus and holds them equal, so the text never depends on how a bundler prints a function).
+//    The request has one door, W3 Q3f's family: C7p (D-7194, D-7540) retired the old `/ask` and the `GET /health` read
+//    (`questionsDoor()`, rendered from `lib/serverCaps.ts` since W7 C7g, D-7485) that chose between them;
 //  - the sentence table, `REFUSAL`, rendered from `refusalWords.ts#NOTIFICATION_REFUSAL_TEXT` and, for the family's own
 //    word, `#NOTIFICATION_QUESTION_DOOR_TEXT`.
 // A test-side module, not a `pwa/scripts/*.mjs`: it ships in no bundle and runs only inside vitest.
 import { ASK_REQUEST } from '../src/session/answerLifecycle';
 import { NOTIFICATION_QUESTION_DOOR_TEXT, NOTIFICATION_REFUSAL_TEXT } from '../src/lib/refusalWords';
-import { SERVER_CAPS_READ } from '../src/lib/serverCaps';
 
 export const REGION_BEGIN = '// ccrc:generated answer-lifecycle BEGIN';
 export const REGION_END = '// ccrc:generated answer-lifecycle END';
@@ -31,8 +30,8 @@ export function renderAnswerRegion(): string {
   const R = ASK_REQUEST;
   return [
     REGION_BEGIN,
-    '// Rendered by pwa/test/answerRegion.ts from pwa/src/session/answerLifecycle.ts#ASK_REQUEST,',
-    '// pwa/src/lib/serverCaps.ts#SERVER_CAPS_READ and pwa/src/lib/refusalWords.ts; push-sw.test.ts holds it byte-equal.',
+    '// Rendered by pwa/test/answerRegion.ts from pwa/src/session/answerLifecycle.ts#ASK_REQUEST and',
+    '// pwa/src/lib/refusalWords.ts; push-sw.test.ts holds it byte-equal.',
     '// Never edit it by hand: change the source, then run `CCRC_WRITE_ANSWER_REGION=1 npx vitest run test/push-sw.test.ts`',
     '// in pwa/.',
     '',
@@ -59,35 +58,14 @@ export function renderAnswerRegion(): string {
     '}',
     '',
     '/**',
-    " * Does this server advertise the question door family (`questions-v1` in `GET /health`'s `caps`)? Matched by the word,",
-    ' * never by counting. A request that fails, a non-200 or an unreadable body is false: the old door, which every server',
-    ' * still answers until its aliases are retired.',
+    " * The request that answers `ask`: the question door family's operator door and its body, the one door there is.",
     ' */',
-    'async function questionsDoor() {',
-    '  try {',
-    `    const res = await fetch(${quoted(SERVER_CAPS_READ.path)}, { cache: ${quoted(SERVER_CAPS_READ.cache)} });`,
-    '    if (!res.ok) return false;',
-    '    const health = await res.json();',
-    `    return typeof health === 'object' && health !== null && Array.isArray(health.caps) && health.caps.includes(${quoted(SERVER_CAPS_READ.word)});`,
-    '  } catch {',
-    '    return false;',
-    '  }',
-    '}',
-    '',
-    '/**',
-    " * The request that answers `ask`: the family's door and body when `questions` (the server advertises it), else the",
-    ' * old door and its body.',
-    ' */',
-    'function askRequestOf(ask, questions) {',
+    'function askRequestOf(ask) {',
     '  return {',
     `    method: ${quoted(R.method)},`,
-    '    path: questions',
-    `      ? ${quoted(R.questionsPathPrefix)} + encodeURIComponent(${quoted(R.questionIdPrefix)} + ask.sessionId) + ${quoted(R.questionsPathSuffix)}`,
-    `      : ${quoted(R.pathPrefix)} + encodeURIComponent(ask.sessionId) + ${quoted(R.pathSuffix)},`,
+    `    path: ${quoted(R.questionsPathPrefix)} + encodeURIComponent(${quoted(R.questionIdPrefix)} + ask.sessionId) + ${quoted(R.questionsPathSuffix)},`,
     `    headers: { 'content-type': ${quoted(R.contentType)} },`,
-    '    body: questions',
-    `      ? JSON.stringify({ ${R.kindField}: ask.${R.kindField}, ${R.keyField}: ask.${R.keyField}, ${R.indexesField}: ask.${R.indexesField} })`,
-    `      : JSON.stringify({ ${R.keyField}: ask.${R.keyField}, ${R.indexesField}: ask.${R.indexesField} }),`,
+    `    body: JSON.stringify({ ${R.kindField}: ask.${R.kindField}, ${R.keyField}: ask.${R.keyField}, ${R.indexesField}: ask.${R.indexesField} }),`,
     '  };',
     '}',
     REGION_END,
