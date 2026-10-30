@@ -73,8 +73,16 @@ describe('the fleet agent never loads the test service\'s adapters (§Review foc
     expect(offenders).toEqual([]);
     expect(reach(path.join(SRC, 'testbox', 'main.ts')).has(path.join(SRC, 'testbox', 'systemd.ts')), 'the walker reaches main.ts\'s adapters').toBe(true);
   });
-  it('the package has two entry points: the fleet agent and the test service', () => {
-    expect(entryPoints(SRC)).toEqual(['index.ts', 'testbox/main.ts']);
+  // TB8 (D-7410) adds the third, the wrapper's client (`testbox/client.ts`), which the wrapper runs as its own process.
+  it('the package has three entry points: the fleet agent, the test service and the wrapper\'s client', () => {
+    expect(entryPoints(SRC)).toEqual(['index.ts', 'testbox/client.ts', 'testbox/main.ts']);
+  });
+  it('nothing agent/src/index.ts imports reaches the client or its budget, and the client reaches no fleet agent file', () => {
+    const r = reach(path.join(SRC, 'index.ts'));
+    expect(['client.ts', 'budget.ts'].map((f) => path.join(SRC, 'testbox', f)).filter((f) => r.has(f)).map((f) => path.relative(SRC, f))).toEqual([]);
+    const c = reach(path.join(SRC, 'testbox', 'client.ts'));
+    expect(c.has(path.join(SRC, 'testbox', 'budget.ts')), 'the walker reaches the client\'s budget').toBe(true);
+    expect([...c].filter((f) => f.startsWith(SRC) && !f.startsWith(path.join(SRC, 'testbox'))).map((f) => path.relative(SRC, f))).toEqual([]);
   });
 });
 
