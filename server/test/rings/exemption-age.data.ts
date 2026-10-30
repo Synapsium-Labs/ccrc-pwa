@@ -15,7 +15,7 @@ export interface SetStamp {
 }
 
 export const EXEMPTION_SET_STAMPS: Readonly<Record<string, SetStamp>> = {
-  'server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS': { size: 11, reason: 'the outward runtime edges left after D-7504 (ARCH-05, #551) moved defaultSessionsPath inward to auth/paths.ts, draining config.ts -> auth/sessions.ts; ARCH-05 drains the rest', since: '2026-10-30' },
+  'server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS': { size: 10, reason: 'the outward runtime edges left after D-7504 (ARCH-05, #551) moved defaultSessionsPath inward to auth/paths.ts, draining config.ts -> auth/sessions.ts, and D-7505 (ARCH-05) drained token/door.ts -> token/files.ts: the door takes its claim-code mint through its options; ARCH-05 drains the rest', since: '2026-10-30' },
   'server/test/rings/host-imports.data.ts#HOST_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since ARCH-03 (#541)', since: '2026-10-20' },
   'server/test/rings/shared-imports.data.ts#SHARED_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },
   'server/test/rings/mjs-node.data.ts#REACHABLE_MJS_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },

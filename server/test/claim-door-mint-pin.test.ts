@@ -9,19 +9,12 @@ import path from 'node:path';
 import { ClaimDoor } from '../src/token/door.js';
 import { bootBoxToken } from '../src/token/boot.js';
 import { BoxTokenDriver } from '../src/token/driver.js';
-import { fileTokenStore, tokenPaths } from '../src/token/files.js';
+import { fileTokenStore, mintClaimCode, tokenPaths } from '../src/token/files.js';
 import { generationReaderOver } from '../src/token/link.js';
 import type { GateNode, SyncResult } from '../src/token/policy.js';
 import type { TokenSyncLink } from '../src/token/ports.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
-
-const mocks = vi.hoisted(() => ({ mint: vi.fn<() => string>() }));
-vi.mock('../src/token/files.js', async (orig) => {
-  const real = await orig<typeof import('../src/token/files.js')>();
-  mocks.mint.mockImplementation(real.mintClaimCode);
-  return { ...real, mintClaimCode: mocks.mint };
-});
 
 const NODE = '0e6a6c2e-3b1f-4c55-9a51-2f0f1c9f7d10';
 const GEN = 'a1b2c3d4e5f60718';
@@ -31,9 +24,9 @@ const CODE = /^[A-Za-z0-9_-]{43}$/;
 
 /** The one place a door row builds its door, and how it reads the mint's call count. */
 function doorUnderTest(): { door: ClaimDoor; mintCalls: () => number } {
-  mocks.mint.mockClear();
-  const door = new ClaimDoor({ valueOf: () => VALUE, warn: () => {} });
-  return { door, mintCalls: () => mocks.mint.mock.calls.length };
+  const mint = vi.fn(mintClaimCode);
+  const door = new ClaimDoor({ valueOf: () => VALUE, warn: () => {}, mintClaimCode: mint });
+  return { door, mintCalls: () => mint.mock.calls.length };
 }
 
 describe('the claim door mints its code (D-7505)', () => {

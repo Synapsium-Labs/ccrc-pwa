@@ -107,7 +107,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.mintFailed = boot.mintFailed;
     this.mintFailedSince = boot.mintFailed ? (boot.state?.mintFailedAt ?? this.now()) : null;
     this.mintOwed = boot.mintFailed ? boot.mintOwed : null;
-    this.door = deps.door ?? new ClaimDoor({ valueOf: (g) => this.deps.holder.pendingValue(g), warn: this.warn });
+    this.door = deps.door ?? new ClaimDoor({
+      valueOf: (g) => this.deps.holder.pendingValue(g), warn: this.warn, mintClaimCode: () => deps.store.mintClaimCode(),
+    });
     this.cur = deps.holder.currentValue();
     for (const p of boot.state?.pending ?? []) {
       const v = deps.holder.pendingValue(p.id);
