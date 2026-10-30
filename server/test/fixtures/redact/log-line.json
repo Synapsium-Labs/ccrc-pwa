@@ -1199,6 +1199,177 @@
       "updateSync": "host"
     },
     {
+      "rule": "R8",
+      "input": "connecting to tok@host:8443... retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "connecting to host:8443... retrying",
+      "bareHost": "connecting to host:8443... retrying",
+      "updateSync": "connecting to host:8443... retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443... ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443... ok",
+      "bareHost": "host:8443... ok",
+      "updateSync": "host:8443... ok"
+    },
+    {
+      "rule": "R8",
+      "input": "reach (tok@host:8443.) now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach (host:8443.) now",
+      "bareHost": "reach (host:8443.) now",
+      "updateSync": "reach (host:8443.) now"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443.,",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443.,",
+      "bareHost": "reach host:8443.,",
+      "updateSync": "reach host:8443.,"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443!! now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443!! now",
+      "bareHost": "reach host:8443!! now",
+      "updateSync": "reach host:8443!! now"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443}}",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443}}",
+      "bareHost": "reach host:8443}}",
+      "updateSync": "reach host:8443}}"
+    },
+    {
+      "rule": "R8",
+      "input": "error: \"dial tok@host:8443.\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "error: \"dial host:8443.\"",
+      "bareHost": "error: \"dial host:8443.\"",
+      "updateSync": "error: \"dial host:8443.\""
+    },
+    {
+      "rule": "R8",
+      "input": "dial tok@host:8443.) retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "dial host:8443.) retrying",
+      "bareHost": "dial host:8443.) retrying",
+      "updateSync": "dial host:8443.) retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443!!",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443!!",
+      "bareHost": "host:8443!!",
+      "updateSync": "host:8443!!"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443}.",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443}.",
+      "bareHost": "host:8443}.",
+      "updateSync": "host:8443}."
+    },
+    {
+      "rule": "R8",
+      "input": "failed to reach `tok@host:8443` (refused)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "failed to reach `host:8443` (refused)",
+      "bareHost": "failed to reach `host:8443` (refused)",
+      "updateSync": "failed to reach `host:8443` (refused)"
+    },
+    {
+      "rule": "R8",
+      "input": "failed to reach `tok@host:8443`",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "failed to reach `host:8443`",
+      "bareHost": "failed to reach `host:8443`",
+      "updateSync": "failed to reach `host:8443`"
+    },
+    {
+      "rule": "R8",
+      "input": "see `user@host:8443`.",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see `host:8443`.",
+      "bareHost": "see `host:8443`.",
+      "updateSync": "see `host:8443`."
+    },
+    {
+      "rule": "R8",
+      "input": "`tok@host:8443`",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "`host:8443`",
+      "bareHost": "`host:8443`",
+      "updateSync": "`host:8443`"
+    },
+    {
+      "rule": "R1",
+      "input": "see `tok@host/x` now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see `host/x` now",
+      "bareHost": "see `host/x` now",
+      "updateSync": "see `host/x` now"
+    },
+    {
+      "rule": "R1",
+      "input": "@tok@host/x refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host/x refused",
+      "bareHost": "host/x refused",
+      "updateSync": "host/x refused"
+    },
+    {
+      "rule": "R6",
+      "input": "@tok@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "@tok@host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "prose",
+      "input": "v pkg@h:1.2.3 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "v pkg@h:1.2.3 ok",
+      "bareHost": "v pkg@h:1.2.3 ok",
+      "updateSync": "v pkg@h:1.2.3 ok"
+    },
+    {
+      "rule": "blast",
+      "input": "see a@b:3.x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see a@b:3.x",
+      "bareHost": "see b:3.x",
+      "updateSync": "see b:3.x"
+    },
+    {
       "rule": "prose",
       "input": "use x@h:1.2 now",
       "home": "/home/u",

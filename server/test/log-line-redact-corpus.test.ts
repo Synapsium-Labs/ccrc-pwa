@@ -29,6 +29,12 @@
 // (runs of text, each repeated `times` times): a text over 4096 bytes keeps only a head cut back to its last
 // whitespace, so a line of thousands of credentials returns in milliseconds, not seconds.
 //
+// D-7564's third round closed three more shapes, each a row in every column: a port followed by a run of '.', '!' or
+// '}' and then any other terminator (`connecting to tok@host:8443... retrying`, `dial tok@host:8443.) retrying`,
+// `tok@host:8443}.`; `x@h:1.2`, `v pkg@h:1.2.3 ok` and `see a@b:3.x` stay whole in plain mode), a backtick around the
+// token (`` reach `tok@host:8443` ``, which keeps its backticks), and a leading '@' before a userinfo whose host a '/'
+// ends, or (bare-host) the text's end: `@tok@host/x refused` reads `host/x refused`.
+//
 // Every call goes through ONE fixed driver: the definitions are written to a temporary file and the input to
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
 // one of the literal calls in `SCRIPTS`. No path and no environment value ever reaches a script's text. The input
