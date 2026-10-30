@@ -138,3 +138,12 @@ describe('assembleFleet: whether a statusline Workflow row promotes idle, under 
     expect(fleet.find((x) => x.id === ID)!.status).toBe(status);
   });
 });
+
+describe('the two live verdicts have one home: livestate.ts re-exports liveVerdicts.ts\'s bindings (D-7512)', () => {
+  it('liveSessionStatus and liveStatusCoversDelegation are the same functions through either module', async () => {
+    const verdicts = await import('../src/liveVerdicts.js');
+    const livestate = await import('../src/livestate.js');
+    expect(livestate.liveSessionStatus).toBe(verdicts.liveSessionStatus);
+    expect(livestate.liveStatusCoversDelegation).toBe(verdicts.liveStatusCoversDelegation);
+  });
+});
