@@ -2722,7 +2722,9 @@ EOF
 # `_upd_redact <text> [bare-host]` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
 # 11 and M1): a URL's userinfo (`[scheme:/…]user:pass@host` -> `[scheme:/…]host`;
-# a scheme's one or more '/' stay as written, D-6748) and this box's own absolute
+# a scheme's one or more '/' stay as written, D-6748; with no scheme, a
+# `user:pass@` goes whatever ends the host, and any userinfo goes before a host
+# ended by `:port` and then a terminator, D-7564) and this box's own absolute
 # home directory (-> `~`). TWO CHOKE POINTS, not one — review fix round 1 M1
 # found a second path that reached `update.json` and the journal unredacted:
 # `UPD_GATE_WHY` (the gate's own failure reason, which can start with
@@ -2766,14 +2768,28 @@ _upd_redact() {
   # `user@host` stays. Past a run's first character '<' and '"' are the
   # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
   # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
+  # D-7564: a run after the first may be empty, so `user:secret@@host/x` loses `user:secret@@` (curl's userinfo
+  # runs to the last '@').
   local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
-  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
+  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  # D-7564, in both modes: two shapes are a credential whatever ends the host, so no end set is asked of them.
+  #   1. a token's userinfo holding a ':' (`user:secret@`, up to the token's last '@', a leading '@' included):
+  #      `server user:secret@host:8443 refused`, `user:secret@host: refused`, a quote, a tab, a CR or the text's end
+  #      after the host. A token starts at the text's start or after whitespace, '"', "'", '<' or '('; past its
+  #      first character the userinfo may hold '"', "'", '<' or '('.
+  #      An email address has no ':' before its '@', so it stays.
+  #   2. any userinfo before a host that ends in `:digits` and then whitespace, `)`, `]`, `,`, `;`, `:`, `|`, a
+  #      quote, `<`, `>` or the text's end: `tok@host:8443 refused`. The host holds a character other than a digit,
+  #      so a time's `build@10:30` stays.
+  # The cost: `mailto:a@example.com` reads as shape 1 and loses `mailto:a@`.
+  local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?:[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(])(([^/@?#[:space:]"'"'"'<(][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*:[0-9]+([]),;:|"'"'"'<>[:space:]]|$))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
   # text's end is masked too, prose's `user@host` included, which is why no ccd/ccrc caller passes it: a systemd
   # instance unit's `claude-session@x.service` would lose its prefix (D-7289).
   if [ "$mode" = bare-host ]; then
-    local bre='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:])]+([/?#)]|$))'
-    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
+    local bre='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
+    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   fi
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
