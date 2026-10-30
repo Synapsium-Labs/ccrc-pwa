@@ -115,9 +115,11 @@ interface Measure {
   panelText: string;
   /** Is focus inside the surface as it settled? */
   focusIn: boolean;
-  /** As the sheet opened and settled, nothing scrolled by the test: the body's scroll offset, the panel's and the
-   *  body's rectangles, and the question's first line and the who line as rectangles. */
-  bodyScrollTop: number | null;
+  /** As the sheet opened and settled, nothing scrolled by the test: the scroll offset of each box that can scroll the
+   *  question or the options (the phone's body; at the desk the question region and the surface, since Task T1d), the
+   *  panel's rectangle and the rectangle the question is read in (the phone's body, the desk's question region), and the
+   *  question's first line and the who line as rectangles. */
+  scrollTops: Array<{ cls: string; top: number }>;
   panel: Box;
   body: Box | null;
   first: Box | null;
@@ -144,7 +146,8 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
     }
     const measured = await opened.page.evaluate(([FIRST_LINE_ARG, WHO_LINE_ARG]): Measure => {
       // The panel is found from the ask itself: the who line is the ask's own.
-      // (At a desk the surface is T1c's inline card, `[data-ask-surface]`, whose one scroller is `.ask-inline-body`.)
+      // (At a desk the surface is T1c's inline card, `[data-ask-surface]`, whose `.ask-inline-body` holds the question region,
+      // the scroller of a long question since Task T1d, and the answer surface, which scrolls on its own.)
       const panel = document.querySelector('.ask-who')!.closest<HTMLElement>('.sheet-panel, [data-ask-surface]')!;
       const title = panel.querySelector<HTMLElement>('.sheet-title');
       const scrolls = (el: HTMLElement): boolean => {
@@ -170,8 +173,10 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
         }
         return null;
       };
-      const body = panel.querySelector<HTMLElement>('.sheet-body, .ask-inline-body');
+      const body = panel.querySelector<HTMLElement>('.sheet-body, .ask-inline-question');
       const bodyRect = body?.getBoundingClientRect();
+      const scrollTops = Array.from(panel.querySelectorAll<HTMLElement>('.sheet-body, .ask-inline-question, .ask-inline-surface'))
+        .map((el) => ({ cls: el.getAttribute('class') ?? el.tagName, top: el.scrollTop }));
       const panelRect = panel.getBoundingClientRect();
       return {
         scrollers,
@@ -179,7 +184,7 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
         pageSide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         panelText: panel.innerText,
         focusIn: panel.contains(document.activeElement),
-        bodyScrollTop: body?.scrollTop ?? null,
+        scrollTops,
         panel: { top: panelRect.top, bottom: panelRect.bottom },
         body: bodyRect === undefined ? null : { top: bodyRect.top, bottom: bodyRect.bottom },
         first: boxOf(FIRST_LINE_ARG),
@@ -192,13 +197,14 @@ async function openAndMeasure(view: AppView, twice = false): Promise<{ measured:
   }
 }
 
-/** The claim of the open sheet: nothing has scrolled the question away, its first line sits inside the body's own
- *  rectangle (not merely inside the window), and the who line, which the eyebrow keeps above the body, sits inside the
+/** The claim of the open sheet: nothing has scrolled the question or the options away (at the desk, neither the
+ *  question region nor the surface), its first line sits inside the rectangle it is read in (not merely inside the window), and the who line, which the eyebrow keeps above the body, sits inside the
  *  panel. (Two pixels of slack: a Range's rectangle is the glyphs' box, which a tight line height lets reach a pixel
  *  past the line.) */
 function expectReadsFromTop(m: Measure): void {
   expect(m.body, 'the sheet has a body').not.toBeNull();
-  expect(m.bodyScrollTop, 'the body opens at its top').toBeLessThanOrEqual(1);
+  expect(m.scrollTops.length, 'premise: the sheet\'s body, or the card\'s question region and surface, are read').toBeGreaterThan(0);
+  for (const { cls, top } of m.scrollTops) expect(top, `${cls} opens at its top`).toBeLessThanOrEqual(1);
   const inside = (what: string, box: Box | null, within: Box, name: string): void => {
     expect(box, `${what} is in the sheet`).not.toBeNull();
     expect(box!.top, `${what} starts inside the ${name}`).toBeGreaterThanOrEqual(within.top - 2);
@@ -255,7 +261,11 @@ describe('an ask at a desk opens at its top too (D-6325, D-6326)', () => {
   it(named(desk), async () => {
     const { measured, errors } = await openAndMeasure(desk, true);
     expect(measured.panelText).toContain(FIRST_LINE);
-    expect(measured.scrollers.map((s) => s.cls), 'the question overflows its body').toHaveLength(1);
+    // Task T1d: the question scrolls in its own region; fixture 1's answer surface (about 560px) is taller than the card
+    // leaves it, so it scrolls on its own too. Nothing else does.
+    const cls = measured.scrollers.map((s) => s.cls);
+    expect(cls.filter((c) => c.startsWith('ask-inline-question')), 'the question overflows its region').toHaveLength(1);
+    expect(cls.filter((c) => !c.startsWith('ask-inline-question') && !c.startsWith('ask-inline-surface')), 'nothing else scrolls').toEqual([]);
     expect(measured.focusIn, 'the arriving ask takes no focus').toBe(false);
     expectReadsFromTop(measured);
     expect(errors).toEqual([]);
