@@ -2749,6 +2749,10 @@ EOF
 # echo). `ccd/ccd-update-sync`, another executable, carries a generated copy of
 # this function (`shared/hook-helpers.mjs`'s log-line region) and redacts at its
 # own `say`, with `bare-host`.
+# OUT OF SCOPE: this function masks only those two, a URL's userinfo and this
+# box's home directory. A query-string secret (`?token=…`, `&key=…`) and a
+# bearer token (`Authorization: Bearer …`) pass through it whole; a line that
+# may carry one needs its own masking before it reaches here.
 _upd_redact() {
   local s="${1:-}" mode="${2:-}" LC_ALL=C
   # The userinfo strip is bounded to characters a URL authority allows

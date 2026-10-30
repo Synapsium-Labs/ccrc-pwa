@@ -18,6 +18,8 @@
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
 // one of the literal calls in `SCRIPTS`. No path and no environment value ever reaches a script's text. The input
 // travels in a file because an argv string cannot carry an invalid UTF-8 byte; stdout and stderr are compared as bytes.
+// The driver cannot test two kinds of text: one that ends in a newline (`input="$(cat -- "$2")"` strips every trailing
+// newline before the call) and one that contains a NUL (a bash variable cannot hold that byte). No row holds either.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
