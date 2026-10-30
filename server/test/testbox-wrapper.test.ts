@@ -22,6 +22,7 @@ import { parseRunsLine, TESTBOX_FALLBACK, TESTBOX_PROTO, type RunsLogRow, type T
 import { TestboxService, type ServiceSettings } from '../../agent/src/testbox/service.js';
 import { startTestboxServer, type RunningTestbox } from '../../agent/src/testbox/main.js';
 import type { SystemManager, UnitEnd } from '../../agent/src/testbox/systemd.js';
+import { SUBCOMMANDS, VALUE_FLAGS } from '../../agent/src/testbox/budget.js';
 
 removeTmpFixturesEachTest();
 
@@ -503,6 +504,67 @@ describe('TB8: a run on the box (D-7410)', () => {
     expect(w.mgr.log).toContain('stop ccrc-testbox-run@1.service');
     expect(runsRows(w)).toEqual([expect.objectContaining({ outcome: 'remote', exit: 130 })]);
   }, T);
+
+  // The Ctrl-C row signals the whole group, so the client gets SIGINT itself. A supervisor's stop or a timeout's kill
+  // signals the wrapper alone: only the wrapper's traps pass it on to the client, and only the client cancels the run.
+  for (const [sig, exit] of [['SIGTERM', 143], ['SIGHUP', 129]] as const) {
+    it(`${sig} to the wrapper alone is passed to the client: the service stops the run, the wrapper exits ${exit} and logs it`, async () => {
+      const w = await world();
+      writeFileSync(path.join(w.pkg, 'test', 'h.test.ts'), 'HOLD\n');
+      let child: ChildProcess | null = null;
+      const p = wrapAsync(w, ['--', './node_modules/.bin/vitest', 'run', 'test/h.test.ts'], { onSpawn: (c) => { child = c; } });
+      await until('the box run to hold', () => w.mgr.log.includes('ccrc-testbox-run@1.service') && existsSync(path.join(w.boxRoot, 'out', '1', 'stdout')) && readFileSync(path.join(w.boxRoot, 'out', '1', 'stdout'), 'utf8').includes('HOLDING'));
+      await new Promise((r) => setTimeout(r, 300));
+      process.kill(child!.pid!, sig);   // the wrapper's own pid, not its group
+      // A wrapper that does not pass the signal on waits on a held run forever: bound it, then end the group.
+      const bound = new Promise<'held'>((r) => setTimeout(() => r('held'), 20_000));
+      const r = await Promise.race([p, bound]);
+      if (r === 'held') { try { process.kill(-child!.pid!, 'SIGKILL'); } catch { /* gone */ } }
+      expect(r === 'held' ? 'the wrapper was still waiting 20 s after the signal' : r.status).toBe(exit);
+      await w.svc.idle();
+      expect(w.mgr.log).toContain('stop ccrc-testbox-run@1.service');
+      expect(runsRows(w)).toEqual([expect.objectContaining({ outcome: 'remote', exit })]);
+    }, T);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// One reading of a vitest argv in two languages: budget.ts's sets against ccd/ccrc-test's case arms.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** `_tvalflag`'s case arm in ccd/ccrc-test: the flags that take the next word as their value. */
+function wrapperValueFlags(text: string): string[] {
+  const m = /^_tvalflag\(\) \{[^\n]*\n\s*case "\$1" in\n([\s\S]*?)\) return 0 ;;/m.exec(text);
+  expect(m, '_tvalflag has its one case arm').not.toBeNull();
+  return m![1]!.replace(/\\\n/g, ' ').split('|').map((f) => f.trim());
+}
+/** The subcommands `_targv_heavy` skips as the first word. */
+function wrapperSubcommands(text: string): string[] {
+  const all = [...text.matchAll(/case "\$w" in ([a-z|]+)\) continue ;; esac/g)];
+  expect(all, 'one subcommand case').toHaveLength(1);
+  return all[0]![1]!.split('|');
+}
+const sorted = (xs: Iterable<string>): string[] => [...xs].sort();
+
+describe('TB8: the budget reads an argv as the wrapper does (single definition across bash and TypeScript)', () => {
+  const text = readFileSync(path.join(REPO, 'ccd', 'ccrc-test'), 'utf8');
+
+  it('budget.ts VALUE_FLAGS is exactly `_tvalflag`\'s list, and a flag added to one side only is caught', () => {
+    const flags = wrapperValueFlags(text);
+    expect(flags.length).toBeGreaterThan(10);
+    expect(new Set(flags).size, 'no flag twice').toBe(flags.length);
+    expect(sorted(VALUE_FLAGS)).toEqual(sorted(flags));
+    const mutated = text.replace('|--workspace) return 0 ;;', '|--workspace|--sequence.seed) return 0 ;;');
+    expect(mutated).not.toBe(text);
+    expect(sorted(VALUE_FLAGS)).not.toEqual(sorted(wrapperValueFlags(mutated)));
+  });
+
+  it('budget.ts SUBCOMMANDS is exactly `_targv_heavy`\'s subcommand case, and one added to one side only is caught', () => {
+    expect(sorted(SUBCOMMANDS)).toEqual(sorted(wrapperSubcommands(text)));
+    const mutated = text.replace('run|watch|dev|related|bench) continue', 'run|watch|dev|related|bench|list) continue');
+    expect(mutated).not.toBe(text);
+    expect(sorted(SUBCOMMANDS)).not.toEqual(sorted(wrapperSubcommands(mutated)));
+  });
 });
 
 describe('TB8: every fallback row, in TESTBOX_FALLBACK\'s order (spec §5 row 7)', () => {

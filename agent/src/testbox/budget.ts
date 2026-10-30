@@ -47,13 +47,16 @@ export function readDurations(text: string | null, why: string, repository: stri
   return { ok: true, durations: out };
 }
 
-/** The vitest and jest flags that take the next word as their value (ccd/ccrc-test's `_tvalflag`, the same list). */
-const VALUE_FLAGS = new Set([
+/** The vitest and jest flags that take the next word as their value: ccd/ccrc-test's `_tvalflag`, the same list, pinned
+ *  to it by server/test/testbox-wrapper.test.ts's parity row (a flag added to one side only reds it). */
+export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   '-c', '--config', '-r', '--root', '--dir', '--project', '--reporter', '--reporters', '--outputFile', '--environment', '--env',
   '-t', '--testNamePattern', '--testPathPattern', '--testPathIgnorePatterns', '--shard', '--pool', '--maxWorkers', '--minWorkers',
   '--exclude', '--mode', '--selectProjects', '--rootDir', '--testRegex', '--testTimeout', '--workspace',
 ]);
-const SUBCOMMANDS = new Set(['run', 'watch', 'dev', 'related', 'bench']);
+/** The vitest subcommands the wrapper's argv reading skips as the first word (ccd/ccrc-test's `_targv_heavy`), pinned
+ *  the same way. */
+export const SUBCOMMANDS: ReadonlySet<string> = new Set(['run', 'watch', 'dev', 'related', 'bench']);
 const TEST_FILE = /\.(test|spec)\.[^/]+$/;
 const GLOB = /[*?[]/;
 
