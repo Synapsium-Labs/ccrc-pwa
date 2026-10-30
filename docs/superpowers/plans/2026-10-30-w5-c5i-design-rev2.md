@@ -133,14 +133,26 @@ base (B). Items 10 to 15 are clarifications (C) or follow this repository's test
 14. **(B) Growth and placement are re-measured on this base.** The `_restamp_region_of` fallback adds about three lines,
     so `ccd/ccrc` grows by about +11 code lines, still under 40. `ccd/lib/` now exists (`train-proof.sh`). The census
     already reads it as part of `ccd/ccd`'s program, and C5i edits nothing there.
-15. **(T) The identity check and the usage line leave the moves.** An earlier draft of this file put the identity check
-    in Step 2a, called a move, while §Must not change forbade any output change in a Step 2 commit.
-    The two identity rows exit 0 `current` on the base, so 2a would have changed them with no red first.
-    - Steps 2a to 2d are moves only: no call's stdout, stderr, exit code or written bytes changes in them, mismatched
-      basenames included.
-    - Step 2e adds the two identity rows, red on the commit before it (each still exits 0 `current`).
-    - Step 2f adds the identity check and the `<file>` usage line, and turns them green. It is the one Step 2 commit
-      that changes output, and only for a call whose given file's basename differs from its row's `file`.
+15. **(T) Only Step 2a is a move. Steps 2b, 2c, 2d and the identity check each land red-first.** An earlier draft
+    called Steps 2a to 2d moves with no output change "for any call". That was false: 2b adds `--region-files`, which
+    exits 2 with the usage line on the base (§What was measured, item 12) and exits 0 with rows after; 2b also makes
+    `cmd_restamp` resolve its file from that column; 2c makes `regionOf` pick the log-line row for a target carrying
+    its BEGIN line, where the base falls back to the hook row; and 2d makes `--check ccd/ccd-update-sync ccd/ccrc` read
+    a real region (`missing`, exit 1, on the base). None of those had a red. So:
+    - **"No output change"** is defined once, in §Commit order's preamble, as the old note's meaning made exact, and
+      every exception is listed by the step that makes it.
+    - **Step 2a is the one move.** It changes no CLI call's stdout, stderr, exit code or written bytes, and no
+      `ccrc restamp` line.
+    - **Steps 2b, 2c and 2d are behaviour commits**, each after its own red commit (2b-red, 2c-red, 2d-red), whose new
+      rows are red on the commit before and green on the step itself. Each step's output change is exactly its listed
+      exception.
+    - **Step 2e** adds the identity rows for all three modes that read `<file>` (`--check`, `--write` and `--restamp`)
+      and the usage-line row, red on Step 2d's tree. **Step 2f** adds the identity check and the `<file>` usage line,
+      and turns them green. Its output change is only a call whose given file's basename differs from its row's
+      `file`, and the usage line.
+    - An earlier draft pinned the check through `--check` alone, which never writes. A build that checked identity in
+      `--check` only would have passed every row while `--write` and `--restamp` still wrote a mismatched target.
+      The `--write` and `--restamp` rows close that, and the mutant "identity check only in `--check` mode" pins it.
 
 No bypass case of the old note is dropped. The corpus rows (R1 to R7, the blast-radius rows and the invalid-byte
 control), the scope pin, every masking mutant and the "never masks less" rules all stand. They are restated in full
@@ -148,9 +160,11 @@ below wherever their section changed.
 
 ## What was measured, and on what
 
-Base `origin/main` `789dfdad1`, re-checked on `e38a2d5f1`. #1920 merged in between, and it changes nothing under
-`ccd/`, `shared/` or `README.md`, and no test file this note names. Nothing under `ccd/` or `shared/` differs from
-`25393a0d7`, the commit where #1578 merged.
+Base `origin/main` `789dfdad1`, re-checked on `e38a2d5f1` and again on `ea20812bf`. #1920 merged before `e38a2d5f1`,
+and it changes nothing under `ccd/`, `shared/` or `README.md`, and no test file this note names. Between `e38a2d5f1`
+and `ea20812bf` the only change under `ccd/` is to `ccd/session-hook.sh`'s join-record and history-spool guards,
+outside every generated region. `ccd/ccrc`, `ccd/ccd-update-sync`, `ccd/ccrc-api` and `shared/hook-helpers.mjs` are
+unchanged, and items 11 and 12 below were re-run on `ea20812bf` with the same results.
 The engine was last changed by #1866 (`b8855f8d4`). Run under macOS bash 5.3.20, `LC_ALL=C`, `HOME=/home/u`, with the
 engine's own `ccdFunctionDefinition`. Open PRs were read with `gh pr list --state open --json number,files` the same day.
 
@@ -246,6 +260,18 @@ engine's own `ccdFunctionDefinition`. Open PRs were read with `gh pr list --stat
     `node shared/hook-helpers.mjs --check ccd/session-hook.sh ccd/ccrc` each print `hook-helpers: current` and exit 0
     on `e38a2d5f1`. The base reads whatever file it is given as the ccd, and these two given files render the same
     regions as `ccd/ccd` does. Under C5i both exit 2 with the identity sentence, so Step 2e is red on Step 2d's tree.
+12. **The other base outputs Steps 2b to 2f change**, each run on `e38a2d5f1` and `ea20812bf`:
+    - `node shared/hook-helpers.mjs --region-files` exits 2, prints the usage line on stderr, and prints nothing on
+      stdout. Step 2b-red's `--region-files` row is therefore red on Step 2a's tree.
+    - `node shared/hook-helpers.mjs --check ccd/ccd-update-sync ccd/ccrc` prints `hook-helpers: missing` and exits 1:
+      the file carries no region, so the CLI falls back to the hook row. Step 2d-red's row is red on Step 2c's tree.
+    - `bash ccd/ccrc restamp ccd/ccd-update-sync` dies with `restamp: ccd/ccd-update-sync carries no ccrc:generated
+      marker — restamp re-stamps a generated file, it never adopts one`, exit 1, and writes nothing.
+    - `node shared/hook-helpers.mjs --write <copy> ccd/ccrc`, where `<copy>` is a copy of `ccd/session-hook.sh` with
+      one line added inside its hook region, prints `hook-helpers: regenerated`, exits 0, and rewrites `<copy>` to the
+      shipped hook's bytes. `ccd/ccrc` renders the same hook region as `ccd/ccd`. So without an identity check in
+      `--write`, a mismatched basename writes the target: Step 2e's `--write` row is red on Step 2d's tree, and stays
+      red under a check that runs in `--check` alone.
 
 ## The union's blast radius
 
@@ -276,8 +302,9 @@ their root:
    with stderr naming the path. The old note's CONTROL row, pinned, not changed.
 2. `row = regionOf(target)`. `--write` and `--check` use the hook row when it is null. `--restamp` prints `nothere` and
    stops.
-3. Compare the last `/`-separated segment of `<file>` with the last segment of `row.file`. A mismatch writes nothing and
-   exits 2 with one stderr line,
+3. Compare the last `/`-separated segment of `<file>` with the last segment of `row.file`. The check runs once, before
+   the mode branches, so `--write`, `--check` and `--restamp` all pass through it before any render or write. A
+   mismatch writes nothing and exits 2 with one stderr line,
    `hook-helpers: <target> carries the <label> region, whose file is <row.file>; <file> is not that file`.
    - The segment is cut with `lastIndexOf('/')`, never with `node:path` (the carve-out).
    - The check is by basename because `_restamp_hook_note` passes a file it only knows is named `ccd`.
@@ -481,9 +508,30 @@ copied from `ccd/ccrc`; after editing it, run `bash ccd/ccrc restamp ccd/ccd-upd
 ## Commit order (replaces the old note's; the one order, option A's)
 
 Branch `refactor/arch-67-log-line-redactor`, from `origin/main`. Every commit runs the corpus test once it exists, and
-states its result. "No output change" keeps the old note's meaning, with one addition: `ccrc restamp`'s lines for the
-`hook`, `authdead` **and `apicap`** regions stay byte-identical. Steps 2a to 2d are moves, with no output change for
-any call. Step 2f is the one Step 2 commit that changes output, after its red in Step 2e (§Differences, item 15).
+states its result.
+
+**"No output change", defined.** It is the old note's meaning, made exact. A commit has no output change when all of
+these hold on its tree:
+- every corpus row equals Step 1's recorded value;
+- the suites Step 1 records are green with their files unedited (re-points named in §Guards excepted, each at the step
+  that table names);
+- `ccrc restamp`'s lines for the `hook`, `authdead` **and `apicap`** regions, over the shipped tree and over every
+  existing planted tree, are byte-identical to the base's;
+- every CLI call that the base answers with a defined output (a verdict line with its exit code, `--regions`' rows,
+  or a write) keeps that stdout, stderr, exit code and those written bytes, whatever the given file's basename;
+- the only exceptions are the ones listed against that commit below, each a new mode, a new row, or a call the step
+  names, and each pinned by a row that is red on the commit before.
+
+A red commit (`test(…): red, …`) changes no shipped file, so it has no output change. Step 2a is the one move: it has
+no exceptions. Steps 2b, 2c, 2d and 2f are behaviour commits, each after its red (§Differences, item 15). Every row a
+red commit adds is either red on that commit (and named as red in its message) or a keep-green row, green on it and on
+every later commit.
+
+**Red rows reach new things through what already exists.** A red row that names a row, export or field its step adds
+must red on its own assertion, not fail the file's import or `tsc`. So a red row finds the log-line row by
+`REGIONS.find((r) => (r.name as string) === 'log-line')`, reads its `begin` and `end` from that row, and calls the
+existing `renderRegion`, `checkRegion` and `applyRegion`. New exports (`LOGLINE_REGION_BEGIN`, `renderLogLineBody`)
+are imported only from the green step on. CLI rows spawn the module, so they need no import.
 
 1. **Step 1, characterization** (`test(redact): …`).
    - Add the corpus file and its test, with each row's expected output on the base. `updateSync` is `say` over
@@ -505,66 +553,115 @@ any call. Step 2f is the one Step 2 commit that changes output, after its red in
      - it counts zero extra sites when the planted `ccd/ccd` holds `fx_redact`, and one (`ccd/sibling#fx_redact`) when
        it does not;
      - C5d's FIXTURE rows stay green unedited.
-3. **Step 2b, restamp reads each region's file** (move).
-   - The change: `--region-files`, `_restamp_region_of` with its fallback, and `cmd_restamp`.
-   - New rows:
-     - `--region-files` prints three tab-separated columns per row, `ccd/ccd` for all three;
-     - `--regions` prints exactly `${r.detect}\t${r.label}\n` per row (the byte pin for the pre-C5i reader);
+3. **Step 2b-red, red for restamp reading each region's file** (`test(restamp): red, …`).
+   - Red rows, each red on Step 2a's tree:
+     - `--region-files` prints three tab-separated columns per row, `ccd/ccd` for all three, and exits 0. On 2a's tree
+       it exits 2 with the usage line and empty stdout (§What was measured, item 12);
      - a planted tree whose module gives the auth-dead row `file: 'ccd/ccd-alt'`, with `ccd/ccd-alt` holding changed
-       writers, regenerates `ccd-account-health` from `ccd-alt` and then answers `current`;
-     - a planted module whose row names `shared/x` refuses, naming `shared/x`, and writes nothing;
-     - a planted module with the `--region-files` branch removed still regenerates the hook region from `$dir/ccd`.
+       writers, regenerates `ccd-account-health` from `ccd-alt` and then answers `current`. On 2a's tree `cmd_restamp`
+       passes `$dir/ccd`, so the region is rendered from `ccd/ccd`'s writers and the `current` check against
+       `ccd-alt` fails;
+     - a planted module whose row names `shared/x` refuses, naming `shared/x`, and writes nothing. On 2a's tree
+       `cmd_restamp` passes `$dir/ccd` and does not refuse.
+   - Keep-green rows, green here and on every later commit:
+     - `--regions` prints exactly `${r.detect}\t${r.label}\n` per row (the byte pin for the pre-C5i reader);
+     - a planted module with no `--region-files` branch regenerates the hook region from `$dir/ccd` (on 2a's tree
+       every module is such a module; from 2b it pins the fallback).
    - The existing `ccrc restamp ccd/ccrc-api` row stays green unedited.
-4. **Step 2c, the log-line row** (move: no shipped file carries the region yet).
-   - The change: the row (appended fourth), the constants, the renderer, the header table, the `.d.mts`, the doc
-     comment of `ccdFunctionDefinition`, and the re-pointed names pin `['hook', 'authdead', 'apicap', 'log-line']`.
-     The `source` pin becomes `['ccd', 'ccd', 'hook', 'ccd']`.
-   - Engine rows:
-     - `renderRegion(LOGLINE, ccrc)`'s body is `ccdFunctionDefinition(ccrc, '_upd_redact')` plus a newline, stamped
-       and verifying;
-     - `renderRegion(LOGLINE, ccrc, hook)` equals `renderRegion(LOGLINE, ccrc)`, so `hookSrc` is not read;
+4. **Step 2b, restamp reads each region's file** (`feat(restamp): …`, behaviour).
+   - The change: `--region-files`, `_restamp_region_of` with its fallback, and `cmd_restamp`.
+   - 2b-red's red rows turn green. No other row moves.
+   - **The output change is exactly this:**
+     - `--region-files` goes from exit 2 with the usage line on stderr to exit 0 with one `detect\tlabel\tfile` row per
+       region;
+     - `ccrc restamp` over a tree whose module gives a row a `file` other than `ccd/ccd` reads that file, or refuses
+       when it is not `ccd/<name>`. No shipped module does, so no line over the shipped tree or an existing planted
+       tree changes.
+5. **Step 2c-red, red for the log-line row** (`test(hook-helpers): red, …`).
+   - Red rows, each red on Step 2b's tree, where the log-line row does not exist:
+     - the re-pointed names pin `['hook', 'authdead', 'apicap', 'log-line']`, and the `source` pin
+       `['ccd', 'ccd', 'hook', 'ccd']`;
+     - the log-line row's render, through `renderRegion`: its body is `ccdFunctionDefinition(ccrc, '_upd_redact')` plus
+       a newline, stamped and verifying, and `renderRegion(row, ccrc, hook)` equals `renderRegion(row, ccrc)`, so
+       `hookSrc` is not read;
      - over a planted target carrying the region, a hand edit reads `edited`, `ccrc` with `_upd_redact` changed reads
        `stale`, and `applyRegion` brings it back to `current`;
-     - `--region-files`' log-line row ends in `ccd/ccrc`, and `--regions` has a fourth two-column row.
-   - Restamp rows:
+     - `--region-files`' log-line row ends in `ccd/ccrc`, and `--regions` has a fourth two-column row;
      - `ccrc restamp` over a planted tree prints `log-line redactor regenerated`, and `--check` then answers `current`.
        The tree holds `ccd/ccd` with no `_upd_redact`, `ccd/ccrc` with it changed, and `ccd/ccd-update-sync` carrying
-       the region;
-     - the same over a tree without `ccd/ccrc` refuses with the sentence naming `$dir/ccrc`, and writes nothing.
-   - Census FIXTURE, the log-line case:
-     - a planted `ccd/ccrc` holds `fx_redact`, `ccd/ccd` does not, and `ccd/sibling` carries the log-line BEGIN line, a
-       stamp line and a byte copy;
-     - it counts `['ccd/ccrc#fx_redact']`;
-     - with one byte of the copy changed, it counts `['ccd/ccrc#fx_redact', 'ccd/sibling#fx_redact']`.
+       the region. On 2b's tree no row matches, so `cmd_restamp` takes the marker path instead;
+     - the same over a tree without `ccd/ccrc` refuses with the sentence naming `$dir/ccrc`, and writes nothing;
+     - census FIXTURE, the log-line case: a planted `ccd/ccrc` holds `fx_redact`, `ccd/ccd` does not, and
+       `ccd/sibling` carries the log-line BEGIN line, a stamp line and a byte copy. It counts `['ccd/ccrc#fx_redact']`;
+       with one byte of the copy changed, it counts `['ccd/ccrc#fx_redact', 'ccd/sibling#fx_redact']`. On 2b's tree no
+       row matches, so the copy is compared with `ccd/ccd` and counts.
    - `census-w3/claimant.test.ts` stays green unedited.
-5. **Step 2d, the region in `ccd-update-sync`** (move). This stands as the old note states it:
-   - the region, its comment and the README line;
-   - the anchored section lookup in `ccd-update-sync.test.ts`, a named re-point;
-   - the rows: the shipped region is `current` against `ccd/ccrc`; `--check ccd/ccd-update-sync ccd/ccrc` prints
-     `hook-helpers: current`, exit 0; and the region's place;
-   - census at this commit: `logLineRedactors()` 2, `inlineUserinfoStrips()` 1.
-6. **Step 2e, red for the identity check** (`test(hook-helpers): red, …`).
-   - The CLI identity rows: `--check ccd/session-hook.sh ccd/ccrc` and `--check ccd/ccrc-api ccd/session-hook.sh` each
-     exit 2 with the sentence and write nothing. The second shows that `apicap` is given ccd, not the hook.
-   - Both are red on this commit's tree: each prints `hook-helpers: current` and exits 0 (§What was measured,
-     item 11). The commit states that result.
-   - Rows the check must keep green are added in the same commit and are green here: `--check ccd/ccrc-api ccd/ccd`
-     (existing, unedited) and `--check ccd/ccd-update-sync ccd/ccrc` (2d's row).
-7. **Step 2f, the identity check** (`feat(hook-helpers): …`, behaviour).
-   - The change: the CLI's identity check (§Problem 2, step 3) and the usage line naming `<file>`.
-   - Step 2e's two rows turn green. No other row moves: every caller in §What was measured item 2 gives a file named
-     `ccd`, and the log-line row is given `ccrc`.
-   - The output change is exactly this: a call whose given file's basename differs from its row's `file` goes from
-     exit 0 to exit 2 with the refusal sentence, and writes nothing. The usage line's `<ccd>` reads `<file>`.
-8. **Step 3, red for the mode** (`test(redact): red, …`). Stands: the `bareHost` column and the scope pin. A `ccrc` value
-   that would change stops the task.
-9. **Step 4, the mode commit.** Stands, with the subject
-   `feat(ccrc): _upd_redact's bare-host mode also masks a run whose host ends at ')' or the text's end (D-7078)`.
-10. **Step 5, red for the switch.** Stands: `updateSync` moves on exactly the R7 rows.
-11. **Step 6, the switch behaviour commit.** Stands, with the subject
+6. **Step 2c, the log-line row** (`feat(hook-helpers): …`, behaviour).
+   - The change: the row (appended fourth), the constants, the renderer, the header table, the `.d.mts`, and the doc
+     comment of `ccdFunctionDefinition`. A row for `renderLogLineBody`'s throw on a text without `_upd_redact` lands
+     here, with the new exports imported.
+   - 2c-red's red rows turn green. No other row moves.
+   - **The output change is exactly this:**
+     - `--regions` and `--region-files` each gain a fourth row; the three existing rows keep their bytes;
+     - a target carrying the log-line BEGIN line now finds the log-line row: `--write` and `--check` render it instead
+       of falling back to the hook row, `--restamp` no longer prints `nothere` for it, and `ccrc restamp` takes the
+       region path instead of the marker path. No shipped file carries that line at this commit, so no call over a
+       shipped file changes.
+7. **Step 2d-red, red for the region in `ccd-update-sync`** (`test(update-sync): red, …`).
+   - Red rows, each red on Step 2c's tree, where the shipped file carries no region:
+     - the shipped region is `current` against `ccd/ccrc`;
+     - `--check ccd/ccd-update-sync ccd/ccrc` prints `hook-helpers: current`, exit 0. On 2c's tree it prints
+       `hook-helpers: missing` and exits 1 (§What was measured, item 12);
+     - the region's place.
+   - Keep-green: the anchored section lookup in `ccd-update-sync.test.ts`, a named re-point, green with or without the
+     region.
+8. **Step 2d, the region in `ccd-update-sync`** (`feat(update-sync): …`, behaviour). The content stands as the old
+   note states it: the region, its comment and the README line.
+   - 2d-red's red rows turn green. Census at this commit: `logLineRedactors()` 2, `inlineUserinfoStrips()` 1.
+   - **The output change is exactly this:**
+     - `--check ccd/ccd-update-sync ccd/ccrc` goes from `missing`, exit 1, to `current`, exit 0;
+     - `bash ccd/ccrc restamp ccd/ccd-update-sync` goes from the "carries no ccrc:generated marker" die, exit 1
+       (§What was measured, item 12), to `restamp: ccd/ccd-update-sync: log-line redactor already current`, exit 0.
+   - `ccd-update-sync`'s own output does not change: the region only defines `_upd_redact`, which nothing calls until
+     Step 6. Every corpus `updateSync` row equals Step 1's.
+9. **Step 2e, red for the identity check** (`test(hook-helpers): red, …`).
+   - Red rows, each red on Step 2d's tree. Each must exit 2 with the identity sentence on stderr, empty stdout, and
+     leave the target's bytes unchanged (compared as bytes before and after):
+     - `--check ccd/session-hook.sh ccd/ccrc`;
+     - `--check ccd/ccrc-api ccd/session-hook.sh`, which shows that `apicap` is given ccd, not the hook. These two
+       print `hook-helpers: current` and exit 0 on 2d's tree (§What was measured, item 11);
+     - `--write <copy> ccd/ccrc`, where `<copy>` is a temporary copy of `ccd/session-hook.sh` with one line added inside
+       its hook region. On 2d's tree it prints `hook-helpers: regenerated`, exits 0, and rewrites `<copy>`
+       (§What was measured, item 12). `ccd/ccrc` renders the hook region without throwing, so the row reds only on
+       the missing check, never on a render error;
+     - `--restamp <planted>/ccd/ccd-update-sync <planted>/ccd/ccd`, where the planted `ccd-update-sync` carries the
+       log-line region with one line hand-edited inside it, and the planted `ccd` defines `_upd_redact` (a byte copy
+       of `ccd/ccrc`'s). On 2d's tree it prints `regenerated`, exits 0, and rewrites the planted file. Because the
+       planted `ccd` has `_upd_redact`, render cannot throw, so this row too reds only on the missing check;
+     - the usage row: `--check` with no further argument prints exactly
+       `usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <file> | --regions | --region-files` and
+       exits 2. On 2d's tree the line names `<ccd>` and lacks `--region-files`.
+   - The commit message states each row's result on this tree.
+   - Keep-green rows, green here and after 2f: `--check ccd/ccrc-api ccd/ccd` (existing, unedited),
+     `--check ccd/ccd-update-sync ccd/ccrc` (2d's row), and `--write` over a hand-edited copy of the hook given
+     `ccd/ccd`, which still regenerates it.
+10. **Step 2f, the identity check** (`feat(hook-helpers): …`, behaviour).
+    - The change: the CLI's identity check (§Problem 2, step 3), run once before the mode branches, and the usage line
+      naming `<file>` and `--region-files`.
+    - Step 2e's red rows turn green. No other row moves: every caller in §What was measured item 2 gives a file named
+      `ccd`, and the log-line row is given `ccrc`.
+    - **The output change is exactly this:** a `--write`, `--check` or `--restamp` call whose given file's basename
+      differs from its row's `file` goes from its base output (exit 0 `current`, or exit 0 and a write) to exit 2
+      with the refusal sentence, and writes nothing; and the usage line reads as Step 2e's usage row pins it.
+11. **Step 3, red for the mode** (`test(redact): red, …`). Stands: the `bareHost` column and the scope pin. A `ccrc` value
+    that would change stops the task.
+12. **Step 4, the mode commit.** Stands, with the subject
+    `feat(ccrc): _upd_redact's bare-host mode also masks a run whose host ends at ')' or the text's end (D-7078)`.
+13. **Step 5, red for the switch.** Stands: `updateSync` moves on exactly the R7 rows.
+14. **Step 6, the switch behaviour commit.** Stands, with the subject
     `fix(update-sync): one log-line redactor; journal lines also lose a run followed by ')' (OA-C12 (a), option A; D-7078)`.
     The re-points go through the fixed driver (§Guards).
-12. **Step 7, the ratchet.** Stands:
+15. **Step 7, the ratchet.** Stands:
     - `logLineRedactors()` equals `['ccd/ccrc#_upd_redact']`, and may only shrink;
     - `inlineUserinfoStrips()` equals `['ccd/ccrc-doctor-checks#_check_box-settings']`.
 
@@ -582,7 +679,7 @@ any call. Step 2f is the one Step 2 commit that changes output, after its red in
 | `ccrc-update-phases.test.ts`'s kept-list row, `ccrc-sweep-window.test.ts` `W5` and `W7` | none | no `ccd/ccrc` caller passes `bare-host` | none; re-run in Steps 4 and 6 |
 | the corpus `bareHost` column and the scope pin | Step 3, green in Step 4 | `_upd_redact` ignores a second argument | the union's values |
 | the corpus `updateSync` column on R7 | Step 5, green in Step 6 | the switch masks them | `)h/r`, ` )<?` |
-| `hook-helpers-generated.test.ts`, the `REGIONS` names pin | 2c | a fourth row | `['hook', 'authdead', 'apicap', 'log-line']` |
+| `hook-helpers-generated.test.ts`, the `REGIONS` names pin | 2c-red, green in 2c | a fourth row | `['hook', 'authdead', 'apicap', 'log-line']` |
 | `census-w5/redactors.test.ts` REAL rows | would, in 2d, under C5d's rule | the copy is compared with `ccd/ccd` | the census switch to `file` lands in 2a |
 | `census-w3/claimant.test.ts` | none | it reads `begin`/`end` only, and `REGIONS[0]` stays the hook row | none; re-run in 2c and 2d |
 | `rings/mjs-node.test.ts` | would, on a `node:path` import | the `.mjs` carve-out | `lastIndexOf('/')` |
@@ -624,7 +721,11 @@ column is the shipped `redact`, and its "Today's `_upd_redact`" column is unchan
 | the log-line row's `source` set to `hook` | the render rows and the shipped region's `current` row (the hook has no `_upd_redact`), and the `source` pin |
 | the `apicap` row's `file` set to `ccd/session-hook.sh` | the existing `--check ccd/ccrc-api ccd/ccd` row (identity refusal), and the 2a `file` pin |
 | `cmd_restamp` passes `$dir/ccd` for every region | the planted-tree log-line restamp row (identity refusal), and the `ccd/ccd-alt` row |
-| the identity check removed | both Step 2e CLI identity rows |
+| the identity check removed | every Step 2e identity row: both `--check` rows, the `--write` row and the `--restamp` row |
+| the identity check only in `--check` mode (`--write` and `--restamp` skip it) | the Step 2e `--write` row (exit 0, `<copy>` rewritten) and `--restamp` row (exit 0 `regenerated`, the planted file rewritten); neither can red from a render error, because `ccd/ccrc` renders the hook region and the planted `ccd` defines `_upd_redact` |
+| the identity check run after the write in `--write` or `--restamp` | the same two rows (exit 2, but the target's bytes changed) |
+| the usage line left naming `<ccd>` | the Step 2e usage row |
+| the `--region-files` branch removed from the module | the `--region-files` row (exit 2 again), the `ccd/ccd-alt` row and the `shared/x` refusal row (the fallback gives `ccd/ccd`) |
 | `--region-files` drops its third column | the `--region-files` row, and the planted-tree log-line restamp row (the fallback's `ccd/ccd` is wrong for it) |
 | `--regions` gains a third column | the `--regions` byte pin |
 | `_restamp_region_of` reads two names from `--region-files` | the planted-tree restamp rows (the label carries the file) |
@@ -664,7 +765,8 @@ column is the shipped `redact`, and its "Today's `_upd_redact`" column is unchan
 
    List them by name in the PR body. A caller that passes another basename is reported first, because the identity
    check would refuse it. Also re-run the two identity rows of §What was measured item 11 and record that each prints
-   `hook-helpers: current` and exits 0 on the base; any other result is reported first.
+   `hook-helpers: current` and exits 0 on the base, and re-run item 12's four rows and record their results; any other
+   result is reported first, because the red commit that relies on it would not be red.
 4. `export LC_ALL=C` still comes before `say`. `say` is still the only caller of `redact`, with 30 `say "…"` lines. The
    `W29` rows and `redact:` rows read as §Guards names them.
 5. `ccdFunctionDefinition(ccrc, '_upd_redact')` returns the whole definition.
@@ -722,9 +824,16 @@ developer verb.
   `ccrc doctor` caller.
 - Which lines `ccd-update-sync` prints, and where.
 - `ccd-update-sync`'s output on every row outside R7 (and on R7 only in Step 6).
-- Any output in Steps 2a to 2d, for any call, a given file of any basename included.
-- In Step 2f, any output except the identity refusal of a call whose given file's basename differs from its row's
-  `file` (exit 0 `current` on the base, exit 2 with the sentence after), and the usage line's `<file>`.
+- In Step 2a and in every red commit, any output, as §Commit order defines "no output change", a given file of any
+  basename included.
+- In Steps 2b, 2c, 2d and 2f, any output except that step's listed exception, each pinned by a row that is red on the
+  commit before it:
+  - 2b: `--region-files` (exit 2 with the usage line on the base, rows after), and `ccrc restamp` over a module whose
+    row names a file other than `ccd/ccd`;
+  - 2c: the fourth `--regions` and `--region-files` row, and the calls on a target carrying the log-line BEGIN line;
+  - 2d: `--check ccd/ccd-update-sync ccd/ccrc` and `ccrc restamp ccd/ccd-update-sync`;
+  - 2f: the identity refusal of a `--write`, `--check` or `--restamp` call whose given file's basename differs from its
+    row's `file`, and the usage line.
 - Masking: no output on any row may mask less than the base's.
 - **The engine's behaviour for the three existing rows**:
   - `--regions`' bytes;
