@@ -11,6 +11,14 @@
 // `NAME=value` of the run's environment, `A` one argv word. A NUL cannot be in an argv word or an environment value,
 // so no value needs quoting.
 //
+// D-7407, D-7543 (TB5): a prepare's install steps follow, one per package in the row's install order: `N` the
+// package, `W` the directory it runs in, then its argv as `J` words (`runs.ts#installStep`: a clone of the pristine
+// install, or `npm ci --prefer-offline` in the run's copy). The install unit's spec, `specs/install`, is the same
+// format: `Y` the install key, `D` `install/run`, `U` the install user, `O` and `M` and `S` for the clean script,
+// `P` the package, `T` an install input's path relative to the repository root followed by `V` its bytes in base64,
+// `Z` a doomed pristine key the privileged first step removes, and `C`, `E`, `A` for `runner` (`npm ci` from the
+// lockfile alone, in `build/<package>`, HOME `install/run/home`).
+//
 // The environment is built from empty (spec §2.3): `PATH` with the box's tools first, `HOME` the run's empty home,
 // `TMPDIR` = `CCRC_TESTBOX_RUN_TMPDIR`, `LANG`, `TERM`, the three worker names, `CCRC_CHROME` (resolved once, at
 // service start), `CI` only when the local invocation had it, and the submission's forwarded names that
@@ -20,6 +28,8 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunSubmit, TestboxRepoRow } from '../../../shared/testbox.js';
+import type { InstallInput } from './pristine.js';
+import type { InstallStep } from './runs.js';
 
 export const SPEC_HEADER = 'ccrc-testbox-spec';
 
@@ -81,6 +91,8 @@ export interface RunSpec {
   readonly workers: number;
   /** The submission's local count when it differs from `workers`, else `null` (the summary's `local default`). */
   readonly localDefault: number | null;
+  /** The prepare's install steps (TB5), in the row's install order; absent, the prepare installs nothing. */
+  readonly installs?: readonly InstallStep[];
 }
 
 export type SpecBuild = { readonly ok: true; readonly spec: RunSpec } | { readonly ok: false; readonly reason: string };
@@ -187,8 +199,70 @@ export function encodeSpec(spec: RunSpec): Buffer {
   for (const o of spec.outputs) recs.push(`X${o}`);
   for (const [n, v] of spec.env) recs.push(`E${n}=${v}`);
   for (const a of spec.argv) recs.push(`A${a}`);
+  for (const st of spec.installs ?? []) recs.push(`N${st.package}`, `W${st.dir}`, ...st.argv.map((w) => `J${w}`));
+  return records(recs);
+}
+
+function records(recs: readonly string[]): Buffer {
   for (const r of recs) if (r.includes('\0')) throw new Error('a spec value holds a NUL');
   return Buffer.from(recs.map((r) => `${r}\0`).join(''), 'utf8');
+}
+
+/** The install unit's spec (spec §2.2 "Pristine installs"). */
+export interface InstallSpec {
+  readonly key: string;
+  readonly runDir: string;
+  readonly installUser: string;
+  readonly out: string;
+  readonly reportMaxBytes: number;
+  readonly serviceUser: string;
+  readonly package: string;
+  readonly inputs: readonly InstallInput[];
+  readonly doomed: readonly string[];
+  readonly env: readonly (readonly [string, string])[];
+}
+
+/** The install user is the run users' prefix and `install` (`ccrc-tb-install`). */
+export const INSTALL_USER_SUFFIX = 'install';
+
+/** `specs/install` for one key's build. */
+export function buildInstallSpec(
+  key: string, pkg: string, inputs: readonly InstallInput[], doomed: readonly string[], s: SpecSettings,
+): InstallSpec {
+  const p = runPaths(s.root, 'install', '-');
+  return {
+    key, runDir: p.runDir, installUser: `${s.runUserPrefix}${INSTALL_USER_SUFFIX}`, out: p.out, reportMaxBytes: s.reportMaxBytes,
+    serviceUser: s.serviceUser, package: pkg, inputs, doomed,
+    env: [
+      ['PATH', `${path.join(s.toolsDir, 'current', 'bin')}:${SYSTEM_PATH}`],
+      ['HOME', path.join(p.runDir, 'home')],
+      ['TMPDIR', s.runTmpdir],
+      ['LANG', FIXED_ENV.LANG],
+      ['TERM', FIXED_ENV.TERM],
+    ],
+  };
+}
+
+export function encodeInstallSpec(spec: InstallSpec): Buffer {
+  const recs: string[] = [SPEC_HEADER, `Y${spec.key}`, `D${spec.runDir}`, `U${spec.installUser}`, `O${spec.out}`,
+    `M${spec.reportMaxBytes}`, `S${spec.serviceUser}`, `P${spec.package}`];
+  for (const i of spec.inputs) recs.push(`T${i.path}`, `V${Buffer.from(i.bytes).toString('base64')}`);
+  for (const k of spec.doomed) recs.push(`Z${k}`);
+  recs.push(`C${path.join(spec.runDir, 'build', spec.package)}`);
+  for (const [n, v] of spec.env) recs.push(`E${n}=${v}`);
+  recs.push('Anpm', 'Aci');
+  return records(recs);
+}
+
+/** Written whole, as `writeSpec` writes a run's. */
+export function writeInstallSpec(root: string, spec: InstallSpec): string {
+  const dir = path.join(root, 'specs');
+  mkdirSync(dir, { recursive: true, mode: 0o755 });
+  const file = path.join(dir, INSTALL_USER_SUFFIX);
+  const tmp = `${file}.${spec.key}.tmp`;
+  writeFileSync(tmp, encodeInstallSpec(spec), { mode: 0o644 });
+  renameSync(tmp, file);
+  return file;
 }
 
 /** Written whole: a temporary file renamed over `specs/<k>`, readable by the run user, writable by the service only. */

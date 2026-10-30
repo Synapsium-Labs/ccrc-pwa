@@ -262,8 +262,11 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'ccd/ccrc', 'ccd/lib/ccrc-settings.sh', 'ccd/testbox-knobs', 'deploy/ccrc.env.example', 'deploy/testbox/ccrc.env.example',
     'server/test/ccrc-settings-census.test.ts', 'server/test/graph-knobs.test.ts', 'server/test/testbox-knobs.test.ts',
   ];
-  const HOLDERS = [...TB1_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
-  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service)', () => {
+  // TB5 (D-7407, D-7543) adds the pristine store and the registry proxy, which read their four keys from the lines
+  // config.ts parsed, and their test. The install unit's scripts under deploy/testbox/bin/ name none (specs/install).
+  const TB5_HOLDERS = ['agent/src/testbox/pristine.ts', 'agent/src/testbox/registry.ts', 'agent/test/testbox-pristine.test.ts'];
+  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);

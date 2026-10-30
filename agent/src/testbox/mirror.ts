@@ -61,3 +61,21 @@ export function mirrorOps(git: Git): MirrorOps {
     gc: (mirror) => git([...at(mirror), 'gc', '--quiet']),
   };
 }
+
+/** D-7407 (TB5): the files at a run's tree, read from the mirror for its install keys (spec §2.2): the snapshot's
+ *  working tree when the run carries one, its head otherwise. `null` when the run has no head or a path is not a file
+ *  there, so the run installs in its own copy and no key is queued. */
+export async function runTreeFiles(git: Git, mirror: string, runId: string, paths: readonly string[]): Promise<{ path: string; bytes: Uint8Array }[] | null> {
+  if (!RUN_ID.test(runId)) throw new Error(`not a run id: ${JSON.stringify(runId)}`);
+  const ref = async (name: string): Promise<boolean> =>
+    (await git([...at(mirror), 'rev-parse', '--verify', '--quiet', `${RUN_REF_PREFIX}${runId}/${name}^{commit}`])).status === 0;
+  const rev = (await ref('snap')) ? `${RUN_REF_PREFIX}${runId}/snap` : (await ref('head')) ? `${RUN_REF_PREFIX}${runId}/head` : null;
+  if (rev === null) return null;
+  const out: { path: string; bytes: Uint8Array }[] = [];
+  for (const p of paths) {
+    const r = await git([...at(mirror), 'cat-file', 'blob', `${rev}:${p}`]);
+    if (r.status !== 0) return null;
+    out.push({ path: p, bytes: Buffer.from(r.stdout, 'utf8') });
+  }
+  return out;
+}

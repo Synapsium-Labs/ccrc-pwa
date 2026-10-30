@@ -14,10 +14,12 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { isReleaseTag } from '../../../shared/api.js';
 import { readTestboxFrame } from '../../../shared/testbox.js';
-import { readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
+import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe } from './fsprobe.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from './hello.js';
-import { gitEnv, mirrorOps, realGit } from './mirror.js';
+import { gitEnv, mirrorOps, realGit, runTreeFiles } from './mirror.js';
+import { pristineSettings } from './pristine.js';
+import { registrySettings, startRegistry } from './registry.js';
 import { FRAME_HANDLERS, TestboxService, type Conn } from './service.js';
 import { systemctlManager } from './systemd.js';
 import { boundedExec, SERVICE_PATH, SHORT_BOUND_MS } from './exec.js';
@@ -155,11 +157,24 @@ export function serviceFor(cfg: TestboxConfig, release: string): TestboxService 
   const facts = releaseFacts(release);
   const sysEnv = { PATH: SERVICE_PATH, LANG: 'C' };
   const short = boundedExec(sysEnv, SHORT_BOUND_MS);
+  const git = realGit(boundedExec(gitEnv(os.homedir()), cfg.unitMaxMs));
   return new TestboxService({
     settings: cfg, rows: readRepoRows(cfg.repos), sys: systemctlManager(short, boundedExec(sysEnv, cfg.unitMaxMs)),
-    probe: () => reflinkProbe(cfg.root, short), mirror: mirrorOps(realGit(boundedExec(gitEnv(os.homedir()), cfg.unitMaxMs))),
+    probe: () => reflinkProbe(cfg.root, short), mirror: mirrorOps(git),
     now: () => Date.now(), chrome, release: facts.release, serviceVersion: facts.serviceVersion,
+    // TB5 (D-7407, D-7543): the installs run under the box's node, the one this service runs under.
+    pristine: {
+      settings: pristineSettings(cfg.lines, durationMs), inputs: (m, id, paths) => runTreeFiles(git, m, id, paths),
+      node: () => process.versions.node, platform: `${process.platform}-${process.arch}`,
+    },
   });
+}
+
+/** The registry proxy (TB5, D-7429): on a loopback address of its own, never the service's tailnet address. */
+export async function registryFor(cfg: TestboxConfig): Promise<{ close(): Promise<void> }> {
+  const r = registrySettings(cfg.lines, hostPort);
+  if (listenClass(r.host) !== 'loopback') throw new Error(`CCRC_TESTBOX_REGISTRY_PROXY: ${r.host} is not a loopback address`);
+  return startRegistry({ host: r.host, port: r.port, upstream: r.upstream, cacheDir: path.join(cfg.root, 'registry'), timeoutMs: cfg.unitMaxMs });
 }
 
 async function main(): Promise<void> {
@@ -169,6 +184,7 @@ async function main(): Promise<void> {
   if (refused !== null) throw new Error(`CCRC_TESTBOX_LISTEN: ${refused}`);
   const token = readToken(cfg.tokenFile);
   const service = serviceFor(cfg, release);
+  await registryFor(cfg);
   await service.start();
   const server = await startTestboxServer({ host: cfg.listen.host, port: cfg.listen.port, token, service });
   // The one scheduler (L5 owns it): fetch, sweep and retention on `CCRC_TESTBOX_FETCH_EVERY`.

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# The test box's install unit's privileged last step, `ExecStartPost=+install-post <spec file>`, run only when the
+# build succeeded (D-7407, D-7543; plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB5; spec §2.2 "Pristine
+# installs", "root cleanup").
+#
+# It reads only the key and the package the service wrote, and moves `install/run/build/<package>/node_modules` to
+# `pristine/<key>`, owned by root with npm's modes kept, so no run or later install can change it and a run's clone
+# is writable by its owner as a local install is. The tree is first moved into a root-only staging directory beside
+# the target, given to root there, and then renamed into place in one step: `pristine/<key>` is never seen half-made
+# or still the install user's. A key that already has a pristine install is refused. `clean@install` removes
+# `install/run` afterwards, whatever the end.
+# It reads no config file and no test box variable; every value comes from the spec the service wrote.
+set -euo pipefail
+
+die() { printf 'ccrc-testbox-install-post: %s\n' "$*" >&2; exit 1; }
+
+[ "$#" -eq 1 ] || die "usage: install-post <spec file>"
+spec=$1
+[ -f "$spec" ] && [ ! -L "$spec" ] || die "no spec file: $spec"
+
+header=
+run=
+pkg=
+key=
+while IFS= read -r -d '' rec; do
+  if [ -z "$header" ]; then
+    [ "$rec" = ccrc-testbox-spec ] || die "not a test box spec: $spec"
+    header=1
+    continue
+  fi
+  case $rec in
+    D*) run=${rec:1} ;;
+    P*) pkg=${rec:1} ;;
+    Y*) key=${rec:1} ;;
+    *) ;;
+  esac
+done < "$spec"
+
+[ -n "$run" ] && [ -n "$pkg" ] && [ -n "$key" ] || die "the spec names no install directory, package or key"
+case $run in /*/install/run) ;; *) die "not the install directory: $run" ;; esac
+case $pkg in *[!A-Za-z0-9._-]*|''|.|..) die "not a package: $pkg" ;; esac
+[[ $key =~ ^[0-9a-f]{64}$ ]] || die "not an install key: $key"
+root=${run%/install/run}
+
+src=$run/build/$pkg/node_modules
+[ -d "$src" ] && [ ! -L "$src" ] || die "the build left no node_modules: $src"
+store=$root/pristine
+[ -d "$store" ] && [ ! -L "$store" ] || mkdir -m 0755 -- "$store"
+dst=$store/$key
+if [ -e "$dst" ] || [ -L "$dst" ]; then die "the key already has a pristine install: $key"; fi
+# mktemp -d makes the staging directory 0700, root's.
+stage=$(mktemp -d "$store/.stage-$key.XXXXXX")
+mv -- "$src" "$stage/node_modules"
+chown -R -h -- 0:0 "$stage/node_modules"
+mv -- "$stage/node_modules" "$dst"
+rmdir -- "$stage"
