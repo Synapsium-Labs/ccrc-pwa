@@ -37,18 +37,19 @@
 // says nothing; and NO row of this view carries "coordinator hibernated" for a claimant that heads a box here: the
 // hibernated box the view draws says it, so the marker is dropped from the members in its tray and, as ruled for review
 // 1239's C1, from the row outside any tray that `keepers` reaches too: a coordinator that is itself a worker of that
-// claimant's run on another card, drawn as its own box's head (pinned in status-programmes). An archived or released
-// worker of that run is a lone row whose line draws no coordinator marker either way. Project mode marks one whose
-// claimant is not on its card "coordinator hibernated". A row whose hibernated claimant is NOT drawn in this view still
-// gets the marker: that is a gap to raise, never a silent rule.
+// claimant's run on another card, drawn as its own box's head (pinned in status-programmes). An archived worker of that
+// run is a lone row too, and its line draws no coordinator marker either way, by marker precedence and not by this rule: a
+// card row draws only the first of its markers (`markers(f)[0]`), and its lifecycle word outranks `coordinator-hibernated`.
+// Project mode marks one whose claimant is not on its card "coordinator hibernated". A row whose hibernated claimant is NOT
+// drawn in this view still gets the marker: that is a gap to raise, never a silent rule.
 //
 // MOVEMENT (Task G1c, D-7380): a box reads stalled or paused exactly as on its project card. `statusView` is handed the
 // card's own three inputs, the stall watch's quiet time (the store's `stallQuietMs`, null on an older server, D-7376), the
 // operator's pause (the coord frame's, D-7373) and a clock, and decides the state; this file only reads and passes them.
-// The clock is `useRollupClock`, `FleetCards`' own: its one timer wakes at the next instant a box crosses its threshold
-// (`nextStallBoundary`), so a box reads stalled at its boundary with no frame, and the view is handed the time read when
-// that boundary last moved (`boxNow`), so it is rebuilt only at a boundary or with a frame. No window is read here, so the
-// clock is given no sessions: the rollup's window ends would wake a view that has no rollup.
+// The clock is `useBoxClock` (Task G1d), the one hook the project cards read too: its one timer wakes at the next instant a
+// box crosses its threshold (`nextStallBoundary`), so a box reads stalled at its boundary with no frame, and the view is
+// handed the time read when that boundary last moved (`boxNow`), so it is rebuilt only at a boundary or with a frame. No
+// window is read here, so the clock is given no sessions: the rollup's window ends would wake a view that has no rollup.
 //
 // PROJECT MODE places the shared `FleetCards`, the list Refined draws: its card heads hold the pool and add doors, its
 // Released fold holds archive-all, and the rollup's rules hold unchanged. A card mixes statuses, so there each row
@@ -75,7 +76,6 @@ import { FleetCards } from '../../fleet/FleetCards';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { useFleetFlows } from '../../fleet/FleetFlows';
 import { useFolded } from '../../fleet/foldState';
-import { markerState } from '../../fleet/coordWords';
 import { cardsOf, childRunContext, fleetTree, workingOn, type FleetTreeGroup } from '../../fleet/fleetTree';
 import { orphanNote } from '../../fleet/orphanWords';
 import { ProgrammeBox } from '../../fleet/ProgrammeBox';
@@ -87,7 +87,7 @@ import { OPEN_RUNS, openSession } from '../../fleet/openers';
 import {
   statusGroupLabel, statusView, statusViewTotal, type BoxClock, type StatusBox, type StatusGroupId, type StatusViewGroup,
 } from '../../fleet/statusGroups';
-import { useRollupClock } from '../../fleet/useRollupClock';
+import { useBoxClock } from '../../fleet/useBoxClock';
 import { ackAll, acksSnapshot, subscribeAcks } from '../../lib/seen';
 import { matchRoute } from '../../lib/routes';
 import { useLocation } from '../../lib/router';
@@ -210,14 +210,10 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
   const frameSeen = useStore((s) => s.fleetFrameSeen);
   const allRuns = useStore((s) => s.runs);
   const activeRuns = useMemo(() => allRuns.filter((r) => !isRunClosed(r)), [allRuns]);
-  // Task G1c (D-7380, D-7373, D-7376): the box clock, read as `FleetCards` reads it. `boxNow` is the time read when the
-  // clock's `next` last moved, so with the same runs, quiet time and pause no box crosses between two moves of it, and
-  // the groups below are rebuilt only at a boundary or with a frame.
-  const stallQuietMs = useStore((s) => s.stallQuietMs);
-  const coordPaused = useStore((s) => markerState(s.coord?.pause) === 'set');
-  const roll = useRollupClock(NO_SESSIONS, activeRuns, stallQuietMs, coordPaused);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
-  const boxNow = useMemo(() => roll.now, [roll.next, activeRuns, stallQuietMs, coordPaused]);
+  // Task G1c, G1d (D-7380, D-7373, D-7376): the box clock, the one hook `FleetCards` reads too. `boxNow` is the time read
+  // when the clock's `next` last moved, so with the same runs, quiet time and pause no box crosses between two moves of it,
+  // and the groups below are rebuilt only at a boundary or with a frame.
+  const { boxNow, stallQuietMs, coordPaused } = useBoxClock(useStore, NO_SESSIONS, activeRuns);
   const clock = useMemo((): BoxClock => ({ now: boxNow, quietMs: stallQuietMs, paused: coordPaused }), [boxNow, stallQuietMs, coordPaused]);
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const flows = useFleetFlows();
