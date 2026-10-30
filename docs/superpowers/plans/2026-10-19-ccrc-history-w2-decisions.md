@@ -699,7 +699,7 @@ build · no · W2-3 (validator), W2-4 (helper), W2-5a and W2-5b (each its own co
     - a family both registry-dropped and assigned, refused at `assignment[j]` and keyed by store, id and generation (`familyKey`), since W2-D20 removes the drops before the flip (the worker's ruling in fix round 2, which review 686 judged sound and the coordinator confirmed).
     - A value that is only costly, a huge `sims` or `planned_days`, is not refused (section 7).
 - **Accepted as written (coordinator, 2026-10-19, final W2-3/W2-4 plan review):** `recordSha256 = sha256(canonicalJson(record) + '\n')`; a null or missing `ctx` is `field-missing` at path `ctx`; a null where the schema allows none is `field-missing` everywhere, as a missing key is; and `decideGate` (W2-D89) answers a union tagged by `ok` (a verdict carries `ok: true`, its `question-not-run` refusal `ok: false`). W2-3 pins each with a case and a mutant (Task 9's M43, M33 and M36; Task 8's H21).
-- **Pins:** one refusal per bullet, including a Fable arm model, a non-Opus judge, a final window shorter than the signed draft's `planned_days` (for a draft signed at 14, a 13-day window; for the seven-day draft of the 2026-10-30 ruling, one under 7 days, and the minimum is never a universal fourteen), a pilot section signed under another `writer_input`, a step 0a entry on no named node, a step 0a entry under another settings mode than part 1's, and a rejected flag (no flag excused, under either settings mode).
+- **Pins:** one refusal per bullet, including a Fable arm model, a non-Opus judge, a final window shorter than the signed draft's `planned_days` (the generic signed-duration guard; its fixture pins the historical fourteen-day boundary, 13 days refused and 14 and 15 accepted, and a 21-day draft pins only a mismatch, not a duration boundary; no seven-day case is separately pinned, and the minimum is never a universal fourteen), a pilot section signed under another `writer_input`, a step 0a entry on no named node, a step 0a entry under another settings mode than part 1's, and a rejected flag (no flag excused, under either settings mode).
 
 build · no · W2-3 · G10 with the G10 checkers' fixes (supersede re-roll, quiz.families missing); C-G; the quiz checker's validator-owner finding (every field and check is in W2-3); the pre-record-spawn, window-length and model-constraint findings.
 
@@ -1846,7 +1846,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 7. Run step 0a on each node: `history-replay.mjs step0a --out <dir> --account <id> --budget <N> --writer-model <id> --judge-model <id> --arm-model <id>` (version, wrapper sha, flags, writer, judge and box init, code shas, release stamp). Post each output's sha256, which is printed on stderr. Amended (coordinator, 2026-10-20, W2-4 review, F14): every flag is required. A record that part 1 would refuse is re-run on a fresh `--out`.
 8. **The maintenance freeze begins** (W2-D7). Record its time.
 9. Run `pilot-source --step0a <file> --step0a-sha256 <hex> --budget <N>` on the one node holding the pilot families (**amended, coordinator, 2026-10-22, W2-5a plan:** one pilot node, and `pilot-source` runs once there, because part 1 has one pilot section with one seed). This spends on the account and reads the homes' CLAUDE.md and memory files. Record the pilot frozen sha.
-10. Run `open --draft` with the step 0a and `pilot-source` outputs. Save part 1 with mode 0600 off-repo. Post its sha256.
+10. Run `open --draft` with the step 0a and `pilot-source` outputs (amended: the operator's ruling of 2026-10-30: the operator passes `planned_days` 7 through `--overrides`). Save part 1 with mode 0600 off-repo. Post its sha256.
 
 **Census and Q18 (before any arm data)**
 
@@ -1895,6 +1895,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 - **What changes.** The operator sets `window_plan.planned_days` to 7 explicitly before part 1 is signed, and part 2's window is `end_ms = start_ms + 604800000`. Setup and pilot time is not observation time. The validator accepts any positive integer `planned_days` and a final of `planned_days` through one day more; that tolerance already admits a seven-day record, and is not authority to schedule an eighth day.
 - **What does not.** The shipped draft default is still 14 and the template does not default to seven. Fourteen is not a hard minimum: the old "13-day" refusal means a final shorter than its signed draft's `planned_days`. Census `lookback_days` stays 14 with its act 11 command unchanged. Q18 is recomputed over seven planned days (W2-D21) and no fourteen-day power figure is reused.
 - **Every bar stands.** The pilot's fidelity and usage checks, at least 60 questions over at least 12 families, every quality and statistical bar and the PASS rule, the budget approval, record privacy and signing, the operator-only hand labels, R-B1 to R-B4 and the release and wrapper freeze are as ruled. If a seven-day measured design cannot meet the unchanged gates, W2 halts and is reported for the operator's disposition: no automatic extension, no weakened denominator or bar, and no node, account or model chosen on the operator's behalf.
+- **Fourteen is still the live default.** The shipped draft default stays 14 in code; this evaluation overrides it explicitly. The census looks back 14 days while Q18 projects seven planned days, and those are two separate numbers.
 - **Order and conditions.** W1's acceptance may overlap W2, so there is no dependency from it to the start. Completed backfill stays completed and reruns only on a genuinely added node, where act 4 already requires it. W3 and W4 stay conditional on an operator-recorded W2 PASS.
 
 **Start checklist.** Each line has one owner. None is done by this amendment: nothing here selects an account, a budget, a release equivalence or a start time, or records a passed pilot, and nothing in it starts the observation clock.
@@ -1905,26 +1906,25 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 |---|---|---|
 | O1 | The named nodes and the one admitted account (W2-D52) | 1 |
 | O2 | The exact non-Fable arm model id and the exact Opus writer and judge ids; no aliases | 1, 7 |
-| O3 | Explicit pre-record budgets: step 0a's `--budget`, the pilot budget, and later the final spend approval | 7, 9, 14, 17 |
-| O4 | Proof that the installed bytes match the baseline bytes and the release (baseline-byte and release proof) | 5, 6 |
-| O5 | Update intent off or pinned to the tag on every named node, the prior intent retained for act 28 | 6, 28 |
-| O6 | `planned_days` set to 7 in part 1, saved 0600 off-repo, its sha256 posted | 10 |
-| O7 | The decision on Q18 after `power`, with the output's sha256 posted before step 0b | 12 |
-| O8 | Headless-on markers written by hand, then removed; the hand labels | 13, 15, 22 |
-| O9 | The final record with seven-day dates, saved 0600, its sha256 posted before window start | 17 |
-| O10 | The recall-off markers and their verifies, then the start | 18, 19 |
+| O3 | Explicit pre-record budgets: step 0a's `--budget`, the pilot budgets, part 1's pilot budget and later the final spend approval | 7, 9, 10, 14, 17 |
+| O4 | Rolling the coordinator's posted tag onto every named node (act 6), with update intent off or pinned to it and the prior intent retained for act 28; no new approval step is added to act 5 or 6 | 6, 28 |
+| O5 | `planned_days` set to 7 in part 1 through the `open --draft` `--overrides` file (the overrides apply to default fields only, and `planned_days` is one), saved 0600 off-repo, its sha256 posted | 10 |
+| O6 | The decision on Q18 after `power`, with the output's sha256 posted before step 0b | 12 |
+| O7 | Headless-on markers written by hand, then removed; the hand labels | 13, 15, 22 |
+| O8 | The final record with seven-day dates, saved 0600, its sha256 posted before window start | 17 |
+| O9 | The recall-off markers and their verifies, before the window start | 18, 19 |
 
 *Coordinator measurements*
 
 | # | Item | Acts |
 |---|---|---|
-| C1 | The release tag posted, and each node's stamp, live Claude Code version and wrapper bytes measured | 5, 6, 20 |
-| C2 | Step 0a outputs checked against the contract: flags, settings mode, code shas, release stamp | 7 |
-| C3 | The census, `verify --registry` and the `power` run re-measured for seven planned days; the added-node checks only if a node was added | 11, 12 |
+| C1 | The act 5 measurement the plan already assigns: the final release's history bytes are byte-identical to v0.0.767's (the baseline is CP-39d's v0.0.767, not a claimed current equivalence), and its tag is posted; then each node's release stamp and live Claude Code version re-measured at window start | 5, 20 |
+| C2 | Step 0a outputs checked against the contract: flags, settings mode, wrapper sha, code shas, release stamp | 7 |
+| C3 | The census (look-back 14 d, act 11 unchanged) and `verify --registry` read as before, and the `power` run read as projecting seven planned days from the signed record; the added-node checks only if a node was added | 11, 12 |
 | C4 | The pilot's source, draft and successful pilot (step 0b, fidelity 5, usage 5+5) read from the record, never assumed | 9, 10, 14 |
 | C5 | The quiz freeze: at least 60 questions over at least 12 families, else stop and rule | 16 |
 | C6 | Part 2's `window` is `planned_days` 7 long, with `end_ms − start_ms` equal to 604800000 | 17 |
-| C7 | The markers and verifies, then the measured start | 18 to 20 |
+| C7 | The markers and verifies read, then the measured start | 19, 20 |
 
 The order of the acts is section 5's: step 0a, pilot source, draft, census, registry and power, a successful pilot, the quiz freeze, the final record, markers and verifies, and the measured start.
 
@@ -1962,6 +1962,7 @@ Each erratum is amended **in place** by the "Amended by" PR, the one that holds 
 | E26 | §10.2 Flags (the spawn flag list) | add `--verbose`, which every spawn argv carries (print mode needs it for `--output-format stream-json`). Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review) | coordinator (W2-D57) | W2-1 | — (additive) |
 | E27 | §10.2 The account ("then part 2's `spend_budget`") and Pre-registration's amendment kinds | from part 2, the budget in force is the newest `budget-raise` amendment's figure, else the signed `spend_budget`; the kinds gain the budget raise, which only raises, names no node and changes nothing that scores | the operator (R-B1, 2026-10-26; W2-D55, W2-D90) | the coordinator's docs PR after W2-7 (W2-7 holds no spec path) | history-w2-budget-raise-amendment (W2-7), D-7063 |
 | E28 | §10.6 item 4 ("an exception is an operator ruling, an amendment once part 2 exists") | from act 6 to act 28 there is no freeze exception: no release is installed and no wrapper changes, and a forced install or wrapper change halts W2 with no verdict | the operator (R-B2, 2026-10-26; W2-D6) | the coordinator's docs PR after W2-7 | — (a ruling) |
+| E29 | §10.2 Pre-registration (the window sentence), §10.6 item 4 ("about 2 weeks") and Q18's recommendation | the W2 observation window is seven days: `planned_days` 7 set explicitly in part 1, `end_ms = start_ms + 604800000`, Q18 projected over seven planned days; the shipped default of 14, the census look-back of 14 and every gate and bar are unchanged | the operator (the ruling of 2026-10-30, "observation window seven days; proceed") | the docs PR #1969 | — (a ruling; no new departure) |
 
 Not spec text, but owed: the programme ledger's sentence "only the quiz waits on the backfill" is superseded by W2-D8. The coordinator corrects it at the ledger's next edit.
 

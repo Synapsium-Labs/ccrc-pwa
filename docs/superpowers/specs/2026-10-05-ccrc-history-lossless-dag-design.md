@@ -41,7 +41,7 @@
   - **I** = INFERRED.
   - *chosen* = a design value with no measurement behind it.
 - Claude Code binary facts are from 2.1.289. Minified names collide across the bundle, so each is cited with a string anchor beside it. 2.1.280–2.1.288 match byte-for-byte on every surface used here (**M**).
-- Upstream code is cited as `lossless-claw@e05d8d3:<path>:<line>` (MIT). The upstream host is cited as `openclaw@ee578bc7:<path>:<line>`.
+- Upstream code is cited as `lossless-claw@e05d8d3:<path>:<line>` (MIT). The upstream host is cited as `upstream-host@ee578bc7:<path>:<line>`.
 - Box identifiers are left out on purpose: hosts, devices, account and home names, session ids, workspace slugs.
 
 **Date:** 2026-10-05 · **Base:** `origin/main` `be93d159e` · rev 3.2 re-checked at `d12b5aba0`
@@ -74,7 +74,7 @@
 
 ## 1. Origin and research summary
 
-**The ask.** The operator asked for research on lossless-claw, an OpenClaw plugin (Martian Engineering, MIT, v1.1.1 at `e05d8d3`). It implements the paper "LCM: Lossless Context Management" (Voltropy, arXiv 2605.04050). The goal is to make ccrc's compaction lossless and DAG-based, "perhaps using graphify".
+**The ask.** The operator asked for research on lossless-claw, a plugin for an open-source agent host (Martian Engineering, MIT, v1.1.1 at `e05d8d3`). It implements the paper "LCM: Lossless Context Management" (Voltropy, arXiv 2605.04050). The goal is to make ccrc's compaction lossless and DAG-based, "perhaps using graphify".
 - Three research passes followed:
   - seven reports plus a verifier;
   - a six-lens harvest of the plugin's source, plus a verifier;
@@ -125,7 +125,7 @@
 
 ### 1.4 Why capture plus recall is the plugin's own answer on a Claude Code host
 
-- **The upstream host's Claude Code backend gives a context engine almost no hooks.** It advertises only bootstrap, after-turn and maintain (`openclaw@ee578bc7:src/context-engine/host-compat.ts:24-28`, **M**).
+- **The upstream host's Claude Code backend gives a context engine almost no hooks.** It advertises only bootstrap, after-turn and maintain (`upstream-host@ee578bc7:src/context-engine/host-compat.ts:24-28`, **M**).
 - **So lossless-claw falls back to capture-only on that host.** It keeps the store plus recall tools, with no prompt assembly (`lossless-claw@e05d8d3:src/engine.ts:121-140`, **M**).
 - **ccrc is in the same position.** It cannot own Claude Code's per-turn message list, re-assemble before each tool-loop call, or replace the summary from a hook.
 - **The levers it does have:**
@@ -2323,7 +2323,7 @@ Every non-PASS line carries a remedy. Every durability word above is a `HEALTH_W
 - **ccrc copies neither off the box.** A copy that box-level tooling makes (§15.2 option f3) is secret material, to be encrypted and access-controlled: the export is verbatim text that grows at the store's rate, several GB at once when one home lowers the horizon (§9.15), and the journal's `redact` records are unsalted (len, sha256) digests, an offline check for any low-entropy value that was loaded (rev 3.2 review, SE12; rev 3.1 said "neither leaves the box" and called both small).
 - **No egress to the server or the PWA.** Recall output enters the calling session's context and so reaches that session's provider, the gateway's included. That path is accepted by the operator (ruled Q8, 2026-10-05; §14 risk 14).
 - **No egress to another box.** No store is read from, or sent to, another box (§6.9, §13.1).
-- **Fixtures** are synthetic, with fixture paths only (`/home/u/tree` style).
+- **Fixtures** are synthetic, with fixture paths only (`<fixture-root>/tree` style).
 
 ### 9.9 Node floor and CI (W1 part A)
 
@@ -2879,7 +2879,7 @@ Slug `history-sole-copy-export`. Claude Code deletes a transcript some days afte
 3. **W1-B2, then W1-B3 and W1-B4** (the export, ruled Q6) in either order; B4 follows B2 (FE15). B4 is live on every session-hosting node before the earliest first due date B1's census measures (W1-k), and at the latest 2026-12-19. If it slips, B1's doctor rules report the gap on each node, measured from the store (§9.15).
 4. **W2.**
    - The quiz can start once B2 is live and every W2 PR has merged into one final release, rolled onto every named node with its update intent off, or pinned to that tag, from that rollout to close (the build freeze: a spawning or scoring driver subcommand refuses `tree-moved` on another release stamp; from act 6 to act 28 there is no exception, so no release is installed and no wrapper changes, and a forced install or wrapper change halts W2 with no verdict, by the operator's ruling R-B2 of 2026-10-26). Before pilot sourcing, on every node that pilot or quiz families come from, the backfill re-run is complete, with the sweep timer paused around it, and 5h-2 is rolled out with its re-clean measured complete; a node named later gets the same, and step 0a, before the draft is superseded. The maintenance freeze runs from pilot sourcing to close on those nodes: no `prune --apply`, `reparse`, `import --apply` or `doctor --repair`, `--adopt`, `--restore`, `--rebuild` or `--migrate`, no `history-off` outside §10.7's W1 kill rule, and no lowered `history-max-gb`; a frozen act a cap or disk emergency forces is recorded (an amendment once part 2 exists), and the next arm batch's re-check must pass. The close steps below are unchanged: no verb removes `headless-on`, so it is removed by hand.
-   - The live A/B needs about 2 weeks of post-install compactions, in a window pre-registered at W2 open (§10.2). **Amended (the operator's ruling of 2026-10-30, "observation window seven days; proceed"):** the W2 observation window is seven days: part 1 sets `window_plan.planned_days` to 7 explicitly before it is signed, and part 2's window is `end_ms = start_ms + 604800000`. The two weeks above and the shipped draft default of 14 (`deploy/history-gate.mjs`) are history, not the contract. Setup and pilot time is not observation time, and the validator's one-day tolerance past `planned_days` is not authority to schedule an eighth day. The census look-back stays `lookback_days` 14, with its look-back command unchanged. Q18 is recomputed for seven planned days and no fourteen-day power figure is reused. Every gate, bar and denominator is unchanged, so a seven-day design that cannot meet them halts and is reported for the operator's disposition: no automatic extension.
+   - The live A/B needs about 2 weeks of post-install compactions, in a window pre-registered at W2 open (§10.2). **Amended (the operator's ruling of 2026-10-30, "observation window seven days; proceed"):** the W2 observation window is seven days: part 1 sets `window_plan.planned_days` to 7 explicitly before it is signed, and part 2's window is `end_ms = start_ms + 604800000`. The two weeks above are history, not the contract. The shipped draft default stays 14 in code and remains live; this evaluation overrides it explicitly. Setup and pilot time is not observation time, and the validator's one-day tolerance past `planned_days` is not authority to schedule an eighth day. The census look-back stays `lookback_days` 14, with its look-back command unchanged. Q18 is recomputed for seven planned days and no fourteen-day power figure is reused. Every gate, bar and denominator is unchanged, so a seven-day design that cannot meet them halts and is reported for the operator's disposition: no automatic extension.
    - Then the gate is computed as ruled (Q7), and the operator records the decision.
    - **Close** (rev 3.2 review, IV15, SE11): `recall-off --clear-all` on each named node, so the control arm's families get recall and the card line again; `headless-on` removed; the driver's `--out` removed by hand once the decision is recorded (§9.4's `history-replay-out` row). Rev 3.1 removed only `headless-on`, leaving every control family at exit 8 for good.
 5. **W3 and W4**, only on a pass, in either order. W3's hook edits are in the tail only. W4 does not ship before W1-B4 is live on every session-hosting node: subagent text reaches its retention first (§9.15), and the export then covers it from its first ingest.
