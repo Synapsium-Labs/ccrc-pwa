@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
-import { AgentOpError, LinkNotSentError } from '../src/remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import { UPDATE_OP_DETAIL_MAX } from '../../shared/agent-protocol.js';
 import { TOKEN } from './remoteHelpers.js';
 
