@@ -13,7 +13,9 @@ import { conflictChipSentence, conflictChipState, conflictChipWord, conflictSumm
 import './fleet.css';
 
 export function ConflictChip({ sessions }: { sessions: readonly FleetSession[] }): ReactNode {
-  const now = useNow(30_000, sessions.some((s) => s.landing !== undefined));
+  // The later of `useNow`'s stored clock and the clock of THIS render: the stored one stands still while no session
+  // carries a landing, so the first render after a long gap would age a landing by a clock hours old (review 1225, F3).
+  const now = Math.max(useNow(30_000, sessions.some((s) => s.landing !== undefined)), Date.now());
   const summary = conflictSummaryOf(sessions, now);
   if (summary === null) return null;
   const sentence = conflictChipSentence(summary);

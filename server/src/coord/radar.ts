@@ -210,6 +210,10 @@ export function sessionLandingsOf(
   for (const r of rows) {
     const h = headOfId.get(r.id);
     if (h === undefined || r.branch === null || h.branch !== r.branch) continue;
+    // A row WITH a PR number matches only an open (or draft) PR of the head's number. One whose PR is merged or closed
+    // keeps a number the radar no longer measures, and one whose sweep is backing off (`unknown`, `unchecked`) keeps its
+    // number too, so it matches nothing while the sweep fails: it fails closed, deliberately (D-7515). A row with no
+    // number (no PR yet) still matches by id and branch.
     if (r.pr !== null && !(r.pr.open && r.pr.number === h.pr)) continue;
 
     const conflicts: LandingConflict[] = [];

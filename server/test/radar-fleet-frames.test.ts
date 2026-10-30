@@ -9,6 +9,10 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { readRegistry } from '../src/registry.js';
+import { loadConfig } from '../src/config.js';
+import { localIO, type FleetIO } from '../src/io.js';
+import { saveSnapshot } from '../src/fleetstate.js';
+import { dropStaleLandings } from '../src/fleet.js';
 import type { FleetSession } from '../../shared/api.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { watcherTeardown } from './watcherTeardown.js';
@@ -22,6 +26,13 @@ describe('FleetSession.landing on the three frames', () => {
   let home: string;
   const teardown = watcherTeardown();
 
+  /** Wave 3b's doc for the one fixture session, stamped `at`. */
+  const probeDoc = (at: string): Record<string, unknown> => ({
+    v: 1, project: 'proj-a', at, state: 'measured', base: { ref: 'main', sha: sha(9) },
+    heads: [{ pr: 12, head: sha(12), branch: 'ws/alpha', id: ID, base: { state: 'clean' } }],
+    headsCut: false, pairs: [], pairHeads: [12], pairsCut: false,
+  });
+
   beforeEach(() => {
     home = mkTmp('ccrc-radar-frames-');
     seedRoster(home);
@@ -32,11 +43,7 @@ describe('FleetSession.landing on the three frames', () => {
       base: 'origin/main', started: '1',
     };
     for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${f}`), v);
-    writeFileSync(path.join(reg, 'landing', 'proj-a', 'probe'), JSON.stringify({
-      v: 1, project: 'proj-a', at: nowIso(), state: 'measured', base: { ref: 'main', sha: sha(9) },
-      heads: [{ pr: 12, head: sha(12), branch: 'ws/alpha', id: ID, base: { state: 'clean' } }],
-      headsCut: false, pairs: [], pairHeads: [12], pairsCut: false,
-    }));
+    writeFileSync(path.join(reg, 'landing', 'proj-a', 'probe'), JSON.stringify(probeDoc(nowIso())));
   });
   let app: Awaited<ReturnType<typeof buildServer>> | undefined;
   afterEach(async () => {
@@ -52,8 +59,8 @@ describe('FleetSession.landing on the three frames', () => {
   };
 
   /** A watcher and a server over the fixture home; `pass` runs the lane once, before any frame is built. */
-  const boot = async (pass: boolean) => {
-    const deps: Deps = withFakeClock(testDeps(home));
+  const boot = async (pass: boolean, over: Partial<Deps> = {}) => {
+    const deps: Deps = withFakeClock({ ...testDeps(home), ...over });
     const bus = new Bus();
     const watcher = teardown.track(new FleetWatcher(deps, bus, 10_000));
     if (pass) await watcher.sweepRadar(await readRegistry(deps.io, deps.cfg));
@@ -116,5 +123,122 @@ describe('FleetSession.landing on the three frames', () => {
     const { watcher } = await boot(false);
     await watcher.tick();
     await vi.waitFor(() => expect(watcher.currentLandings().get(ID)).toMatchObject(LANDING));
+  });
+
+  // Fix round 1, R1 (review 1225, F1): four sends carry a fleet that was not just assembled, so `assembleFleet`'s own
+  // window check never saw it: the cold frame and the degraded GET (the watcher's last broadcast) and the two snapshot
+  // arms (a saved file). Every instant here is fixed and second-aligned (`T0`, the probe's `at` and the clock both),
+  // never `nowIso()` against the real clock, so a window edge cannot move under the test.
+  describe('the sends that carry an EARLIER fleet drop a landing past its window (R1)', () => {
+    const T0 = Date.parse('2026-10-27T09:00:00Z');
+    const stamp = (offsetS: number): string => new Date(T0 + offsetS * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const EDGE: ReadonlyArray<readonly [number, boolean]> = [[1200, true], [1201, false]];
+    let unlistable = false;
+
+    beforeEach(() => {
+      unlistable = false;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(T0);
+      writeFileSync(path.join(home, '.cc-sessions', 'landing', 'proj-a', 'probe'), JSON.stringify(probeDoc(stamp(0))));
+    });
+    afterEach(() => { vi.useRealTimers(); });
+
+    /** An io whose `readdir` of the REGISTRY directory alone can be made to fail: the lane's own listings go through
+     *  `readdirMeasured` and stay real, as does every other directory. */
+    const blindable = (): FleetIO => {
+      const registryDir = testDeps(home).cfg.registryDir;
+      return { ...localIO, readdir: async (p, t, sg) => (unlistable && p === registryDir ? null : localIO.readdir(p, t, sg)) };
+    };
+    const getBody = async (a: NonNullable<typeof app>): Promise<{ sessions: FleetSession[]; stale?: boolean }> =>
+      (await a.inject({ method: 'GET', url: '/api/fleet' })).json() as { sessions: FleetSession[]; stale?: boolean };
+    const coldFleet = async (a: NonNullable<typeof app>): Promise<FleetSession[]> => {
+      await a.listen({ host: '127.0.0.1', port: 0 });
+      const addr = a.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      type Frame = { type: string; sessions?: FleetSession[] };
+      const fleet = await new Promise<Frame>((resolve, reject) => {
+        ws.on('message', (d) => {
+          const f = JSON.parse(String(d)) as Frame;
+          if (f.type === 'fleet') resolve(f);
+        });
+        ws.on('error', reject);
+      });
+      ws.close();
+      return fleet.sessions!;
+    };
+    /** One lane pass and one tick at `T0`, then the clock moves `offset` s and the registry cannot be listed, and one
+     *  more tick runs (the review's scenario): the watcher's last fleet still carries the landing it assembled at `T0`. */
+    const blindAfter = async (offset: number) => {
+      const b = await boot(false, { io: blindable() });
+      await b.watcher.tick();                                                        // the lane's pass starts
+      await vi.waitFor(() => expect(b.watcher.currentLandings().get(ID)).toBeDefined());
+      await b.watcher.tick();                                                        // a broadcast that carries it
+      expect(row(b.watcher.currentFleet()!).landing, 'the hazard: the last fleet carries the landing').toMatchObject(LANDING);
+      vi.setSystemTime(T0 + offset * 1000);
+      unlistable = true;
+      await b.watcher.tick();
+      return b;
+    };
+
+    it.each(EDGE)('the registry unlistable %i s after the pass: the degraded GET carries the landing: %s', async (offset, carries) => {
+      const { app: a, watcher } = await blindAfter(offset);
+      const body = await getBody(a);
+      expect(body.stale, 'this is the degraded arm').toBe(true);
+      expect('landing' in row(body.sessions), `a landing ${offset} s old, carried: ${String(carries)}`).toBe(carries);
+      if (carries) expect(row(body.sessions).landing).toMatchObject(LANDING);
+      expect(row(watcher.currentFleet()!).landing, 'the watcher\'s own last fleet is never mutated').toMatchObject(LANDING);
+    });
+
+    it.each(EDGE)('the registry unlistable %i s after the pass: a new /ws/fleet client\'s cold frame carries the landing: %s', async (offset, carries) => {
+      const { app: a, watcher } = await blindAfter(offset);
+      const sessions = await coldFleet(a);
+      expect('landing' in row(sessions), `a landing ${offset} s old, carried: ${String(carries)}`).toBe(carries);
+      if (carries) expect(row(sessions).landing).toMatchObject(LANDING);
+      expect(row(watcher.currentFleet()!).landing, 'the watcher\'s own last fleet is never mutated').toMatchObject(LANDING);
+    });
+
+    /** A saved snapshot of a fleet that carries the landing (read off a live GET at `T0`), then the clock moves. */
+    const snapshotThen = async (offset: number, connected: boolean) => {
+      const cachePath = path.join(mkTmp('ccrc-radar-cache-'), 'state-cache.json');
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+      const fleetState = { connected: true, downSince: null as number | null, ccdVerbs: null, rosterFp: null, build: null };
+      const b = await boot(true, { io: blindable(), cfg, fleetState, stateCachePath: cachePath });
+      const live = await getBody(b.app);
+      expect(row(live.sessions).landing, 'the snapshot is saved WITH a landing').toMatchObject(LANDING);
+      await saveSnapshot(live.sessions, cachePath);
+      vi.setSystemTime(T0 + offset * 1000);
+      fleetState.connected = connected;
+      fleetState.downSince = connected ? null : T0;
+      return b;
+    };
+
+    it.each(EDGE)('the remote disconnected arm, a snapshot %i s old: the landing is carried: %s', async (offset, carries) => {
+      const { app: a } = await snapshotThen(offset, false);
+      const body = await getBody(a);
+      expect(body.stale, 'this is the disconnected arm').toBe(true);
+      expect('landing' in row(body.sessions), `a landing ${offset} s old, carried: ${String(carries)}`).toBe(carries);
+    });
+
+    it.each(EDGE)('the degraded arm\'s fallback to the snapshot, one %i s old: the landing is carried: %s', async (offset, carries) => {
+      const { app: a, watcher } = await snapshotThen(offset, true);
+      unlistable = true;                                       // no broadcast has been made, so the fallback is the snapshot
+      expect(watcher.currentFleet()).toBeNull();
+      const body = await getBody(a);
+      expect(body.stale, 'this is the degraded arm').toBe(true);
+      expect('landing' in row(body.sessions), `a landing ${offset} s old, carried: ${String(carries)}`).toBe(carries);
+    });
+
+    it('dropStaleLandings: a list with nothing to drop is returned as it is, and a stale row is copied, not edited', () => {
+      const fresh = { id: 'a', landing: { at: stamp(0) } } as unknown as FleetSession;
+      const old = { id: 'b', landing: { at: stamp(-1201) } } as unknown as FleetSession;
+      const none = { id: 'c' } as unknown as FleetSession;
+      const same = [fresh, none];
+      expect(dropStaleLandings(same, T0)).toBe(same);
+      const out = dropStaleLandings([fresh, old, none], T0);
+      expect(out.map((s) => 'landing' in s)).toEqual([true, false, false]);
+      expect(out[0]).toBe(fresh);
+      expect(old.landing, 'the input row keeps its landing').toBeDefined();
+    });
   });
 });

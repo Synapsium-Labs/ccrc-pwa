@@ -1873,7 +1873,8 @@ export class FleetWatcher {
       if (!read.ok) continue;
       const rows: RadarRow[] = records.filter((r) => r.project === project).map((r) => {
         const pr = sessionPrOf(r, this.prStates);
-        // D-7515: a draft is an open PR to GitHub and to the radar; only a merged or closed PR keeps a number it no longer measures.
+        // D-7515: a draft is an open PR to GitHub and to the radar. A row whose PR is any other phase and still carries a number
+        // (merged, closed, or a sweep backing off as `unknown`/`unchecked`) matches nothing, and fails closed while the sweep fails.
         return {
           id: r.id, branch: sessionBranchOf(r, this.statuslines.get(r.id), heads.get(r.id)),
           pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' || pr.phase === 'draft' },

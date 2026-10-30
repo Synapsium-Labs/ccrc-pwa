@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { sessionBranchOf, sessionPrOf } from '../src/fleet.js';
-import { listRadarProjects, readRadarPass, readRadarProbe } from '../src/coord/lineageRead.js';
+import { listRadarProjects, readRadarPass, readRadarProbe, readRegular } from '../src/coord/lineageRead.js';
 import { RADAR_PROBE_MAX_BYTES } from '../src/coord/radar.js';
 import { readRegistry, type SessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -273,6 +273,21 @@ describe('the radar lane', () => {
       expect(ok.ok).toBe(true);
     });
 
+    // G9 (review 1225, F4). `parseProbe` checks the bytes against the cap again, so a case through `readRadarProbe`, the
+    // pass or the lane cannot see `readRegular`'s own post-read check: call it directly, with an io whose stat says the
+    // file is within the cap and whose read hands back more than the cap.
+    it('readRegular checks the bytes it read against the cap, whatever the stat said', async () => {
+      const cap = 16;
+      const io = {
+        lstatMeasured: async () => ({ ok: true as const, kind: 'regular' as const }),
+        statMeasured: async () => ({ ok: true as const, mtimeMs: 0, size: cap }),
+        readFileMeasured: async () => ({ ok: true as const, content: 'x'.repeat(cap + 1) }),
+      };
+      expect(await readRegular(io, '/f', undefined, cap)).toEqual({ ok: false, reason: 'unreadable' });
+      const within = { ...io, readFileMeasured: async () => ({ ok: true as const, content: 'x'.repeat(cap) }) };
+      expect(await readRegular(within, '/f', undefined, cap), 'a file at the cap reads').toEqual({ ok: true, content: 'x'.repeat(cap) });
+    });
+
     it('the listing leaves out the lister\'s .lp.* temporaries and says absent for no directory', async () => {
       expect(await listRadarProjects(localIO, reg)).toEqual({ ok: false, reason: 'absent' });
       mkdirSync(path.join(reg, 'landing', 'proj-a'), { recursive: true });
@@ -306,6 +321,34 @@ describe('the radar lane', () => {
       expect(keys(w)).toEqual([ALPHA, BETA, GAMMA]);
       await w.sweepRadar(null, NOW + 1201_000);
       expect(keys(w)).toEqual([]);
+    });
+
+    // G6 (review 1225, F4). The cases above hand `sweepRadar(null, …)` in directly, which is why a `[]` for the null in the
+    // tick's hand-off survived: an empty record list is a LISTED registry with no sessions, and rebuilds the map empty.
+    // This one drives `tick()`, twice, a lane beat (60 s) apart, the registry unlistable through its `readdir` alone.
+    it('tick() hands an unlistable registry to the lane as null: the kept map is re-aged, never emptied', async () => {
+      plantFleet(); plantProbe(worked());
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(NOW);
+      let blind = false;
+      const io: FleetIO = { ...localIO, readdir: async (p, t, sg) => (blind && p === reg ? null : localIO.readdir(p, t, sg)) };
+      const w = make(io);
+      const passes: Array<Promise<void>> = [];
+      const real = w.sweepRadar.bind(w);
+      const sweep = vi.spyOn(w, 'sweepRadar');
+      sweep.mockImplementation((...a) => { const p = real(...a); passes.push(p); return p; });
+      await w.tick();
+      await vi.waitFor(() => expect(passes).toHaveLength(1));
+      await Promise.all(passes);
+      expect(keys(w)).toEqual([ALPHA, BETA, GAMMA]);
+
+      blind = true;
+      vi.setSystemTime(NOW + 61_000);                       // past the lane's 60 s throttle, inside the doc's window
+      await w.tick();
+      await vi.waitFor(() => expect(passes).toHaveLength(2));
+      await Promise.all(passes);
+      expect(sweep.mock.calls[1]?.[0], 'an unlistable registry is null, not an empty list').toBeNull();
+      expect(keys(w), 'the lane emptied the map for a registry it could not list').toEqual([ALPHA, BETA, GAMMA]);
     });
 
     it('a landing directory that disappears empties the map at once (no radar)', async () => {

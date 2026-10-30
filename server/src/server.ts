@@ -10,7 +10,7 @@ import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Deps } from './deps.js';
-import { assembleFleet } from './fleet.js';
+import { assembleFleet, dropStaleLandings } from './fleet.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
@@ -1171,7 +1171,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // persisted (spec §5.4.1), so there is nothing measured to serve, and a
       // cached tag rendered as live policy would lie. Absence reads as
       // "unknown" on the PWA, which is the truth here.
-      if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
+      if (snap) return { sessions: dropStaleLandings(snap.sessions, Date.now()), stale: true, downSince: deps.fleetState.downSince };
     }
     // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
     // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
@@ -1184,7 +1184,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // [registry-refused:stale]
     const reg = await readRegistryMeasured(deps.io, deps.cfg);
     if (!reg.listed) {
-      return { sessions: watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], stale: true };
+      return { sessions: dropStaleLandings(watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], Date.now()), stale: true };
     }
     // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
     // the watcher tick, so a client connecting into a quiet fleet would
@@ -1562,7 +1562,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // and the `runs` frame below is still sent.
     let cold: Promise<FleetSession[] | null>;
     if (broadcast !== null) {
-      cold = Promise.resolve(broadcast);
+      cold = Promise.resolve(dropStaleLandings(broadcast, Date.now()));
     } else {
       // [registry-refused:stale]
       cold = readRegistryMeasured(deps.io, deps.cfg).then((reg) => (reg.listed

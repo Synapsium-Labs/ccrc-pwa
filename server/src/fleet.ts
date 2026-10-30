@@ -479,6 +479,24 @@ export function lifecycleInputFor(
   };
 }
 
+/** The sends of a fleet that was NOT just assembled (landing order wave 4b, fix round 1): the `/ws/fleet` cold frame and
+ *  `GET /api/fleet`'s degraded arm, which carry the watcher's last broadcast, and the snapshot arms, which carry a saved
+ *  file. Each drops a `landing` that `freshWithin` no longer accepts, the rule `assembleFleet` applies on its own path, so
+ *  no send of the wire carries a prediction past `RADAR_PROBE_FRESH_S` however long the lane has been blind (D-7481).
+ *  Pure: `nowMs` is the caller's clock. It never mutates what it is handed, because the watcher keeps its last fleet and
+ *  re-sends it: a row with nothing to drop is returned as it is, a row with a stale landing as a copy without the key
+ *  (absence means unknown, never `null`), and a list with no such row as the same list, so the frame cache keyed on it
+ *  still hits. */
+export function dropStaleLandings(sessions: readonly FleetSession[], nowMs: number): FleetSession[] {
+  const stale = (s: FleetSession): boolean => s.landing !== undefined && !freshWithin(s.landing.at, RADAR_PROBE_FRESH_S, nowMs);
+  if (!sessions.some(stale)) return sessions as FleetSession[];
+  return sessions.map((s) => {
+    if (!stale(s)) return s;
+    const { landing: _old, ...rest } = s;
+    return rest;
+  });
+}
+
 export async function assembleFleet(
   io: FleetIO,
   cfg: CcrcConfig,
@@ -553,7 +571,8 @@ export async function assembleFleet(
   panePids?: Map<string, number | null>,
   /** The landing radar lane's map (landing order wave 4b, `FleetWatcher.currentLandings()`), keyed by session id. Absent
    *  on every caller that builds no fleet frame and in older tests. An entry past its window is dropped here, so no
-   *  frame carries an old prediction however long the lane has been blind (D-7481). */
+   *  frame this assembly builds carries an old prediction however long the lane has been blind; the sends that carry an
+   *  earlier fleet instead take `dropStaleLandings` (D-7481). */
   landings?: ReadonlyMap<string, SessionLanding>,
 ): Promise<FleetSession[]> {
   // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
