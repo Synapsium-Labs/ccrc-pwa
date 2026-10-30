@@ -8012,8 +8012,9 @@ export class CoordStore {
       // (D-2545). Answering `'unknown-ask'` here would be the overloaded value
       // this whole change removes — a coordinator told "no such ask" for a row
       // that is sitting there. It THROWS instead, and it is unreachable by
-      // construction from both call sites: `/answer` reads `askById` and
-      // `POST /api/sessions/:id/ask` reads `heldAskFor` immediately before,
+      // construction from both call sites: `/answer` reads `askById` and the
+      // operator's ask (`coord/questions.ts`, behind `POST /api/questions/
+      // session-<id>/answer` since W7 C7p) reads `heldAskFor` immediately before,
       // each refusing the unreadable row in its own words first. Widening
       // `AskTakeResult` would put a never-wire word into the ask refusal
       // vocabulary the two routes send verbatim.

@@ -50,7 +50,7 @@ import {
   sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter, refusalShape,
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
-import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
+import { answerAsk, type AskDeps } from './inject/ask.js';
 import { measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
@@ -1818,7 +1818,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         case 'found': break;
         case 'absent': case 'unmeasurable': case 'unlistable': return null;
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
-        // non-registry id on `POST /api/sessions/:id/ask`, and on
+        // non-registry id on `POST /api/questions/session-<id>/answer` (the
+        // operator's ask, since W7 C7p retired `/api/sessions/:id/ask`), and on
         // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
         // `child-unmeasurable` before `answerAsk` reaches this read. `null`,
         // the safe word, all the same.
@@ -1845,8 +1846,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // drift. Since W3 Q3f (D-7030) both answer paths read it in one file,
   // `coord/questions.ts` (the operator's core and the claimant's). See
   // `registry.ts`'s own doc comment on it for the full reasoning, and
-  // `POST /api/sessions/:id/ask`'s comment below for why a lost CAS never
-  // refuses the operator regardless of which unmeasurable arm fired.
+  // `coord/questions.ts`'s operator ask ladder (Task 12, D-2171) for why a lost
+  // CAS never refuses the operator regardless of which unmeasurable arm fired.
 
   // Build 7 coordination: mail ingress + ack (this build) and run routes
   // (Task 9) — registered from their own module because six-plus routes
@@ -1878,11 +1879,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // D-7026: this server's ONE owner of question state, the watcher's own when it is given one (`index.ts` hands it
   // one, so production has exactly one instance), and its own otherwise; never module scope.
   const questions = watcher?.questions ?? createQuestions(deps);
-  // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to both the old operator
-  // doors below and the family's `POST /api/questions/:id/answer` in `coord/routes.ts`, so the two read the same wiring:
-  // the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's hookstate as the
-  // watcher last read it. `coord`, `io` and `cfg` are read at the call, as the old doors read them. The emit and
-  // `knownId` are declared below, beside the session routes, so both are read lazily, at a request.
+  // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to the family's
+  // `POST /api/questions/:id/answer` in `coord/routes.ts` (the old operator doors that read it too were retired in W7
+  // C7p, D-7194): the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's
+  // hookstate as the watcher last read it. `coord`, `io` and `cfg` are read at the call, as the old doors read them. The
+  // emit and `knownId` are declared below, beside the session routes, so both are read lazily, at a request.
   const operatorDoorDeps: OperatorDoorDeps = {
     get coord() { return deps.coord; }, get io() { return deps.io; }, get cfg() { return deps.cfg; }, notice,
     pressAsk: (id, key, optionIndexes) => answerAsk(askDeps, id, key, optionIndexes),
@@ -2161,7 +2162,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 22 request-id routes (18 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's floor is 97 agent-WS operations [registry-read-census:fleet]
@@ -2438,61 +2439,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (res.next !== undefined) bus.emit(`answered:${id}`, res.next);
   };
 
-  app.post('/api/sessions/:id/dialog', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown };
-    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // W3 Q3f (D-7030): an ALIAS from here on. D-5298's approval marking (the operator recorded on the child's open
-    // approval rows BEFORE any key, gated on the watcher's hookstate, D-5491) and the press are the operator's core,
-    // `questions.answer`, which `POST /api/questions/session-<id>/answer` calls too.
-    const out = await questions.answer({ kind: 'dialog', form: 'row', sessionId: id, dialogId: body.dialogId, optionIndex: body.optionIndex }, operatorDoorDeps);
-    return reply.code(out.status).send(out.body);
-  });
-
-  /**
-   * D-5047: type an answer into an AskUserQuestion's free-text row ("Type something.") and submit it, proved focused
-   * before typing and echoed before Enter (`answerDialogText`, `inject/send.ts`). A NEW route, deliberately not a
-   * `text` field on `/dialog` above: an older server would ignore that field, walk onto the empty row and press Enter,
-   * which rejects the whole ask. An older server answers this route 404 instead. `bad-text` (`isDialogText`,
-   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
-   */
-  app.post('/api/sessions/:id/dialog/text', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown; text?: unknown };
-    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number' || typeof body.text !== 'string') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // W3 Q3f (D-7030): an ALIAS from here on, into the operator's core (`questions.answer`): the press, its answered
-    // frame, and `bad-text` 400, every other refusal 409.
-    const out = await questions.answer({ kind: 'dialog', form: 'text', sessionId: id, dialogId: body.dialogId, optionIndex: body.optionIndex, text: body.text }, operatorDoorDeps);
-    return reply.code(out.status).send(out.body);
-  });
-
-  /**
-   * D-5048: answer a multiSelect AskUserQuestion question, leaving exactly `optionIndexes` ticked and committing it
-   * with Tab, each step proved on a fresh capture (`answerDialogMulti`, `inject/send.ts`). A NEW route, like
-   * `/dialog/text`: an older server answers it 404, where a field on `/dialog` would have walked and pressed Enter,
-   * which on a multiSelect question toggles a box and commits nothing. `bad-indexes` (`isDialogMultiIndexes`,
-   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
-   */
-  app.post('/api/sessions/:id/dialog/multi', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndexes?: unknown };
-    if (typeof body.dialogId !== 'string' || !Array.isArray(body.optionIndexes) ||
-        !body.optionIndexes.every((n) => typeof n === 'number')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // W3 Q3f (D-7030): an ALIAS from here on, into the operator's core (`questions.answer`): the press, its answered
-    // frame, and `bad-indexes` 400, every other refusal 409.
-    const out = await questions.answer({ kind: 'dialog', form: 'multi', sessionId: id, dialogId: body.dialogId, optionIndexes: body.optionIndexes as number[] }, operatorDoorDeps);
-    return reply.code(out.status).send(out.body);
-  });
-
   /**
    * Decision `ask-dialog-tab-route`: move an AskUserQuestion's pane to another tab with ←/→ (the sheet's arrow keys and
    * its tab strip), each step proved by the screen it lands on, never Enter (`moveDialogTab`, `inject/send.ts`). The
@@ -2506,61 +2452,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     answeredFrame(id, 'dialog/tab', res);
     if (res.ok) return res;
     return reply.code(res.error === 'bad-request' ? 400 : 409).send(res);
-  });
-
-  /**
-   * Task 12 (D-2171) — this is the OPERATOR's own answer path, the ordinary
-   * lock-screen route every ask goes through, PWA and pre-emption lane
-   * alike. Before this task it never consulted the `asks` table at all: if
-   * the operator answered first, the row stayed `'held'`, the parent's
-   * later `POST /api/asks/:id/answer` CAS'd it to `'answering'`, got
-   * refused by `answerAsk` below (the menu was already gone), and rolled
-   * back to `'held'` via `untakeAsk` — asserting the question was STILL
-   * pre-emptible when it had in fact just been answered, and never naming
-   * who answered it. Both routes serialize through the ONE per-session
-   * `KeyedQueue` (`askDeps`, built once per server, above), so exactly one
-   * digit ever reaches the pane regardless of this route's own logic — this
-   * is a RECORD defect, not a safety one, and everything below is in
-   * service of the record alone.
-   *
-   * `heldAskFor` returning null — no row for this child, the overwhelming
-   * majority of asks — takes EXACTLY the pre-Task-12 path: one `answerAsk`
-   * call, same refusal shape, no added read once a row exists nowhere to
-   * look up (a coord-less box skips `heldAskFor` entirely). This is the
-   * single most important property of this route: it is not new behaviour
-   * layered onto the common case, it is new behaviour reached only on the
-   * lane's own minority path.
-   *
-   * When a row IS held, it is taken (`takeAskForAnswer`, the identical CAS
-   * `/api/asks/:id/answer` uses, guarded by the same fresh re-read —
-   * `registry.ts`'s `freshAskAt`, imported above, shared with that route)
-   * BEFORE the keystroke: the row is the mutex, so
-   * taking it after the press would be decorative. Unlike the parent's own
-   * route, though, a LOST race here never refuses the caller — the operator
-   * is the authority this row exists to protect against being locked out
-   * of, not a third party mediated by it, so losing the CAS only means this
-   * request cannot claim the record; the press still goes through on its
-   * own merits (`answerAsk`'s own thirteen pre-send guards plus its
-   * post-send `sendKey` check, D-2177, are the only refusal that still
-   * applies; D-5048 added the thirteenth, the multiSelect refusal, and took
-   * away the commit Enter and its check).
-   *
-   * Since W3 Q3f (D-7030) this door keeps its front ladder (`knownId`, the body) and delegates the rest, in this order,
-   * to `coord/questions.ts#createQuestions`'s `answer`.
-   */
-  app.post('/api/sessions/:id/ask', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    // D-5293: one reader for this body and the parent's (`readAskAnswer`).
-    const body = readAskAnswer(req.body ?? {});
-    if (body === null || body.askKey === undefined) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // W3 Q3f (D-7030): an ALIAS from here on. The record arms (the held row taken before the digit, rolled back on a
-    // refused press, settled after it, the press unrecorded on an unreadable or throwing store) and the press itself are
-    // the operator's core, `questions.answer`, which `POST /api/questions/session-<id>/answer` calls too.
-    const out = await questions.answer({ kind: 'ask', sessionId: id, askKey: body.askKey, optionIndexes: body.optionIndexes }, operatorDoorDeps);
-    return reply.code(out.status).send(out.body);
   });
 
   app.get('/api/sessions/:id/commands', async (req, reply) => {
