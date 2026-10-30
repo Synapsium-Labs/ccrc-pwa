@@ -13,7 +13,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
-import { liveStateReaderOver } from '../src/livestate.js';
+import { liveStateReaderOver, type LiveStateRead } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
@@ -146,5 +146,27 @@ describe('the two live verdicts have one home: livestate.ts re-exports liveVerdi
     const livestate = await import('../src/livestate.js');
     expect(livestate.liveSessionStatus).toBe(verdicts.liveSessionStatus);
     expect(livestate.liveStatusCoversDelegation).toBe(verdicts.liveStatusCoversDelegation);
+  });
+});
+
+// D-7512, the seam: the live fields come from the reader `assembleFleet` is handed, never from `io`. Each row hands a
+// reader that disagrees with what `io` holds, so a read that went round the port to `io` reds here.
+describe('assembleFleet: the live fields come from the handed reader, never from io (D-7512)', () => {
+  it('io holds no live file, the reader answers a well-formed idle at 2.1.283: the row reads the reader\'s state', async () => {
+    const idle: LiveStateRead = { ok: true, state: {
+      pid: PID, sessionId: '3'.repeat(36), cwd: `/data/projects/${ID}`, name: 'from the reader', nameSource: 'chosen',
+      status: 'idle', statusUpdatedAt: 1784600000001, startedAt: null, version: '2.1.283', waitingFor: null,
+    } };
+    const fleet = await assembleFleet(localIO, cfg, tmux, async () => idle);
+    expect(project(fleet.find((x) => x.id === ID)!)).toEqual({
+      status: 'idle', name: 'from the reader', statusUpdatedAt: 1784600000001, version: '2.1.283',
+      statusUnmeasured: false, dialogPending: false, askSummary: null,
+    });
+  });
+
+  it('io holds a well-formed file, the reader answers unmeasured: the row is busy and declared unmeasured', async () => {
+    const unmeasured: LiveStateRead = { ok: false, reason: 'unmeasured' };
+    const fleet = await assembleFleet(bodiesIO([body('idle', '2.1.283')]), cfg, tmux, async () => unmeasured);
+    expect(project(fleet.find((x) => x.id === ID)!)).toEqual({ status: 'busy', ...NOTHING, statusUnmeasured: true });
   });
 });
