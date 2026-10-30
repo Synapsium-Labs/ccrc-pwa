@@ -118,7 +118,7 @@ export type SleepActResult<V, St> =
     /** A `then: 'wake'` lane's wake, inside its one `ccd hibernate --roll` (D-7458): `true`, or ccd's stderr when the
      *  sleep landed and the wake failed. `restored: true` is `roll-wake-failed` (exit 4): ccd put the row back to sleep,
      *  the sanctioned hibernated row. `restored: false` is `roll-wake-unrestored` (exit 5): the marker could not be
-     *  written again, so the row may be neither running nor hibernated. Absent for a lane that stays asleep. */
+     *  written again or the unit could not be stopped again, so the row may be neither running nor hibernated. Absent for a lane that stays asleep. */
     readonly woke?: true | { readonly failed: string; readonly restored: boolean };
     /** A `wake` lane's target asked again on the serialiser AFTER the call (D-7541): the word that says it is no longer
      *  one (the setting turned off, the row no longer a coordinator) when a coordination write landed while ccd ran.
@@ -170,7 +170,8 @@ export interface SleepPassFacts<St> {
 // ── The lane row ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Who the pass looks at. `dispatched-children-by-id`: the frame's dispatched children that are neither stopped nor
- *  archived, with a record, not in retry, sorted by id. `recorded-rows-in-frame-order`: every row with a record. */
+ *  archived, with a record, not in retry, sorted by id. `recorded-rows-in-frame-order`: every row with a record, not in
+ *  retry (only a `hold-off` lane has rows in retry). */
 export type SleepPopulation = 'dispatched-children-by-id' | 'recorded-rows-in-frame-order';
 
 /** Each pass's own budget. `past: 'stop'`: the pass stops once it has `acts` due or has measured `measures`; `'wait'`:
@@ -178,7 +179,8 @@ export type SleepPopulation = 'dispatched-children-by-id' | 'recorded-rows-in-fr
 export interface SleepCaps { readonly acts: number; readonly measures: number | null; readonly past: 'stop' | 'wait' }
 
 /** What a refused act leaves behind. `hold-off`: not asked again for `ms` (`of` is the lane memory's map), pruned at the
- *  pass's start. `ask-next-pass`: asked again next pass; skip and failure lines at most once per `lineMs` per id,
+ *  pass's start; a `wake` lane also holds off a row held at the act (D-7552), so a row that will not roll never takes
+ *  every pass's one act. `ask-next-pass`: asked again next pass; skip and failure lines at most once per `lineMs` per id,
  *  shadow lines once per `shadowLineMs`, both maps (`of`) pruned of ids the pass no longer sees. */
 export type SleepRetry<M> =
   | { readonly kind: 'hold-off'; readonly ms: number; readonly of: (m: M) => Map<string, number> }
@@ -260,7 +262,7 @@ const SESSION_BUSY = /ccd: session-busy: ?(\S*)/;
 /** `cmd_hibernate --roll`'s exit-4 line (D-7458): the sleep landed, the wake did not, and ccd put the row back to sleep. */
 const ROLL_WAKE_FAILED = /ccd: roll-wake-failed/;
 /** `cmd_hibernate --roll`'s exit-5 line: the sleep landed, the wake did not, and `.hibernated` could not be written
- *  again, so the row was NOT restored. A phrase of its own, so it is never read as the exit-4 one. */
+ *  again or the unit could not be stopped again, so the row was NOT restored. A phrase of its own, so it is never read as the exit-4 one. */
 const ROLL_WAKE_UNRESTORED = /ccd: roll-wake-unrestored/;
 /** `cmd_hibernate --roll`'s exit-6 line: the pane was still live after the kill, so nothing was rolled and no wake was
  *  tried; the marker and the stopped unit the act wrote stand. */
@@ -269,6 +271,10 @@ const ROLL_KILL_FAILED = /ccd: roll-kill-failed/;
 /** Whether the box can run this lane's act: `hibernate` listed, and for a `wake` lane the `--roll` flag too. */
 export const laneVerb = (then: 'stay-asleep' | 'wake', fleetState: FleetState | undefined): boolean =>
   ccdCan(fleetState, 'hibernate') && (then !== 'wake' || capSupported(fleetState, HIBERNATE_ROLL_CAP));
+
+/** A `wake` lane's after-call re-ask that could not be read (D-7552): the word `afterAct` answers for a row it could not
+ *  re-read, so a throw there reads as the same unmeasured re-ask. */
+export const AFTER_UNMEASURED = 'row-unmeasured';
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -305,7 +311,7 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
   const pop = lane.population === 'dispatched-children-by-id'
     ? sessions.filter((s) => s.child.kind === 'child' && s.stoppedBy === null && s.archivedAt === null && byId.has(s.id)
       && !inRetry(s.id)).sort(byIdOrder)
-    : sessions.filter((s) => byId.has(s.id));
+    : sessions.filter((s) => byId.has(s.id) && !inRetry(s.id));
   const finish = (): void => {
     if (retry.kind !== 'ask-next-pass') return;
     const seen = new Set(sessions.map((s) => s.id));
@@ -384,10 +390,13 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
  * fleet-wide. Its act is three steps, each taking the serialiser (where it does) before the queue, the order every
  * other holder takes them in:
  *   1. on the serialiser and the queue: the reads above, ending with the wake budget;
- *   2. on the session's queue only: the call, so nothing else writes to that session while it is rolled;
+ *   2. on the session's queue only: the reads again but the budget (D-7552), so anything queued on the session while
+ *      step 1 ran is seen, then the call in that same turn, so nothing else writes to that session while it is rolled;
  *   3. on the serialiser and the queue again, only for a roll that landed: the target asked again (`asks.afterAct`),
- *      so a coordination write that landed while ccd ran is journalled beside the roll, never hidden by it.
- * A `wake` lane's admission is refunded when the answer woke nothing (D-7542). Never throws.
+ *      so a coordination write that landed while ccd ran is journalled beside the roll, never hidden by it. A throw
+ *      here is the re-ask unmeasured, and a throw once ccd was called is an unknown outcome (D-7552).
+ * A `wake` lane's admission is refunded when the answer woke nothing (D-7542), and a row it held at the act is held
+ * off (D-7552). Never throws.
  */
 export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonly subagents: FleetSession['subagents'] }, St, V extends SleepAnswer, O>(
   lane: SleepLane<D, M, Row, St, V, O>, deps: D, mem: M, f: SleepPassFacts<St>, port: ArmedPort<Row>,
@@ -404,8 +413,9 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
   let called = false;
   const refund = (): void => { (admission as WakeAdmission | null)?.refund(); admission = null; };
   type Before = { readonly go: false; readonly r: SleepActResult<V, St> } | { readonly go: true; readonly v: Asleep<V>; readonly store: St; readonly again: Row };
-  // Typed on the binding, so the call below stays in `sleepAct`'s scope for `id-argv-census.test.ts`.
-  const before: () => Promise<Before> = async () => {
+  // Typed on the binding, so the call below stays in `sleepAct`'s scope for `id-argv-census.test.ts`. `check` is every
+  // read but the wake budget; `before` is `check`, then the budget.
+  const check: () => Promise<Before> = async () => {
     const fresh = await port.rowAtAct(rec);
     if (!fresh.ok) return { go: false, r: { kind: 'held-at-act', verdict: null } };
     // Only the roster falls back to the tick's read, when the re-read row has none.
@@ -421,12 +431,20 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
     // D-7047: the switches over a fresh listing, the read nearest the argv. No retry memory: the next pass asks again.
     const off = switchedOffAt(lane, readSwitches(await port.listing()));
     if (off !== null) return { go: false, r: { kind: 'switched-off', detail: off } };
-    // D-7452: a lane that wakes what it sleeps is an automatic wake, asked of the budget before anything stops.
-    if (wake) {
-      admission = port.admitWake?.(id) ?? null;
-      if (admission === null) return { go: false, r: { kind: 'skipped', detail: 'wake-budget', by: 'wake-budget' } };
-    }
     return { go: true, v, store, again };
+  };
+  const before: () => Promise<Before> = async () => {
+    const b = await check();
+    // D-7452: a lane that wakes what it sleeps is an automatic wake, asked of the budget before anything stops.
+    if (!b.go || !wake) return b;
+    admission = port.admitWake?.(id) ?? null;
+    if (admission === null) return { go: false, r: { kind: 'skipped', detail: 'wake-budget', by: 'wake-budget' } };
+    return b;
+  };
+  // D-7552: a `wake` lane's row held at the act is held off, as a refused one is, so it leaves the population a while.
+  const heldOff = (r: SleepActResult<V, St>): SleepActResult<V, St> => {
+    if (r.kind === 'held-at-act') holdOff();
+    return r;
   };
   const call = (v: Asleep<V>): Promise<CcdResult> => {
     called = true;
@@ -452,26 +470,49 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
     }
     // 1. The reads, on the serialiser and the queue.
     const b = await port.serial(() => port.queueRun(id, before));
-    if (!b.go) return b.r;
-    // 2. The call, on the session's queue only (D-7541).
-    const res = await port.queueRun(id, () => call(b.v));
-    const r = wakeAnswer<V, St>(res, b.v, b.store);
+    if (!b.go) return heldOff(b.r);
+    // 2. The call, on the session's queue only (D-7541), asked again first in the same turn of that queue (D-7552):
+    // whatever was queued on the session while step 1 ran (a prompt sent, an ask answered, mail delivered) has run by
+    // now, so the record, the verdict, the verb and the switches are read again here, beside the argv. Not the
+    // serialiser: that is what D-7541 keeps off the call. The wake budget was admitted in step 1 and is given back here.
+    const at = await port.queueRun(id, async (): Promise<{ readonly go: false; readonly r: SleepActResult<V, St> } | { readonly go: true; readonly b: Before & { readonly go: true }; readonly res: CcdResult }> => {
+      const c = await check();
+      if (!c.go) return c;
+      return { go: true, b: c, res: await call(c.v) };
+    });
+    if (!at.go) {
+      refund();
+      return heldOff(at.r);
+    }
+    const { res } = at;
+    const c = at.b;
+    const r = wakeAnswer<V, St>(res, c.v, c.store);
     if (!res.ok) holdOff();
     if (wokeNothing(r)) refund();
     if (r.kind !== 'hibernated' || r.woke !== true) return r;
-    // 3. The target asked again, on the serialiser and the queue.
+    // 3. The target asked again, on the serialiser and the queue. The roll landed whatever this read comes to, so a
+    // throw here is the re-ask unmeasured (D-7552), never a failure of an act that happened.
     const afterAct = lane.asks.afterAct;
-    const after = await port.serial(() => port.queueRun(id, async () => {
-      const word = afterAct === undefined ? null : await afterAct(deps, b.again, rec);
-      lane.notices?.slept(deps, id, b.v, b.store);
-      return word;
-    }));
+    let after: string | null;
+    try {
+      after = await port.serial(() => port.queueRun(id, async () => {
+        const word = afterAct === undefined ? null : await afterAct(deps, c.again, rec);
+        lane.notices?.slept(deps, id, c.v, c.store);
+        return word;
+      }));
+    } catch {
+      after = AFTER_UNMEASURED;
+    }
     return after === null ? r : { ...r, after };
   } catch (err) {
     holdOff();
-    // A throw before the call woke nothing; one after it may have, so its admission stands.
-    if (!called) refund();
-    return { kind: 'failed', detail: errText(err), by: 'throw' };
+    // A throw before the call woke nothing; one after it may have, so its admission stands, and a `wake` lane's
+    // answer is unknown, never a failure that stopped nothing (D-7552).
+    if (!called) {
+      refund();
+      return { kind: 'failed', detail: errText(err), by: 'throw' };
+    }
+    return wake ? { kind: 'failed', detail: errText(err), by: 'throw', outcome: 'unknown' } : { kind: 'failed', detail: errText(err), by: 'throw' };
   }
 }
 

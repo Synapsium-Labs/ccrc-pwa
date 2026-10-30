@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
-import { rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
+import { ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
 type RollActPort = SleepActPort<FleetSession>;
 import { ROLL_QUIET_MS } from '../src/coord/rollTarget.js';
@@ -85,7 +85,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
   };
   return { deps, lines, calls, wakes, refunds, set };
 }
-const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map() });
+const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map() });
 const pass = (f: Fake, rows: FleetSession[] = [row(COORD)], names: readonly string[] = [], m = mem()) =>
   rollPass(f.deps, m, rows, rows.map((r) => rec(r.id)), names);
 
@@ -350,7 +350,7 @@ describe('the roll does not hold the coordination serialiser across its ccd call
     expect(await p).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
   });
 
-  it('control: the reads before the call run on the serialiser', async () => {
+  it('control: the reads before and after the call run on the serialiser; the re-ask beside the call on the session\'s queue only (D-7552)', async () => {
     const f = fake();
     const t = inFlight(f);
     const heldAt: boolean[] = [];
@@ -360,8 +360,7 @@ describe('the roll does not hold the coordination serialiser across its ccd call
     await settle();
     t.answer(ok(`rolled ${COORD}`));
     await p;
-    expect(heldAt.length, 'the row is read before the call and again after it').toBe(2);
-    expect(heldAt.every((h) => h), 'every re-read is on the serialiser').toBe(true);
+    expect(heldAt, 'read before the call on the serialiser, beside it off it, and after it on it again').toEqual([true, false, true]);
   });
 
   it('the target is asked again on the serialiser after the call: a setting turned off meanwhile is journalled beside the roll', async () => {
@@ -457,3 +456,146 @@ describe('a pane kill that failed on a live pane is never a roll (exit 6, roll-k
   });
 });
 
+
+describe('the woke-unrestored line is worded from ccd\'s branch, never a cause ccd did not report', () => {
+  const unrestored = (why: string): CcdResult => ({ ok: false, ran: true, stdout: 'hibernated', stderr: `ccd: roll-wake-unrestored — ${COORD} was hibernated and its wake exited 5, and ${why}: ${COORD} may be neither running nor hibernated; check it (ccd ensure ${COORD})`, code: 5, killed: false, signal: null }) as unknown as CcdResult;
+
+  it('the unit branch (its unit could not be stopped again) is never said to be a marker that could not be written', async () => {
+    const f = fake();
+    f.set.hibernate = () => unrestored(`its unit claude-session@${COORD} could not be stopped again`);
+    expect((await pass(f))[0]!.kind).toBe('woke-unrestored');
+    const text = f.lines.join('\n');
+    expect(text).not.toMatch(/ccd could not write its hibernated marker/);
+    expect(text).toMatch(new RegExp(`roll of ${COORD}: its wake failed \\(.*\\) and ccd could not put it back to sleep, so it was not restored: the session may be neither running nor hibernated; check ${COORD}`));
+  });
+
+  it('control: the marker branch reads the same, and its cause stays in ccd\'s own words in the parentheses', async () => {
+    const f = fake();
+    f.set.hibernate = () => unrestored(`/reg/${COORD}.hibernated could not be written again`);
+    await pass(f);
+    const text = f.lines.join('\n');
+    expect(text).toMatch(/\.hibernated could not be written again/);
+    expect(text).toMatch(/and ccd could not put it back to sleep, so it was not restored/);
+  });
+});
+
+describe('a throw once ccd has been called is never "it was not stopped"', () => {
+  it('the target re-asked after a roll that landed throws (the link dropped): it is still a roll, its re-ask unmeasured, its wake spent', async () => {
+    const f = fake();
+    const rowAtAct = f.deps.act!.rowAtAct;
+    (f.deps.act as { rowAtAct: RollActPort['rowAtAct'] }).rowAtAct = async (r) => {
+      if (f.calls.length > 0) throw new Error('link dropped');
+      return rowAtAct(r);
+    };
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, after: 'row-unmeasured' }]);
+    expect(f.calls.length).toBe(1);
+    expect(f.refunds).toEqual([]);
+    const text = f.lines.join('\n');
+    expect(text).not.toMatch(/was not stopped/);
+    expect(text).not.toMatch(/no longer a roll target/);
+    expect(text).toMatch(new RegExp(`rolled ${COORD} onto the current release .*; once ccd answered, whether it was still a roll target could not be read again \\(row-unmeasured\\)`));
+  });
+
+  it('a throw from the call itself is an unknown outcome that names the session to check, and keeps its wake spent', async () => {
+    const f = fake();
+    f.set.hibernate = () => { throw new Error('link dropped'); };
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'unknown', detail: 'link dropped' }]);
+    expect(f.refunds).toEqual([]);
+    const text = f.lines.join('\n');
+    expect(text).not.toMatch(/was not stopped/);
+    expect(text).toMatch(new RegExp(`roll of ${COORD}: outcome unknown .*check ${COORD}`));
+  });
+
+  it('control: a throw before the call is a failure that stopped nothing, and refunds the wake', async () => {
+    const f = fake();
+    (f.deps.act as { listing: RollActPort['listing'] }).listing = async () => { throw new Error('listing failed'); };
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'failed', detail: 'listing failed' }]);
+    expect(f.calls).toEqual([]);
+  });
+});
+
+/** The process's per-session write queue as `KeyedQueue` is: FIFO per id. */
+function keyedQueue(): <T>(id: string, fn: () => Promise<T>) => Promise<T> {
+  const tails = new Map<string, Promise<unknown>>();
+  return <T>(id: string, fn: () => Promise<T>): Promise<T> => {
+    const run = (tails.get(id) ?? Promise.resolve()).then(fn);
+    tails.set(id, run.then(() => undefined, () => undefined));
+    return run;
+  };
+}
+
+describe('the roll is asked again beside its call, on the session\'s queue', () => {
+  it('a task queued on the session while the reads ran (a prompt sent) holds the roll: ccd is not called and the wake is given back', async () => {
+    const f = fake();
+    const q = keyedQueue();
+    (f.deps.act as { queueRun: RollActPort['queueRun'] }).queueRun = q;
+    const rowAtAct = f.deps.act!.rowAtAct;
+    let first = true;
+    (f.deps.act as { rowAtAct: RollActPort['rowAtAct'] }).rowAtAct = async (r) => {
+      if (first) { first = false; void q(COORD, async () => { f.set.word = 'busy'; }); }
+      return rowAtAct(r);
+    };
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'idle-gate:live-word' }]);
+    expect(f.calls).toEqual([]);
+    expect(f.wakes).toEqual([COORD]);
+    expect(f.refunds).toEqual([COORD]);
+  });
+
+  it('a kill switch raised while the reads ran holds the roll beside its call', async () => {
+    const f = fake();
+    const q = keyedQueue();
+    (f.deps.act as { queueRun: RollActPort['queueRun'] }).queueRun = q;
+    let listed = 0;
+    (f.deps.act as { listing: RollActPort['listing'] }).listing = async () => (listed++ === 0 ? [] : [HIBERNATE_DISABLED_MARKER]);
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: HIBERNATE_DISABLED_MARKER }]);
+    expect(f.calls).toEqual([]);
+    expect(f.refunds).toEqual([COORD]);
+  });
+
+  it('control: with nothing queued meanwhile the roll lands, with one ccd call', async () => {
+    const f = fake();
+    (f.deps.act as { queueRun: RollActPort['queueRun'] }).queueRun = keyedQueue();
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls.length).toBe(1);
+  });
+});
+
+describe('a coordinator that will not roll does not keep the others from rolling', () => {
+  it('the first coordinator\'s ccd always answers session-busy: draft, and the second is rolled within two passes', async () => {
+    const f = fake();
+    f.set.hibernate = () => (f.calls.at(-1)!.includes(COORD) ? refused('ccd: session-busy: draft — a message is half-typed in the input box; nothing was touched') : ok('rolled'));
+    const m = mem();
+    const rolled: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      for (const o of await pass(f, [row(COORD), row(COORD2)], [], m)) if (o.kind === 'rolled') rolled.push(o.id);
+    }
+    expect(rolled).toEqual([COORD2]);
+  });
+
+  it('the same holds when the act re-ask holds the first coordinator (held at the act)', async () => {
+    const f = fake();
+    const rowAtAct = f.deps.act!.rowAtAct;
+    (f.deps.act as { rowAtAct: RollActPort['rowAtAct'] }).rowAtAct = async (r) => (r.id === COORD ? { ok: false as const } : rowAtAct(r));
+    const m = mem();
+    const rolled: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      for (const o of await pass(f, [row(COORD), row(COORD2)], [], m)) if (o.kind === 'rolled') rolled.push(o.id);
+    }
+    expect(rolled).toEqual([COORD2]);
+  });
+
+  it('control: the held-off coordinator is asked again once its hold-off ends', async () => {
+    const f = fake();
+    let busy = true;
+    f.set.hibernate = () => (busy ? refused('ccd: session-busy: draft — half-typed') : ok('rolled'));
+    const m = mem();
+    let now = NOW;
+    const deps = { ...f.deps, now: () => now };
+    await rollPass(deps, m, [row(COORD)], [rec(COORD)], []);
+    busy = false;
+    expect(await rollPass(deps, m, [row(COORD)], [rec(COORD)], []), 'held off: not asked').toEqual([]);
+    expect(f.calls.length).toBe(1);
+    now = NOW + ROLL_HOLD_OFF_MS;
+    expect(await rollPass(deps, m, [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR + ROLL_HOLD_OFF_MS }]);
+  });
+});

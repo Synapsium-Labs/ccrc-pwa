@@ -8,7 +8,7 @@ import {
 import {
   NO_ROLL_SUFFIX, ROLL_QUIET_MS, ROLL_SWEEP_ACTOR, autoRollVerdict, rollTargetVerdict, type AutoRollVerdict,
 } from './coord/rollTarget.js';
-import { idleHoursBindings, laneVerb, sleepPass, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
+import { AFTER_UNMEASURED, idleHoursBindings, laneVerb, sleepPass, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
 import { readSwitches } from '../../shared/switches.js';
 import type { FleetSession } from '../../shared/api.js';
 import type { ClaudeRollTargets } from '../../shared/claudeVersion.js';
@@ -45,14 +45,19 @@ import type { ClaudeRollTargets } from '../../shared/claudeVersion.js';
  * ONE PASS (`rollPass`): `hibernate-disabled` (the act's kill switch) or the Settings row at anything but
  * `coordinators` journals one line and reads nothing; otherwise the node's install time is read once, and the executor
  * asks every recorded row, measures the ones the verdict asks it to, and acts on at most ONE a pass (`ROLL_PER_PASS`),
- * so rolls never herd. Every skip is journalled with its reason, at most once per id per `ROLL_LINE_MS` unless the
- * reason changed; a row already on the current release is not a skip and writes nothing.
+ * so rolls never herd. A row ccd refused, that failed, or that was held at the act is held off for `ROLL_HOLD_OFF_MS`
+ * (D-7552), so a coordinator that will not roll leaves the pass's population and the next one in frame order gets the
+ * act. Every skip is journalled with its reason, at most once per id per `ROLL_LINE_MS` unless the reason changed; a
+ * row already on the current release is not a skip and writes nothing.
  */
 
 /** One roll a pass, fleet-wide. */
 export const ROLL_PER_PASS = 1;
 /** At most one journal line per id this often, unless its reason changed. */
 export const ROLL_LINE_MS = 60 * 60_000;
+/** D-7552: a row ccd refused, that failed, or that was held at the act is not asked again for this long, so a
+ *  coordinator that will not roll (a lasting draft, an attached terminal) never takes every pass's one act. */
+export const ROLL_HOLD_OFF_MS = 60 * 60_000;
 
 export interface RollSweepDeps {
   readonly coord: IdleHoursCoordPort | undefined;
@@ -91,6 +96,8 @@ export interface RollSweepMemory {
   /** The last journal line per id (and the pass-level key `*`): when, and for what. */
   readonly lastAt: Map<string, number>;
   readonly lastWhat: Map<string, string>;
+  /** D-7552: rows held off, and until when (the executor's `hold-off` map). */
+  readonly heldUntil: Map<string, number>;
 }
 
 export type RollOutcome =
@@ -103,8 +110,9 @@ export type RollOutcome =
   | { readonly id: string; readonly kind: 'skipped'; readonly reason: string }
   | { readonly id: string; readonly kind: 'failed'; readonly detail: string }
   | { readonly id: string; readonly kind: 'woke-failed'; readonly detail: string }
-  /** The wake failed AND ccd could not write `.hibernated` again (`roll-wake-unrestored`, exit 5): the session may be
-   *  neither running nor hibernated, so the line names it to be checked, and never says it stays hibernated. */
+  /** The wake failed AND ccd could not put the row back to sleep (`roll-wake-unrestored`, exit 5: `.hibernated` could
+   *  not be written again, or the unit could not be stopped again; ccd's stderr says which): the session may be neither
+   *  running nor hibernated, so the line names it to be checked, and never says it stays hibernated. */
   | { readonly id: string; readonly kind: 'woke-unrestored'; readonly detail: string }
   /** The one call was cut short or never answered (a timeout, a dropped link, a kill): the session may be running,
    *  hibernated, or between the two, so the line names it to be checked. */
@@ -163,7 +171,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
   population: 'recorded-rows-in-frame-order',
   caps: { acts: ROLL_PER_PASS, measures: null, past: 'wait' },
   acts: 'inline',
-  retry: { kind: 'ask-next-pass', lineMs: ROLL_LINE_MS, shadowLineMs: ROLL_LINE_MS, of: (m) => [m.lastAt] },
+  retry: { kind: 'hold-off', ms: ROLL_HOLD_OFF_MS, of: (m) => m.heldUntil },
   store: 'optional',
   unarmed: 'shadow',
   verb: 'arms-and-asked-at-act',
@@ -194,7 +202,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       const targets = deps.targets();
       if (targets === null) return 'setting-unreadable';
       const fresh = deps.act === null ? { ok: false as const } : await deps.act.rowAtAct(rec);
-      if (!fresh.ok) return 'row-unmeasured';
+      if (!fresh.ok) return AFTER_UNMEASURED;
       const t = rollTargetVerdict(targets, fresh.row.role);
       return t.take ? null : t.skip;
     },
@@ -235,6 +243,9 @@ function journal(deps: RollSweepDeps, mem: RollSweepMemory, key: string, what: s
   deps.log(line);
 }
 
+/** `afterAct`'s words for a re-ask it could not read: the roll stands, and whether it was still a target is unknown. */
+const UNREAD_AFTER: ReadonlySet<string> = new Set(['setting-unreadable', AFTER_UNMEASURED]);
+
 /** One pass. Returns what it did to every row it did not find current, for the caller's log and the tests. */
 export async function rollPass(
   deps: RollSweepDeps, mem: RollSweepMemory,
@@ -270,13 +281,18 @@ export async function rollPass(
     .filter((o): o is RollOutcome => o !== null)
     // `judged` cannot tell a row past the pass's one act from one the unarmed executor passed over; this pass can.
     .map((o) => (!actArmed && o.kind === 'skipped' && o.reason === 'one-per-pass' ? { ...o, reason: 'unarmed' } : o));
+  // The line memory of ids the pass no longer sees is pruned here (a `hold-off` lane's executor prunes only its own map).
+  const seen = new Set(sessions.map((s) => s.id));
+  for (const k of [...mem.lastAt.keys()]) if (k !== '*' && !seen.has(k)) mem.lastAt.delete(k);
   for (const k of [...mem.lastWhat.keys()]) if (k !== '*' && !mem.lastAt.has(k)) mem.lastWhat.delete(k);
   const done = new Set<string>();
   for (const o of out) {
     done.add(o.id);
     if (o.kind === 'rolled') {
       mem.lastAt.delete(o.id);
-      const after = o.after === undefined ? '' : `; by the time ccd answered it was no longer a roll target (${o.after})`;
+      const after = o.after === undefined ? ''
+        : UNREAD_AFTER.has(o.after) ? `; once ccd answered, whether it was still a roll target could not be read again (${o.after})`
+          : `; by the time ccd answered it was no longer a roll target (${o.after})`;
       deps.log(`ccrc-server: rolled ${o.id} onto the current release (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
     } else if (o.kind === 'skipped') {
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
@@ -287,7 +303,7 @@ export async function rollPass(
     } else if (o.kind === 'woke-failed') {
       journal(deps, mem, o.id, 'woke-failed', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}); ccd put it back to sleep, so it stays hibernated, and mail, an open screen or a re-dispatch wakes it on the current release`);
     } else if (o.kind === 'woke-unrestored') {
-      journal(deps, mem, o.id, 'woke-unrestored', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}) and ccd could not write its hibernated marker again, so it was not restored: the session may be neither running nor hibernated; check ${o.id} (ccd ensure ${o.id} wakes it if it is down)`);
+      journal(deps, mem, o.id, 'woke-unrestored', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}) and ccd could not put it back to sleep, so it was not restored: the session may be neither running nor hibernated; check ${o.id} (ccd ensure ${o.id} wakes it if it is down)`);
     } else {
       journal(deps, mem, o.id, 'unknown', `ccrc-server: roll of ${o.id}: outcome unknown (${o.detail.trim() || 'no stderr'}): ccd hibernate --roll was cut short or not answered, so ${o.id} may be running, hibernated or neither; check ${o.id} (ccd ensure ${o.id} wakes it if it is down)`);
     }
