@@ -453,6 +453,34 @@ async function spawnFresh(
 }
 
 /**
+ * D-7563 (operator ruling 2026-10-30): THE RETURNED CHILD'S BIND. A dispatch whose `ws-add` came back after the dispatch
+ * stopped reading leaves a planned run that names no session beside a live child workspace whose `.child` marker names
+ * it. The dead-dispatch pass (`abandonDeadDispatch.ts`) proves that shape and calls this, inside the coordination
+ * serialiser, right after its re-measure. It binds through THE SAME STORE WRITE the fresh-spawn arm above makes,
+ * `setSession`, with the adopted arm's `null` birth: the workspace may be an earlier attempt's, so no birth is dated
+ * against it. It lives here, beside that arm, so the binding's writers stay the files `BINDING_WRITER_FILES` names.
+ *
+ * SYNCHRONOUS from its read to its write: the run is read again and bound with no `await` between, so nothing in this
+ * process can move it in between. Any change since the pass measured it refuses: not planned, already bound, another
+ * claimant, or another dispatch stamp (a retry restamps the run). Nothing else is written here: no hold, no advance, no
+ * brief. The coordinator's next dispatch of the run resumes the bound workspace through the resume arm below.
+ */
+export function bindReturnedChild(
+  coord: CoordStore, b: { runId: number; sessionId: string; claimedBy: string; startedAt: number },
+): { ok: true } | { ok: false; why: string } {
+  const read = coord.run(b.runId);
+  if (!read.ok) return { ok: false, why: `the run could not be read (${read.detail})` };
+  const run = read.run;
+  if (run === null) return { ok: false, why: 'the run is gone' };
+  if (run.state !== 'planned') return { ok: false, why: `the run is ${run.state}` };
+  if (run.sessionId !== null) return { ok: false, why: `the run already names ${run.sessionId}` };
+  if (run.claimedBy !== b.claimedBy) return { ok: false, why: `the run's claimant is ${run.claimedBy ?? 'none'}` };
+  if (run.dispatchStartedAt !== b.startedAt) return { ok: false, why: 'the run was dispatched again' };
+  coord.setSession(b.runId, b.sessionId, null);
+  return { ok: true };
+}
+
+/**
  * Wave N>=2: resume the SAME workspace (deviation D-1: no ccd verb can spawn fresh into an existing one). NO
  * `markDispatchStarted` here, deliberately: that column measures the window in which a workspace is being MINTED
  * with no session id yet, and a resume has neither half. Adding the stamp widens what NULL means and reds

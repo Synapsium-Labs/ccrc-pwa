@@ -48,6 +48,11 @@ export function isDispatchAbandonRefusal(v: unknown): v is DispatchAbandonRefusa
  *  operator's and from the dead-coordinator lane's (all three close `failed`). */
 export const DISPATCH_ABANDON_EVENT = 'dispatch-abandoned:never-came-back';
 
+/** D-7563: the `run_events.detail` prefix the same pass journals when it BINDS a run to the one child workspace that came
+ *  back for it (its `.child` marker names the run, its pane is live, no run names it yet), so the trail tells that bind
+ *  from a dispatch's own. Followed by `session=<id> started=<ms>`. */
+export const DISPATCH_BIND_EVENT = 'dispatch-bound:returned-child';
+
 /** The mail's subject: one kebab word, the server's other mail subjects' shape. */
 export const DISPATCH_ABANDON_SUBJECT = 'dispatch-abandoned';
 
@@ -71,7 +76,8 @@ export const DISPATCH_ABANDON_TEXT = {
   legend: 'Abandon dispatches that never came back',
   on: 'On',
   onNote: 'A planned run whose dispatch started longer ago than the bound, with no workspace for it and no dispatch '
-    + 'still running, is abandoned once, its reason journaled, and its coordinator mailed.',
+    + 'still running, is abandoned once, its reason journaled, and its coordinator mailed. A run whose one child '
+    + 'workspace did come back, with its pane live, is bound to that workspace instead, and the bind journaled.',
   off: 'Off',
   offNote: 'Such a run is left as it is, for you to abandon from Runs.',
   pauseNote: 'Pause all cleanup stops it too while the pause stands.',
