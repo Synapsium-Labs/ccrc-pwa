@@ -11,5 +11,4 @@ import type { EntrySet } from './exemptions.js';
 export const OUTWARD_EDGE_EXEMPTIONS: EntrySet = {
   'server/src/accounts/ops.ts -> server/src/remote/client.ts': { reason: "L3 -> L4: the account op's agent lane takes FleetClient and matches its error classes", since: '2026-10-20' },
   'server/src/commands.ts -> server/src/livestate.ts': { reason: 'L1 -> L3: the command handlers read the live state themselves (readLiveState)', since: '2026-10-20' },
-  'server/src/transcript/parse.ts -> server/src/accounts/mask.ts': { reason: "L1 -> L4: the transcript parse masks with the masker's shape-only instance (SHAPE_ONLY_MASKER)", since: '2026-10-20' },
 };
