@@ -6,14 +6,17 @@
  * the radar files' one freshness rule, D-7475), reads no file and no clock (`nowMs` is an argument), so every case is a
  * table row.
  *
- * The parser reads only the shapes the radar writes (`lineage_unmeasured`, `lineage_pass` and `walk_lineage` in
- * `ccd/ccd-land-probe`), and refuses a doc those writers do not produce from real merges (D-7469). The three shapes: a failed fetch
- * (`unmeasured`, a `why`, no base, no stop, an empty chain), a walk under a measured base (`measured`, no `why`, a stop),
- * and a walk cut under one (`unmeasured`, a `why`, `stop: 'unmeasured'`, a partial chain). Every one carries the row's
- * `branch`. A walk of `LINEAGE_MAX_CHAIN` entries stopped at its limit, so it is `measured` with `stop: 'limit'`; a
- * `limit` walk of fewer is readable, because the step count is a knob. A chain is a first-parent walk of two-parent
- * merges, so no entry has `p1 === p2` and no `merge` repeats. A doc of any other shape is unreadable, so the accept row
- * is reachable only through the radar's walk shapes.
+ * The parser reads the files the radar writes (`lineage_unmeasured`, `lineage_pass` and `walk_lineage` in
+ * `ccd/ccd-land-probe`) by the rules below, and a doc that breaks any of them is unreadable (a doc that keeps them
+ * all but lacks a fresh `at` reads `stale`, not unreadable). They are rules the radar's writers keep; they do not
+ * prove that a doc which keeps them came from the radar or from real merges (D-7528, restating D-7469). Every doc
+ * is one JSON object of at most `LINEAGE_MAX_BYTES` with `v: 1`, and carries the row's `project`, `id` and
+ * `branch`, and a fresh `at` (`freshWithin`). A measured doc has a sha `tip`,
+ * a sha `base`, a stop other than `unmeasured`, and no `why`. An unmeasured doc has a non-empty `why`, and is a
+ * failed fetch (no base, no stop, an empty chain, a sha or `null` tip) or a cut walk (a sha base, a sha tip, `stop:
+ * 'unmeasured'`). A chain needs a base, starts at the tip, links each `p1` to the next `merge`, holds at most
+ * `LINEAGE_MAX_CHAIN` entries and, at that length, says `limit`; a `limit` walk of fewer is readable, because the
+ * step count is a knob. No entry has `p1 === p2`, and no `merge` repeats.
  *
  * Fail closed. Every unreadable, malformed, foreign, stale, inconsistent, non-qualifying or unknown fact answers
  * `today` (the caller's own refusal) or `unmeasured` (re-send after the radar's next tick), and never `accept`. The
@@ -46,7 +49,7 @@ export type LineageStop = (typeof LINEAGE_STOPS)[number];
 export interface LineageEntry { merge: string; p1: string; p2: string }
 
 /** A lineage doc that passed every check of `parseLineage`. A `null` `base` or `stop` in the file is `undefined`
- *  here (D-7269); `tip` stays `null` only in an `unmeasured` doc whose radar could not read the local tip. */
+ *  here (D-7269); `tip` stays `null` only in a failed-fetch doc (no `base`) whose radar could not read the local tip. */
 export interface LineageDoc {
   tip: string | null;
   base?: string;
@@ -91,16 +94,18 @@ export function parseLineage(
   const state = o.state;
   const measured = state === 'measured';
 
-  // A `null` reads as absent (D-7269). A `tip` is a sha, or `null` in an unmeasured doc only.
+  // A `null` reads as absent (D-7269). A `tip` is a sha, or `null` in a failed-fetch doc only (D-7529).
   const tip = o.tip;
   if (tip === null ? measured : !isSha(tip)) return bad;
   const base = o.base ?? undefined;
   if (base !== undefined && !isSha(base)) return bad;
+  // A null tip is a failed fetch's alone: `lineage_unmeasured` writes no base, and a walk always has a tip (D-7529, narrowing D-7269).
+  if (tip === null && base !== undefined) return bad;
   const stop = o.stop ?? undefined;
   if (stop !== undefined && !(LINEAGE_STOPS as readonly unknown[]).includes(stop)) return bad;
   if (measured && (base === undefined || stop === undefined)) return bad;
-  // `state` and `stop` agree (fix round 1, F1): only a cut walk is `unmeasured` with a stop, and that stop says so.
-  if (measured ? stop === 'unmeasured' : stop !== undefined && stop !== 'unmeasured') return bad;
+  // A measured walk never says it was cut (fix round 1, F1). An unmeasured doc's stop is the two base rules' below.
+  if (measured && stop === 'unmeasured') return bad;
 
   // Both of the radar's writers set `branch` (D-7469), so a doc without it is not one of theirs.
   const branch = o.branch;

@@ -298,6 +298,21 @@ describe('the landing briefs carry the run\'s recorded episode head (landing ord
     f.stop();
   });
 
+  it('a run sent back to working while its PR is queued, then dequeued, gets the brief with no recorded head (D-7470)', async () => {
+    const f = await atMerging(openLine({ queue: 'queued', queueAt: T1 }), HEAD);
+    await f.sweep();
+    expect(f.mail(), 'a queued PR asks for nothing').toEqual([]);
+    expect(f.coord.advance(f.firstRunId, 'working', 'coordinator').ok).toBe(true);
+    // The send-back leaves the episode row in place, so the head is there to be misread.
+    expect(f.coord.currentEpisode(f.firstRunId)?.head).toBe(HEAD);
+    await f.sweep(openLine({ queue: 'dequeued', queueAt: T2 }));
+    expect(f.mail().map((m) => m.subject)).toEqual([dequeuedSubject(42, T2)]);
+    const body = bodyOf(f);
+    expect(body).toBe(renderDequeueBrief(ID, 42));
+    expect(body).not.toContain(HEAD);
+    expect(f.queueFeed()).toHaveLength(1);
+    f.stop();
+  });
   it('a run with no episode head gets exactly the text it always did', async () => {
     const d = await atMerging(openLine({ queue: 'dequeued', queueAt: T1 }), null);
     await d.sweep();

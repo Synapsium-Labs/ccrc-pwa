@@ -151,6 +151,7 @@ describe('parseLineage: the radar writes three shapes only (fix round 1, F1)', (
 
   // Wave 4c (D-7469): every unmeasured case carries its `why`, so the `why` rule is not what refuses it. (a) and (b) are
   // still refused twice, by the no-base-no-stop rule and by the chain-without-base rule; (f) is the chain rule alone.
+  // (c) is the base-bearing-unmeasured rule alone since wave 5a, and (d) the measured-stop rule alone.
   it("(a) state: 'unmeasured', stop: 'unmeasured', a chain holding the claim and base: null", () => {
     refused({ state: 'unmeasured', why: 'budget', stop: 'unmeasured', base: null });
   });
@@ -267,6 +268,28 @@ describe("parseLineage: the radar's shapes only (wave 4c, D-7469)", () => {
     it('a measured doc whose why is null (absent and null read alike)', () => {
       expect(lin({ why: null }).ok).toBe(true);
     });
+  });
+});
+
+describe('parseLineage: the rules the parser measures (wave 5a)', () => {
+  const decide = (lineage: LineageRead) => decideLineage({
+    claim: sha(2), live: sha(1), marker: 'trusted', globalPause: 'running', projectPause: 'running', qualifies: true,
+    lineage,
+  });
+  /** A cut walk's shape with a null tip and an empty chain: main reads it and answers `tip-unmeasured`. */
+  const NULL_TIP_UNDER_BASE = { state: 'unmeasured', why: 'budget', stop: 'unmeasured', tip: null, chain: [] };
+
+  it('a null tip under a sha base is unreadable (the null-tip rule: only a failed fetch has a null tip)', () => {
+    expect(lin(NULL_TIP_UNDER_BASE)).toEqual({ ok: false, reason: 'unreadable' });
+    expect(decide(lin(NULL_TIP_UNDER_BASE))).toEqual({ answer: 'unmeasured', detail: 'lineage-unreadable' });
+  });
+  it('control: the same cut walk with a sha tip reads', () => {
+    expect(lin({ ...NULL_TIP_UNDER_BASE, tip: sha(1) }).ok).toBe(true);
+  });
+  it('control: the failed fetch keeps its null tip, and still answers tip-unmeasured', () => {
+    const lineage = lin({ ...FETCH_FAILED, tip: null });
+    expect(lineage.ok).toBe(true);
+    expect(decide(lineage)).toEqual({ answer: 'unmeasured', detail: 'tip-unmeasured' });
   });
 });
 
