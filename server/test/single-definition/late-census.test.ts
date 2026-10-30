@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
 import { identifierReferences, parseSource, stringExpressions } from '../scan/parse.js';
 import { hibernateActSites, sleepVerdictLadders } from '../census-w4/sleep.js';
 import { retirePortReaders, retireRowSteps } from '../census-w4/retire.js';
@@ -64,17 +64,31 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     }
   });
   it('the mask lives in its one file', () => {
-    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers',
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration',
       'fingerprintRow', 'fingerprintAnswerOf']) {   // the last two: D-5996
       expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
     }
+    expect(holders(decl('shapeMatchers')), 'shapeMatchers').toEqual(['server/src/accounts/shapes.ts']);   // D-7513
   });
   it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
     expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
     expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
-    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/shapes.ts']);   // D-7513
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+  it('the shape half has one owner: SecretMasker splices and walks through shapes.ts, and keeps no copy (D-7513)', () => {
+    const mask = 'server/src/accounts/mask.ts';
+    const named = (sym: string): string[] => callsIn(symbolOf(mask, sym)).map((c) => c.name ?? '');
+    expect(named('SecretMasker.maskWithCarry')).toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
+    expect(named('SecretMasker.maskDeep')).toEqual(expect.arrayContaining(['walkStrings']));
+    expect(parsedFile(mask).symbols.map((x) => x.name)).not.toContain('SecretMasker.walk');
+    // and the shape-only mask splices the same spans: no private copy of shapeSpans behind SHAPE_MASK
+    expect(callsIn(symbolOf('server/src/accounts/shapes.ts', 'maskShapes')).map((c) => c.name ?? ''))
+      .toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
+    for (const c of ['shapeSpans', 'spliceMasked', 'walkStrings', 'SHAPE_MASK']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/shapes.ts']);
+    }
   });
 });
 
