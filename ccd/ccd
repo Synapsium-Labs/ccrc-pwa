@@ -6727,14 +6727,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — EIGHTEEN dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these ten are
+# NOT reachable this way, and this set IS the boundary — NINETEEN dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these eleven are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The ten: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The eleven: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
 # records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
 # `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
@@ -6755,8 +6755,11 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `$REG/.pool-epoch.$$.tmp` staging file, written by the same tmp-then-rename
 # idiom outside `_reg_set` itself, before it renames into the dot-FREE
 # `$REG/pool-epoch` — the projection's published name carries no dot, only
-# its transient staging copy does; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last three ARE candidate glob matches when
+# its transient staging copy does; `ccd testbox-remote`'s
+# `$REG/.testbox-remote-live.$$.tmp` staging file (TB9, D-7411), the same
+# idiom again: the raise renames it onto the dot-FREE `$REG/testbox-remote-live`,
+# the test box switch, so only the transient copy carries a dot; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last four ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
