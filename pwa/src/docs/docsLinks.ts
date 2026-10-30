@@ -13,7 +13,6 @@ import {
   admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject, resolveDocRef,
   type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
-import { codeLanguage, inMarkdownPageBudget, inScanPageBudget } from '../lib/markdown';
 import {
   DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
 } from '../lib/markdownLimits';
@@ -87,9 +86,6 @@ export interface DocsHighlightLanguages {
   inMarkdownPageBudget(lang: string): boolean;
 }
 
-/** Transitional (D-7574): the renderer's own three, until every caller passes its `DocsHighlightLanguages`. */
-const RENDERER_LANGUAGES: DocsHighlightLanguages = { codeLanguage, inScanPageBudget, inMarkdownPageBudget };
-
 /** A copy of `tree` with every URL moved out (spec 4.11; refinement (n)). Iteratively, in document pre-order: the root
  *  and every element are copied (text, comment and doctype nodes are shared, untouched); every `URL_KEYS` property of
  *  an element is deleted from its copy and recorded in `urls` under the copy; `img` elements are numbered 0..n-1;
@@ -105,8 +101,7 @@ const RENDERER_LANGUAGES: DocsHighlightLanguages = { codeLanguage, inScanPageBud
  *  entry. Never writes `tree`, so a kept outcome can be detached again, and part 2's Export reuses the copy and its
  *  map (a second detach of the copy finds no URL). `langs` holds the renderer's grammar facts (`DocsHighlightLanguages`),
  *  handed in by the Docs page. */
-export function detachUrls(tree: HastRoot, langs?: DocsHighlightLanguages): Detached {
-  const l = langs ?? RENDERER_LANGUAGES;
+export function detachUrls(tree: HastRoot, langs: DocsHighlightLanguages): Detached {
   const urls = new WeakMap<HastElement, DetachedUrls>();
   const root: HastRoot = { ...tree, children: [] };
   // Children are pushed last to first, so they pop first to last; each entry names the array its copy joins.
@@ -143,10 +138,10 @@ export function detachUrls(tree: HastRoot, langs?: DocsHighlightLanguages): Deta
     if (node.tagName === 'pre') {
       const chars = preCodeChars(node);
       codeChars += chars;
-      const language = l.codeLanguage(preCodeClass(node));
-      const scan = l.inScanPageBudget(language);
+      const language = langs.codeLanguage(preCodeClass(node));
+      const scan = langs.inScanPageBudget(language);
       if (scan) scanChars += chars;
-      const md = l.inMarkdownPageBudget(language);
+      const md = langs.inMarkdownPageBudget(language);
       if (md) markdownChars += chars;
       highlight = codeChars <= DOCS_HIGHLIGHT_PAGE_MAX_CHARS && (!scan || scanChars <= DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS)
         && (!md || markdownChars <= DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS);
