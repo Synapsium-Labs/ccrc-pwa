@@ -219,14 +219,19 @@ function exitParagraph(src: string): string {
 const exit75Lines = (src: string): string[] =>
   src.split('\n').filter((l) => !/^\s*#/.test(l) && /\bexit 75\b/.test(l));
 
-describe('exitContract(): ccrc test refuses only a usage error and a ccrc it cannot load (D-7402)', () => {
+describe('exitContract(): ccrc test refuses a usage error, a ccrc it cannot load, and the three refusals of exit 75 (D-7402; TB8, D-7410, D-7417)', () => {
   const src = readFileSync(WRAPPER, 'utf8');
-  it('no line of ccd/ccrc-test outside comments exits 75', () => {
-    expect(exit75Lines(src)).toEqual([]);
+  // TB8 (D-7410): 75 is reserved for "refused, nothing ran". One line exits 75, the refusal every one of the three
+  // goes through: an explicit --remote over the budget, a fallback install refused, and a lost run under `fail`
+  // before any output (the client's verdict carries the first and the last; the fallback carries the second).
+  it('the one line of ccd/ccrc-test outside comments that exits 75 is the refusal the three go through', () => {
+    expect(exit75Lines(src)).toEqual([
+      '_tb_refused() { _tb_runs_log refused "$1" 75; exit 75; }   # <TestboxFallbackId>: one of the three refusals (EXIT); nothing ran',
+    ]);
   });
-  it('the EXIT paragraph names exit codes 1 and 2 only', () => {
+  it('the EXIT paragraph names exit codes 1, 2 and 75 only', () => {
     const codes = [...exitParagraph(src).matchAll(/\bexit (\d+)\b/g)].map((m) => m[1]);
-    expect([...new Set(codes)].sort()).toEqual(['1', '2']);
+    expect([...new Set(codes)].sort()).toEqual(['1', '2', '75']);
   });
 });
 
@@ -269,8 +274,13 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   // driver, which names the two directories it writes and reads in comments, and their test. The tools unit's script,
   // deploy/testbox/bin/tools-sync, names none (it reads only specs/tools and, for the release base, the box file).
   const TB6_HOLDERS = ['agent/src/testbox/tools.ts', 'agent/src/testbox/toolsync.ts', 'agent/test/testbox-tools.test.ts'];
-  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
-  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync)', () => {
+  // TB8 (D-7410) adds the wrapper's remote arm (the marker's one shell read and the settings it reads), the client and
+  // the budget that read the settings the printer gave, the parity harness, and their test.
+  const TB8_HOLDERS = [
+    'agent/src/testbox/budget.ts', 'agent/src/testbox/client.ts', 'ccd/ccrc-test', 'ccd/testbox-parity', 'server/test/testbox-wrapper.test.ts',
+  ];
+  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB8_HOLDERS].sort();
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB8: the remote arm)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);
