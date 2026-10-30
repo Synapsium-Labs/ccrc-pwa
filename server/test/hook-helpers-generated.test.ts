@@ -390,6 +390,7 @@ describe('`ccrc restamp` gives each region the file its row names (C5i)', () => 
 
   it('a module with no --region-files branch still regenerates the hook region from the tree\'s ccd', () => {
     const old = realModule.replaceAll("'--region-files'", "'--no-such-mode'");
+    expect(old, 'the replace must take the module\'s --region-files branch away').not.toBe(realModule);
     const t = planted(old, { 'ccd/ccd': ccd, 'ccd/session-hook.sh': hook.replace('CCRC_ID_MAX=128', 'CCRC_ID_MAX=1') });
     const f = join(t, 'ccd/session-hook.sh');
     const r = restamp(f);

@@ -180,6 +180,12 @@ if (startedAsScript()) {
     process.stdout.write(REGIONS.map((r) => `${r.detect}\t${r.label}\n`).join(''));
     process.exit(0);
   }
+  if (mode === '--region-files') {
+    // For `ccrc restamp`: as `--regions`, with the file each row is given as a third column (`--regions` keeps its two,
+    // which an installed ccrc from before this mode reads).
+    process.stdout.write(REGIONS.map((r) => `${r.detect}\t${r.label}\t${r.file}\n`).join(''));
+    process.exit(0);
+  }
   if ((mode !== '--write' && mode !== '--check' && mode !== '--restamp') || !targetPath || !ccdPath) {
     process.stderr.write('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <ccd> | --regions\n');
     process.exit(2);
