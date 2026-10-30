@@ -162,7 +162,8 @@ function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetS
 }
 
 /** The roll's row of the sleep executor. Its policy row is hibernation's (`IDLE_HOURS_POLICY`): the roll's idle gate
- *  IS hibernation's, asked through `autoRollVerdict` with the roll's quiet window. */
+ *  runs hibernation's ladder, asked through `autoRollVerdict` with the roll's quiet window and its claims holds passed
+ *  (`ROLL_IDLE_GATE`, D-7562): an open run the coordinator claims and a live claim it holds do not hold a roll. */
 export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, HibernateStoreRead, RollAnswer, RollOutcome | null> = {
   policy: IDLE_HOURS_POLICY,
   kill: [HIBERNATE_DISABLED_MARKER],

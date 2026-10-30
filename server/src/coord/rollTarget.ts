@@ -11,9 +11,11 @@
  * trigger is not here: it comes with the binary-lifecycle programme's `ccd roll` (its wave 2) and its canary.
  *
  * IDLE is hibernation's gate (`hibernateVerdict`, the one ladder `decideSleep` runs), with its quiet window set to the
- * roll's 90 minutes (binary-lifecycle spec §7.2, its U2), plus this verdict's own holds: `.no-roll`, hibernation due
- * soon, and a live status that moved in the last 10 minutes (`compacting`: Claude Code's idle compaction runs on a turn
- * that already ended, so the turn marker does not see it, but the live status does). ccd re-measures the box-local half
+ * roll's 90 minutes (binary-lifecycle spec §7.2, its U2) and its claims holds passed (`ROLL_IDLE_GATE`, D-7562: an
+ * open run the coordinator claims, planned or dispatched, and a live claim do not hold a roll), plus this verdict's own
+ * holds: `.no-roll`, hibernation due soon, and a live status that moved in the last 10 minutes (`compacting`: Claude
+ * Code's idle compaction runs on a turn that already ended, so the turn marker does not see it, but the live status
+ * does). ccd re-measures the box-local half
  * at the act (`ccd hibernate --roll`, D-7458: a draft in the input box, `esc to interrupt`, an attached terminal,
  * `.no-roll`), and its refusal is the lane's skip.
  *
@@ -27,7 +29,7 @@
  */
 import type { SessionRole } from '../../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
-import { hibernateVerdict, type HibernateHold, type HibernateInput } from './hibernate.js';
+import { hibernateVerdict, type HibernateHold, type HibernateInput, type IdleGateOptions } from './hibernate.js';
 
 /** The quiet window (binary-lifecycle spec §7.2 and §12, decision U2): the turn marker's newest stamp older than this. */
 export const ROLL_QUIET_MS = 90 * 60_000;
@@ -35,6 +37,10 @@ export const ROLL_QUIET_MS = 90 * 60_000;
 export const ROLL_HIBERNATION_LEAD_MS = 30 * 60_000;
 /** The `compacting` hold's window (spec §7.2): a live status that moved this recently holds. */
 export const ROLL_COMPACT_QUIET_MS = 10 * 60_000;
+/** The roll's idle gate (D-7562, the operator's ruling of 2026-10-30): an open run the coordinator claims and a live claim
+ *  it holds do not hold a roll, which comes straight back as the same session with its runs and claims standing. Every
+ *  other hold of hibernation's gate still holds. Used here only: hibernation and every other caller keep the default. */
+export const ROLL_IDLE_GATE: IdleGateOptions = { claims: 'pass' };
 /** `$REG/<id>.no-roll` (decision U4): that session is never rolled automatically. Written by hand, never by the tree. */
 export const NO_ROLL_SUFFIX = 'no-roll';
 /** The actor the act declares on `ccd hibernate --roll`, as every unattended lane names itself. */
@@ -131,10 +137,14 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.startedAt === null) return { act: 'skip', reason: 'start-unmeasured' };
   if (i.startedAt >= i.release) return { act: 'current' };
   if (i.optedOut.roll) return { act: 'skip', reason: 'no-roll' };
-  const gate = hibernateVerdict({ ...i.sleep, optedOut: false }, i.now, ROLL_QUIET_MS);
+  const sleep = { ...i.sleep, optedOut: false };
+  const gate = hibernateVerdict(sleep, i.now, ROLL_QUIET_MS, ROLL_IDLE_GATE);
   if (gate.act === 'measure') return { act: 'measure' };
   if (gate.act === 'hold') return { act: 'skip', reason: 'idle-gate', hold: gate.reason };
-  if (i.hibernation.armed && !i.optedOut.hibernate && gate.idleMs + ROLL_HIBERNATION_LEAD_MS >= i.hibernation.afterMs) {
+  // D-7562: hibernation keeps its claims holds, so it never takes a coordinator that claims a run or holds a claim, and
+  // only one its own gate would pass is due.
+  const hibernationTakes = hibernateVerdict(sleep, i.now, ROLL_QUIET_MS).act === 'hibernate';
+  if (i.hibernation.armed && !i.optedOut.hibernate && hibernationTakes && gate.idleMs + ROLL_HIBERNATION_LEAD_MS >= i.hibernation.afterMs) {
     return { act: 'skip', reason: 'hibernation-due' };
   }
   if (i.statusUpdatedAt === null || i.now - i.statusUpdatedAt < ROLL_COMPACT_QUIET_MS) return { act: 'skip', reason: 'compacting' };

@@ -3,7 +3,7 @@
 // keeps every argv; nothing runs ccd, tmux or a process. `ccd-hibernate-roll.test.ts` pins the verb itself.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { VIEWER_OPEN_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, type FleetSession, type RunState } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
 import { ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
@@ -42,7 +42,7 @@ const ok = (stdout = ''): CcdResult => ({ ok: true, stdout, stderr: '' }) as Ccd
 const refused = (stderr: string): CcdResult => ({ ok: false, stdout: '', stderr, code: 3 }) as unknown as CcdResult;
 
 interface Fake {
-  deps: RollSweepDeps; lines: string[]; calls: string[][]; wakes: string[]; refunds: string[];
+  deps: RollSweepDeps; coord: CoordStore; lines: string[]; calls: string[][]; wakes: string[]; refunds: string[];
   set: { targets: ClaudeRollTargets | null; word: string; age: number; hibernate: (id: string) => CcdResult; wake: boolean };
 }
 function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: readonly string[] } = {}): Fake {
@@ -83,7 +83,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
     now: () => NOW,
     act,
   };
-  return { deps, lines, calls, wakes, refunds, set };
+  return { deps, coord, lines, calls, wakes, refunds, set };
 }
 const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map(), heldUntil: new Map() });
 const pass = (f: Fake, rows: FleetSession[] = [row(COORD)], names: readonly string[] = [], m = mem()) =>
@@ -236,6 +236,85 @@ describe('rollPass: what is rolled (D-7452)', () => {
     f.set.hibernate = () => ({ ok: false, ran: true, stdout: '', stderr: 'ccd: no such session', code: 1, killed: false, signal: null }) as unknown as CcdResult;
     expect((await pass(f))[0]!.kind).toBe('failed');
     expect(f.lines.join('\n')).toMatch(/it was not stopped/);
+  });
+});
+
+describe('rollPass: claimed runs and claims do not hold a roll (D-7562)', () => {
+  // On a real store: the coordinator claims open runs (a stale planned one, a dispatched one its child works) and holds a
+  // live claim, which held every live coordinator off the roll before the operator's ruling of 2026-10-30.
+  let seq = 0;
+  const openRun = (s: CoordStore, o: { claimedBy: string; state: RunState; worker?: string }): void => {
+    const r = s.openRun({ program: `program-${++seq}`, title: 't', project: 'project-a', wave: 1, waveOf: 1, claimedBy: o.claimedBy });
+    if (!('id' in r)) throw new Error(`fixture openRun refused: ${JSON.stringify(r)}`);
+    if (o.worker !== undefined) s.setSession(r.id, o.worker);
+    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(o.state, r.id);
+  };
+  const claim = (s: CoordStore, by: string): void => {
+    const r = s.claimAttempt({ project: 'project-a', paths: ['server/src/io.ts'], sessionId: by, uuid: `uuid-${by}`, runId: null, intent: 'fixture', now: NOW });
+    if (!r.ok) throw new Error('fixture claim refused');
+  };
+
+  it('a coordinator idle past 90 minutes that claims planned runs is rolled', async () => {
+    const f = fake();
+    f.set.age = ROLL_QUIET_MS + MIN;
+    openRun(f.coord, { claimedBy: COORD, state: 'planned' });
+    openRun(f.coord, { claimedBy: COORD, state: 'planned' });
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'rolled', idleMs: ROLL_QUIET_MS + MIN }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('a coordinator that claims a dispatched run its live child works, and holds a live claim, is rolled', async () => {
+    const f = fake();
+    openRun(f.coord, { claimedBy: COORD, state: 'dispatched', worker: CHILD });
+    claim(f.coord, COORD);
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls.map((c) => c[0])).toEqual(['hibernate']);
+  });
+
+  it('with claims, a busy coordinator is still not rolled, and nothing is called', async () => {
+    const f = fake();
+    openRun(f.coord, { claimedBy: COORD, state: 'planned' });
+    claim(f.coord, COORD);
+    f.set.word = 'busy';
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'idle-gate:live-word' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('with claims, an attached or a drafting coordinator is still not rolled: ccd refuses it at the act', async () => {
+    for (const [word, why] of [['attached', '1 terminal(s) attached to the pane'], ['draft', 'a message is half-typed in the input box']] as const) {
+      const f = fake();
+      openRun(f.coord, { claimedBy: COORD, state: 'planned' });
+      claim(f.coord, COORD);
+      f.set.hibernate = () => refused(`ccd: session-busy: ${word} — ${why}; nothing was touched`);
+      expect(await pass(f), word).toEqual([{ id: COORD, kind: 'skipped', reason: `ccd:${word}` }]);
+      expect(f.calls.map((c) => c[0]), word).toEqual(['hibernate']);
+    }
+  });
+
+  it('with claims, a non-coordinator is still never rolled', async () => {
+    const f = fake();
+    openRun(f.coord, { claimedBy: CHILD, state: 'planned' });
+    claim(f.coord, CHILD);
+    expect(await rollPass(f.deps, mem(), [childRow(CHILD)], [rec(CHILD)], [])).toEqual([{ id: CHILD, kind: 'skipped', reason: 'not-coordinator' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('with claims, undelivered mail to the coordinator still holds', async () => {
+    const f = fake();
+    openRun(f.coord, { claimedBy: COORD, state: 'planned' });
+    claim(f.coord, COORD);
+    const m = f.coord.insertMail({ fromId: CHILD, fromUuid: `uuid-${CHILD}`, toId: COORD, runId: null,
+      kind: 'question', subject: 'still queued', body: 'body', artifacts: [] });
+    f.coord.queueDelivery(m.id, COORD, 'envelope');
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'idle-gate:mail' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('with claims, an open run naming the coordinator as worker still holds', async () => {
+    const f = fake();
+    openRun(f.coord, { claimedBy: COORD2, state: 'working', worker: COORD });
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'idle-gate:run-worker' }]);
+    expect(f.calls).toEqual([]);
   });
 });
 
