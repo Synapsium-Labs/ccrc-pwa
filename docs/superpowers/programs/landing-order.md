@@ -29,8 +29,18 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); run 1189 (the run's wave 9) dispatched 2026-10-29, block 7433–7442, with the coordinator's rulings on where the plan had drifted from `main` (Decisions, 2026-10-29 09:41); PR #1884; fix round 1 after review 1212; accepted on `5aa30a97` after review run 1216 and merged through the native queue as `f6b67a5b` (Decisions, 2026-10-29 17:38); D-7433–D-7442 and D-7464–D-7467 defined after the merge; deploy, arming (the operator's) and the live proof wait (Next-wave brief) |
 | 4b | 3, the console half | the radar's server reader, its wire field `FleetSession.landing` and the PWA predicted-conflict chip (moved out of wave 3b, D-4329) | server, pwa | waves 4 and 4c | #1923 (plan #1906) | planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4b-radar-console.md`, D-7477 to D-7484; Decisions, 2026-10-29 18:40); run 1224 (the run's wave 12) opened and dispatched after wave 4c merged, before run 1219 closed (Decisions, 2026-10-29 22:55); sent back once after review run 1225, accepted on `38bcaf1e` after review run 1226, and merged through the native queue as `85d61aa8` (Decisions, 2026-10-30 02:32); D-7514–D-7523 defined in its departures note, and D-7526 after the merge |
 | 4c | 4, hardening | the lineage hardening carried from wave 4's reviews (Carried constraints), kept apart from 4b so that no PR mixes an acceptance change with a display change (D-4329's reason) | server, skills | wave 4 | #1911 | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed, under the title "wave 4b: lineage hardening" given before this row was split from 4b (Decisions, 2026-10-29 17:38); planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4c-lineage-hardening.md`, D-7469 to D-7476); the coordinator-side re-proof moved to the operator (Decisions, 2026-10-29 18:40); accepted on `0a9ff1b2` after review run 1220, then one clean merge of `main` reviewed alone (run 1223), and merged through the native queue as `9ec4fc54` (Decisions, 2026-10-29 22:55); D-7486–D-7495 defined after the merge |
-| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan; run 1227 (the run's wave 13) opened 2026-10-30, before run 1224 closed (Decisions, 2026-10-30 02:32); its scope waits on the operator's answers (Decisions, 2026-10-30 03:40) |
+| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | split 2026-10-30 into sub-waves 5b to 5k (Decisions, 2026-10-30 23:24); run 1227 (the run's wave 13) opened 2026-10-30, before run 1224 closed (Decisions, 2026-10-30 02:32) |
 | 5a | 3 and 4, hardening | the hardening that the reviews of waves 4c and 4b, and three older review items (1141, 1216, 1222), carried forward: the lineage parser, the radar lane, the chip's words, and text and pins (Carried constraints). Kept apart from 5 so that the landing line's PR carries only its own data, routes and verb (D-4329's reason) | server, pwa, skills | waves 4c and 4b | #1960 (plan #1944) | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, D-7528 to D-7539; Decisions, 2026-10-30 03:40); run 1228 (the run's wave 14) opened 2026-10-30; reviewed once (run 1232) and accepted with no fix round; merged 2026-10-30 (`d196d8b3`); five departures, D-7544 to D-7548, in `docs/superpowers/plans/2026-10-30-landing-order-wave5a-departures.md` (Decisions, 2026-10-30 08:16) |
+| 5b | 5, skill text | the new-head route is the coordinator's own act (the operator's answer to D-7536's question), the evidence that a red is `main`'s own, the report-less fix round from `merging`, review 1232's F9 (a) and (c), and **A requested change** against clause 19; D-7546's restatement is a droppable task, held for the operator | skills | wave 5a | — | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md`, D-7588 to D-7592; Decisions, 2026-10-30 23:24) |
+| 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599; Decisions, 2026-10-30 23:24) |
+| 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads | ccd (fleet box first) | — | — | to plan; waits on the operator's question 3 |
+| 5e | 5, the line's core | `landing_entries` and `landing_projects`, the `landing.log` journal and its replay, an entry pinned at `advance → merging`, ejection and the second-ejection ask, the order and hold decider, and the coordinator's read of the line | server, skills | wave 5a | — | to plan |
+| 5f | 5, attributed writes | `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events | server, skills | 5e | — | to plan |
+| 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
+| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
+| 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
+| 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
+| 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -1464,6 +1474,44 @@ carries it (spec §5.1, amended 2026-09-24).
     - 6 coordinators' pages came back full, so their mail is left out, and the closed-run read reached its cap of
       500. The figure covers 8 of the 14 coordinators.
   - **Wave 4b's live read** waits. The plan's read is `GET /api/fleet`, and the fleet box has no read of it.
+- **2026-10-30 23:24 — the operator's second answers; stage 5 split into ten sub-waves; waves 5b and 5c planned.**
+  - **The operator answered (about 22:15):**
+    - **The allowance file (D-7249):** the coordinator writes it. It was written at 22:20, an empty regular file at the
+      path the hook reads, for the one project allowed to keep admin merges.
+    - **Question 2: (a).** The two private repositories land by direct merge once the PR's own checks pass (route G).
+      Nothing tests a PR combined with `main` there before it lands. Ruling R10's strict-protection flip stays the
+      operator's.
+    - **The server box:** likely moved by the 10:22 update; it is not measured from the fleet box. The fleet box moved
+      again, to v0.0.874, by a console update at 19:35.
+  - **Still open, each with the coordinator's recommendation:**
+    - **Question 3:** a `lander=coordinator` key in the project's landing conf. The radar refuses an unknown key, so
+      sub-wave 5d teaches it the key before anyone writes it.
+    - **D-7546:** restate the rule as the latest attempt of each required check name, and keep the every-attempt read
+      as a report line. Wave 5b's Task 2 holds that text, and it is droppable.
+    - **D-7472, changed:** no re-proof in wave 5, and `lineage=on` stays off. On this repository the queue does not
+      require a PR to be up to date (`strict=no`), so a clean merge of `main` after review is rare. Its one routine
+      case, the new-head route, is followed by a short review of one merge commit. Lineage and the re-proof pay where a
+      project requires up-to-date branches, and they are revisited when one joins the landing line.
+    - **Wave 4b's live read:** a look at the chip on two bound PRs' cards, named to the operator.
+    - **The CLAUDE.md lines (question 4).** `box-token-census` and `collect-switch-prose` read the PR's own
+      `CLAUDE.md`, so sub-waves 5e, 5f and 5j must carry their box-token and coord.db lines in the PR itself. The
+      coordinator proposes to hold each such PR for the operator to read those lines before the enqueue. The ccd-verb
+      rule needs no change: with `land-candidate` left out, stage 5 adds no verb.
+  - **Stage 5 is split into ten sub-waves, 5b to 5k** (Waves table), from a read-only survey of `main`, so that each
+    PR carries only its own data, routes and verb (D-4329's reason):
+    - first, in parallel: 5b (skill text), 5c (the PR-keyed `pr-state`), and 5d (the `lander=` key) once question 3
+      is answered;
+    - then 5e, 5f and 5g in series, because they share the schema, the store and the routes;
+    - then 5h once 5c runs on the fleet box, and 5i once 5d does;
+    - then 5j and 5k.
+
+    The survey's open design choices for 5e onward are settled in each sub-wave's own plan: two migrations, no `repo`
+    column, an entry's identity, when `landing.log` is replayed, and the rest.
+  - **Waves 5b and 5c are planned** (D-7588 to D-7599). Each task was drafted against `main` by an Opus reader and checked by a Sonnet reader, and all 22 fixes are applied. Five Opus lenses then reviewed the two plans, Sonnet refuters checked the serious findings, and a reader checked each fixed plan for consistency. One critical finding per plan held and is answered: in 5c, Task 2's reader expected a line Task 1 never prints; in 5b, a number word the clause-count census refuses. So is every important finding. Until sub-wave 5e records a base, 5b reads clause 15's ejection as covering its report-less round, on the operator's answer to D-7536's question (D-7590).
+  - **The spec** gains an inline note for D-7588, in Figure 1's caption and in §5.7.5's row for a red nothing here can
+    reach.
+  - **Clause 19.** The coordinator's own workflows now run as clause 19 says: short, time-capped and at `medium`
+    effort. Earlier ones in this programme ran at `high`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1920,7 +1968,7 @@ its review, for a project the operator opts in.
 fleet session, with the operator's per-project allowance (D-7249).
 - **Deploy.** ccrc's updater carries the hook to every home (AGENT-FIRST).
 - **The live check, plan Task 3 Step 4,** holds (Decisions, 2026-10-30 10:50). The operator's allowance file
-  (D-7249) is not yet written.
+  (D-7249) was written on 2026-10-30 at the operator's instruction (Decisions, 2026-10-30 23:24).
 - **From then on,** the landing verdict, the checks gate and the enqueue run as separate commands (D-7314).
 
 **Wave 4c is merged** (#1911 `9ec4fc54`; Decisions, 2026-10-29 22:55): the lineage parser refuses the docs the radar's
@@ -1940,8 +1988,8 @@ past its window, and the chip ages a frame it already holds.
   `landing` for that project's bound sessions, and the chip. The ledger then records the release, the rollout date
   (which starts §10's stage 3 clock for the operator's view only, D-7483) and the first fresh landing seen.
 
-**Waiting on the operator:** the re-proof (D-7472), wave 5's questions 2 and 3, D-7546, and the allowance file of
-D-7249.
+**Waiting on the operator** (Decisions, 2026-10-30 23:24): question 3 (the `lander=` key), D-7546, D-7472, a look at
+wave 4b's chip, and whether the PRs that must carry `CLAUDE.md` lines wait for the operator's read.
 
 **Wave 5a is merged** (#1960 `d196d8b3`; Decisions, 2026-10-30 08:16). It carries the hardening that the reviews of
 waves 4c and 4b, and three older review items, left for wave 5:
@@ -1954,6 +2002,9 @@ waves 4c and 4b, and three older review items, left for wave 5:
 
 Deploy: ccrc's updater carries the server, the PWA and the skill text.
 
-**Wave 5**, the landing line, is run 1227. Questions 1, 4 and 5 and D-7536 are answered (Decisions, 2026-10-30
-10:50). Its plan waits on questions 2 and 3, on D-7546 (whether read 5 judges every run of a name or the latest), and
-on D-7472.
+**Wave 5**, the landing line, is split into sub-waves 5b to 5k (Waves table; Decisions, 2026-10-30 23:24). Questions
+1, 2, 4 and 5 and D-7536 are answered.
+- **5b and 5c are planned** and share no file, so they run in parallel: `docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md` and `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`. 5b's Task 2 (D-7546)
+  waits on the operator, and is dropped if the operator rules against it.
+- **5c reaches the fleet box** before 5h reads it.
+- **5d waits on question 3.** 5e to 5k are planned in order, each against `main` as it then stands.
