@@ -2786,12 +2786,14 @@ _upd_redact() {
   # whitespace, '"' or '<') whose host ends at '/', '?' or '#'; prose's
   # `user@host` stays. Past a run's first character '<' and '"' are the
   # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
-  # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
+  # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn, and a userinfo that starts with '@'
+  # loses its leading '@'s with it (D-7564: `https://@tok@host/x` and `https://@@tok@host` read `https://host/x` and
+  # `https://host`). Each pass drops at least one '@', so the loop ends.
   # D-7564: a run after the first may be empty, so `user:secret@@host/x` loses `user:secret@@` (curl's userinfo
   # runs to the last '@'). Any leading '@'s go with the userinfo (`@tok@host/x` reads `host/x`), and a token may
   # also start after a backtick, which stays (`` `tok@host/x` `` reads `` `host/x` ``). Bare-host's rule below does
   # the same.
-  local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
+  local sre=':(/+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   # D-7564: a token that starts `KEY=` or `--flag=` (a letter or '_' first, then letters, digits, '_' or '-') keeps that
   # prefix when a ':' userinfo follows it, so `CCRC_X=user:secret@host` reads `CCRC_X=host`. The userinfo's first
   # character may be neither ':' nor '=': a base64 name's padding (`dG9rZW4=:x@h`) then reads as no prefix and goes
@@ -2809,12 +2811,16 @@ _upd_redact() {
   #      follows: `tok@host:8443 refused`, `reach tok@host:8443.`, `connecting to tok@host:8443... retrying`,
   #      `dial tok@host:8443.) retrying`. A token may also start after a backtick, which stays
   #      (`` `tok@host:8443` `` reads `` `host:8443` ``). The host holds a character other than a digit, so a
-  #      time's `build@10:30` stays, or is a bracketed IPv6 address (`tok@[::1]:8443`). A version's `x@h:1.2` is no
+  #      time's `build@10:30` stays, or is a bracketed IPv6 address, a zone id or an IPvFuture literal included
+  #      (`tok@[::1]:8443`, `tok@[fe80::1%25en0]:80`, `tok@[v1.fe80::1]:80`). A version's `x@h:1.2` is no
   #      port and a terminator, so rule 2 leaves it (bare-host's own rule still masks it at the text's end).
   # The cost: `mailto:a@example.com` and `npm:pkg@1.2.3` read as shape 1, a logger's `WARNING:root:bob@example.com` too;
-  # `stash@{0}:3` and `claude-session@x.service:12` read as shape 2. The corpus's `blast` rows hold each.
+  # `stash@{0}:3`, `claude-session@x.service:12` and `log@[core:io]:2` read as shape 2. The corpus's `blast` rows hold
+  # each. Its `known-limit` rows hold what still prints whole: a userinfo inside a query or a path, a raw '#', '?' or
+  # '/' in a password, a token-only userinfo before a host that no port and no path follows while more text follows
+  # (`--proxy=tok@host refused`), and a port that a non-ASCII punctuation mark follows (`tok@host:8443…`).
   local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
-  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Fa-f:.]+\]):[0-9]+([]),;:|"'"'"'<>`[:space:]]|$|[.!}]+([]),;:|"'"'"'<>`[:space:]]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([]),;:|"'"'"'<>`[:space:]]|$|[.!}]+([]),;:|"'"'"'<>`[:space:]]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
   # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
   # text's end is masked too, prose's `user@host` included, which is why no ccd/ccrc caller passes it: a systemd
   # instance unit's `claude-session@x.service` would lose its prefix (D-7289).
