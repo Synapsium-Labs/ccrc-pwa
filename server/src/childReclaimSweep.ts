@@ -940,22 +940,22 @@ export function childReclaimNextEntry(
         refusedAt: ask.at.monoMs, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
       };
     case 'deferred': {
-      const presence = (CHILD_RECLAIM_VIEWER_DEFERS as readonly string[]).includes(outcome.why);
+      const viewerClass = (CHILD_RECLAIM_VIEWER_DEFERS as readonly string[]).includes(outcome.why);
       // the NEW answer's ARRIVAL against the previous answer's REQUEST
-      const continues = presence && !ask.licensed && entry.firstViewerDeferredAt !== null
+      const continues = viewerClass && !ask.licensed && entry.firstViewerDeferredAt !== null
         && childReclaimViewerWithin(entry, answered, passIntervalMs);
       // the lease: an unlicensed presence answer keeps the child in line or puts it at the back,
       // EXCEPT that a holder whose answer does not continue its episode forfeits
-      const inLine = presence && !ask.licensed && (continues || !ask.asHolder);
+      const inLine = viewerClass && !ask.licensed && (continues || !ask.asHolder);
       // THE PERSISTENT TIER STANDS (spec §5.7): `...entry` keeps its membership, its word, j and its run. The ramp
       // is cleared exactly as it always was (`consecutiveFailures`, `lastFailedAt`), so a deferred tier child is due
       // on its next pass, and the presence lease, its episode and its licence are unchanged (spec §5.7).
       return {
         ...entry,
-        firstDeferredAt: entry.firstDeferredAt ?? ask.at.wallMs,                                                // WALL: display only
-        firstViewerDeferredAt: presence ? (continues ? entry.firstViewerDeferredAt : answered.monoMs) : null, // the episode starts at an ARRIVAL
-        lastViewerDeferredAt: presence ? ask.at.monoMs : null,                                                // freshness reads the REQUEST
-        lastViewerWallAt: presence ? ask.at.wallMs : null,
+        firstDeferredAt: entry.firstDeferredAt ?? ask.at.wallMs,                                                   // WALL: display only
+        firstViewerDeferredAt: viewerClass ? (continues ? entry.firstViewerDeferredAt : answered.monoMs) : null, // the episode starts at an ARRIVAL
+        lastViewerDeferredAt: viewerClass ? ask.at.monoMs : null,                                                // freshness reads the REQUEST
+        lastViewerWallAt: viewerClass ? ask.at.wallMs : null,
         viewerHeldSince: inLine ? (entry.viewerHeldSince ?? answered.monoMs) : null,
         refusedAt: null, consecutiveFailures: 0, lastFailedAt: null, lastAskedAt: ask.at.monoMs,
         lastDeferWhy: outcome.why,                                                                              // the episode a feed row is written once for

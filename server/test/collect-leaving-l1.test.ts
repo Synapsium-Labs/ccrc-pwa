@@ -154,9 +154,9 @@ describe('an act ends presence’s continuity (spec §5.10)', () => {
       let x = collectAfterViewer(collectFirstSighting(1), step(0, 2));
       x = collectAfterViewer(x, step(C / 2, 3));
       x = collectAfterAct(x, r, step(C / 2 + 1, 4));
-      expect(x.presence, `${r.kind}: the act ended it`).toBeNull();
+      expect(x.viewer, `${r.kind}: the act ended it`).toBeNull();
       x = collectAfterViewer(x, step(C, 5));
-      expect(x.presence, `${r.kind}: presence starts again`).toEqual({ count: 1, sinceMono: C, atMono: C });
+      expect(x.viewer, `${r.kind}: presence starts again`).toEqual({ count: 1, sinceMono: C, atMono: C });
     }
   });
 });
