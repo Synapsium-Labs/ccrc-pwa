@@ -18,7 +18,7 @@ export const ROLL_IDLE_LABELS: Record<ClaudeRollTargets, string> = {
 export const ROLL_IDLE_TEXT = {
   legend: 'Roll idle sessions',
   when: 'Turn it off while you want every coordinator to keep its running process, for example during a long review. '
-    + 'A coordinator with $REG/<id>.no-roll is never rolled.',
+    + 'A coordinator you have opted out by hand (a no-roll marker on the fleet box) is never rolled.',
   unreadable: 'The server could not read this setting, so nothing is rolled until it can.',
   unavailable: 'This server does not offer the setting.',
 } as const;

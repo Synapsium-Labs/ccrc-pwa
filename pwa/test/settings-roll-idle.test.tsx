@@ -46,4 +46,13 @@ describe('Roll idle sessions (D-7453)', () => {
     expect(screen.getByText(ROLL_IDLE_TEXT.unavailable)).toBeInTheDocument();
     expect(screen.queryAllByRole('radio')).toEqual([]);
   });
+
+  it('says who is never rolled in the operator\'s words, never a registry path', async () => {
+    vi.spyOn(api, 'rollIdle').mockResolvedValue(view('coordinators'));
+    const { container } = render(<RollIdleSection />);
+    await settle();
+    const text = container.textContent ?? '';
+    expect(text).toContain('A coordinator you have opted out by hand (a no-roll marker on the fleet box) is never rolled.');
+    expect(text).not.toMatch(/\$REG|<id>|\.no-roll/);
+  });
 });
