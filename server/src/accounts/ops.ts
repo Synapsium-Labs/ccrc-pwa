@@ -9,7 +9,8 @@ import {
 import { buildAccountArgv, isAccountStdin, type AccountArgvRefusal } from '../../../shared/account-argv.js';
 import { boundedStdinSpawn } from '../../../shared/spawn.mjs';
 import type { CcrcConfig } from '../config.js';
-import { AgentOpError, LinkNotSentError, type FleetClient } from '../remote/client.js';
+import type { FleetClient } from '../remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../remote/errors.js';
 
 /**
  * THE `AccountOps` PORT (spec §13.2, G13; plan Task A7): how an account route runs `ccrc account <sub>` on the fleet

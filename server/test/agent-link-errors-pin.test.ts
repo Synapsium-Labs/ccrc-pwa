@@ -147,4 +147,14 @@ describe('the link error classes have one definition, in remote/errors.ts (D-750
   it('(iv) remote/errors.ts declares each class as a class', () => {
     for (const name of CLASSES) expect(symbolOf('server/src/remote/errors.ts', name).kind, name).toBe('class');
   });
+
+  // The exit row (D-7508): the transitional re-export is gone, so remote/client.ts exports neither class, by an
+  // export-from edge or by an `export { … }` list of its imported binding. The classes' one export is remote/errors.ts.
+  it('(v) remote/client.ts re-exports neither class, by an export-from edge or an export list (D-7508)', () => {
+    const parsed = parsedFile(CLIENT);
+    const edges = parsed.imports.filter((e) => e.kind === 'export-from' && e.names.some((n) => CLASSES.includes(n)));
+    expect(edges.map((e) => `${e.specifier}: ${e.names.join(', ')}`)).toEqual([]);
+    const lists = [...parsed.text.matchAll(/\bexport\s+(?:type\s+)?\{([^}]*)\}/g)].map((m) => m[1]);
+    expect(lists.filter((list) => CLASSES.some((name) => new RegExp(`\\b${name}\\b`).test(list)))).toEqual([]);
+  });
 });

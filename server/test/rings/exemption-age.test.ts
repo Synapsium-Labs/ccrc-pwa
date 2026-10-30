@@ -79,7 +79,7 @@ describe('an exemption set unchanged for more than 60 days needs a re-dated reas
   });
 
   it('CONTROL: a set is measured from its module, or from its literal in any other file', async () => {
-    expect(await sizeOf('server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS')).toBeGreaterThan(0);
+    expect(await sizeOf('server/test/rings/wire-totality.data.ts#WIRE_TOTALITY_EXEMPTIONS')).toBeGreaterThan(0);
     expect(await sizeOf('server/test/deviation-refs.test.ts#GRANDFATHERED')).toBeGreaterThan(0);
     expect(await sizeOf('server/test/deviation-refs.test.ts#NO_SUCH_SET')).toBeUndefined();
     // A `.json` list (the growth check's, D-6211) is measured by its named array: a committed fixture with two
