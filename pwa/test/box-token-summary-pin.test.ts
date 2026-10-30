@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { BOX_TOKEN_PHASES, TOKEN_HOLDS } from '../../shared/box-token';
 import type { BoxTokenPhase, TokenHold } from '../../shared/box-token';
-import { boxTokenHoldText, boxTokenStateText, boxTokenSummary } from '../src/screens/settings/SecuritySection';
+import { boxTokenHoldText, boxTokenStateText, boxTokenSummary } from '../src/screens/settings/boxTokenWords';
 import { AUTO_LABELS, CHANNEL_SENTENCES } from '../src/screens/settings/UpdatesSection';
 import { readBoxTokenView as apiReader } from '../src/lib/api';
 import { readBoxTokenView as leafReader } from '../src/lib/wireReaders';

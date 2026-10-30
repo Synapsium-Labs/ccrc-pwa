@@ -13,7 +13,7 @@ import { haltingNodes } from '../../fleet/updateHalt';
 import { readBoxTokenView } from '../../lib/wireReaders';
 import type { SettingsSectionId } from '../../lib/routes';
 import type { PushState, SettingsView } from './SettingsDataProvider';
-import { boxTokenSummary } from './SecuritySection';
+import { boxTokenSummary } from './boxTokenWords';
 import { unarmedExposure } from './signInGate';
 import { AUTO_LABELS, CHANNEL_SENTENCES } from './UpdatesSection';
 
