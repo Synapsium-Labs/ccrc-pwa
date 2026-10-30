@@ -1,0 +1,5 @@
+# The per-run slices' parent (D-7409, D-7568). Run <k>'s prepare and run units are in ccrc-testbox-run-<k>.slice, which
+# the system manager makes on use; each takes the per-run MemoryMax=, MemorySwapMax= and CPUQuota= (spec §2.3
+# "Containment of the units") from the installer's prefix drop-in, ccrc-testbox-run-.slice.d/50-ccrc-testbox.conf.
+[Unit]
+Description=ccrc test box: the runs

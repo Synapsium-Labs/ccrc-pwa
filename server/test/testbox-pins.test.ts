@@ -287,6 +287,13 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'server/src/ccdargv.ts', 'server/src/testbox.ts', 'server/src/testboxLane.ts', 'server/test/testbox-routes.test.ts',
     'shared/agent-protocol.ts',
   ];
+  // TB7 (D-7409) adds the box package: the installer, which reads the box keys through `_tb_load box` and renders the
+  // units' drop-ins from them, the firewall file, which names the listen key it is rendered from in a comment, and the
+  // two tests and their shared fixture. The units, the rule and the prepare and egress scripts name none.
+  const TB7_HOLDERS = [
+    'deploy/testbox/install.sh', 'deploy/testbox/nft/ccrc-testbox.nft', 'server/test/testbox-box-package.test.ts',
+    'server/test/testbox-config-file.test.ts', 'server/test/testboxBoxFixture.ts',
+  ];
   // TB10 (D-7412) adds the Test box card: its read hook names the server poll's setting in the comment on the cadence
   // it mirrors; it reads no setting and no marker (the card reads only the server's status route).
   const TB10_HOLDERS = ['pwa/src/fleet/useTestboxView.ts'];
@@ -299,10 +306,10 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'server/test/testbox-times.test.ts', 'shared/lifecycle.ts',
   ];
   const HOLDERS = [
-    ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB8_HOLDERS, ...TB9_HOLDERS,
-    ...TB10_HOLDERS, ...TB11_HOLDERS,
+    ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,
+    ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS,
   ].sort();
-  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README)', () => {
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB7: the box package; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);
