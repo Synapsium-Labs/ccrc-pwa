@@ -668,8 +668,8 @@ describe('the WebSocket door: hello, the status answer, refusals', () => {
       await srv.close();
     }
   });
-  it('the dispatch table takes run.submit and run.cancel, nothing else yet', () => {
-    expect(Object.keys(FRAME_HANDLERS).sort()).toEqual(['run.cancel', 'run.submit']);
+  it('the dispatch table takes run.submit, run.cancel and (TB6, D-7408) tools.sync, nothing else yet', () => {
+    expect(Object.keys(FRAME_HANDLERS).sort()).toEqual(['run.cancel', 'run.submit', 'tools.sync']);
   });
 });
 
@@ -822,6 +822,18 @@ describe('a run through the units: prepare, run, clean, summary', () => {
     box.svc.submit({ ...f, session: 'session-z' }, again);
     expect(again.refusals).toEqual([`run id ${f.runId} already used`]);
     expect(box.mgr.log.filter((u) => u.startsWith('ccrc-testbox-prepare'))).toHaveLength(1);
+  });
+  it('a submission whose log directory cannot be made throws and is never queued (D-7560: a hand-over file stays until its submit is accepted)', async () => {
+    const box = makeBox();
+    await box.svc.start();
+    const logs = path.join(box.root, 'logs');
+    rmSync(logs, { recursive: true, force: true });
+    writeFileSync(logs, 'not a directory\n');
+    const sink = new Sink();
+    expect(() => box.svc.submit(SUBMIT(), sink)).toThrow();
+    expect(box.svc.waitingSubmits()).toEqual([]);
+    expect(box.svc.status().queueDepth).toBe(0);
+    expect(box.mgr.log.filter((u) => u.startsWith('ccrc-testbox-prepare'))).toEqual([]);
   });
 });
 

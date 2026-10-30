@@ -265,8 +265,12 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   // TB5 (D-7407, D-7543) adds the pristine store and the registry proxy, which read their four keys from the lines
   // config.ts parsed, and their test. The install unit's scripts under deploy/testbox/bin/ name none (specs/install).
   const TB5_HOLDERS = ['agent/src/testbox/pristine.ts', 'agent/src/testbox/registry.ts', 'agent/test/testbox-pristine.test.ts'];
-  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
-  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy)', () => {
+  // TB6 (D-7408) adds the tool sync: its decider, which reads its three keys from the lines config.ts parsed, its
+  // driver, which names the two directories it writes and reads in comments, and their test. The tools unit's script,
+  // deploy/testbox/bin/tools-sync, names none (it reads only specs/tools and, for the release base, the box file).
+  const TB6_HOLDERS = ['agent/src/testbox/tools.ts', 'agent/src/testbox/toolsync.ts', 'agent/test/testbox-tools.test.ts'];
+  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS].sort();
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);

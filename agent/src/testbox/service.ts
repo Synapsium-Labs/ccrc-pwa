@@ -53,7 +53,7 @@ export interface ServiceDeps {
   readonly probe: () => Promise<ProbeResult>;
   readonly mirror: MirrorOps;
   readonly now: () => number;
-  /** `<tools>/current/chrome`, resolved once at start. */
+  /** `<tools>/current/chrome`, read when each prepare starts (TB6: the entry point resolves it on each read). */
   readonly chrome: string;
   readonly release: string | null;
   readonly serviceVersion: string;
@@ -61,6 +61,12 @@ export interface ServiceDeps {
   readonly tools?: () => TestboxToolVersions | null;
   /** The pristine installs (TB5, D-7543); absent, every run installs nothing beyond its prepare. */
   readonly pristine?: PristineDeps;
+  /** Whether a waiting run may start now (TB6, D-7426: a tool-sync takeover closes admissions while submissions still
+   *  queue); absent, always. The run limit the status answer reports stays the configured one. */
+  readonly admitting?: () => boolean;
+  /** A run's spec is built, in the same turn and before its prepare awaits anything (TB6, spec §2.10: the tool sync
+   *  pins the set the spec's `PATH` names, so no sync prunes it before the spec is written); absent, nothing. */
+  readonly specBuilt?: (spec: RunSpec) => void;
 }
 
 /** What the pristine store needs from outside (D-7543). */
@@ -180,6 +186,15 @@ export class TestboxService {
   /** Each waiting run's position (spec §2.8). */
   positions(): ReadonlyMap<string, number> { return positions(this.queue); }
 
+  /** The submissions waiting in the queue, in queue order, each the frame the service queued (TB6, D-7426: what a
+   *  takeover hands to the next service); a refused submission is never one. */
+  waitingSubmits(): RunSubmit[] {
+    return this.queue.waiting.flatMap((e) => {
+      const run = e.kind === 'run' ? this.runs.get(e.id) : undefined;
+      return run === undefined ? [] : [run.submit];
+    });
+  }
+
   private runIdUsed(id: string): boolean {
     return this.runs.has(id) || existsSync(path.join(this.s.root, 'results', id)) || existsSync(path.join(this.s.root, 'logs', id));
   }
@@ -193,9 +208,10 @@ export class TestboxService {
     if (!dry.ok) { conn.refuse(dry.reason); return; }
     const q = enqueue(this.queue, { id: f.runId, session: f.session, kind: 'run' });
     if (q === null) { conn.refuse(`run id ${f.runId} already used`); return; }
+    // D-7560: its log directory first, so a submission that throws was never queued (a hand-over file stays for it).
+    mkdirSync(path.join(this.s.root, 'logs', f.runId), { recursive: true });
     this.queue = q;
     this.runs.set(f.runId, { state: queuedRun(f.runId), submit: f, row, sink: conn, spec: null, prepareExit: null, prepareMs: 0, wallMs: 0 });
-    mkdirSync(path.join(this.s.root, 'logs', f.runId), { recursive: true });
     this.pump();
   }
 
@@ -219,7 +235,8 @@ export class TestboxService {
 
   /** Start every run the queue admits. */
   private pump(): void {
-    const limits = { runs: Math.max(0, this.s.runs - this.held()), sessionRuns: this.s.sessionRuns };
+    const open = this.d.admitting?.() ?? true;
+    const limits = { runs: open ? Math.max(0, this.s.runs - this.held()) : 0, sessionRuns: this.s.sessionRuns };
     const { state, started } = admit(this.queue, limits);
     this.queue = state;
     for (const e of started) {
@@ -257,6 +274,7 @@ export class TestboxService {
       case 'start-prepare': {
         const built = buildRunSpec(run.submit, run.row, k, this.s, this.d.chrome);
         if (!built.ok) return { t: 'prepared', exit: FAILED_END.exit, lastStderr: null };
+        this.d.specBuilt?.(built.spec);
         run.spec = { ...built.spec, ...(this.store === null ? {} : { installs: await this.installSteps(run, p.runDir) }) };
         writeSpec(this.s.root, run.spec);
         mkdirSync(p.out, { recursive: true });
@@ -461,4 +479,5 @@ export type FrameHandler = (svc: TestboxService, frame: TestboxFrame, conn: Conn
 export const FRAME_HANDLERS: Readonly<Partial<Record<TestboxFrameType, FrameHandler>>> = {
   'run.submit': (svc, f, conn) => svc.submit(f as RunSubmit, conn),
   'run.cancel': (svc, f) => svc.cancel((f as RunCancel).runId),
+  'tools.sync': async (svc, f, conn) => (await import('./toolsync.js')).onToolsSync(svc, f, conn),
 };

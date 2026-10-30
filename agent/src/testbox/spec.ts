@@ -19,12 +19,12 @@
 // `Z` a doomed pristine key the privileged first step removes, and `C`, `E`, `A` for `runner` (`npm ci` from the
 // lockfile alone, in `build/<package>`, HOME `install/run/home`).
 //
-// The environment is built from empty (spec §2.3): `PATH` with the box's tools first, `HOME` the run's empty home,
-// `TMPDIR` = `CCRC_TESTBOX_RUN_TMPDIR`, `LANG`, `TERM`, the three worker names, `CCRC_CHROME` (resolved once, at
-// service start), `CI` only when the local invocation had it, and the submission's forwarded names that
-// `CCRC_TESTBOX_ENV_FORWARD` allows. The session's environment is never forwarded. A vitest head always gets
-// `--maxWorkers=<n>` (the session's own is kept when lower, and then the worker names carry the same lower count,
-// D-7501) and the service's JSON reporter beside the session's reporters.
+// The environment is built from empty (spec §2.3): `PATH` with the box's tools first (the set current when the spec
+// is built, TB6), `HOME` the run's empty home, `TMPDIR` = `CCRC_TESTBOX_RUN_TMPDIR`, `LANG`, `TERM`, the three worker
+// names, `CCRC_CHROME` (the current set's, read when each prepare starts, TB6), `CI` only when the local invocation
+// had it, and the submission's forwarded names that `CCRC_TESTBOX_ENV_FORWARD` allows. The session's environment is
+// never forwarded. A vitest head always gets `--maxWorkers=<n>` (the session's own is kept when lower, and then the
+// worker names carry the same lower count, D-7501) and the service's JSON reporter beside the session's reporters.
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunSubmit, TestboxRepoRow } from '../../../shared/testbox.js';
@@ -41,11 +41,20 @@ export const FIXED_ENV = { LANG: 'C.UTF-8', TERM: 'dumb' } as const;
 /** The system directories after the box's tools on `PATH`. */
 export const SYSTEM_PATH = '/usr/local/bin:/usr/bin:/bin';
 
+/** A spec's `PATH`: the box's tools (`toolsBin`, read once), then the system directories. */
+export function toolsPath(s: SpecSettings): string {
+  return `${s.toolsBin ?? path.join(s.toolsDir, 'current', 'bin')}:${SYSTEM_PATH}`;
+}
+
 export interface SpecSettings {
   readonly root: string;
   readonly workers: number;
   readonly runTmpdir: string;
   readonly toolsDir: string;
+  /** The box's tool directory a spec puts first on `PATH`, read once per spec built (TB6, spec §2.10: the entry point
+   *  resolves `<tools>/current` to its set on each read, so a sync during a run changes nothing under it). Absent, the
+   *  link path `<tools>/current/bin`. */
+  readonly toolsBin?: string;
   readonly envForward: readonly string[];
   readonly runUserPrefix: string;
   readonly reportMaxBytes: number;
@@ -165,7 +174,7 @@ export function buildRunSpec(submit: RunSubmit, row: TestboxRepoRow, k: number, 
     argv = reporterArgv(w.argv, path.join(p.runDir, 'report.json'));
   }
   const env: [string, string][] = [
-    ['PATH', `${path.join(s.toolsDir, 'current', 'bin')}:${SYSTEM_PATH}`],
+    ['PATH', toolsPath(s)],
     ['HOME', path.join(p.runDir, 'home')],
     ['TMPDIR', s.runTmpdir],
     ['LANG', FIXED_ENV.LANG],
@@ -234,7 +243,7 @@ export function buildInstallSpec(
     key, runDir: p.runDir, installUser: `${s.runUserPrefix}${INSTALL_USER_SUFFIX}`, out: p.out, reportMaxBytes: s.reportMaxBytes,
     serviceUser: s.serviceUser, package: pkg, inputs, doomed,
     env: [
-      ['PATH', `${path.join(s.toolsDir, 'current', 'bin')}:${SYSTEM_PATH}`],
+      ['PATH', toolsPath(s)],
       ['HOME', path.join(p.runDir, 'home')],
       ['TMPDIR', s.runTmpdir],
       ['LANG', FIXED_ENV.LANG],
