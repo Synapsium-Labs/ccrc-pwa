@@ -10,8 +10,8 @@
 // changed: a one-row frame rebuilds the tree, so the cards re-render, but one `SessionLine` only; a chrome change with
 // the same fleet re-renders no card. No one-second clock runs here: a spawning dispatch's readout ticks itself
 // (`ProjectCard`'s `PendingSpawn`). The rollup's clock is read on every render (`useRollupClock`), but with the same
-// fleet, preferences and selection the rollup is rebuilt only when its next window end moves (`roll.next`), so it
-// reads `roll.now` only then.
+// fleet, preferences and selection the rollup is rebuilt only when its next boundary moves (`roll.next`: a window end,
+// or since Task G1b a programme box's stall boundary), so it reads `roll.now` only then.
 //
 // It reads the chrome's store (`useFleetChrome`), the one `FleetScreen` itself checks it was handed, so the cards and
 // the screen around them always describe one fleet.
@@ -23,6 +23,8 @@ import { isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
 import { useHoldView } from './useHoldView';
 import { useRollupClock } from './useRollupClock';
+import { markerState } from './coordWords';
+import { cardBoxes, foldedCard } from './programmeBoxes';
 import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from './rollup';
 import type { FleetSession } from '../../../shared/api';
 import { useProjectedHome } from './useProjectedHome';
@@ -58,16 +60,27 @@ export function FleetCards({ selectedId, onOpen }: {
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
-  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: one timer for the next window
-  // end only (`useRollupClock`), and the rollup reads `roll.now` only when it is rebuilt. A folded card's "active … ago"
-  // runs its own 30 s interval (`ProjectCardHead`'s `LastActive`), so a quiet fleet runs that, and no one-second timer.
+  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: one timer, for the next window
+  // end or box stall boundary (`useRollupClock`), and the rollup reads `roll.now` only when it is rebuilt. A folded
+  // card's "active … ago" runs its own 30 s interval (`ProjectCardHead`'s `LastActive`), so a quiet fleet runs that,
+  // and no one-second timer.
   const [rollupPrefs, updateRollup] = useRollupPrefs();
-  const roll = useRollupClock(sessions);
+  // Task G1b (D-7380, D-7373, D-7376): a programme box's threshold is the stall watch's own quiet time (the runs frame's,
+  // read once in the store), its pause the coord frame's, and its clock this one: the timer also wakes when a box
+  // crosses its threshold (`nextStallBoundary`). The cards are handed the time read when `next` last moved (`boxNow`):
+  // with the same runs, quiet time and pause no box crosses between two moves of `next`, so that time reads every box's
+  // state as the real time would, and a memo'd card's props change only at a boundary or with a frame (C9).
+  const stallQuietMs = useStore((s) => s.stallQuietMs);
+  const coordPaused = useStore((s) => markerState(s.coord?.pause) === 'set');
+  const roll = useRollupClock(sessions, activeRuns, stallQuietMs, coordPaused);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`, as for the rollup below.
+  const boxNow = useMemo(() => roll.now, [roll.next, activeRuns, stallQuietMs, coordPaused]);
   // The tree the cards draw, once, and its rollup over the same groups (D-6088). Memoised (C9): the rollup reads the
-  // time when it is rebuilt, which is on a new tree, a new preference or selection, or a window's end (`roll.next`).
+  // time when it is rebuilt, which is on a new tree, a new preference or selection, or a move of `roll.next` (a window's
+  // end, or a box's stall boundary, where the rollup is rebuilt to the same answer: harmless, one rebuild a boundary).
   const tree = useMemo(
     () => fleetTree(sessions, projects.knownProjects, activeRuns, acks), [sessions, projects.knownProjects, activeRuns, acks]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: the window moves only then.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
   const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.next]);
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
   // dropped — from a FRESH frame only, never from a cached snapshot (`fleetFrameSeen`). `prunePrefs` answers null when
@@ -82,7 +95,19 @@ export function FleetCards({ selectedId, onOpen }: {
   }, [fleetFrameSeen, pruneKey, updateRollup]);
   // D-6090: a card rolled up or out on its own must not move the one the operator is reading (`useHoldView`).
   const listRef = useRef<HTMLDivElement>(null);
-  useHoldView(listRef, [...rollup.cards].map(([p, c]) => `${p}:${c.collapsed ? '-' : c.rows.length}`).join('|'));
+  // A folded card's height is its kept boxes (spec §2.3), which a stall boundary can change with no frame (Task G1b), so
+  // its part of the key counts them, by the composition the card itself draws (`cardBoxes`); an open card's is its rows.
+  const holdKey = useMemo(() => {
+    const groups = new Map(tree.map((g) => [g.project, g] as const));
+    const kept = (p: string): number => {
+      const g = groups.get(p);
+      if (g === undefined) return 0;
+      const { ranked } = cardBoxes(g.rows, g.runs, g.claimed, g.hues, boxNow, stallQuietMs, coordPaused);
+      return foldedCard(ranked, [], []).keep.length;
+    };
+    return [...rollup.cards].map(([p, c]) => `${p}:${c.collapsed ? `-${kept(p)}` : c.rows.length}`).join('|');
+  }, [tree, rollup, boxNow, stallQuietMs, coordPaused]);
+  useHoldView(listRef, holdKey);
   // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1):
   // the cards read the loop's in-flight set, which the chrome holds (D-5468).
   // The ··· sheet's lifecycle, the guarded reap flow and the confirm's subject
@@ -120,6 +145,10 @@ export function FleetCards({ selectedId, onOpen }: {
           /* D-6088: the project fold and the worker lines are the rollup's (`rollup.ts`); the Released and
              Archived sub-folds keep `useFolded`. */
           rollup={rollup.cards.get(g.project)}
+          /* Task G1b: the programme boxes' clock, threshold and pause (above). */
+          boxNow={boxNow}
+          stallQuietMs={stallQuietMs}
+          coordPaused={coordPaused}
           onToggle={onToggle}
           onToggleChildren={onToggleChildren}
           onActions={onActions}

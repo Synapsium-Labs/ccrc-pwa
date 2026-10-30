@@ -78,16 +78,10 @@ export const itemTallyLabel = (items: RunItemTally): string =>
 export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
   run.closedAt ?? null;
 
-/** What `runLastMove` reads: `RunSummary`'s two times, and the server's `lastMoveAt` (D-7334). It was declared here,
- *  structurally, before `RunSummary` carried the field; `RunSummary.lastMoveAt` is on the wire type now, and every
- *  `RunSummary` satisfies this alias. The alias goes in Task G1b, with the card wiring (Task G1b), when the reader takes
- *  `RunSummary` and no caller changes. */
-type LastMoveCarrier = Pick<RunSummary, 'openedAt' | 'dispatchedAt'> & { readonly lastMoveAt?: number | null };
-
 /** The one reader of `RunSummary.lastMoveAt` (D-7334, D-7338). ABSENT is an older server and reads null, so an older server
  *  shows no movement (programme-boxes spec §5). NULL is a server that measured no move on the run yet, and falls back to its
  *  dispatch time, then its open time. A number is the move. */
-export const runLastMove = (run: LastMoveCarrier): number | null =>
+export const runLastMove = (run: RunSummary): number | null =>
   run.lastMoveAt === undefined ? null : run.lastMoveAt ?? run.dispatchedAt ?? run.openedAt;
 
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never

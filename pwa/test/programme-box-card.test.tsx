@@ -16,9 +16,16 @@ import { SKIN_SETS } from '../src/skins';
 import { createFleetStore } from '../src/stores/fleet';
 import { renderFleet } from './fleetHost';
 import { withRunBinding } from './runBindingFixture';
-import { HOUR, NOW, answeredByCoordinator, asking, run, sess } from './rollupFixture';
+import { HOUR, MIN, NOW, answeredByCoordinator, asking, run, sess } from './rollupFixture';
 
 const noop = (): void => {};
+
+// Fix round 1, F1: the keys the list hands its view hold, recorded around the real hook.
+const holdKeys = vi.hoisted((): string[] => []);
+vi.mock('../src/fleet/useHoldView', async (load) => {
+  const real = await load<typeof import('../src/fleet/useHoldView')>();
+  return { useHoldView: (...args: Parameters<typeof real.useHoldView>): void => { holdKeys.push(args[1]); real.useHoldView(...args); } };
+});
 
 /** project-c: a coordinator with three workers (`w1` asks the operator, `w2` works, `w3` idles) and two sessions
  *  in no programme. */
@@ -36,15 +43,16 @@ function fleet(w1: Partial<FleetSession> = asking(), waveOf: number | null = 6):
 
 function drawCard(
   sessions: FleetSession[], runs: RunSummary[], project: string,
-  { prefs = NO_ROLLUP_PREFS, collapsed }: { prefs?: RollupPrefs; collapsed?: boolean } = {},
+  { prefs = NO_ROLLUP_PREFS, collapsed, stallQuietMs, coordPaused }:
+    { prefs?: RollupPrefs; collapsed?: boolean; stallQuietMs?: number | null; coordPaused?: boolean } = {},
 ): HTMLElement {
   const tree = fleetTree(withRunBinding(sessions, runs), [], runs);
   const g = tree.find((x) => x.project === project);
   if (g === undefined) throw new Error(`no card ${project}`);
   const rollup = collapsed === undefined ? rollupFleet(tree, prefs, NOW, null).cards.get(project) : undefined;
   const { container } = render(
-    <ProjectCard group={g} rollup={rollup} collapsed={collapsed} runs={g.runs} abroad={g.abroad} nowMs={NOW}
-      onOpen={noop} onActions={noop} onToggleChildren={noop} />,
+    <ProjectCard group={g} rollup={rollup} collapsed={collapsed} runs={g.runs} abroad={g.abroad} nowMs={NOW} boxNow={NOW}
+      stallQuietMs={stallQuietMs} coordPaused={coordPaused} onOpen={noop} onActions={noop} onToggleChildren={noop} />,
   );
   return container;
 }
@@ -232,6 +240,57 @@ describe('a box\'s far workers are the runs whose worker renders on another card
   });
 });
 
+// Task G1b (D-7380, D-7373): the moves off the runs frame (`runLastMove`), the stall watch's quiet time (`stallQuietMs`)
+// and the operator's pause (the coord frame) reach the box at its one call site.
+const QUIET = 2 * HOUR;
+/** The fleet with no worker asking, every run last moved at `at` (`lastMoveAt`, as a current server sends it). */
+function quietFleet(at: number | null): { sessions: FleetSession[]; runs: RunSummary[] } {
+  const f = fleet(answeredByCoordinator());
+  return { sessions: f.sessions, runs: f.runs.map((r) => ({ ...r, lastMoveAt: at })) };
+}
+const boxOf = (root: ParentNode): HTMLElement | null => root.querySelector<HTMLElement>('section.pg-box');
+
+describe('a box says when its programme last moved (Task G1b)', () => {
+  it('reads "no move 2h 10m" and stalled at the stall watch\'s own quiet time', () => {
+    const { sessions, runs } = quietFleet(NOW - 2 * HOUR - 10 * MIN);
+    const box = boxOf(drawCard(sessions, runs, 'project-c', { stallQuietMs: 7_200_000 }))!;
+    expect(box.getAttribute('data-state')).toBe('stalled');
+    expect(box.querySelector('.pg-moved')?.textContent).toBe('no move 2h 10m');
+  });
+
+  it('reads "paused" under the coord frame\'s pause, never stalled', () => {
+    const { sessions, runs } = quietFleet(NOW - 2 * HOUR - 10 * MIN);
+    const box = boxOf(drawCard(sessions, runs, 'project-c', { stallQuietMs: QUIET, coordPaused: true }))!;
+    expect(box.getAttribute('data-state')).toBe('paused');
+    expect(box.querySelector('.pg-moved')?.textContent).toBe('paused');
+  });
+
+  it('reads "moved … ago" below the quiet time', () => {
+    const { sessions, runs } = quietFleet(NOW - 90 * MIN);
+    const box = boxOf(drawCard(sessions, runs, 'project-c', { stallQuietMs: QUIET }))!;
+    expect(box.getAttribute('data-state')).toBe('moving');
+    expect(box.querySelector('.pg-moved')?.textContent).toBe('moved 1h 30m ago');
+  });
+
+  it('falls back to the dispatch time when the server measured no move (D-7338; fix round 1, F5)', () => {
+    const f = quietFleet(null);
+    const runs = f.runs.map((r) => ({ ...r, dispatchedAt: NOW - 2 * HOUR - 10 * MIN }));
+    const box = boxOf(drawCard(f.sessions, runs, 'project-c', { stallQuietMs: QUIET }))!;
+    expect(box.getAttribute('data-state')).toBe('stalled');
+    expect(box.querySelector('.pg-moved')?.textContent).toBe('no move 2h 10m');
+  });
+
+  it('never stalls when the frame carries no quiet time, and shows no movement for an older server', () => {
+    const late = quietFleet(NOW - 5 * HOUR);
+    expect(boxOf(drawCard(late.sessions, late.runs, 'project-c'))?.getAttribute('data-state')).toBe('moving');
+    cleanup();
+    const old = fleet(answeredByCoordinator());   // no `lastMoveAt` on any run: an older server
+    const box = boxOf(drawCard(old.sessions, old.runs, 'project-c', { stallQuietMs: QUIET }))!;
+    expect(box.getAttribute('data-state')).toBe('moving');
+    expect(box.querySelector('.pg-moved')).toBeNull();
+  });
+});
+
 describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet list', (skin: SkinId) => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -259,5 +318,178 @@ describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet l
     expect(Object.keys(window.localStorage).filter((k) => !keys.includes(k))).toEqual(
       keys.includes('ccrc.fleet-rollup.v1') ? [] : ['ccrc.fleet-rollup.v1']);
     expect(screen.getByRole('button', { name: 'hide 3 workers' })).toBeTruthy();
+  });
+
+  // Through the real list (FleetCards, its rollup and its one clock), never the test-only `nowMs` (review 1152 F1, F2).
+  const mount = (): ReturnType<typeof createFleetStore> => {
+    act(() => setSkin(skin));
+    const store = createFleetStore({
+      makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
+    });
+    const Nav = SKIN_SETS[skin].Nav;
+    if (Nav === null) throw new Error(`${skin} places no fleet list`);
+    renderFleet(<Nav />, store);
+    return store;
+  };
+  const frames = (sessions: FleetSession[], runs: RunSummary[]) =>
+    ({ conn: 'open' as const, fleetFrameSeen: true, runsFrameSeen: true, runs, sessions, stallQuietMs: QUIET });
+
+  it('an open card\'s box turns from moving to stalled at its boundary, with no frame between', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(NOW - QUIET + MIN);   // crosses in one minute
+    // The coordinator changed state a minute ago, so the card is active and drawn open.
+    const sessions = f.sessions.map((x) => (x.id === 'coord' ? { ...x, bucketSince: NOW - MIN, statusUpdatedAt: NOW - MIN } : x));
+    act(() => { store.setState(frames(sessions, f.runs)); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('moving');
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+  });
+
+  it('a folded card shows its box once it stalls with no frame, and counts the rest (review 1152 F2)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(NOW - QUIET + MIN);
+    // Every session idle for hours: the project is inactive, so the rollup folds its card and keeps no moving box.
+    const sessions = f.sessions.map((x) => ({ ...x, status: 'idle' as const, bucket: 'idle' as const }));
+    act(() => { store.setState(frames(sessions, f.runs)); });
+    expect(boxOf(document)).toBeNull();
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+    expect(document.querySelector('.pg-more')?.textContent).toBe('2 more in this project');
+  });
+
+  it('a runs frame with no quiet time never stalls a box, however long it has been quiet (D-7376)', () => {
+    const store = mount();
+    const f = quietFleet(NOW - 5 * HOUR);
+    const sessions = f.sessions.map((x) => (x.id === 'coord' ? { ...x, bucketSince: NOW - MIN, statusUpdatedAt: NOW - MIN } : x));
+    act(() => { store.setState({ ...frames(sessions, f.runs), stallQuietMs: null }); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('moving');
+    expect(boxOf(document)?.querySelector('.pg-moved')?.textContent).toBe('moved 5h ago');
+  });
+
+  it('under the coord frame\'s pause a quiet box reads paused, never stalled', () => {
+    const store = mount();
+    const f = quietFleet(NOW - 3 * HOUR);
+    const sessions = f.sessions.map((x) => (x.id === 'coord' ? { ...x, bucketSince: NOW - MIN, statusUpdatedAt: NOW - MIN } : x));
+    act(() => { store.setState(frames(sessions, f.runs)); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+    act(() => { store.setState({ coordFrameSeen: true,
+      coord: { pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] } }); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('paused');
+  });
+
+  // Fix round 1 (review 1241): every input the list's clock and `boxNow` read, each pinned through the real list.
+  /** The coordinator changed state a minute ago, so the card is active and drawn open. */
+  const active = (sessions: FleetSession[], id = 'coord'): FleetSession[] =>
+    sessions.map((x) => (x.id === id ? { ...x, bucketSince: NOW - MIN, statusUpdatedAt: NOW - MIN } : x));
+  const coordFrame = (pause: 'set' | 'clear' | 'unmeasurable') =>
+    ({ coordFrameSeen: true, coord: { pause, mail: 'clear' as const, reclaim: 'clear' as const, childReclaimAttention: [] } });
+  const boxTitled = (title: string): HTMLElement | undefined =>
+    [...document.querySelectorAll<HTMLElement>('section.pg-box')].find((b) => b.querySelector('.pg-title')?.textContent === title);
+
+  it('a box that crossed under the pause reads stalled once the pause clears, with no runs frame (F3)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(NOW - QUIET + MIN);
+    act(() => { store.setState({ ...frames(active(f.sessions), f.runs), ...coordFrame('set') }); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('paused');
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    act(() => { store.setState(coordFrame('clear')); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+  });
+
+  it('a runs frame that ages a box reads it stalled while the clock waits on another box (F3)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const sessions = active([
+      sess('coord-a', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working' }),
+      sess('wa1', 'project-c', { role: 'child' }), sess('wa2', 'project-c', { role: 'child' }),
+      sess('coord-b', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working' }),
+      sess('wb1', 'project-c', { role: 'child' }),
+    ], 'coord-a');
+    const a = { program: 'prog-a', programTitle: 'Programme A' };
+    const runs = [
+      run(20, 'coord-a', 'wa1', { ...a, lastMoveAt: NOW - 115 * MIN }),
+      run(21, 'coord-a', 'wa2', { ...a, lastMoveAt: NOW - 30 * MIN }),   // A's newest: its boundary is 90 minutes out
+      run(22, 'coord-b', 'wb1', { program: 'prog-b', programTitle: 'Programme B', lastMoveAt: NOW - 100 * MIN }),   // B's: 20
+    ];
+    act(() => { store.setState(frames(withRunBinding(sessions, runs), runs)); });
+    expect(boxTitled('Programme A')?.getAttribute('data-state')).toBe('moving');
+    act(() => { vi.advanceTimersByTime(10 * MIN); });
+    // A's newest run closes: its last move is now 125 minutes old, and the clock still waits on B's boundary.
+    act(() => { store.setState({ runs: runs.map((r) => (r.id === 21 ? { ...r, state: 'done' as const } : r)) }); });
+    expect(boxTitled('Programme A')?.getAttribute('data-state')).toBe('stalled');
+  });
+
+  it('the clock wakes at the rollup\'s window end when it comes before a box\'s boundary (F4)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(NOW - 10 * MIN);   // the box's boundary is 110 minutes out
+    // Nobody working; the coordinator's last change was 25 minutes ago, so the card rolls up in 5 minutes.
+    const sessions = f.sessions.map((x) => ({ ...x, status: 'idle' as const, bucket: 'idle' as const,
+      ...(x.id === 'coord' ? { bucketSince: NOW - 25 * MIN, statusUpdatedAt: NOW - 25 * MIN } : {}) }));
+    act(() => { store.setState(frames(sessions, f.runs)); });
+    expect(document.querySelector('section.proj-card')?.getAttribute('data-collapsed')).toBeNull();
+    act(() => { vi.advanceTimersByTime(5 * MIN + 1_000); });
+    expect(document.querySelector('section.proj-card')?.getAttribute('data-collapsed')).toBe('true');
+  });
+
+  it('a run the server measured no move on stalls from its dispatch time, at its boundary (D-7338, F5)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(null);
+    const runs = f.runs.map((r) => ({ ...r, dispatchedAt: NOW - QUIET + MIN }));
+    act(() => { store.setState(frames(active(f.sessions), runs)); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('moving');
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+  });
+
+  it('a coord frame that could not measure the pause does not pause a box (F6 ii)', () => {
+    const store = mount();
+    const f = quietFleet(NOW - 3 * HOUR);
+    act(() => { store.setState({ ...frames(active(f.sessions), f.runs), ...coordFrame('unmeasurable') }); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+  });
+
+  it('the box stalls at the frame\'s own quiet time, not at a default (F6 iii)', () => {
+    const store = mount();
+    const f = quietFleet(NOW - 150 * MIN);
+    act(() => { store.setState({ ...frames(active(f.sessions), f.runs), stallQuietMs: 3 * HOUR }); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('moving');
+    expect(boxOf(document)?.querySelector('.pg-moved')?.textContent).toBe('moved 2h 30m ago');
+  });
+
+  it('a folded card that gains a stalled box with no frame changes its view-hold key (D-6090; F1)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(NOW - QUIET + MIN);
+    const sessions = f.sessions.map((x) => ({ ...x, status: 'idle' as const, bucket: 'idle' as const }));
+    act(() => { store.setState(frames(sessions, f.runs)); });
+    expect(boxOf(document)).toBeNull();
+    const before = holdKeys.at(-1);
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+    expect(holdKeys.at(-1)).not.toBe(before);
+  });
+
+  it('the readout agrees with the state from the boundary on, whatever its own clock last read (spec §2.5; F9)', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(NOW);
+    const store = mount();
+    const f = quietFleet(NOW - QUIET + 45_000);   // crosses 15 s after the readout's own 30 s tick
+    act(() => { store.setState(frames(active(f.sessions), f.runs)); });
+    expect(boxOf(document)?.querySelector('.pg-moved')?.textContent).toBe('moved 1h 59m ago');
+    act(() => { vi.advanceTimersByTime(46_000); });
+    expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
+    expect(boxOf(document)?.querySelector('.pg-moved')?.textContent).toBe('no move 2h');
   });
 });

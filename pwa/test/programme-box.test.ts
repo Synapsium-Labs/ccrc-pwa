@@ -6,10 +6,10 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { cardsOf, fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet } from '../src/fleet/nestFleet';
 import {
-  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, fleetHues, foldedCard, movementWords, programmeBoxes, rankBoxes,
-  type BoxState, type ProgrammeBoxView,
+  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, fleetHues, foldedCard, movementWords, nextStallBoundary,
+  programmeBoxes, rankBoxes, type BoxState, type ProgrammeBoxView,
 } from '../src/fleet/programmeBoxes';
-import { runCard } from '../src/fleet/runWords';
+import { runCard, runLastMove } from '../src/fleet/runWords';
 import { HOUR, MIN, NOW, asking, run, sess } from './rollupFixture';
 import { withRunBinding } from './runBindingFixture';
 
@@ -351,5 +351,54 @@ describe('boxOrder', () => {
   it('keeps the input order when no move is known', () => {
     const list = [ranked('moving', null, 'a'), ranked('moving', null, 'b'), ranked('moving', null, 'c')];
     expect([...list].sort(boxOrder).map((b) => b.view.coordinatorId)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+// Task G1b (D-7380; review 1152 F1): the instant a box crosses the stall watch's quiet time with no new frame, so the
+// rollup's one timer (`useRollupClock`) wakes the list there. Per claimant, the box's own membership and its newest move.
+describe('nextStallBoundary', () => {
+  const QUIET = 2 * HOUR;
+  const moved = (id: number, claimedBy: string, worker: string, at: number | null): RunSummary =>
+    run(id, claimedBy, worker, { lastMoveAt: at });
+
+  it('is the claimant\'s newest move plus the quiet time', () => {
+    const runs = [moved(1, 'coord', 'w1', NOW - HOUR), moved(2, 'coord', 'w2', NOW - 30 * MIN)];
+    expect(nextStallBoundary(runs, runLastMove, NOW, QUIET, false)).toBe(NOW - 30 * MIN + QUIET);
+  });
+
+  it('is null with no quiet time from the server, or no known move', () => {
+    expect(nextStallBoundary([moved(1, 'coord', 'w1', NOW - HOUR)], runLastMove, NOW, null, false)).toBeNull();
+    // An older server sends no `lastMoveAt`, which reads null (`runLastMove`); a coordinator's own run is no box.
+    expect(nextStallBoundary([run(1, 'coord', 'w1'), moved(2, 'coord', 'coord', NOW - 30 * MIN)], runLastMove, NOW, QUIET, false))
+      .toBeNull();
+  });
+
+  it('is null under the operator\'s pause: a paused programme never stalls', () => {
+    expect(nextStallBoundary([moved(1, 'coord', 'w1', NOW - HOUR)], runLastMove, NOW, QUIET, true)).toBeNull();
+  });
+
+  it('is the earliest boundary still ahead across claimants, and none once every box has crossed', () => {
+    const runs = [
+      moved(1, 'coord-a', 'w1', NOW - 3 * HOUR),   // crossed an hour ago
+      moved(2, 'coord-b', 'w2', NOW - 90 * MIN),   // crosses in 30 minutes
+      moved(3, 'coord-c', 'w3', NOW - 10 * MIN),   // crosses in 110 minutes
+    ];
+    expect(nextStallBoundary(runs, runLastMove, NOW, QUIET, false)).toBe(NOW + 30 * MIN);
+    expect(nextStallBoundary([runs[0]!], runLastMove, NOW, QUIET, false)).toBeNull();
+    expect(nextStallBoundary([moved(4, 'coord', 'w4', NOW - QUIET)], runLastMove, NOW, QUIET, false)).toBeNull();
+  });
+
+  it('is the earliest boundary whatever the order the claimants come in (fix round 1, F6 i)', () => {
+    const runs = [moved(1, 'coord-c', 'w3', NOW - 10 * MIN), moved(2, 'coord-b', 'w2', NOW - 90 * MIN)];
+    expect(nextStallBoundary(runs, runLastMove, NOW, QUIET, false)).toBe(NOW + 30 * MIN);
+  });
+
+  it('is the instant the box over the same runs turns stalled, not a millisecond later', () => {
+    const sessions = [coord, kid('w1'), kid('w2')];
+    const runs = [moved(1, 'coord', 'w1', NOW - 90 * MIN), moved(2, 'coord', 'w2', NOW - 100 * MIN)];
+    const at = nextStallBoundary(runs, runLastMove, NOW, QUIET, false)!;
+    const box = only(boxesOf(sessions, runs, runLastMove));
+    expect(rankBoxes([box], at - 1, QUIET, false)[0]!.state).toBe('moving');
+    expect(rankBoxes([box], at, QUIET, false)[0]!.state).toBe('stalled');
   });
 });

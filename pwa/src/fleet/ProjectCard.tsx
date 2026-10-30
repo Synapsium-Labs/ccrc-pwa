@@ -35,7 +35,7 @@ import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
 import {
-  cardAbroad, fleetHues, foldedCard, programmeBoxes, rankBoxes, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
+  cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
 } from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine } from './SessionLine';
@@ -71,13 +71,6 @@ export const NEST_BRACKET = '└─';
  *
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
-
-/** A run's last move, until the server says. Task G1 supplies the moves, the quiet threshold and a boundary clock (the
- *  rollup's `nextRollupBoundary` idiom) at the box's one call site, in place of this, `QUIET_MS` and the test-only
- *  `nowMs`. */
-const NO_MOVE = (): null => null;
-/** The stall watch's quiet threshold, until the server sends it (Task G1, with the moves and the clock). */
-const QUIET_MS: number | null = null;
 
 function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number | undefined }): ReactNode {
   // The readout's own clock (C9, D-6441), to the second, while it is drawn; a test passes its clock instead. Only this
@@ -127,6 +120,9 @@ function ProjectCardView({
   abroad = [],
   poolFor = () => null,
   nowMs,
+  boxNow,
+  stallQuietMs = null,
+  coordPaused = false,
   coordOf = () => null,
   frameSeen = false,
   rollup,
@@ -222,6 +218,13 @@ function ProjectCardView({
    *  Absent in the app (C9, D-6441): each of those leaves then ticks its own clock (`PendingSpawn` each second while a
    *  spawn is drawn, `LastActive` each half minute), so the card itself never re-renders for the time. */
   nowMs?: number;
+  /** Task G1b (D-7380): the time the programme boxes' states are read at, `FleetCards`' rollup clock as its `next` last
+   *  moved (`nextStallBoundary` wakes it when a box crosses its threshold). Absent, no box reads stalled. */
+  boxNow?: number;
+  /** The stall watch's quiet time, off the runs frame (`stores/fleet.ts`'s one read, D-7376); null, no box stalls. */
+  stallQuietMs?: number | null;
+  /** The operator's pause, off the coord frame (D-7373): a box reads paused, never stalled. */
+  coordPaused?: boolean;
   /** The coordinator session by id, looked up FLEET-WIDE — it may sit on
    *  another card, in an archive fold, or nowhere this pass. Feeds
    *  `coordinatorPresence`, the same read the runs board uses (D-1129, D-7181);
@@ -290,8 +293,9 @@ function ProjectCardView({
   // The fleet's hue map, this card's entries (`fleetTree`). A group drawn without the tree has no fleet to read, so its
   // own runs are the whole of what it knows.
   const hues = 'hues' in group ? (group as FleetTreeGroup).hues : fleetHues(boxRuns);
-  const prog = programmeBoxes(tree, runs, claimed, NO_MOVE, hues);
-  const ranked = rankBoxes(prog.boxes, nowMs ?? null, QUIET_MS, false);
+  // Task G1b: the moves (`runLastMove`, the one reader), the stall watch's threshold, the pause and the list's clock, in
+  // the one composition the list's view hold counts too (`cardBoxes`).
+  const { prog, ranked } = cardBoxes(tree, runs, claimed, hues, boxNow ?? null, stallQuietMs, coordPaused);
   const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
   const shownAbroad = cardAbroad(abroad, prog.boxes);
   const rowKey = (row: FleetRow): string => (row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`);
