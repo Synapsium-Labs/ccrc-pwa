@@ -73,7 +73,8 @@
 //                                                                  "a hibernated claimant's worker the operator has open…" (it draws
 //                                                                  `coordinator-hibernated`; D-7377 as amended rules no marker there)
 // Task G1c (D-7380, D-7373, D-7376; review 1239's S1, R1 and C1) added the movement rows, each RUN red on its new cases and
-// green restored, over this suite, status-groups, instrument-list and programme-box-card (the three counts above, refreshed
+// green restored (the counts of the G1c rows below are AS MEASURED AT G1c: G1d's three cases, further down, add red cases to
+// some of them, by reading and unmeasured: moves ignored, clock not passed, `boxNow` frozen, the pause ignored), over this suite, status-groups, instrument-list and programme-box-card (the three counts above, refreshed
 // from a run on the tree after G1c, are cases over this suite, status-groups and instrument-list). The new cases were RED FIRST
 // on main (87cfba3dd): 8 of them (4 here, 4 in status-groups), the Status view's `() => null` and `boxState(…, 0, null, false)`;
 // the case with no quiet time in status-groups and the R123 pin pass on main by design (they pin what main already does).
@@ -84,11 +85,16 @@
 //   the quiet time a constant 2 h in the view ................... status-groups' two quiet-time cases, "reads the frame's own quiet time…",
 //                                                                  "with no quiet time on the runs frame…" (4)
 //   the quiet time a constant 2 h in the table ................ "reads the frame's own quiet time…", "with no quiet time…" (2)
-//   the moves ignored (`programmeBoxes(…, () => null, …)`) ...... 7 cases, status-groups' four movement cases among them
+//   the moves ignored (`programmeBoxes(…, () => null, …)`) ...... 7 cases, status-groups' three movement cases among them
 //   the clock not passed to `statusView` ........................ "turns from moving to stalled…", "under the coord frame's pause…" (2)
 //   `boxNow` frozen at first render (memo deps `[]`) ............ "turns from moving to stalled…", "under the coord frame's pause…" (2)
 //   the orphan marker asking no box (`keepers` an empty list) ... "a hibernated claimant's worker the operator has open…" and the R123
 //                                                                  nested-coordinator case (2)
+// Task G1d (D-7380; review 1279 F5) moved the table's clock into the shared `useBoxClock` and added three cases here, each RUN red
+// on its dependency dropped from the hook's `boxNow` memo (the same mutants over useBoxClock.test.tsx and programme-box-card):
+//   `activeRuns` dropped ...................................... "a runs frame that ages a box reads it stalled while the clock waits…" (1)
+//   `coordPaused` dropped ..................................... "a box that crossed under the pause reads stalled once the pause clears…" (1)
+//   `stallQuietMs` dropped .................................... "a quiet time that changes with no boundary moving reads the boxes…" (1)
 // programme-box-card (review 1253's F5): the folded hold key over-firing (`-${kept}@${boxNow}`) or bare (`-`) ... both new key cases, in both
 // skins (4 each).
 import { readFileSync } from 'node:fs';
@@ -513,7 +519,7 @@ describe('a box in the Status view reads stalled or paused (Task G1c, D-7380)', 
     act(() => { vi.advanceTimersByTime(MIN + 1_000); });
     expect(stateB()).toBe('stalled');
     expect(movedB()).toBe('no move 2h');
-    // Stalled outranks moving: the box is still in Programmes, now ahead of the rows it was behind.
+    // The box is still in Programmes, now stalled; the group draws no lone row, so no order is seen here (statusGroups' case pins it).
     expect(boxes(groupOf('programmes')).map((b) => b.getAttribute('data-state'))).toEqual(['stalled']);
   });
 
@@ -540,13 +546,69 @@ describe('a box in the Status view reads stalled or paused (Task G1c, D-7380)', 
     expect(stateB()).toBe('moving');
     expect(movedB()).toBe('moved 2h 30m ago');
   });
+
+  // Task G1d (D-7380; review 1279 F5): every input the table's `boxNow` is read over, each pinned through the real table. Each
+  // case is built so the clock's `next` does NOT move at the event, since a move of `next` re-reads `boxNow` by itself and
+  // would hide a dependency dropped from the memo: no boundary is ahead before or after it, or the one ahead is the same.
+  const runAt = (id: number, claimedBy: string, sessionId: string, project: string, at: number, over: Partial<RunSummary> = {}): RunSummary =>
+    run(id, claimedBy, sessionId, { program: `prog-${claimedBy}`, programTitle: `Programme ${claimedBy}`, project, lastMoveAt: at, ...over });
+
+  it('a box that crossed under the pause reads stalled once the pause clears, with no boundary ahead (review 1279 F5)', () => {
+    // Every other box is long past its threshold, so nothing is ahead once the pause clears: `next` is null before and after.
+    const runs = RUNS.map((r) => ({ ...r, lastMoveAt: r.claimedBy === 'coord-b' ? NOW - QUIET + MIN : NOW - 3 * HOUR }));
+    clockedMount({ runs, sessions: withRunBinding(SESSIONS, runs), stallQuietMs: QUIET, ...coordFrame('set') });
+    act(() => { vi.advanceTimersByTime(MIN + 1_000); });
+    expect(stateB()).toBe('paused');
+    act(() => { useFleetStore.setState(coordFrame('clear')); });
+    expect(stateB()).toBe('stalled');
+  });
+
+  it('a runs frame that ages a box reads it stalled while the clock waits on another box (review 1279 F5)', () => {
+    const at = (m: number): number => NOW - m * MIN;
+    const runs = [
+      ...['a1', 'a2', 'a3'].map((id, i) => runAt(i + 1, 'coord-a', id, 'project-a', at(100))),   // coord-a's boundary: 20 minutes out
+      runAt(4, 'coord-b', 'b1', 'project-b', at(115)),
+      runAt(5, 'coord-b', 'b2', 'project-b', at(30)),   // coord-b's newest move: its boundary is 90 minutes out
+    ];
+    clockedMount({ runs, sessions: withRunBinding(SESSIONS, runs), stallQuietMs: QUIET });
+    expect(stateB()).toBe('moving');
+    act(() => { vi.advanceTimersByTime(10 * MIN); });
+    // The newest run closes: coord-b last moved 125 minutes ago, and the clock still waits on coord-a's boundary.
+    act(() => { useFleetStore.setState({ runs: runs.map((r) => (r.id === 5 ? { ...r, state: 'done' as const } : r)) }); });
+    expect(stateB()).toBe('stalled');
+  });
+
+  it('a quiet time that changes with no boundary moving reads the boxes against the new one (review 1279 F5)', () => {
+    const at = (m: number): number => NOW - m * MIN;
+    const extra = [
+      coordinator('coord-c', 'project-b', { bucket: 'idle', status: 'idle' }), sess('c1', 'project-b', { bucket: 'idle' }),
+      coordinator('coord-d', 'project-b', { bucket: 'idle', status: 'idle' }), sess('d1', 'project-b', { bucket: 'idle' }),
+    ];
+    const runs = [
+      ...['a1', 'a2', 'a3'].map((id, i) => runAt(i + 1, 'coord-a', id, 'project-a', at(300))),
+      runAt(4, 'coord-b', 'b1', 'project-b', at(100)),   // Y
+      runAt(5, 'coord-b', 'b2', 'project-b', at(100)),
+      runAt(6, 'coord-c', 'c1', 'project-b', at(180)),   // V
+      runAt(7, 'coord-d', 'd1', 'project-b', at(60)),    // W
+    ];
+    // At 4 h the earliest boundary is V's, 60 minutes out. At 2 h, 40 minutes on, V and Y have crossed and W's, the same
+    // instant, is the earliest: `next` is the same, and only a `boxNow` re-read tells Y it has crossed (it moved 140 minutes ago).
+    clockedMount({ runs, sessions: withRunBinding([...SESSIONS, ...extra], runs), stallQuietMs: 4 * HOUR });
+    expect(stateB()).toBe('moving');
+    vi.setSystemTime(NOW + 40 * MIN);
+    act(() => { useFleetStore.setState({ stallQuietMs: QUIET }); });
+    expect(stateB()).toBe('stalled');
+    expect(boxOf(table(), 'coord-c').getAttribute('data-state')).toBe('stalled');
+    expect(boxOf(table(), 'coord-d').getAttribute('data-state')).toBe('moving');
+  });
 });
 
 // R123 (the operator's ruling of 2026-10-30; review 1239 C1): in the Status view a hibernated claimant's workers carry no
 // `coordinator-hibernated` marker anywhere, because the hibernated box the view draws says it. Besides a box's members one
 // row reaches that rule: a coordinator that is itself a worker of a hibernated head's run elsewhere (nested), drawn as its
 // own box's head. The other shape review 1239's C1 named, an archived worker whose run a hibernated head still claims, draws
-// no coordinator marker at all (measured with `keepers` emptied: the line shows only its lifecycle word), so no case pins it.
+// no coordinator marker while it has a lifecycle word (measured with `keepers` emptied: the line shows only that word), so no
+// case pins it; an archived row still carrying `hibernatedAt` has none and relies on `keepers`, which no case pins either.
 describe('a hibernated claimant\'s workers carry no marker anywhere in the Status view (R123)', () => {
   const hibernated = sess('hc', 'project-b', {
     role: 'coordinator', status: 'dead', presence: 'dead', bucket: 'dead', lifecycle: 'stopped', hibernatedAt: Date.now() - 3_600_000,
