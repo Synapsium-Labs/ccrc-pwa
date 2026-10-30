@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -32,7 +33,7 @@ const closedRun = (coord: CoordStore, sessionId: string, claimedBy = 'demo-coord
 };
 
 const assemble = (home: string, coord?: CoordStore) => assembleFleet(
-  localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+  localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
   undefined, undefined, undefined, undefined, undefined, undefined, coord,
 );
 

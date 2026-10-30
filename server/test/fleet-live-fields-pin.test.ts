@@ -13,6 +13,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
@@ -46,7 +47,7 @@ const tmux = new Tmux(run);
 
 /** The one call of `assembleFleet` in this file. */
 const assemble = (io: FleetIO, statuslines?: Map<string, Statusline>): Promise<FleetSession[]> =>
-  assembleFleet(io, cfg, tmux, undefined, undefined, statuslines);
+  assembleFleet(io, cfg, tmux, liveStateReaderOver(io), undefined, undefined, statuslines);
 
 /** Counts the live file's reads and delegates every read to `inner`. */
 const counted = (inner: FleetIO): { io: FleetIO; reads: () => number } => {

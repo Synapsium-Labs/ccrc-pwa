@@ -6,7 +6,7 @@ import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
 import { liveSessionStatus, liveStatusCoversDelegation } from './liveVerdicts.js';
-import { readLiveStateMeasured } from './livestate.js';
+import { readLiveStateMeasured, type LiveStateRead } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionLanding, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
@@ -498,10 +498,16 @@ export function dropStaleLandings(sessions: readonly FleetSession[], nowMs: numb
   });
 }
 
+/** D-7512: the port the assembly reads Claude Code's live status file through, `<configDir>/sessions/<pid>.json` →
+ *  the measured read. Its adapter is `livestate.ts#liveStateReaderOver`, `readLiveStateMeasured` bound to one box's
+ *  io: that file is L3 (the torn-body wait), and this one is L1, so the read is handed in rather than imported. */
+export type LiveStateMeasuredReader = (configDir: string, pid: number) => Promise<LiveStateRead>;
+
 export async function assembleFleet(
   io: FleetIO,
   cfg: CcrcConfig,
   tmux: Tmux,
+  readLive: LiveStateMeasuredReader,
   now = Math.floor(Date.now() / 1000),
   pendingDialogs?: ReadonlySet<string>,
   statuslines?: Map<string, Statusline>,
@@ -639,7 +645,7 @@ export async function assembleFleet(
         status = 'busy';
         statusUnmeasured = true;
       } else if (cfgDir) {
-        // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
+        // D-115: `livestate.ts#readLiveStateMeasured`, reached through `readLive`, not `readLiveState`. The folded read
         // answered ONE null for four conditions, and this block spent it as
         // "leave `status` at the `alive` default" — which is `'idle'`. So a
         // pane whose `<pid>.json` this box could not read (EACCES; in remote
@@ -649,7 +655,7 @@ export async function assembleFleet(
         // file over — "a status we don't recognise is far likelier to be new
         // work than new rest" — reached by a path that never got as far as a
         // status word.
-        const read = await readLiveStateMeasured(io, cfgDir, pid);
+        const read = await readLive(cfgDir, pid);
         if (read.ok) {
           const live = read.state;
           status = liveSessionStatus(live.status);

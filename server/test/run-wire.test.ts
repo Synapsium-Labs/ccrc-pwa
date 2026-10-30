@@ -9,6 +9,7 @@ import { childIdsOf, reviveFleetSession, sessionRunOf, type FleetSession, type R
 import { loadConfig } from '../src/config.js';
 import { Tmux } from '../src/exec.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { localIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
@@ -167,7 +168,7 @@ const seedSession = (home: string, id: string, extra: Record<string, string> = {
 };
 const dead = new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
 const assemble = (home: string, coord?: CoordStore): Promise<FleetSession[]> => assembleFleet(
-  localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+  localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
   undefined, undefined, undefined, undefined, undefined, undefined, coord,
 );
 

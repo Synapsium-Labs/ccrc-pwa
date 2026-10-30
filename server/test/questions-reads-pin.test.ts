@@ -14,6 +14,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -64,7 +65,7 @@ describe('the fleet frame reads the question tables (fleet.ts#readCurrentAsks, #
     seedRoster(home);
     for (const id of [CHILD, CHILD2, PARENT]) seedSession(home, id);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
     return [CHILD, CHILD2, PARENT].map((id) => {
