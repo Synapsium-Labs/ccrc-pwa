@@ -209,12 +209,12 @@ if (startedAsScript()) {
   const ccd = readFileSync(givenPath, 'utf8');
   const row = regionOf(target);
   // The given file must be the one the target's row names (W5 C5i), compared by basename (a caller may know only that
-  // its file is named `ccd`), once, before any mode renders or writes. `--restamp` on a file with no region checks
-  // nothing: it prints `nothere`. `--write` and `--check` on such a file use the hook row, as below.
-  const checked = row ?? (mode === '--restamp' ? null : HOOK);
+  // its file is named `ccd`), once, before any mode renders or writes. A file with no region has no row, so nothing is
+  // checked: `--restamp` prints `nothere`, and `--write` and `--check` keep the base's output through the hook row
+  // below (`missing`, or the "no region" throw).
   const base = (p) => p.slice(p.lastIndexOf('/') + 1);
-  if (checked !== null && base(givenPath) !== base(checked.file)) {
-    process.stderr.write(`hook-helpers: ${targetPath} carries the ${checked.label} region, whose file is ${checked.file}; ${givenPath} is not that file\n`);
+  if (row !== null && base(givenPath) !== base(row.file)) {
+    process.stderr.write(`hook-helpers: ${targetPath} carries the ${row.label} region, whose file is ${row.file}; ${givenPath} is not that file\n`);
     process.exit(2);
   }
   // The `apicap` row renders from the hook beside the given file; no other row reads it.
