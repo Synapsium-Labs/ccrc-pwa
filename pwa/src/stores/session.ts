@@ -5,7 +5,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
-  PRESENCE_REFRESH_MS,
+  VIEWER_REFRESH_MS,
   SECRET_MASK,
   type AskPairing,
   type ChatEvent,
@@ -801,8 +801,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
      * whenever no close frame arrives — a phone in a lift or a tunnel sends no
      * FIN — and every notification for this session would then be suppressed
      * for a viewer who is long gone, indefinitely. So the server expires a
-     * claim it has not heard for `PRESENCE_TTL_MS` and this re-states it every
-     * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
+     * claim it has not heard for `VIEWER_TTL_MS` and this re-states it every
+     * `VIEWER_REFRESH_MS` (three refreshes of slack, both defined together
      * in `shared/api.ts`).
      *
      * WHATEVER the visibility (D-5242's presence contract): the server also
@@ -919,7 +919,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         });
         socket.start();
         stopPageClock = [onPageVisible(onVisible), onPageHidden(onVisible), onOnline(nudge)];
-        heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
+        heartbeat ??= setInterval(beat, VIEWER_REFRESH_MS);
       },
 
       disconnect() {
