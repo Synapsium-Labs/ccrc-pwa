@@ -2,7 +2,7 @@ import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
-import { defaultSessionsPath } from './auth/sessions.js';
+import { defaultSessionsPath } from './auth/paths.js';
 import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
 import { isNodeRole } from '../../shared/node-role.js';
