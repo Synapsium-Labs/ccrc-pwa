@@ -28,7 +28,8 @@ import {
   UPDATE_LOCK_HELD_PREFIX, isUpdateLockHeldLine, updateWriterAlive, inFlightBusyDetail, lockHeldBusyDetail, updateWriterMayLive,
 } from '../../shared/agent-protocol.js';
 import { IN_FLIGHT_UPDATE_PHASES, inFlightReport } from '../../shared/api.js';
-import { AgentOpError, connectFleet, type ConnectedFleet } from '../src/remote/client.js';
+import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
+import { AgentOpError } from '../src/remote/errors.js';
 import { TOKEN } from './remoteHelpers.js';
 
 describe('UPDATE_OP_ERRORS — the only words the update op refuses with', () => {

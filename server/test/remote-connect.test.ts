@@ -6,7 +6,8 @@ import v8 from 'node:v8';
 import vm from 'node:vm';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
-import { connectFleet, FleetClient, LinkNotSentError, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
+import { connectFleet, FleetClient, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
+import { LinkNotSentError } from '../src/remote/errors.js';
 import { MAX_CAP_WORDS } from '../../shared/api.js';
 import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 

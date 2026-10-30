@@ -22,7 +22,7 @@ import {
 } from '../../shared/agent-protocol.js';
 import type { RequestKind } from '../../shared/api.js';
 import type { ExecResult } from '../src/exec.js';
-import { AgentOpError } from '../src/remote/client.js';
+import { AgentOpError } from '../src/remote/errors.js';
 import { runDispatch, localUpdateSpawnFor } from '../src/update/converge.js';
 import { RELEASE_TAG_COMPONENT_MAX_DIGITS } from '../src/update/resolve.js';
 import {
