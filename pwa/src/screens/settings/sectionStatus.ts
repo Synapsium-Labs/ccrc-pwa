@@ -10,7 +10,7 @@ import { AUTO_MODES, FLEET_SCOPE, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT } from '.
 import { COLLECT_STATE_TEXT } from '../../fleet/collectLaneWords';
 import { releaseWaitingWords } from '../../fleet/releaseWaiting';
 import { haltingNodes } from '../../fleet/updateHalt';
-import { readBoxTokenView } from '../../lib/api';
+import { readBoxTokenView } from '../../lib/wireReaders';
 import type { SettingsSectionId } from '../../lib/routes';
 import type { PushState, SettingsView } from './SettingsDataProvider';
 import { boxTokenSummary } from './SecuritySection';
