@@ -187,6 +187,31 @@ describe('what the listing decides', () => {
     expect(again.records.find((r) => r.id === 'lane-a-listed')!.branchEvidence).toBe('absent');
   });
 
+  it('the .project read keeps its measured state, and the display default stays the id (4b F5)', async () => {
+    quiet();
+    const files = new Map<string, string>();
+    const unreadable = new Set<string>();
+    const racedAbsent = new Set<string>();
+    const put = (id: string, fields: Record<string, string>): void => {
+      for (const [f, v] of Object.entries(fields)) files.set(at(id, f), v);
+    };
+    const base = { uuid: 'u1', wrapper: 'lane-a', workdir: '/w' };
+    put('lane-a-named', { ...base, project: 'proj-a' });
+    put('lane-a-unreadable', { ...base, project: 'proj-a' });
+    unreadable.add(at('lane-a-unreadable', 'project'));
+    put('lane-a-raced', { ...base, project: 'proj-a' });
+    racedAbsent.add(at('lane-a-raced', 'project'));
+    put('lane-a-none', base);
+    const fake = countingIO({ files, unreadable, racedAbsent });
+    const read = await readRegistryMeasured(fake.io, cfg);
+    if (!read.listed) throw new Error('unlisted');
+    const by = (id: string): SessionRecord => read.records.find((r) => r.id === id)!;
+    expect(by('lane-a-named')).toMatchObject({ project: 'proj-a', projectEvidence: 'measured' });
+    expect(by('lane-a-unreadable')).toMatchObject({ project: 'lane-a-unreadable', projectEvidence: 'unreadable' });
+    expect(by('lane-a-raced')).toMatchObject({ project: 'lane-a-raced', projectEvidence: 'absent' });
+    expect(by('lane-a-none')).toMatchObject({ project: 'lane-a-none', projectEvidence: 'absent' });
+  });
+
   it('the hold file and the identity triple are read whether or not the listing shows them', async () => {
     const files = new Map<string, string>();
     // Only `<id>.uuid` is listed (it is what makes a row); the triple's other two members and the hold are served.

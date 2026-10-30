@@ -1515,15 +1515,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const sendFleet = (sessions: FleetSession[]) =>
       socket.send(maskedFrame(sessions, (mk) => maskFleetFrame(mk, { type: 'fleet', sessions } satisfies FleetMsg)));
     // THE COLD FRAME IS THE WATCHER'S LAST BROADCAST once there is one
-    // (`currentFleet`), and a snapshot is assembled only before it. The watcher
-    // re-emits only on change (`lastJson`), so a cold frame that differs from
-    // what it last broadcast is never corrected: one assembled from watcher
+    // (`currentFleet`), less any landing past its window (`dropStaleLandings`,
+    // D-7481), and a snapshot is assembled only before it. The watcher
+    // re-emits only on change (`lastJson`), so a cold frame ASSEMBLED apart
+    // from that broadcast would never be corrected: one assembled from watcher
     // state captured at connect could land AFTER a newer broadcast and replace
     // it, and one assembled off a registry listing that failed once sent
-    // `fleet: []` to a fleet that was there. Before the first broadcast the
-    // snapshot is all there is, and `broadcastSeen` still keeps it from
-    // landing on a broadcast that beat it: anything newer it did read differs
-    // from `lastJson`, so the next tick broadcasts that anyway.
+    // `fleet: []` to a fleet that was there. The one difference the cold frame
+    // may carry is the landings it drops. Those are past their window: the
+    // next listable tick assembles without them and re-emits, and until then
+    // the PWA's `landingOf` hides them too (review 1226, F1).
+    // Before the first broadcast the snapshot is all there is, and
+    // `broadcastSeen` still keeps it from landing on a broadcast that beat it:
+    // anything newer it did read differs from `lastJson`, so the next tick
+    // broadcasts that anyway.
     let broadcastSeen = false;
     const onFleet = (sessions: FleetSession[]) => {
       broadcastSeen = true;

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../../shared/api.js';
 import { sourceOfSymbol } from '../scan/symbols.js';
-import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources, stallCodeText } from './helpers.js';
+import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources, stallCode, stallCodeText } from './helpers.js';
 
 
 describe('the roots this scans', () => {
@@ -393,18 +393,18 @@ describe('Build 7 nouns', () => {
       }
     });
 
-    // The readers that exist. A file not yet created (the PWA's two, until Task 3) is skipped, never red; `radar.ts` and
-    // `lineage.ts` must exist, so the scan is never vacuous.
+    // Every reader listed here must exist, and the scan reads every one of them: a file missing from the list is red, never
+    // skipped (D-7538, amending D-7514), so a moved or deleted reader cannot disarm the scan.
     const READERS = ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts', 'server/src/coord/lineageRead.ts',
       'server/src/watch.ts', 'server/src/fleet.ts', 'server/src/server.ts',
       'pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
     // `1000` is spelled three ways in a window's milliseconds: `1000`, `1_000` and `1e3`.
     const SECOND_RULE = [/Date\.parse\(/, /FRESH_FUTURE_SKEW_S/, /RADAR_PROBE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/,
       /LINEAGE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/, /(?:1000|1_000|1e3)\s*\*\s*(?:RADAR_PROBE_FRESH_S|LINEAGE_FRESH_S)/];
-    // The PWA's two readers also never build a `Date` (D-7514): `at` is a fixed-width stamp, and the chip orders it as a
-    // string. Not applied to the server readers: `watch.ts` formats a log line with `new Date(...)`, which is no clock read.
+    // The PWA's two readers build no `Date` (D-7514): `at` is a fixed-width stamp, and the chip orders it as a string. The
+    // server readers build one only at the named log line below (D-7538).
     const PWA_READERS = ['pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
-    const PWA_ONLY = /\bnew Date\(/;
+    const BUILDS_A_DATE = /\bnew Date\(/;
     const codeOf = (f: string): string => stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8'));
 
     it('no radar reader parses a date, names the skew, or multiplies a window by 1000 on a code line', () => {
@@ -419,17 +419,40 @@ describe('Build 7 nouns', () => {
       }
       expect(SECOND_RULE.some((re) => re.test('x = RADAR_PROBE_FRESH_S * 10000;')), 'a longer number').toBe(false);
       // CONTROL: `new Date(` is seen on a code line and dropped from a comment.
-      expect(PWA_ONLY.test(stallCodeText('const ms = new Date(l.at).getTime();'))).toBe(true);
-      expect(PWA_ONLY.test(stallCodeText('// orders by new Date(at) once\nconst a = 1;'))).toBe(false);
+      expect(BUILDS_A_DATE.test(stallCodeText('const ms = new Date(l.at).getTime();'))).toBe(true);
+      expect(BUILDS_A_DATE.test(stallCodeText('// orders by new Date(at) once\nconst a = 1;'))).toBe(false);
       expect(SECOND_RULE.some((re) => re.test(stallCodeText(' * a window is Date.parse( by 1000 * LINEAGE_FRESH_S\n// FRESH_FUTURE_SKEW_S')))).toBe(false);
 
-      const present = READERS.filter((f) => existsSync(path.join(ccrcRoot, f)));
-      for (const must of ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts']) expect(present, must).toContain(must);
+      const present = READERS;
       const hits = present.flatMap((f) => SECOND_RULE.filter((re) => re.test(codeOf(f))).map((re) => `${f}: ${re.source}`));
       expect(hits, 'a radar reader with a freshness rule of its own').toEqual([]);
-      const dates = PWA_READERS.filter((f) => existsSync(path.join(ccrcRoot, f))).filter((f) => PWA_ONLY.test(codeOf(f)));
+      const dates = PWA_READERS.filter((f) => BUILDS_A_DATE.test(codeOf(f)));
       expect(dates, 'a PWA radar reader that builds a Date').toEqual([]);
-      expect(PWA_READERS.filter((f) => existsSync(path.join(ccrcRoot, f))), 'the PWA scan is never vacuous').toContain('pwa/src/fleet/conflictWords.ts');
+    });
+
+    it('every listed radar reader exists: a moved or deleted one is red, never skipped (D-7514)', () => {
+      const missing = [...READERS].filter((f) => !existsSync(path.join(ccrcRoot, f)));
+      expect(missing, 'a listed radar reader is missing: move its row with the file').toEqual([]);
+    });
+
+    // The one `new Date(` a server reader may carry is the busy-shadow log line in `FleetWatcher.mailPass`, named by symbol,
+    // never by line number: it formats a time for a person and reads no freshness. Every other server reader builds none.
+    it('no server radar reader builds a Date on a code line, save the busy-shadow log line in FleetWatcher.mailPass (D-7514)', () => {
+      const DATE_ALLOWANCE = { file: 'server/src/watch.ts', symbol: 'FleetWatcher.mailPass' } as const;
+      const SERVER_READERS = READERS.filter((f) => f.startsWith('server/'));
+      expect(SERVER_READERS).toEqual(['server/src/coord/radar.ts', 'server/src/coord/lineage.ts', 'server/src/coord/lineageRead.ts',
+        'server/src/watch.ts', 'server/src/fleet.ts', 'server/src/server.ts']);
+      const allowed = sourceOfSymbol(path.join(ccrcRoot, DATE_ALLOWANCE.file), DATE_ALLOWANCE.symbol);
+      const at = stallCodeText(allowed).split('\n').filter((l) => BUILDS_A_DATE.test(l));
+      expect(at, 'the allowance holds exactly one new Date(, its log line').toHaveLength(1);
+      expect(at[0]).toMatch(/console\.warn\(`ccrc-server: mail-gate busy-shadow /);
+      const hits = SERVER_READERS.filter((f) => {
+        const raw = readFileSync(path.join(ccrcRoot, f), 'utf8');
+        if (f !== DATE_ALLOWANCE.file) return BUILDS_A_DATE.test(stallCodeText(raw));
+        expect(raw.includes(allowed), 'the allowed symbol is not verbatim in its file').toBe(true);
+        return BUILDS_A_DATE.test(stallCodeText(raw.replace(allowed, '')));
+      });
+      expect(hits, 'a server radar reader that builds a Date').toEqual([]);
     });
 
     it('radar.ts and lineage.ts each call freshWithin(, so the scan above is never vacuous', () => {
@@ -442,6 +465,22 @@ describe('Build 7 nouns', () => {
       const code = (file: string, symbol: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, file), symbol));
       expect(code('server/src/fleet.ts', 'assembleFleet'), 'fleet.ts').toMatch(/\bfreshWithin\(\s*landing\.at,\s*RADAR_PROBE_FRESH_S,/);
       expect(code('server/src/watch.ts', 'FleetWatcher.sweepRadar'), 'watch.ts').toMatch(/\bfreshWithin\(\s*l\.at,\s*RADAR_PROBE_FRESH_S,/);
+    });
+  });
+
+  // Landing order wave 5a (4b F5). `SessionRecord.projectEvidence` says how `.project` read, and `project` stays a display
+  // default (the id) when it did not measure. One reader decides on it, `radarRowsOf`: a second reader would be a second
+  // rule for which rows join a project. The writer is `registry.ts`'s `buildRecord`.
+  describe('SessionRecord.projectEvidence has one reader (landing order wave 5a, 4b F5)', () => {
+    it("is on a code line only in registry.ts, which writes it, and radar.ts's radarRowsOf, which reads it", () => {
+      const NAMED = /\bprojectEvidence\b/;
+      const COUNT = /\bprojectEvidence\b/g;
+      expect(ALL.filter((f) => NAMED.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/coord/radar.ts', 'server/src/registry.ts']);
+      const radar = path.join(ccrcRoot, 'server/src/coord/radar.ts');
+      const whole = (stallCode(radar).match(COUNT) ?? []).length;
+      const inFn = (stallCodeText(sourceOfSymbol(radar, 'radarRowsOf')).match(COUNT) ?? []).length;
+      expect(inFn).toBeGreaterThan(0);
+      expect(whole, 'a reader of projectEvidence in radar.ts outside radarRowsOf').toBe(inFn);
     });
   });
 

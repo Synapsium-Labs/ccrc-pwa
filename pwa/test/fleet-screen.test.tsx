@@ -3331,3 +3331,25 @@ describe('the Docs door (docs design 4.8, M4.L1)', () => {
     expect(location.pathname).toBe('/docs');
   });
 });
+
+describe('the predicted-conflict chip renders after the claimed-files strip (landing order wave 5a; 4b F4 a)', () => {
+  it('puts the chip after the strip in the document, and outside it', async () => {
+    const T = Date.now();
+    vi.spyOn(api, 'claims').mockResolvedValue({ claims: [{
+      id: 1, project: 'ProjectC', paths: ['src/a.ts'], heldBy: 'lane-a-proj-a-alpha', heldByUuid: null, intent: '',
+      runId: 3, state: 'live', createdAt: T - 60_000, renewedAt: T - 60_000, expiresAt: T + 40 * 60_000,
+      hardExpiresAt: T + 8 * 3_600_000, endedAt: null, endedBy: null,
+    }] });
+    const store = makeStore();
+    renderFleet(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', roster: TEST_ROSTER, sessions: [session({ landing: {
+      at: new Date(T - 30_000).toISOString().replace(/\.\d{3}Z$/, 'Z'), pr: 12, head: 'abc1234', baseRef: 'main',
+      base: { state: 'clean' }, paired: true, conflicts: [], unmeasuredWith: [],
+      cut: { heads: false, pairs: false, unbound: false },
+    } })] });
+    const strip = await screen.findByRole('region', { name: 'Claimed files' }, { timeout: 5000 });
+    const chip = screen.getByRole('status', { name: /No predicted conflicts in 1 measured PR/ });
+    expect(strip.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING, 'the chip renders after the strip').not.toBe(0);
+    expect(strip.contains(chip), 'the chip is not inside the strip').toBe(false);
+  });
+});

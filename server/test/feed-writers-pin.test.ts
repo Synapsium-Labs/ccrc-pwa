@@ -309,7 +309,7 @@ const nudgeRig = async (o: { notifyLog?: boolean } = {}) => {
   const record: SessionRecord = {
     hibernatedAt: null,
     namedByOperator: false, title: null,
-    id: A, wrapper: 'claude', project: 'project-a', workdir: NUDGE_WORKDIR, uuid: NUDGE_UUID,
+    id: A, wrapper: 'claude', project: 'project-a', projectEvidence: 'measured', workdir: NUDGE_WORKDIR, uuid: NUDGE_UUID,
     started: true, home: null, pool: null, lastswap: null,
     workspace: `${A}-ws`, branch: null, branchEvidence: 'absent', base: null,
     prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,

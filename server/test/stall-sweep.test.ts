@@ -132,7 +132,7 @@ const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join
 const regRow = (id: string, uuid: string = UUID, over: Partial<SessionRecord> = {}): SessionRecord => ({
   hibernatedAt: null,
   namedByOperator: false, title: null,
-  id, wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid,
+  id, wrapper: 'claude', project: 'demo', projectEvidence: 'measured', workdir: '/w/demo', uuid,
   started: true, home: null, pool: null, lastswap: null,
   workspace: `${id}-ws`, branch: null, branchEvidence: 'absent', base: null,
   prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,

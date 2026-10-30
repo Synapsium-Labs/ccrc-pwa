@@ -3,7 +3,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
-import { sessionLandingsOf, type RadarRow } from './coord/radar.js';
+import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
@@ -203,7 +203,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { createQuestions, type Questions, type RaiseVerdict } from './coord/questions.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
-import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { FLEET_LABEL, SERVER_LABEL, printableDetail, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { changeLatch, changeLatchMap } from './changeLatch.js';
 import { writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
@@ -694,12 +694,15 @@ export class FleetWatcher {
    * `hasNotice` before announcing. The tray tag alone was not enough: it made a
    * repeated push REPLACE that PR's own notification, but every push is also a
    * feed row, and nothing replaced the row. Measured 2026-10-21: a restart
-   * wrote a merged PR's `merged` row a second time. Three repeats remain, by
+   * wrote a merged PR's `merged` row a second time. Four repeats remain, by
    * design: a row pruned past `FEED_RETENTION` reads as never written; a push
-   * the presence gate kept out of the archive wrote no row to find; and a row
-   * archived before the key existed is matched only by its exact body, so one
-   * whose reason clause changed since (its run closed after it was written)
-   * repeats once, at the first sweep after the deploy, and that repeat is keyed.
+   * the presence gate kept out of the archive wrote no row to find; a push
+   * whose archive write threw (`notify` logs it, answers `archived: 'failed'`
+   * and still pushes) wrote none either; and a row archived before the key
+   * existed is matched only by its exact body, so one whose reason clause
+   * changed since (a hold placed, released or reworded, a run opened or
+   * closed, or the run read turning readable or unreadable) repeats once, at
+   * the first sweep after the deploy, and that repeat is keyed.
    */
   private mergedNotified = new Set<string>();
   /** The merge-queue word each session's last full pr-state line carried
@@ -751,8 +754,12 @@ export class FleetWatcher {
   private prStates = new Map<string, PrState>();
   /** The landing radar lane's map (wave 4b), keyed by session id: `sweepRadar` is its one writer. */
   private landings = new Map<string, SessionLanding>();
-  /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. */
+  /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. Keyed by the
+   *  raw name; `sweepRadar` prints it through `printableDetail`, so a listed name cannot forge a log line. */
   private radarSaid = new Map<string, string>();
+  /** The radar lane's pass counter: the latest pass to start is the only one that may commit `landings` or speak. A pass the
+   *  runner abandoned and later released finds a newer count and returns, so it never overwrites a newer map. */
+  private radarGen = 0;
   /** Last-measured repo cell per PROJECT — retained, not derived, from what
    *  `sweepPr` already reads off `CcdPrLine.repo` / `CcdPrFailure.reason` for
    *  `GET /api/projects`. See `repoCellFor` (prstate.ts) for the fold. */
@@ -1819,7 +1826,8 @@ export class FleetWatcher {
    * The set of session ids that currently have a pending menu dialog. Exposed
    * so a one-shot fleet assembly (the /api/fleet REST, and the /ws/fleet push
    * on a connect before this watcher's first broadcast — after it, the cold
-   * frame IS that broadcast, `currentFleet`) can reflect an ALREADY-pending
+   * frame is that broadcast, `currentFleet`, less any landing past its window
+   * (`dropStaleLandings`)) can reflect an ALREADY-pending
    * dialog. Without this, a
    * dialog that appeared before a client connected shows no "needs you" marker
    * on the fleet overview: the initial push omits it and the watcher only
@@ -1831,10 +1839,13 @@ export class FleetWatcher {
   }
 
   /** The fleet this watcher last BROADCAST, or null before its first. A new
-   *  /ws/fleet socket takes it as its cold frame: it is exactly what every
-   *  connected client already holds, and this watcher re-emits only on change,
-   *  so a cold frame assembled apart from it — from state captured at connect,
-   *  or off a registry listing that failed once — was never corrected. */
+   *  /ws/fleet socket takes it as its cold frame, and the degraded GET
+   *  /api/fleet answers it, in both cases less any landing past its window
+   *  (`server.ts` passes it through `dropStaleLandings`): what every connected
+   *  client holds, save a prediction too old to show, which the next listable
+   *  tick drops for them too. This watcher re-emits only on change, so a cold
+   *  frame assembled apart from it, from state captured at connect or off a
+   *  registry listing that failed once, was never corrected. */
   currentFleet(): FleetSession[] | null {
     return this.lastFleet;
   }
@@ -1862,31 +1873,33 @@ export class FleetWatcher {
    *  that answered in time; a project that failed, or missed the deadline, contributes nothing (D-7481, D-7484). PUBLIC
    *  for the reason `sweepNames` is: `tick()` dispatches it with `void`. */
   async sweepRadar(records: readonly SessionRecord[] | null, nowMs = Date.now()): Promise<void> {
+    const gen = ++this.radarGen;
     const reaged = () => new Map([...this.landings].filter(([, l]) => freshWithin(l.at, RADAR_PROBE_FRESH_S, nowMs)));
     const said = (key: string, reason: string, warn: boolean): void => {
-      if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${key}`} is ${reason}`);
+      if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${printableDetail(key)}`} is ${reason}`);
       this.radarSaid.set(key, reason);
     };
     if (records === null) { this.landings = reaged(); return; }
+    const heads = this.currentHeadBranches();
+    const { byProject, stray } = radarRowsOf(records, (r) => {
+      const pr = sessionPrOf(r, this.prStates);
+      // D-7515: a draft is an open PR to GitHub and to the radar. A row whose PR is any other phase and still carries a number
+      // (merged, closed, or a sweep backing off as `unknown`/`unchecked`) matches nothing, and fails closed while the sweep fails.
+      return {
+        id: r.id, branch: sessionBranchOf(r, this.statuslines.get(r.id), heads.get(r.id)),
+        pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' || pr.phase === 'draft' },
+      };
+    });
     const pass = await readRadarPass(
-      this.deps.io, this.deps.cfg.registryDir, new Set(records.map((r) => r.project)), nowMs, LANDING_RADAR_SWEEP_MS / 2);
+      this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2);
+    if (gen !== this.radarGen) return;
     said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
     if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); return; }
-    const heads = this.currentHeadBranches();
     const next = new Map<string, SessionLanding>();
     for (const [project, read] of pass.reads) {
       said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
       if (!read.ok) continue;
-      const rows: RadarRow[] = records.filter((r) => r.project === project).map((r) => {
-        const pr = sessionPrOf(r, this.prStates);
-        // D-7515: a draft is an open PR to GitHub and to the radar. A row whose PR is any other phase and still carries a number
-        // (merged, closed, or a sweep backing off as `unknown`/`unchecked`) matches nothing, and fails closed while the sweep fails.
-        return {
-          id: r.id, branch: sessionBranchOf(r, this.statuslines.get(r.id), heads.get(r.id)),
-          pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' || pr.phase === 'draft' },
-        };
-      });
-      for (const [id, l] of sessionLandingsOf(read.doc, rows, nowMs)) next.set(id, l);
+      for (const [id, l] of sessionLandingsOf(read.doc, byProject.get(project) ?? [], nowMs, stray)) next.set(id, l);
     }
     this.landings = next;
   }
@@ -8143,8 +8156,9 @@ export class FleetWatcher {
    * contradict each other. `sweepMerged` announces a merge once per
    * (workspace, PR) through the in-memory `mergedNotified` latch — an edge —
    * because a sentence repeated every 120 s for the life of a workspace is
-   * noise, and losing that edge to a restart costs one silently-replaced
-   * notification (see the field's own docstring). The old consumer was
+   * noise, and a restart that loses that edge does not repeat the
+   * announcement, because the archive's keyed row answers `hasNotice` (the
+   * field's own docstring lists the repeats that remain). The old consumer was
    * `ws-archive`, which is idempotent and destructive, so it wanted the
    * opposite: no latch at all, and a retry every sweep. It is gone (operator
    * ruling, 2026-09-10 — see `sweepMerged`).
