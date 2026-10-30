@@ -32,11 +32,11 @@ import {
   buildDelegationJournalRecord,
   decodeDelegationJournalLine,
   encodeDelegationJournalRecord,
-  nodeDelegationFilePort,
   parseDelegationJournal,
   type DelegationFileHandle,
   type DelegationFilePort,
 } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
   DELEGATION_COMPACTION_EDGES,
