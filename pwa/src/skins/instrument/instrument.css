@@ -279,13 +279,21 @@
   background: var(--bg-raised);
   color: var(--ink-primary);
 }
-/* The four tabs share the row at 360: each takes an equal part, none wraps or scrolls. Underline tabs: the ghost
-   button's hairline goes and the chosen tab's accent edge is drawn by a positioned `::after`, which takes no room, so
-   choosing moves no label. */
+/* Five tabs (Task G3, D-7333: Programmes after Needs you): each takes its words' width (`width: auto` over the
+   button's full width), and when the five do not fit the row (at 360, say) the tablist scrolls sideways inside itself,
+   never the page, on one line. Its pad is the focus ring's room
+   (2px at a 2px offset), which a scroller would otherwise clip, and the margin gives the pad back, so nothing moves.
+   Underline tabs: the ghost button's hairline goes and the chosen tab's accent edge is drawn by a positioned `::after`,
+   which takes no room, so choosing moves no label. */
+.ins-tabs {
+  overflow-x: auto;
+  padding: var(--sp-1);
+  margin: calc(-1 * var(--sp-1));
+}
 .ins-tab {
   position: relative;
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 auto;
+  width: auto;
   gap: var(--sp-1);
   padding: 0 var(--sp-1);
   border: 0;
@@ -320,13 +328,6 @@
 .ins-row .sess-line {
   min-height: var(--row-h);
 }
-.ins-coord-crumb {
-  display: block;
-  padding: 0 var(--sp-2) var(--sp-1) calc(var(--sp-2) * 3);
-  font-size: var(--fs-xs);
-  overflow-wrap: anywhere;
-}
-
 /* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name with its
    state word at the end of the line, then its context: two lines and at most 42px when the name and the state fit side
    by side. When they do not, the state word ends the context line instead, as long as the context fits there whole

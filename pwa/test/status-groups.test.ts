@@ -19,7 +19,12 @@ import ts from 'typescript';
 import { createElement } from 'react';
 import { render, cleanup } from '@testing-library/react';
 import type { FleetSession, SessionBucket } from '../../shared/api';
-import { groupByStatus, needsReason, STATUS_GROUPS } from '../src/fleet/statusGroups';
+import {
+  groupByStatus, needsReason, PROGRAMMES_GROUP, STATUS_GROUPS, statusGroupLabel, statusView, statusViewTotal,
+} from '../src/fleet/statusGroups';
+import { fleetTree } from '../src/fleet/fleetTree';
+import { asking, run, sess } from './rollupFixture';
+import { withRunBinding } from './runBindingFixture';
 import { sortFleet } from '../src/fleet/sortFleet';
 import { BUCKET_ORDER } from '../../shared/api';
 import { BucketBar } from '../src/fleet/BucketBar';
@@ -106,6 +111,117 @@ describe('groupByStatus (D-5473)', () => {
     for (const group of g) expect(group.unseen).toBe(barUnseen.get(group.bucket) ?? 0);
     expect(g.find((x) => x.bucket === 'idle')!.unseen).toBe(0);
     expect(g.find((x) => x.bucket === 'attention')!.unseen).toBe(1);
+  });
+});
+
+// Task G3 (D-7333): the Status view's groups, given the fleet's tree. RED FIRST on main (34ee3e3f8): `statusView` is absent.
+describe('statusView (Task G3, D-7333)', () => {
+  const coord = (id: string, project: string, over: Partial<FleetSession> = {}): FleetSession =>
+    sess(id, project, { role: 'coordinator', bucket: 'working', status: 'busy', ...over });
+  const fleet: FleetSession[] = [
+    coord('c1', 'project-a'),
+    sess('k1', 'project-a', asking({ ask: { state: 'held', parentId: 'c1', answeredBy: null } })),
+    sess('k2', 'project-a', { bucket: 'done' }),
+    coord('c2', 'project-b', { bucket: 'idle', status: 'idle' }),
+    sess('k3', 'project-b', { bucket: 'working', status: 'busy' }),
+    sess('far', 'project-b', { bucket: 'done' }),
+    sess('lone-a', 'project-a', asking({ ask: null })),
+    sess('lone-d', 'project-b', { bucket: 'done' }),
+  ];
+  const runs = [
+    run(1, 'c1', 'k1', { program: 'prog-a', project: 'project-a' }), run(2, 'c1', 'k2', { program: 'prog-a', project: 'project-a' }),
+    run(3, 'c2', 'k3', { program: 'prog-b', project: 'project-b' }), run(4, 'c1', 'far', { program: 'prog-a', project: 'project-b' }),
+  ];
+  const lookupIn = (s: readonly FleetSession[]) => (id: string): FleetSession | null => s.find((x) => x.id === id) ?? null;
+  /** A current server's frame: each session carries its run binding over the runs (D-7461). */
+  const statusOf = (s: FleetSession[], r: typeof runs, selectedId: string | null, frameSeen: boolean) => {
+    const b = withRunBinding(s, r);
+    return statusView(b, fleetTree(b, ['project-a', 'project-b'], r), {}, selectedId, lookupIn(b), frameSeen);
+  };
+  const view = (s: FleetSession[] = fleet, r = runs) => statusOf(s, r, null, true);
+  const ids = (xs: readonly FleetSession[]): string[] => xs.map((x) => x.id);
+
+  it('the groups are Needs you, Programmes, then the buckets, Programmes labelled and open', () => {
+    expect(view().map((g) => g.id)).toEqual(['attention', 'programmes', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+    expect(statusGroupLabel('programmes')).toBe('Programmes');
+    expect(PROGRAMMES_GROUP.folds).toBe(false);
+  });
+
+  it('a box needing the operator is in Needs you before the lone asks; the other box is in Programmes', () => {
+    const [needs, programmes, done] = view();
+    expect(needs!.boxes.map((b) => b.view.coordinatorId)).toEqual(['c1']);
+    expect(ids(needs!.sessions)).toEqual(['lone-a']);
+    expect(programmes!.boxes.map((b) => [b.view.coordinatorId, b.state, b.project])).toEqual([['c2', 'moving', 'project-b']]);
+    expect(ids(done!.sessions)).toEqual(['lone-d']);
+  });
+
+  it('a member is hidden, and in its tray only while it asks; a far worker is a member too', () => {
+    const g = view();
+    const all = g.flatMap((x) => ids(x.sessions));
+    for (const id of ['c1', 'c2', 'k1', 'k2', 'k3', 'far']) expect(all, id).not.toContain(id);
+    expect(g[0]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k1']);
+    expect(g[0]!.boxes[0]!.tray.summary).toBeNull();
+    const asksFar = fleet.map((x) => (x.id === 'far' ? { ...x, ...asking({ ask: null }) } : x));
+    expect(view(asksFar)[0]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k1', 'far']);
+  });
+
+  it('a box that needs you only through a far worker is in Needs you, with that worker in its tray', () => {
+    const s = fleet.map((x) => (x.id === 'k1' ? { ...x, ...sess('k1', 'project-a', { bucket: 'working', status: 'busy' }) }
+      : x.id === 'far' ? { ...x, ...asking({ ask: null }) } : x));
+    const [needs, programmes] = view(s);
+    expect(needs!.boxes.map((b) => [b.view.coordinatorId, b.state])).toEqual([['c1', 'needs']]);
+    expect(needs!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['far']);
+    expect(programmes!.boxes.map((b) => b.view.coordinatorId)).toEqual(['c2']);
+  });
+
+  it('every group counts what it draws, and All is their sum', () => {
+    const g = view();
+    for (const x of g) expect(x.count, x.id).toBe(x.boxes.length + x.sessions.length);
+    expect(g.map((x) => x.count)).toEqual([2, 1, 1, 0, 0, 0, 0, 0]);
+    expect(statusViewTotal(g)).toBe(4);
+  });
+
+  it('Needs you is held while it draws anything; Mark all seen covers what a group draws, coordinators included', () => {
+    const g = view();
+    expect(g.map((x) => x.held)).toEqual([true, false, false, false, false, false, false, false]);
+    expect(ids(g[0]!.seen)).toEqual(['c1', 'k1', 'lone-a']);
+    expect(ids(g[1]!.seen)).toEqual(['c2']);
+  });
+
+  it('the session the operator has open stays in its box\'s tray (G3\'s Step 0 ruling), and makes no box need anything', () => {
+    const g = statusOf(fleet, runs, 'k3', true);
+    expect(g[1]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k3']);
+    expect(g[1]!.boxes[0]!.state).toBe('moving');
+    expect(g[1]!.count).toBe(1);
+  });
+
+  it('a worker whose claimant is a box nowhere stays a row of its own', () => {
+    const s = [...fleet, sess('orphan', 'project-a', { bucket: 'working', status: 'busy' })];
+    const g = view(s, [...runs, run(9, 'nobody', 'orphan', { program: 'prog-z', project: 'project-a' })]);
+    expect(ids(g.find((x) => x.id === 'working')!.sessions)).toEqual(['orphan']);
+  });
+
+  it('a claimant measured dead keeps none of its workers: its box is gone and draws, its children are rows of their own (fix round 2)', () => {
+    const dead = { status: 'dead' as const, presence: 'dead' as const, bucket: 'dead' as const, lifecycle: 'orphan' as const };
+    const s = fleet.map((x) => (x.id === 'c1' ? { ...x, ...dead } : x));
+    const g = view(s);
+    const all = g.flatMap((x) => x.boxes);
+    expect(all.find((b) => b.view.coordinatorId === 'c1')).toMatchObject({ gone: true, state: 'moving', tray: { rows: [] } });
+    expect(all.find((b) => b.view.coordinatorId === 'c2')!.gone).toBe(false);
+    // k1 asks, k2 is done, far is done on another card: each a row of its own, in its own status's group.
+    expect(ids(g.find((x) => x.id === 'attention')!.sessions)).toEqual(expect.arrayContaining(['k1', 'lone-a']));
+    expect(ids(g.find((x) => x.id === 'done')!.sessions)).toEqual(expect.arrayContaining(['k2', 'far']));
+    // The frame unseen measures nothing, so nothing is gone.
+    const unseen = statusOf(s, runs, null, false);
+    expect(unseen.flatMap((x) => x.boxes).every((b) => !b.gone)).toBe(true);
+  });
+
+  it('with no open run it is groupByStatus exactly, and no Programmes', () => {
+    const g = view(fleet, []);
+    const today = groupByStatus(fleet, {});
+    expect(g.filter((x) => x.id !== 'programmes').map((x) => [x.id, ids(x.sessions), x.unseen])).toEqual(
+      today.map((x) => [x.bucket, ids(x.sessions), x.unseen]));
+    expect(g.find((x) => x.id === 'programmes')!.count).toBe(0);
   });
 });
 

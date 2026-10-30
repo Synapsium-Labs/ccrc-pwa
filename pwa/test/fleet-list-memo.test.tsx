@@ -282,7 +282,10 @@ describe('a one-row frame re-renders one SessionLine (C9, D-6441)', () => {
 
   it('a one-row frame re-renders one SessionLine, through StatusTable', async () => {
     const d = await mountStatus(RUNS);
-    for (const id of ['ws-b', 'ws-e', 'ws-k', 'ws-l']) expect(probe.lines).toContain(id);
+    // Task G3 (D-7333): ws-a's open work is its programme's box, drawn with its row, and its child ws-b, which does not
+    // ask, is drawn nowhere; ws-k and ws-l, whose coordinator left, stay rows of their own.
+    for (const id of ['ws-a', 'ws-e', 'ws-k', 'ws-l']) expect(probe.lines).toContain(id);
+    expect(probe.lines).not.toContain('ws-b');
     resetProbe();
     d.sendRows(renamed(FLEET, 'ws-e'));
     expect(screen.getByRole('button', { name: 'Actions for renamed ws-e' })).toBeTruthy();
