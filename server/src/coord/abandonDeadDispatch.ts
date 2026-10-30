@@ -21,12 +21,15 @@
 //      by it: the close parks every outstanding delivery of the run's mail.
 // A RETURNED CHILD IS BOUND (D-7563, operator ruling 2026-10-30). When exactly one registry row's `.child` marker names
 // the candidate, this file also asks tmux for that row's pane and the store for the runs that already name its session,
-// and the verdict (L1) answers `bind` when the pane is live and no run names it. The bind is the same pass's act, under
-// the same switch, pause and cap: its re-measure (every fact read again, inside the serialiser) runs first, then
-// `bindReturnedChild` (`dispatch.ts`, the spawn arm's own `setSession` write, refused on any change since), then the
-// bind journaled on the run (`DISPATCH_BIND_EVENT`). Nothing is closed, mailed or asked of the fleet beyond that tmux
-// read. A bound run names a session, so it is never a candidate again: a second pass does nothing. Any other shape of
-// child keeps the run, as before.
+// and the verdict (L1) answers `bind` when the pane is live, the row holds no hold, no run names it and the run's
+// journal never unbound it. The bind is the same pass's act, under the same switch, pause and cap: THE CHILD BIND GATE
+// first (`childBindGate`, `childBind.ts`, the one gate every door that binds an existing workspace to a run goes
+// through: a spent or unmeasured child never binds), then its re-measure (every fact read again, inside the
+// serialiser), then `bindReturnedChild` (`dispatch.ts`, the spawn arm's own `setSession` write, refused on any change
+// since), then the bind journaled on the run (`DISPATCH_BIND_EVENT`). Nothing is closed or mailed; the fleet is asked
+// only the tmux read and the gate's own reads. A bound run names a session, so it is never a candidate again: a second
+// pass does nothing. A run the resume arm later unbinds as spent journals `session-unbound:`, which keeps it from
+// being bound back. Any other shape of child keeps the run, as before.
 // AT MOST `DISPATCH_ABANDON_PER_PASS` CANDIDATES A PASS (D-7502), the oldest stamps first (the store's order); the rest
 // wait for the next pass, which reads the candidates afresh. The loop holds the coordination serialiser throughout.
 // It never retries inside itself; the next pass reads again. A run it abandoned is terminal, so it is never a candidate
@@ -40,6 +43,8 @@
 import type { FleetIO } from '../io.js';
 import type { SessionVerdict } from '../exec.js';
 import type { CcrcConfig } from '../config.js';
+import type { FleetState } from '../fleetstate.js';
+import type { RunCcd } from './ports.js';
 import type { CoordStore } from './store.js';
 import type { CloseOutcome, SweepCloseGuard } from './close.js';
 import type { DeadCoordinatorStop } from '../deadCoordinator.js';
@@ -55,6 +60,8 @@ import {
   deadDispatchVerdict, dispatchAbandonViewOf, type DeadDispatchRegistry, type DeadDispatchVerdict, type ReturnedChildFacts,
 } from './deadDispatch.js';
 import { bindReturnedChild } from './dispatch.js';
+import { childBindGate } from './childBind.js';
+import { unboundSessionOf } from './runSpend.js';
 
 /** D-7502: at most this many candidates are handled in one pass. The loop runs inside the coordination serialiser,
  *  which every dispatch waits on from before its `ws-add` to after its bind, and each candidate costs up to two measured
@@ -73,6 +80,9 @@ export interface AbandonDeadDispatchDeps {
   cfg: CcrcConfig;
   /** D-7563: the one child's pane, asked only when exactly one row's marker names the run. */
   tmux: { sessionVerdict(id: string): Promise<SessionVerdict> };
+  /** D-7563: the child bind gate's reads (its `pr-state`), asked only for a run the verdict would bind. */
+  runCcd: RunCcd;
+  fleetState?: FleetState | undefined;
   serial: <T>(coord: CoordStore, fn: (
     abandon: (runId: number, claimedBy: string, guard: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
   ) => Promise<T>) => Promise<T>;
@@ -108,6 +118,7 @@ async function registryFacts(deps: Pick<AbandonDeadDispatchDeps, 'io' | 'cfg'>):
  *  from tmux reads `unknown` and a failed store read `unreadable`: neither binds. */
 async function returnedChildOf(
   deps: Pick<AbandonDeadDispatchDeps, 'coord' | 'tmux'>, id: number, registry: DeadDispatchRegistry,
+  unbound: readonly string[],
 ): Promise<ReturnedChildFacts | undefined> {
   if (!registry.listed) return undefined;
   const children = registry.records.filter((r) => r.child.kind === 'child' && r.child.runId === id);
@@ -117,7 +128,7 @@ async function returnedChildOf(
   try { pane = (await deps.tmux.sessionVerdict(sid)).verdict; } catch { pane = 'unknown'; }
   // Read AFTER tmux's round trip, so the count is never older than the pane it is judged with.
   const named = deps.coord.runsNamingSession(sid);
-  return { id: sid, pane, namedBy: named.ok ? named.runs.length : 'unreadable' };
+  return { id: sid, pane, namedBy: named.ok ? named.runs.length : 'unreadable', unboundBefore: unbound.includes(sid) };
 }
 
 /** Every fact the verdict needs for run `id`, read now, and the verdict. A run the store cannot read is kept. */
@@ -129,9 +140,11 @@ export async function deadDispatchOf(deps: Pick<AbandonDeadDispatchDeps, 'coord'
   }
   const run = read.run;
   const armed = dispatchAbandonViewOf(deps.coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs).armed;
-  const childOmitted = deps.coord.runEvents(id).some((e) => e.detail !== null && e.detail.startsWith('child-omitted:'));
+  const events = deps.coord.runEvents(id);
+  const childOmitted = events.some((e) => e.detail !== null && e.detail.startsWith('child-omitted:'));
+  const unbound = events.flatMap((e) => { const u = unboundSessionOf(e.detail); return u === null ? [] : [u]; });
   const registry = await registryFacts(deps);
-  const returned = await returnedChildOf(deps, id, registry);
+  const returned = await returnedChildOf(deps, id, registry, unbound);
   // The instant is read AFTER the registry's and tmux's round trips, so the age is never older than what was measured.
   const verdict = deadDispatchVerdict({
     armed, run, childOmitted, registry, ...(returned === undefined ? {} : { returned }), now: deps.now(), boundMs: deps.cfg.dispatchAbandonMs,
@@ -161,7 +174,7 @@ export async function abandonDeadDispatches(deps: AbandonDeadDispatchDeps): Prom
     for (const id of thisPass) {
       const first = await deadDispatchOf(deps, id);
       if (first.verdict.kind === 'keep') { kept.push({ runId: id, why: whyOf(first.verdict) }); continue; }
-      if (first.verdict.kind === 'bind') { bindOne(deps, id, bound, kept, await deadDispatchOf(deps, id)); continue; }
+      if (first.verdict.kind === 'bind') { await bindOne(deps, id, first.verdict.sessionId, bound, kept); continue; }
       const { claimedBy, startedAt } = first.verdict;
       const guard = async (): Promise<DeadCoordinatorStop | null> => {
         const again = await deadDispatchOf(deps, id);
@@ -201,19 +214,32 @@ export async function abandonDeadDispatches(deps: AbandonDeadDispatchDeps): Prom
   return { abandoned, bound, kept };
 }
 
-/** D-7563: one returned child's bind, acting on its re-measure (every fact read again inside the serialiser, immediately
- *  before): the re-measure must answer `bind` itself, and its facts, the latest, are the ones bound. `bindReturnedChild`
- *  then re-reads the run and writes with no `await` between, refusing any change since. The journal follows the write
- *  and is guarded: the run is bound whatever it does. */
-function bindOne(
-  deps: Pick<AbandonDeadDispatchDeps, 'coord'>, id: number,
+/** D-7563: one returned child's bind. FIRST the child bind gate on the session the verdict named (`childBindGate`, the
+ *  one gate every door that binds an existing workspace to a run goes through): any answer but `ok` keeps the run, its
+ *  code in the why. THEN the re-measure (every fact read again inside the serialiser, after the gate's round trips): it
+ *  must answer `bind` itself, to the session the gate passed, and its facts, the latest, are the ones bound.
+ *  `bindReturnedChild` then re-reads the run and writes with no `await` between, refusing any change since. The journal
+ *  follows the write and is guarded: the run is bound whatever it does. */
+async function bindOne(
+  deps: Pick<AbandonDeadDispatchDeps, 'coord' | 'io' | 'cfg' | 'tmux' | 'now' | 'runCcd' | 'fleetState'>,
+  id: number, gated: string,
   bound: { runId: number; sessionId: string; claimedBy: string }[], kept: { runId: number; why: string }[],
-  again: Awaited<ReturnType<typeof deadDispatchOf>>,
-): void {
-  const v = again.verdict;
+): Promise<void> {
+  const fleet = deps.fleetState === undefined ? {} : { fleetState: deps.fleetState };
+  const gate = await childBindGate({ io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, ...fleet }, deps.coord, gated);
+  if (!gate.ok) {
+    const said = gate.code === 'workspace-spent' ? `${gate.code} #${gate.pr}` : `${gate.code}: ${gate.detail}`;
+    kept.push({ runId: id, why: `bind refused: child gate ${said}` });
+    return;
+  }
+  const v = (await deadDispatchOf(deps, id)).verdict;
   if (v.kind !== 'bind') {
     // A re-measure that reads dead (the child gone since) abandons nothing here: the next pass reads it afresh.
     kept.push({ runId: id, why: `re-measured: ${v.kind === 'dead' ? v.kind : whyOf(v)}` });
+    return;
+  }
+  if (v.sessionId !== gated) {
+    kept.push({ runId: id, why: `re-measured: another child (${v.sessionId}) than the gate passed` });
     return;
   }
   const out = bindReturnedChild(deps.coord, { runId: id, sessionId: v.sessionId, claimedBy: v.claimedBy, startedAt: v.startedAt });

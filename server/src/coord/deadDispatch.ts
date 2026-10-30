@@ -26,9 +26,13 @@
 // the run, that row is a measured workspace of the run's own project, its pane measured `live`, and NO run names its
 // session yet, the verdict is `bind` to that session, and the executor binds through the spawn arm's own store write.
 // Every other shape keeps today's answer, `child-workspace`: two such rows, a pane not live or not asked, a session some
-// run already names (or whose runs could not be read), a row not of the run's project or not measured. A marker that
-// names ANOTHER run is not this run's child at all, exactly as before. Every guard above step 5 still comes first, so a
-// bind needs the switch on, the pause clear, the bound passed, a marking box and a registry read whole.
+// run already names (or whose runs could not be read), a row not of the run's project or not measured, a row with a
+// hold (a claim someone placed, or a hold that could not be read: a run that never bound placed none, so a hold is
+// someone else acting on it, the adopted arm's own `held === null`), and a session this run's journal says was once
+// unbound from it (`session-unbound:`, the resume arm's workspace-spent unbind: binding it back would ping-pong with
+// that arm). The executor then asks the child bind gate (`childBind.ts`) before it writes: a spent child never binds.
+// A marker that names ANOTHER run is not this run's child at all, exactly as before. Every guard above step 5 still
+// comes first, so a bind needs the switch on, the pause clear, the bound passed, a marking box and a registry read whole.
 import type { ChildMark } from '../../../shared/api.js';
 import { isDispatchAbandonChoice, isDispatchAbandonRefusal, type DispatchAbandonView } from '../../../shared/dispatch-abandon.js';
 
@@ -81,6 +85,9 @@ export interface ReturnedChildFacts {
   readonly id: string;
   readonly pane: 'live' | 'gone' | 'unknown';
   readonly namedBy: number | 'unreadable';
+  /** The run's journal carries a `session-unbound: <id>` event for this session: the server found it spent for this
+   *  run once and unbound it, so it is never bound back. */
+  readonly unboundBefore: boolean;
 }
 
 export interface DeadDispatchFacts {
@@ -146,7 +153,8 @@ export function deadDispatchVerdict(f: DeadDispatchFacts): DeadDispatchVerdict {
     const c = children[0]!;
     const back = f.returned;
     const bindable = children.length === 1 && back !== undefined && back.id === c.id && back.pane === 'live'
-      && back.namedBy === 0 && c.project === run.project && c.workspace !== null && c.identityMeasured;
+      && back.namedBy === 0 && !back.unboundBefore && c.held === null
+      && c.project === run.project && c.workspace !== null && c.identityMeasured;
     if (!bindable) return keep('child-workspace', children.map((r) => r.id).join(', '));
     return { kind: 'bind', sessionId: c.id, claimedBy: run.claimedBy, startedAt: run.dispatchStartedAt };
   }

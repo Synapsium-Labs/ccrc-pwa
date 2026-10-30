@@ -22,9 +22,11 @@ export type ChildBindVerdict =
   | { readonly ok: false; readonly code: 'spent-unmeasured'; readonly detail: string };
 
 /**
- * THE ONE GATE both doors call — `POST /api/runs` naming a `sessionId`
- * (`coord/routes.ts`) and dispatch's resume arm (`coord/dispatch.ts`) — so the
- * two cannot drift into two readings of one rule.
+ * THE ONE GATE every door that binds an existing workspace to a run calls —
+ * `POST /api/runs` naming a `sessionId` (`coord/routes.ts`), dispatch's resume
+ * arm (`coord/dispatch.ts`), and the dead-dispatch pass's bind of a returned
+ * child (D-7563, `coord/abandonDeadDispatch.ts`) — so they cannot drift into
+ * readings of one rule.
  *
  * It re-reads the registry at the instant it decides, never a snapshot:
  * `readSessionRecord` costs one listing plus that session's field reads, 5

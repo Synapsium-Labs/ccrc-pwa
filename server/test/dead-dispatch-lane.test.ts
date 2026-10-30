@@ -13,7 +13,8 @@
 //   * D-7563: the run's one child workspace came back with a live pane -> bound to it (the spawn arm's own store write),
 //     journaled, not abandoned, not mailed, and the card's phantom gone; two children, another run's marker, a pane not
 //     live, a session already named by a run, the switch off, or a pane that dies before the write -> never bound; a
-//     second pass does nothing; the pass cap counts binds.
+//     second pass does nothing; the pass cap counts binds; a held child (or an unreadable hold), a child the child bind
+//     gate refuses (spent, or unmeasured), and a child the run was once unbound from as spent -> never bound.
 // NOTHING here reaches a box: tmux and ccd are a scripted recorder, the registry is a fixture HOME's.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -52,6 +53,7 @@ const fixture = async (opts: { beforeAbandon?: () => void; livePane?: (id: strin
   // D-7563: the panes tmux answers live besides the coordinator's, and every id it was asked about.
   const live = new Set<string>();
   const asked: string[] = [];
+  const prRows = new Map<string, unknown[]>();
   const livePane = (id: string): boolean => (opts.livePane ?? ((x: string) => live.has(x)))(id);
   const run: Runner = async (cmd, args) => {
     if (path.basename(cmd) === 'tmux') {
@@ -61,6 +63,14 @@ const fixture = async (opts: { beforeAbandon?: () => void; livePane?: (id: strin
       return id === COORD || livePane(id) ? { ran: true, code: 0, stdout: '', stderr: '' } : { ran: true, code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
     }
     calls.push(args);
+    // D-7563: the child bind gate's `pr-state --session <id>` read. A child planted by `returned` below answers a
+    // measured line with no PR on its branch (unspent); `prRows` hands a session the rows it answers instead.
+    const pr = args.indexOf('pr-state');
+    if (pr !== -1 && args[pr + 1] === '--session') {
+      const id = args[pr + 2] ?? '';
+      const line = { id, rows: prRows.get(id) ?? [], baseShort: 'main', branch: `ws/${id.replace(/^demo-/, '')}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 };
+      return { ran: true, code: 0, stdout: `${JSON.stringify(line)}\n`, stderr: '' };
+    }
     return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -102,7 +112,7 @@ const fixture = async (opts: { beforeAbandon?: () => void; livePane?: (id: strin
   const reasons = (id: number) => coord.runEvents(id).filter((e) => e.detail?.startsWith(DISPATCH_ABANDON_EVENT) === true);
   const binds = (id: number) => coord.runEvents(id).filter((e) => e.detail?.startsWith(DISPATCH_BIND_EVENT) === true);
   const sessionOf = (id: number) => okRun(coord.run(id))!.sessionId;
-  return { coord, reg, cfg, calls, plant, stalled, pass, stateOf, mail, reasons, binds, sessionOf, live, asked, acts: () => acts,
+  return { coord, reg, cfg, calls, plant, stalled, pass, stateOf, mail, reasons, binds, sessionOf, live, asked, prRows, acts: () => acts,
     advance: (ms: number) => { clock += ms; }, now: () => clock };
 };
 
@@ -297,7 +307,7 @@ describe('the returned child (D-7563): a run whose one child came back live is b
     return sid;
   };
 
-  it('binds the run to the child, journals it once, abandons nothing, mails nothing, asks the fleet nothing', async () => {
+  it("binds the run to the child, journals it once, abandons nothing, mails nothing, asks the fleet only the child gate's read", async () => {
     const f = await fixture();
     const id = f.stalled(BOUND * 2);
     const sid = returned(f, id);
@@ -309,7 +319,8 @@ describe('the returned child (D-7563): a run whose one child came back live is b
     expect(f.binds(id)[0]!.detail).toMatch(new RegExp(`^${DISPATCH_BIND_EVENT} session=${sid} started=\\d+$`));
     expect(f.reasons(id)).toEqual([]);
     expect(f.mail()).toEqual([]);
-    expect(f.calls).toEqual([]);
+    // The one fleet read: the child bind gate's `pr-state` for the child (an unspent child: no PR on its branch).
+    expect(f.calls).toEqual([['pr-state', '--session', sid]]);
     // The spawn arm's adopted shape: no birth dated, since the child may be an earlier attempt's.
     expect(f.coord.db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE id = ?').get(id)).toEqual({ sessionBornAt: null, sessionBornFor: null });
   });
@@ -387,6 +398,68 @@ describe('the returned child (D-7563): a run whose one child came back live is b
     expect(f.stateOf(id)).toBe('planned');
     expect(f.sessionOf(id)).toBeNull();
     expect(f.binds(id)).toEqual([]);
+  });
+
+  it('a child the server unbound as spent is never bound back: no ping-pong with the resume arm', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    await f.pass();
+    expect(f.sessionOf(id)).toBe(sid);
+    // The resume arm's `refuseSpentChild` for workspace-spent: the one unbind, the dispatch stamp left as it was.
+    expect(f.coord.clearSession(id, 42)).toEqual({ ok: true, cleared: true });
+    expect(f.coord.stalledDispatchRunIds(f.now())).toContain(id);
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toHaveLength(1);
+    expect(f.stateOf(id)).toBe('planned');
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toHaveLength(1);
+  });
+
+  it('a spent child (a PR of its own) that no run ever bound is refused by the child bind gate: never bound', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    f.plant(sid, { prnumber: '42' });
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.stateOf(id)).toBe('planned');
+  });
+
+  it("a child whose pr-state the gate cannot measure is never bound (the gate's spent-unmeasured)", async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    f.prRows.set(sid, [{ number: 7, headRefName: 'ws/w9' }]);
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+  });
+
+  it('a held child never binds: a claim someone placed on it', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    f.plant(sid, { hold: 'program prog-b' });
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.stateOf(id)).toBe('planned');
+  });
+
+  it('a child whose hold cannot be read never binds (an unreadable hold reads held)', async () => {
+    const f = await fixture();
+    const id = f.stalled(BOUND * 2);
+    const sid = returned(f, id);
+    // Listed, but its bytes cannot be read: a directory where the file should be.
+    mkdirSync(path.join(f.reg, `${sid}.hold`));
+    await f.pass();
+    expect(f.sessionOf(id)).toBeNull();
+    expect(f.binds(id)).toEqual([]);
+    expect(f.stateOf(id)).toBe('planned');
   });
 
   it('the switch off binds nothing and asks tmux nothing', async () => {

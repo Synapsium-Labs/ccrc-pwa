@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEAD_DISPATCH_KEEPS, deadDispatchVerdict, dispatchAbandonViewOf, type DeadDispatchFacts, type DeadDispatchRecord,
 } from '../src/coord/deadDispatch.js';
+import { HOLD_UNREADABLE } from '../src/registry.js';
 
 const NOW = 1_790_000_000_000;
 const BOUND = 900_000;
@@ -86,7 +87,7 @@ describe('deadDispatchVerdict', () => {
 
 describe('the returned child (D-7563): a run whose one child workspace came back live is bound to it', () => {
   const child = ws({ id: 'project-a-w9', workspace: 'w9', child: { kind: 'child', runId: 7 } });
-  const live = { id: 'project-a-w9', pane: 'live', namedBy: 0 } as const;
+  const live = { id: 'project-a-w9', pane: 'live', namedBy: 0, unboundBefore: false } as const;
   const returned = (over: Partial<DeadDispatchFacts> = {}): DeadDispatchFacts => ({ ...withRecords([child]), returned: live, ...over });
 
   it('exactly one child naming the run, its pane live and no run naming it: bind, to that session', () => {
@@ -107,6 +108,16 @@ describe('the returned child (D-7563): a run whose one child workspace came back
   it('a session a run already names never binds, nor one whose runs could not be read', () => {
     expect(why(returned({ returned: { ...live, namedBy: 1 } }))).toBe('child-workspace');
     expect(why(returned({ returned: { ...live, namedBy: 'unreadable' } }))).toBe('child-workspace');
+  });
+
+  it('a held child never binds: a claim, or a hold that could not be read, is someone else acting on it', () => {
+    expect(why({ ...withRecords([{ ...child, held: 'program prog-b' }]), returned: live })).toBe('child-workspace');
+    expect(why({ ...withRecords([{ ...child, held: HOLD_UNREADABLE }]), returned: live })).toBe('child-workspace');
+    expect(why({ ...withRecords([{ ...child, held: '' }]), returned: live })).toBe('child-workspace');
+  });
+
+  it('a session the run was once unbound from (found spent for it) never binds again', () => {
+    expect(why(returned({ returned: { ...live, unboundBefore: true } }))).toBe('child-workspace');
   });
 
   it('a marker that names another run is not this run\'s child: no bind, today\'s verdict', () => {
