@@ -7746,6 +7746,8 @@ These conventions carry more weight here than style:
   region has gone stale. `ccd/ccd-account-health` carries the same module's second region, the
   auth-dead writers copied from `ccd/ccd`: after editing `_authdead_mark`, `_authdead_clear` or
   `_authdead_sweep_staged`, run `bash ccd/ccrc restamp ccd/ccd-account-health`.
+  `ccd/ccd-update-sync` carries the module's log-line region, `_upd_redact` copied from
+  `ccd/ccrc`; after editing it, run `bash ccd/ccrc restamp ccd/ccd-update-sync`.
 - **A feature pull request does not edit the shared ledgers.** An existing file under
   `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
   add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
