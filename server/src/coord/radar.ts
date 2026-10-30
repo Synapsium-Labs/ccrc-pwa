@@ -15,12 +15,15 @@
  * a row of the project holding that `id`, the row's CURRENT branch equal to the head's `branch`, and, when the row has
  * a PR, that PR open and numbered like the head's. The radar's `id: null` can mean no row, two rows, an unlisted
  * registry or a held row, and the record does not say which, so a null-`id` head on a fleet session's branch marks every
- * landing of the project `cut.unbound`: no landing can claim it was paired against that head.
+ * landing of the project `cut.unbound`: no landing can claim it was paired against that head. A row whose `.project`
+ * would not read is held by the radar, so its branch is checked against every project's null-`id` heads
+ * (`radarRowsOf`, wave 5a).
  */
 import {
   RADAR_PROBE_FRESH_S, freshWithin, isRadarStamp, isRegistryId,
   type LandingConflict, type LandingMergeState, type SessionLanding,
 } from '../../../shared/api.js';
+import type { ProjectEvidence } from '../registry.js';   // type-only: no ring edge
 
 /** The radar writes no cap of its own (D-7482): the reader refuses a `probe` over 512 KiB, measured before the read
  *  and again on the bytes. The largest real doc (100 heads, 45 pairs, 20 paths each) is far below it. */
@@ -174,6 +177,27 @@ export interface RadarRow {
   pr: { number: number; open: boolean } | null;
 }
 
+/** The field's one reader (wave 5a, 4b F5): which rows each project's doc is matched against, and which branches the
+ *  radar holds for a row it cannot place. A `measured` `.project` joins its project's rows. An `unreadable` one gives
+ *  only its current branch, as `stray`: the row may belong to any project. An `absent` one joins nothing, as the
+ *  radar's own `project_rows` treats a row with no `.project`. */
+export function radarRowsOf<R extends { readonly project: string; readonly projectEvidence: ProjectEvidence }>(
+  records: readonly R[], rowOf: (r: R) => RadarRow,
+): { byProject: Map<string, RadarRow[]>; stray: ReadonlySet<string> } {
+  const byProject = new Map<string, RadarRow[]>();
+  const stray = new Set<string>();
+  for (const r of records) {
+    if (r.projectEvidence === 'measured') {
+      const list = byProject.get(r.project);
+      if (list === undefined) byProject.set(r.project, [rowOf(r)]); else list.push(rowOf(r));
+    } else if (r.projectEvidence === 'unreadable') {
+      const branch = rowOf(r).branch;
+      if (branch !== null) stray.add(branch);
+    }
+  }
+  return { byProject, stray };
+}
+
 /** A path cut to `RADAR_PATH_MAX` characters, never inside a surrogate pair. */
 function cutPath(p: string): string {
   if (p.length <= RADAR_PATH_MAX) return p;
@@ -192,15 +216,16 @@ function shownBase(a: ProbeAnswer): SessionLanding['base'] {
  *  one the radar does not speak for: absence means unknown. A doc already out of its window answers an empty map, so
  *  no caller can show a prediction past it (D-7481). */
 export function sessionLandingsOf(
-  doc: ProbeDoc, rows: readonly RadarRow[], nowMs: number,
+  doc: ProbeDoc, rows: readonly RadarRow[], nowMs: number, stray: ReadonlySet<string>,
 ): Map<string, SessionLanding> {
   const out = new Map<string, SessionLanding>();
   if (!freshWithin(doc.at, RADAR_PROBE_FRESH_S, nowMs)) return out;
 
-  // The branches some row is on now: a null-`id` head on one is a fleet head the radar left out of its pairs.
+  // The branches some row is on now, and the `stray` ones (a row whose `.project` would not read, which may be this
+  // project's): a null-`id` head on one is a fleet head the radar left out of its pairs.
   const rowBranches = new Set<string>();
   for (const r of rows) if (r.branch !== null) rowBranches.add(r.branch);
-  const unbound = doc.heads.some((h) => h.id === null && rowBranches.has(h.branch));
+  const unbound = doc.heads.some((h) => h.id === null && (rowBranches.has(h.branch) || stray.has(h.branch)));
 
   const idCount = new Map<string, number>();
   for (const h of doc.heads) if (h.id !== null) idCount.set(h.id, (idCount.get(h.id) ?? 0) + 1);

@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { RADAR_PROBE_FRESH_S } from '../../shared/api.js';
 import {
-  RADAR_PATH_MAX, RADAR_PROBE_MAX_BYTES, parseProbe, sessionLandingsOf,
+  RADAR_PATH_MAX, RADAR_PROBE_MAX_BYTES, parseProbe, radarRowsOf, sessionLandingsOf,
   type ProbeDoc, type ProbeRead, type RadarRow,
 } from '../src/coord/radar.js';
 
@@ -265,7 +265,7 @@ const ROWS: RadarRow[] = [
   { id: 'lane-a-proj-a-beta', branch: 'ws/beta', pr: { number: 14, open: true } },
 ];
 const landings = (over: Record<string, unknown> = {}, rows: readonly RadarRow[] = ROWS, nowMs = NOW) =>
-  sessionLandingsOf(okDoc(worked(over)), rows, nowMs);
+  sessionLandingsOf(okDoc(worked(over)), rows, nowMs, new Set());
 
 describe('sessionLandingsOf', () => {
   it("the worked example's three heads: two matched sessions, each with the other's conflict, and the null-id head unbound", () => {
@@ -349,6 +349,25 @@ describe('sessionLandingsOf', () => {
     for (const l of landings().values()) expect(l.cut.unbound).toBe(false);
   });
 
+  it('radarRowsOf: a measured row joins its project, an unreadable one gives only its branch, an absent one gives nothing (4b F5)', () => {
+    const recs = [
+      { id: 'lane-a-proj-a-alpha', project: 'proj-a', projectEvidence: 'measured', branch: 'ws/alpha' },
+      { id: 'lane-a-proj-b-bob', project: 'proj-b', projectEvidence: 'measured', branch: 'ws/bob' },
+      { id: 'lane-a-held', project: 'lane-a-held', projectEvidence: 'unreadable', branch: 'ws/held' },
+      { id: 'lane-a-held-2', project: 'lane-a-held-2', projectEvidence: 'unreadable', branch: null },
+      { id: 'lane-a-bare', project: 'lane-a-bare', projectEvidence: 'absent', branch: 'ws/bare' },
+    ] as const;
+    const out = radarRowsOf(recs, (r) => ({ id: r.id, branch: r.branch, pr: null }));
+    expect([...out.byProject.keys()].sort()).toEqual(['proj-a', 'proj-b']);
+    expect(out.byProject.get('proj-a')).toEqual([{ id: 'lane-a-proj-a-alpha', branch: 'ws/alpha', pr: null }]);
+    expect([...out.stray]).toEqual(['ws/held']);
+  });
+
+  it('a null-id head on a stray branch sets unbound on every landing; one on no stray branch does not (4b F5)', () => {
+    for (const l of sessionLandingsOf(okDoc(worked()), ROWS, NOW, new Set(['feature/x'])).values()) expect(l.cut.unbound).toBe(true);
+    for (const l of sessionLandingsOf(okDoc(worked()), ROWS, NOW, new Set(['ws/other'])).values()) expect(l.cut.unbound).toBe(false);
+  });
+
   it('a pair is shown on both of its PRs, and on no third', () => {
     const heads = [12, 14, 16].map((pr, i) => ({
       pr, head: sha(pr), branch: `ws/h${i}`, id: `lane-a-proj-a-h${i}`, base: { state: 'clean' },
@@ -418,8 +437,8 @@ describe('sessionLandingsOf', () => {
 
   it('a doc already out of its window answers an empty map', () => {
     const doc = okDoc(worked());
-    expect(sessionLandingsOf(doc, ROWS, NOW + 1201 * 1000).size).toBe(0);
-    expect(sessionLandingsOf(doc, ROWS, NOW + 1200 * 1000).size).toBe(2);
+    expect(sessionLandingsOf(doc, ROWS, NOW + 1201 * 1000, new Set()).size).toBe(0);
+    expect(sessionLandingsOf(doc, ROWS, NOW + 1200 * 1000, new Set()).size).toBe(2);
   });
 
   it('an empty registry gives an empty map', () => {

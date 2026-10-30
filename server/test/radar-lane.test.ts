@@ -492,6 +492,38 @@ describe('the radar lane', () => {
       expect(w.currentLandings().get(ALPHA)?.cut.unbound, 'the held row\'s HEAD branch was not read').toBe(true);
     });
 
+    it('a row whose .project will not read puts its branch into every project: a null-id head there sets unbound (4b F5)', async () => {
+      const BOB = 'claude-a-proj-b-alpha';
+      plantRow(ALPHA); plantRow(BETA); plantRow(BOB, { project: 'proj-b', branch: 'ws/bob' });
+      plantProbe(worked({
+        heads: [
+          { pr: 12, head: sha(12), branch: 'ws/alpha', id: ALPHA, base: { state: 'clean' } },
+          { pr: 13, head: sha(13), branch: 'ws/beta', id: null, base: { state: 'clean' } },
+        ],
+        pairs: [], pairHeads: [12],
+      }));
+      plantProbe(worked({
+        project: 'proj-b',
+        heads: [
+          { pr: 21, head: sha(21), branch: 'ws/bob', id: BOB, base: { state: 'clean' } },
+          { pr: 22, head: sha(22), branch: 'ws/beta', id: null, base: { state: 'clean' } },
+        ],
+        pairs: [], pairHeads: [21],
+      }), 'proj-b');
+      const unread = (p: string): boolean => p.endsWith(`${BETA}.project`);
+      const io: FleetIO = { ...bent((m, p) => (m === 'read' && unread(p) ? { ok: false, reason: 'unreadable' } : undefined)),
+        readFile: (p) => (unread(p) ? Promise.resolve(null) : localIO.readFile(p)) };
+      const w = make(io);
+      await w.sweepRadar(await rows(io), NOW);
+      expect(keys(w)).toEqual([ALPHA, BOB]);
+      expect(w.currentLandings().get(ALPHA)?.cut.unbound, 'proj-a').toBe(true);
+      expect(w.currentLandings().get(BOB)?.cut.unbound, 'proj-b, a project the held row may belong to').toBe(true);
+      // CONTROL: with BETA's .project readable (localIO), BETA is proj-a's alone.
+      const w2 = make();
+      await w2.sweepRadar(await rows(), NOW);
+      expect(w2.currentLandings().get(BOB)?.cut.unbound, "a readable .project is its own project's only").toBe(false);
+    });
+
     it('a statusline branch wins over the registry\'s .branch: a session that moved branches matches the new head', async () => {
       plantRow(ALPHA);                        // the registry still says ws/alpha
       plantProbe(worked({ heads: [{ pr: 12, head: sha(12), branch: 'ws/moved', id: ALPHA, base: { state: 'clean' } }], pairs: [], pairHeads: [12] }));

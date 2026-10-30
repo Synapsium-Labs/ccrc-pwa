@@ -3,7 +3,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
-import { sessionLandingsOf, type RadarRow } from './coord/radar.js';
+import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
@@ -1862,25 +1862,25 @@ export class FleetWatcher {
       this.radarSaid.set(key, reason);
     };
     if (records === null) { this.landings = reaged(); return; }
+    const heads = this.currentHeadBranches();
+    const { byProject, stray } = radarRowsOf(records, (r) => {
+      const pr = sessionPrOf(r, this.prStates);
+      // D-7515: a draft is an open PR to GitHub and to the radar. A row whose PR is any other phase and still carries a number
+      // (merged, closed, or a sweep backing off as `unknown`/`unchecked`) matches nothing, and fails closed while the sweep fails.
+      return {
+        id: r.id, branch: sessionBranchOf(r, this.statuslines.get(r.id), heads.get(r.id)),
+        pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' || pr.phase === 'draft' },
+      };
+    });
     const pass = await readRadarPass(
-      this.deps.io, this.deps.cfg.registryDir, new Set(records.map((r) => r.project)), nowMs, LANDING_RADAR_SWEEP_MS / 2);
+      this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2);
     said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
     if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); return; }
-    const heads = this.currentHeadBranches();
     const next = new Map<string, SessionLanding>();
     for (const [project, read] of pass.reads) {
       said(project, read.ok ? 'ok' : read.reason, !read.ok && read.reason !== 'absent');
       if (!read.ok) continue;
-      const rows: RadarRow[] = records.filter((r) => r.project === project).map((r) => {
-        const pr = sessionPrOf(r, this.prStates);
-        // D-7515: a draft is an open PR to GitHub and to the radar. A row whose PR is any other phase and still carries a number
-        // (merged, closed, or a sweep backing off as `unknown`/`unchecked`) matches nothing, and fails closed while the sweep fails.
-        return {
-          id: r.id, branch: sessionBranchOf(r, this.statuslines.get(r.id), heads.get(r.id)),
-          pr: pr === null || pr.number === null ? null : { number: pr.number, open: pr.phase === 'open' || pr.phase === 'draft' },
-        };
-      });
-      for (const [id, l] of sessionLandingsOf(read.doc, rows, nowMs)) next.set(id, l);
+      for (const [id, l] of sessionLandingsOf(read.doc, byProject.get(project) ?? [], nowMs, stray)) next.set(id, l);
     }
     this.landings = next;
   }

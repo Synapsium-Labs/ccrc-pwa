@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../../shared/api.js';
 import { sourceOfSymbol } from '../scan/symbols.js';
-import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources, stallCodeText } from './helpers.js';
+import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources, stallCode, stallCodeText } from './helpers.js';
 
 
 describe('the roots this scans', () => {
@@ -442,6 +442,22 @@ describe('Build 7 nouns', () => {
       const code = (file: string, symbol: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, file), symbol));
       expect(code('server/src/fleet.ts', 'assembleFleet'), 'fleet.ts').toMatch(/\bfreshWithin\(\s*landing\.at,\s*RADAR_PROBE_FRESH_S,/);
       expect(code('server/src/watch.ts', 'FleetWatcher.sweepRadar'), 'watch.ts').toMatch(/\bfreshWithin\(\s*l\.at,\s*RADAR_PROBE_FRESH_S,/);
+    });
+  });
+
+  // Landing order wave 5a (4b F5). `SessionRecord.projectEvidence` says how `.project` read, and `project` stays a display
+  // default (the id) when it did not measure. One reader decides on it, `radarRowsOf`: a second reader would be a second
+  // rule for which rows join a project. The writer is `registry.ts`'s `buildRecord`.
+  describe('SessionRecord.projectEvidence has one reader (landing order wave 5a, 4b F5)', () => {
+    it("is on a code line only in registry.ts, which writes it, and radar.ts's radarRowsOf, which reads it", () => {
+      const NAMED = /\bprojectEvidence\b/;
+      const COUNT = /\bprojectEvidence\b/g;
+      expect(ALL.filter((f) => NAMED.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/coord/radar.ts', 'server/src/registry.ts']);
+      const radar = path.join(ccrcRoot, 'server/src/coord/radar.ts');
+      const whole = (stallCode(radar).match(COUNT) ?? []).length;
+      const inFn = (stallCodeText(sourceOfSymbol(radar, 'radarRowsOf')).match(COUNT) ?? []).length;
+      expect(inFn).toBeGreaterThan(0);
+      expect(whole, 'a reader of projectEvidence in radar.ts outside radarRowsOf').toBe(inFn);
     });
   });
 

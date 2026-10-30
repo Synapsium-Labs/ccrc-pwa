@@ -43,8 +43,16 @@ export type { IdentityField };
  *  "one absent/unreadable read vocabulary" pins it. */
 export type BranchEvidence = 'named' | ReadFailure | 'empty';
 
+/** How `.project` read: `measured` (the record's `project` is the file's trimmed content), `absent` (no `.project`
+ *  in the listing, or a raced removal) or `unreadable` (listed, and the read failed). `project` stays `id` unless
+ *  this is `measured` — a display default; nothing may decide on it (4b F5). */
+export type ProjectEvidence = 'measured' | ReadFailure;
+
 export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;
+  /** How `project` above read (4b F5): the one field a decision on `.project` may read, through `radar.ts`'s
+   *  `radarRowsOf`. Server-side only; it reaches no wire field. */
+  projectEvidence: ProjectEvidence;
   started: boolean; home: string | null; pool: string[] | null; lastswap: number | null;
   workspace: string | null; branch: string | null;
   /** WHY `branch` above reads the way it does — one field, four conditions,
@@ -556,7 +564,7 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
  * rather than collapsed to one `null`. `field()` itself is UNCHANGED and
  * keeps calling `io.readFile` — it stays the reader for every registry field
  * that has not migrated to the measured ladder (see the per-site ruling in
- * the plan; `field()` still backs `project`/`home`/`pool`/`lastswap`/
+ * the plan; `field()` still backs `home`/`pool`/`lastswap`/
  * `workspace`/`base`/`prphase`/`prnumber`/`prcheckedat`/`archived`/
  * `archivemanifest`/`swapblocked`/`spawn`).
  *
@@ -830,7 +838,7 @@ async function buildRecord(
   // answer for an unlisted field: `null`, which their consumers read as "none", not a synthesized `absent`.
   const listedOnlyMeasured = (f: string): Promise<MeasuredRead | null> =>
     names.has(`${id}.${f}`) ? fieldMeasured(io, cfg.registryDir, id, f) : Promise.resolve(null);
-  const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
+  const [wrapperRead, projectRead, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
     routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRaw,
@@ -838,7 +846,7 @@ async function buildRecord(
     // The identity triple (`wrapper`, `workdir`, `uuid`) and `hold` are read whatever the listing says (D-6388): the
     // plan (C1) rules them unconditional. Every other field's one-listing window is accepted: its presence is as of
     // the listing, and a file created after it is seen on the next read.
-    fieldMeasured(io, cfg.registryDir, id, 'wrapper'), listedField('project'),
+    fieldMeasured(io, cfg.registryDir, id, 'wrapper'), listedMeasured('project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     listedMeasured('started'), listedField('home'),
     listedField('pool'), listedField('lastswap'),
@@ -1089,7 +1097,8 @@ async function buildRecord(
   const route: SessionRecord['route'] = allAbsent ? null : { fields: routeFields, degraded, inert, unreadable };
 
   return {
-    id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
+    id, wrapper: measured.wrapper, project: projectRead.ok ? projectRead.content : id,
+    projectEvidence: projectRead.ok ? 'measured' : projectRead.reason, workdir: measured.workdir, uuid: measured.uuid,
     started: startedRead.ok && startedRead.content === '1',
     home, pool: pool ? pool.split(/\s+/).filter(Boolean) : null,
     lastswap: lastswap ? parseInt(lastswap, 10) : null,
