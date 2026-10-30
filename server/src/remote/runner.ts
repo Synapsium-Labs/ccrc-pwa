@@ -132,10 +132,6 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // case exactly — hence the same number rather than a guess.
   start: 300_000,
   enable: 300_000,
-  // `cmd_hibernate --roll` (D-7458) is the automatic roll's one act: the sleep, then `cmd_ensure` inside the same
-  // verb, so it inherits ensure's worst case above, and the same number, the agent's ceiling. A plain hibernate's
-  // re-measure is a few reads and a kill, so the larger bound costs it nothing it uses.
-  hibernate: 300_000,
   // `cmd_swap` stops the supervisor unit (ccd/ccd#cmd_swap) and kills the tmux
   // pane (:13723) BEFORE it flips the registry's `wrapper` (:13817). A kill
   // inside that window leaves a session that is not running, a registry that
@@ -182,10 +178,20 @@ const CCD_DRY_RUN_TIMEOUT_MS: Record<string, number> = {
   'ws-shed-deps': 180_000,
 };
 
+/** `cmd_hibernate --roll` (D-7458) is the automatic roll's one act: the sleep, then `cmd_ensure` inside the same verb,
+ *  so it inherits ensure's worst case, and the same number, the agent's ceiling. It is keyed on the flag, not the verb
+ *  (D-7541): a plain hibernate (the two sleep lanes) is a re-measure and a kill, and those lanes hold the coordination
+ *  serialiser across their call, so a hung one would hold every coordination write for as long as its bound; it keeps
+ *  the flat default. The roll's call is not held on the serialiser (`sleepLane.ts`'s `wakeAct`), so this bound holds
+ *  only the roll lane's single flight and the rolled session's own queue. ccd refuses a dash-led value for every flag
+ *  of the verb, so `--roll` in its argv is the flag itself. */
+const CCD_ROLL_TIMEOUT_MS = 300_000;
+
 function timeoutMsFor(cmd: string, args: string[]): number {
   if (cmd !== 'ccd') return TMUX_TIMEOUT_MS;
   const dry = CCD_DRY_RUN_TIMEOUT_MS[args[0] ?? ''];
   if (dry !== undefined && args.includes('--dry-run')) return dry;
+  if (args[0] === 'hibernate' && args.includes('--roll')) return CCD_ROLL_TIMEOUT_MS;
   // `?? ''` guards an empty `args` (args[0] === undefined) from reaching the
   // lookup as a literal `undefined` key. Provably redundant against THIS
   // map, disclosed rather than removed: no key here is `''` or the coerced

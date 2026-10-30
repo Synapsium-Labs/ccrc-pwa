@@ -222,7 +222,7 @@ import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, ty
 import { DEPS_SHED_STAMP_SUFFIX, depsShedMemory, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
-import { wakeAdmit, type WakeKind } from './coord/wakeBudget.js';
+import { wakeAdmit, wakeRefund, type WakeAdmission, type WakeKind } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import { rollPass, type RollSweepMemory } from './rollLane.js';
@@ -2080,11 +2080,36 @@ export class FleetWatcher {
    * rule is `wakeAdmit` (L1); this is the one list it is applied to.
    */
   admitWake(kind: WakeKind, id: string): boolean {
-    const now = Date.now();
+    return this.admitWakeAt(kind, id, Date.now());
+  }
+
+  private admitWakeAt(kind: WakeKind, id: string, now: number): boolean {
     const r = wakeAdmit(this.wakeRecent, now, kind);
     this.wakeRecent = r.recent;
     if (r.admit) this.lastWakeAt.set(id, now);
     return r.admit;
+  }
+
+  /**
+   * D-7542: an automatic wake admitted before an act that may wake nothing (the automatic roll's `ccd hibernate
+   * --roll`): admitted and recorded exactly as `admitWake('auto', id)` is, or null when the window is full. Its `refund`
+   * takes this admission back out of the window and puts the session's last wake back as it stood, so a roll ccd
+   * refused, or whose wake failed, neither eats `WAKE_BURST` nor delays the mail lane's wake of that session.
+   */
+  admitWakeRefundable(id: string): WakeAdmission | null {
+    const now = Date.now();
+    const before = this.lastWakeAt.get(id);
+    if (!this.admitWakeAt('auto', id, now)) return null;
+    let spent = true;
+    return {
+      refund: () => {
+        if (!spent) return;
+        spent = false;
+        this.wakeRecent = wakeRefund(this.wakeRecent, now);
+        if (this.lastWakeAt.get(id) !== now) return;
+        if (before === undefined) this.lastWakeAt.delete(id); else this.lastWakeAt.set(id, before);
+      },
+    };
   }
 
   /** `buildServer` hands the stop-done lane (D-5370) the coordination serialiser: its stop re-reads the store and acts
@@ -2206,7 +2231,7 @@ export class FleetWatcher {
             listing: async () => {
               try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
             },
-            admitWake: (id) => this.admitWake('auto', id),
+            admitWake: (id) => this.admitWakeRefundable(id),
           },
         }, this.rollMemory, sessions, records, names);
       } catch (err) {

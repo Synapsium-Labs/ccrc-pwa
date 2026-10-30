@@ -42,7 +42,7 @@ const ok = (stdout = ''): CcdResult => ({ ok: true, stdout, stderr: '' }) as Ccd
 const refused = (stderr: string): CcdResult => ({ ok: false, stdout: '', stderr, code: 3 }) as unknown as CcdResult;
 
 interface Fake {
-  deps: RollSweepDeps; lines: string[]; calls: string[][]; wakes: string[];
+  deps: RollSweepDeps; lines: string[]; calls: string[][]; wakes: string[]; refunds: string[];
   set: { targets: ClaudeRollTargets | null; word: string; age: number; hibernate: (id: string) => CcdResult; wake: boolean };
 }
 function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: readonly string[] } = {}): Fake {
@@ -50,6 +50,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
   const lines: string[] = [];
   const calls: string[][] = [];
   const wakes: string[] = [];
+  const refunds: string[] = [];
   const set: Fake['set'] = { targets: CLAUDE_ROLL_TARGETS_DEFAULT, word: 'idle', age: 2 * HOUR, hibernate: () => ok('hibernated'), wake: true };
   const fleetState = { ccdVerbs: o.verbs ?? ['hibernate', 'hibernate-roll', 'ensure', 'actor-flags-v1'] } as unknown as FleetState;
   const act: RollActPort = {
@@ -62,7 +63,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
     queueRun: <T>(_id: string, fn: () => Promise<T>) => fn(),
     rowAtAct: async (r: SessionRecord) => ({ ok: true as const, row: r.id === CHILD ? childRow(r.id) : row(r.id) }),
     listing: async () => [],
-    admitWake: (id: string) => { wakes.push(id); return set.wake; },
+    admitWake: (id: string) => { wakes.push(id); return set.wake ? { refund: () => { refunds.push(id); } } : null; },
   } as unknown as RollActPort;
   const deps: RollSweepDeps = {
     coord: withBindingsOf({
@@ -82,7 +83,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
     now: () => NOW,
     act,
   };
-  return { deps, lines, calls, wakes, set };
+  return { deps, lines, calls, wakes, refunds, set };
 }
 const mem = (): RollSweepMemory => ({ lastAt: new Map(), lastWhat: new Map() });
 const pass = (f: Fake, rows: FleetSession[] = [row(COORD)], names: readonly string[] = [], m = mem()) =>
@@ -302,3 +303,157 @@ describe('rollPass: the setting and the switches (D-7453)', () => {
     expect(await rollPass({ ...f.deps, act: null }, mem(), [row(COORD)], [rec(COORD)], [])).toEqual([{ id: COORD, kind: 'skipped', reason: 'unarmed' }]);
   });
 });
+
+/** A real coordination serialiser: one holder at a time, FIFO, as `CoordMutex` is. */
+function mutex(): { serial: <T>(fn: () => Promise<T>) => Promise<T>; held: () => boolean } {
+  let tail: Promise<unknown> = Promise.resolve();
+  let held = false;
+  return {
+    serial: <T>(fn: () => Promise<T>): Promise<T> => {
+      const run = tail.then(async () => { held = true; try { return await fn(); } finally { held = false; } });
+      tail = run.then(() => undefined, () => undefined);
+      return run;
+    },
+    held: () => held,
+  };
+}
+const settle = async (): Promise<void> => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
+/** The fake's port with the ccd call held open until the test answers it. */
+function inFlight(f: Fake): { answer: (r: CcdResult) => void; heldAtCall: () => boolean | null; m: ReturnType<typeof mutex> } {
+  const m = mutex();
+  let answer: ((r: CcdResult) => void) | null = null;
+  let heldAtCall: boolean | null = null;
+  const act = f.deps.act as unknown as { serial: unknown; runCcd: unknown };
+  act.serial = m.serial;
+  act.runCcd = (argv: readonly string[]) => {
+    f.calls.push([...argv]);
+    heldAtCall = m.held();
+    return new Promise<CcdResult>((r) => { answer = r; });
+  };
+  return { answer: (r) => { answer!(r); }, heldAtCall: () => heldAtCall, m };
+}
+
+describe('the roll does not hold the coordination serialiser across its ccd call (D-7541)', () => {
+  it('a coordination write issued while the roll call is in flight is not blocked by it', async () => {
+    const f = fake();
+    const t = inFlight(f);
+    const p = pass(f);
+    await settle();
+    expect(f.calls.length, 'the roll call is in flight').toBe(1);
+    expect(t.heldAtCall(), 'the serialiser is free while ccd runs').toBe(false);
+    const write = await Promise.race([
+      t.m.serial(async () => 'written'),
+      new Promise((r) => setTimeout(() => r('blocked'), 500)),
+    ]);
+    expect(write).toBe('written');
+    t.answer(ok(`hibernated ${COORD}\nrolled ${COORD}`));
+    expect(await p).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+  });
+
+  it('control: the reads before the call run on the serialiser', async () => {
+    const f = fake();
+    const t = inFlight(f);
+    const heldAt: boolean[] = [];
+    const rowAtAct = f.deps.act!.rowAtAct;
+    (f.deps.act as { rowAtAct: RollActPort['rowAtAct'] }).rowAtAct = async (r) => { heldAt.push(t.m.held()); return rowAtAct(r); };
+    const p = pass(f);
+    await settle();
+    t.answer(ok(`rolled ${COORD}`));
+    await p;
+    expect(heldAt.length, 'the row is read before the call and again after it').toBe(2);
+    expect(heldAt.every((h) => h), 'every re-read is on the serialiser').toBe(true);
+  });
+
+  it('the target is asked again on the serialiser after the call: a setting turned off meanwhile is journalled beside the roll', async () => {
+    const f = fake();
+    const t = inFlight(f);
+    const p = pass(f);
+    await settle();
+    f.set.targets = 'off';
+    t.answer(ok(`rolled ${COORD}`));
+    expect(await p).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, after: 'setting-off' }]);
+    expect(f.lines.join('\n')).toMatch(new RegExp(`rolled ${COORD} onto the current release .*; by the time ccd answered it was no longer a roll target \\(setting-off\\)`));
+  });
+
+  it('a row that stopped being a coordinator while the call ran is journalled so', async () => {
+    const f = fake();
+    const t = inFlight(f);
+    const p = pass(f);
+    await settle();
+    (f.deps.act as { rowAtAct: RollActPort['rowAtAct'] }).rowAtAct = async (r) => ({ ok: true as const, row: childRow(r.id) });
+    t.answer(ok(`rolled ${COORD}`));
+    expect(await p).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR, after: 'not-coordinator' }]);
+  });
+
+  it('control: a target still eligible after the call is a plain roll', async () => {
+    const f = fake();
+    const t = inFlight(f);
+    const p = pass(f);
+    await settle();
+    t.answer(ok(`rolled ${COORD}`));
+    expect(await p).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.lines.join('\n')).not.toMatch(/no longer a roll target/);
+  });
+});
+
+describe('a roll that woke nothing gives its wake-budget slot back (D-7542)', () => {
+  it('ccd refusing the roll (session-busy) refunds the wake', async () => {
+    const f = fake();
+    f.set.hibernate = () => refused('ccd: session-busy: draft — a message is half-typed in the input box; nothing was touched');
+    await pass(f);
+    expect(f.wakes).toEqual([COORD]);
+    expect(f.refunds).toEqual([COORD]);
+  });
+
+  it('a wake that failed and was put back to sleep (exit 4) refunds the wake', async () => {
+    const f = fake();
+    f.set.hibernate = () => ({ ok: false, ran: true, stdout: 'hibernated', stderr: `ccd: roll-wake-failed — ${COORD} was hibernated and its wake exited 5`, code: 4, killed: false, signal: null }) as unknown as CcdResult;
+    await pass(f);
+    expect(f.refunds).toEqual([COORD]);
+  });
+
+  it('a plain failure before anything stopped refunds the wake, and so does a call that never started', async () => {
+    const f = fake();
+    f.set.hibernate = () => ({ ok: false, ran: true, stdout: '', stderr: 'ccd: no such session', code: 1, killed: false, signal: null }) as unknown as CcdResult;
+    await pass(f);
+    expect(f.refunds).toEqual([COORD]);
+    const g = fake();
+    g.set.hibernate = () => ({ ok: false, ran: false, reason: 'spawn', detail: 'declined', stdout: '', stderr: '', killed: false, signal: null }) as unknown as CcdResult;
+    await pass(g);
+    expect(g.refunds).toEqual([COORD]);
+  });
+
+  it('a pane kill that failed (exit 6) refunds the wake: nothing was woken', async () => {
+    const f = fake();
+    f.set.hibernate = () => ({ ok: false, ran: true, stdout: '', stderr: `ccd: roll-kill-failed — ${COORD}'s pane could not be killed and is still live, so it was not rolled`, code: 6, killed: false, signal: null }) as unknown as CcdResult;
+    await pass(f);
+    expect(f.refunds).toEqual([COORD]);
+  });
+
+  it('a roll that landed keeps its wake spent; so do an unrestored wake and an unknown ending, which may have spawned', async () => {
+    const f = fake();
+    await pass(f);
+    expect(f.refunds).toEqual([]);
+    const g = fake();
+    g.set.hibernate = () => ({ ok: false, ran: true, stdout: 'hibernated', stderr: `ccd: roll-wake-unrestored — ${COORD} was hibernated and its wake exited 5`, code: 5, killed: false, signal: null }) as unknown as CcdResult;
+    await pass(g);
+    expect(g.refunds).toEqual([]);
+    const u = fake();
+    u.set.hibernate = () => ({ ok: false, ran: false, reason: 'timeout', detail: 'timeout', stdout: '', stderr: 'timeout', killed: false, signal: null }) as unknown as CcdResult;
+    await pass(u);
+    expect(u.refunds).toEqual([]);
+  });
+});
+
+describe('a pane kill that failed on a live pane is never a roll (exit 6, roll-kill-failed)', () => {
+  it('is its own outcome, and its line says it was not rolled and names the session to check', async () => {
+    const f = fake();
+    f.set.hibernate = () => ({ ok: false, ran: true, stdout: '', stderr: `ccd: roll-kill-failed — ${COORD}'s pane could not be killed and is still live, so it was not rolled`, code: 6, killed: false, signal: null }) as unknown as CcdResult;
+    expect((await pass(f))[0]!.kind).toBe('kill-failed');
+    const text = f.lines.join('\n');
+    expect(text).toMatch(new RegExp(`roll of ${COORD}: its pane could not be killed .*it was not rolled.*check ${COORD}`));
+    expect(text).not.toMatch(/rolled lane/);
+    expect(text).not.toMatch(/it was not stopped/);
+  });
+});
+

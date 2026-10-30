@@ -6,7 +6,8 @@ import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
 import { notify, type NoticeRecord } from './notice.js';
-import { ccdEnding } from './lifecycle.js';
+import type { WakeAdmission } from './coord/wakeBudget.js';
+import { ccdEnding, type CcdResult } from './lifecycle.js';
 import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, HIBERNATE_ROLL_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
   HIBERNATE_ACT_LINE_MS, HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER,
@@ -87,8 +88,10 @@ export interface SleepActPort<Row> {
   /** At the act (D-7047): the registry listed again, for the lane's switches; null when it cannot be listed. */
   readonly listing: () => Promise<readonly string[] | null>;
   /** A lane that wakes what it put to sleep (`then: 'wake'`, the automatic roll, D-7452): the fleet-wide wake budget
-   *  (`FleetWatcher.admitWake('auto', …)`), asked before the hibernate; false or absent holds the act. */
-  readonly admitWake?: (id: string) => boolean;
+   *  (`FleetWatcher.admitWakeRefundable`), asked before the hibernate; null or absent holds the act. The admission is
+   *  given back (`refund`, D-7542) when the act woke nothing: ccd refused it, the call failed before anything stopped,
+   *  the pane would not die, or the wake failed and ccd put the row back to sleep. */
+  readonly admitWake?: (id: string) => WakeAdmission | null;
 }
 
 /** A verdict as the executor reads it: each lane's own verdict type (`StopDoneVerdict`, `HibernateVerdict`) is one. */
@@ -117,6 +120,10 @@ export type SleepActResult<V, St> =
      *  the sanctioned hibernated row. `restored: false` is `roll-wake-unrestored` (exit 5): the marker could not be
      *  written again, so the row may be neither running nor hibernated. Absent for a lane that stays asleep. */
     readonly woke?: true | { readonly failed: string; readonly restored: boolean };
+    /** A `wake` lane's target asked again on the serialiser AFTER the call (D-7541): the word that says it is no longer
+     *  one (the setting turned off, the row no longer a coordinator) when a coordination write landed while ccd ran.
+     *  Absent while it still is. The act happened either way; this says what changed beside it. */
+    readonly after?: string;
   }
   | { readonly kind: 'held-at-act'; readonly verdict: V | null }
   | { readonly kind: 'skipped'; readonly detail: string; readonly by: 'verb' | 'ccd' | 'wake-budget' }
@@ -125,7 +132,7 @@ export type SleepActResult<V, St> =
     /** `unknown`, a `wake` lane's only (the roll, D-7458): the call was cut short or never answered (this server's wait
      *  ran out, the link failed, the runner's deadline or a signal ended the child), or how it ended was not measured
      *  (the runner sent no signal half, `ccdEnding`'s `unmeasured`), so what ccd did is not known. */
-    readonly outcome?: 'unknown';
+    readonly outcome?: 'unknown' | 'kill-failed';
   }
   | { readonly kind: 'switched-off'; readonly detail: MarkerSwitchName | typeof REGISTRY_UNLISTABLE };
 
@@ -230,6 +237,9 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
     readonly first: (deps: D, f: SleepPassFacts<St>, row: FleetSession, now: number) => V;
     readonly measured: (deps: D, f: SleepPassFacts<St>, row: FleetSession, rec: SessionRecord) => Promise<{ v: V; now: number }>;
     readonly atAct: (deps: D, f: SleepPassFacts<St>, row: Row, rec: SessionRecord) => Promise<{ v: V; store: St }>;
+    /** A `wake` lane's (D-7541): after its call returned, on the serialiser again, is the row still this lane's target?
+     *  Null while it is, else the word that says why not. Absent: nothing is asked again. */
+    readonly afterAct?: (deps: D, row: Row, rec: SessionRecord) => Promise<string | null>;
   };
   readonly notices: SleepNotices<D, M, V, St> | null;
   /** The shadow line, throttled (`null`: the lane has no shadow). */
@@ -252,6 +262,9 @@ const ROLL_WAKE_FAILED = /ccd: roll-wake-failed/;
 /** `cmd_hibernate --roll`'s exit-5 line: the sleep landed, the wake did not, and `.hibernated` could not be written
  *  again, so the row was NOT restored. A phrase of its own, so it is never read as the exit-4 one. */
 const ROLL_WAKE_UNRESTORED = /ccd: roll-wake-unrestored/;
+/** `cmd_hibernate --roll`'s exit-6 line: the pane was still live after the kill, so nothing was rolled and no wake was
+ *  tried; the marker and the stopped unit the act wrote stand. */
+const ROLL_KILL_FAILED = /ccd: roll-kill-failed/;
 
 /** Whether the box can run this lane's act: `hibernate` listed, and for a `wake` lane the `--roll` flag too. */
 export const laneVerb = (then: 'stay-asleep' | 'wake', fleetState: FleetState | undefined): boolean =>
@@ -359,10 +372,23 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
   return out;
 }
 
-/** The act, for one row the pass answered `hibernate` for: on the serialiser, then the session's queue; everything
- *  re-read and the verdict asked again inside them; the verb again where the lane says so; the switches over a fresh
- *  listing (D-7047); only then `ccd hibernate`.
- *  Never throws. */
+/**
+ * The act, for one row the pass answered `hibernate` for: everything re-read and the verdict asked again on the
+ * serialiser and the session's queue; the verb again where the lane says so; the switches over a fresh listing
+ * (D-7047); for a `wake` lane the wake budget; only then `ccd hibernate`, the ONE act site of every sleep lane.
+ *
+ * WHERE THE SERIALISER IS HELD. A sleep lane (`stay-asleep`) holds it, and the queue, across its call, which is a
+ * re-measure and a kill under the runner's flat bound. A `wake` lane (the automatic roll, D-7452, D-7458) NEVER holds
+ * it across the call (D-7541): it is the ONE coordination mutex, and `ccd hibernate --roll` includes `cmd_ensure`'s
+ * pane wait (up to the runner's 300 s), so a slow or hung roll held there would block every coordination write
+ * fleet-wide. Its act is three steps, each taking the serialiser (where it does) before the queue, the order every
+ * other holder takes them in:
+ *   1. on the serialiser and the queue: the reads above, ending with the wake budget;
+ *   2. on the session's queue only: the call, so nothing else writes to that session while it is rolled;
+ *   3. on the serialiser and the queue again, only for a roll that landed: the target asked again (`asks.afterAct`),
+ *      so a coordination write that landed while ccd ran is journalled beside the roll, never hidden by it.
+ * A `wake` lane's admission is refunded when the answer woke nothing (D-7542). Never throws.
+ */
 export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonly subagents: FleetSession['subagents'] }, St, V extends SleepAnswer, O>(
   lane: SleepLane<D, M, Row, St, V, O>, deps: D, mem: M, f: SleepPassFacts<St>, port: ArmedPort<Row>,
   row: FleetSession, rec: SessionRecord,
@@ -372,59 +398,117 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
   const holdOff = (): void => {
     if (retry.kind === 'hold-off') retry.of(mem).set(id, deps.now() + retry.ms);
   };
+  // D-7458: a `wake` lane's act is `--roll`, the sleep and the in-place resume in ONE ccd verb.
+  const wake = lane.then === 'wake';
+  let admission: WakeAdmission | null = null;
+  let called = false;
+  const refund = (): void => { (admission as WakeAdmission | null)?.refund(); admission = null; };
+  type Before = { readonly go: false; readonly r: SleepActResult<V, St> } | { readonly go: true; readonly v: Asleep<V>; readonly store: St; readonly again: Row };
+  // Typed on the binding, so the call below stays in `sleepAct`'s scope for `id-argv-census.test.ts`.
+  const before: () => Promise<Before> = async () => {
+    const fresh = await port.rowAtAct(rec);
+    if (!fresh.ok) return { go: false, r: { kind: 'held-at-act', verdict: null } };
+    // Only the roster falls back to the tick's read, when the re-read row has none.
+    const again: Row = { ...fresh.row, subagents: fresh.row.subagents ?? row.subagents };
+    const { v, store } = await lane.asks.atAct(deps, f, again, rec);
+    if (!isAsleep(v)) return { go: false, r: { kind: 'held-at-act', verdict: v } };
+    // Never sent to a ccd that does not list the verb, asked again here where the lane says so.
+    // The verb's own gate stays literal here (`verb-gate.test.ts` reads it); a `wake` lane also needs `--roll`.
+    if (lane.verb === 'arms-and-asked-at-act' && !(ccdCan(port.fleetState, 'hibernate')
+      && (lane.then !== 'wake' || capSupported(port.fleetState, HIBERNATE_ROLL_CAP)))) {
+      return { go: false, r: { kind: 'skipped', detail: 'no-verb', by: 'verb' } };
+    }
+    // D-7047: the switches over a fresh listing, the read nearest the argv. No retry memory: the next pass asks again.
+    const off = switchedOffAt(lane, readSwitches(await port.listing()));
+    if (off !== null) return { go: false, r: { kind: 'switched-off', detail: off } };
+    // D-7452: a lane that wakes what it sleeps is an automatic wake, asked of the budget before anything stops.
+    if (wake) {
+      admission = port.admitWake?.(id) ?? null;
+      if (admission === null) return { go: false, r: { kind: 'skipped', detail: 'wake-budget', by: 'wake-budget' } };
+    }
+    return { go: true, v, store, again };
+  };
+  const call = (v: Asleep<V>): Promise<CcdResult> => {
+    called = true;
+    return port.runCcd(CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake));
+  };
   try {
-    return await port.serial(() => port.queueRun(id, async (): Promise<SleepActResult<V, St>> => {
-      const fresh = await port.rowAtAct(rec);
-      if (!fresh.ok) return { kind: 'held-at-act', verdict: null };
-      // Only the roster falls back to the tick's read, when the re-read row has none.
-      const again: Row = { ...fresh.row, subagents: fresh.row.subagents ?? row.subagents };
-      const { v, store } = await lane.asks.atAct(deps, f, again, rec);
-      if (!isAsleep(v)) return { kind: 'held-at-act', verdict: v };
-      // Never sent to a ccd that does not list the verb, asked again here where the lane says so.
-      // The verb's own gate stays literal here (`verb-gate.test.ts` reads it); a `wake` lane also needs `--roll`.
-      if (lane.verb === 'arms-and-asked-at-act' && !(ccdCan(port.fleetState, 'hibernate')
-        && (lane.then !== 'wake' || capSupported(port.fleetState, HIBERNATE_ROLL_CAP)))) {
-        return { kind: 'skipped', detail: 'no-verb', by: 'verb' };
-      }
-      // D-7047: the switches over a fresh listing, the read nearest the argv. No retry memory: the next pass asks again.
-      const off = switchedOffAt(lane, readSwitches(await port.listing()));
-      if (off !== null) return { kind: 'switched-off', detail: off };
-      // D-7452: a lane that wakes what it sleeps is an automatic wake, asked of the budget before anything stops.
-      if (lane.then === 'wake' && !(port.admitWake?.(id) ?? false)) return { kind: 'skipped', detail: 'wake-budget', by: 'wake-budget' };
-      // D-7458: a `wake` lane's act is `--roll`, the sleep and the in-place resume in ONE ccd verb.
-      const wake = lane.then === 'wake';
-      const res = await port.runCcd(CCD_ARGV.hibernate(id, sweepDec(port.fleetState, lane.actor), holdOkOf(v), wake));
-      if (!res.ok) {
-        holdOff();
-        // D-6840: a call that never ran has no `session-busy` to read off the runner's forged stderr.
-        const busy = res.ran === false ? null : SESSION_BUSY.exec(res.stderr);
-        if (busy !== null) return { kind: 'skipped', detail: busy[1] || 'busy', by: 'ccd' };
-        // The roll's sleep landed and its wake did not: a sanctioned hibernated row, which mail or an open screen wakes.
-        if (wake && res.ran !== false && ROLL_WAKE_FAILED.test(res.stderr)) {
-          return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr, restored: true } };
+    if (!wake) {
+      return await port.serial(() => port.queueRun(id, async (): Promise<SleepActResult<V, St>> => {
+        const b = await before();
+        if (!b.go) return b.r;
+        const res = await call(b.v);
+        if (!res.ok) {
+          holdOff();
+          // D-6840: a call that never ran has no `session-busy` to read off the runner's forged stderr.
+          const busy = res.ran === false ? null : SESSION_BUSY.exec(res.stderr);
+          return busy !== null
+            ? { kind: 'skipped', detail: busy[1] || 'busy', by: 'ccd' }
+            : { kind: 'failed', detail: res.stderr, by: 'ccd' };
         }
-        // The sleep landed, the wake did not, and the marker could not be written again: NOT the hibernated row.
-        if (wake && res.ran !== false && ROLL_WAKE_UNRESTORED.test(res.stderr)) {
-          return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr, restored: false } };
-        }
-        // A `wake` lane's call cut short, never answered, or ended in a way nobody measured (`unmeasured`: the runner
-        // sent no signal half): ccd may have slept the session, woken it, or be acting still, so the lane names it to
-        // be checked. A runner's own `spawn` answer is known not to have run, and stays a plain failure. The sleep
-        // lanes keep their answer as it was.
-        const ending = res.ran === false ? null : ccdEnding(res).kind;
-        if (wake && ((res.ran === false && res.reason !== 'spawn') || ending === 'deadline' || ending === 'signal'
-          || ending === 'unmeasured')) {
-          return { kind: 'failed', detail: res.ran === false ? `${res.reason}: ${res.detail}` : res.stderr, by: 'ccd', outcome: 'unknown' };
-        }
-        return { kind: 'failed', detail: res.stderr, by: 'ccd' };
-      }
-      lane.notices?.slept(deps, id, v, store);
-      return wake ? { kind: 'hibernated', verdict: v, store, woke: true } : { kind: 'hibernated', verdict: v, store };
+        lane.notices?.slept(deps, id, b.v, b.store);
+        return { kind: 'hibernated', verdict: b.v, store: b.store };
+      }));
+    }
+    // 1. The reads, on the serialiser and the queue.
+    const b = await port.serial(() => port.queueRun(id, before));
+    if (!b.go) return b.r;
+    // 2. The call, on the session's queue only (D-7541).
+    const res = await port.queueRun(id, () => call(b.v));
+    const r = wakeAnswer<V, St>(res, b.v, b.store);
+    if (!res.ok) holdOff();
+    if (wokeNothing(r)) refund();
+    if (r.kind !== 'hibernated' || r.woke !== true) return r;
+    // 3. The target asked again, on the serialiser and the queue.
+    const afterAct = lane.asks.afterAct;
+    const after = await port.serial(() => port.queueRun(id, async () => {
+      const word = afterAct === undefined ? null : await afterAct(deps, b.again, rec);
+      lane.notices?.slept(deps, id, b.v, b.store);
+      return word;
     }));
+    return after === null ? r : { ...r, after };
   } catch (err) {
     holdOff();
+    // A throw before the call woke nothing; one after it may have, so its admission stands.
+    if (!called) refund();
     return { kind: 'failed', detail: errText(err), by: 'throw' };
   }
+}
+
+/** What `ccd hibernate --roll` came to, read off its answer (D-7458). */
+function wakeAnswer<V extends SleepAnswer, St>(res: CcdResult, v: Asleep<V>, store: St): SleepActResult<V, St> {
+  if (res.ok) return { kind: 'hibernated', verdict: v, store, woke: true };
+  // D-6840: a call that never ran has no `session-busy` (or any other phrase) to read off the runner's forged stderr.
+  const busy = res.ran === false ? null : SESSION_BUSY.exec(res.stderr);
+  if (busy !== null) return { kind: 'skipped', detail: busy[1] || 'busy', by: 'ccd' };
+  // The roll's sleep landed and its wake did not: a sanctioned hibernated row, which mail or an open screen wakes.
+  if (res.ran !== false && ROLL_WAKE_FAILED.test(res.stderr)) {
+    return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr, restored: true } };
+  }
+  // The sleep landed, the wake did not, and the row could not be put back to sleep: NOT the hibernated row.
+  if (res.ran !== false && ROLL_WAKE_UNRESTORED.test(res.stderr)) {
+    return { kind: 'hibernated', verdict: v, store, woke: { failed: res.stderr, restored: false } };
+  }
+  // The pane was still live after the kill: nothing was rolled and no wake was tried.
+  if (res.ran !== false && ROLL_KILL_FAILED.test(res.stderr)) return { kind: 'failed', detail: res.stderr, by: 'ccd', outcome: 'kill-failed' };
+  // A call cut short, never answered, or ended in a way nobody measured (`unmeasured`: the runner sent no signal
+  // half): ccd may have slept the session, woken it, or be acting still, so the lane names it to be checked. A runner's
+  // own `spawn` answer is known not to have run, and stays a plain failure.
+  const ending = res.ran === false ? null : ccdEnding(res).kind;
+  if ((res.ran === false && res.reason !== 'spawn') || ending === 'deadline' || ending === 'signal' || ending === 'unmeasured') {
+    return { kind: 'failed', detail: res.ran === false ? `${res.reason}: ${res.detail}` : res.stderr, by: 'ccd', outcome: 'unknown' };
+  }
+  return { kind: 'failed', detail: res.stderr, by: 'ccd' };
+}
+
+/** Whether an answer woke nothing, so its wake admission goes back (D-7542): ccd refused, the call failed before
+ *  anything stopped (or never started), the pane would not die, or the wake failed and the row is back asleep. An
+ *  unrestored wake and an unknown ending keep it: the unit may still bring the session up. */
+function wokeNothing<V, St>(r: SleepActResult<V, St>): boolean {
+  if (r.kind === 'skipped') return true;
+  if (r.kind === 'failed') return r.outcome !== 'unknown';
+  if (r.kind === 'hibernated') return r.woke !== undefined && r.woke !== true && r.woke.restored;
+  return false;
 }
 
 // ── run-done (the stop-done lane): its binding read, live reads, notices and lines ──────────────────────────────────

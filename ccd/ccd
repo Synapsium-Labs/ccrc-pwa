@@ -4303,8 +4303,12 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # (the message this replaced); routing all five call sites through one
   # choke point must not mean the warning stops firing for any of them. Mirrors
   # _ws_supervise's own warning on the same failure, one function up.
+  # The status stays 0 (the intent is recorded either way). The refusal is ALSO left in `_WS_UNSUPERVISE_DISABLED`
+  # (1 the unit was disabled, 0 it was not) for the one caller that must not claim a stopped unit it did not get: the
+  # roll's put-back-to-sleep (`cmd_hibernate --roll`). Every other caller ignores it.
+  _WS_UNSUPERVISE_DISABLED=1
   _svc_disable_now "claude-session@$id" 2>/dev/null \
-    || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
+    || { _WS_UNSUPERVISE_DISABLED=0; echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2; }
 }
 
 _session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started
@@ -29863,7 +29867,9 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # retrying it, so the act is repeated (the marker re-stamped, the unit stopped, any late pane killed, the `.woke`
   # stamp the wake wrote put back) and the row is the sanctioned hibernated one that mail, an open screen or a
   # re-dispatch wakes. When the marker cannot be written again the row is NOT restored: exit 5,
-  # `ccd: roll-wake-unrestored — …`, a phrase of its own, since that row may be neither running nor hibernated. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
+  # `ccd: roll-wake-unrestored — …`, a phrase of its own, since that row may be neither running nor hibernated. The same exit
+  # when the unit cannot be stopped again. A pane kill that fails on a pane still live exits 6, `ccd: roll-kill-failed — …`:
+  # nothing was rolled and no wake is tried. The deliberate act is ONE journal row, `hibernate`, its declared reason defaulted to `roll` (the wake's
   # `ensure` rows are the unit's own, as on every wake). It takes no value and, like `--hold-ok`, is not on the usage
   # line, which is pinned. `ccd caps` says `hibernate-roll`.
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
@@ -29974,6 +29980,13 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
   _ws_unsupervise "$id" ccd
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
+  # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.
+  if (( lc_roll )) && _alive "$id"; then
+    echo "$(date '+%F %T') hibernate $id: roll kill failed, pane still live" >> "$REG/swap.log"
+    echo "ccd: roll-kill-failed — $id's pane could not be killed and is still live, so it was not rolled: it still runs the release it started on, with $REG/$id.hibernated written and its unit stopped; check it" >&2
+    exit 6
+  fi
   local lc_tag=''; (( lc_roll )) && lc_tag=' (roll)'
   echo "$(date '+%F %T') hibernate $id: idle ${hours}h$lc_tag" >> "$REG/swap.log"
   echo "hibernated $id"
@@ -29986,8 +29999,15 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   ( cmd_ensure "$id" ) || wrc=$?
   if (( wrc != 0 )); then
     # Back to sleep, in the act's own order: the marker first, then the unit, then a pane the unit may have raised late.
-    if _reg_set "$id" hibernated "$now $hours"; then
-      _ws_unsupervise "$id" ccd
+    # A unit that could not be stopped again is not the sanctioned hibernated row (a Restart=always unit retries it), so
+    # it takes the unrestored branch below, never "put back to sleep".
+    local lc_unrestored=''
+    if ! _reg_set "$id" hibernated "$now $hours"; then
+      lc_unrestored="$REG/$id.hibernated could not be written again"
+    elif _ws_unsupervise "$id" ccd; (( ! _WS_UNSUPERVISE_DISABLED )); then
+      lc_unrestored="its unit claude-session@$id could not be stopped again"
+      tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+    else
       tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
       # The `.woke` stamp `cmd_ensure` wrote goes back to what stood before it: nothing woke, so it must neither hold
       # the auto-swap's cooldown (`_standdown_note … woke`) nor read as fresh activity to the stale-archive lane.
@@ -29996,12 +30016,12 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
       exit 4
     fi
-    # NOT RESTORED: the wake cleared `.hibernated` and the marker could not be written again, so the row is not the
-    # sanctioned hibernated one. Its own exit (5) and its own phrase, never `roll-wake-failed`: a caller that reads
+    # NOT RESTORED: the marker could not be written again, or the unit could not be stopped again, so the row is not
+    # the sanctioned hibernated one. Its own exit (5) and its own phrase, never `roll-wake-failed`: a caller that reads
     # exit 4 as "stays hibernated" must not read this as that. `.woke` is left as the wake wrote it (a registry that
     # refused the marker is not trusted with a second write here).
-    echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), NOT restored: .hibernated could not be written" 2>/dev/null >> "$REG/swap.log" || true
-    echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $REG/$id.hibernated could not be written again: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
+    echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), NOT restored: $lc_unrestored" 2>/dev/null >> "$REG/swap.log" || true
+    echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $lc_unrestored: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
     exit 5
   fi
   echo "rolled $id"

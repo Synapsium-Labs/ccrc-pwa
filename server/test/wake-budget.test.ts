@@ -3,7 +3,7 @@
 // `WAKE_BURST` in any `WAKE_WINDOW_MS`. A wake somebody ASKED for (the operator's ensure, a dispatch's resume) is never
 // refused, but it counts in the window.
 import { describe, it, expect } from 'vitest';
-import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit } from '../src/coord/wakeBudget.js';
+import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeRefund } from '../src/coord/wakeBudget.js';
 
 const T0 = 1_800_000_000_000;
 
@@ -49,5 +49,31 @@ describe('wakeAdmit', () => {
     wakeAdmit(recent, T0 + 1, 'auto');
     wakeAdmit(recent, T0 + WAKE_WINDOW_MS + 1, 'asked');
     expect(recent).toEqual([T0]);
+  });
+});
+
+// D-7542: a wake admitted and then not spent (ccd refused the roll, or its wake failed) gives its slot back.
+describe('wakeRefund', () => {
+  it('takes back the one admission it names, so the window has room again', () => {
+    const a = wakeAdmit([], T0, 'auto');
+    const b = wakeAdmit(a.recent, T0 + 1_000, 'auto');
+    expect(wakeAdmit(b.recent, T0 + 2_000, 'auto').admit).toBe(false);
+    const back = wakeRefund(b.recent, T0 + 1_000);
+    expect(back).toEqual([T0]);
+    expect(wakeAdmit(back, T0 + 2_000, 'auto').admit).toBe(true);
+  });
+
+  it('takes back ONE entry when two wakes share a millisecond', () => {
+    expect(wakeRefund([T0, T0], T0)).toEqual([T0]);
+  });
+
+  it('an admission already out of the list (pruned, or refunded) changes nothing', () => {
+    expect(wakeRefund([T0 + 5], T0)).toEqual([T0 + 5]);
+  });
+
+  it('never mutates the list it is handed', () => {
+    const recent = [T0, T0 + 1];
+    wakeRefund(recent, T0);
+    expect(recent).toEqual([T0, T0 + 1]);
   });
 });

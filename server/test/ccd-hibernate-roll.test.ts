@@ -10,8 +10,8 @@
  * When the marker cannot be written again it exits 5 with `ccd: roll-wake-unrestored` instead: not that row.
  *
  * THE FIXTURE is `ccd-hibernate.test.ts`'s: a fixture HOME, a stubbed `tmux` answering from files in HOME, logged
- * `systemctl`, and the pane's live file. The wake is `cmd_ensure` stubbed to log its call (or fail), so these rows
- * pin the composition; `ccd-hibernate.test.ts`'s wake rows pin what `cmd_ensure` does to a hibernated row.
+ * `systemctl`, and the pane's live file; the pane is gone once a `kill-session` has been called (a roll checks it).
+ * The wake is `cmd_ensure` stubbed to log its call (or fail), so these rows pin the composition; `ccd-hibernate.test.ts`'s wake rows pin what `cmd_ensure` does to a hibernated row.
  * Neutral ids throughout (public repository).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -36,6 +36,7 @@ const STUBS = `
     case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
     case "$*" in *session_attached*) [[ -e "$HOME/attached" ]] || return 1; cat "$HOME/attached"; return 0 ;; esac
     case "\${1:-}" in
+      has-session)     grep -q kill-session "$HOME/ccd-calls" 2>/dev/null && { echo "can't find session"; return 1; } ;;
       capture-pane)    cat "$HOME/pane" 2>/dev/null ;;
       list-panes)      echo ${PID} ;;
     esac; return 0; };
@@ -231,6 +232,42 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
     expect(r.out).not.toContain('rolled');
     expect(fs.statSync(regPath('hibernated')).isFile(), 'no hibernated marker file stands').toBe(false);
     expect(eventsOf(h.home, 'hibernate'), 'still ONE deliberate act').toHaveLength(1);
+  });
+
+  it('a pane kill that fails on a live session exits 6 with roll-kill-failed: never rolled, and no wake is tried', () => {
+    idle();
+    // tmux refuses the kill and the pane is still there afterwards.
+    const stuck = 'eval "$(declare -f tmux | sed \'1s/^tmux/_tmux_stub/\')"; '
+      + 'tmux() { [[ "${1:-}" == kill-session ]] && { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _tmux_stub "$@"; }; '
+      + '_alive() { return 0; };';
+    const r = roll('', stuck);
+    expect(r.rc, r.err).toBe(6);
+    expect(r.err).toMatch(new RegExp(`ccd: roll-kill-failed — ${ID}'s pane could not be killed`));
+    expect(r.err).toMatch(/it was not rolled/);
+    expect(r.out).not.toContain('rolled');
+    expect(killAt(), 'the kill was tried').toBeGreaterThanOrEqual(0);
+    expect(ensureAt(), 'no wake follows a kill that did not land').toBe(-1);
+  });
+
+  it('control: a pane kill that fails on a session already gone is not a kill failure, and the wake follows', () => {
+    idle();
+    const gone = 'eval "$(declare -f tmux | sed \'1s/^tmux/_tmux_stub/\')"; '
+      + 'tmux() { [[ "${1:-}" == kill-session ]] && { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _tmux_stub "$@"; }; '
+      + '_alive() { ! grep -q kill-session "$HOME/ccd-calls" 2>/dev/null; };';
+    const r = roll('', gone);
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+  });
+
+  it('a failed wake whose unit cannot be stopped again exits 5 with roll-wake-unrestored, never "put back to sleep"', () => {
+    idle();
+    fs.writeFileSync(path.join(h.home, 'wake-fails'), '');
+    const r = roll('', '_svc_disable_now() { echo "disable $*" >> "$HOME/ccd-calls"; return 1; };');
+    expect(r.rc, r.err).toBe(5);
+    expect(r.err).toMatch(new RegExp(`ccd: roll-wake-unrestored — ${ID} was hibernated and its wake exited 5, and its unit claude-session@${ID} could not be stopped again: ${ID} may be neither running nor hibernated`));
+    expect(r.err).not.toContain('roll-wake-failed');
+    expect(r.err).not.toContain('put back to sleep');
+    expect(r.out).not.toContain('rolled');
   });
 
   it('a roll does not take a standing .hibernated as done: the re-measure runs and the act lands', () => {

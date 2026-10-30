@@ -6,7 +6,7 @@ import {
   hibernateAfterMs, type HibernateLive, type HibernateMark, type HibernateStoreRead,
 } from './coord/hibernate.js';
 import {
-  NO_ROLL_SUFFIX, ROLL_QUIET_MS, ROLL_SWEEP_ACTOR, autoRollVerdict, type AutoRollVerdict,
+  NO_ROLL_SUFFIX, ROLL_QUIET_MS, ROLL_SWEEP_ACTOR, autoRollVerdict, rollTargetVerdict, type AutoRollVerdict,
 } from './coord/rollTarget.js';
 import { idleHoursBindings, laneVerb, sleepPass, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
 import { readSwitches } from '../../shared/switches.js';
@@ -29,7 +29,13 @@ import type { ClaudeRollTargets } from '../../shared/claudeVersion.js';
  * `hibernate-roll`. Not `ccd roll`: it does not exist yet (binary-lifecycle wave 2). Not a swap: `cmd_swap` refuses a
  * same-account target. Everything is re-read and the verdict asked again on the coordination serialiser and
  * the session's queue (D-5428), the switches over a fresh listing (D-7047), and the fleet-wide wake budget as an
- * automatic wake, so a roll never lands on top of another wake. A failed wake leaves the coordinator hibernated, a
+ * automatic wake, so a roll never lands on top of another wake. The serialiser is NOT held across the ccd call
+ * (D-7541): it is the one coordination mutex, and the call includes `cmd_ensure`'s pane wait (up to the runner's
+ * 300 s), so the call holds only the session's queue, and once ccd answers a roll the target is asked again on the
+ * serialiser (`afterAct`: the setting and the role, read fresh), so a coordination write that landed meanwhile is
+ * journalled beside the roll. A roll that woke nothing (ccd refused it, the call failed before anything stopped, the
+ * pane would not die, the wake failed and ccd put it back to sleep) gives its wake-budget slot back (D-7542). A pane
+ * still live after ccd's kill is `kill-failed` (exit 6), never rolled. A failed wake leaves the coordinator hibernated, a
  * sanctioned state ccd restores (the marker re-stamped, the unit stopped): mail, an open screen or a re-dispatch wakes
  * it, on the current release. A failed wake ccd could NOT put back to sleep is `woke-unrestored`, never "stays
  * hibernated": the line names the session to check. A call cut short or never answered (a timeout, a dropped link, a
@@ -88,7 +94,12 @@ export interface RollSweepMemory {
 }
 
 export type RollOutcome =
-  | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number }
+  /** `after` (D-7541): the target asked again on the serialiser once ccd answered, when it was no longer one (a
+   *  coordination write landed while the call ran, which no longer waits on it): the word that says why. */
+  | { readonly id: string; readonly kind: 'rolled'; readonly idleMs: number; readonly after?: string }
+  /** The pane was still live after ccd's kill (`roll-kill-failed`, exit 6): nothing was rolled and no wake was tried,
+   *  but the hibernated marker and the stopped unit the act wrote stand, so the line names the session to check. */
+  | { readonly id: string; readonly kind: 'kill-failed'; readonly detail: string }
   | { readonly id: string; readonly kind: 'skipped'; readonly reason: string }
   | { readonly id: string; readonly kind: 'failed'; readonly detail: string }
   | { readonly id: string; readonly kind: 'woke-failed'; readonly detail: string }
@@ -177,6 +188,16 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       const store = idleHoursBindings(deps)(row.id);
       return { v: ask(deps, p, f.names, row, store, live, startedAt, at), store };
     },
+    // D-7541: once ccd answered, on the serialiser again: the setting and the row's role, read fresh. The roll happened
+    // either way; a target that stopped being one while the call ran is journalled beside it.
+    afterAct: async (deps, _row, rec) => {
+      const targets = deps.targets();
+      if (targets === null) return 'setting-unreadable';
+      const fresh = deps.act === null ? { ok: false as const } : await deps.act.rowAtAct(rec);
+      if (!fresh.ok) return 'row-unmeasured';
+      const t = rollTargetVerdict(targets, fresh.row.role);
+      return t.take ? null : t.skip;
+    },
   },
   notices: null,
   // Unarmed (no act port, no serialiser yet, or no `hibernate` on the box), `judged` answers the row and `rollPass`
@@ -188,7 +209,9 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       : v.act === 'hibernate' ? { id, kind: 'skipped', reason: 'one-per-pass' } : null),
     acted: (id, v, r) => {
       if (r.kind === 'hibernated') {
-        if (r.woke === undefined || r.woke === true) return { id, kind: 'rolled', idleMs: v.idleMs };
+        if (r.woke === undefined || r.woke === true) {
+          return r.after === undefined ? { id, kind: 'rolled', idleMs: v.idleMs } : { id, kind: 'rolled', idleMs: v.idleMs, after: r.after };
+        }
         return r.woke.restored ? { id, kind: 'woke-failed', detail: r.woke.failed } : { id, kind: 'woke-unrestored', detail: r.woke.failed };
       }
       if (r.kind === 'held-at-act') {
@@ -197,6 +220,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       }
       if (r.kind === 'skipped') return { id, kind: 'skipped', reason: r.by === 'ccd' ? `ccd:${r.detail}` : r.detail };
       if (r.kind === 'switched-off') return { id, kind: 'skipped', reason: r.detail };
+      if (r.outcome === 'kill-failed') return { id, kind: 'kill-failed', detail: r.detail };
       return r.outcome === 'unknown' ? { id, kind: 'unknown', detail: r.detail } : { id, kind: 'failed', detail: r.detail };
     },
   },
@@ -252,11 +276,14 @@ export async function rollPass(
     done.add(o.id);
     if (o.kind === 'rolled') {
       mem.lastAt.delete(o.id);
-      deps.log(`ccrc-server: rolled ${o.id} onto the current release (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)`);
+      const after = o.after === undefined ? '' : `; by the time ccd answered it was no longer a roll target (${o.after})`;
+      deps.log(`ccrc-server: rolled ${o.id} onto the current release (idle ${Math.floor(o.idleMs / 60_000)} min; D-7452)${after}`);
     } else if (o.kind === 'skipped') {
       journal(deps, mem, o.id, o.reason, `ccrc-server: roll-skip ${o.id}: ${o.reason}`);
     } else if (o.kind === 'failed') {
       journal(deps, mem, o.id, 'failed', `ccrc-server: roll of ${o.id} failed at its hibernate (${o.detail.trim() || 'no stderr'}); it was not stopped`);
+    } else if (o.kind === 'kill-failed') {
+      journal(deps, mem, o.id, 'kill-failed', `ccrc-server: roll of ${o.id}: its pane could not be killed (${o.detail.trim() || 'no stderr'}), so it was not rolled and no wake was tried: it still runs its old release, with its hibernated marker written and its unit stopped; check ${o.id}`);
     } else if (o.kind === 'woke-failed') {
       journal(deps, mem, o.id, 'woke-failed', `ccrc-server: roll of ${o.id}: its wake failed (${o.detail.trim() || 'no stderr'}); ccd put it back to sleep, so it stays hibernated, and mail, an open screen or a re-dispatch wakes it on the current release`);
     } else if (o.kind === 'woke-unrestored') {
