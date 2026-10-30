@@ -1,9 +1,10 @@
 // Single-definition scanners, one area of the guard that used to be one file (see ./helpers.ts for the doctrine and the shared walkers).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../../shared/api.js';
-import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources } from './helpers.js';
+import { sourceOfSymbol } from '../scan/symbols.js';
+import { ALL, REACH, ROOTS, ccrcRoot, here, holdersOf, passage, prose, rel, sources, stallCodeText } from './helpers.js';
 
 
 describe('the roots this scans', () => {
@@ -364,6 +365,84 @@ describe('Build 7 nouns', () => {
     // Exactly one literal list opens with the authority list's first two members: DONE_AUTHORITY_CODES' own.
     const copies = ALL.flatMap((f) => (readFileSync(f, 'utf8').match(LITERAL_COPY) ?? []).map(() => rel(f)));
     expect(copies, 'a hand-typed copy of the done-authority list').toEqual(['shared/api.ts']);
+  });
+
+  // Landing order wave 4b (D-7514, from wave 4c's review F5). The radar's files are read against ONE freshness rule on the
+  // server, `freshWithin` (D-7475), and the display has ONE clock rule of its own, `landingShown` (D-7481): a second
+  // `Date.parse` or a second `* 1000` of a window in a radar reader is a third rule that drifts. Each is defined once, in
+  // `shared/api.ts`, by a pattern that sees a function, a const and an unexported copy and not an import or a longer name.
+  // Task 2 adds the positive check that `fleet.ts` and `watch.ts` reach `freshWithin`.
+  describe('the radar files have one freshness rule (D-7514)', () => {
+    const defOf = (name: string): RegExp =>
+      new RegExp(`^\\s*(?:export\\s+)?(?:(?:async\\s+)?function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+    const holdersOfDef = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('defines freshWithin, FRESH_FUTURE_SKEW_S and landingShown once each, in shared/api.ts', () => {
+      // CONTROL: the pattern sees every spelling of a definition, and neither an import nor a longer name.
+      const d = defOf('freshWithin');
+      for (const t of ['export function freshWithin(a: unknown) {', 'function freshWithin() {', 'export const freshWithin = () => 1;',
+        '  const freshWithin = () => 1;', 'export async function freshWithin() {', 'let freshWithin;']) {
+        expect(d.test(t), t).toBe(true);
+      }
+      for (const t of ["import { freshWithin } from '../x.js';", 'const freshWithinFoo = 1;', 'function myfreshWithin() {',
+        '// function freshWithin() {', 'const x = freshWithin(a, 1, 2);']) {
+        expect(d.test(t), t).toBe(false);
+      }
+      for (const name of ['freshWithin', 'FRESH_FUTURE_SKEW_S', 'landingShown']) {
+        expect(holdersOfDef(defOf(name)), name).toEqual(['shared/api.ts']);
+      }
+    });
+
+    // The readers that exist. A file not yet created (the PWA's two, until Task 3) is skipped, never red; `radar.ts` and
+    // `lineage.ts` must exist, so the scan is never vacuous.
+    const READERS = ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts', 'server/src/coord/lineageRead.ts',
+      'server/src/watch.ts', 'server/src/fleet.ts', 'server/src/server.ts',
+      'pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
+    // `1000` is spelled three ways in a window's milliseconds: `1000`, `1_000` and `1e3`.
+    const SECOND_RULE = [/Date\.parse\(/, /FRESH_FUTURE_SKEW_S/, /RADAR_PROBE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/,
+      /LINEAGE_FRESH_S\s*\*\s*(?:1000|1_000|1e3)\b/, /(?:1000|1_000|1e3)\s*\*\s*(?:RADAR_PROBE_FRESH_S|LINEAGE_FRESH_S)/];
+    // The PWA's two readers also never build a `Date` (D-7514): `at` is a fixed-width stamp, and the chip orders it as a
+    // string. Not applied to the server readers: `watch.ts` formats a log line with `new Date(...)`, which is no clock read.
+    const PWA_READERS = ['pwa/src/fleet/conflictWords.ts', 'pwa/src/fleet/ConflictChip.tsx'];
+    const PWA_ONLY = /\bnew Date\(/;
+    const codeOf = (f: string): string => stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8'));
+
+    it('no radar reader parses a date, names the skew, or multiplies a window by 1000 on a code line', () => {
+      // CONTROL: each pattern fires on the line it is for, and the comment filter drops a sentence ABOUT it.
+      expect(SECOND_RULE.map((re) => re.test('const t = Date.parse(at); x = RADAR_PROBE_FRESH_S * 1000; FRESH_FUTURE_SKEW_S; LINEAGE_FRESH_S*1000')))
+        .toEqual([true, true, true, true, false]);
+      expect(SECOND_RULE[4]!.test('const w = 1000 * LINEAGE_FRESH_S;')).toBe(true);
+      // CONTROL: the other spellings of 1000 are seen too, and a longer number is not.
+      for (const t of ['x = RADAR_PROBE_FRESH_S * 1_000;', 'x = RADAR_PROBE_FRESH_S*1e3;', 'x = LINEAGE_FRESH_S * 1_000', 'x = 1e3 * RADAR_PROBE_FRESH_S',
+        'x = 1_000*LINEAGE_FRESH_S']) {
+        expect(SECOND_RULE.some((re) => re.test(t)), t).toBe(true);
+      }
+      expect(SECOND_RULE.some((re) => re.test('x = RADAR_PROBE_FRESH_S * 10000;')), 'a longer number').toBe(false);
+      // CONTROL: `new Date(` is seen on a code line and dropped from a comment.
+      expect(PWA_ONLY.test(stallCodeText('const ms = new Date(l.at).getTime();'))).toBe(true);
+      expect(PWA_ONLY.test(stallCodeText('// orders by new Date(at) once\nconst a = 1;'))).toBe(false);
+      expect(SECOND_RULE.some((re) => re.test(stallCodeText(' * a window is Date.parse( by 1000 * LINEAGE_FRESH_S\n// FRESH_FUTURE_SKEW_S')))).toBe(false);
+
+      const present = READERS.filter((f) => existsSync(path.join(ccrcRoot, f)));
+      for (const must of ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts']) expect(present, must).toContain(must);
+      const hits = present.flatMap((f) => SECOND_RULE.filter((re) => re.test(codeOf(f))).map((re) => `${f}: ${re.source}`));
+      expect(hits, 'a radar reader with a freshness rule of its own').toEqual([]);
+      const dates = PWA_READERS.filter((f) => existsSync(path.join(ccrcRoot, f))).filter((f) => PWA_ONLY.test(codeOf(f)));
+      expect(dates, 'a PWA radar reader that builds a Date').toEqual([]);
+      expect(PWA_READERS.filter((f) => existsSync(path.join(ccrcRoot, f))), 'the PWA scan is never vacuous').toContain('pwa/src/fleet/conflictWords.ts');
+    });
+
+    it('radar.ts and lineage.ts each call freshWithin(, so the scan above is never vacuous', () => {
+      for (const f of ['server/src/coord/radar.ts', 'server/src/coord/lineage.ts']) expect(codeOf(f), f).toMatch(/\bfreshWithin\(/);
+    });
+
+    // Task 2: the two places that age a landing on the server go through the same rule. `assembleFleet` drops an entry past
+    // its window, and `sweepRadar` re-ages the kept map; neither writes its own comparison.
+    it('fleet.ts (assembleFleet) and watch.ts (the lane\'s re-age) call freshWithin( too', () => {
+      const code = (file: string, symbol: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, file), symbol));
+      expect(code('server/src/fleet.ts', 'assembleFleet'), 'fleet.ts').toMatch(/\bfreshWithin\(\s*landing\.at,\s*RADAR_PROBE_FRESH_S,/);
+      expect(code('server/src/watch.ts', 'FleetWatcher.sweepRadar'), 'watch.ts').toMatch(/\bfreshWithin\(\s*l\.at,\s*RADAR_PROBE_FRESH_S,/);
+    });
   });
 
   // D-1319. `runHealth`'s statement (1) reuses `DELIBERATE_CANCEL_ERRORS_SQL`

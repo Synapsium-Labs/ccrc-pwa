@@ -3094,6 +3094,23 @@ button.proj-card-pool::before {
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 
+/* ── The predicted-conflict chip (landing order wave 4b) ──────────────────
+   One read-only pill beside the hot-files strip, on the strip's own gutters. Self-grounded: every rule that sets an ink
+   sets its ground too, so the gate measures the pair. The WORD carries the meaning; the ink only quiets or raises it —
+   attention for a predicted conflict, tertiary for "partly measured" and "no predicted conflicts". */
+.chip--conflict {
+  display: flex;
+  width: fit-content;
+  max-width: calc(100% - 2 * var(--sp-4));
+  margin: 0 var(--sp-4) var(--sp-2);
+  color: var(--ink-tertiary);
+  background: var(--bg-raised);
+}
+.chip--conflict[data-state='conflict'] {
+  color: var(--status-attention-text);
+  background: var(--bg-raised);
+}
+
 /* — centralised update management W3: SettingsScreen (design 2026-09-20 §13) —
    Its head and column are `PageScaffold`'s since settings Task R2b1 (D-5504):
    `.settings-screen`, `.settings-head` and `.settings-title` retired with the

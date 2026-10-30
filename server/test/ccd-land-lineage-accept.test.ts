@@ -16,7 +16,11 @@ import { makeLandFixture, type LandFixture } from './ccdLandProbeFixture.js';
 import { verifyDone, type DoneClaim } from '../src/coord/fingerprint.js';
 import { parseLineage, type LineageRead } from '../src/coord/lineage.js';
 import type { Runner } from '../src/exec.js';
-import { testDeps } from './helpers.js';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { assembleFleet } from '../src/fleet.js';
+import { readRegistry } from '../src/registry.js';
+import { testDeps, withFakeClock } from './helpers.js';
 
 let h: CcdHarness;
 let fx: LandFixture;
@@ -206,5 +210,43 @@ describe("the parser reads every shape the shipped radar writes (wave 4c, D-7469
     const r = parsed();
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.doc).toMatchObject({ state: 'unmeasured', chain: [], branch: BRANCH });
+  });
+});
+
+// Landing order wave 4b (Task 2), end to end: the SHIPPED radar's `probe` doc is what the lane reads, and the row the
+// fleet frame assembles for the bound session carries a `landing` that matches it. Two bound heads whose files collide
+// on one path, so the doc holds a measured pair.
+describe('the fleet frame carries what the shipped radar measured (wave 4b)', () => {
+  it('a bound session\'s assembled row has a landing that matches the probe doc, and the other\'s names it back', { timeout: 120_000 }, async () => {
+    fx.addHead(1, { 'src/x.ts': 'alpha\n' }, { branch: BRANCH });
+    fx.addHead(2, { 'src/x.ts': 'other\n' }, { branch: 'ws/other' });
+    seedRecord(ID, BRANCH);
+    seedRecord(OTHER_ID, 'ws/other');
+    fx.conf(PROJECT, '');
+    expect(fx.run().status).toBe(0);
+    const doc = fx.readJson('probe');
+    expect(doc).toMatchObject({ state: 'measured', pairs: [{ a: 1, b: 2, state: 'conflict', paths: ['src/x.ts'] }] });
+
+    const deps = serverDeps();
+    const watcher = new FleetWatcher(withFakeClock(deps), new Bus(), 10_000);
+    try {
+      const records = await readRegistry(deps.io, deps.cfg);
+      await watcher.sweepRadar(records);
+      const heads = doc.heads as { pr: number; head: string }[];
+      const alpha = watcher.currentLandings().get(ID);
+      expect(alpha).toEqual({
+        at: doc.at, pr: 1, head: heads.find((x) => x.pr === 1)!.head, baseRef: doc.base.ref,
+        base: { state: 'clean' }, paired: true, conflicts: [{ pr: 2, paths: ['src/x.ts'], pathsCut: false }],
+        unmeasuredWith: [], cut: { heads: false, pairs: false, unbound: false },
+      });
+
+      const frame = await assembleFleet(
+        deps.io, deps.cfg, deps.tmux, undefined, undefined, undefined, undefined, undefined, undefined, records,
+        undefined, undefined, undefined, undefined, watcher.currentLandings());
+      expect(frame.find((r) => r.id === ID)?.landing).toEqual(alpha);
+      expect(frame.find((r) => r.id === OTHER_ID)?.landing).toMatchObject({ pr: 2, conflicts: [{ pr: 1, paths: ['src/x.ts'] }] });
+    } finally {
+      watcher.stop();
+    }
   });
 });

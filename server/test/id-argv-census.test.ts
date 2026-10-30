@@ -490,6 +490,8 @@ const GATE_FILES = [
   'orphanTreeLane.ts',
   // coord/siblingRead.ts (D-6923): a sibling run's `claimedBy` is vetted by the predicate before the registry read.
   'coord/siblingRead.ts',
+  // coord/radar.ts (D-7479): a probe head's `id` is vetted by the predicate before it can match a registry row.
+  'coord/radar.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;

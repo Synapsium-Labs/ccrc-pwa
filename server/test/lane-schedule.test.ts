@@ -436,6 +436,15 @@ describe('the declared derivations are references, never a second literal', () =
     expect(laneRow('digestBeat').cadenceMs).toBe(60_000);
     expect(laneRow('approvalPrune').cadenceMs).toBe(86_400_000);
   });
+
+  // Landing order wave 4b, fix round 1 (R3, G1b and G1c). The radar lane reads a probe file per project, so its beat is a
+  // minute and a pass still in flight is skipped, not joined. Literals on purpose, never `LANDING_RADAR_SWEEP_MS`: a test
+  // that read the exported constant would move with a mutation of it.
+  it('the landing radar lane is the 60 s, skip-while-in-flight row', () => {
+    const r = laneRow('landingRadar');
+    expect(r.cadenceMs).toBe(60_000);
+    expect(r.flight).toBe('skip');
+  });
 });
 
 describe('the four reclaim lanes (D-5862, PR 3)', () => {
@@ -485,9 +494,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 31 of 31 are monotonic', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 32 of 32 are monotonic', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(31);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(32);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
