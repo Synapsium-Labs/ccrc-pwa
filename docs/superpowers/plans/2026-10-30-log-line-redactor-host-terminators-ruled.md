@@ -101,3 +101,34 @@ after.
 row (`@tok@host`), 1 `prose` row (`v pkg@h:1.2.3 ok`) and 1 `blast` row (bare-host's `see a@b:3.x`). The six
 `known-limit` rows are unchanged. Red first: 17 of 173 before the change, 173 of 173 after. The region in
 `ccd/ccd-update-sync` was regenerated with `node shared/hook-helpers.mjs --write ccd/ccd-update-sync ccd/ccrc`.
+
+**Fourth round, same PR, same ruling.** Review found one more shape that printed a secret whole in all three modes,
+and asked that every gap left be named:
+
+1. A scheme URL whose userinfo starts with '@' (`https://@tok@host/x`, `https://@tok@host`, `https://@@tok@host/x`).
+   The scheme rule now takes any leading '@'s with the userinfo (`:(/+)@*[^/@?#[:space:]]+@`), so these read
+   `https://host/x` and `https://host` in every mode. Each pass still drops at least one '@', so the loop ends.
+2. A bracketed host that holds an IPv6 zone id or is an IPvFuture literal (`tok@[fe80::1%25en0]:80 refused`,
+   `tok@[v1.fe80::1]:80 refused`). Rule 2's bracket now takes `[0-9A-Za-z:.%_~-]`. Widening it moved no existing row;
+   its cost is one `blast` row, `log@[core:io]:2 ok`, which now reads `[core:io]:2 ok`. A bracket with no ':', as in
+   `ref@[main]:2 ok`, was already read as an ordinary host, and a second `blast` row records that.
+
+**Known limits, the complete list.** Ten `known-limit` rows, each with a note and printed whole in every column, and
+the file's own note name what this PR does not close. The CONTROL test pins exactly these ten:
+
+- a userinfo inside a query string or a path: `https://h/x?proxy=user:secret@host`, `GET /p?u=user:secret@host:8443`,
+  `dir/user:secret@host`;
+- a raw '#', '?' or '/' inside a password: `user:pa#ss@host refused`, `user:pa?ss@host refused`,
+  `user:pa/ss@host refused`;
+- a token-only userinfo (no ':') before a host that no port and no path follows, while more text follows the host:
+  `--proxy=tok@host refused`, `--proxy tok@host refused`. Prose's `user@host` has the same shape, and bare-host's rule
+  masks it only at ')' or the end of the text;
+- a port followed by a non-ASCII punctuation mark: `tok@host:8443… x`, `tok@host:8443” x`.
+
+**Bound, fourth round.** A second `bound` row keeps a head dense with masks: about 98 KB of ` u:secret@h:1` three
+times and then ` /home/u/x`, so the 4001-byte head masks 244 credentials and 81 homes. BOUND now checks both rows
+against the same 3 s limit in every column, and that one of them masks at least 200 credentials and 50 homes, so the
+Linux CI legs measure the worst case the cap leaves. Locally it returns in under 0.1 s a call.
+
+**Corpus, fourth round.** 7 more `R8` rows, 2 `blast` rows, 4 `known-limit` rows and the dense `bound` row. Red
+first: 8 of 187 before the change (the 7 `R8` rows and `log@[core:io]:2 ok`), 187 of 187 after.
