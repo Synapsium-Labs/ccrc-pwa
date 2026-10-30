@@ -433,3 +433,21 @@ describe('pythonRedactorTables() equals [], may only shrink (C5h, D-7077)', () =
     expect(c5hPythonRedactorTables().map((s) => s.name)).toEqual([]);
   });
 });
+
+// W5 Task C5i (D-7078; ARCH-67; spec K7's log-line half, K18; option A, D-7289): one bash log-line redactor,
+// ccd/ccrc's `_upd_redact`. ccd/ccd-update-sync carries it as shared/hook-helpers.mjs's generated log-line region, a byte
+// copy the census counts zero, and its own `redact` is gone. The census is census-w5/redactors.ts#logLineRedactors (2 at
+// C5i's base, `ccd/ccrc#_upd_redact` and `ccd/ccd-update-sync#redact`); it may only shrink, and a name leaves it in the
+// commit that removes its function. `inlineUserinfoStrips()` holds its one named site
+// (`_check_box-settings` strips one setting's displayed value before `_upd_redact` runs over the whole doctor line).
+import { inlineUserinfoStrips as c5iInlineUserinfoStrips, logLineRedactors as c5iLogLineRedactors } from '../census-w5/redactors.js';
+
+describe('logLineRedactors() equals [ccd/ccrc#_upd_redact], may only shrink (C5i, D-7078)', () => {
+  it('one bash function in ccd\'s shipped programs redacts a log line, and the generated copy counts zero', () => {
+    expect(c5iLogLineRedactors().map((s) => s.name)).toEqual(['ccd/ccrc#_upd_redact']);
+  });
+
+  it('inlineUserinfoStrips() equals its one named site', () => {
+    expect(c5iInlineUserinfoStrips().map((s) => s.name)).toEqual(['ccd/ccrc-doctor-checks#_check_box-settings']);
+  });
+});

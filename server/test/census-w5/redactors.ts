@@ -12,13 +12,15 @@
 // KNOWN WIDTH. The userinfo shape is a negated bracket class holding `/` and `@`, then `*`, `+` or `)`, then `@`
 // (`[^/@[:space:]]*@`, `+([^\/@?#[:space:]])@`, `[^/@\t\n\v\f\r ]+@`). A strip spelled another way (a `case` glob, a
 // `sed` with other delimiters, an `awk` script) is not seen. A heredoc's body is never bash code here: its lines are read
-// only by `pythonRedactorTables`. A function inside a `# ccrc:generated` region whose bytes equal `ccd/ccd`'s function of
-// the same name is that function's copy (the accounts plan's C5a rule; C5i re-points the compare to its region row's
-// `source`): it is a counted function's copy, never a site of its own.
+// only by `pythonRedactorTables`. A function inside a `# ccrc:generated` region whose bytes equal the function of the
+// same name in the file its region row is given (`REGIONS[].file` in `shared/hook-helpers.mjs`, under the census's
+// root; `ccd/ccd` and its library for a region that matches no row, the accounts plan's C5a rule) is that function's
+// copy (C5i): it is a counted function's copy, never a site of its own.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { bashCodeOf, REPO } from '../consolidationCensus.js';
 import { bashBodies, ccdProgramBodies, shippedBashPrograms, type ProgramBody } from './accountMarkers.js';
+import { regionOf } from '../../../shared/hook-helpers.mjs';
 
 /** One site: `name` is `<file>#<function>` (or `<file>#<top-level>`), with a `:<TABLE>` suffix for a python table. */
 export interface RedactorSite { readonly name: string; readonly file: string; readonly line: number; readonly text: string }
@@ -45,8 +47,8 @@ export function heredocLines(src: string): Set<number> {
 
 /** The bash programs this census reads, with their bodies: `ccd/ccd` as ccd's whole program (its library included), every
  *  other shipped bash program, and the top-level `.sh` files under `ccd/`. Each body's heredoc lines are marked. */
-function bashProgramBodies(root: string): Array<{ file: string; bodies: ProgramBody[]; heredoc: Map<string, Set<number>> }> {
-  const out: Array<{ file: string; bodies: ProgramBody[]; heredoc: Map<string, Set<number>> }> = [];
+function bashProgramBodies(root: string): Array<{ file: string; src: string; bodies: ProgramBody[]; heredoc: Map<string, Set<number>> }> {
+  const out: Array<{ file: string; src: string; bodies: ProgramBody[]; heredoc: Map<string, Set<number>> }> = [];
   const dir = path.join(root, 'ccd');
   const sh = existsSync(dir) ? readdirSync(dir).sort().filter((e) => e.endsWith('.sh') && statSync(path.join(dir, e)).isFile()).map((e) => `ccd/${e}`) : [];
   for (const file of [...shippedBashPrograms(root), ...sh]) {
@@ -54,11 +56,11 @@ function bashProgramBodies(root: string): Array<{ file: string; bodies: ProgramB
       const bodies = ccdProgramBodies(root);
       const heredoc = new Map<string, Set<number>>();
       for (const f of new Set(bodies.map((b) => b.file))) heredoc.set(f, heredocLines(readFileSync(path.join(root, f), 'utf8')));
-      out.push({ file, bodies, heredoc });
+      out.push({ file, src: '', bodies, heredoc });
       continue;
     }
     const src = readFileSync(path.join(root, file), 'utf8');
-    out.push({ file, bodies: bashBodies(src).map((b) => ({ ...b, file })), heredoc: new Map([[file, heredocLines(src)]]) });
+    out.push({ file, src, bodies: bashBodies(src).map((b) => ({ ...b, file })), heredoc: new Map([[file, heredocLines(src)]]) });
   }
   return out;
 }
@@ -74,9 +76,23 @@ function ccdFunctionTexts(root: string): Map<string, string> {
   return out;
 }
 
-/** Whether a body is a generated copy of `ccd/ccd`'s function of the same name, byte for byte. */
-const isGeneratedCopy = (program: string, b: ProgramBody, ccdFns: ReadonlyMap<string, string>): boolean =>
-  program !== 'ccd/ccd' && b.generated && ccdFns.get(b.name) === b.text;
+/** The function texts a generated body of a program other than `ccd/ccd` is compared with, by name: those of the file
+ *  the program's region row is given (`regionOf(programSrc).file`, read under `root`), or `ccd/ccd`'s and its library's
+ *  when that file is `ccd/ccd` or the program's region matches no row. */
+function generatedSourceTexts(root: string, programSrc: string, ccdFns: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  const file = regionOf(programSrc)?.file ?? 'ccd/ccd';
+  if (file === 'ccd/ccd') return ccdFns;
+  const abs = path.join(root, file);
+  const out = new Map<string, string>();
+  if (!existsSync(abs)) return out;
+  for (const b of bashBodies(readFileSync(abs, 'utf8'))) if (b.fn && !out.has(b.name)) out.set(b.name, b.text);
+  return out;
+}
+
+/** Whether a body is a generated copy, byte for byte, of the function of the same name in the file its program's
+ *  region is given (`srcFns`, from `generatedSourceTexts`). */
+const isGeneratedCopy = (program: string, b: ProgramBody, srcFns: ReadonlyMap<string, string>): boolean =>
+  program !== 'ccd/ccd' && b.generated && srcFns.get(b.name) === b.text;
 
 /** Whether a function body is a LINE redactor: it binds a local from `$1`, carries a userinfo strip or a `$HOME` -> `~`
  *  rewrite, and prints that local back. */
@@ -97,8 +113,9 @@ export function logLineRedactors(root: string = REPO): RedactorSite[] {
   const ccdFns = ccdFunctionTexts(root);
   const out: RedactorSite[] = [];
   for (const p of bashProgramBodies(root)) {
+    const srcFns = generatedSourceTexts(root, p.src, ccdFns);
     for (const b of p.bodies) {
-      if (!b.fn || isGeneratedCopy(p.file, b, ccdFns)) continue;
+      if (!b.fn || isGeneratedCopy(p.file, b, srcFns)) continue;
       const lines = codeLines(b, p.heredoc);
       if (isLineRedactor(lines)) out.push({ name: `${p.file}#${b.name}`, file: b.file, line: b.lines[0]!.line, text: b.lines[0]!.raw });
     }
@@ -112,11 +129,12 @@ export function inlineUserinfoStrips(root: string = REPO): RedactorSite[] {
   const ccdFns = ccdFunctionTexts(root);
   const out: RedactorSite[] = [];
   for (const p of bashProgramBodies(root)) {
+    const srcFns = generatedSourceTexts(root, p.src, ccdFns);
     for (const b of p.bodies) {
       const lines = codeLines(b, p.heredoc);
-      // A counted function: a hand-written line redactor, or a generated byte-equal copy of a `ccd/ccd` function. A
-      // generated body that differs from its source by one byte is neither, so its strip is a site of its own.
-      if (b.fn && (isGeneratedCopy(p.file, b, ccdFns) || (!b.generated && isLineRedactor(lines)))) continue;
+      // A counted function: a hand-written line redactor, or a generated byte-equal copy of its region's source
+      // function. A generated body that differs from its source by one byte is neither, so its strip is a site of its own.
+      if (b.fn && (isGeneratedCopy(p.file, b, srcFns) || (!b.generated && isLineRedactor(lines)))) continue;
       const hit = lines.find((l) => USERINFO_SHAPE.test(l.code));
       if (hit) out.push({ name: `${b.fn ? p.file : b.file}#${b.name}`, file: b.file, line: hit.line, text: hit.raw });
     }

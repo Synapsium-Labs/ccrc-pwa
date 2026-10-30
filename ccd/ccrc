@@ -2719,7 +2719,7 @@ EOF
 }
 
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
-# `_upd_redact <text>` — what NO die sentence, report detail, WARN or
+# `_upd_redact <text> [bare-host]` — what NO die sentence, report detail, WARN or
 # announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
 # 11 and M1): a URL's userinfo (`[scheme:/…]user:pass@host` -> `[scheme:/…]host`;
 # a scheme's one or more '/' stay as written, D-6748) and this box's own absolute
@@ -2746,10 +2746,15 @@ EOF
 # `$gate_fail` (`cmd_update`, redacted once at its own local definition, so
 # `_upd_rollback_no_restore` and `_upd_restore` inherit it as `$reason`);
 # `$UPD_GATE_WHY` directly (`_upd_gate`'s two echoes, `cmd_update`'s exit-4
-# echo). `ccd/ccd-update-sync`, another executable, redacts at its own `say`
-# with its own copy of all three rules (wave 29, R45, D-6984; its header says how).
+# echo). `ccd/ccd-update-sync`, another executable, carries a generated copy of
+# this function (`shared/hook-helpers.mjs`'s log-line region) and redacts at its
+# own `say`, with `bare-host`.
+# OUT OF SCOPE: this function masks only those two, a URL's userinfo and this
+# box's home directory. A query-string secret (`?token=…`, `&key=…`) and a
+# bearer token (`Authorization: Bearer …`) pass through it whole; a line that
+# may carry one needs its own masking before it reaches here.
 _upd_redact() {
-  local s="${1:-}" LC_ALL=C
+  local s="${1:-}" mode="${2:-}" LC_ALL=C
   # The userinfo strip is bounded to characters a URL authority allows
   # before an '@' — never '/' or whitespace — so an UNRELATED '@' past the
   # authority (a query's `?email=a@example.com`) is left alone. Review fix
@@ -2763,6 +2768,13 @@ _upd_redact() {
   # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn.
   local sre=':(/+)[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
   local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
+  # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
+  # text's end is masked too, prose's `user@host` included, which is why no ccd/ccrc caller passes it: a systemd
+  # instance unit's `claude-session@x.service` would lose its prefix (D-7289).
+  if [ "$mode" = bare-host ]; then
+    local bre='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:])]+([/?#)]|$))'
+    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
+  fi
   # Review fix round 1, M6: the OLD blind substring replace was not anchored
   # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
   # `~ser2/f` (a PREFIX match with no boundary check at all), and a
@@ -27306,14 +27318,23 @@ _uninst_purge() {
 # ARCH-74 (#809): the hook's generated region is rewritten by shared/hook-helpers.mjs --restamp.
 # Prints regenerated | current | refused-missing (BEGIN present, region damaged) | nothere.
 _restamp_hook_region() { node --no-warnings "$1" --restamp "$2" "$3" 2>/dev/null; }
-# The label of the generated region <file> carries (`hook helpers`, `auth-dead writers`, `server-cap reader`), or nothing:
-# each row of <module> --regions is a BEGIN prefix and its label (D-7049).
+# The generated region <file> carries, as its label (`hook helpers`, `auth-dead writers`, `server-cap reader`), a tab
+# and the repository-relative file its row is given, or nothing: each row of <module> --region-files is a BEGIN
+# prefix, its label and that file (D-7049; W5 C5i). A module from before --region-files refuses it (exit 2, nothing on
+# stdout); its --regions rows (a prefix and a label) are read instead, every region of such a module given ccd/ccd.
 _restamp_region_of() {   # module file
-  local b l
+  local detect label file rows
   [ -f "$1" ] || return 0
-  while IFS=$'\t' read -r b l; do
-    [ -n "$b" ] && grep -qF -- "$b" "$2" 2>/dev/null && { printf '%s' "$l"; return 0; }
-  done < <(node --no-warnings "$1" --regions 2>/dev/null)
+  rows="$(node --no-warnings "$1" --region-files 2>/dev/null)"
+  if [ -z "$rows" ]; then
+    while IFS=$'\t' read -r detect label; do
+      [ -n "$detect" ] && grep -qF -- "$detect" "$2" 2>/dev/null && { printf '%s\t%s' "$label" ccd/ccd; return 0; }
+    done < <(node --no-warnings "$1" --regions 2>/dev/null)
+    return 0
+  fi
+  while IFS=$'\t' read -r detect label file; do
+    [ -n "$detect" ] && grep -qF -- "$detect" "$2" 2>/dev/null && { printf '%s\t%s' "$label" "$file"; return 0; }
+  done <<<"$rows"
 }
 
 # After restamping ccd/ccd, say whether the sibling hook's region has gone stale.
@@ -27362,7 +27383,7 @@ _restamp_hook_note() {
 cmd_restamp() {
   case "${1:-}" in -h|--help) echo "usage: $PROG restamp <file>"; return 0 ;; esac
   [ $# -eq 1 ] || { echo "usage: $PROG restamp <file>" >&2; exit 2; }
-  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks ccdsrc what
+  local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d hooks what file srcfile
   { [ -f "$f" ] && [ ! -L "$f" ]; } || _ccrc_die "restamp: $f is not a regular file"
   # CDPATH= : `cd` consults an exported CDPATH for a relative operand, so the
   # directory resolved here could be a decoy while the write lands on $f itself.
@@ -27387,14 +27408,18 @@ cmd_restamp() {
   # the TARGET'S OWN tree: its shared/hook-helpers.mjs and its sibling ccd, never
   # this script's tree (the installed ccrc would otherwise regenerate a
   # worktree's hook against the installed constants). Missing either is refused. The regions' BEGIN prefixes
-  # come from the module (`--regions`): the target tree's, else this tree's.
+  # and the file each is given come from the module (`--region-files`, else `--regions` with every region given
+  # ccd/ccd): the target tree's, else this tree's. The given file is `ccd/<name>` in the target's own tree; any
+  # other path is refused as missing (W5 C5i).
   hooks="$dir/../shared/hook-helpers.mjs"; [ -f "$hooks" ] || hooks="$CCRC_HERE/../shared/hook-helpers.mjs"
   what="$(_restamp_region_of "$hooks" "$f")"
   if [ -n "$what" ]; then
-    hooks="$dir/../shared/hook-helpers.mjs"; ccdsrc="$dir/ccd"
-    { [ -f "$hooks" ] && [ -f "$ccdsrc" ]; } \
-      || _ccrc_die "restamp: $f carries generated $what, but its own tree lacks $hooks or $ccdsrc; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
-    verdict="$(_restamp_hook_region "$hooks" "$f" "$ccdsrc")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
+    file="${what#*$'\t'}"; what="${what%%$'\t'*}"; srcfile=""
+    case "$file" in ccd/*/*|*..*) ;; ccd/?*) srcfile="$dir/${file#ccd/}" ;; esac
+    hooks="$dir/../shared/hook-helpers.mjs"
+    { [ -f "$hooks" ] && [ -n "$srcfile" ] && [ -f "$srcfile" ]; } \
+      || _ccrc_die "restamp: $f carries generated $what, but its own tree lacks $hooks or ${srcfile:-$file}; restamp it from a full checkout (the tree holding both ccd/ and shared/). Nothing was written."
+    verdict="$(_restamp_hook_region "$hooks" "$f" "$srcfile")" || _ccrc_die "restamp: $f could not be read or written; restore it from git (git checkout -- $f), re-apply your edit, restamp again"
     case "$verdict" in
       regenerated) echo "restamp: $f: $what regenerated"; return 0 ;;
       current)     echo "restamp: $f: $what already current"; return 0 ;;

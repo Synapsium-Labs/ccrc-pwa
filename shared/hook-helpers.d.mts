@@ -18,7 +18,7 @@ export function checkHookRegion(hookSrc: string, ccdSrc: string): HookRegionStat
 export const AUTHDEAD_REGION_BEGIN: string;
 export const AUTHDEAD_REGION_END: string;
 export const AUTHDEAD_WRITERS: readonly string[];
-/** ccd's whole definition of `name` (its `name() {` line through its column-0 `}`, or a one-line definition), or null. */
+/** A bash source's whole definition of `name` (its `name() {` line through its column-0 `}`, or a one-line definition), or null. */
 export function ccdFunctionDefinition(ccdSrc: string, name: string): string | null;
 export function renderAuthdeadBody(ccdSrc: string): string;
 /** D-7321: the third region, `_api_server_cap` for `ccd/ccrc-api`, generated from the hook's `_hook_server_cap`. */
@@ -26,15 +26,22 @@ export const APICAP_REGION_BEGIN: string;
 export const APICAP_REGION_END: string;
 /** The server-cap reader region's unstamped body, from the HOOK's text (`_hook_server_cap`'s body, renamed). */
 export function renderApicapBody(hookSrc: string): string;
+/** W5 C5i: the fourth region, `_upd_redact` for `ccd/ccd-update-sync`, a byte copy of its definition in `ccd/ccrc`. */
+export const LOGLINE_REGION_BEGIN: string;
+export const LOGLINE_REGION_END: string;
+/** The log-line redactor region's unstamped body, from ccd/ccrc's text (`_upd_redact`'s whole definition). */
+export function renderLogLineBody(ccrcSrc: string): string;
 /** One generated region: its BEGIN/END lines, the prefix it is recognised by, its report label, the text it renders
- *  from (`ccd`, or the `hook` beside it) and its renderer. */
+ *  from (`ccd`, or the `hook` beside it), the file it is given, and its renderer. */
 export interface GeneratedRegion {
-  readonly name: 'hook' | 'authdead' | 'apicap';
+  readonly name: 'hook' | 'authdead' | 'apicap' | 'log-line';
   readonly label: string;
   readonly begin: string;
   readonly end: string;
   readonly detect: string;
   readonly source: 'ccd' | 'hook';
+  /** The repository-relative path of the file the row is given (the CLI's third argument, the engine's `ccdSrc`). */
+  readonly file: string;
   readonly render: (src: string) => string;
 }
 export const REGIONS: readonly GeneratedRegion[];
