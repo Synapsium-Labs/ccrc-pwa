@@ -20,6 +20,7 @@ import { IDLE_NUDGE_DISABLED_MARKER } from '../src/idlenudge.js';
 import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 import { isMarkerState } from '../../shared/api.js';
+import { sqlStatementsIn, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import {
   ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
   NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
@@ -109,6 +110,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'stall-watch-level': 'stall_settings.level',
       'collect-lane-choice': 'collect_lane_settings.choice',
       'roll-idle-targets': 'roll_settings.targets',
+      'dispatch-abandon-choice': 'dispatch_abandon_settings.choice',
     });
   });
 
@@ -121,7 +123,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, three settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, four settings routes, the rest by hand', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -130,6 +132,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'collect-lane-choice': 'POST /api/coord/collect-lane',
       'testbox-remote-live': 'ccd testbox-remote, through POST /api/testbox/switch',
       'roll-idle-targets': 'POST /api/coord/roll-idle',
+      'dispatch-abandon-choice': 'POST /api/coord/dispatch-abandon',
     });
   });
 
@@ -182,8 +185,29 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 32 rows: 29 markers and 3 settings (30 at the test box contract\'s base; roll-idle-targets the third setting)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([32, 29, 3]);
+  it('the table has 33 rows: 29 markers and 4 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([33, 29, 4]);
+  });
+
+  it('D-7319: the dispatch abandon switch is Coordination\'s settings row, seeded on, written by its route and read by the store', () => {
+    expect(SWITCHES['dispatch-abandon-choice']).toEqual({
+      storage: { setting: 'dispatch_abandon_settings.choice' }, default: 'on', owner: 'C5',
+      meaning: expect.stringMatching(/never came back/), writer: 'POST /api/coord/dispatch-abandon',
+    });
+    // The row describes what the tree has: the table its migration creates and seeds on, the store's one reader of it
+    // and the store's one writer, which only the route calls. The abandon pass reads the store, never this row.
+    const store = 'server/src/coord/store.ts';
+    expect(sqlStatementsIn(symbolOf(store, 'CoordStore.dispatchAbandonSetting')).map((q) => [q.verb, q.table]))
+      .toEqual([['SELECT', 'dispatch_abandon_settings']]);
+    expect(sqlStatementsIn(symbolOf(store, 'CoordStore.setDispatchAbandon')).map((q) => [q.verb, q.table]))
+      .toEqual([['INSERT', 'dispatch_abandon_settings']]);
+    const ddl = sqlStatementsInFile('server/src/coord/schema.ts').filter((q) => /\bdispatch_abandon_settings\b/.test(q.text));
+    expect(ddl.map((q) => q.verb)).toEqual(['CREATE', 'INSERT']);
+    expect(ddl[1]!.text).toContain("VALUES (1, 'on', 0)");
+    // The test box row stays the last: this row sits with the other settings rows, ahead of it.
+    const keys = Object.keys(SWITCHES);
+    expect(keys.indexOf('dispatch-abandon-choice')).toBe(keys.indexOf('roll-idle-targets') + 1);
+    expect(keys.at(-1)).toBe(TESTBOX_REMOTE_LIVE_MARKER);
   });
 
   it('a listing with reclaim-paused is set for it and clear for every other marker row', () => {
