@@ -30,6 +30,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { SERVER_CAPS, SERVER_CAPS_FILE, isServerCapWord, parseServerCaps } from '../../shared/api.js';
+import { REGIONS, ccdFunctionDefinition, checkRegion, extractRegion } from '../../shared/hook-helpers.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SYNC = join(REPO, 'ccd', 'ccd-update-sync');
@@ -347,17 +348,26 @@ describe('ccd-update-sync: a transport failure writes nothing', () => {
 });
 
 describe('ccd-update-sync: no credential or absolute home path in a printed line (fix round 1 item 11 / review 155 C18)', () => {
-  // W6 Task 8A, review 167's F5: `redact`'s HOME rule is anchored BEFORE the
-  // home as well as after it, exactly as ccd/ccrc's `_upd_redact` is — and the
-  // two copies' HOME sections are byte-identical, so neither can drift.
-  it('redact: a HOME that is the suffix of a longer path stays whole (`/srv/home/u/x`), a real one still becomes ~, and the section equals _upd_redact\'s (review 167 F5)', () => {
+  // W6 Task 8A, review 167's F5: the HOME rule is anchored BEFORE the home as
+  // well as after it. W5 C5i (D-7078, D-7289): `say` applies the generated copy
+  // of ccd/ccrc's `_upd_redact` (the log-line region), called as `say` calls it,
+  // `_upd_redact "$input" bare-host`; the region is current against ccd/ccrc, so
+  // the two cannot drift. Each call goes through a fixed stdin script, the
+  // definition and the input in files passed as arguments.
+  it('the generated _upd_redact: a HOME that is the suffix of a longer path stays whole (`/srv/home/u/x`), a real one still becomes ~, and the region is current against ccd/ccrc (review 167 F5)', () => {
     const src = readFileSync(SYNC, 'utf8');
-    const block = /^redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
-    expect(block, 'ccd-update-sync has no redact block').not.toBeNull();
+    const block = ccdFunctionDefinition(src, '_upd_redact');
+    expect(block, 'ccd-update-sync has no generated _upd_redact').not.toBeNull();
     const home = mkTmp('upd-sync-redact-unit-');
+    const defs = join(home, 'upd-redact.sh');
+    writeFileSync(defs, `${block!}\n`);
+    let n = 0;
     const call = (text: string, h: string): string => {
+      const input = join(home, `input-${n++}`);
+      writeFileSync(input, text);
       const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true });
-      const p = spawnSync('bash', ['-c', [block![0], 'redact "$1"'].join('\n'), '_', text], { env, encoding: 'utf8' });
+      const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', defs, input],
+        { env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n', encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
     };
@@ -376,13 +386,10 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
       expect(call(url, '/fixture-home')).toBe(url);
     }
     expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?a@b#c@d');
-    const section = (text: string, fn: string): string => {
-      const i = text.indexOf('  local home="${HOME:-}"\n', text.indexOf(`\n${fn}() {`));
-      return text.slice(i, text.indexOf("  printf '%s' \"$s\"\n}", i));
-    };
     const ccrcSrc = readFileSync(CCRC, 'utf8');
-    expect(section(src, 'redact').length, 'the HOME section was not found').toBeGreaterThan(200);
-    expect(section(src, 'redact')).toBe(section(ccrcSrc, '_upd_redact'));
+    const LL = REGIONS.find((r) => r.name === 'log-line')!;
+    expect(checkRegion(LL, src, ccrcSrc)).toBe('current');
+    expect(extractRegion(LL, src)).toContain(`${ccdFunctionDefinition(ccrcSrc, '_upd_redact')!}\n`);
   });
 
   it('a CCRC_SERVER_URL carrying userinfo never reaches stderr on a curl failure (rc 6)', () => {
@@ -533,8 +540,8 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
     const locale = locales.split('\n').find((l) => /^en_US\.utf-?8$/i.test(l));
     if (!locale) { skip(); return; }
     const src = readFileSync(SYNC, 'utf8');
-    const block = /^redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
-    expect(block, 'ccd-update-sync has no redact block').not.toBeNull();
+    const block = ccdFunctionDefinition(src, '_upd_redact');
+    expect(block, 'ccd-update-sync has no generated _upd_redact').not.toBeNull();
     const home = mkTmp('upd-sync-w29-invalid-userinfo-');
     const fixture = join(home, 'url \' " $(printf expanded) [*]');
     writeFileSync(fixture, Buffer.from([
@@ -542,24 +549,28 @@ describe('W29: the sync never prints a URL\'s userinfo', () => {
       ...Buffer.from('ter2@127.0.0.1:9', 'ascii'),
     ]));
     const redactor = join(home, 'redactor \' " $(printf expanded) [*].sh');
-    writeFileSync(redactor, block![0]);
+    writeFileSync(redactor, block!);
     const env = ghContainedEnv(home, {
       HOME: home, LC_ALL: locale, PATH: process.env['PATH'] ?? '',
     }, { systemd: true, tmux: true });
     const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', redactor, fixture], {
-      env, input: '. "$1"\ninput="$(cat -- "$2")"\nredact "$input"\n',
+      env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n',
     });
     expect(p.status, p.stderr.toString()).toBe(0);
     expect(p.stdout).toEqual(Buffer.from('127.0.0.1:9', 'ascii'));
   });
 
-  it('W29-Y3: the header above redact() names the rules it applies, not "the same two rules"', () => {
+  it('W29-Y3: the comment above say() names the rules it applies, not "the same two rules"', () => {
     const src = readFileSync(SYNC, 'utf8');
-    const at = src.indexOf('\nredact() {');
-    const header = src.slice(src.lastIndexOf('\n\n', at), at);
-    expect(header).toContain('`redact <text>`');
+    const END = '\n# ── END GENERATED LOG-LINE REDACTOR ──\n';
+    const end = src.indexOf(END);
+    const at = src.indexOf('\nsay() {', end);
+    expect(end, 'ccd-update-sync carries the log-line region').toBeGreaterThanOrEqual(0);
+    expect(at, 'say() follows the region').toBeGreaterThan(end);
+    const header = src.slice(end + END.length - 1, at);
+    expect(header).toContain('`_upd_redact <text> bare-host`');
     expect(header).not.toContain('the same two rules');
-    expect(header.replace(/\n# ?/g, ' ')).toMatch(/all three of ccd\/ccrc's `_upd_redact` rules/);
+    expect(header.replace(/\n# ?/g, ' ')).toMatch(/every rule of ccd\/ccrc's `_upd_redact`/);
   });
 });
 

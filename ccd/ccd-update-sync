@@ -129,89 +129,6 @@ NODE_ID_FILE="$HOME/.ccrc/node-id"
 DEST="$HOME/.ccrc/update-intent"
 TIMEOUT="${CCRC_UPDATE_SYNC_TIMEOUT:-20}"
 
-# `redact <text>` -- what NO line this script prints may carry verbatim
-# (review 155 C18, fix round 1 item 11): a URL's userinfo and this box's own
-# absolute home directory (-> ~). It applies all three of ccd/ccrc's
-# `_upd_redact` rules (wave 29, R45, D-6984): the scheme rule, after one or
-# more slashes (scheme://user:pass@host -> scheme://host; scheme:/user:pass@host
-# -> scheme:/host, which curl also authenticates with); the rule for a base with
-# no scheme (user:pass@host, which curl takes as http, and which nothing here
-# refuses in agent.env -> host); and the home rule. One difference, on
-# purpose: this script strips the base's trailing '/' and closes its exit-6
-# clause with ')', so a scheme-less host here may also end at ')' or at the
-# text's end, where `_upd_redact` wants '/', '?' or '#'. Called from `say` alone -- the ONE place every
-# line this script prints (to stderr, which a `--user` unit's journal
-# carries) is assembled -- so no `say` call site here, present or future,
-# has to remember to redact its own sentence. Before this fix, `$AGENT_ENV`
-# (an absolute path built from $HOME, unlike the rest of this file's
-# LITERAL `~/.ccrc/...` spellings) and `$url` (which may carry
-# CCRC_SERVER_URL's own userinfo) reached the journal verbatim on three and
-# one lines respectively (review 155 C18); routing every `say` through this
-# redacts them without hand-editing each sentence, and covers any future
-# line the same way.
-redact() {
-  local s="$1" had_extglob=0 LC_ALL=C
-  shopt -q extglob && had_extglob=1
-  shopt -s extglob
-  # Bounded to characters a URL authority actually allows before an '@' --
-  # never '/' or whitespace -- so an unrelated '@' past the authority is
-  # left alone (ccd/ccrc's `_upd_redact` states the same rule). Review fix
-  # round 1, N2 (ccd/ccrc's own copy): '?' and '#' also end the authority --
-  # excluded so the class stops at the first of '/', '?' or '#'. Local
-  # LC_ALL=C keeps an invalid UTF-8 byte inside the authority class.
-  local sre=':(/+)[^/@?#[:space:]]+@'
-  while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
-  # No scheme: every '@'-ended run from a token's start (the text's, or after whitespace, '"' or '<'), `_upd_redact`'s
-  # class, whose host ends at '/', '?', '#', ')' or the text's end; prose's `user@host` with nothing after it is masked too.
-  local re='(^|[[:space:]"<])(([^/@?#[:space:]"<][^/@?#[:space:]]*@)+)([^/@?#[:space:])]+([/?#)]|$))'
-  while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[4]}"}"; done
-  [ "$had_extglob" -eq 1 ] || shopt -u extglob
-  # The replacement side of a bash `${..//pattern/string}` substitution
-  # undergoes TILDE EXPANSION -- a bare `~` there expands to the CURRENT
-  # $HOME before it is ever used as a literal, so `s="${s//"$HOME"/~}"`
-  # replaces $HOME with $HOME: a silent no-op (measured: the redaction did
-  # nothing at all). The backslash keeps `~` literal.
-  # Review fix round 1, M6 (ccd/ccrc's own copy): anchored to a path
-  # boundary -- a trailing slash stripped from HOME first (HOME of '/' or
-  # empty then strips to empty and is skipped), replaced only where it is
-  # followed by '/' (put back, never dropped) or ends a token (whitespace,
-  # a quote, ':', ')', or the end of the string), enumerated one boundary
-  # character at a time -- a bash glob substitution has no lookahead to
-  # keep an unknown trailing character while still matching on it.
-  local home="${HOME:-}"
-  home="${home%/}"
-  if [ -n "$home" ]; then
-    # W6 Task 8A, review 167's F5: the boundary BEFORE home is anchored too.
-    # A HOME of `/home/u` is a real match only where the character before it
-    # is no part of a longer path — the start of the string, whitespace, a
-    # quote or backtick, or one of `= : ( [ { , ; < > |`, or the `//` that
-    # ends a `file://` scheme — never a path character, so `/srv/home/u/x`
-    # is left whole instead of becoming `/srv~/x`. A bash glob has no
-    # lookbehind either, so each occurrence is walked in turn and the
-    # character before it read from the text already passed.
-    local seen="" out="" pre="" post="" before="" after="" left=0 right=0
-    while [[ "$s" == *"$home"* ]]; do
-      pre="${s%%"$home"*}"
-      post="${s#*"$home"}"
-      seen+="$pre"
-      before="${seen: -1}"
-      after="${post:0:1}"
-      left=0; right=0
-      case "$before" in
-        ''|' '|$'\t'|$'\n'|'"'|"'"|'`'|'='|':'|'('|'['|'{'|','|';'|'<'|'>'|'|') left=1 ;;
-        '/') case "$seen" in *://) left=1 ;; esac ;;
-      esac
-      case "$after" in
-        ''|'/'|' '|$'\t'|$'\n'|'"'|"'"|':'|')') right=1 ;;
-      esac
-      if [ "$left" -eq 1 ] && [ "$right" -eq 1 ]; then out+="${pre}~"; else out+="${pre}${home}"; fi
-      seen+="$home"
-      s="$post"
-    done
-    s="${out}${s}"
-  fi
-  printf '%s' "$s"
-}
 # The one bash log-line redactor, ccd/ccrc's `_upd_redact`, as a generated byte copy (this executable is installed alone
 # and sources nothing). Edit `_upd_redact` in ccd/ccrc, then `ccrc restamp ccd/ccd-update-sync`.
 # ── BEGIN GENERATED LOG-LINE REDACTOR (shared/hook-helpers.mjs; edit it in ccd/ccrc, then regenerate) ──
@@ -287,7 +204,12 @@ _upd_redact() {
   printf '%s' "$s"
 }
 # ── END GENERATED LOG-LINE REDACTOR ──
-say() { printf 'ccd-update-sync: %s\n' "$(redact "$1")" >&2; }
+# `say` is the ONE place every line this script prints (to stderr, which a `--user` unit's journal carries) is
+# assembled, so no call site here, present or future, redacts its own sentence (review 155 C18). It applies every rule
+# of ccd/ccrc's `_upd_redact`, through `_upd_redact <text> bare-host`: a URL's userinfo with a scheme or without one,
+# and this box's home directory (-> ~). `bare-host` because this script strips the base's trailing '/' and closes its
+# exit-6 clause with ')', so a scheme-less host here may end at ')' or at the text's end (D-7289).
+say() { printf 'ccd-update-sync: %s\n' "$(_upd_redact "$1" bare-host)" >&2; }
 
 # W6 Task 8A, review 167's F7: `TIMEOUT` goes to curl's `--max-time`, and curl
 # reads `--max-time 0` as NO LIMIT AT ALL — so a `0` (or a typo) in the user
@@ -583,7 +505,7 @@ prc=$?
 # never bash's own plain `$( )`, which would also eat a NUL the SAME way
 # D-3280 already guards the body against) and routed through `say`, which
 # ALREADY redacts everything it is given (this file's own choke point) — no
-# second `redact` call is needed here, or every consumer would redact twice.
+# second `_upd_redact` call is needed here, or every consumer would redact twice.
 [ -n "$verr" ] && say "$verr"
 if [ "$prc" -eq 2 ]; then
   rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1
