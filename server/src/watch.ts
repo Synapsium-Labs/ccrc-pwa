@@ -202,7 +202,7 @@ import type { CoordRoutesHandle } from './coord/routes.js';
 import { createQuestions, type Questions, type RaiseVerdict } from './coord/questions.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
-import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { FLEET_LABEL, SERVER_LABEL, printableDetail, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { changeLatch, changeLatchMap } from './changeLatch.js';
 import { writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
@@ -747,8 +747,12 @@ export class FleetWatcher {
   private prStates = new Map<string, PrState>();
   /** The landing radar lane's map (wave 4b), keyed by session id: `sweepRadar` is its one writer. */
   private landings = new Map<string, SessionLanding>();
-  /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. */
+  /** The last reason each project's `probe` read gave (`''` the listing), so a warning is said once per change. Keyed by the
+   *  raw name; `sweepRadar` prints it through `printableDetail`, so a listed name cannot forge a log line. */
   private radarSaid = new Map<string, string>();
+  /** The radar lane's pass counter: the latest pass to start is the only one that may commit `landings` or speak. A pass the
+   *  runner abandoned and later released finds a newer count and returns, so it never overwrites a newer map. */
+  private radarGen = 0;
   /** Last-measured repo cell per PROJECT — retained, not derived, from what
    *  `sweepPr` already reads off `CcdPrLine.repo` / `CcdPrFailure.reason` for
    *  `GET /api/projects`. See `repoCellFor` (prstate.ts) for the fold. */
@@ -1856,9 +1860,10 @@ export class FleetWatcher {
    *  that answered in time; a project that failed, or missed the deadline, contributes nothing (D-7481, D-7484). PUBLIC
    *  for the reason `sweepNames` is: `tick()` dispatches it with `void`. */
   async sweepRadar(records: readonly SessionRecord[] | null, nowMs = Date.now()): Promise<void> {
+    const gen = ++this.radarGen;
     const reaged = () => new Map([...this.landings].filter(([, l]) => freshWithin(l.at, RADAR_PROBE_FRESH_S, nowMs)));
     const said = (key: string, reason: string, warn: boolean): void => {
-      if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${key}`} is ${reason}`);
+      if (this.radarSaid.get(key) !== reason && warn) console.warn(`ccrc-server: the landing radar's ${key === '' ? 'listing' : `probe of ${printableDetail(key)}`} is ${reason}`);
       this.radarSaid.set(key, reason);
     };
     if (records === null) { this.landings = reaged(); return; }
@@ -1874,6 +1879,7 @@ export class FleetWatcher {
     });
     const pass = await readRadarPass(
       this.deps.io, this.deps.cfg.registryDir, new Set(byProject.keys()), nowMs, LANDING_RADAR_SWEEP_MS / 2);
+    if (gen !== this.radarGen) return;
     said('', pass.ok ? 'ok' : pass.reason, !pass.ok && pass.reason !== 'absent');
     if (!pass.ok) { this.landings = pass.reason === 'absent' ? new Map() : reaged(); return; }
     const next = new Map<string, SessionLanding>();

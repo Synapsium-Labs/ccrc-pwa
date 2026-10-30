@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { sessionBranchOf, sessionPrOf } from '../src/fleet.js';
-import { listRadarProjects, readRadarPass, readRadarProbe, readRegular } from '../src/coord/lineageRead.js';
+import { RADAR_PASS_CONCURRENCY, listRadarProjects, readRadarPass, readRadarProbe, readRegular } from '../src/coord/lineageRead.js';
 import { RADAR_PROBE_MAX_BYTES } from '../src/coord/radar.js';
 import { readRegistry, type SessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -84,6 +84,12 @@ describe('the radar lane', () => {
   };
   const plantFleet = (): void => { plantRow(ALPHA); plantRow(BETA); plantRow(GAMMA); };
   const keys = (w: FleetWatcher): string[] => [...w.currentLandings().keys()].sort();
+  /** Silences `console.warn` and hands back what was said: every warn call's first argument, and those that name the radar. */
+  const warnSpy = (): { lines: () => string[]; said: () => string[] } => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const lines = (): string[] => warn.mock.calls.map((c) => String(c[0]));
+    return { lines, said: () => lines().filter((m) => m.includes('landing radar')) };
+  };
 
   /** An io whose answers for the probe files can be bent: `bend` sees the method and the path. */
   const bent = (bend: (method: string, p: string) => unknown | undefined, seen: string[] = []): FleetIO => {
@@ -288,11 +294,13 @@ describe('the radar lane', () => {
       expect(await readRegular(within, '/f', undefined, cap), 'a file at the cap reads').toEqual({ ok: true, content: 'x'.repeat(cap) });
     });
 
-    it('the listing leaves out the lister\'s .lp.* temporaries and says absent for no directory', async () => {
+    it("the listing leaves out the lister's .lp.* temporaries, keeps an unsafe name apart, and says absent for no directory", async () => {
       expect(await listRadarProjects(localIO, reg)).toEqual({ ok: false, reason: 'absent' });
       mkdirSync(path.join(reg, 'landing', 'proj-a'), { recursive: true });
+      mkdirSync(path.join(reg, 'landing', 'bad name'), { recursive: true });
       mkdirSync(path.join(reg, 'landing', '.lp.123'), { recursive: true });
-      expect(await listRadarProjects(localIO, reg)).toEqual({ ok: true, names: ['proj-a'] });
+      const r = await listRadarProjects(localIO, reg);
+      expect(r.ok && { names: r.names, refused: [...r.refused].sort() }).toEqual({ names: ['proj-a'], refused: ['bad name'] });
     });
   });
 
@@ -455,16 +463,36 @@ describe('the radar lane', () => {
       expect(signal?.aborted).toBe(true);
     });
 
-    it('a lane failure is caught by the lane and never stops the tick', async () => {
+    it('a thrown listing is said once through the lane, never by the runner, and never stops the tick (4b F9 (5))', async () => {
       plantRow(ALPHA);
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const { lines, said } = warnSpy();
+      let landingReaddirs = 0;
       const io: FleetIO = {
         ...localIO,
-        readdirMeasured: (p, t, s) => (p.endsWith(`${path.sep}landing`) ? Promise.reject(new Error('boom')) : localIO.readdirMeasured(p, t, s)),
+        readdirMeasured: (p, t, s) => {
+          if (!p.endsWith(`${path.sep}landing`)) return localIO.readdirMeasured(p, t, s);
+          landingReaddirs += 1;
+          return Promise.reject(new Error('boom'));
+        },
       };
       const w = make(io);
+      const recs = await rows(io);
+      await expect(w.sweepRadar(recs, NOW)).resolves.toBeUndefined();
+      await expect(w.sweepRadar(recs, NOW + 1000)).resolves.toBeUndefined();
       await expect(w.tick()).resolves.toBeUndefined();
-      await vi.waitFor(() => expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain('the landing radar lane failed'));
+      await vi.waitFor(() => expect(landingReaddirs).toBeGreaterThanOrEqual(3), { timeout: 5000 });
+      await new Promise<void>((r) => setImmediate(r));
+      expect(said()).toEqual(["ccrc-server: the landing radar's listing is unreadable"]);
+      expect(lines().join('\n')).not.toContain('the landing radar lane failed');
+    });
+
+    it('a fault the pass does not catch is still said by the runner: the landingRadar row\'s warnKey is the backstop (4b F9 (5))', async () => {
+      plantRow(ALPHA);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const w = make();
+      vi.spyOn(w, 'sweepRadar').mockRejectedValue(new Error('boom'));
+      await expect(w.tick()).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain('the landing radar lane failed'), { timeout: 5000 });
     });
   });
 
@@ -534,6 +562,154 @@ describe('the radar lane', () => {
       (w as unknown as { statuslines: Map<string, unknown> }).statuslines.set(ALPHA, { branch: 'ws/moved', retained: false });
       await w.sweepRadar(recs, NOW);
       expect(keys(w)).toEqual([ALPHA]);
+    });
+  });
+
+  describe("wave 5a: the pass's hardening (4b F9)", () => {
+    it('a project name that is not a safe segment is never read, and is said once on one line (4b F9 (1), (2))', async () => {
+      const bad = 'proj\nccrc-server: forged';
+      plantRow(ALPHA, { project: bad }); plantProbe(worked({ project: bad }), bad);
+      const { said } = warnSpy();
+      const seen: string[] = [];
+      const io = bent(() => undefined, seen);
+      const w = make(io);
+      const recs = await rows(io);
+      await w.sweepRadar(recs, NOW);
+      await w.sweepRadar(recs, NOW + 1000);
+      expect(seen.filter((s) => s.includes('forged') && !s.startsWith('readdir ')), 'a path was joined on an unsafe name').toEqual([]);
+      expect(keys(w)).toEqual([]);
+      expect(said()).toEqual(["ccrc-server: the landing radar's probe of proj ccrc-server: forged is refused"]);
+    });
+
+    it('an unsafe directory no session names is skipped without a word (4b F9 (1))', async () => {
+      plantRow(ALPHA); plantProbe(worked());
+      mkdirSync(path.join(reg, 'landing', 'bad name'), { recursive: true });
+      const r = await readRadarPass(localIO, reg, new Set(['proj-a']), NOW, 5000);
+      expect(r.ok && [...r.reads.keys()]).toEqual(['proj-a']);
+    });
+
+    it('a pass has at most RADAR_PASS_CONCURRENCY (8) probe reads in flight (4b F9 (3))', async () => {
+      const projects = Array.from({ length: 20 }, (_, i) => `proj-${String(i).padStart(2, '0')}`);
+      for (const p of projects) plantProbe(worked({ project: p, heads: [], pairs: [], pairHeads: [] }), p);
+      const held: Array<() => void> = [];
+      let issued = 0;
+      const io: FleetIO = {
+        ...localIO,
+        lstatMeasured: (p) => {
+          if (!p.endsWith(`${path.sep}probe`)) return localIO.lstatMeasured(p);
+          issued += 1;
+          return new Promise<Awaited<ReturnType<FleetIO['lstatMeasured']>>>((resolve) => {
+            held.push(() => { void localIO.lstatMeasured(p).then(resolve); });
+          });
+        },
+      };
+      const pass = readRadarPass(io, reg, new Set(projects), NOW, 60_000);
+      expect(RADAR_PASS_CONCURRENCY).toBe(8);
+      await vi.waitFor(() => expect(issued).toBe(8), { timeout: 5000 });
+      await new Promise<void>((r) => setImmediate(r));
+      expect(issued, 'more than the bound went out at once').toBe(8);
+      held.shift()!();
+      await vi.waitFor(() => expect(issued).toBe(9), { timeout: 5000 });
+      // release the rest, round by round
+      let done = false;
+      void pass.then(() => { done = true; });
+      for (let guard = 0; guard < 400 && !done; guard++) {
+        held.shift()?.();
+        await new Promise<void>((r) => setTimeout(r, 5));
+      }
+      const r = await pass;
+      expect(r.ok && r.reads.size).toBe(20);
+      expect(r.ok && [...r.reads.values()].every((x) => x.ok)).toBe(true);
+    });
+
+    it('a hung read frees its slot at the deadline, and a name whose turn comes after it answers late with no io (4b F9 (3), (4))', async () => {
+      const projects = Array.from({ length: 10 }, (_, i) => `proj-${String(i).padStart(2, '0')}`);
+      for (const p of projects) plantProbe(worked({ project: p, heads: [], pairs: [], pairHeads: [] }), p);
+      const lstats: string[] = [];
+      const io: FleetIO = { ...localIO, lstatMeasured: (p) => { if (p.endsWith(`${path.sep}probe`)) lstats.push(p); return new Promise<never>(() => undefined); } };
+      const r = await readRadarPass(io, reg, new Set(projects), NOW, 50);
+      expect(r.ok && r.reads.size).toBe(10);
+      expect(r.ok && [...r.reads.values()].every((x) => !x.ok && x.reason === 'late')).toBe(true);
+      expect(lstats, 'a read was issued after the deadline').toHaveLength(8);
+    });
+
+    it('a listing that hangs settles as late at the deadline, and the kept map is re-aged (4b F9 (4))', async () => {
+      plantFleet(); plantProbe(worked());
+      const { said } = warnSpy();
+      let hang = false;
+      const io: FleetIO = {
+        ...localIO,
+        readdirMeasured: (p, t, s) => (hang && p.endsWith(`${path.sep}landing`) ? new Promise<never>(() => undefined) : localIO.readdirMeasured(p, t, s)),
+      };
+      const w = make(io);
+      const recs = await rows(io);
+      await w.sweepRadar(recs, NOW);
+      expect(keys(w)).toEqual([ALPHA, BETA, GAMMA]);
+
+      hang = true;
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      let settled = false;
+      void w.sweepRadar(recs, NOW + 1000).then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(settled, 'the pass settled before its deadline').toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await new Promise<void>((r) => setImmediate(r));
+      expect(settled, 'a hung listing held the pass past its deadline').toBe(true);
+      expect(keys(w), 'a late listing re-ages the kept map').toEqual([ALPHA, BETA, GAMMA]);
+      expect(said()).toEqual(["ccrc-server: the landing radar's listing is late"]);
+    });
+
+    it('readRadarPass answers late for a listing that has not answered, and aborts it', async () => {
+      plantRow(ALPHA); plantProbe(worked());
+      let signal: AbortSignal | undefined;
+      const io: FleetIO = {
+        ...localIO,
+        readdirMeasured: (_p, _t, s) => { signal = s; return new Promise<never>(() => undefined); },
+      };
+      expect(await readRadarPass(io, reg, new Set(['proj-a']), NOW, 20)).toEqual({ ok: false, reason: 'late' });
+      expect(signal?.aborted).toBe(true);
+    });
+
+    it('an abandoned pass released after a newer one started never overwrites its map (4b F9 (4))', async () => {
+      plantFleet(); plantProbe(worked());
+      let holdNext = false;
+      const parked: Array<() => void> = [];
+      const io: FleetIO = {
+        ...localIO,
+        readdirMeasured: (p, t, s) => {
+          if (!(holdNext && p.endsWith(`${path.sep}landing`))) return localIO.readdirMeasured(p, t, s);
+          holdNext = false;
+          return new Promise<Awaited<ReturnType<FleetIO['readdirMeasured']>>>((resolve) => {
+            parked.push(() => { void localIO.readdirMeasured(p, t, s).then(resolve); });
+          });
+        },
+      };
+      /** Starts a pass whose landing listing is parked until `parked.shift()` releases it. */
+      const hold = async (w: FleetWatcher, recs: SessionRecord[], nowMs: number): Promise<{ pass: Promise<void> }> => {
+        const before = parked.length;
+        holdNext = true;
+        const pass = w.sweepRadar(recs, nowMs);
+        await vi.waitFor(() => expect(parked.length).toBe(before + 1), { timeout: 5000 });
+        return { pass };
+      };
+      const w = make(io);
+      const recs = await rows(io);
+
+      const { pass: a } = await hold(w, recs, NOW);
+      await w.sweepRadar(recs, NOW + 1000);
+      expect(keys(w)).toEqual([ALPHA, BETA, GAMMA]);
+      plantProbe(worked({ heads: [], pairs: [], pairHeads: [] }));
+      parked.shift()!();
+      await a;
+      expect(keys(w), 'the older pass overwrote the newer map').toEqual([ALPHA, BETA, GAMMA]);
+
+      plantProbe(worked());
+      const { pass: c } = await hold(w, recs, NOW + 2000);
+      plantProbe(worked({ heads: [], pairs: [], pairHeads: [] }));
+      await w.sweepRadar(null, NOW + 3000);
+      parked.shift()!();
+      await c;
+      expect(keys(w), 'a re-age-only pass did not count as newer').toEqual([ALPHA, BETA, GAMMA]);
     });
   });
 

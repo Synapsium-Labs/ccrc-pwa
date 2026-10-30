@@ -5,7 +5,11 @@
  * `readBranchTip`'s project guard has passed and `id` has passed `isRegistryId`, and it never reads `main-health`
  * (D-7478). Landing order wave 4b adds the one other reader of the radar's files: `probe` (below `readRadarProbe`), for
  * the fleet frame's `landing`, by the same regular-file rule, with `radar.ts`'s parser and a 512 KiB cap measured
- * before the read (D-7482).
+ * before the read (D-7482). Landing order wave 5a hardens that pass (D-7530, D-7531): a listed name that is not a safe
+ * project segment (`isSafeProjectSegment`, the radar's own grammar) joins no path and is kept apart as `refused`; a
+ * rejected listing answers `unreadable`; at most `RADAR_PASS_CONCURRENCY` probe reads are in flight, through `mapBounded`;
+ * and the pass's one deadline starts before the listing and covers it, so a hung listing, like a hung read, settles as
+ * `late` and a name whose turn comes after the deadline is `late` with no io.
  *
  * Wave 3b's rule, re-proved here: `enabled` and `<id>.lineage` count only as REGULAR files. `readFileMeasured`
  * follows symlinks, so each is read only after `lstatMeasured` (the path's own type, never its target's) answers
@@ -18,6 +22,8 @@ import path from 'node:path';
 import type { FleetIO, ReadFailure } from '../io.js';
 import { parseEnabled, parseLineage, type LineageRead, type MarkerRead, type PauseRead } from './lineage.js';
 import { parseProbe, RADAR_PROBE_MAX_BYTES, type ProbeRead } from './radar.js';
+import { isSafeProjectSegment } from './ledgerseed.js';
+import { mapBounded } from '../bounded.js';
 
 export interface LandingFacts {
   marker: MarkerRead;
@@ -78,14 +84,16 @@ export async function readLandingFacts(
   };
 }
 
-/** The radar's project directories, `$REG/landing/*`, with the lister's own `.lp.*` temporaries left out. A proven
- *  absence of the directory (no radar) and any other failure keep their own reasons. */
+/** The radar's project directories, `$REG/landing/*`, with the lister's own `.lp.*` temporaries left out. A name that
+ *  passes `isSafeProjectSegment` goes to `names`; one that fails goes to `refused`, and nothing joins a path for it. A
+ *  proven absence of the directory (no radar) and any other failure keep their own reasons. */
 export async function listRadarProjects(
-  io: Pick<FleetIO, 'readdirMeasured'>, registryDir: string,
-): Promise<{ ok: true; names: string[] } | { ok: false; reason: ReadFailure }> {
-  const r = await io.readdirMeasured(path.join(registryDir, 'landing'));
+  io: Pick<FleetIO, 'readdirMeasured'>, registryDir: string, signal?: AbortSignal,
+): Promise<{ ok: true; names: string[]; refused: string[] } | { ok: false; reason: ReadFailure }> {
+  const r = await io.readdirMeasured(path.join(registryDir, 'landing'), undefined, signal);
   if (!r.ok) return { ok: false, reason: r.reason };
-  return { ok: true, names: r.entries.filter((n) => !n.startsWith('.lp.')) };
+  const listed = r.entries.filter((n) => !n.startsWith('.lp.'));
+  return { ok: true, names: listed.filter(isSafeProjectSegment), refused: listed.filter((n) => !isSafeProjectSegment(n)) };
 }
 
 /** One project's `probe`, through `readRegular` (the one regular-file reader, with the 512 KiB cap measured before the
@@ -99,31 +107,37 @@ export async function readRadarProbe(
   return r.ok ? parseProbe(r.content, project, nowMs) : r;
 }
 
-/** What one project's read came to in a pass: `readRadarProbe`'s answer, or `late` when it had not answered by the
- *  pass's deadline. */
-export type RadarPassRead = ProbeRead | { ok: false; reason: ReadFailure | 'late' };
+/** At most this many projects' `probe` reads are in flight in one pass (D-7531). */
+export const RADAR_PASS_CONCURRENCY = 8;
 
-/** One pass of the radar lane's reads: ONE listing, then every named project's `probe` at once under ONE deadline.
- *  A project that has not answered by `deadlineMs` is `late` and its read is aborted, so it contributes nothing and
- *  never holds the others back. The timer is a local of this call (a deadline inside one adapter call). */
+/** What one project's read came to in a pass: `readRadarProbe`'s answer, `late` when it had not answered by the pass's
+ *  deadline, or `refused` for a listed name that is not a safe project segment (never read, D-7530). */
+export type RadarPassRead = ProbeRead | { ok: false; reason: ReadFailure | 'late' | 'refused' };
+
+/** One pass of the radar lane's reads: ONE listing, then each wanted project's `probe` at most `RADAR_PASS_CONCURRENCY`
+ *  at a time, under ONE deadline that starts before the listing. A listing or a project that has not answered by
+ *  `deadlineMs` is `late` and its read is aborted, so it contributes nothing and never holds the others back: a hung
+ *  read frees its slot at the deadline, and a name whose turn comes after it is `late` without any io. A listing that
+ *  rejects answers `unreadable`. The timer is a local of this call (a deadline inside one adapter call). */
 export async function readRadarPass(
   io: Pick<FleetIO, 'readFileMeasured' | 'lstatMeasured' | 'statMeasured' | 'readdirMeasured'>, registryDir: string,
   projectsWanted: ReadonlySet<string>, nowMs: number, deadlineMs: number,
-): Promise<{ ok: true; reads: Map<string, RadarPassRead> } | { ok: false; reason: ReadFailure }> {
-  const listing = await listRadarProjects(io, registryDir);
-  if (!listing.ok) return listing;
-  const names = listing.names.filter((n) => projectsWanted.has(n));
+): Promise<{ ok: true; reads: Map<string, RadarPassRead> } | { ok: false; reason: ReadFailure | 'late' }> {
   const ac = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<RadarPassRead>((resolve) => {
+  const late = new Promise<{ ok: false; reason: 'late' }>((resolve) => {
     timer = setTimeout(() => { ac.abort(); resolve({ ok: false, reason: 'late' }); }, deadlineMs);
   });
   try {
-    const answers = await Promise.all(names.map((n) => Promise.race([
-      readRadarProbe(io, registryDir, n, nowMs, ac.signal).catch((): RadarPassRead => ({ ok: false, reason: 'unreadable' })),
-      late,
-    ])));
-    return { ok: true, reads: new Map(names.map((n, i) => [n, answers[i]!] as const)) };
+    const listing = await Promise.race([
+      listRadarProjects(io, registryDir, ac.signal).catch(() => ({ ok: false, reason: 'unreadable' }) as const), late]);
+    if (!listing.ok) return listing;
+    const safe = listing.names.filter((n) => projectsWanted.has(n));
+    const answers = await mapBounded(safe, RADAR_PASS_CONCURRENCY, (n): Promise<RadarPassRead> => (ac.signal.aborted ? late
+      : Promise.race([readRadarProbe(io, registryDir, n, nowMs, ac.signal).catch((): RadarPassRead => ({ ok: false, reason: 'unreadable' })), late])));
+    const reads = new Map<string, RadarPassRead>(safe.map((n, i) => [n, answers[i]!] as const));
+    for (const n of listing.refused) if (projectsWanted.has(n)) reads.set(n, { ok: false, reason: 'refused' });
+    return { ok: true, reads };
   } finally {
     clearTimeout(timer);
   }
