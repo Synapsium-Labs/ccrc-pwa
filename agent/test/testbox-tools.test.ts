@@ -35,7 +35,7 @@ import {
   ended, encodeToolsSpec, IDLE_TOOLS, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, sameAsBox, seenRuns,
   toolsSettings, withSync, type BoxTools, type ToolsSettings,
 } from '../src/testbox/tools.js';
-import { attachToolSync, HANDOVER_DIR, statusOf, ToolSync, toolSyncOf, type ServedService } from '../src/testbox/toolsync.js';
+import { attachToolSync, HANDOVER_DIR, HANDOVER_DROPPED, statusOf, ToolSync, toolSyncOf, type ServedService } from '../src/testbox/toolsync.js';
 import { durationMs } from '../src/testbox/config.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -59,6 +59,8 @@ const MADISON: Record<string, string> = {
   tmux: '      tmux | 3.4-1ubuntu0.1 | http://mirror.testbox.invalid noble-updates/main amd64 Packages\n      tmux | 3.3a-1 | http://mirror.testbox.invalid noble/main amd64 Packages\n',
 };
 const MEASURED_AT = '2026-10-29T12:00:00Z';
+/** Another npm, for a sync that changes npm alone on the same node. */
+const NPM_2 = '10.9.1';
 const SPEC_ROW: TestboxRepoRow = {
   name: 'project-a', fetchUrl: 'https://testbox.invalid/project-a.git', mirrorPath: '/nonexistent/project-a.git',
   packages: [{ name: 'server', installInputs: ['server/package.json'], commands: ['./node_modules/.bin/vitest'] }], buildOutputs: [], systemTools: [],
@@ -398,13 +400,14 @@ beforeAll(async () => {
   dl.files.set(`/chrome-for-testing-public/${NEW.chrome}/linux64/chrome-linux64.zip`, chrome);
   dl.files.set('/dist/probe', Buffer.from('reached the fixture\n'));
   const registry = await httpHost();
-  const npmTgz = npmTarball(art, NEW.npm, log);
-  registry.files.set(`/npm/-/npm-${NEW.npm}.tgz`, npmTgz);
-  registry.files.set('/npm', Buffer.from(JSON.stringify({
-    name: 'npm', versions: { [NEW.npm]: { dist: {
-      integrity: `sha512-${createHash('sha512').update(npmTgz).digest('base64')}`, tarball: `http://127.0.0.1:${registry.port}/npm/-/npm-${NEW.npm}.tgz`,
-    } } },
-  })));
+  // Two npm builds: the measured one, and another a sync may move to on the same node.
+  const npmVersions: Record<string, { dist: { integrity: string; tarball: string } }> = {};
+  for (const v of [NEW.npm, NPM_2]) {
+    const tgz = npmTarball(art, v, log);
+    registry.files.set(`/npm/-/npm-${v}.tgz`, tgz);
+    npmVersions[v] = { dist: { integrity: `sha512-${createHash('sha512').update(tgz).digest('base64')}`, tarball: `http://127.0.0.1:${registry.port}/npm/-/npm-${v}.tgz` } };
+  }
+  registry.files.set('/npm', Buffer.from(JSON.stringify({ name: 'npm', versions: npmVersions })));
   W = { dir, log, hostA: await httpHost(), hostB: await httpHost(), hostC: await httpHost(), dl, registry, newRel, otherRel, bootTree, certFile, nodeNew, chrome };
   serveRelease(W.hostA, newRel);
   serveRelease(W.hostB, otherRel);
@@ -489,6 +492,10 @@ function sync(b: Box, f: ToolsSync = frameOf(NEW_TAG), keep: string[] = []): Pro
   return exec(b.script, [b.spec], b.env);
 }
 const linkOf = (p: string): string => readlinkSync(p);
+/** The version an npm package directory's package.json names. */
+const npmVersionAt = (dir: string): string => (JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version: string }).version;
+/** The npm a set's `bin/npm` runs: its package directory's version. */
+const npmOfSet = (setDir: string): string => npmVersionAt(path.dirname(path.dirname(realpathSync(path.join(setDir, 'bin', 'npm')))));
 const report = (b: Box): ReturnType<typeof parseReport> => parseReport(existsSync(path.join(b.tools, 'sync-report')) ? readFileSync(path.join(b.tools, 'sync-report'), 'utf8') : null);
 const resetLogs = (): void => {
   for (const h of [W.hostA, W.hostB, W.hostC, W.dl, W.registry]) h.log.length = 0;
@@ -538,7 +545,8 @@ describe('tools-sync on a fixture box laid out as TB7\'s bootstrap leaves it (D-
     expect(existsSync(path.join(nodeDir, 'include', 'node', 'node.h'))).toBe(true);
     // 3. npm through the proxy.
     expect(W.registry.log).toEqual(['/npm', `/npm/-/npm-${NEW.npm}.tgz`]);
-    expect((JSON.parse(readFileSync(path.join(nodeDir, 'lib', 'node_modules', 'npm', 'package.json'), 'utf8')) as { version: string }).version).toBe(NEW.npm);
+    // D-7560: in a directory of its own version, `<tools>/npm/<version>`, never placed over node's own.
+    expect(npmVersionAt(path.join(b.tools, 'npm', NEW.npm))).toBe(NEW.npm);
     // 4. Chrome, with its libraries from the OS mirror; the download's sha256 in the report (D-7422).
     expect(W.dl.log).toEqual([`/dist/v${NEW.node}/SHASUMS256.txt`, `/dist/v${NEW.node}/node-v${NEW.node}-linux-x64.tar.xz`, `/chrome-for-testing-public/${NEW.chrome}/linux64/chrome-linux64.zip`]);
     expect(report(b).chromeSha256).toBe(sha256(W.chrome));
@@ -607,14 +615,73 @@ describe('tools-sync on a fixture box laid out as TB7\'s bootstrap leaves it (D-
     const built = buildRunSpec(SPEC_SUBMIT, SPEC_ROW, 1, s, path.join(b.tools, 'current', 'chrome'));
     expect(built.ok).toBe(true);
     const pre = path.join(b.tools, 'node', NEW.node);
+    const npmDir = path.join(b.tools, 'npm', NEW.npm);
     for (const env of [built.ok ? built.spec.env : [], buildInstallSpec('k1', 'server', [], [], s).env]) {
       const first = (env.find(([k]) => k === 'PATH')?.[1] ?? '').split(':')[0]!;
       expect(realpathSync(path.join(first, 'node'))).toBe(realpathSync(path.join(pre, 'bin', 'node')));
-      expect(realpathSync(path.join(first, 'npm'))).toBe(realpathSync(path.join(pre, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')));
-      expect(realpathSync(path.join(first, 'npx'))).toBe(realpathSync(path.join(pre, 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js')));
+      expect(realpathSync(path.join(first, 'npm'))).toBe(realpathSync(path.join(npmDir, 'bin', 'npm-cli.js')));
+      expect(realpathSync(path.join(first, 'npx'))).toBe(realpathSync(path.join(npmDir, 'bin', 'npx-cli.js')));
     }
     // D-7424's verifier PATH and the set's Chrome stay where they were: `<tools>/current/node` and `<tools>/current/chrome`.
     expect(realpathSync(path.join(b.tools, 'current', 'node'))).toBe(realpathSync(path.join(pre, 'bin', 'node')));
+  });
+});
+
+describe('npm is per version: a sync that changes npm alone on the same node changes nothing under a run or under current until it switches (D-7560; spec §2.10)', () => {
+  const NPM_ONLY: TestboxToolVersions = { ...NEW, npm: NPM_2 };
+  const setDir = (b: Box, name: string): string => path.join(b.tools, 'sets', name);
+  const setName = (b: Box): string => path.basename(realpathSync(path.join(b.tools, 'current')));
+
+  it('an npm-only sync while a run holds the old set leaves that run\'s bin/npm at the old npm, and the node prefix\'s npmrc untouched', async () => {
+    const b = makeBox();
+    resetLogs();
+    const first = await sync(b, frameOf(BOOT_TAG));
+    expect(first.code, first.stderr).toBe(0);
+    const old = setName(b);
+    expect(npmOfSet(setDir(b, old))).toBe(NEW.npm);
+    const npmrc = path.join(b.tools, 'node', NEW.node, 'etc', 'npmrc');
+    const rcBefore = { ino: lstatSync(npmrc).ino, text: readFileSync(npmrc, 'utf8') };
+    // The run that resolved the old set is live: the spec names its set (`K`).
+    const r = await sync(b, frameOf(BOOT_TAG, NPM_ONLY), [old]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(setName(b)).not.toBe(old);
+    expect(npmOfSet(path.join(b.tools, 'current')), 'current names the new npm').toBe(NPM_2);
+    expect(npmOfSet(setDir(b, old)), 'the run\'s set still runs the npm it resolved').toBe(NEW.npm);
+    expect(readFileSync(path.join(setDir(b, old), 'versions'), 'utf8')).toMatch(new RegExp(`^npm\\t${reEscape(NEW.npm)}$`, 'm'));
+    expect(lstatSync(npmrc).ino, 'the same proxy rewrites no npmrc').toBe(rcBefore.ino);
+    expect(readFileSync(npmrc, 'utf8')).toBe(rcBefore.text);
+  });
+
+  it('an npm-only sync that fails at Chrome leaves current\'s npm, and every directory it names, as they were', async () => {
+    const b = makeBox();
+    resetLogs();
+    const first = await sync(b, frameOf(BOOT_TAG));
+    expect(first.code, first.stderr).toBe(0);
+    const set = linkOf(path.join(b.tools, 'current'));
+    const npmBin = realpathSync(path.join(b.tools, 'current', 'bin', 'npm'));
+    // A Chrome the download host does not have: the sync stops at step 4, after npm.
+    const r = await sync(b, frameOf(BOOT_TAG, { ...NPM_ONLY, chrome: '131.0.6778.99' }));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/tool sync failed \(chrome: download failed/);
+    expect(linkOf(path.join(b.tools, 'current'))).toBe(set);
+    expect(npmOfSet(path.join(b.tools, 'current')), 'current\'s npm is the one it named').toBe(NEW.npm);
+    expect(realpathSync(path.join(b.tools, 'current', 'bin', 'npm'))).toBe(npmBin);
+    expect(parseVersions(readFileSync(path.join(b.tools, 'current', 'versions'), 'utf8'))?.npm).toBe(NEW.npm);
+  });
+
+  it('an npm directory is kept while a kept set links it, and removed once no set does', async () => {
+    const b = makeBox();
+    for (const v of [CHROME_2]) W.dl.files.set(`/chrome-for-testing-public/${v}/linux64/chrome-linux64.zip`, chromeZip(v));
+    resetLogs();
+    expect((await sync(b, frameOf(BOOT_TAG))).code).toBe(0);
+    const s1 = setName(b);
+    expect((await sync(b, frameOf(BOOT_TAG, NPM_ONLY), [s1])).code).toBe(0);
+    expect(existsSync(path.join(b.tools, 'npm', NEW.npm)), 'the run\'s set links it').toBe(true);
+    // A third sync with no run: the previous set (the second) is kept, the first goes, and the npm only it linked.
+    const r = await sync(b, frameOf(BOOT_TAG, { ...NPM_ONLY, chrome: CHROME_2 }));
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(setDir(b, s1))).toBe(false);
+    expect(readdirSync(path.join(b.tools, 'npm')).sort()).toEqual([NPM_2]);
   });
 });
 
@@ -786,7 +853,13 @@ const cfgFor = (b: Box): TestboxConfig => ({
   lines: new Map([...SETTINGS_LINES, ['CCRC_TESTBOX_PRISTINE_KEEP', { value: '7d' }]]) as unknown as TestboxConfig['lines'],
 });
 
-function driver(b: Box, o: { live?: string[]; now?: () => number; beforeUnit?: (n: number) => void | Promise<void> } = {}) {
+function driver(b: Box, o: {
+  live?: string[]; now?: () => number; beforeUnit?: (n: number) => void | Promise<void>;
+  /** The takeover's wait between hand-over attempts (D-7560); the default resolves at once. */
+  wait?: (ms: number) => Promise<void>;
+  /** The service's submit, in place of the recording one. */
+  submit?: ServedService['submit'];
+} = {}) {
   const svcRoot = path.join(path.dirname(b.root), 'svc');
   const units: string[] = [];
   const exits: number[] = [];
@@ -798,11 +871,12 @@ function driver(b: Box, o: { live?: string[]; now?: () => number; beforeUnit?: (
   const submitted: { f: RunSubmit; conn: { send(f: unknown): void; refuse(r: string): void } }[] = [];
   const served: ServedService = {
     status: okStatus, idle: () => idle, tick: async () => { ticks++; }, liveRuns: () => live, waiting: () => waiting,
-    submit: (f, conn) => { submitted.push({ f, conn }); },
+    submit: (f, conn) => { if (o.submit !== undefined) o.submit(f, conn); submitted.push({ f, conn }); },
   };
   const t = new ToolSync({
     sys: fakeSys(b, path.join(svcRoot, 'specs', 'tools'), units, o.beforeUnit), root: svcRoot, toolsDir: b.tools,
     settings: { ...TS, proxy: `127.0.0.1:${W.registry.port}` }, now: o.now ?? (() => 1_000), exit: (c) => { exits.push(c); },
+    wait: o.wait ?? (async () => undefined),
   });
   t.serve(served);
   return { t, units, exits, ticks: () => ticks, release: () => release(), live, waiting, submitted, svcRoot };
@@ -852,18 +926,95 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     expect(next.t.resume(), 'a second start queues nothing again').toBe(0);
   }, 180_000);
 
-  it('a handed-over file that does not read as a run.submit is dropped, never queued', async () => {
+  it('a handed-over file that does not read as a run.submit is never queued: it moves to handover/dropped/ with its reason (D-7560)', async () => {
     const b = makeBox();
     const d = driver(b);
     const dir = path.join(d.svcRoot, HANDOVER_DIR);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, `000000000000001-000001-${Q1}.json`), '{"t":"run.cancel","runId":"' + Q1 + '"}\n');
-    writeFileSync(path.join(dir, `000000000000001-000002-${Q2}.json`), 'not json\n');
+    const [cancelFile, junkFile] = [`000000000000001-000001-${Q1}.json`, `000000000000001-000002-${Q2}.json`];
+    writeFileSync(path.join(dir, cancelFile), '{"t":"run.cancel","runId":"' + Q1 + '"}\n');
+    writeFileSync(path.join(dir, junkFile), 'not json\n');
     writeFileSync(path.join(dir, `000000000000001-000003-${Q3}.json`), `${JSON.stringify(submitOf(Q3))}\n`);
     expect(d.t.resume()).toBe(1);
     expect(d.submitted.map((x) => x.f.runId)).toEqual([Q3]);
-    expect(readdirSync(dir)).toEqual([]);
+    expect(readdirSync(dir)).toEqual([HANDOVER_DROPPED]);
+    const dropped = path.join(dir, HANDOVER_DROPPED);
+    expect(readdirSync(dropped).sort()).toEqual([cancelFile, `${cancelFile}.reason`, junkFile, `${junkFile}.reason`].sort());
+    expect(readFileSync(path.join(dropped, `${cancelFile}.reason`), 'utf8')).toMatch(/does not read as a run\.submit/);
+    expect(d.t.resume(), 'a dropped file is never read again').toBe(0);
   });
+
+  it('a handed-over run is removed only once its submit is accepted: one that throws stays for the next attempt, a refused one moves to dropped/ with the refusal (D-7560)', async () => {
+    const b = makeBox();
+    let failing = true;
+    const d = driver(b, {
+      submit: (f, conn) => {
+        if (f.runId === Q1 && failing) throw new Error('ENOSPC: no space left on device');
+        if (f.runId === Q2) conn.refuse('this repository is not set up there (project-a)');
+      },
+    });
+    const dir = path.join(d.svcRoot, HANDOVER_DIR);
+    mkdirSync(dir, { recursive: true });
+    const names = [Q1, Q2, Q3].map((q, i) => `000000000000001-00000${i + 1}-${q}.json`);
+    [Q1, Q2, Q3].forEach((q, i) => writeFileSync(path.join(dir, names[i]!), `${JSON.stringify(submitOf(q))}\n`));
+    expect(() => d.t.resume(), 'a submit that throws never rejects the start').not.toThrow();
+    expect(d.t.pendingHandover(), 'the run whose submit threw is still on disk').toBe(1);
+    expect(readdirSync(dir).sort()).toEqual([names[0], HANDOVER_DROPPED].sort());
+    expect(readFileSync(path.join(dir, HANDOVER_DROPPED, `${names[1]}.reason`), 'utf8')).toMatch(/not set up there/);
+    // The next attempt (the timer's) queues it once the service takes it.
+    failing = false;
+    expect(d.t.resume()).toBe(1);
+    expect(readdirSync(dir)).toEqual([HANDOVER_DROPPED]);
+    expect(d.submitted.map((x) => x.f.runId)).toEqual([Q1, Q2, Q3, Q1]);
+  });
+
+  it('a takeover whose hand-over cannot be written keeps the process up with admissions closed, reports it, and exits 0 once every queued run is on disk (D-7559, D-7560)', async () => {
+    const b = makeBox();
+    const waits: (() => void)[] = [];
+    const d = driver(b, { wait: () => new Promise<void>((r) => { waits.push(r); }) });
+    d.waiting.push(submitOf(Q1), submitOf(Q2));
+    // `<root>/handover` is a file: the directory cannot be made (a full disk fails the same way).
+    mkdirSync(d.svcRoot, { recursive: true });
+    const handover = path.join(d.svcRoot, HANDOVER_DIR);
+    writeFileSync(handover, 'in the way\n');
+    d.release();
+    const p = d.t.request(frameOf(NEW_TAG));
+    for (let i = 0; i < 3000 && waits.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(waits.length, 'the takeover waits to try again').toBe(1);
+    expect(d.exits, 'never exits while the queue is not on disk').toEqual([]);
+    expect(d.t.admitting()).toBe(false);
+    expect(d.t.sync()).toMatchObject({ state: 'failed' });
+    expect(d.t.sync().detail).toMatch(/^handover: /);
+    // A run submitted while it waits queues too, and is handed over with the others.
+    d.waiting.push(submitOf(Q3));
+    rmSync(handover);
+    waits.shift()!();
+    await p;
+    expect(d.exits).toEqual([0]);
+    expect(readdirSync(handover).sort().map((n) => n.replace(/^[0-9]+-[0-9]+-/, ''))).toEqual([`${Q1}.json`, `${Q2}.json`, `${Q3}.json`]);
+  }, 180_000);
+
+  it('a hand-over that fails part-way leaves no queued run\'s file behind, so the next attempt writes each run once (D-7560)', async () => {
+    const b = makeBox();
+    const waits: (() => void)[] = [];
+    const d = driver(b, { wait: () => new Promise<void>((r) => { waits.push(r); }) });
+    d.waiting.push(submitOf(Q1), submitOf(Q2));
+    const handover = path.join(d.svcRoot, HANDOVER_DIR);
+    // The second run's file cannot be written: a directory stands where it is staged.
+    const blocker = path.join(handover, `${String(1_000).padStart(15, '0')}-000002-${Q2}.json.tmp`);
+    mkdirSync(blocker, { recursive: true });
+    d.release();
+    const p = d.t.request(frameOf(NEW_TAG));
+    for (let i = 0; i < 3000 && waits.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(waits.length).toBe(1);
+    expect(d.exits).toEqual([]);
+    expect(readdirSync(handover).filter((n) => n.endsWith('.json')), 'no run is half handed over').toEqual([]);
+    rmSync(blocker, { recursive: true });
+    waits.shift()!();
+    await p;
+    expect(d.exits).toEqual([0]);
+    expect(readdirSync(handover).sort().map((n) => n.replace(/^[0-9]+-[0-9]+-/, ''))).toEqual([`${Q1}.json`, `${Q2}.json`]);
+  }, 180_000);
 
   it('a run\'s Chrome is the current set\'s when its prepare starts: after two Chrome-only syncs it names the newest, which exists', async () => {
     const b = makeBox();

@@ -823,6 +823,18 @@ describe('a run through the units: prepare, run, clean, summary', () => {
     expect(again.refusals).toEqual([`run id ${f.runId} already used`]);
     expect(box.mgr.log.filter((u) => u.startsWith('ccrc-testbox-prepare'))).toHaveLength(1);
   });
+  it('a submission whose log directory cannot be made throws and is never queued (D-7560: a hand-over file stays until its submit is accepted)', async () => {
+    const box = makeBox();
+    await box.svc.start();
+    const logs = path.join(box.root, 'logs');
+    rmSync(logs, { recursive: true, force: true });
+    writeFileSync(logs, 'not a directory\n');
+    const sink = new Sink();
+    expect(() => box.svc.submit(SUBMIT(), sink)).toThrow();
+    expect(box.svc.waitingSubmits()).toEqual([]);
+    expect(box.svc.status().queueDepth).toBe(0);
+    expect(box.mgr.log.filter((u) => u.startsWith('ccrc-testbox-prepare'))).toEqual([]);
+  });
 });
 
 describe('the output tail: streamed on the watchers AND on a periodic drain, so a missed watch event never stalls the log', () => {
