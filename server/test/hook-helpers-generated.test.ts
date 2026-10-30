@@ -16,6 +16,7 @@ import {
   AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END, AUTHDEAD_WRITERS, REGIONS, applyRegion, ccdFunctionDefinition, checkRegion, extractRegion,
   regionOf, renderRegion,
 } from '../../shared/hook-helpers.mjs';
+import { LOGLINE_REGION_BEGIN, LOGLINE_REGION_END, renderLogLineBody } from '../../shared/hook-helpers.mjs';
 import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
@@ -104,7 +105,7 @@ describe('the auth-dead writers region (D-7049)', () => {
   const defOf = (src: string, name: string): string | null => ccdFunctionDefinition(src, name);
 
   it('is a row of the one engine, beside the hook\'s, and the module names both', () => {
-    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead', 'apicap']);
+    expect(REGIONS.map((r) => r.name)).toEqual(['hook', 'authdead', 'apicap', 'log-line']);
     expect(AD.begin).toBe(AUTHDEAD_REGION_BEGIN);
     expect(AD.end).toBe(AUTHDEAD_REGION_END);
     expect(regionOf(hook)).toBe(REGIONS[0]);
@@ -280,5 +281,392 @@ describe('the server-cap reader region in ccrc-api (D-7321)', () => {
     const again = run();
     expect(again.status, again.stderr).toBe(0);
     expect(again.stdout).toContain('server-cap reader already current');
+  });
+});
+
+// W5 Task C5i (ARCH-67; D-7078): each REGIONS row names the file it is given (`file`), the CLI's third argument and the
+// engine's `ccdSrc`. `source` keeps its meaning: the text `render` reads, `ccd` (the given file) or `hook` (the
+// session-hook.sh beside it). Every CLI spawn below runs the real module with a contained env.
+describe('each generated region names the file it is given (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-');
+  const cli = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync('node', [MODULE, ...args], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('the hook, auth-dead and server-cap rows are each given ccd/ccd, and source keeps its values', () => {
+    for (const n of ['hook', 'authdead', 'apicap']) {
+      expect(REGIONS.find((r) => r.name === n)?.file, n).toBe('ccd/ccd');
+    }
+    // Keyed by row name, not a bare list: two adjacent quoted `ccd` literals are the split-path spelling of the
+    // script that core-vocab's one-path-to-the-ccd-script scan forbids outside ccdWsHelpers.ts.
+    expect(Object.fromEntries(REGIONS.map((r) => [r.name, r.source])))
+      .toEqual({ hook: 'ccd', authdead: 'ccd', apicap: 'hook', 'log-line': 'ccd' });
+  });
+
+  it('CONTROL: an absent target or an absent given file exits non-zero, naming the path', () => {
+    const gone = join(work, 'no-such-file');
+    const a = cli('--check', path.join(root, 'ccd/session-hook.sh'), gone);
+    expect(a.code).not.toBe(0);
+    expect(a.stderr).toContain(gone);
+    expect(a.stdout).toBe('');
+    const b = cli('--check', gone, path.join(root, 'ccd/ccd'));
+    expect(b.code).not.toBe(0);
+    expect(b.stderr).toContain(gone);
+    expect(b.stdout).toBe('');
+  });
+});
+
+// C5i: `ccrc restamp` takes the file a region is given from the module's `--region-files` (detect, label, file), and
+// from `--regions` (detect, label; every region given ccd/ccd) when the module predates that mode. `--regions` keeps
+// its two columns byte for byte: an installed ccrc from before C5i reads it with `read -r b l`.
+describe('`ccrc restamp` gives each region the file its row names (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const realModule = read('shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-restamp-');
+  const cli = (mod: string, ...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync('node', [mod, ...args], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  /** A planted tree: the given files under ccd/ and shared/, the real mark.mjs, and `module` as its engine. */
+  const planted = (module: string, files: Record<string, string>): string => {
+    const t = mkTmp('ccrc-restamp-c5i-');
+    mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
+    copyFileSync(join(root, 'shared/mark.mjs'), join(t, 'shared/mark.mjs'));
+    writeFileSync(join(t, 'shared/hook-helpers.mjs'), module);
+    for (const [rel, body] of Object.entries(files)) writeFileSync(join(t, rel), body);
+    return t;
+  };
+  const restamp = (f: string): { code: number; stdout: string; stderr: string } => {
+    const home = mkTmp('ccrc-restamp-c5i-home-');
+    const r = spawnSync('bash', [join(root, 'ccd', 'ccrc'), 'restamp', f], { env: ghContainedEnv(home, { ...process.env, HOME: home }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  /** The real module with the auth-dead row given `file` instead of ccd/ccd. */
+  const authdeadGiven = (file: string): string => {
+    const at = "file: 'ccd/ccd', render: renderAuthdeadBody";
+    expect(realModule).toContain(at);
+    return realModule.replace(at, `file: '${file}', render: renderAuthdeadBody`);
+  };
+
+  it('--regions prints exactly each row\'s detect prefix and label, two columns, nothing more', () => {
+    const r = cli(MODULE, '--regions');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(REGIONS.map((x) => `${x.detect}\t${x.label}\n`).join(''));
+  });
+
+  it('--region-files prints each row\'s detect prefix, label and given file, three columns, and exits 0', () => {
+    const r = cli(MODULE, '--region-files');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(REGIONS.map((x) => `${x.detect}\t${x.label}\t${x.file}\n`).join(''));
+    for (const n of ['hook', 'authdead', 'apicap']) {
+      const row = REGIONS.find((x) => x.name === n)!;
+      expect(r.stdout.split('\n'), n).toContain(`${row.detect}\t${row.label}\tccd/ccd`);
+    }
+  });
+
+  it('a region whose row names ccd/ccd-alt is regenerated from ccd/ccd-alt, then answers current', () => {
+    const alt = ccd.replace('t=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 1', 't=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 3');
+    expect(alt).not.toBe(ccd);
+    const t = planted(authdeadGiven('ccd/ccd-alt'), { 'ccd/ccd': ccd, 'ccd/ccd-alt': alt, 'ccd/ccd-account-health': probe });
+    const f = join(t, 'ccd/ccd-account-health');
+    const r = restamp(f);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('auth-dead writers regenerated');
+    expect(readFileSync(f, 'utf8')).toContain('|| return 3');
+    const c = cli(join(t, 'shared/hook-helpers.mjs'), '--check', f, join(t, 'ccd/ccd-alt'));
+    expect(c.stdout.trim()).toBe('hook-helpers: current');
+    expect(c.code).toBe(0);
+  });
+
+  it('a region whose row names a file outside ccd/ is refused, naming that file, and nothing is written', () => {
+    const t = planted(authdeadGiven('shared/x'), { 'ccd/ccd': ccd, 'ccd/ccd-account-health': probe.replace('rm -f -- "$t"; return 2', 'return 2') });
+    const f = join(t, 'ccd/ccd-account-health');
+    const before = readFileSync(f);
+    const r = restamp(f);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('carries generated auth-dead writers, but its own tree lacks');
+    expect(r.stderr).toContain('or shared/x;');
+    expect(r.stderr).toContain('Nothing was written');
+    expect(readFileSync(f)).toEqual(before);
+  });
+
+  it('a module with no --region-files branch still regenerates the hook region from the tree\'s ccd', () => {
+    const old = realModule.replaceAll("'--region-files'", "'--no-such-mode'");
+    expect(old, 'the replace must take the module\'s --region-files branch away').not.toBe(realModule);
+    const t = planted(old, { 'ccd/ccd': ccd, 'ccd/session-hook.sh': hook.replace('CCRC_ID_MAX=128', 'CCRC_ID_MAX=1') });
+    const f = join(t, 'ccd/session-hook.sh');
+    const r = restamp(f);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('hook helpers regenerated');
+    expect(readFileSync(f, 'utf8')).toBe(hook);
+  });
+});
+
+// C5i: the fourth region, the log-line redactor. `ccd/ccd-update-sync` (a sibling executable that sources nothing)
+// carries a generated byte copy of ccd/ccrc's `_upd_redact`; the row is given ccd/ccrc and renders from it. These rows
+// reach the row through `REGIONS` and the existing engine calls, so they red on their own assertions where it is absent.
+const LL_BEGIN = '# ── BEGIN GENERATED LOG-LINE REDACTOR (shared/hook-helpers.mjs; edit it in ccd/ccrc, then regenerate) ──';
+const LL_END = '# ── END GENERATED LOG-LINE REDACTOR ──';
+describe('the log-line redactor region (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-logline-');
+  const LL = REGIONS.find((r) => (r.name as string) === 'log-line');
+  const upd = ccdFunctionDefinition(ccrc, '_upd_redact')!;
+  /** The region as the engine must render it from `src`, built by hand (BEGIN, the stamped copy, END). */
+  const byHand = (src: string): string => `${LL_BEGIN}\n${markGenerated(`${ccdFunctionDefinition(src, '_upd_redact')!}\n`)}${LL_END}\n`;
+  const movedCcrc = ccrc.replace('  local home="${HOME:-}"\n  home="${home%/}"\n', '  local home="${HOME:-}"\n  home="${home%%/}"\n');
+  const cli = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync('node', [MODULE, ...args], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const restamp = (f: string): { code: number; stdout: string; stderr: string } => {
+    const home = mkTmp('ccrc-restamp-logline-home-');
+    const r = spawnSync('bash', [join(root, 'ccd', 'ccrc'), 'restamp', f], { env: ghContainedEnv(home, { ...process.env, HOME: home }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  /** A planted tree holding the real ccd (which has no `_upd_redact`), the given files and the real modules. */
+  const planted = (files: Record<string, string>): string => {
+    const t = mkTmp('ccrc-restamp-logline-');
+    mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
+    for (const f of ['ccd/ccd', 'shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    for (const [rel, body] of Object.entries(files)) writeFileSync(join(t, rel), body);
+    return t;
+  };
+  const SYNC_SHAPE = (region: string): string => `#!/usr/bin/env bash\nset +x\nexport LC_ALL=C\n${region}say() { printf 'x: %s\\n' "$(_upd_redact "$1" bare-host)" >&2; }\n`;
+
+  it('is the fourth row, given ccd/ccrc, rendering from the given text', () => {
+    expect(LL, 'the engine carries a log-line row').toBeDefined();
+    expect(LL!.begin).toBe(LL_BEGIN);
+    expect(LL!.end).toBe(LL_END);
+    expect(LL!.detect).toBe('# ── BEGIN GENERATED LOG-LINE REDACTOR');
+    expect(LL!.label).toBe('log-line redactor');
+    expect(LL!.file).toBe('ccd/ccrc');
+    expect(movedCcrc).not.toBe(ccrc);
+  });
+
+  it('renders ccd/ccrc\'s whole _upd_redact plus a newline, stamped and verifying, and never reads the hook', () => {
+    expect(LL, 'the engine carries a log-line row').toBeDefined();
+    const r = renderRegion(LL!, ccrc);
+    expect(r).toBe(byHand(ccrc));
+    const inner = r.slice(LL_BEGIN.length + 1, r.length - LL_END.length - 1);
+    expect(inner.split('\n')[0]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
+    expect(verifyMarker(inner)).toBe('ccrc-unmodified');
+    expect(inner.split('\n').slice(1).join('\n')).toBe(`${upd}\n`);
+    expect(renderRegion(LL!, ccrc, hook)).toBe(renderRegion(LL!, ccrc));
+  });
+
+  it('over a planted target, a hand edit reads edited, a change to ccrc\'s _upd_redact reads stale, and applyRegion brings it back', () => {
+    expect(LL, 'the engine carries a log-line row').toBeDefined();
+    const target = SYNC_SHAPE(byHand(ccrc));
+    expect(regionOf(target)).toBe(LL);
+    expect(checkRegion(LL!, target, ccrc)).toBe('current');
+    const edited = target.replace('home="${home%/}"', 'home="${home}"');
+    expect(edited).not.toBe(target);
+    expect(checkRegion(LL!, edited, ccrc)).toBe('edited');
+    expect(checkRegion(LL!, target, movedCcrc)).toBe('stale');
+    expect(checkRegion(LL!, applyRegion(LL!, edited, ccrc), ccrc)).toBe('current');
+    expect(applyRegion(LL!, edited, ccrc)).toBe(target);
+    expect(checkRegion(LL!, applyRegion(LL!, target, movedCcrc), movedCcrc)).toBe('current');
+  });
+
+  it('--region-files ends the log-line row with ccd/ccrc, and --regions has a fourth two-column row', () => {
+    const files = cli('--region-files');
+    expect(files.code, files.stderr).toBe(0);
+    expect(files.stdout.split('\n')).toContain('# ── BEGIN GENERATED LOG-LINE REDACTOR\tlog-line redactor\tccd/ccrc');
+    const two = cli('--regions');
+    expect(two.code).toBe(0);
+    expect(two.stdout.split('\n').filter((l) => l !== '')).toHaveLength(4);
+    expect(two.stdout.split('\n')).toContain('# ── BEGIN GENERATED LOG-LINE REDACTOR\tlog-line redactor');
+  });
+
+  it('`ccrc restamp` regenerates the region from the tree\'s own ccd/ccrc, then --check answers current', () => {
+    const t = planted({ 'ccd/ccrc': movedCcrc, 'ccd/ccd-update-sync': SYNC_SHAPE(byHand(ccrc)) });
+    const f = join(t, 'ccd/ccd-update-sync');
+    const r = restamp(f);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('log-line redactor regenerated');
+    expect(readFileSync(f, 'utf8')).toBe(SYNC_SHAPE(byHand(movedCcrc)));
+    const c = spawnSync('node', [join(t, 'shared/hook-helpers.mjs'), '--check', f, join(t, 'ccd/ccrc')], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    expect(c.stdout.trim()).toBe('hook-helpers: current');
+    expect(c.status).toBe(0);
+    const again = restamp(f);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toContain('log-line redactor already current');
+  });
+
+  it('renderLogLineBody copies ccd/ccrc\'s _upd_redact and throws on a text without one; the module exports the row\'s lines', () => {
+    expect(LOGLINE_REGION_BEGIN).toBe(LL_BEGIN);
+    expect(LOGLINE_REGION_END).toBe(LL_END);
+    expect(renderLogLineBody(ccrc)).toBe(`${upd}\n`);
+    expect(() => renderLogLineBody(ccd)).toThrow('ccd/ccrc has no _upd_redact to copy');
+  });
+
+  it('`ccrc restamp` over a tree without ccd/ccrc refuses, naming it, and writes nothing', () => {
+    const t = planted({ 'ccd/ccd-update-sync': SYNC_SHAPE(byHand(ccrc).replace('home="${home%/}"', 'home="${home}"')) });
+    const f = join(t, 'ccd/ccd-update-sync');
+    const before = readFileSync(f);
+    const r = restamp(f);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`carries generated log-line redactor, but its own tree lacks ${t}/ccd/../shared/hook-helpers.mjs or ${t}/ccd/ccrc;`);
+    expect(r.stderr).toContain('Nothing was written');
+    expect(readFileSync(f)).toEqual(before);
+  });
+});
+
+// C5i: the shipped ccd/ccd-update-sync carries the log-line region, current against ccd/ccrc, after its `set +x` and
+// `export LC_ALL=C`, with nothing but comments between it and `say`. Each row finds the region by its BEGIN line and
+// asserts that line is there before it compares positions, so an absent region reds on that assertion.
+describe('ccd/ccd-update-sync carries the log-line region (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-sync-');
+  const sync = read('ccd/ccd-update-sync');
+  const LL = REGIONS.find((r) => (r.name as string) === 'log-line');
+  const beginAt = (): number => {
+    const at = sync.indexOf(`\n${LL_BEGIN}\n`);
+    expect(at, 'ccd-update-sync carries the log-line BEGIN line').toBeGreaterThanOrEqual(0);
+    expect(sync.split(LL_BEGIN.slice(0, 40)).length - 1, 'exactly one log-line BEGIN line').toBe(1);
+    return at + 1;
+  };
+
+  it('is current against ccd/ccrc, and no _upd_redact is defined outside it (a later definition would win)', () => {
+    beginAt();
+    expect(LL, 'the engine carries a log-line row').toBeDefined();
+    expect(regionOf(sync)).toBe(LL);
+    expect(checkRegion(LL!, sync, ccrc)).toBe('current');
+    const rest = sync.replace(extractRegion(LL!, sync)!, '');
+    expect(rest).not.toMatch(/(?:^|[\s;&|(){}])(?:function\s+_upd_redact\b|_upd_redact\s*\(\s*\))/m);
+    expect(rest).not.toMatch(/^\s*(?:alias|eval|source|\.)\s[^\n]*_upd_redact/m);
+  });
+
+  it('--check ccd/ccd-update-sync ccd/ccrc answers current', () => {
+    const r = spawnSync('node', [MODULE, '--check', path.join(root, 'ccd/ccd-update-sync'), path.join(root, 'ccd/ccrc')],
+      { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    expect(r.stdout.trim(), r.stderr).toBe('hook-helpers: current');
+    expect(r.status).toBe(0);
+  });
+
+  it('sits after `export LC_ALL=C`, with only blank or comment lines between its END line and `say() {`', () => {
+    const at = beginAt();
+    const lc = sync.indexOf('\nexport LC_ALL=C\n');
+    expect(lc, 'ccd-update-sync exports LC_ALL=C at its top level').toBeGreaterThanOrEqual(0);
+    expect(at).toBeGreaterThan(lc);
+    const end = sync.indexOf(`\n${LL_END}\n`, at);
+    expect(end, 'the region has its END line').toBeGreaterThan(at);
+    const say = sync.indexOf('\nsay() {', end);
+    expect(say, 'say() is defined after the region').toBeGreaterThan(end);
+    const between = sync.slice(end + LL_END.length + 2, say + 1).split('\n').filter((l) => l !== '');
+    for (const l of between) expect(l, 'only comments between the region and say').toMatch(/^\s*#/);
+  });
+
+  it('lies after `set +x`, the file\'s first line of code', () => {
+    const at = beginAt();
+    const lines = sync.split('\n');
+    const first = lines.findIndex((l, i) => i > 0 && l.trim() !== '' && !/^\s*#/.test(l));
+    expect(lines[first]!.replace(/\s+#.*$/, ''), 'the first line of code').toBe('set +x');
+    expect(at).toBeGreaterThan(lines.slice(0, first + 1).join('\n').length);
+  });
+});
+
+// C5i: the CLI's identity check. `--write`, `--check` and `--restamp` compare the given file's basename with the
+// basename of the target row's `file` once, before any render or write; a mismatch exits 2 with one sentence and writes
+// nothing. By basename, because `_restamp_hook_note` passes a file it only knows is named `ccd`. Each row compares
+// the target's bytes before and after, so a check that runs after the write still reds.
+describe('the engine refuses a given file that is not the target row\'s (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-identity-');
+  const cli = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync('node', [MODULE, ...args], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const refusal = (target: string, label: string, file: string, given: string): string =>
+    `hook-helpers: ${target} carries the ${label} region, whose file is ${file}; ${given} is not that file\n`;
+  const at = (f: string): string => path.join(root, f);
+  /** The hook with one line added inside its generated region. */
+  const handEditedHook = (): string => {
+    const edited = hook.replace(`${HOOK_REGION_BEGIN}\n`, `${HOOK_REGION_BEGIN}\n# a hand edit\n`);
+    expect(edited).not.toBe(hook);
+    return edited;
+  };
+  const expectRefused = (r: { code: number; stdout: string; stderr: string }, sentence: string): void => {
+    expect(r.stderr).toBe(sentence);
+    expect(r.stdout).toBe('');
+    expect(r.code).toBe(2);
+  };
+
+  it('--check ccd/session-hook.sh ccd/ccrc is refused: the hook region is given ccd', () => {
+    const before = readFileSync(at('ccd/session-hook.sh'));
+    expectRefused(cli('--check', at('ccd/session-hook.sh'), at('ccd/ccrc')), refusal(at('ccd/session-hook.sh'), 'hook helpers', 'ccd/ccd', at('ccd/ccrc')));
+    expect(readFileSync(at('ccd/session-hook.sh'))).toEqual(before);
+  });
+
+  it('--check ccd/ccrc-api ccd/session-hook.sh is refused: the server-cap region is given ccd, not the hook', () => {
+    const before = readFileSync(at('ccd/ccrc-api'));
+    expectRefused(cli('--check', at('ccd/ccrc-api'), at('ccd/session-hook.sh')),
+      refusal(at('ccd/ccrc-api'), 'server-cap reader', 'ccd/ccd', at('ccd/session-hook.sh')));
+    expect(readFileSync(at('ccd/ccrc-api'))).toEqual(before);
+  });
+
+  it('--write <hand-edited hook copy> ccd/ccrc is refused and leaves the copy\'s bytes', () => {
+    const copy = join(mkTmp('hook-helpers-c5i-write-'), 'session-hook.sh');
+    writeFileSync(copy, handEditedHook());
+    const before = readFileSync(copy);
+    expectRefused(cli('--write', copy, at('ccd/ccrc')), refusal(copy, 'hook helpers', 'ccd/ccd', at('ccd/ccrc')));
+    expect(readFileSync(copy)).toEqual(before);
+  });
+
+  it('--restamp <log-line target> <a ccd that defines _upd_redact> is refused and leaves the target\'s bytes', () => {
+    const t = mkTmp('hook-helpers-c5i-restamp-');
+    mkdirSync(join(t, 'ccd'));
+    const sync = read('ccd/ccd-update-sync');
+    const inRegion = sync.indexOf(`\n${LL_BEGIN}\n`);
+    expect(inRegion, 'the shipped ccd-update-sync carries the log-line region').toBeGreaterThanOrEqual(0);
+    const edited = sync.slice(0, inRegion) + sync.slice(inRegion).replace('home="${home%/}"', 'home="${home}"');
+    expect(edited).not.toBe(sync);
+    const f = join(t, 'ccd/ccd-update-sync');
+    writeFileSync(f, edited);
+    writeFileSync(join(t, 'ccd/ccd'), `${ccd}${ccdFunctionDefinition(ccrc, '_upd_redact')!}\n`);
+    const before = readFileSync(f);
+    expectRefused(cli('--restamp', f, join(t, 'ccd/ccd')), refusal(f, 'log-line redactor', 'ccd/ccrc', join(t, 'ccd/ccd')));
+    expect(readFileSync(f)).toEqual(before);
+  });
+
+  // A target that carries no region has no row, so there is no file to compare: `--check` and `--write` keep the base's
+  // output (the hook row's `missing`, and its uncaught "no region" throw), whatever the given file is named.
+  it('keep-green: a target with no region keeps the base output for --check and --write, given ccd/ccrc', () => {
+    const target = at('ccd/ccrc-doctor-checks');
+    expect(regionOf(read('ccd/ccrc-doctor-checks')), 'ccd/ccrc-doctor-checks carries no region').toBeNull();
+    const c = cli('--check', target, at('ccd/ccrc'));
+    expect(c).toEqual({ code: 1, stdout: 'hook-helpers: missing\n', stderr: '' });
+    const copy = join(mkTmp('hook-helpers-c5i-noregion-'), 'ccrc-doctor-checks');
+    copyFileSync(target, copy);
+    const before = readFileSync(copy);
+    const w = cli('--write', copy, at('ccd/ccrc'));
+    expect(w.code).toBe(1);
+    expect(w.stdout).toBe('');
+    expect(w.stderr).toContain('Error: the file carries no generated hook helpers region to regenerate');
+    expect(readFileSync(copy)).toEqual(before);
+  });
+
+  it('the usage line names <file> and --region-files', () => {
+    const r = cli('--check');
+    expect(r.stderr).toBe('usage: node shared/hook-helpers.mjs --write|--check|--restamp <target> <file> | --regions | --region-files\n');
+    expect(r.code).toBe(2);
+  });
+
+  it('keep-green: a given file of the row\'s basename passes, and --write over a hand-edited hook given ccd/ccd regenerates it', () => {
+    const a = cli('--check', at('ccd/ccrc-api'), at('ccd/ccd'));
+    expect(a.stdout.trim()).toBe('hook-helpers: current');
+    expect(a.code).toBe(0);
+    const b = cli('--check', at('ccd/ccd-update-sync'), at('ccd/ccrc'));
+    expect(b.stdout.trim()).toBe('hook-helpers: current');
+    expect(b.code).toBe(0);
+    const copy = join(mkTmp('hook-helpers-c5i-write-'), 'session-hook.sh');
+    writeFileSync(copy, handEditedHook());
+    const w = cli('--write', copy, at('ccd/ccd'));
+    expect(w.stdout.trim(), w.stderr).toBe('hook-helpers: regenerated');
+    expect(w.code).toBe(0);
+    expect(readFileSync(copy, 'utf8')).toBe(hook);
   });
 });

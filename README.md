@@ -5100,7 +5100,7 @@ refused but counts in the window. A manual swap refuses a sleeping row `409 hibe
 deliverable, with `hibernatedAt`; the reclaim door treats a sleeping claimant as alive; a sleeping main checkout stays
 out of the archived fold. **The presence contract:** beside the visible claim that suppresses pushes, every
 `/ws/session/:id` connection holds an *open* claim, stamped at connect and by every frame, visible or hidden, believed
-for `PRESENCE_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat now beats while hidden too
+for `VIEWER_OPEN_TTL_MS` (10 minutes) and dropped at close; the PWA's heartbeat now beats while hidden too
 (`visible:false`, which leaves notifications as they were), and for that long after a server start every session counts
 as viewed.
 
@@ -7206,7 +7206,7 @@ until then an open tab can hold pre-deploy JS against a post-deploy server. A
 synchronous `hello` frame closes that gap without doing anything yet:
 
 - `FLEET_PROTO` / `FLEET_PROTO_MIN` live once, in `shared/api.ts` beside
-  `PRESENCE_REFRESH_MS` — both currently `1`, with `MIN <= PROTO` pinned by a
+  `VIEWER_REFRESH_MS` — both currently `1`, with `MIN <= PROTO` pinned by a
   test. **`FLEET_PROTO_MIN` is the kill-switch**: raise it above an old
   build's `FLEET_PROTO` to block that build. It is dormant until then.
 - `/ws/fleet`'s first frame, sent synchronously before the async `fleet`
@@ -7746,6 +7746,8 @@ These conventions carry more weight here than style:
   region has gone stale. `ccd/ccd-account-health` carries the same module's second region, the
   auth-dead writers copied from `ccd/ccd`: after editing `_authdead_mark`, `_authdead_clear` or
   `_authdead_sweep_staged`, run `bash ccd/ccrc restamp ccd/ccd-account-health`.
+  `ccd/ccd-update-sync` carries the module's log-line region, `_upd_redact` copied from
+  `ccd/ccrc`; after editing it, run `bash ccd/ccrc restamp ccd/ccd-update-sync`.
 - **A feature pull request does not edit the shared ledgers.** An existing file under
   `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
   add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`

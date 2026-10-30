@@ -412,3 +412,29 @@ describe('landingOf is the PWA\'s one reader of FleetSession.landing; the chip c
     expect(where).toEqual({ CHIP_PATHS_MAX: [LANDING_OWNER], CHIP_LINES_MAX: [LANDING_OWNER] });
   });
 });
+
+// C7o (D-7193; the ARCH-53 follow-up, #1371; OA-C18 (a)): in TS, "presence" names SESSION presence only. The viewer
+// constants (`shared/api.ts#VIEWER_REFRESH_MS`, `#VIEWER_TTL_MS`, `#VIEWER_OPEN_TTL_MS`) and the defer-derived
+// identifiers take viewer words, read through W7's census (`census-w7/pwa.ts#viewerWordsAsPresence`, the plan's item 18
+// names), so a viewer fact named presence again reds. The persisted word `presence` is that row's known width: it stays
+// byte-identical on the wire, the feed, coord.db and the journals, listed by `census-w7/pwa.ts#persistedPresenceWords`.
+describe('viewer facts take viewer words; "presence" in TS is session presence (C7o, D-7193)', () => {
+  it('viewerWordsAsPresence() 92 -> 0 across server/src, shared/ and pwa/src; may only shrink', async () => {
+    const { viewerWordsAsPresence, showSite } = await import('../census-w7/pwa.js');
+    expect(viewerWordsAsPresence().map(showSite)).toEqual([]);
+  });
+
+  // A bare `presence` name is session presence's too, so it is read only in the files where it can mean a viewer
+  // (`census-w7/pwa.ts#VIEWER_ONLY_FILES`). What stays is a map keyed BY the persisted word, each listed: a new field,
+  // key, read or local named presence there reds.
+  it('viewerNamesAsPresence() 44 -> 5 in the viewer-only files: only the maps keyed by the persisted word', async () => {
+    const { viewerNamesAsPresence } = await import('../census-w7/pwa.js');
+    expect(viewerNamesAsPresence().map((s) => `${s.file}#${s.symbol}  ${s.text}`)).toEqual([
+      "server/src/collectLane.ts#(module)  presence: 'its id has been open on a screen for a long time, so the temp-root collector leaves its temp root alone.',",
+      "server/src/collectLane.ts#collectItemOf  return { word: 'presence', many: COLLECT_ITEM_MANY.presence,",
+      "server/src/coord/collectTempRoot.ts#(module)  caps: true, 'id-refused': true, paused: true, presence: true,",
+      "server/src/coord/collectTempRoot.ts#(module)  'unknown-fleet': true, 'safety-stopped': true, 'pair-cleared': true, presence: true, caps: true,",
+      "server/src/coord/childReclaim.ts#(module)  presence: true, 'siblings-open': true, 'siblings-unreadable': true, 'marker-unreadable': true,",
+    ]);
+  });
+});

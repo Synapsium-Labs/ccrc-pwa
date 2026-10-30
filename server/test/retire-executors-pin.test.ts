@@ -1556,7 +1556,7 @@ describe('the close route (C4h k; D-7228)', () => {
 // for byte), and a `need` sequence whose reads, as the rig records them, are the executor's reads in the executor's
 // order up to its act. A row that answers `{ act: true }` must stand where the executor composed its verb.
 import {
-  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_PRESENCE_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
+  RETIRE_LISTING_MODES, RETIRE_NOTICE_HOMES, RETIRE_VIEWER_RULES, RETIRE_REASON_NAMES, RETIRE_STEPS, RetireRejected,
   decideRetire, type RetireDecision, type RetireFactSet, type RetireReason, type RetireReasonName, type RetireStep,
 } from '../src/retire.js';
 import {
@@ -1684,7 +1684,7 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
     [RETIRE_STEPS.offSwitch]: () => childDisabledDetail(k, ''),
     [RETIRE_STEPS.generation]: () => (req.licenceGeneration.kind === 'none' ? null
       : childReclaimGenerationRead(deps.io, deps.cfg.registryDir, req.sessionId)),
-    [RETIRE_STEPS.presence]: () => !req.deferExpired && deps.viewers?.isVisible(req.sessionId) === true,
+    [RETIRE_STEPS.viewer]: () => !req.deferExpired && deps.viewers?.isVisible(req.sessionId) === true,
     [RETIRE_STEPS.capability]: () => [ccdCan(deps.fleetState, 'wsReclaim'),
       req.stale === undefined || capSupported(deps.fleetState, RECLAIM_STALE_CAP)],
     [RETIRE_STEPS.audit]: async () => {
@@ -1759,10 +1759,10 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     // The rule itself, over facts: a person looking defers a request below its ceiling and passes one past it.
     const k = await childRig();
     const facts = (await drive(CHILD_SPENT_RETIRE, k.req, childReaders(k))).facts;
-    const seen = { ...facts, [RETIRE_STEPS.presence]: true } as ChildSpentFacts;
+    const seen = { ...facts, [RETIRE_STEPS.viewer]: true } as ChildSpentFacts;
     expect(decideRetire(seen, CHILD_SPENT_RETIRE, k.req)).toEqual({ outcome: deferredC(k, 'presence', 'someone is viewing this session') });
     expect(decideRetire(seen, CHILD_SPENT_RETIRE, { ...k.req, deferExpired: true })).toEqual({ act: true });
-    expect(CHILD_SPENT_RETIRE.presence).toBe(RETIRE_PRESENCE_RULES.untilCeiling);
+    expect(CHILD_SPENT_RETIRE.viewer).toBe(RETIRE_VIEWER_RULES.untilCeiling);
   });
 
   it('child-spent: a raised pause says automatic reclamation is paused', async () => {
@@ -1808,7 +1808,7 @@ describe('decideRetire: child-spent over C4h\'s matrix (C4i; D-7166)', () => {
     const k = await childRig();
     const facts = (await drive(CHILD_SPENT_RETIRE, k.req, childReaders(k))).facts;
     const boom = new Error('EIO: presence lost');
-    expect(() => decideRetire({ ...facts, [RETIRE_STEPS.presence]: new RetireRejected(boom) } as unknown as ChildSpentFacts, CHILD_SPENT_RETIRE, k.req)).toThrow(boom);
+    expect(() => decideRetire({ ...facts, [RETIRE_STEPS.viewer]: new RetireRejected(boom) } as unknown as ChildSpentFacts, CHILD_SPENT_RETIRE, k.req)).toThrow(boom);
   });
 
   it('child-spent: gone has three sources — the record step, the audit\'s verdict and the act — and the gate answers the first two', async () => {
@@ -1869,7 +1869,7 @@ const expiryReaders = (x: ExpiryRig): Readers<ArchiveExpiredFacts> => {
       req.childOf === undefined || capSupported(deps.fleetState, EXPIRE_CHILD_CAP)],
     [RETIRE_STEPS.switches]: () => expirySwitchesOf(x),
     [RETIRE_STEPS.store]: () => readExpiryStore(deps.coord, req.sessionId, req.childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null }),
-    [RETIRE_STEPS.presence]: () => deps.viewers?.isVisible(req.sessionId) === true,
+    [RETIRE_STEPS.viewer]: () => deps.viewers?.isVisible(req.sessionId) === true,
     [RETIRE_STEPS.audit]: async () => {
       const argv = CCD_ARGV.wsExpireAudit(req.sessionId, req.childOf);
       if (!ccdCan(deps.fleetState, 'wsExpireAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
@@ -1929,7 +1929,7 @@ describe('decideRetire: archive-expired over C4h\'s matrix (C4i; D-7166)', () =>
 
   it('archive-expired: presence defers with no ceiling (decider suite)', async () => {
     expect((await expiryRow(undefined, (x) => { x.see(true); })).outcome).toMatchObject({ kind: 'deferred', why: 'presence' });
-    expect(ARCHIVE_EXPIRED_RETIRE.presence).toBe(RETIRE_PRESENCE_RULES.noCeiling);
+    expect(ARCHIVE_EXPIRED_RETIRE.viewer).toBe(RETIRE_VIEWER_RULES.noCeiling);
   });
 
   it('archive-expired: an unlistable registry names its reason (decider suite)', async () => {
@@ -2021,7 +2021,7 @@ const collectReaders = (d: CollectTempRootDeps, job: CollectJob): Readers<TempOr
       collectLooseHexOf(job.id) === null || (ccdCan(d.fleetState, 'wsCollectLoose') && ccdCan(d.fleetState, 'wsCollectLooseAudit'))],
     [RETIRE_STEPS.id]: () => collectLooseHexOf(job.id),
     [RETIRE_STEPS.switches]: () => collectSwitches(d.io, d.cfg.registryDir),
-    [RETIRE_STEPS.presence]: () => d.viewers?.isVisible(job.id) === true,
+    [RETIRE_STEPS.viewer]: () => d.viewers?.isVisible(job.id) === true,
     [RETIRE_STEPS.audit]: () => collectAskedOf(d, job.id),
     [RETIRE_STEPS.staleGeneration]: () => d.lane.generations(job.id),
     [RETIRE_STEPS.auditVerdict]: () => true,
@@ -2051,7 +2051,7 @@ const collectReaders = (d: CollectTempRootDeps, job: CollectJob): Readers<TempOr
     [RETIRE_STEPS.flip]: (f) => d.lane.flipped(f[RETIRE_STEPS.lane] as CollectLaneSettled),
     [RETIRE_STEPS.safety]: () => true,
     [RETIRE_STEPS.licenceStands]: () => ({ generations: d.lane.generations(job.id), observation: d.lane.observation(job.id) }),
-    [RETIRE_STEPS.presenceLast]: () => d.viewers?.isVisible(job.id) === true,
+    [RETIRE_STEPS.viewerLast]: () => d.viewers?.isVisible(job.id) === true,
     [RETIRE_STEPS.holdLast]: (f) => collectOpenRunHold(d.coord, job.id, doc(f).value),
     [RETIRE_STEPS.live]: () => true,
     [RETIRE_STEPS.looseMarker]: () => ccdCan(d.fleetState, 'wsCollectLoose'),
@@ -2201,10 +2201,10 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
   const ROWS = [CHILD_SPENT_RETIRE, ARCHIVE_EXPIRED_RETIRE, TEMP_ORPHAN_RETIRE] as unknown as readonly RetireReason<never, RetireFactSet, unknown>[];
 
   it('each row names its reason, its listing mode, its presence rule and its notice home', () => {
-    expect(ROWS.map((r) => [r.name, r.listing, r.presence, r.notice])).toEqual([
-      [RETIRE_REASON_NAMES.childSpent, RETIRE_LISTING_MODES.plainPerMarker, RETIRE_PRESENCE_RULES.untilCeiling, RETIRE_NOTICE_HOMES.executor],
-      [RETIRE_REASON_NAMES.archiveExpired, RETIRE_LISTING_MODES.measuredOnce, RETIRE_PRESENCE_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
-      [RETIRE_REASON_NAMES.tempOrphan, RETIRE_LISTING_MODES.measuredOnce, RETIRE_PRESENCE_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
+    expect(ROWS.map((r) => [r.name, r.listing, r.viewer, r.notice])).toEqual([
+      [RETIRE_REASON_NAMES.childSpent, RETIRE_LISTING_MODES.plainPerMarker, RETIRE_VIEWER_RULES.untilCeiling, RETIRE_NOTICE_HOMES.executor],
+      [RETIRE_REASON_NAMES.archiveExpired, RETIRE_LISTING_MODES.measuredOnce, RETIRE_VIEWER_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
+      [RETIRE_REASON_NAMES.tempOrphan, RETIRE_LISTING_MODES.measuredOnce, RETIRE_VIEWER_RULES.noCeiling, RETIRE_NOTICE_HOMES.lane],
     ]);
   });
 
@@ -2274,7 +2274,7 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
   });
 
   it('a step whose fact is missing is the step asked for: no fact is read out of order', () => {
-    const later = { [RETIRE_STEPS.presence]: false, [RETIRE_STEPS.capability]: [true, true] } as ChildSpentFacts;
+    const later = { [RETIRE_STEPS.viewer]: false, [RETIRE_STEPS.capability]: [true, true] } as ChildSpentFacts;
     expect(decideRetire(later, CHILD_SPENT_RETIRE, {} as ChildReclaimRequest)).toEqual({ need: RETIRE_STEPS.record });
   });
 
@@ -2299,7 +2299,7 @@ type LaneAFact = string | RetireRejected | null;
 interface LaneAFacts {
   readonly [RETIRE_STEPS.id]?: LaneAFact;
   readonly [RETIRE_STEPS.switches]?: LaneAFact;
-  readonly [RETIRE_STEPS.presence]?: LaneAFact;
+  readonly [RETIRE_STEPS.viewer]?: LaneAFact;
   readonly [RETIRE_STEPS.audit]?: LaneAFact;
   readonly [RETIRE_STEPS.switchesLast]?: LaneAFact;
   readonly [RETIRE_STEPS.latch]?: LaneAFact;
@@ -2311,7 +2311,7 @@ interface LaneAReq { readonly sessionId: string }
 type LaneARead = { readonly kind: 'value'; readonly v: string | null } | { readonly kind: 'async'; readonly v: string | null }
   | { readonly kind: 'reject'; readonly err: Error } | { readonly kind: 'throw'; readonly err: Error };
 
-const LANE_A_DECIDE: readonly LaneAStep[] = [RETIRE_STEPS.id, RETIRE_STEPS.switches, RETIRE_STEPS.presence];
+const LANE_A_DECIDE: readonly LaneAStep[] = [RETIRE_STEPS.id, RETIRE_STEPS.switches, RETIRE_STEPS.viewer];
 const LANE_A_ACT: readonly LaneAStep[] = [RETIRE_STEPS.switchesLast, RETIRE_STEPS.latch, RETIRE_STEPS.lane];
 const LANE_A_STEPS: readonly LaneAStep[] = [...LANE_A_DECIDE, RETIRE_STEPS.audit, ...LANE_A_ACT];
 /** The fixture row's async steps: the switches, the audit and the last switches. Every other step is `sync`. */
@@ -2339,7 +2339,7 @@ const laneARow = (o: {
     audit: spec(RETIRE_STEPS.audit) as RetireStepSpec & { readonly step: typeof RETIRE_STEPS.audit },
     act: LANE_A_ACT.map(spec),
     listing: RETIRE_LISTING_MODES.measuredOnce,
-    presence: RETIRE_PRESENCE_RULES.noCeiling,
+    viewer: RETIRE_VIEWER_RULES.noCeiling,
     notice: o.notice ?? RETIRE_NOTICE_HOMES.executor,
     judge: judge as RetireReason<LaneAReq, LaneAFacts, string>['judge'],
     evidence: [],
@@ -2448,7 +2448,7 @@ describe('retireAct: the one executor loop over fixture rows (C4j; D-7167)', () 
   });
 
   it('a throwing synchronous reader behaves as a rejecting one of its mode', async () => {
-    for (const at of [RETIRE_STEPS.id, RETIRE_STEPS.presence, RETIRE_STEPS.lane] as const) {
+    for (const at of [RETIRE_STEPS.id, RETIRE_STEPS.viewer, RETIRE_STEPS.lane] as const) {
       const err = new Error(`${at} threw`);
       const judged = laneAPort({ reads: { [at]: { kind: 'throw', err } } });
       const out = `lane-a ${at}: rejected (${at} threw)`;
@@ -2488,7 +2488,7 @@ describe('retireAct: the one executor loop over fixture rows (C4j; D-7167)', () 
   });
 
   it('a reader\'s effect runs once, only for a step the decider asked for', async () => {
-    const t = laneAPort({ reads: { [RETIRE_STEPS.presence]: { kind: 'value', v: 'stop' } } });
+    const t = laneAPort({ reads: { [RETIRE_STEPS.viewer]: { kind: 'value', v: 'stop' } } });
     await retireAct(t.port, laneARow(), LANE_A_REQ);
     const effects = t.log.filter((l) => l.startsWith('effect:'));
     expect(effects).toEqual(['effect:id', 'effect:switches', 'effect:presence']);

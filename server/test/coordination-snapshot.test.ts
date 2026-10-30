@@ -1911,7 +1911,7 @@ describe('8B: backup-coord.mjs stays the SQLite-only snapshot, and the helper ne
 // `delegation.journalTailOmitted: {bytes, sha256}` (version 1 still; absence means nothing was left out), and the CLI says so on stderr.
 // The rule is the server's, restated once on this side (it cannot import server TypeScript); the differential below holds the two together.
 import { statSync } from 'node:fs';
-import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import { DelegationDurability, recoverDelegation, recoverDelegationFromFiles } from '../src/coord/delegation-checkpoint.js';
 
 describe('8C: capture of a torn tail (D-4655): the complete prefix, the checkpoint, an additive manifest field, and a warning', () => {
@@ -2165,7 +2165,7 @@ describe('8C: a snapshot taken past a torn tail restores as a valid pair, and th
     const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target));
     expect(report.failure).toBeNull();
     expect(report.tailHeal, 'the restored journal has no tail').toBeNull();
-    const dur = await DelegationDurability.open({ dir: liveDir(target), projection: null, now: () => Date.now(), randomUUID: () => 'u' });
+    const dur = await DelegationDurability.open({ dir: liveDir(target), projection: null, now: () => Date.now(), randomUUID: () => 'u', port: nodeDelegationFilePort });
     try {
       expect(dur.failure()).toBeNull();
       expect(dur.state().phase).toBe('ready');

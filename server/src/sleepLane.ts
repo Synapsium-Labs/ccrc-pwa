@@ -14,7 +14,7 @@ import {
   type HibernateStoreRead, type HibernateVerdict,
 } from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER, programmeHoldOf } from './coord/rundefs.js';
-import { PRESENCE_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
 import { readSwitches, type MarkerSwitchName, type SwitchReading } from '../../shared/switches.js';
 import {
   RUN_DONE_POLICY, STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS,
@@ -66,7 +66,7 @@ import type { LaneName } from './laneSchedule.js';
  * run-done's population never asks it twice; it wakes as any sleeping session does (mail under the wake budget, a
  * re-dispatch's `ensure`, an open screen). The pane menu is the watcher's newest scrape, and the live reads use the
  * tick's record: a uuid or wrapper that changed since fails closed (the marker reads `foreign`, the live file
- * `unmeasured`). Presence is never persisted: every candidate holds `viewer` for `PRESENCE_OPEN_TTL_MS` after
+ * `unmeasured`). Presence is never persisted: every candidate holds `viewer` for `VIEWER_OPEN_TTL_MS` after
  * `startedAt`, so a hidden tab that has not reconnected after a deploy is not an empty screen.
  */
 
@@ -508,7 +508,7 @@ async function runDoneLive(deps: StopDoneSweepDeps, rec: SessionRecord): Promise
 export function runDoneViewerFacts(
   deps: { readonly viewers: Pick<Viewers, 'isOpen'> | undefined; readonly startedAt: number }, id: string, at: number,
 ): { readonly viewer: boolean; readonly sinceStartMs: number; readonly viewerOpenTtlMs: number } {
-  return { viewer: deps.viewers?.isOpen(id) ?? true, sinceStartMs: at - deps.startedAt, viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS };
+  return { viewer: deps.viewers?.isOpen(id) ?? true, sinceStartMs: at - deps.startedAt, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS };
 }
 
 /** run-done's verdict input: the row's `.hold` classified again at each ask (`heldKindOf`), presence read as it is

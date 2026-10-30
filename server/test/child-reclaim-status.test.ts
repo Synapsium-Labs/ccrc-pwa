@@ -478,8 +478,8 @@ const mirrored = (act: string, outcome: string, at: number, refusal: string | nu
   ({ act, outcome, at, refusal, id: SID }) as unknown as MirroredLifecycleEvent;
 /** A sweep entry as the chip reads it: the decision clocks are the lane's monotonic ones (never an epoch), `bornAt`
  *  is the idle null, `markerRunId` is the marker's own run, and the two fields the chip reads are the caller's. */
-const entry = (firstDeferredAt: number | null, firstPresenceDeferredAt: number | null = null, consecutiveFailures = 0) =>
-  ({ ...childReclaimFirstSighting(5_000, null, RUN, { kind: 'absent' }), firstDeferredAt, firstPresenceDeferredAt, consecutiveFailures });
+const entry = (firstDeferredAt: number | null, firstViewerDeferredAt: number | null = null, consecutiveFailures = 0) =>
+  ({ ...childReclaimFirstSighting(5_000, null, RUN, { kind: 'absent' }), firstDeferredAt, firstViewerDeferredAt, consecutiveFailures });
 
 describe('withChildReclaim — the composer GET /api/runs calls', () => {
   it('keeps every other field and sets childReclaim on each row', () => {
@@ -561,7 +561,7 @@ describe('withChildReclaim — the composer GET /api/runs calls', () => {
   it('dates a defer from the first deferral of ANY kind, never the presence clock (spec §5.7)', () => {
     // A sibling-open defer first, a presence defer later: the chip's `at` is
     // the first. (The case above already holds that a non-presence defer
-    // alone, `firstPresenceDeferredAt: null`, reads deferred.)
+    // alone, `firstViewerDeferredAt: null`, reads deferred.)
     const both = src({ defers: new Map([[SID, entry(AT + 9_000, AT + 20_000)]]) });
     expect(withChildReclaim([run({})], both)[0]!.childReclaim)
       .toEqual({ word: 'deferred', sentence: S.sweepDeferred, at: AT + 9_000 });

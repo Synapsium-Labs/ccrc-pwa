@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { inlineUserinfoStrips, logLineRedactors, pythonRedactorTables, type RedactorSite } from './redactors.js';
 import { expectReportRow } from './reportRow.js';
+import { AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END } from '../../../shared/hook-helpers.mjs';
 
 const SH = '#!/usr/bin/env bash\n';
 const show = (name: string, sites: readonly RedactorSite[]): void => {
@@ -64,6 +65,29 @@ describe('logLineRedactors: bash functions that redact a line (D-7071)', () => {
     expect(logLineRedactors(copy).map((s) => s.name)).toEqual(['ccd/ccd#fx_redact']);
     const edited = tree({ 'ccd/ccd': `${SH}${FX_REDACT}\n`, 'ccd/sibling': `${SH}${region(FX_REDACT.replace('${1:-}', '${1-}'))}` });
     expect(logLineRedactors(edited).map((s) => s.name)).toEqual(['ccd/ccd#fx_redact', 'ccd/sibling#fx_redact']);
+  });
+
+  // C5i: a generated body is compared with the file its region row is given (`REGIONS[].file`). The auth-dead row is
+  // given `ccd/ccd`, so a copy under its real BEGIN line is still compared with ccd/ccd's function.
+  it('FIXTURE: a copy under a region row given ccd/ccd counts zero when ccd/ccd holds the function, and one when it does not', () => {
+    const real = (body: string): string =>
+      `${AUTHDEAD_REGION_BEGIN}\n# ccrc:generated 1 sha256=${'0'.repeat(64)}\n${body}\n${AUTHDEAD_REGION_END}\n`;
+    const held = tree({ 'ccd/ccd': `${SH}${FX_REDACT}\n`, 'ccd/sibling': `${SH}${real(FX_REDACT)}` });
+    expect(logLineRedactors(held).map((s) => s.name)).toEqual(['ccd/ccd#fx_redact']);
+    const absent = tree({ 'ccd/ccd': `${SH}names_home() { local d="$1"; echo "$HOME/$d"; }\n`, 'ccd/sibling': `${SH}${real(FX_REDACT)}` });
+    expect(logLineRedactors(absent).map((s) => s.name)).toEqual(['ccd/sibling#fx_redact']);
+  });
+
+  // C5i: the log-line row is given ccd/ccrc, so a copy under its BEGIN line is compared with ccd/ccrc's function, not
+  // ccd/ccd's. The BEGIN line is spelled here: the row's own constant is imported only once the row exists.
+  it('FIXTURE: a copy under the log-line region is compared with ccd/ccrc: byte-equal counts zero, one byte changed counts', () => {
+    const ll = (body: string): string =>
+      `# ── BEGIN GENERATED LOG-LINE REDACTOR (shared/hook-helpers.mjs; edit it in ccd/ccrc, then regenerate) ──\n# ccrc:generated 1 sha256=${'0'.repeat(64)}\n${body}\n# ── END GENERATED LOG-LINE REDACTOR ──\n`;
+    const ccdNo = `${SH}names_home() { local d="$1"; echo "$HOME/$d"; }\n`;
+    const copy = tree({ 'ccd/ccd': ccdNo, 'ccd/ccrc': `${SH}${FX_REDACT}\n`, 'ccd/sibling': `${SH}${ll(FX_REDACT)}` });
+    expect(logLineRedactors(copy).map((s) => s.name)).toEqual(['ccd/ccrc#fx_redact']);
+    const edited = tree({ 'ccd/ccd': ccdNo, 'ccd/ccrc': `${SH}${FX_REDACT}\n`, 'ccd/sibling': `${SH}${ll(FX_REDACT.replace('${1:-}', '${1-}'))}` });
+    expect(logLineRedactors(edited).map((s) => s.name)).toEqual(['ccd/ccrc#fx_redact', 'ccd/sibling#fx_redact']);
   });
 
   it('REAL: reported by name (2 at base, `ccd/ccrc#_upd_redact` and `ccd/ccd-update-sync#redact`; C5i takes it to 1)', () => {

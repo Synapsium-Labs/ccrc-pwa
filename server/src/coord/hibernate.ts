@@ -1,4 +1,4 @@
-import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
 import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../shared/switches.js';
 import {
   SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, decideSleep, type SleepInput,
@@ -30,7 +30,7 @@ import {
  * - no hold, no open run naming it as worker or claimant in ANY non-terminal state (the store's `state NOT IN` the
  *   terminal set, so `planned`, `awaiting-review`, `merging`, `closing` and `unknown` hold too), no claim, no mail;
  * - nobody has it open (`Viewers.isOpen`, a hidden tab included), and nothing is believed about presence for
- *   `PRESENCE_OPEN_TTL_MS` after the server starts, since presence is never persisted;
+ *   `VIEWER_OPEN_TTL_MS` after the server starts, since presence is never persisted;
  * - not stranded, swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`.
  *
  * THE `measure` ARM (hibernate-verdict-measure-arm (D-5425)): the plan's signature answers `hibernate` or a hold;
@@ -209,7 +209,7 @@ export function hibernateSleepInput(i: HibernateInput, now: number, afterMs: num
   return {
     row: r, child: null, paneDead: r.status === 'dead', stopped: null, heldPasses: false, optedOut: i.optedOut,
     store: i.store.ok ? { ...i.store, last: null, parkedWorker: false } : i.store,
-    viewer: i.viewer, sinceStartMs: i.sinceStartMs, viewerOpenTtlMs: PRESENCE_OPEN_TTL_MS, verb: null,
+    viewer: i.viewer, sinceStartMs: i.sinceStartMs, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS, verb: null,
     live: i.live.kind === 'read' ? { ...i.live, turn: null } : i.live, now, quietMs: afterMs,
   };
 }

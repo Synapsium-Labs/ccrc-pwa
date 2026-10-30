@@ -29,7 +29,7 @@ import { recordInterrupt } from '../src/interruptlog.js';
 import { askKey } from '../src/askkey.js';
 import { COLLECT_FEED_TITLE, COLLECT_SETTING_FEED_TITLE, measureCollectLaneRow } from '../src/collectLane.js';
 import {
-  IDLE_COMPACT_NUDGE_PROMPT, PRESENCE_OPEN_TTL_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT,
+  IDLE_COMPACT_NUDGE_PROMPT, VIEWER_OPEN_TTL_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT,
   type CollectLaneView, type FleetSession,
 } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
@@ -1099,7 +1099,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
       listing: async () => [],
-      startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
+      startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
     // D-6091: a lane that already wrote its mail-only zero, so the one row here is the sleep's.

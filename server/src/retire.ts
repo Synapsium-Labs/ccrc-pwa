@@ -35,10 +35,10 @@ export type RetireReasonName = (typeof RETIRE_REASON_NAMES)[keyof typeof RETIRE_
 export const RETIRE_LISTING_MODES = { measuredOnce: 'measured-once', plainPerMarker: 'plain-per-marker' } as const;
 export type RetireListingMode = (typeof RETIRE_LISTING_MODES)[keyof typeof RETIRE_LISTING_MODES];
 
-/** Whether presence defers past the request's ceiling. `no-ceiling`: for as long as it lasts (spec §6 O6 (a)).
+/** Whether a viewer defers past the request's ceiling. `no-ceiling`: for as long as it lasts (spec §6 O6 (a)).
  *  `until-ceiling`: only until the request says its defer ceiling was reached. */
-export const RETIRE_PRESENCE_RULES = { noCeiling: 'no-ceiling', untilCeiling: 'until-ceiling' } as const;
-export type RetirePresenceRule = (typeof RETIRE_PRESENCE_RULES)[keyof typeof RETIRE_PRESENCE_RULES];
+export const RETIRE_VIEWER_RULES = { noCeiling: 'no-ceiling', untilCeiling: 'until-ceiling' } as const;
+export type RetireViewerRule = (typeof RETIRE_VIEWER_RULES)[keyof typeof RETIRE_VIEWER_RULES];
 
 /** Who writes the outcome's feed row: the `executor` itself, or the `lane` that folds the executor's report. */
 export const RETIRE_NOTICE_HOMES = { executor: 'executor', lane: 'lane' } as const;
@@ -62,8 +62,8 @@ export const RETIRE_STEPS = {
   coordinated: 'coordinated',
   /** child-spent: the generation re-read. */
   generation: 'generation',
-  /** all three: presence, by the row's presence rule. */
-  presence: 'presence',
+  /** all three: a viewer, by the row's viewer rule (the step word stays `presence`, D-7193). */
+  viewer: 'presence',
   /** all three: the audit that mints the token, judged on its own answer before its verdict. */
   audit: 'audit',
   /** archive-expired: the audit read another archive. */
@@ -94,8 +94,8 @@ export const RETIRE_STEPS = {
   safety: 'safety',
   /** temp-orphan: observation 1 still stands. */
   licenceStands: 'licence-stands',
-  /** temp-orphan: presence again, nearest the argv. */
-  presenceLast: 'presence-last',
+  /** temp-orphan: a viewer again, nearest the argv (the step word stays `presence-last`). */
+  viewerLast: 'presence-last',
   /** temp-orphan: the hold again, nearest the argv. */
   holdLast: 'hold-last',
   /** temp-orphan, archive-expired: the shadow arm. */
@@ -148,7 +148,7 @@ export interface RetireReason<Req, Facts extends RetireFactSet, Out> {
   readonly audit: RetireStepSpec & { readonly step: typeof RETIRE_STEPS.audit };
   readonly act: readonly RetireStepSpec[];
   readonly listing: RetireListingMode;
-  readonly presence: RetirePresenceRule;
+  readonly viewer: RetireViewerRule;
   readonly notice: RetireNoticeHome;
   readonly judge: RetireJudges<Req, Facts, Out>;
   readonly evidence: readonly RetireEvidence[];
@@ -157,13 +157,13 @@ export interface RetireReason<Req, Facts extends RetireFactSet, Out> {
 /** The decider's answer: read this step next, this outcome ends the gate, or the act may run. */
 export type RetireDecision<Out> = { readonly need: RetireStep } | { readonly outcome: Out } | { readonly act: true };
 
-/** Presence, by the row's rule: a person looking defers, unless the rule is `until-ceiling` and the request says its
+/** A viewer, by the row's rule: a person looking defers, unless the rule is `until-ceiling` and the request says its
  *  ceiling was reached. */
-export function presenceJudge<Req, Facts, Out>(
-  rule: RetirePresenceRule, answer: (req: Req, facts: Facts) => Out, ceilingReached: (req: Req) => boolean = () => false,
+export function viewerJudge<Req, Facts, Out>(
+  rule: RetireViewerRule, answer: (req: Req, facts: Facts) => Out, ceilingReached: (req: Req) => boolean = () => false,
 ): RetireJudge<Req, Facts, Out, boolean> {
   return (visible, facts, req) =>
-    (visible && !(rule === RETIRE_PRESENCE_RULES.untilCeiling && ceilingReached(req)) ? answer(req, facts) : null);
+    (visible && !(rule === RETIRE_VIEWER_RULES.untilCeiling && ceilingReached(req)) ? answer(req, facts) : null);
 }
 
 /** A capability the box does not advertise: the fact lists each capability the row's reader asked, in the row's order
