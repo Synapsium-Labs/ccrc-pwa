@@ -514,6 +514,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
 | `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
+| `ccd-testbox-times.timer` | fleet, both | 24 h | fetches CI's per-file test durations into `CCRC_TESTBOX_TIMES` with the box's `gh`, for the test box's budget estimate; fetches nothing with no test box configured ("The test box", below) | — |
 | `ccrc-codex-usage@<id>.timer` | fleet, both | 15 min | one per `codex` lane: that lane's Codex usage into `~/.cc-limits` | — |
 
 The role's service and `ccd-cap-scopes.timer` must enable or the install fails; any other timer that
@@ -622,6 +623,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
+| `test-slice`, `testbox` | the test slice's live memory, limits and heavy-run queue; the test box as the server decided it: its state and its switch, named separately, the box's queue depth and the tool versions that differ ("The test box", below) |
 | `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). The FAIL and WARN arms are on: a FAIL counts in doctor's exit code and a WARN does not. A fresh box that was never handed a value (no fleet generation file and no sync report that records a value written or carries the generation the box held, or no server state file and none of the server's traces of a value: its retired list, its previous value, a set-aside copy, or, on a box whose server writes the fleet file itself, that file or its generation file) has that finding read PASS with its sentence, never WARN or FAIL: the server mints at its first boot, and its next rotation hands the fleet one. A box that once held a value and lost it is a FAIL |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
@@ -1317,6 +1319,12 @@ Two of the fleet box's ccd-* sweeps read their settings the same way (wave 29, D
 `ccd/lib/ccrc-settings.sh`, ccrc's own reader generated from `ccd/ccrc` and placed at `~/.local/libexec/ccrc`, and a line
 in `ccrc.env` survives a reboot. A line that reader refuses, or a value a sweep cannot use, stops that sweep's pass with a
 line naming the setting, where it came from and what was refused; a server-role box runs none of these sweeps.
+The test box's 44 settings (D-7403, D-7451; see **The test box**) are box-wide, so each is read in `file` mode only
+(an environment value is ignored, with a warning), checked against its shape, and kept at its default with a warning
+naming the file when it is not that shape. Sixteen are the fleet host's, read from `~/.ccrc/ccrc.env`: `CCRC_TESTBOX_URL`, `CCRC_TESTBOX_TOKEN_FILE`, `CCRC_TESTBOX_GIT_URL_BASE`, `CCRC_TESTBOX_GIT_KEY`, `CCRC_TESTBOX_UNTRACKED_FILE_MAX`, `CCRC_TESTBOX_SNAPSHOT_MAX`, `CCRC_TESTBOX_STATUS_DEADLINE`, `CCRC_TESTBOX_RECONNECT_DEADLINE`, `CCRC_TESTBOX_LOST_RUN`, `CCRC_TESTBOX_QUEUE_LIMIT`, `CCRC_TESTBOX_QUEUE_WAIT`, `CCRC_TESTBOX_BUDGET`, `CCRC_TESTBOX_DENY_GLOBS`, `CCRC_TESTBOX_POLL`, `CCRC_TESTBOX_FALLBACK_INSTALL` and `CCRC_TESTBOX_TIMES`. The other
+twenty-eight are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
+(`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE` and `CCRC_TESTBOX_UNIT_MAX`. `ccrc test --testbox-knobs host|box` prints either table, one
+line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -6453,6 +6461,93 @@ scope keeps a heavy run's slot lock after its wrapper is SIGKILLed, that a run p
 inside the slice (its `oom_kill` rises; the session slice's `memory.pressure` is printed) and that `CPUQuota`
 throttles; it refuses, changing nothing, unless the slice is idle, holds every heavy slot while it measures, and
 re-applies the box's own limits when it ends. The PWA control for the cap and the queue size is a follow-up.
+
+### The test box: `ccrc test` off the fleet host
+
+A second, separate box can run the fleet host's tests instead of `ccrctests.slice` (spec
+`docs/superpowers/specs/2026-10-28-test-box-design.md`; plan `docs/superpowers/plans/2026-10-29-test-box.md`). Everything
+below ships **off**: with no `CCRC_TESTBOX_URL` in `~/.ccrc/ccrc.env`, or with the switch off, `ccrc test` is exactly
+the wrapper **Test containment** describes, its output, exit status and the processes it starts unchanged.
+
+**What runs where** (spec §2.5). The box takes one test file or a set whose estimated time is under
+`CCRC_TESTBOX_BUDGET` (default 15 min), mutation loops (each run a fresh copy), the tests-inclusive typecheck and the
+pwa browser tests. The full server suite, or a set over the budget, stays with GitHub CI and the merge queue; the macOS
+legs stay on CI; a command that needs a real system manager, a live tmux server or a live account runs nowhere. The
+estimate reads the per-file durations CI publishes: `ccd-testbox-times.timer` fetches, once a day, the newest
+`testtimes` artifact of a trusted run (this repository's own `ci.yml` on `main`, from a push, a schedule or a manual
+dispatch) for each row of `~/.ccrc/testbox-times.sources` (`<repository> <owner>/<name>` per line, beside
+`CCRC_TESTBOX_TIMES` with `.sources` in place of `.json`; D-7567), and replaces `CCRC_TESTBOX_TIMES` whole by a rename;
+a failed pass keeps the previous file and logs one line. With no durations a file counts at a per-file default and the
+summary says `estimate: no durations (<why>)`. A repository runs on the box only when the box's repository table
+(`CCRC_TESTBOX_REPOS`, on the box) has its row; ccrc's code names no repository.
+
+**How a run gets there** (TB1 to TB8). The wrapper never copies the session's tree: it builds the session's HEAD, its
+branch, its resolved `origin/main` and its dirty state (from a copy of the index, so the session's index and tree are
+untouched) and pushes them to create-only scratch refs (`refs/ccrc-test/<run-id>/*`) in a mirror on the box, over
+`CCRC_TESTBOX_GIT_URL_BASE` with the key `CCRC_TESTBOX_GIT_KEY`; a mirror URL equal to any of the clone's own remotes is
+refused, so scratch refs never reach `origin`. The snapshot is refused for a path the deny list (`CCRC_TESTBOX_DENY_GLOBS`)
+names, an untracked file over `CCRC_TESTBOX_UNTRACKED_FILE_MAX` or a snapshot over `CCRC_TESTBOX_SNAPSHOT_MAX`. On the
+box the test service (a second entry point of `agent/`, as an unprivileged service user) queues the run, gives it a
+fresh checkout in a disposable directory with `node_modules` as a copy-on-write clone of a pristine install built once
+per lockfile, node version and platform, builds the declared outputs inside the run, and runs the command as a run
+user in a static unit with an empty HOME, a fixed allowlisted environment and loopback only (an install reaches the
+box's registry proxy and nothing else); the directory is removed after the run. The session's environment is never
+forwarded. The log streams back as it is written, and the exit status is the run's.
+
+**The fallback reasons** (spec §2.4; `shared/testbox.ts`'s `TESTBOX_FALLBACK`, the one list the wrapper, the summary
+and the card read). When a check fails the wrapper runs the same command in the local slice, prints the reason in its
+first line and its last, and exits with the local run's status: `test box: off`, `this repository is not set up
+there`, `unreachable (<detail>)`, `down (<reason>)`, `version differs (<name> <local> vs <remote>)`, `protocol differs
+(<local> vs <remote>)`, `queue full (<n> waiting)`, `snapshot refused (<paths>)`, `snapshot too large (<path>
+<size>)`, `unmerged paths`, `<command> runs locally`, `over budget (<estimate>)`, `prepare failed (git <step>:
+<detail>)`, `install failed (<package>, exit <n>)`, `build failed (<output>, exit <n>)`, `waited <n> min` (past
+`CCRC_TESTBOX_QUEUE_WAIT`) and `lost the run` (a dropped link that did not come back within
+`CCRC_TESTBOX_RECONNECT_DEADLINE`; `CCRC_TESTBOX_LOST_RUN=fail` fails it instead). A fallback with no local
+dependencies installs them first; `CCRC_TESTBOX_FALLBACK_INSTALL=refuse` refuses instead. Three things exit 75 with
+nothing run: an explicit `ccrc test --remote …` over the budget, that refused install, and a lost run under `fail`
+before any output. `ccrc test --local …` never goes to the box. Every call that reached the remote arm appends one line
+to the runs log, `$REG/testbox-runs/<UTC date>.log` (`remote`, `fallback` or `refused`, the reason and the exit;
+D-7445); the wrapper is its one writer, and keeps today's and yesterday's file.
+
+**The switch** (TB2, TB9). One marker, `$REG/testbox-remote-live` (a row of `shared/switches.ts`), absent meaning off.
+The wrapper reads it itself, so the switch holds with the server down; the server's switch route writes or removes it
+through `ccd testbox-remote --state on|off`, the marker's one shell writer, and only from a signed-in session: arming
+remote runs is the operator's act, never a box token's. Removing the marker at a terminal turns remote runs off at
+once; runs already on the box finish.
+
+**The status, the card and the doctor line** (TB9, TB10, TB11). The fleet agent's `testbox` op measures the fleet
+host's node, npm, Chrome, python3, git and tmux with the user manager's PATH and asks the box's status within
+`CCRC_TESTBOX_STATUS_DEADLINE`; the server polls it every `CCRC_TESTBOX_POLL` (default 30 s) and decides two fields,
+never folded into one (D-7444). The **state** is `off` only with no `CCRC_TESTBOX_URL`; otherwise `ok`, `degraded` (a
+tool version or the release that differs from the fleet host's, a tool sync in progress or failed, a failed pristine
+key, a run user held out by a failed cleanup), `down` (the service answers but cannot run) or `unreachable`, the same
+whether the switch is on or off, so a box's health shows before anyone arms it. The **switch** is the marker. `GET
+/api/testbox` answers the block, with the last 24 hours' runs and fallbacks counted by reason from the runs log.
+Settings › Automation's **Test box** card (TB10) shows the switch with one sentence of what it does; the state with its
+reason, the last answer time and the service and protocol versions; the versions table, fleet host against box, with
+the differing cell marked; **Bring tools up to date** when a tool differs or the last sync failed (`syncing <tool>`
+while it runs, the last sync's time and result under it); runs in progress of the limit, the queue depth, and the
+24-hour runs and fallbacks by reason; and the pristine installs per package with each failed key's exit, attempts and
+next attempt. On a phone it is one column with the state on top, the button full width and the tables behind a
+disclosure; on a laptop the state line carries the button at its end over a three-cell row; wide, the versions and
+pristine-install tables sit open side by side. `ccrc doctor`'s `testbox` line names the state and the switch
+separately, the queue depth and the tool versions that differ: it SKIPs with no URL (`off`) or when the block cannot be
+read, WARNs on `degraded`, `down` or `unreachable` with the switch on (every run is then falling back), and PASSes
+otherwise, so `ok, switch off` is a PASS.
+
+**Tools in step with the fleet host** (TB6, TB11; spec §2.10). The box installs the release the fleet host runs,
+verified as `ccrc update` verifies a release, and exactly the tool versions the fleet agent measured, from their
+official download hosts, under `CCRC_TESTBOX_TOOLS_DIR`. After every `ccrc update` on the fleet host whose health gate
+passed (never the automatic restore, never `--no-gate`), and only with `CCRC_TESTBOX_URL` set, the update makes one
+`ccrc-api testbox tools-sync` call, the card's button: the server's agent op sends the box the fleet host's release and
+freshly measured versions. A failed call prints `update: WARN: test box: tools sync not sent — …` and never fails the
+update; the card shows the drift until the next sync.
+
+**The settings.** The fleet host's keys are in `~/.ccrc/ccrc.env`, the box's in its own `/etc/ccrc-testbox/ccrc.env`;
+**ccrc's own settings** names every one, and `deploy/testbox/ccrc.env.example` documents the box's with their defaults.
+The fleet host also holds two operator-placed files, the token the agent op and the wrapper present
+(`CCRC_TESTBOX_TOKEN_FILE`, default `~/.ccrc/testbox.token`) and the push key (`CCRC_TESTBOX_GIT_KEY`), which nothing in
+the tree writes or removes (`shared/lifecycle.ts`).
 
 ### Session history: lossless recall (`ccrc history`)
 

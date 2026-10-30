@@ -208,6 +208,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(bin, 'ccd-scope-sweep'), '#!/bin/sh\n# scope sweep\n', { mode: 0o755 });
   // The read-only conflict radar (landing order wave 3b), placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-land-probe'), '#!/bin/sh\n# land probe\n', { mode: 0o755 });
+  // Test box TB11 (D-7413): the durations fetch, placed by `_inst_bins` on the same non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-testbox-times'), '#!/bin/sh\n# testbox times\n', { mode: 0o755 });
   // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-tool-adj'), '#!/bin/sh\n# tool adj\n', { mode: 0o755 });
   // history spec §9.5: the history sweep's shim, placed by `_inst_bins` off
@@ -285,6 +287,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     'ccd-scope-sweep.service', 'ccd-scope-sweep.timer',
     // landing order wave 3b: the conflict radar's pair, on the same role-gated terms.
     'ccd-land-probe.service', 'ccd-land-probe.timer',
+    // test box TB11 (D-7413): the durations timer's pair, on the same role-gated terms.
+    'ccd-testbox-times.service', 'ccd-testbox-times.timer',
     // history spec §9.5: the history sweep's pair, on the same role-gated terms.
     'ccd-history-sweep.service', 'ccd-history-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
@@ -605,6 +609,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // landing order wave 3b: the radar's timer AND service are disabled, and both unit files go (the unit-file census above).
     expect(calls).toContain('--user disable --now ccd-land-probe.timer');
     expect(calls).toContain('--user disable --now ccd-land-probe.service');
+    expect(calls).toContain('--user disable --now ccd-testbox-times.timer');
+    expect(calls).toContain('--user disable --now ccd-testbox-times.service');
     expect(calls).toContain('--user disable --now ccd-history-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
@@ -871,7 +877,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // `_inst_bins` places them, so an uninstall that left them strands them on
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-land-probe', 'ccd-tool-adj', 'ccd-history-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-land-probe', 'ccd-testbox-times', 'ccd-tool-adj', 'ccd-history-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'ccrc-api',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);

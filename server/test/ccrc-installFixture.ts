@@ -1162,6 +1162,9 @@ export const UNIT_FILES: Array<[string, string]> = [
   // The read-only conflict radar (landing order wave 3b): ROLE-GATED `!= server` - a server box checks out no project to measure.
   ['ccd-land-probe.service', 'deploy/systemd/ccd-land-probe.service'],
   ['ccd-land-probe.timer', 'deploy/systemd/ccd-land-probe.timer'],
+  // Test box TB11 (D-7413): the durations timer's pair, ROLE-GATED `!= server` - only a box that runs `ccrc test` estimates.
+  ['ccd-testbox-times.service', 'deploy/systemd/ccd-testbox-times.service'],
+  ['ccd-testbox-times.timer', 'deploy/systemd/ccd-testbox-times.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -1875,6 +1878,8 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   // D-7298: PASS at every stage, re-measured from both box-token cases' own failing diff (the install
   // places ccrctests.slice, and this fixture's manager then answers it loaded).
   "test-slice": "PASS",
+  // Test box TB11 (D-7413, D-7567): SKIP at every stage, since a fresh fleet box configures no test box (no URL).
+  "testbox": "SKIP",
   "timeout": "PASS",
   "tmux": "PASS",
   "tmux_skew": "PASS",

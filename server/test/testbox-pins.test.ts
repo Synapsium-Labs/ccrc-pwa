@@ -287,8 +287,16 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'server/src/ccdargv.ts', 'server/src/testbox.ts', 'server/src/testboxLane.ts', 'server/test/testbox-routes.test.ts',
     'shared/agent-protocol.ts',
   ];
-  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB8_HOLDERS, ...TB9_HOLDERS].sort();
-  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB8: the remote arm; TB9: the agent op, the decider and the switch verb)', () => {
+  // TB11 (D-7413) adds the doctor line (which reads the URL through ccrc's reader), the durations timer and its
+  // service, the lifecycle rows that name the settings their files sit at, the README's test box section and settings
+  // sentence, and their tests. ccd/ccrc's update-lane call reads the URL there, already a TB1 holder.
+  const TB11_HOLDERS = [
+    'README.md', 'ccd/ccd-testbox-times', 'ccd/ccrc-doctor-checks', 'deploy/systemd/ccd-testbox-times.service',
+    'server/test/ccrc-doctor-testbox.test.ts', 'server/test/ccrc-update-testbox-signal.test.ts', 'server/test/lifecycle.test.ts',
+    'server/test/testbox-times.test.ts', 'shared/lifecycle.ts',
+  ];
+  const HOLDERS = [...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB8_HOLDERS, ...TB9_HOLDERS, ...TB11_HOLDERS].sort();
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB11: the doctor line, the durations timer, lifecycle and README)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);
