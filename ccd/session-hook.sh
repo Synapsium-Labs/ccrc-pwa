@@ -359,7 +359,11 @@ _hook_load_graph_settings() {   # <store> -> GS_MAX_DIFF_PCT GS_MAX_DENIALS GS_D
 # graph's commit and HEAD; GM_BRANCH, the share of those that are the branch's
 # own (changed since merge-base(graph, HEAD)); GM_DIFF_LIST names up to
 # CARD_DIFF_LIST_MAX of them, the branch's own FIRST, so main-line drift never
-# crowds them out. GM_MAIN_MOVED counts what main gained since the refresh. A
+# crowds them out, and stops at the first name that would take the list past
+# CARD_DIFF_LIST_MAX_CHARS (argued beside CARD_MAX_CHARS): a count alone let
+# real paths grow this card until the shared clip cut the hold after it. It
+# stops rather than skipping to a shorter name, so the order still holds and
+# "and N more" counts every name not said. GM_MAIN_MOVED counts what main gained since the refresh. A
 # git that will not answer leaves its value empty and its clause unsaid.
 _hook_graph_diff() {   # <tree>
   local all="" mb="" br="" f="" n=0
@@ -376,6 +380,7 @@ _hook_graph_diff() {   # <tree>
   GM_BRANCH=${#first[@]}; GM_DIFF=$(( GM_BRANCH + ${#rest[@]} ))
   for f in "${first[@]}" "${rest[@]}"; do
     [ "$n" -lt "$GS_DIFF_LIST_MAX" ] || break
+    (( ${#GM_DIFF_LIST} + 2 + ${#f} <= CARD_DIFF_LIST_MAX_CHARS )) || break
     GM_DIFF_LIST+="${GM_DIFF_LIST:+, }$f"; n=$((n + 1))
   done
   [ "$GM_DIFF" -le "$n" ] || GM_DIFF_LIST+="${GM_DIFF_LIST:+ and }$(( GM_DIFF - n )) more"
@@ -2560,6 +2565,25 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # fields that ARE gated. Raising the bound is the cheap answer;
 # drop-whole-subject logic on the hot path is not, and was refused.
 CARD_MAX_CHARS=2400
+# THE LINKED TREE'S DIFF LIST HAS ITS OWN CHARACTER BOUND, DERIVED FROM THE ONE
+# ABOVE (GR5 fix round, D-7351). The linked graphify sentence (spec §6.3) quotes
+# repository paths, whose number `card_diff_list_max` bounds but whose length
+# nothing did: 20 paths of about 65 characters made the graph card about 2150
+# characters, and since graphify is joined FIRST the clip above cut held case
+# A mid-sentence, losing its `mail list` and `runs list` instructions. So the
+# list gets what the structural worst case leaves, and never more:
+#   903  the linked graphify sentence with NO name in the list: a 12-digit node
+#        count (the meta read's own gate), engine and pin at 64, the age's
+#        12-digit gate as 8 digits of days, "main has moved", the differing
+#        and the branch counts and "and N more" each MODELLED at 7 digits (as
+#        `$id` and `$CT_N` are above), the advice and the armed-gate sentence
+#        (longer than the kill-switch one)
+#   1107 held case A 860 + co-tenant 245 + the two joins, as argued above (the
+#        role subject is shorter than case A and never beside it)
+# 2400 - 903 - 1107 = 390 characters of names. The list stops before a name
+# that would pass it, so every subject after graphify is said whole; the
+# real-directory arm has no list and is unchanged at 719.
+CARD_DIFF_LIST_MAX_CHARS=$(( CARD_MAX_CHARS - 903 - 1107 ))
 # ── THE COMPACTION CARD (spec 2026-09-09-graphify-compaction-card-design.md) ──
 # Three registry files per session, every suffix DOT-FREE so `_reg_purge`'s
 # loop (`ccd/ccd`: every dot-free `$REG/<id>.<suffix>` except `archived` and
@@ -3251,7 +3275,8 @@ case "$event" in
     # ONCE PER CONTEXT, BY SOURCE (D-5359): a `resume` or `fork` carries the transcript that already received it, so
     # it says nothing there (no "shown" marker exists or is added); startup, clear, compact and a
     # source-less start are fresh or rebuilt contexts. Mutually exclusive with every held sentence, so
-    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged.
+    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
+    # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
     # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
     # (D-3615), and every line added up there moves the frozen compaction-card corpus's anchors.
     _hook_role_card() {
