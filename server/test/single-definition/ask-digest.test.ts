@@ -526,9 +526,11 @@ describe('one eligibility rule and one answer body for the parent and the operat
     expect(gate, 'and before the capture').toBeLessThan(body.indexOf('d.tmux.capture('));
   });
 
+  // W7 C7p (D-7194): the operator's ask answer is the family's `POST /api/questions/:id/answer` since
+  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler.
   it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
-    const operator = between('POST /api/sessions/:id/ask', stallCode(path.join(ccrcRoot, 'server/src/server.ts')),
-      "app.post('/api/sessions/:id/ask'", "app.get('/api/sessions/:id/commands'");
+    const operator = between('POST /api/questions/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/questions/:id/answer'", "app.post('/api/questions/:id/rule'");
     const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
       "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
     for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
@@ -1597,14 +1599,13 @@ describe('the question doors: one reader, one core per principal, the old doors 
       .toEqual(QUESTION_STORE_EXCLUDED.map((x) => `${x.file} | ${x.symbol} | ${x.method} | true`));
   });
 
-  /** The eight aliases, each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
+  /** The aliases (eight at W3 Q3f; W7 C7p, D-7194, retires the four operator ones one per commit), each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
    *  404), and the reader that must come before its core call when it reads an ask's answer. */
   const ALIASES: ReadonlyArray<readonly [file: string, route: string, words: readonly string[], reader: string | null]> = [
     ['server/src/coord/routes.ts', '/api/asks/:id/answer', ['bad-request'], 'readAskAnswer('],
     ['server/src/coord/routes.ts', '/api/asks/:id/release', ['bad-request'], null],
     ['server/src/coord/routes.ts', '/api/approvals/:id/rule', ['bad-request'], null],
     ['server/src/coord/routes.ts', '/api/approvals/:id/release', ['bad-request'], null],
-    ['server/src/server.ts', '/api/sessions/:id/ask', ['unknown-session', 'bad-request'], 'readAskAnswer('],
     ['server/src/server.ts', '/api/sessions/:id/dialog', ['unknown-session', 'bad-request'], null],
     ['server/src/server.ts', '/api/sessions/:id/dialog/text', ['unknown-session', 'bad-request'], null],
     ['server/src/server.ts', '/api/sessions/:id/dialog/multi', ['unknown-session', 'bad-request'], null],

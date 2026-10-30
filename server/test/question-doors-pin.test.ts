@@ -786,8 +786,12 @@ const RELEASE_ROWS: Row[] = [
 
 // ── The operator's doors ─────────────────────────────────────────────────────────────────────────────────────────
 
+// W7 C7p (D-7194; plan 2026-10-27-consolidation-w7-pwa.md, Task C7p): `POST /api/sessions/:id/ask` is retired. Its rows
+// keep their names and their EXPECTED outcomes, byte for byte, and run through the door that replaced it, W3 Q3f's
+// `POST /api/questions/session-<id>/answer` with the family's body (`{kind:'ask', …}`): the same operator core, which
+// `question-doors.test.ts`'s pairs held equal to the old door before the retirement. A re-point, listed in C7p's PR.
 const opAsk = (f: { inject: Approvals['app']['inject'] }, id: string, body: unknown) =>
-  f.inject({ method: 'POST', url: `/api/sessions/${id}/ask`, payload: body as Record<string, unknown> });
+  f.inject({ method: 'POST', url: `/api/questions/session-${id}/answer`, payload: { kind: 'ask', ...(body as Record<string, unknown>) } });
 const op = (f: Approvals, url: string, body: unknown) => f.app.inject({ method: 'POST', url, payload: body as Record<string, unknown> });
 
 /** One operator row: the response, the ask row (when one was minted), keys pressed into the child's pane, feed rows. */
@@ -1354,7 +1358,8 @@ describe('question-doors pin: each door\'s auth posture', () => {
     'POST /api/approvals': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/rule': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/release': { exempt: true, originCheck: false },
-    'POST /api/sessions/:id/ask': { exempt: false, originCheck: true },
+    // W7 C7p (D-7194): `POST /api/sessions/:id/ask` retired; the door that answers its rows above holds its posture.
+    'POST /api/questions/:id/answer': { exempt: false, originCheck: true },
     'POST /api/sessions/:id/dialog': { exempt: false, originCheck: true },
     'POST /api/sessions/:id/dialog/text': { exempt: false, originCheck: true },
     'POST /api/sessions/:id/dialog/multi': { exempt: false, originCheck: true },

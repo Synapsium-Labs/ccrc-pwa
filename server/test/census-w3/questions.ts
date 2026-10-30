@@ -139,7 +139,7 @@ export const QUESTION_DOOR_TAGS: Readonly<Record<string, QuestionDoorTag>> = {
   '/api/asks/:id/release': 'claimant',
   '/api/approvals/:id/rule': 'claimant',
   '/api/approvals/:id/release': 'claimant',
-  '/api/sessions/:id/ask': 'operator',
+  // W7 C7p (D-7194): `/api/sessions/:id/ask` retired; the family's `/answer` below answers the operator's ask.
   '/api/sessions/:id/dialog': 'operator',
   '/api/sessions/:id/dialog/text': 'operator',
   '/api/sessions/:id/dialog/multi': 'operator',

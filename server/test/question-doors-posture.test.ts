@@ -78,7 +78,6 @@ const OLD_DOORS: Readonly<Record<string, string>> = {
   'POST /api/asks/:id/release': '/api/asks/1/release',
   'POST /api/approvals/:id/rule': '/api/approvals/1/rule',
   'POST /api/approvals/:id/release': '/api/approvals/1/release',
-  'POST /api/sessions/:id/ask': '/api/sessions/project-a-quiet-basin/ask',
   'POST /api/sessions/:id/dialog': '/api/sessions/project-a-quiet-basin/dialog',
   'POST /api/sessions/:id/dialog/text': '/api/sessions/project-a-quiet-basin/dialog/text',
   'POST /api/sessions/:id/dialog/multi': '/api/sessions/project-a-quiet-basin/dialog/multi',
@@ -107,12 +106,28 @@ const OPERATOR: Readonly<Record<Credential, Posture>> = {
   'token, foreign origin': { status: 403, gate: false, error: 'foreign-origin' },
 };
 
+/** What a RETIRED operator door answers (W7 C7p, D-7194): the gate still refuses no credential and the box token alike,
+ *  and a foreign origin, exactly as it did; a live session now reaches no door at all (fastify's own 404, `Not Found`,
+ *  never the door's `unknown-session`), so nothing past the gate runs. Its operator rows above moved to
+ *  `POST /api/questions/:id/answer` (`NEW_DOORS`), which keeps the `OPERATOR` posture. */
+const RETIRED: Readonly<Record<Credential, Posture>> = {
+  none: { status: 401, gate: true, error: 'unauthenticated' },
+  session: { status: 404, gate: false, error: 'Not Found' },
+  token: { status: 401, gate: true, error: 'unauthenticated' },
+  'session, foreign origin': { status: 403, gate: false, error: 'foreign-origin' },
+  'token, foreign origin': { status: 403, gate: false, error: 'foreign-origin' },
+};
+
+/** The operator doors W7 C7p retired, each with the url its router matched. */
+const RETIRED_DOORS: Readonly<Record<string, string>> = {
+  'POST /api/sessions/:id/ask': '/api/sessions/project-a-quiet-basin/ask',
+};
+
 const EXPECTED: Readonly<Record<string, Readonly<Record<Credential, Posture>>>> = {
   'POST /api/asks/:id/answer': CLAIMANT,
   'POST /api/asks/:id/release': CLAIMANT,
   'POST /api/approvals/:id/rule': CLAIMANT,
   'POST /api/approvals/:id/release': CLAIMANT,
-  'POST /api/sessions/:id/ask': OPERATOR,
   'POST /api/sessions/:id/dialog': OPERATOR,
   'POST /api/sessions/:id/dialog/text': OPERATOR,
   'POST /api/sessions/:id/dialog/multi': OPERATOR,
@@ -127,6 +142,11 @@ describe('question-doors posture: each old door through an armed gate (W3 Q3f, D
   it.each(Object.entries(OLD_DOORS).flatMap(([door, url]) => CREDENTIALS.map((c) => [`${door} | ${c}`, door, url, c] as const)))(
     '%s', async (_name, door, url, cred) => {
       expect(await postureOf(url, cred)).toEqual(EXPECTED[door]![cred]);
+    });
+
+  it.each(Object.entries(RETIRED_DOORS).flatMap(([door, url]) => CREDENTIALS.map((c) => [`${door} (retired, W7 C7p) | ${c}`, url, c] as const)))(
+    '%s', async (_name, url, cred) => {
+      expect(await postureOf(url, cred)).toEqual(RETIRED[cred]);
     });
 
   // The new family's rows (Task Q3f Step 3): the operator's door takes the operator doors' posture, the claimant's two

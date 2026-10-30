@@ -65,7 +65,9 @@ describe('W3 question census (slug question-census)', () => {
     'export function buildServer(): void {',
     "  app.post('/api/sessions/:id/dialog/tab', async () => {});",
     "  app.post('/api/sessions/:id/release', async () => {});",
-    "  app.post('/api/sessions/:id/ask', async () => { coord.heldAskFor('x'); });",
+    // W7 C7p (D-7194): the fixture's operator door was `/api/sessions/:id/ask`, retired, so its tag row is gone; the
+    // family's operator door stands in for it, with the same store call.
+    "  app.post('/api/questions/:id/answer', async () => { coord.heldAskFor('x'); });",
     '}',
   ].join('\n');
 
@@ -153,7 +155,7 @@ describe('W3 question census (slug question-census)', () => {
     try {
       expect(questionDoors(t).map((s) => [s.route, s.tag])).toEqual([
         ['POST /api/asks/:id/answer', 'claimant'], ['POST /api/asks/:id/shout', 'untagged'],
-        ['POST /api/sessions/:id/dialog/tab', 'navigation'], ['POST /api/sessions/:id/ask', 'operator'],
+        ['POST /api/sessions/:id/dialog/tab', 'navigation'], ['POST /api/questions/:id/answer', 'operator'],
       ]);
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
@@ -178,7 +180,7 @@ describe('W3 question census (slug question-census)', () => {
         ['server/src/coord/routes.ts', 'POST /api/asks/:id/answer', 'askById', false],
         ['server/src/coord/routes.ts', 'POST /api/approvals', 'insertApproval', false],
         ['server/src/coord/routes.ts', 'GET /api/approvals/:id/ruling', 'approvalById', true],
-        ['server/src/server.ts', 'POST /api/sessions/:id/ask', 'heldAskFor', false],
+        ['server/src/server.ts', 'POST /api/questions/:id/answer', 'heldAskFor', false],
         ['server/src/watch.ts', 'FleetWatcher.askPass', 'releaseAsk', false],
         ['server/src/watch.ts', 'FleetWatcher.sweepApprovals', 'lapseApproval', false],
         ['server/src/watch.ts', 'FleetWatcher.sweepOther', 'askById', false],
@@ -221,8 +223,9 @@ describe('W3 question census (slug question-census)', () => {
     expect(doors.filter((s) => s.tag === 'untagged').map((s) => s.route), 'a door-shaped POST with no principal').toEqual([]);
     expect(doors.map((s) => s.route), 'the cited door is found').toContain('POST /api/approvals/:id/rule');
     // 9 at the base (4 claimant, 4 operator, 1 navigation); 12 since Q3f (D-7030): 9 + the 3 routes of the family.
+    // W7 C7p (D-7194) retires the operator aliases one per commit: 11 (4 operator) with `/api/sessions/:id/ask` gone.
     const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
-    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([12, 6, 5, 1]);
+    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([11, 6, 4, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
     // W3 Q3f (D-7030; slug q3f-door-in-repoint), at the target, may only shrink: no route calls the watcher for a question, and the four
     // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the

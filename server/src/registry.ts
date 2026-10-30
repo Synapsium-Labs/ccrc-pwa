@@ -1520,8 +1520,9 @@ export const UNMEASURED_ASK_AT = -1;
  * nothing it does.
  *
  * ONE definition for both callers of this guard — `coord/routes.ts`'s
- * `POST /api/asks/:id/answer` and `server.ts`'s `POST
- * /api/sessions/:id/ask` — deliberately: both already close over the SAME
+ * `POST /api/asks/:id/answer` and the operator's ask (`server.ts`'s `POST
+ * /api/sessions/:id/ask` until W7 C7p, `POST /api/questions/session-<id>/
+ * answer` since, both through `coord/questions.ts`) — deliberately: both already close over the SAME
  * `Deps` object (`registerCoordRoutes(app, deps, ...)` passes `buildServer`'s
  * own `deps` straight through, unmodified), so a security-relevant fail-shut
  * guard duplicated across the two files could drift silently. It lives here

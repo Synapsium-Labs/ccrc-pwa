@@ -323,7 +323,7 @@ describe('POST /api/asks/:id/answer', () => {
   });
 
   // D-5293: the parent's route reads the operator's body shape (`readAskAnswer`, `inject/ask.ts`, the reader
-  // `POST /api/sessions/:id/ask` reads), so `askKey`, the key the operator's route requires, is understood here too:
+  // the operator's ask reads, `POST /api/questions/session-<id>/answer` since W7 C7p retired `/api/sessions/:id/ask`), so `askKey`, the key the operator's route requires, is understood here too:
   // the key the parent was shown must be the row's, or nothing is pressed.
   it("accepts the operator's body shape: the row's own askKey beside optionIndexes presses the digit (D-5293)", async () => {
     const { coord, id, calls } = await setup(Date.now());
@@ -699,7 +699,7 @@ describe('GET /api/asks', () => {
 });
 
 /**
- * `POST /api/sessions/:id/ask` — the OPERATOR's own answer path, closing the
+ * The OPERATOR's own ask answer path, closing the
  * hole Task 12 exists for (D-2171). Before this task the route never
  * consulted the `asks` table at all: if the operator answered first, the
  * row stayed `'held'` forever, the parent's later `/api/asks/:id/answer`
@@ -718,13 +718,19 @@ describe('GET /api/asks', () => {
  * This file adds the coord-configured cases `routes.test.ts` has no way to
  * build: a row held for the child, and a coord-configured box with no row
  * at all (the "parentless path" the overwhelming majority of asks take).
+ *
+ * W7 C7p (D-7194): the path was `POST /api/sessions/:id/ask` until C7p
+ * retired it; these rows run through the family's door that replaced it,
+ * `POST /api/questions/session-<id>/answer` with `{kind:'ask', …}`, which
+ * calls the same operator core (`coord/questions.ts`), so each row asserts
+ * what it asserted before.
  */
-describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
+describe('POST /api/questions/session-<id>/answer {kind:\'ask\'} — closes the held row (Task 12)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
   const post = (id: string, body: Record<string, unknown>) =>
-    app!.inject({ method: 'POST', url: `/api/sessions/${id}/ask`, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/session-${id}/answer`, payload: { kind: 'ask', ...body } });
 
   /** Same shape as `/answer`'s own `setup` above: registry, a fresh waiting
    *  hookstate for the child at `now`, and — the one difference — the
@@ -1077,8 +1083,9 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
   });
 
+  // W7 C7p (D-7194): the operator's ask through the family's door (was `POST /api/sessions/:id/ask`).
   const operator = (body: Record<string, unknown>) =>
-    app!.inject({ method: 'POST', url: `/api/sessions/${KID}/ask`, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/session-${KID}/answer`, payload: { kind: 'ask', ...body } });
 
   it("a refused operator press after the lapse goes back to released, not held", async () => {
     const { coord, w, id, calls } = await setup(Date.now());

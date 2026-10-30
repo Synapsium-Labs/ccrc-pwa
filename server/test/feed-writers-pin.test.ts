@@ -442,7 +442,10 @@ describe("interruptlog.ts's recordInterrupt: recorded always, never pushed (D-58
   });
 });
 
-describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorded always, never pushed (D-5850)", () => {
+// W7 C7p (D-7194): the operator's ask answer was `POST /api/sessions/:id/ask` in `server.ts` until C7p retired it; the
+// family's `POST /api/questions/session-<id>/answer {kind:'ask'}` calls the same operator core, so these rows run through
+// it and hold the same pair.
+describe("the operator-answer pair (POST /api/questions/session-<id>/answer {kind:'ask'}, was POST /api/sessions/:id/ask): recorded always, never pushed (D-5850)", () => {
   const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
   const ASK_KEY = askKey({ questions: [QUESTION] })!;
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
@@ -473,8 +476,8 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
         dialogId: 'dlg-1', question: QUESTION.question, options: QUESTION.options.map((o) => o.label), now });
       if (fail) rec.archiveThrowsOn('every');
       const at = rec.mark();
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${B}/ask`,
-        payload: { askKey: ASK_KEY, optionIndexes: [1] } });
+      const res = await app.inject({ method: 'POST', url: `/api/questions/session-${B}/answer`,
+        payload: { kind: 'ask', askKey: ASK_KEY, optionIndexes: [1] } });
       return { home, rec, res, calls: rec.since(at), id };
     } finally {
       await app.close();

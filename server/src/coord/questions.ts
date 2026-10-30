@@ -1650,7 +1650,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return sent(200, { ok: true });
   };
 
-  /** `POST /api/sessions/:id/ask`'s ladder after its body read (Task 12, D-2171): the OPERATOR's own answer path. A
+  /** The operator's ask ladder after its body read (Task 12, D-2171; `POST /api/sessions/:id/ask`'s until W7 C7p retired
+   *  it, `POST /api/questions/session-<id>/answer`'s since): the OPERATOR's own answer path. A
    *  held row is taken BEFORE the keystroke (the row is the mutex) and settled after it; a lost CAS never refuses the
    *  operator (the press goes through on its own merits), and an unreadable or throwing store answers the press
    *  UNRECORDED (D-2169's free degrade, D-2545, whole-branch review F3), never a 500 and never a refusal. */

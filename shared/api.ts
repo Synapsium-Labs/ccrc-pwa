@@ -2141,7 +2141,8 @@ export function isAskState(v: unknown): v is AskState {
 
 /**
  * The principal an ask row names when THE OPERATOR answered it themselves —
- * `server.ts`'s `POST /api/sessions/:id/ask`, the lock-screen path, which
+ * the operator's ask, the lock-screen path (`POST /api/questions/session-<id>/
+ * answer`; `server.ts`'s `POST /api/sessions/:id/ask` until W7 C7p), which
  * takes the held row and settles it around its own press (Task 12, D-2171).
  * Every other value `answeredBy` can carry is a registry session id: the
  * parent's own route settles with `fromId`, guarded to equal the row's

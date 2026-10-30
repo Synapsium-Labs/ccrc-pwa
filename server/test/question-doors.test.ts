@@ -8,6 +8,13 @@
 // old doors' rows byte for byte, so equality here is "the new path answers Q3a's rows". The other rows are the new
 // family's own: the id grammar, the kind check, the session gate, and the gate's posture. A refusal that names its own
 // route (the box token's `no box token presented — <route> …`) names the new door, so it is a row of its own, not a pair.
+//
+// RETIRED ROWS (W7 C7p, D-7194; plan 2026-10-27-consolidation-w7-pwa.md, Task C7p). The operator's old doors
+// (`/api/sessions/:id/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`) are retired one per commit. A pair whose old door
+// is gone moves from PAIRS to RETIRED_PAIRS, unchanged, and reads differently: the old door answers 404 on its own
+// fixture and nothing moves (no key, no row change, no door-in, no feed row, no push), and the new path, on a fresh
+// fixture, answers the old door's outcome as RECORDED on the base before the retirement (RETIRED_OUTCOMES, every field
+// the pair compared). The equality the pair held, new == old, is held against the old door's recorded bytes.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -239,20 +246,6 @@ const PAIRS: Pair[] = [
   ['release approval | not the stored parent', approvalSide, ...releaseApproval({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
   ['release approval | not held', approvalSide, ...releaseApproval(P), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
   ['release approval | success: declined, the door-in fires', approvalSide, ...releaseApproval(P)],
-  // The operator's ask answer: `POST /api/sessions/:id/ask` and `POST /api/questions/session-<id>/answer {kind:'ask'}`.
-  ['answer ask | an unknown session', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [0] }, 'project-a-nobody-here')],
-  ['answer ask | no askKey', askSide, ...opAsk({ optionIndexes: [0] })],
-  ['answer ask | optionIndexes not numbers', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [true] })],
-  ['answer ask | nothing held: pressed, nothing recorded', () => askSide({ mint: 'none' }), ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
-  ['answer ask | held and taken: answered by the operator', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
-  ['answer ask | held, the press refused: rolled back', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [5] })],
-  ['answer ask | the CAS lost: pressed, the row untouched', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }), (s) => { hookstate(s.f, CHILD, s.now + 5); }],
-  ['answer ask | the store refuses: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
-    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockReturnValue({ ok: false, detail: 'fixture: the asks table is unreadable' } as never); }],
-  ['answer ask | the store throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
-    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
-  ['answer ask | the take throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
-    (s) => { vi.spyOn(s.f.coord, 'takeAskForAnswer').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
   // The operator's dialog answers.
   ['answer dialog | an unknown session', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }, 'project-a-nobody-here')],
   ['answer dialog | a bad body', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 7, optionIndex: 1 })],
@@ -278,6 +271,54 @@ const PAIRS: Pair[] = [
   ['answer dialog multi | success: the next screen back', () => dialogSide([TOOLS_OPEN, TOOLS_2_1, SIZES_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [3, 1] })],
 ];
 
+/** The pairs whose old door W7 C7p retired, each unchanged from its PAIRS row. */
+const RETIRED_PAIRS: Pair[] = [
+  // The operator's ask answer: `POST /api/sessions/:id/ask` and `POST /api/questions/session-<id>/answer {kind:'ask'}`.
+  ['answer ask | an unknown session', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [0] }, 'project-a-nobody-here')],
+  ['answer ask | no askKey', askSide, ...opAsk({ optionIndexes: [0] })],
+  ['answer ask | optionIndexes not numbers', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [true] })],
+  ['answer ask | nothing held: pressed, nothing recorded', () => askSide({ mint: 'none' }), ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
+  ['answer ask | held and taken: answered by the operator', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
+  ['answer ask | held, the press refused: rolled back', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [5] })],
+  ['answer ask | the CAS lost: pressed, the row untouched', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }), (s) => { hookstate(s.f, CHILD, s.now + 5); }],
+  ['answer ask | the store refuses: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
+    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockReturnValue({ ok: false, detail: 'fixture: the asks table is unreadable' } as never); }],
+  ['answer ask | the store throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
+    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
+  ['answer ask | the take throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
+    (s) => { vi.spyOn(s.f.coord, 'takeAskForAnswer').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
+  // (a row moves here from PAIRS in the commit that retires its door)
+];
+
+/** Each retired pair's OLD-door outcome, recorded on the base (`origin/main` at `b99070116`, the old doors live)
+ *  before the commit that retired the door, through this file's own `outcome`. */
+const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
+  "answer ask | an unknown session":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-session\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer ask | no askKey":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer ask | optionIndexes not numbers":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer ask | nothing held: pressed, nothing recorded":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": [], "pushes": []}},
+  "answer ask | held and taken: answered by the operator":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "answered", "answeredBy": "operator", "answer": "Blue"}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": ["question answered"], "pushes": []}},
+  "answer ask | held, the press refused: rolled back":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"range\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "answer ask | the CAS lost: pressed, the row untouched":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": [], "pushes": []}},
+  "answer ask | the store refuses: pressed unrecorded":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": [], "pushes": []}},
+  "answer ask | the store throws: pressed unrecorded":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": [], "pushes": []}},
+  "answer ask | the take throws: pressed unrecorded":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": [], "pushes": []}},
+  // (each row's old-door outcome, recorded on the base before the commit that retired its door)
+};
+
+/** What a side's effects read before any request: the old door's 404 must leave them exactly so. */
+const effectsNow = (s: Side): Record<string, unknown> => outcome(s, { statusCode: 0, body: '' } as LightMyRequestResponse).effects;
+
 describe('the new paths answer the old doors\' rows (W3 Q3f, D-7030)', () => {
   it('the pairs are uniquely named', () => {
     expect(new Set(PAIRS.map(([n]) => n)).size).toBe(PAIRS.length);
@@ -285,6 +326,27 @@ describe('the new paths answer the old doors\' rows (W3 Q3f, D-7030)', () => {
   it.each(PAIRS.map((p) => [p[0], p] as const))('%s', async (_n, pair) => {
     const { old, nu } = await runPair(pair);
     expect(nu).toEqual(old);
+  });
+});
+
+describe('a retired operator door is gone, and the new path answers its recorded rows (W7 C7p, D-7194)', () => {
+  it('every retired pair has its recorded outcome, and every recorded outcome a pair; no name is in both lists', () => {
+    expect(Object.keys(RETIRED_OUTCOMES).sort()).toEqual(RETIRED_PAIRS.map(([n]) => n).sort());
+    const live = new Set(PAIRS.map(([n]) => n));
+    expect(RETIRED_PAIRS.map(([n]) => n).filter((n) => live.has(n))).toEqual([]);
+  });
+  it.each(RETIRED_PAIRS.map((p) => [p[0], p] as const))('%s', async (name, [, setup, old, nu, before]) => {
+    const a = await setup();
+    await before?.(a);
+    const untouched = effectsNow(a);
+    const gone = await old(a);
+    expect(gone.statusCode, 'the retired door is not a route').toBe(404);
+    expect(gone.json(), 'fastify\'s own not-found, never a door\'s word').toMatchObject({ error: 'Not Found', statusCode: 404 });
+    expect(outcome(a, gone).effects, 'nothing moved').toEqual(untouched);
+    KEYS = [];
+    const b = await setup();
+    await before?.(b);
+    expect(outcome(b, await nu(b))).toEqual(RETIRED_OUTCOMES[name]);
   });
 });
 
@@ -324,14 +386,16 @@ describe('with no coordination store', () => {
     }
   });
 
-  it('the operator\'s answer presses plain, as `/ask` does', async () => {
+  // W7 C7p (D-7194): `/ask` is retired. The row held the new path equal to it; it now holds the old door gone (404,
+  // nothing pressed) and the new path equal to what `/ask` answered on the base, recorded (the same bytes as
+  // `question-doors-pin`'s `no coord` row): 200 `{"ok":true}`, the single digit.
+  it('the operator\'s answer presses plain, as `/ask` did', async () => {
     const app = await noCoordApp();
     const a = await app.inject({ method: 'POST', url: `/api/sessions/${CHILD}/ask`, payload: { askKey: ASK_KEY, optionIndexes: [1] } });
-    const keysA = [...KEYS];
+    expect([a.statusCode, KEYS], 'the retired door is not a route, and presses nothing').toEqual([404, []]);
     KEYS = [];
     const b = await app.inject({ method: 'POST', url: `/api/questions/session-${CHILD}/answer`, payload: { kind: 'ask', askKey: ASK_KEY, optionIndexes: [1] } });
-    expect([b.statusCode, b.body, KEYS]).toEqual([a.statusCode, a.body, keysA]);
-    expect(b.statusCode).toBe(200);
+    expect([b.statusCode, b.body, KEYS]).toEqual([200, '{"ok":true}', [`${CHILD} 2`]]);
   });
 });
 

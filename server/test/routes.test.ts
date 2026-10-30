@@ -25,6 +25,12 @@ import { CoordStore } from '../src/coord/store.js';
 
 const ID = 'claude-a-project-f';
 
+/** The operator's answer door, W3 Q3f's `POST /api/questions/session-<id>/answer`. W7 C7p (D-7194) retired the session
+ *  doors it replaced (`/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`); their rows below run through it, with the
+ *  family's body (`kind`, and `multi: true` for a multiSelect set), and answer what the old door answered, byte for byte
+ *  (`question-doors.test.ts`'s pairs proved it before the retirement). */
+const answerDoor = (id: string): string => `/api/questions/session-${id}/answer`;
+
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -316,7 +322,6 @@ describe('knownId route census', () => {
       { method: 'POST', routePath: '/api/sessions/:id/dialog/multi', args: 'id' },
       // Decision `ask-dialog-tab-route`: moving the pane between an ask's tabs, arrows only, never Enter.
       { method: 'POST', routePath: '/api/sessions/:id/dialog/tab', args: 'id' },
-      { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/interrupt', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/submit', args: 'id' },
@@ -334,8 +339,10 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(22);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(18);
+    // W7 C7p (D-7194): 22 -> 21 and 18 -> 17 POST with `POST /api/sessions/:id/ask` retired; the operator's ask is
+    // gated by the same `knownId` inside the family's door (`coord/routes.ts`, through its wiring).
+    expect(requestGates).toHaveLength(21);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(17);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -828,7 +835,8 @@ describe('write routes', () => {
       ['/api/sessions/nope/dialog/multi', { dialogId: 'x', optionIndexes: [1] }],
       ['/api/sessions/nope/dialog/tab', { dialogId: 'x', to: 'next' }],
       ['/api/sessions/nope/interrupt', {}],
-      ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
+      // W7 C7p: the operator's ask, through the family's door since `/ask` was retired.
+      [answerDoor('nope'), { kind: 'ask', askKey: 'k', optionIndexes: [0] }],
       ['/api/sessions/nope/submit', {}],
     ] as const) {
       const res = await app.inject({ method: 'POST', url, payload });
@@ -950,8 +958,10 @@ describe('POST /api/sessions/:id/submit', () => {
 // `server.ts` actually wires them together: the registry lookup for the
 // session's uuid, `readHookState`'s freshness/identity gate, and the
 // askDeps/sendDeps shared queue. Same convention as the `/dialog` suite
-// above: 404 covered there, so this adds 400 / 409 / 200.
-describe('POST /api/sessions/:id/ask', () => {
+// above: 404 covered there, so this adds 400 / 409 / 200. W7 C7p (D-7194):
+// the operator's ask through the family's door (`answerDoor`, `{kind:'ask'}`),
+// the retired `/api/sessions/:id/ask`'s rows unchanged in what they answer.
+describe('POST /api/questions/session-<id>/answer {kind:\'ask\'} (was POST /api/sessions/:id/ask)', () => {
   const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
 
@@ -972,8 +982,8 @@ describe('POST /api/sessions/:id/ask', () => {
     seedAsk(home);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/ask`,
-      payload: { askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
+      url: answerDoor(ID),
+      payload: { kind: 'ask', askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -987,8 +997,8 @@ describe('POST /api/sessions/:id/ask', () => {
     seedAsk(home);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/ask`,
-      payload: { askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
+      url: answerDoor(ID),
+      payload: { kind: 'ask', askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
@@ -1006,7 +1016,7 @@ describe('POST /api/sessions/:id/ask', () => {
       { askKey: 'k', optionIndexes: [0, '1'] },         // one entry not a number
       { askKey: 'k' },                                  // optionIndexes missing
     ]) {
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/ask`, payload });
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'ask', ...payload } });
       expect(res.statusCode).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     }
