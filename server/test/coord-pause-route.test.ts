@@ -294,6 +294,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/dispatch-abandon',
     // D-7453: Settings › Automation › Roll idle sessions, an operator dial, session-gated like the stall-watch door.
     '/api/coord/roll-idle',
+    // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).
+    '/api/testbox/switch',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',
   ]);

@@ -260,7 +260,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'twenty-five', 'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty', 'thirty-one', 'thirty-two',
   'thirty-three', 'thirty-four', 'thirty-five', 'thirty-six',
   // W3 Q3f (D-7030): the surface grew to thirty-eight with the question family's claimant pair.
-  'thirty-seven', 'thirty-eight'];
+  'thirty-seven', 'thirty-eight',
+  // Test box plan TB9 (D-7554): forty with the test box's read and its tools sync, which take a session or the token.
+  'thirty-nine', 'forty'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

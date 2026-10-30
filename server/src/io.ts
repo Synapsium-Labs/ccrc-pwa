@@ -2,10 +2,11 @@ import { constants as fsConstants, createReadStream, watch, type FSWatcher } fro
 import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ReadFailure } from '../../shared/agent-protocol.js';
+import type { ReadFailure, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
 import { measurePressure } from '../../agent/src/pressure.js';
+import { measureTestbox, syncTestboxTools } from '../../agent/src/testboxOp.js';
 import type { HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
@@ -253,7 +254,25 @@ export interface FleetIO {
    *  op, a kernel with no PSI): never a stall. `unanswered` is an ask the link or the agent failed (a timeout, a
    *  disconnect, an error reply, a malformed one): the evidence of a stall. Neither is ever a reading of zero. */
   pressureMeasured(): Promise<MeasuredPressure>;
+  /** The fleet host's `testbox` op (test box plan TB9, D-7411): its measured tools and the box's status answer, or the
+   *  op's typed failure. Takes nothing: the adapter reads ITS box's test box settings.
+   *  Failure contract: never rejects. `no-op` is an agent too old to list the op (never sent it); `unanswered` is an
+   *  ask the link or the agent failed, or a reply in no shape the one reader knows. Neither is ever `ok`. */
+  testboxMeasured(): Promise<MeasuredTestbox>;
+  /** The `testbox-tools-sync` op, the `testbox` op's one write: the box is sent the fleet host's own release and
+   *  versions. Takes nothing. Failure contract: as `testboxMeasured`. */
+  testboxToolsSync(): Promise<TestboxSyncAsked>;
 }
+
+/** The `testbox` op as a seam answers it, or why there is none (D-7411). */
+export type MeasuredTestbox =
+  | { ok: true; reply: TestboxOpReply }
+  | { ok: false; reason: 'no-op' | 'unanswered' };
+
+/** The `testbox-tools-sync` op as a seam answers it, or why there is none (D-7411). */
+export type TestboxSyncAsked =
+  | { ok: true; reply: TestboxToolsSyncReply }
+  | { ok: false; reason: 'no-op' | 'unanswered' };
 
 /** The `pressure` reading as a seam answers it (#1170), or why there is none. */
 export type MeasuredPressure =
@@ -487,7 +506,20 @@ export const localIO: FleetIO = {
   pressureMeasured: async () => {
     try { return { ok: true, psi: measurePressure() }; } catch { return { ok: false, reason: 'unsupported' }; }
   },
+
+  // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
+  testboxMeasured: () => localTestbox(os.homedir()),
+  testboxToolsSync: () => localTestboxSync(os.homedir()),
 };
+
+/** The `testbox` op's body on `home` (D-7411): the one implementation, so the two adapters cannot disagree. */
+export async function localTestbox(home: string): Promise<MeasuredTestbox> {
+  try { return { ok: true, reply: await measureTestbox(home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
+/** The `testbox-tools-sync` op's body on `home` (D-7411). */
+export async function localTestboxSync(home: string): Promise<TestboxSyncAsked> {
+  try { return { ok: true, reply: await syncTestboxTools(home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
 
 /** The agent's own measurer on `home`: the one implementation of the `disk` op's arithmetic, so the two adapters
  *  cannot disagree about a root (D-6615). It never throws for a disk fault (a fault is a `missing` row). */
@@ -499,5 +531,8 @@ export async function measureLocalDisk(home: string): Promise<MeasuredDisk> {
 /** `localIO` measuring the server's CONFIGURED home (`cfg.home`: `CCRC_HOME` or the process home), as every other
  *  local-mode path does, never the process home behind its back. */
 export function localIOFor(home: string): FleetIO {
-  return { ...localIO, statfsMeasured: () => measureLocalDisk(home) };
+  return {
+    ...localIO, statfsMeasured: () => measureLocalDisk(home),
+    testboxMeasured: () => localTestbox(home), testboxToolsSync: () => localTestboxSync(home),
+  };
 }

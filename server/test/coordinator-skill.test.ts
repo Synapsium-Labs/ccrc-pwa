@@ -801,6 +801,13 @@ describe('the coordinator skill: linkage', () => {
       // The OPERATOR's answer: session-gated, never a coordinator's door, for `POST /api/coord/pause`'s reason: naming it
       // would be an invitation to answer the operator's question in the operator's name.
       'POST /api/questions/:id/answer',
+      // THE TEST BOX (test box plan TB9, D-7411, D-7554): the Settings card's three doors, not coordination doors. The
+      // switch is the operator-dial shape once more: a coordinator told about it would be told how to send its own
+      // workers' test runs off the fleet host. The read and the tools sync are the card's and the update lane's
+      // (`ccrc-api testbox status|tools-sync`); no programme reads or moves the test box, so neither is named either.
+      'GET /api/testbox',
+      'POST /api/testbox/switch',
+      'POST /api/testbox/tools-sync',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {

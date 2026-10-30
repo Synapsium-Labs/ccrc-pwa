@@ -61,7 +61,7 @@ const ID_BUILDERS = {
   wsShedDeps: 'id',
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
-  coordPause: 'no-id', reclaimPause: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
+  coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;

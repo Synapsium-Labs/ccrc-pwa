@@ -183,24 +183,27 @@ describe('the deps-shed arm’s live switch has no writer in the tree (D-7278)',
 // `ccd testbox-remote` verb in `ccd/ccd` (TB9, behind POST /api/testbox/switch); no TypeScript file writes it. TB2
 // ships the row alone, so until TB8 and TB9 land this pin expects ZERO shell holders: TB8 raises it to the wrapper's
 // one read line and TB9 to the verb's one write, each in its own PR.
-describe('the test box’s remote switch: its definer and the wrapper’s one read until TB9 (D-7404; TB8, D-7410)', () => {
+// TB8 (D-7410) raised the shell holders 0 -> 1, the wrapper's one read; TB9 (D-7411) adds the one shell WRITER, `ccd
+// testbox-remote` in ccd/ccd, and the one TypeScript reader beside the definer, the server's decider
+// (`server/src/testbox.ts`), which reads the switch through `readSwitches` and writes nothing.
+describe('the test box’s remote switch: its definer, the wrapper’s one read, the verb’s one write and the decider’s read (D-7404; TB8, D-7410; TB9, D-7411)', () => {
   const NAME = TESTBOX_REMOTE_LIVE_MARKER;
   const DEFINER = 'shared/switches.ts';
 
-  // TB8 (D-7410) raises the shell holders 0 -> 1: the wrapper's one read, a test of the file's presence. TB9 adds the
-  // one writer (ccd/ccd's `testbox-remote` verb).
-  it('one shell line names it: the wrapper ccd/ccrc-test, whose one line is a read; TB9 adds the one writer (ccd/ccd)', () => {
+  it('two shell files name it: the wrapper ccd/ccrc-test, whose one line is a read, and ccd/ccd, whose two lines are the verb\'s marker and its temp', () => {
     expect(NAME).toBe('testbox-remote-live');
-    expect(holdersOf(NAME), 'a line of shell other than the wrapper names it — a writer TB8 does not ship').toEqual(['ccd/ccrc-test']);
+    expect(holdersOf(NAME), 'a line of shell other than the wrapper and the verb names it — a writer TB8 and TB9 do not ship').toEqual(['ccd/ccd', 'ccd/ccrc-test']);
     expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccrc-test') ?? '').filter((l) => l.includes(NAME)))
       .toEqual(['  [ -e "$REG/testbox-remote-live" ] && TB_LIVE=1']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes(NAME)))
+      .toEqual(['  marker="$REG/testbox-remote-live"', '    tmp="$REG/.testbox-remote-live.$$.tmp"']);
   });
 
   it('its one TS holder is its definer, and no file that names its constant reaches a write', () => {
     expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     const holders = ALL.filter((f) => stallCode(f).includes('TESTBOX_REMOTE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER]);
+    expect(holders).toEqual([DEFINER, 'server/src/testbox.ts'].sort());
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 
