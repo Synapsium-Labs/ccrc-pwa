@@ -1,5 +1,5 @@
 {
-  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string or a path (https://h/x?proxy=user:secret@host, GET /p?u=user:secret@host:8443, dir/user:secret@host) a raw '#', '?' or '/' inside a password (user:pa#ss@host refused), a token-only userinfo before a host that no port and no path follows, which neither mode masks while more text follows the host (--proxy=tok@host refused, --proxy tok@host refused), and a port followed by a non-ASCII punctuation mark such as an ellipsis or a curly quote (tok@host:8443… x, tok@host:8443” x). A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
+  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string or a path (https://h/x?proxy=user:secret@host, GET /p?u=user:secret@host:8443, dir/user:secret@host) a raw '#', '?' or '/' inside a password (user:pa#ss@host refused), a token-only userinfo before a host that no port and no path follows, which neither mode masks while more text follows the host (--proxy=tok@host refused, --proxy tok@host refused), and a port followed by a letter, '-', '_' or '~', characters a host name holds, while more text follows (tok@host:8443-x retrying, tok@host:8443a x). Any other character after a port ends it, ASCII or not: an ellipsis, a curly quote, a no-break space, '(', '&', '\\', '=' or an invalid byte. A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
   "rows": [
     {
       "rule": "R5",
@@ -1514,6 +1514,96 @@
       "updateSync": "[core:io]:2 ok"
     },
     {
+      "rule": "R8",
+      "input": "proxy tok@host:8443 x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "proxy host:8443 x",
+      "bareHost": "proxy host:8443 x",
+      "updateSync": "proxy host:8443 x"
+    },
+    {
+      "rule": "R8",
+      "input": "proxy tok@host:8443　x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "proxy host:8443　x",
+      "bareHost": "proxy host:8443　x",
+      "updateSync": "proxy host:8443　x"
+    },
+    {
+      "rule": "R8",
+      "inputHex": "70726f787920746f6b40686f73743a38343433ff2078",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "70726f787920686f73743a38343433ff2078",
+      "bareHostHex": "70726f787920686f73743a38343433ff2078",
+      "updateSyncHex": "70726f787920686f73743a38343433ff2078"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443( x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443( x",
+      "bareHost": "host:8443( x",
+      "updateSync": "host:8443( x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443& x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443& x",
+      "bareHost": "host:8443& x",
+      "updateSync": "host:8443& x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443\\ x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443\\ x",
+      "bareHost": "host:8443\\ x",
+      "updateSync": "host:8443\\ x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443= x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443= x",
+      "bareHost": "host:8443= x",
+      "updateSync": "host:8443= x"
+    },
+    {
+      "rule": "R8",
+      "input": "\"msg\":\"proxy tok@host:8443\\\" refused\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"msg\":\"proxy host:8443\\\" refused\"",
+      "bareHost": "\"msg\":\"proxy host:8443\\\" refused\"",
+      "updateSync": "\"msg\":\"proxy host:8443\\\" refused\""
+    },
+    {
+      "rule": "R8",
+      "input": "proxy=\\\"tok@host:8443\\\" failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "proxy=\\\"host:8443\\\" failed",
+      "bareHost": "proxy=\\\"host:8443\\\" failed",
+      "updateSync": "proxy=\\\"host:8443\\\" failed"
+    },
+    {
+      "rule": "R8",
+      "input": "connect to tok@host:8443\\nretry",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "connect to host:8443\\nretry",
+      "bareHost": "connect to host:8443\\nretry",
+      "updateSync": "connect to host:8443\\nretry"
+    },
+    {
       "rule": "known-limit",
       "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
       "input": "https://h/x?proxy=user:secret@host",
@@ -1594,24 +1684,72 @@
       "updateSync": "--proxy tok@host refused"
     },
     {
-      "rule": "known-limit",
-      "note": "known limit: a port followed by a non-ASCII punctuation mark (an ellipsis, a curly quote) does not end the port, so a token-only userinfo before it is not masked",
+      "rule": "R8",
       "input": "tok@host:8443… x",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "tok@host:8443… x",
-      "bareHost": "tok@host:8443… x",
-      "updateSync": "tok@host:8443… x"
+      "ccrc": "host:8443… x",
+      "bareHost": "host:8443… x",
+      "updateSync": "host:8443… x"
     },
     {
-      "rule": "known-limit",
-      "note": "known limit: a port followed by a non-ASCII punctuation mark (an ellipsis, a curly quote) does not end the port, so a token-only userinfo before it is not masked",
+      "rule": "R8",
       "input": "tok@host:8443” x",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "tok@host:8443” x",
-      "bareHost": "tok@host:8443” x",
-      "updateSync": "tok@host:8443” x"
+      "ccrc": "host:8443” x",
+      "bareHost": "host:8443” x",
+      "updateSync": "host:8443” x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443-x retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443-x retrying",
+      "bareHost": "tok@host:8443-x retrying",
+      "updateSync": "tok@host:8443-x retrying"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443- x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443- x",
+      "bareHost": "tok@host:8443- x",
+      "updateSync": "tok@host:8443- x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443a x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443a x",
+      "bareHost": "tok@host:8443a x",
+      "updateSync": "tok@host:8443a x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443_x y",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443_x y",
+      "bareHost": "tok@host:8443_x y",
+      "updateSync": "tok@host:8443_x y"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443~ x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443~ x",
+      "bareHost": "tok@host:8443~ x",
+      "updateSync": "tok@host:8443~ x"
     },
     {
       "rule": "bound",
