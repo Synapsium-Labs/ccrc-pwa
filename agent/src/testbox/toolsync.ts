@@ -8,15 +8,20 @@
 // the entry point hands the service; submissions still queue, and the status answer keeps the configured run limit),
 // waits for the runs in progress to end, hands every queued run, as the service queued it, to the next service
 // (`<root>/handover/`, which that service queues at its start, in the same order) and exits 0, so the service manager
-// restarts the service on the new tree and queued runs wait for it. A new node version queues every
+// restarts the service on the new tree and queued runs wait for it. It exits only once every queued run is on disk
+// (D-7560): a hand-over that fails is reported and tried again, admissions still closed; the next service removes a
+// handed-over file only once it has queued that run. A new node version queues every
 // pristine key's rebuild at once, by one tick of the service's timer work (the pristine store reads the box's node
 // from this driver); that tick and the timer's own run one after the other, never at once (`serviceTick`).
-import { mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync, writeSync,
+} from 'node:fs';
 import path from 'node:path';
 import {
   readTestboxFrame,
   type RunLog, type RunSubmit, type RunSummary, type StatusAnswer, type TestboxFrame, type TestboxSync, type TestboxToolVersions, type ToolsSync,
 } from '../../../shared/testbox.js';
+import { retryDelay } from './pristine.js';
 import { units, type SystemManager } from './systemd.js';
 import {
   ended, IDLE_TOOLS, encodeToolsSpec, INSTALL_SETS_KEY, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, seenRuns,
@@ -40,6 +45,9 @@ export interface ServedService {
 
 /** Under `CCRC_TESTBOX_ROOT`: the queued runs a takeover hands to the next service (D-7426). */
 export const HANDOVER_DIR = 'handover';
+/** Under `<root>/handover/`: a handed-over file the next service will not queue (it does not read as a `run.submit`,
+ *  or the service refused it), beside a `<name>.reason` file (D-7560). Nothing reads it again. */
+export const HANDOVER_DROPPED = 'dropped';
 
 export interface ToolSyncDeps {
   readonly sys: SystemManager;
@@ -51,6 +59,8 @@ export interface ToolSyncDeps {
   readonly now: () => number;
   /** The takeover's end: the process exits so the service manager starts the new tree. */
   readonly exit: (code: number) => void;
+  /** The takeover's wait before it tries a failed hand-over again (D-7560); a timer unless a test passes its own. */
+  readonly wait?: (ms: number) => Promise<void>;
 }
 
 /** UTC ISO 8601 to the second, as the status frame carries a time. */
@@ -59,6 +69,18 @@ const utcSecond = (ms: number): string => new Date(ms).toISOString().replace(/\.
 const readText = (f: string): string | null => { try { return readFileSync(f, 'utf8'); } catch { return null; } };
 const listDir = (d: string): string[] => { try { return readdirSync(d); } catch { return []; } };
 const linkName = (f: string): string | null => { try { return path.basename(readlinkSync(f)); } catch { return null; } };
+const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms).unref?.(); });
+/** `text` in `file`, on disk before this returns (written, then fsync'd). */
+function writeDurably(file: string, text: string): void {
+  const fd = openSync(file, 'w', 0o600);
+  try { writeSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
+}
+/** A directory's entries on disk (fsync of the directory), where the platform allows it. */
+function syncDir(dir: string): void {
+  let fd: number | null = null;
+  try { fd = openSync(dir, 'r'); fsyncSync(fd); } catch { /* not every platform fsyncs a directory */ } finally { if (fd !== null) closeSync(fd); }
+}
 
 export class ToolSync {
   private state: ToolsState = IDLE_TOOLS;
@@ -132,41 +154,77 @@ export class ToolSync {
    *  own record, so a refused submission (a duplicate run id) is never one. */
   queuedFrames(): RunSubmit[] { return this.svc === null ? [] : [...this.svc.waiting()]; }
 
-  /** At the service's start, after its own: the runs a takeover handed over are queued, in their order, each with no
-   *  connection (its summary is the service's `results/<id>`, as for any run whose link dropped); returns how many. */
+  private get handoverDir(): string { return path.join(this.d.root, HANDOVER_DIR); }
+
+  /** The handed-over runs still waiting on disk for this service to queue them. */
+  pendingHandover(): number { return listDir(this.handoverDir).filter((x) => x.endsWith('.json')).length; }
+
+  /** At the service's start, after its own, and again on the timer while any is left (D-7560): the runs a takeover
+   *  handed over are queued, in their order, each with no connection (its summary is the service's `results/<id>`, as
+   *  for any run whose link dropped); returns how many. A file goes only once the service has taken its run: one whose
+   *  submit throws stays for the next attempt, and one that does not read as a `run.submit` or that the service
+   *  refuses moves to `dropped/` with its reason. Never during a takeover, which writes this directory. */
   resume(): number {
     const svc = this.svc;
     if (svc === null) throw new Error('the tool sync serves no service');
-    const dir = path.join(this.d.root, HANDOVER_DIR);
+    if (!this.admitting()) return 0;
+    const dir = this.handoverDir;
     let n = 0;
     for (const name of listDir(dir).filter((x) => x.endsWith('.json')).sort()) {
       const file = path.join(dir, name);
       const text = readText(file);
-      try { unlinkSync(file); } catch { /* gone */ }
-      const r = text === null ? null : readTestboxFrame(text.trim());
-      if (r === null || !r.ok || r.value.t !== 'run.submit') { console.error(`ccrc-testbox: a handed-over run (${name}) does not read as a run.submit; dropped`); continue; }
+      if (text === null) continue;
+      const r = readTestboxFrame(text.trim());
+      if (!r.ok || r.value.t !== 'run.submit') { this.dropHandedOver(name, `does not read as a run.submit${r.ok ? ` (${r.value.t})` : `: ${r.reason}`}`); continue; }
       const id = r.value.runId;
-      // Queued as the WebSocket door queues a submission, so a later takeover hands it over again while it waits.
-      svc.submit(r.value, { send: () => undefined, refuse: (why) => console.error(`ccrc-testbox: the handed-over run ${id} was refused: ${why}`) });
+      let refused = null as string | null;
+      try {
+        // Queued as the WebSocket door queues a submission, so a later takeover hands it over again while it waits.
+        svc.submit(r.value, { send: () => undefined, refuse: (why) => { refused = why; } });
+      } catch (e) {
+        console.error(`ccrc-testbox: the handed-over run ${id} could not be queued (${message(e)}); it stays in ${dir} for the next attempt`);
+        continue;
+      }
+      if (refused !== null) { this.dropHandedOver(name, `refused: ${refused}`); continue; }
+      try { unlinkSync(file); } catch { /* gone */ }
       n++;
     }
     return n;
   }
 
-  /** D-7426: each queued run written for the next service, in queue order; its log directory, which is empty while it
-   *  has not started, is removed so the next service takes the id afresh. */
+  /** A handed-over file the service will not queue, moved to `dropped/` beside its reason. */
+  private dropHandedOver(name: string, why: string): void {
+    console.error(`ccrc-testbox: the handed-over run ${name} ${why}; moved to ${HANDOVER_DIR}/${HANDOVER_DROPPED}/`);
+    const dropped = path.join(this.handoverDir, HANDOVER_DROPPED);
+    try {
+      mkdirSync(dropped, { recursive: true, mode: 0o700 });
+      writeFileSync(path.join(dropped, `${name}.reason`), `${why}\n`, { mode: 0o600 });
+      renameSync(path.join(this.handoverDir, name), path.join(dropped, name));
+    } catch (e) {
+      console.error(`ccrc-testbox: the handed-over run ${name} could not be moved to ${HANDOVER_DROPPED}/ (${message(e)})`);
+    }
+  }
+
+  /** D-7426, D-7560: every queued run written for the next service, in queue order, all or none: each file is written
+   *  and fsync'd under a staging name, then all are renamed into place and the directory is fsync'd. A failure removes
+   *  what this attempt wrote and throws, so the next attempt writes each run once. Only then is each run's log
+   *  directory, empty while it has not started, removed so the next service takes the id afresh. */
   private handOver(): void {
     const frames = this.queuedFrames();
     if (frames.length === 0) return;
-    const dir = path.join(this.d.root, HANDOVER_DIR);
+    const dir = this.handoverDir;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const at = String(this.d.now()).padStart(15, '0');
-    frames.forEach((f, i) => {
-      const file = path.join(dir, `${at}-${String(i + 1).padStart(6, '0')}-${f.runId}.json`);
-      writeFileSync(`${file}.tmp`, `${JSON.stringify(f)}\n`, { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
-      try { rmdirSync(path.join(this.d.root, 'logs', f.runId)); } catch { /* none, or not empty */ }
-    });
+    const files = frames.map((f, i) => path.join(dir, `${at}-${String(i + 1).padStart(6, '0')}-${f.runId}.json`));
+    try {
+      frames.forEach((f, i) => { writeDurably(`${files[i]!}.tmp`, `${JSON.stringify(f)}\n`); });
+      for (const file of files) renameSync(`${file}.tmp`, file);
+      syncDir(dir);
+    } catch (e) {
+      for (const file of files) for (const f of [file, `${file}.tmp`]) { try { unlinkSync(f); } catch { /* none, or not a file */ } }
+      throw e;
+    }
+    for (const f of frames) { try { rmdirSync(path.join(this.d.root, 'logs', f.runId)); } catch { /* none, or not empty */ } }
   }
 
   /** Whether the service may start a waiting run: not once a takeover has begun (D-7426). Submissions still queue, and
@@ -270,11 +328,21 @@ export class ToolSync {
     }
   }
 
-  /** D-7426: no new run starts, the runs in progress end, the queued ones are handed over, and the process exits 0
-   *  for the new tree to take over. */
+  /** D-7426, D-7559, D-7560: no new run starts, the runs in progress end, the queued ones are handed over, and the
+   *  process exits 0 for the new tree to take over. It never exits while the queue is not on disk: a hand-over that
+   *  fails is reported as the sync's failure (`handover: <why>`, so the box reads as degraded), and tried again on
+   *  `CCRC_TESTBOX_PRISTINE_RETRY`'s delays with admissions still closed; a run submitted meanwhile queues and is
+   *  handed over with the others. */
   private async takeover(): Promise<void> {
     if (this.svc !== null) await this.svc.idle();
-    try { this.handOver(); } catch (e) { console.error(`ccrc-testbox: the queued runs could not be handed over: ${e instanceof Error ? e.message : String(e)}`); }
+    for (let attempt = 1; ; attempt++) {
+      try { this.handOver(); break; } catch (e) {
+        const why = message(e);
+        console.error(`ccrc-testbox: the queued runs could not be handed over (${why}); the takeover tries again`);
+        this.state = { ...this.state, sync: { state: 'failed', detail: `handover: ${why}`, at: utcSecond(this.d.now()) } };
+        await (this.d.wait ?? sleep)(retryDelay(this.d.settings.retryMs, attempt));
+      }
+    }
     this.d.exit(0);
   }
 

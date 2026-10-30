@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The test box's tool sync, `ccrc-testbox-tools.service`'s fixed root script: `tools-sync <spec file>` (D-7408, D-7422,
-# D-7423, D-7424, D-7425, D-7426, D-7457, D-7553; plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB6; spec §2.10).
+# D-7423, D-7424, D-7425, D-7426, D-7457, D-7553, D-7560; plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB6; spec §2.10).
 #
 # It runs from the INSTALLED release, `<tools>/release/installed/deploy/testbox/bin/tools-sync`, and takes `<tools>`
 # from that path alone. It reads only the spec the service wrote (`ccrc-testbox-tools-spec`, NUL-separated records),
@@ -17,7 +17,9 @@
 #   2. node, `_tbt_node_install` (the one function TB7's bootstrap calls too, D-7424): the linux-x64 tarball and
 #      SHASUMS256.txt over HTTPS from the official host, the sha256 checked (the .sig is not, D-7425), unpacked to
 #      `<tools>/node/<version>`, then that install's root-owned `etc/npmrc` (spec §2.2's three lines);
-#   3. npm at the measured version into that prefix, through the registry proxy, checked against `dist.integrity`;
+#   3. npm at the measured version, through the registry proxy, checked against `dist.integrity`, into a directory of its
+#      own version, `<tools>/npm/<version>` (D-7560), placed whole and never changed after; node's own prefix is never
+#      written, so a sync that changes npm alone changes nothing a run or `current` already names;
 #   4. Chrome for Testing linux64 at the measured version over HTTPS, unpacked to `<tools>/chrome/<version>`, its
 #      system libraries (the build's own `deb.deps`) from the OS mirror; no hash is compared (D-7422), the download's
 #      sha256 is recorded in the report;
@@ -184,8 +186,9 @@ _tbt_release() {   # <tag> <stage dir> -> <stage>/release, verified; else the sy
 
 # ── 2. node (D-7424, D-7425): the one function TB7's bootstrap calls too ─
 # `_tbt_node_install <tools> <version> <proxy host:port>` -> `<tools>/node/<version>` with its root-owned etc/npmrc;
-# rc 1 and TBT_WHY on a failure, with nothing left under `<tools>/node`. An install already there is kept, its npmrc
-# rewritten. The tarball's sha256 must be the one SHASUMS256.txt names for it.
+# rc 1 and TBT_WHY on a failure, with nothing left under `<tools>/node`. An install already there is kept, and its npmrc
+# is written only when its lines differ (a changed proxy, a box setting), so a sync on the same node and proxy changes
+# nothing under a run (D-7560). The tarball's sha256 must be the one SHASUMS256.txt names for it.
 _tbt_node_install() {
   local tools="$1" v="$2" proxy="$3" dst="$1/node/$2" st name want got
   name="node-v$v-linux-x64"
@@ -209,17 +212,24 @@ _tbt_node_install() {
     rm -rf -- "$st"
   fi
   # Spec §2.2: the settings every install on the box needs, in the global npmrc npm reads with no environment variable.
-  mkdir -p -- "$dst/etc" && printf 'registry=http://%s/\ncache=${HOME}/.npm\nnodedir=%s\n' "$proxy" "$dst" > "$dst/etc/npmrc.tmp" \
+  local rc
+  # shellcheck disable=SC2016  # ${HOME} is npm's to expand, not this shell's
+  rc="$(printf 'registry=http://%s/\ncache=${HOME}/.npm\nnodedir=%s\n' "$proxy" "$dst")"
+  [ -f "$dst/etc/npmrc" ] && [ "$(cat -- "$dst/etc/npmrc" 2>/dev/null)" = "$rc" ] && return 0
+  mkdir -p -- "$dst/etc" && printf '%s\n' "$rc" > "$dst/etc/npmrc.tmp" \
     && chmod 0644 "$dst/etc/npmrc.tmp" && mv -f -- "$dst/etc/npmrc.tmp" "$dst/etc/npmrc" \
     || { TBT_WHY="cannot write $dst/etc/npmrc"; return 1; }
 }
 
-# ── 3. npm, through the proxy, against dist.integrity ────────────────────
-_tbt_npm_install() {   # <node prefix> <version> <proxy> -> npm at that version in the prefix; else 1 and TBT_WHY
-  local pre="$1" v="$2" proxy="$3" node="$1/bin/node" st have line integrity tarball
-  have="$("$node" -e 'try { process.stdout.write(String(require(process.argv[1]).version)) } catch { }' "$pre/lib/node_modules/npm/package.json" 2>/dev/null)"
-  [ "$have" = "$v" ] && return 0
-  st="$(mktemp -d "$pre/.npm-stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory in $pre"; return 1; }
+# ── 3. npm, through the proxy, against dist.integrity (D-7560) ──────────
+# `<tools>/npm/<version>` is npm's package directory, placed whole in one rename and never changed after; a set's
+# `bin/npm` and `bin/npx` link into it, so each set keeps the npm it was made with.
+_tbt_npm_install() {   # <tools> <version> <proxy> <node> -> <tools>/npm/<version>; else 1 and TBT_WHY
+  local tools="$1" v="$2" proxy="$3" node="$4" dst="$1/npm/$2" st have line integrity tarball
+  have="$("$node" -e 'try { process.stdout.write(String(require(process.argv[1]).version)) } catch { }' "$dst/package.json" 2>/dev/null)"
+  [ "$have" = "$v" ] && [ -f "$dst/bin/npm-cli.js" ] && return 0
+  [ ! -e "$dst" ] && [ ! -L "$dst" ] || { TBT_WHY="$dst is there but is not npm $v"; return 1; }
+  mkdir -p -- "$tools/npm" && st="$(mktemp -d "$tools/npm/.stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory under $tools/npm"; return 1; }
   _tbt_curl "http://$proxy/npm" "$st/packument.json" || { rm -rf -- "$st"; TBT_WHY="the registry proxy gave no npm packument"; return 1; }
   line="$("$node" -e '
     const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -235,13 +245,9 @@ _tbt_npm_install() {   # <node prefix> <version> <proxy> -> npm at that version 
     const got = "sha512-" + c.createHash("sha512").update(require("fs").readFileSync(process.argv[1])).digest("base64");
     process.exit(want.split(/\s+/).includes(got) ? 0 : 1);
   ' "$st/npm.tgz" "$integrity" || { rm -rf -- "$st"; TBT_WHY="npm-$v.tgz does not match its dist.integrity"; return 1; }
-  mkdir -- "$st/x" && tar -xzf "$st/npm.tgz" -C "$st/x" 2>/dev/null && [ -f "$st/x/package/bin/npm-cli.js" ] \
-    || { rm -rf -- "$st"; TBT_WHY="npm-$v.tgz holds no package/bin/npm-cli.js"; return 1; }
-  chmod -R go-w "$st/x/package"
-  mkdir -p -- "$pre/lib/node_modules" "$pre/bin"
-  if [ -e "$pre/lib/node_modules/npm" ]; then mv -- "$pre/lib/node_modules/npm" "$st/old"; fi
-  mv -- "$st/x/package" "$pre/lib/node_modules/npm" || { rm -rf -- "$st"; TBT_WHY="cannot place npm $v"; return 1; }
-  ln -sfn ../lib/node_modules/npm/bin/npm-cli.js "$pre/bin/npm" && ln -sfn ../lib/node_modules/npm/bin/npx-cli.js "$pre/bin/npx"
+  mkdir -- "$st/x" && tar -xzf "$st/npm.tgz" -C "$st/x" 2>/dev/null && [ -f "$st/x/package/bin/npm-cli.js" ] && [ -f "$st/x/package/bin/npx-cli.js" ] \
+    || { rm -rf -- "$st"; TBT_WHY="npm-$v.tgz holds no package/bin/npm-cli.js and npx-cli.js"; return 1; }
+  chmod -R go-w "$st/x/package" && chmod 0755 "$st/x/package" && mv -- "$st/x/package" "$dst" || { rm -rf -- "$st"; TBT_WHY="cannot place $dst"; return 1; }
   rm -rf -- "$st"
 }
 
@@ -307,25 +313,26 @@ _tbt_chrome_install() {   # <tools> <version> -> <tools>/chrome/<version>; TBT_C
 
 # ── 6. the switch ────────────────────────────────────────────────────────
 # `node` and `chrome` at the top (the verifier's PATH, D-7424, and CCRC_CHROME), and `bin/` with node, npm and npx: the
-# directory spec.ts puts first on every run's and install's PATH (`<tools>/current/bin`).
+# directory spec.ts puts first on every run's and install's PATH (`<tools>/current/bin`). npm and npx link into the
+# set's own npm version (D-7560), never node's prefix.
 _tbt_make_set() {   # -> TBT_NEW_SET under <tools>/sets, a directory of links naming one version of each, and `versions`
-  local d nv="${TBT_V[node]}" cv="${TBT_V[chrome]}" t
+  local d nv="${TBT_V[node]}" cv="${TBT_V[chrome]}" pv="${TBT_V[npm]}" t
   mkdir -p -- "$TBT_TOOLS/sets" && d="$(mktemp -d "$TBT_TOOLS/sets/s.XXXXXXXX")" || { TBT_WHY="cannot create a tool set"; return 1; }
   chmod 0755 "$d" && mkdir -m 0755 -- "$d/bin" || { TBT_WHY="cannot create the tool set $d"; return 1; }
   ln -s "../../node/$nv/bin/node" "$d/node" && ln -s "../../chrome/$cv/chrome-linux64/chrome" "$d/chrome" \
-    && ln -s "../../../node/$nv/bin/node" "$d/bin/node" && ln -s "../../../node/$nv/bin/npm" "$d/bin/npm" \
-    && ln -s "../../../node/$nv/bin/npx" "$d/bin/npx" \
+    && ln -s "../../../node/$nv/bin/node" "$d/bin/node" && ln -s "../../../npm/$pv/bin/npm-cli.js" "$d/bin/npm" \
+    && ln -s "../../../npm/$pv/bin/npx-cli.js" "$d/bin/npx" \
     || { TBT_WHY="cannot link the tool set $d"; return 1; }
   { for t in "${TBT_TOOLS_ORDER[@]}"; do printf '%s\t%s\n' "$t" "${TBT_V[$t]}"; done; } > "$d/versions" && chmod 0644 "$d/versions" \
     || { TBT_WHY="cannot write $d/versions"; return 1; }
   TBT_NEW_SET="${d##*/}"
 }
 _tbt_place_release() {   # <stage>/release -> <tools>/release/<tag>, root's, with server/'s production dependencies
-  local src="$1/release" dst="$TBT_TOOLS/release/$TBT_REL" st pre="$TBT_TOOLS/node/${TBT_V[node]}"
+  local src="$1/release" dst="$TBT_TOOLS/release/$TBT_REL" st bin="$TBT_TOOLS/sets/$TBT_NEW_SET/bin"
   st="$(mktemp -d "$TBT_TOOLS/release/.stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory under $TBT_TOOLS/release"; return 1; }
   mv -- "$src" "$st/tree" && chmod -R go-w "$st/tree" || { rm -rf -- "$st"; TBT_WHY="cannot stage the verified tree"; return 1; }
   if [ -f "$st/tree/server/package.json" ]; then
-    ( cd "$st/tree/server" && PATH="$pre/bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
+    ( cd "$st/tree/server" && PATH="$bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
       || { rm -rf -- "$st"; TBT_WHY="npm ci --omit=dev --ignore-scripts failed in the release's server/"; return 1; }
     chmod -R go-w "$st/tree/server"
   fi
@@ -349,20 +356,20 @@ _tbt_takeover_ended() {   # the release a takeover replaced, removed once that t
   done < "$f"
   rm -f -- "$f"
 }
-_tbt_prune() {   # <previous set> -> every set, node and Chrome no kept set names, and leftover staging, removed
+_tbt_prune() {   # <previous set> -> every set, node, npm and Chrome no kept set names, and leftover staging, removed
   local prev="$1" s d keep=" " used=" " l
   keep+="$TBT_NEW_SET $prev ${TBT_KEEP[*]+"${TBT_KEEP[*]}"} "
   for d in "$TBT_TOOLS/sets"/s.*; do
     [ -d "$d" ] || continue
     s="${d##*/}"
     case "$keep" in *" $s "*) ;; *) rm -rf -- "$d"; continue ;; esac
-    for l in node chrome; do [ -L "$d/$l" ] && used+="$(readlink -- "$d/$l") "; done
+    for l in node chrome bin/npm; do [ -L "$d/$l" ] && used+="$(readlink -- "$d/$l") "; done
   done
-  for d in "$TBT_TOOLS/node"/* "$TBT_TOOLS/chrome"/*; do
+  for d in "$TBT_TOOLS/node"/* "$TBT_TOOLS/npm"/* "$TBT_TOOLS/chrome"/*; do
     [ -d "$d" ] || continue
     case "$used" in *"/${d#"$TBT_TOOLS/"}/"*) ;; *) rm -rf -- "$d" ;; esac
   done
-  rm -rf -- "$TBT_TOOLS/node"/.stage.* "$TBT_TOOLS/chrome"/.stage.* "$TBT_TOOLS/release"/.stage.* "$TBT_TOOLS"/.stage.* 2>/dev/null
+  rm -rf -- "$TBT_TOOLS/node"/.stage.* "$TBT_TOOLS/npm"/.stage.* "$TBT_TOOLS/chrome"/.stage.* "$TBT_TOOLS/release"/.stage.* "$TBT_TOOLS"/.stage.* 2>/dev/null
   return 0
 }
 
@@ -393,7 +400,7 @@ _tbt_main() {
   _tbt_step node
   _tbt_node_install "$TBT_TOOLS" "${TBT_V[node]}" "$TBT_PROXY" || _tbt_fail node "$TBT_WHY"
   _tbt_step npm
-  _tbt_npm_install "$TBT_TOOLS/node/${TBT_V[node]}" "${TBT_V[npm]}" "$TBT_PROXY" || _tbt_fail npm "$TBT_WHY"
+  _tbt_npm_install "$TBT_TOOLS" "${TBT_V[npm]}" "$TBT_PROXY" "$TBT_TOOLS/node/${TBT_V[node]}/bin/node" || _tbt_fail npm "$TBT_WHY"
   TBT_SWAP_NODE="$TBT_TOOLS/node/${TBT_V[node]}/bin/node"
   _tbt_step chrome
   _tbt_apt_sources || _tbt_fail chrome "$TBT_WHY"

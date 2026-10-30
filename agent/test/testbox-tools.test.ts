@@ -965,7 +965,8 @@ describe('toolsync.ts: the driver (D-7408, D-7426)', () => {
     failing = false;
     expect(d.t.resume()).toBe(1);
     expect(readdirSync(dir)).toEqual([HANDOVER_DROPPED]);
-    expect(d.submitted.map((x) => x.f.runId)).toEqual([Q1, Q2, Q3, Q1]);
+    // The recorder sees each submit the service returned from: Q2 (refused), Q3, then Q1 on its second attempt.
+    expect(d.submitted.map((x) => x.f.runId)).toEqual([Q2, Q3, Q1]);
   });
 
   it('a takeover whose hand-over cannot be written keeps the process up with admissions closed, reports it, and exits 0 once every queued run is on disk (D-7559, D-7560)', async () => {

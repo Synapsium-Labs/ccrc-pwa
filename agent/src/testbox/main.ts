@@ -198,10 +198,14 @@ export async function registryFor(cfg: TestboxConfig): Promise<{ close(): Promis
 }
 
 /** The timer's work (L5): the service's tick, after any tick in progress, and beside it, not awaited, the tool sync's
- *  retry, whose unit runs for minutes and whose takeover waits for every run (TB6). */
+ *  retry, whose unit runs for minutes and whose takeover waits for every run (TB6). A handed-over run the start could
+ *  not queue is tried again first (D-7560). */
 export function timerWork(service: TestboxService): Promise<void> {
   const tools = toolSyncOf(service);
   if (tools === undefined) return service.tick();
+  if (tools.pendingHandover() > 0) {
+    try { tools.resume(); } catch (e: unknown) { console.error(`ccrc-testbox: handed-over runs: ${e instanceof Error ? e.message : String(e)}`); }
+  }
   void tools.tick().catch((e: unknown) => console.error(`ccrc-testbox: tool sync: ${e instanceof Error ? e.message : String(e)}`));
   return tools.serviceTick();
 }

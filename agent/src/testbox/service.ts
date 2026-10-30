@@ -205,9 +205,10 @@ export class TestboxService {
     if (!dry.ok) { conn.refuse(dry.reason); return; }
     const q = enqueue(this.queue, { id: f.runId, session: f.session, kind: 'run' });
     if (q === null) { conn.refuse(`run id ${f.runId} already used`); return; }
+    // D-7560: its log directory first, so a submission that throws was never queued (a hand-over file stays for it).
+    mkdirSync(path.join(this.s.root, 'logs', f.runId), { recursive: true });
     this.queue = q;
     this.runs.set(f.runId, { state: queuedRun(f.runId), submit: f, row, sink: conn, spec: null, prepareExit: null, prepareMs: 0, wallMs: 0 });
-    mkdirSync(path.join(this.s.root, 'logs', f.runId), { recursive: true });
     this.pump();
   }
 
