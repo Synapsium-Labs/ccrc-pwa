@@ -64,6 +64,9 @@ export interface ServiceDeps {
   /** Whether a waiting run may start now (TB6, D-7426: a tool-sync takeover closes admissions while submissions still
    *  queue); absent, always. The run limit the status answer reports stays the configured one. */
   readonly admitting?: () => boolean;
+  /** A run's spec is built, in the same turn and before its prepare awaits anything (TB6, spec §2.10: the tool sync
+   *  pins the set the spec's `PATH` names, so no sync prunes it before the spec is written); absent, nothing. */
+  readonly specBuilt?: (spec: RunSpec) => void;
 }
 
 /** What the pristine store needs from outside (D-7543). */
@@ -271,6 +274,7 @@ export class TestboxService {
       case 'start-prepare': {
         const built = buildRunSpec(run.submit, run.row, k, this.s, this.d.chrome);
         if (!built.ok) return { t: 'prepared', exit: FAILED_END.exit, lastStderr: null };
+        this.d.specBuilt?.(built.spec);
         run.spec = { ...built.spec, ...(this.store === null ? {} : { installs: await this.installSteps(run, p.runDir) }) };
         writeSpec(this.s.root, run.spec);
         mkdirSync(p.out, { recursive: true });

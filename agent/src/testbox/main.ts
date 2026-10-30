@@ -176,7 +176,7 @@ export function serviceFor(cfg: TestboxConfig, release: string, exit: (code: num
     // TB6 (spec §2.10): `<tools>/current/chrome` resolved when each prepare starts, so the next prepare picks the new set.
     now: () => Date.now(), get chrome(): string { return tools.chrome(); }, release: facts.release, serviceVersion: facts.serviceVersion,
     // TB6: the box's measured tool versions are the current set's.
-    tools: () => tools.versions(), admitting: () => tools.admitting(),
+    tools: () => tools.versions(), admitting: () => tools.admitting(), specBuilt: (spec) => tools.pin(spec),
     // TB5 (D-7407, D-7543): the installs run under the box's node, the current set's (TB6), else the one this service runs under.
     pristine: {
       settings: pristineSettings(cfg.lines, durationMs), inputs: seams.inputs ?? ((m, id, paths) => runTreeFiles(git, m, id, paths)),

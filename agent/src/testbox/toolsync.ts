@@ -10,7 +10,10 @@
 // (`<root>/handover/`, which that service queues at its start, in the same order) and exits 0, so the service manager
 // restarts the service on the new tree and queued runs wait for it. It exits only once every queued run is on disk
 // (D-7560): a hand-over that fails is reported and tried again, admissions still closed; the next service removes a
-// handed-over file only once it has queued that run. A new node version queues every
+// handed-over file only once it has queued that run. A `tools.sync` that was waiting when the sync ended, or that
+// came during the takeover, is handed over beside them (`<root>/handover/tools.sync`) and run by the next service at
+// its start, never dropped (D-7559). A prepare's tool set is pinned when its spec is built (`pin`, called by the
+// service before the prepare awaits anything), so no sync prunes a set a prepare has resolved. A new node version queues every
 // pristine key's rebuild at once, by one tick of the service's timer work (the pristine store reads the box's node
 // from this driver); that tick and the timer's own run one after the other, never at once (`serviceTick`).
 import {
@@ -24,7 +27,7 @@ import {
 import { retryDelay } from './pristine.js';
 import { units, type SystemManager } from './systemd.js';
 import {
-  ended, IDLE_TOOLS, encodeToolsSpec, INSTALL_SETS_KEY, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, seenRuns,
+  binSet, ended, IDLE_TOOLS, encodeToolsSpec, INSTALL_SETS_KEY, keptSets, parseReport, parseVersions, requested, retryDue, retryStarted, seenRuns,
   specSet, syncNow, withSync, type BoxTools, type ToolsSettings, type ToolsState,
 } from './tools.js';
 
@@ -48,6 +51,8 @@ export const HANDOVER_DIR = 'handover';
 /** Under `<root>/handover/`: a handed-over file the next service will not queue (it does not read as a `run.submit`,
  *  or the service refused it), beside a `<name>.reason` file (D-7560). Nothing reads it again. */
 export const HANDOVER_DROPPED = 'dropped';
+/** Under `<root>/handover/`: the `tools.sync` frame a takeover kept for the next service (D-7559), the newest. */
+export const HANDOVER_TOOLS_SYNC = 'tools.sync';
 
 export interface ToolSyncDeps {
   readonly sys: SystemManager;
@@ -189,7 +194,23 @@ export class ToolSync {
       try { unlinkSync(file); } catch { /* gone */ }
       n++;
     }
+    this.resumeSync();
     return n;
+  }
+
+  /** The `tools.sync` a takeover handed over (D-7559): requested here as a frame from the door is, and its file removed
+   *  once the decider holds it (a sync started, a no-op, or waiting); one that does not read as a `tools.sync` moves to
+   *  `dropped/` with its reason. */
+  private resumeSync(): void {
+    const file = path.join(this.handoverDir, HANDOVER_TOOLS_SYNC);
+    const text = readText(file);
+    if (text === null) return;
+    const r = readTestboxFrame(text.trim());
+    if (!r.ok || r.value.t !== 'tools.sync') { this.dropHandedOver(HANDOVER_TOOLS_SYNC, `does not read as a tools.sync${r.ok ? ` (${r.value.t})` : `: ${r.reason}`}`); return; }
+    // `request` records the frame before its first await; the sync it starts runs on.
+    const p = this.request(r.value);
+    try { unlinkSync(file); } catch { /* gone */ }
+    p.catch((e: unknown) => console.error(`ccrc-testbox: the handed-over tools.sync: ${message(e)}`));
   }
 
   /** A handed-over file the service will not queue, moved to `dropped/` beside its reason. */
@@ -205,17 +226,21 @@ export class ToolSync {
     }
   }
 
-  /** D-7426, D-7560: every queued run written for the next service, in queue order, all or none: each file is written
+  /** D-7426, D-7559, D-7560: every queued run, and the kept `tools.sync`, written for the next service, in queue order,
+   *  all or none: each file is written
    *  and fsync'd under a staging name, then all are renamed into place and the directory is fsync'd. A failure removes
    *  what this attempt wrote and throws, so the next attempt writes each run once. Only then is each run's log
    *  directory, empty while it has not started, removed so the next service takes the id afresh. */
   private handOver(): void {
-    const frames = this.queuedFrames();
-    if (frames.length === 0) return;
     const dir = this.handoverDir;
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
     const at = String(this.d.now()).padStart(15, '0');
-    const files = frames.map((f, i) => path.join(dir, `${at}-${String(i + 1).padStart(6, '0')}-${f.runId}.json`));
+    const runs = this.queuedFrames();
+    const frames: (RunSubmit | ToolsSync)[] = [...runs];
+    const files = runs.map((f, i) => path.join(dir, `${at}-${String(i + 1).padStart(6, '0')}-${f.runId}.json`));
+    // D-7559: the tools.sync that waited, or came during the takeover, goes with them.
+    if (this.state.pending !== null) { frames.push(this.state.pending); files.push(path.join(dir, HANDOVER_TOOLS_SYNC)); }
+    if (frames.length === 0) return;
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {
       frames.forEach((f, i) => { writeDurably(`${files[i]!}.tmp`, `${JSON.stringify(f)}\n`); });
       for (const file of files) renameSync(`${file}.tmp`, file);
@@ -224,7 +249,7 @@ export class ToolSync {
       for (const file of files) for (const f of [file, `${file}.tmp`]) { try { unlinkSync(f); } catch { /* none, or not a file */ } }
       throw e;
     }
-    for (const f of frames) { try { rmdirSync(path.join(this.d.root, 'logs', f.runId)); } catch { /* none, or not empty */ } }
+    for (const f of runs) { try { rmdirSync(path.join(this.d.root, 'logs', f.runId)); } catch { /* none, or not empty */ } }
   }
 
   /** Whether the service may start a waiting run: not once a takeover has begun (D-7426). Submissions still queue, and
@@ -239,12 +264,27 @@ export class ToolSync {
     return withSync(this.svc.status(), this.sync());
   }
 
+  /** `CCRC_TESTBOX_TOOLS_DIR`, and the path it resolves to: the roots a spec's set may sit under. */
+  private toolsRoots(): string[] {
+    let real = this.d.toolsDir;
+    try { real = realpathSync(this.d.toolsDir); } catch { /* not there yet */ }
+    return [this.d.toolsDir, real];
+  }
+
+  /** A run's spec is built: the set its `PATH` starts at is in use from now, before its prepare awaits anything or
+   *  writes the spec (the service calls this in the same turn as it builds the spec), so no sync that starts meanwhile
+   *  prunes it. The run keeps it while it is live, as any set first seen under a run. */
+  pin(spec: { readonly runId: string; readonly env: readonly (readonly [string, string])[] }): void {
+    const first = spec.env.find(([n]) => n === 'PATH')?.[1].split(':')[0];
+    const set = first === undefined ? null : binSet(first, this.toolsRoots());
+    if (set === null) return;
+    this.state = { ...this.state, runSets: new Map(this.state.runSets).set(spec.runId, set) };
+  }
+
   /** The sets the specs in `specs/` name: each run's by its run id, and the pristine install's. */
   private specSets(): { named: Map<string, string>; install: string | null } {
     const dir = path.join(this.d.root, 'specs');
-    let real = this.d.toolsDir;
-    try { real = realpathSync(this.d.toolsDir); } catch { /* not there yet */ }
-    const roots = [this.d.toolsDir, real];
+    const roots = this.toolsRoots();
     const named = new Map<string, string>();
     let install: string | null = null;
     for (const name of listDir(dir)) {

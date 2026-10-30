@@ -9,8 +9,10 @@
 // the pristine build's backoff (`CCRC_TESTBOX_PRISTINE_RETRY`, the last delay repeating); a new frame runs at once. A
 // sync that replaced the release ends in the takeover (D-7426): the service starts no run, lets the runs in progress
 // end, hands the queued ones to the next service and exits to be restarted on the new tree, and no frame starts a sync
-// meanwhile. A run resolves the tool set
-// once, so the service names, in each spec, the set every live run started under, and the tools unit keeps those.
+// meanwhile: a frame that was waiting when the sync ended, or that comes during the takeover, is kept (the newest
+// replacing an older) and handed to the next service with the queued runs, which runs it (D-7559). A run resolves the
+// tool set once, so the service names, in each spec, the set every live run started under, and the tools unit keeps
+// those; a prepare's set is pinned when its spec is built, before the prepare awaits anything.
 import {
   TESTBOX_TOOLS,
   type StatusAnswer, type TestboxSync, type TestboxTool, type TestboxToolVersions, type ToolsSync,
@@ -59,7 +61,7 @@ export interface ToolsState {
   readonly sync: TestboxSync;
   /** The tools unit is running. */
   readonly running: boolean;
-  /** A frame that came while a sync ran: it runs next. */
+  /** A frame that came while a sync ran: it runs next; during the takeover, the next service runs it. */
   readonly pending: ToolsSync | null;
   /** The frame the running or the failed sync is for; a retry runs it again. */
   readonly last: ToolsSync | null;
@@ -88,7 +90,8 @@ const syncing = (at: string, detail: string | null = null): TestboxSync => ({ st
 
 /** A `tools.sync` frame (the update lane's, or the card's **Bring tools up to date**). */
 export function requested(s: ToolsState, f: ToolsSync, box: BoxTools, at: string): Decision {
-  if (s.takeover) return { state: s, start: null };
+  // D-7559: never dropped; the takeover hands it to the next service.
+  if (s.takeover) return { state: { ...s, pending: f }, start: null };
   if (s.running) return { state: { ...s, pending: f }, start: null };
   if (sameAsBox(f, box)) {
     // Nothing to do, and nothing changes on the box; a failed sync for another set is over, since the fleet host
@@ -155,7 +158,7 @@ export function ended(s: ToolsState, exit: number, report: SyncReport, now: numb
   if (passed) {
     const takeover = report.result === 'ok' && report.takeover;
     return {
-      state: { ...s, running: false, pending: null, last: null, attempts: 0, nextAt: null, takeover, sync: { state: 'idle', detail: null, at } },
+      state: { ...s, running: false, pending: takeover ? pending : null, last: null, attempts: 0, nextAt: null, takeover, sync: { state: 'idle', detail: null, at } },
       takeover, nodeChanged: report.result === 'ok' && report.nodeChanged, next: takeover ? null : pending,
     };
   }
@@ -202,12 +205,16 @@ export function specSet(text: string, toolsRoots: readonly string[]): { readonly
     if (r.startsWith('R') && runId === null) runId = r.slice(1);
     else if (r.startsWith('EPATH=') && first === null) first = r.slice('EPATH='.length).split(':')[0] ?? '';
   }
-  if (first === null || path.basename(first) !== 'bin') return { runId, set: null };
+  return { runId, set: first === null ? null : binSet(first, toolsRoots) };
+}
+
+/** A `PATH` entry `<tools>/sets/<set>/bin` to its set, where `<tools>` is one of `toolsRoots`; else `null`. */
+export function binSet(first: string, toolsRoots: readonly string[]): string | null {
+  if (path.basename(first) !== 'bin') return null;
   const setDir = path.dirname(first);
   const set = path.basename(setDir);
   const sets = path.dirname(setDir);
-  const ok = SET_NAME.test(set) && path.basename(sets) === 'sets' && toolsRoots.includes(path.dirname(sets));
-  return { runId, set: ok ? set : null };
+  return SET_NAME.test(set) && path.basename(sets) === 'sets' && toolsRoots.includes(path.dirname(sets)) ? set : null;
 }
 
 /** The sets a live run uses, each once, in name order. */
