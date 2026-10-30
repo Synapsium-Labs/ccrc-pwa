@@ -608,7 +608,7 @@
       "input": "could not resolve host in u:hunter2@h.invalid:9)",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "could not resolve host in u:hunter2@h.invalid:9)",
+      "ccrc": "could not resolve host in h.invalid:9)",
       "bareHost": "could not resolve host in h.invalid:9)",
       "updateSync": "could not resolve host in h.invalid:9)"
     },
@@ -712,84 +712,373 @@
       "updateSyncHex": "68747470733a2f2f682f72"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "server user:secret@host:8443 refused",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "server user:secret@host:8443 refused",
-      "bareHost": "server user:secret@host:8443 refused",
-      "updateSync": "server user:secret@host:8443 refused"
+      "ccrc": "server host:8443 refused",
+      "bareHost": "server host:8443 refused",
+      "updateSync": "server host:8443 refused"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "user:secret@host: refused",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "user:secret@host: refused",
-      "bareHost": "user:secret@host: refused",
-      "updateSync": "user:secret@host: refused"
+      "ccrc": "host: refused",
+      "bareHost": "host: refused",
+      "updateSync": "host: refused"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "user:secret@host' failed",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "user:secret@host' failed",
-      "bareHost": "user:secret@host' failed",
-      "updateSync": "user:secret@host' failed"
+      "ccrc": "host' failed",
+      "bareHost": "host' failed",
+      "updateSync": "host' failed"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "user:secret@host\" failed",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "user:secret@host\" failed",
-      "bareHost": "user:secret@host\" failed",
-      "updateSync": "user:secret@host\" failed"
+      "ccrc": "host\" failed",
+      "bareHost": "host\" failed",
+      "updateSync": "host\" failed"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "user:secret@host\tfailed",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "user:secret@host\tfailed",
-      "bareHost": "user:secret@host\tfailed",
-      "updateSync": "user:secret@host\tfailed"
+      "ccrc": "host\tfailed",
+      "bareHost": "host\tfailed",
+      "updateSync": "host\tfailed"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "user:secret@host\rfailed",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "user:secret@host\rfailed",
-      "bareHost": "user:secret@host\rfailed",
-      "updateSync": "user:secret@host\rfailed"
+      "ccrc": "host\rfailed",
+      "bareHost": "host\rfailed",
+      "updateSync": "host\rfailed"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "user:secret@@host/x",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "user:secret@@host/x",
-      "bareHost": "user:secret@@host/x",
-      "updateSync": "user:secret@@host/x"
+      "ccrc": "host/x",
+      "bareHost": "host/x",
+      "updateSync": "host/x"
     },
     {
-      "rule": "known-limit",
-      "note": "KNOWN LIMIT: scheme-less userinfo the redactor does not see today; recorded unchanged (characterization), closed by a separate follow-up",
+      "rule": "R8",
       "input": "@user:secret@host",
       "home": "/home/u",
       "locale": "C",
-      "ccrc": "@user:secret@host",
-      "bareHost": "@user:secret@host",
-      "updateSync": "@user:secret@host"
+      "ccrc": "host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443",
+      "bareHost": "host:8443",
+      "updateSync": "host:8443"
+    },
+    {
+      "rule": "R8",
+      "input": "see <user:secret@host:8443> now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see <host:8443> now",
+      "bareHost": "see <host:8443> now",
+      "updateSync": "see <host:8443> now"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443 refused",
+      "bareHost": "host:8443 refused",
+      "updateSync": "host:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@10.0.0.1:443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "10.0.0.1:443",
+      "bareHost": "10.0.0.1:443",
+      "updateSync": "10.0.0.1:443"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443, retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443, retrying",
+      "bareHost": "host:8443, retrying",
+      "updateSync": "host:8443, retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "u:p@x@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443 refused",
+      "bareHost": "host:8443 refused",
+      "updateSync": "host:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host:",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:",
+      "bareHost": "host:",
+      "updateSync": "host:"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host failed",
+      "bareHost": "host failed",
+      "updateSync": "host failed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host\nfailed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host\nfailed",
+      "bareHost": "host\nfailed",
+      "updateSync": "host\nfailed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host, retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host, retrying",
+      "bareHost": "host, retrying",
+      "updateSync": "host, retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host; retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host; retrying",
+      "bareHost": "host; retrying",
+      "updateSync": "host; retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "(user:secret@host)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "(host)",
+      "bareHost": "(host)",
+      "updateSync": "(host)"
+    },
+    {
+      "rule": "R8",
+      "input": "see 'user:secret@host' failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see 'host' failed",
+      "bareHost": "see 'host' failed",
+      "updateSync": "see 'host' failed"
+    },
+    {
+      "rule": "R8",
+      "input": "<user:secret@host>",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "<host>",
+      "bareHost": "<host>",
+      "updateSync": "<host>"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host!",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host!",
+      "bareHost": "host!",
+      "updateSync": "host!"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@ refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": " refused",
+      "bareHost": " refused",
+      "updateSync": " refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "h/r",
+      "bareHost": "h/r",
+      "updateSync": "h/r"
+    },
+    {
+      "rule": "R8",
+      "input": "@user:secret@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host/x",
+      "bareHost": "host/x",
+      "updateSync": "host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host: refused",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "host: refused",
+      "bareHost": "host: refused",
+      "updateSync": "host: refused"
+    },
+    {
+      "rule": "prose",
+      "input": "mail a@example.com: refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "mail a@example.com: refused",
+      "bareHost": "mail a@example.com: refused",
+      "updateSync": "mail a@example.com: refused"
+    },
+    {
+      "rule": "prose",
+      "input": "from ops@example.com, cc b@example.org today",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "from ops@example.com, cc b@example.org today",
+      "bareHost": "from ops@example.com, cc b@example.org today",
+      "updateSync": "from ops@example.com, cc b@example.org today"
+    },
+    {
+      "rule": "prose",
+      "input": "'a@example.com' bounced",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "'a@example.com' bounced",
+      "bareHost": "'a@example.com' bounced",
+      "updateSync": "'a@example.com' bounced"
+    },
+    {
+      "rule": "prose",
+      "input": "a@example.com\tok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "a@example.com\tok",
+      "bareHost": "a@example.com\tok",
+      "updateSync": "a@example.com\tok"
+    },
+    {
+      "rule": "prose",
+      "input": "see claude-session@x.service: active",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see claude-session@x.service: active",
+      "bareHost": "see claude-session@x.service: active",
+      "updateSync": "see claude-session@x.service: active"
+    },
+    {
+      "rule": "prose",
+      "input": "at 10:30 restarted",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "at 10:30 restarted",
+      "bareHost": "at 10:30 restarted",
+      "updateSync": "at 10:30 restarted"
+    },
+    {
+      "rule": "prose",
+      "input": "restarted at 10:30:15",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "restarted at 10:30:15",
+      "bareHost": "restarted at 10:30:15",
+      "updateSync": "restarted at 10:30:15"
+    },
+    {
+      "rule": "prose",
+      "input": "build@10:30 done",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "build@10:30 done",
+      "bareHost": "build@10:30 done",
+      "updateSync": "build@10:30 done"
+    },
+    {
+      "rule": "prose",
+      "input": "https://h:8443/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h:8443/x",
+      "bareHost": "https://h:8443/x",
+      "updateSync": "https://h:8443/x"
+    },
+    {
+      "rule": "prose",
+      "input": "connect h:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "connect h:8443 refused",
+      "bareHost": "connect h:8443 refused",
+      "updateSync": "connect h:8443 refused"
+    },
+    {
+      "rule": "prose",
+      "input": "http://127.0.0.1:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://127.0.0.1:8443",
+      "bareHost": "http://127.0.0.1:8443",
+      "updateSync": "http://127.0.0.1:8443"
+    },
+    {
+      "rule": "prose",
+      "input": "listening on [::1]:8443 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "listening on [::1]:8443 ok",
+      "bareHost": "listening on [::1]:8443 ok",
+      "updateSync": "listening on [::1]:8443 ok"
+    },
+    {
+      "rule": "blast",
+      "input": "mailto:a@example.com",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "example.com",
+      "bareHost": "example.com",
+      "updateSync": "example.com"
     }
   ]
 }

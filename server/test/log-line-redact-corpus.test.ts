@@ -8,11 +8,15 @@
 // Each value is what the tree printed when the row was added (characterization), and a later commit may move a value
 // only where it names the move.
 //
-// KNOWN LIMIT. The rows whose rule is `known-limit` (each carries the same `note`) record a gap, not a rule: scheme-less
-// userinfo that no '/' follows, ended instead by ':port', ':', a quote, a tab, a CR, a second '@', or led by an '@'
-// (`server user:secret@host:8443 refused`, `@user:secret@host`, …). Every column prints such a line whole today, and
-// the rows hold that output unchanged. They are characterization only: this change does not touch the redactor for
-// them, and a separate follow-up closes the gap, moving these rows in its own diff.
+// R8 (D-7564). Scheme-less userinfo that no '/' follows used to print whole in every column: ended instead by ':port',
+// ':', a quote, a tab, a CR, a second '@', or led by an '@' (`server user:secret@host:8443 refused`,
+// `@user:secret@host`, …). Those eight rows were labelled `known-limit` and held that unmasked output; D-7564 moved them
+// to their masked output under rule `R8`, beside one row per new terminator. Two rules close the gap, in both modes: a
+// token's userinfo that holds a ':' (`user:pass@`) goes whatever follows it, and any userinfo goes before a host that
+// ends in `:digits` and then whitespace, `)`, `]`, `,`, `;`, `:`, `|`, a quote, `<`, `>` or the text's end. The same
+// move took `u:hunter2@h.invalid:9)`'s `ccrc` column from whole to masked (rule R6's row). The `prose` rows beside them
+// hold what must stay whole: an email address, a time such as `10:30`, a URL or a host with a port and no userinfo.
+// One `blast` row records the cost: `mailto:a@example.com` reads as `user:pass@host` and loses its `mailto:a@`.
 //
 // Every call goes through ONE fixed driver: the definitions are written to a temporary file and the input to
 // another, and bash runs `bash --noprofile --norc -s -- <defs> <input>` with a fixed stdin script whose last line is
@@ -131,15 +135,24 @@ describe('the log-line redaction corpus (D-7078)', () => {
     expect(shown(run(defs, 'updateSync', Buffer.from('plain words'), '/home/u', 'C')).text).toBe('plain words');
   });
 
-  it('CONTROL: the known-limit rows are the eight recorded shapes, each labelled with the follow-up note', () => {
-    const limit = ROWS.filter((r) => r.rule === 'known-limit');
-    expect(limit.map((r) => r.input)).toEqual([
+  // D-7564: the eight shapes once recorded as `known-limit` are R8 rows now, and in every column their output no longer
+  // carries the secret. No row is a known limit, and no row carries a note.
+  it('CONTROL: the eight former known-limit shapes are R8 rows whose every column drops the secret, and no known limit is left', () => {
+    const former = [
       'server user:secret@host:8443 refused', 'user:secret@host: refused', "user:secret@host' failed",
       'user:secret@host" failed', 'user:secret@host\tfailed', 'user:secret@host\rfailed', 'user:secret@@host/x',
       '@user:secret@host',
-    ]);
-    for (const r of limit) expect(r.note, r.input).toMatch(/^KNOWN LIMIT: .*closed by a separate follow-up$/);
-    expect(ROWS.filter((r) => r.note !== undefined && r.rule !== 'known-limit')).toEqual([]);
+    ];
+    for (const input of former) {
+      const r = ROWS.find((x) => x.input === input && x.locale === 'C');
+      expect(r?.rule, input).toBe('R8');
+      for (const c of COLUMNS) expect(want(r!, c).toString('utf8'), `${input} (${c})`).not.toContain('secret');
+    }
+    expect(ROWS.filter((r) => r.rule === 'known-limit')).toEqual([]);
+    expect(ROWS.filter((r) => r.note !== undefined)).toEqual([]);
+    for (const r of ROWS.filter((x) => x.rule === 'R8')) {
+      for (const c of COLUMNS) expect(want(r, c).toString('utf8'), `${r.input} (${c})`).not.toMatch(/secret|\bp@|tok@/);
+    }
   });
 
   it.each(ROWS.map((r, i) => [i, r.rule, r.locale, r.input ?? `<hex ${r.inputHex}>`, r] as const))(
