@@ -16,6 +16,7 @@ import {
   AUTHDEAD_REGION_BEGIN, AUTHDEAD_REGION_END, AUTHDEAD_WRITERS, REGIONS, applyRegion, ccdFunctionDefinition, checkRegion, extractRegion,
   regionOf, renderRegion,
 } from '../../shared/hook-helpers.mjs';
+import { LOGLINE_REGION_BEGIN, LOGLINE_REGION_END, renderLogLineBody } from '../../shared/hook-helpers.mjs';
 import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
@@ -490,6 +491,13 @@ describe('the log-line redactor region (C5i)', () => {
     const again = restamp(f);
     expect(again.code, again.stderr).toBe(0);
     expect(again.stdout).toContain('log-line redactor already current');
+  });
+
+  it('renderLogLineBody copies ccd/ccrc\'s _upd_redact and throws on a text without one; the module exports the row\'s lines', () => {
+    expect(LOGLINE_REGION_BEGIN).toBe(LL_BEGIN);
+    expect(LOGLINE_REGION_END).toBe(LL_END);
+    expect(renderLogLineBody(ccrc)).toBe(`${upd}\n`);
+    expect(() => renderLogLineBody(ccd)).toThrow('ccd/ccrc has no _upd_redact to copy');
   });
 
   it('`ccrc restamp` over a tree without ccd/ccrc refuses, naming it, and writes nothing', () => {
