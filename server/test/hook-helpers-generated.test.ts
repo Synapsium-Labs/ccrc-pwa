@@ -282,3 +282,34 @@ describe('the server-cap reader region in ccrc-api (D-7321)', () => {
     expect(again.stdout).toContain('server-cap reader already current');
   });
 });
+
+// W5 Task C5i (ARCH-67; D-7078): each REGIONS row names the file it is given (`file`), the CLI's third argument and the
+// engine's `ccdSrc`. `source` keeps its meaning: the text `render` reads, `ccd` (the given file) or `hook` (the
+// session-hook.sh beside it). Every CLI spawn below runs the real module with a contained env.
+describe('each generated region names the file it is given (C5i)', () => {
+  const MODULE = path.join(root, 'shared/hook-helpers.mjs');
+  const work = mkTmp('hook-helpers-c5i-');
+  const cli = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync('node', [MODULE, ...args], { env: ghContainedEnv(work, { PATH: process.env['PATH'] ?? '' }), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('the hook, auth-dead and server-cap rows are each given ccd/ccd, and source keeps its values', () => {
+    for (const n of ['hook', 'authdead', 'apicap']) {
+      expect(REGIONS.find((r) => r.name === n)?.file, n).toBe('ccd/ccd');
+    }
+    expect(REGIONS.map((r) => r.source)).toEqual(['ccd', 'ccd', 'hook']);
+  });
+
+  it('CONTROL: an absent target or an absent given file exits non-zero, naming the path', () => {
+    const gone = join(work, 'no-such-file');
+    const a = cli('--check', path.join(root, 'ccd/session-hook.sh'), gone);
+    expect(a.code).not.toBe(0);
+    expect(a.stderr).toContain(gone);
+    expect(a.stdout).toBe('');
+    const b = cli('--check', gone, path.join(root, 'ccd/ccd'));
+    expect(b.code).not.toBe(0);
+    expect(b.stderr).toContain(gone);
+    expect(b.stdout).toBe('');
+  });
+});

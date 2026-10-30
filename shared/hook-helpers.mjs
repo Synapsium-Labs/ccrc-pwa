@@ -98,14 +98,16 @@ export function renderApicapBody(src) {
 
 /** One row per generated region. `detect` is the BEGIN line's prefix a file carrying the region (whole or damaged)
  *  is recognised by; `label` is the words `ccrc restamp` reports it in; `source` is the text `render` reads: `ccd` (the
- *  given ccd) or `hook` (the `session-hook.sh` beside it, handed to that row only). */
+ *  given ccd) or `hook` (the `session-hook.sh` beside it, handed to that row only); `file` is the repository-relative
+ *  path of the file the row is given, for the CLI's third argument and the engine's `ccdSrc` (a `source: 'hook'` row
+ *  reads the hook beside it). */
 export const REGIONS = Object.freeze([
   Object.freeze({ name: 'hook', label: 'hook helpers', begin: HOOK_REGION_BEGIN, end: HOOK_REGION_END,
-    detect: '# ── BEGIN GENERATED HOOK HELPERS', source: 'ccd', render: renderHookBody }),
+    detect: '# ── BEGIN GENERATED HOOK HELPERS', source: 'ccd', file: 'ccd/ccd', render: renderHookBody }),
   Object.freeze({ name: 'authdead', label: 'auth-dead writers', begin: AUTHDEAD_REGION_BEGIN, end: AUTHDEAD_REGION_END,
-    detect: '# ── BEGIN GENERATED AUTH-DEAD WRITERS', source: 'ccd', render: renderAuthdeadBody }),
+    detect: '# ── BEGIN GENERATED AUTH-DEAD WRITERS', source: 'ccd', file: 'ccd/ccd', render: renderAuthdeadBody }),
   Object.freeze({ name: 'apicap', label: 'server-cap reader', begin: APICAP_REGION_BEGIN, end: APICAP_REGION_END,
-    detect: '# ── BEGIN GENERATED SERVER-CAP READER', source: 'hook', render: renderApicapBody }),
+    detect: '# ── BEGIN GENERATED SERVER-CAP READER', source: 'hook', file: 'ccd/ccd', render: renderApicapBody }),
 ]);
 
 const HOOK = REGIONS[0];

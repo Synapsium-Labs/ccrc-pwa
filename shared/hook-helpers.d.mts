@@ -27,7 +27,7 @@ export const APICAP_REGION_END: string;
 /** The server-cap reader region's unstamped body, from the HOOK's text (`_hook_server_cap`'s body, renamed). */
 export function renderApicapBody(hookSrc: string): string;
 /** One generated region: its BEGIN/END lines, the prefix it is recognised by, its report label, the text it renders
- *  from (`ccd`, or the `hook` beside it) and its renderer. */
+ *  from (`ccd`, or the `hook` beside it), the file it is given, and its renderer. */
 export interface GeneratedRegion {
   readonly name: 'hook' | 'authdead' | 'apicap';
   readonly label: string;
@@ -35,6 +35,8 @@ export interface GeneratedRegion {
   readonly end: string;
   readonly detect: string;
   readonly source: 'ccd' | 'hook';
+  /** The repository-relative path of the file the row is given (the CLI's third argument, the engine's `ccdSrc`). */
+  readonly file: string;
   readonly render: (src: string) => string;
 }
 export const REGIONS: readonly GeneratedRegion[];
