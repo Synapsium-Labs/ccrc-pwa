@@ -204,13 +204,13 @@ describe('the D-numbered replays', () => {
 
 interface Captured { method: string; path: string; headers: Record<string, string>; body: string }
 
-/** What a `lib/api.ts` writer sends, through a fetch that answers 200 `{ok:true}`. W7 C7g (D-7185, D-7485): the
- *  writer first reads `GET /health` to choose the door; that read is answered apart (a server without `questions-v1`,
- *  so these rows are the old doors' bytes) and is not one of the requests the writer sends. */
+/** What a `lib/api.ts` writer sends, through a fetch that answers 200 `{ok:true}`. Every request is recorded: W7 C7g
+ *  (D-7185, D-7485) had the writer read `GET /health` first to choose the door, answered apart here as a server
+ *  without `questions-v1`; since C7p (D-7194, D-7540) there is one door and no such read, so a `/health` request would
+ *  show in the rows. */
 async function sent(write: (seam: AnswerSeam) => Promise<unknown>): Promise<Captured[]> {
   const out: Captured[] = [];
   const api = createApi((async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === '/health') return new Response('{"ok":true,"caps":[]}', { status: 200, headers: { 'content-type': 'application/json' } });
     out.push({
       method: init?.method ?? 'GET', path: String(input),
       headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body),
@@ -221,7 +221,7 @@ async function sent(write: (seam: AnswerSeam) => Promise<unknown>): Promise<Capt
   return out;
 }
 const asCaptured = (c: AnswerCommand): Captured => {
-  const r = answerRequest(c, false);
+  const r = answerRequest(c);
   return { method: r.method, path: r.path, headers: { ...r.headers }, body: r.body };
 };
 
@@ -238,9 +238,8 @@ async function swSent(action: string, sessionId: string | null): Promise<{ posts
     clients: { matchAll: async () => [], openWindow: async (u: string) => { opened.push(u); } },
   };
   const fetch = async (url: string, init: { method?: string; headers: Record<string, string>; body: string }) => {
-    // The worker's `GET /health` (C7g): a server without `questions-v1`, so the answer below is the old door's.
-    if (init.method === undefined) return { ok: true, json: async () => ({ ok: true, caps: [] }) };
-    posts.push({ method: init.method, path: url, headers: { ...init.headers }, body: init.body });
+    // Every request is recorded: C7g's `GET /health` read (gone since C7p) would show here as a request with no method.
+    posts.push({ method: init.method as string, path: url, headers: { ...init.headers }, body: init.body });
     return { ok: true, json: async () => ({ ok: true }) };
   };
   new Function('self', 'fetch', src)(self, fetch);
@@ -254,19 +253,20 @@ async function swSent(action: string, sessionId: string | null): Promise<{ posts
   return { posts, opened };
 }
 
-// W7 C7g (D-7185, D-7485): the rows below are a server WITHOUT `questions-v1`, where each answer still takes its old
-// door with today's bytes (the skew row); `answer-questions-door.test.ts` holds the family's door on a server with it.
+// W7 C7g (D-7185, D-7485) ran the rows below against a server WITHOUT `questions-v1`, where each answer took its old
+// door. Since C7p (D-7194, D-7540) every answer takes the family's door whatever the server advertises; the rows still
+// hold each command's request equal to what its writer sends, and the ask row pins the family's bytes.
 describe('answerRequest: one row per command kind, equal to what that kind\'s writer sends today', () => {
   const id = 'lane-a:project a/1';
-  it('answer = api.answerQuestion\'s option row, on a server without questions-v1', async () => {
+  it('answer = api.answerQuestion\'s option row', async () => {
     const c: AnswerCommand = { kind: 'answer', sessionId: id, dialogId: 'd1', optionIndex: 2 };
     expect(await sent((a) => a.answerQuestion(id, { kind: 'dialog', dialogId: 'd1', optionIndex: 2 }))).toEqual([asCaptured(c)]);
   });
-  it('text = api.answerQuestion\'s own words, on a server without questions-v1', async () => {
+  it('text = api.answerQuestion\'s own words', async () => {
     const c: AnswerCommand = { kind: 'text', sessionId: id, dialogId: 'd1', optionIndex: 3, text: 'my words' };
     expect(await sent((a) => a.answerQuestion(id, { kind: 'dialog', dialogId: 'd1', optionIndex: 3, text: 'my words' }))).toEqual([asCaptured(c)]);
   });
-  it('multi = api.answerQuestion\'s multiSelect set, on a server without questions-v1', async () => {
+  it('multi = api.answerQuestion\'s multiSelect set', async () => {
     const c: AnswerCommand = { kind: 'multi', sessionId: id, dialogId: 'd1', optionIndexes: [3, 1] };
     expect(await sent((a) => a.answerQuestion(id, { kind: 'dialog', multi: true, dialogId: 'd1', optionIndexes: [3, 1] }))).toEqual([asCaptured(c)]);
   });
@@ -285,8 +285,8 @@ describe('answerRequest: one row per command kind, equal to what that kind\'s wr
     expect(c).toEqual({ kind: 'ask', sessionId: 'session-a', askKey: 'k1', optionIndexes: [2] });
     expect((await swSent('ask:k1:2', 'session-a')).posts).toEqual([asCaptured(c)]);
     expect(asCaptured(c)).toEqual({
-      method: 'POST', path: '/api/sessions/session-a/ask', headers: { 'content-type': 'application/json' },
-      body: '{"askKey":"k1","optionIndexes":[2]}',
+      method: 'POST', path: '/api/questions/session-session-a/answer', headers: { 'content-type': 'application/json' },
+      body: '{"kind":"ask","askKey":"k1","optionIndexes":[2]}',
     });
   });
   it('ask: a malformed action, or no session, is no command, and the worker sends nothing', async () => {

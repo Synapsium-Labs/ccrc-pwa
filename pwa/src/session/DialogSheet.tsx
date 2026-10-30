@@ -176,7 +176,6 @@ import {
 import { dialogMultiRefusal, dialogRefusal, dialogTabRefusal, dialogTextRefusal } from './askWords';
 import { useAskEngagement, useAskKeys } from './useAskKeys';
 import { api, ApiError, failedTo } from '../lib/api';
-import { onPageVisible } from '../lib/pageClock';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -231,16 +230,6 @@ export function DialogSheet({ id, store, onOpenTerminal, raise, asker = null, on
     if (!useStore.getState().askFrameSeen) return;
     useStore.getState().applyAnswered(answeredId, next);
   };
-  // W7 C7g (D-7185, D-7485): read which door an answer takes (`questions-v1`, `lib/serverCaps.ts`) when the sheet
-  // mounts, and again when the page comes back into view. The reader answers a tap at once with the last door the
-  // server gave and re-reads behind it once that is past its lease, so these reads keep it current and a tap's request
-  // goes out at once, never one `GET /health` read behind it. The page clock (`lib/pageClock.ts`) owns the
-  // `visibilitychange` subscription. A read, never an answer, so it is `api`'s (where the read is held), not the answer
-  // seam's.
-  useEffect(() => {
-    void api.questionsDoor();
-    return onPageVisible(() => { void api.questionsDoor(); });
-  }, []);
   const storeAsk = useStore((s) => s.ask);
   // D-7184: the server's pairing for the envelope and the dialog the store holds (the last frame's, `stores/session.ts`).
   const storePairing = useStore((s) => s.pairing);

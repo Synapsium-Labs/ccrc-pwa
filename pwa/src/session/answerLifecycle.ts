@@ -6,10 +6,10 @@
 //
 // The doors (W7 C7g, D-7185, D-7485): an option row, the own words, a multiSelect set and the notification's ask are
 // answers to an operator question, and go to W3 Q3f's `POST /api/questions/session-<id>/answer` with the family's body
-// (`questionBodyOf`), through one writer, `lib/api.ts#answerQuestion`. Against a server without `questions-v1`
-// (`lib/serverCaps.ts`) the same answer goes to the old door it replaces (`LEGACY_ANSWER_DOORS`, the skew row; C7p
-// deletes it with the aliases). The tab move and Deny are not answers: they stay session doors (`/dialog/tab`, and the
-// literal Escape through `/interrupt`).
+// (`questionBodyOf`), through one writer, `lib/api.ts#answerQuestion`. It is the only door: C7p (D-7194, D-7540)
+// retired the old doors Q3f's family replaced, on the server and in the skew fallback C7g kept here, so a server
+// without `questions-v1` (older than Q3f) is no longer answered. The tab move and Deny are not answers: they stay
+// session doors (`/dialog/tab`, and the literal Escape through `/interrupt`).
 //
 // What it holds, and why each piece is ONE value:
 //  - `phase`: the option answer, the tab move and Deny (`sending`), an option answer that landed and waits for the pane
@@ -361,11 +361,6 @@ export interface AnswerRequest {
   readonly body: string;
 }
 
-/** The operator answer doors W3 Q3f's family replaces, under `/api/sessions/<id>`, kept for ONE reason: a server
- *  without `questions-v1` (an older one, or a rollback) is answered through them (W7 C7g's skew row). Every server
- *  before C7p still answers them, as aliases into the family's core; C7p deletes this table with them. */
-export const LEGACY_ANSWER_DOORS = { ask: '/ask', row: '/dialog', text: '/dialog/text', multi: '/dialog/multi' } as const;
-
 /** The family's operator door: `POST /api/questions/<question id>/answer`, the id `shared/api.ts#formatQuestionId`'s
  *  `session-<id>`. */
 const QUESTIONS_PATH_PREFIX = '/api/questions/';
@@ -375,13 +370,11 @@ const questionsAnswerPath = (sessionId: string): string =>
 
 /** The `ask` command's declared shape (the notification's answer), read by `answerRequest` and by the renderer of
  *  `push-sw.js`'s generated region, so the two never drift: the family's door and body (`questionsPathPrefix`,
- *  `questionIdPrefix`, `questionsPathSuffix`, `kindField`/`kindValue`) on a `questions-v1` server, the old door
- *  (`pathPrefix`, `pathSuffix`) otherwise. The action is the notification's `ask:<key>:<index>`: the key minted
- *  server-side and carried verbatim, the index a number, never derived from a label. */
+ *  `questionIdPrefix`, `questionsPathSuffix`, `kindField`/`kindValue`), the only door since C7p. The action is the
+ *  notification's `ask:<key>:<index>`: the key minted server-side and carried verbatim, the index a number, never
+ *  derived from a label. */
 export const ASK_REQUEST = {
   method: 'POST',
-  pathPrefix: '/api/sessions/',
-  pathSuffix: LEGACY_ANSWER_DOORS.ask,
   questionsPathPrefix: QUESTIONS_PATH_PREFIX,
   questionIdPrefix: 'session-',
   questionsPathSuffix: QUESTIONS_ANSWER_SUFFIX,
@@ -405,31 +398,22 @@ const sessionPath = (id: string, suffix: string): string => `/api/sessions/${enc
 const json = (path: string, body: unknown): AnswerRequest =>
   ({ method: 'POST', path, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-/** The door and the JSON value an answer to session `sessionId`'s question takes: the family's door with `body` when
- *  `questions` (the server advertises `questions-v1`), else the old door `body` names, with that door's own body (the
- *  family's minus `kind` and `multi`), byte for byte what it took before C7g. `lib/api.ts#answerQuestion` posts it. */
-export function questionAnswerRequest(sessionId: string, body: QuestionAnswerBody, questions: boolean): { path: string; payload: unknown } {
-  if (questions) return { path: questionsAnswerPath(sessionId), payload: body };
-  if (body.kind === 'ask') {
-    return { path: sessionPath(sessionId, LEGACY_ANSWER_DOORS.ask), payload: { [ASK_REQUEST.keyField]: body.askKey, [ASK_REQUEST.indexesField]: body.optionIndexes } };
-  }
-  if ('multi' in body) return { path: sessionPath(sessionId, LEGACY_ANSWER_DOORS.multi), payload: { dialogId: body.dialogId, optionIndexes: body.optionIndexes } };
-  if (body.text !== undefined) {
-    return { path: sessionPath(sessionId, LEGACY_ANSWER_DOORS.text), payload: { dialogId: body.dialogId, optionIndex: body.optionIndex, text: body.text } };
-  }
-  return { path: sessionPath(sessionId, LEGACY_ANSWER_DOORS.row), payload: { dialogId: body.dialogId, optionIndex: body.optionIndex } };
+/** The door and the JSON value an answer to session `sessionId`'s question takes: the family's door with `body`.
+ *  `lib/api.ts#answerQuestion` posts it. */
+export function questionAnswerRequest(sessionId: string, body: QuestionAnswerBody): { path: string; payload: QuestionAnswerBody } {
+  return { path: questionsAnswerPath(sessionId), payload: body };
 }
 
-/** The request a command's door takes on a server that does (`questions`) or does not advertise `questions-v1`: the
- *  method, the path and the JSON body, byte for byte what that kind's writer sends (`lib/api.ts#answerQuestion` for
- *  the sheets' answers, `answerDialogTab` and `interrupt` for the two session doors, `push-sw.js` for `ask`). */
-export function answerRequest(c: AnswerCommand, questions: boolean): AnswerRequest {
+/** The request a command's door takes: the method, the path and the JSON body, byte for byte what that kind's writer
+ *  sends (`lib/api.ts#answerQuestion` for the sheets' answers, `answerDialogTab` and `interrupt` for the two session
+ *  doors, `push-sw.js` for `ask`). */
+export function answerRequest(c: AnswerCommand): AnswerRequest {
   switch (c.kind) {
     case 'answer':
     case 'text':
     case 'multi':
     case 'ask': {
-      const r = questionAnswerRequest(c.sessionId, questionBodyOf(c), questions);
+      const r = questionAnswerRequest(c.sessionId, questionBodyOf(c));
       return json(r.path, r.payload);
     }
     case 'tab':

@@ -10,8 +10,6 @@ import path from 'node:path';
 
 import { answerRegionOf, applyAnswerRegion, renderAnswerRegion } from './answerRegion';
 import { answerRequest, askCommandOf } from '../src/session/answerLifecycle';
-import { advertisesQuestions } from '../src/lib/serverCaps';
-import { HEALTH_CORPUS } from './healthCorpus';
 
 const SW_PATH = path.join(__dirname, '..', 'public', 'push-sw.js');
 const SRC = readFileSync(SW_PATH, 'utf8');
@@ -33,9 +31,11 @@ let shown: Shown[] = [];
 let opened: string[] = [];
 let posted: Posted[] = [];
 let fetchImpl: (url: string, init: { body: string }) => Promise<unknown>;
-// W7 C7g (D-7185, D-7485): the worker reads `GET /health` before it answers, to choose the door (`questions-v1`). The
-// read is answered here, apart from the answer's POST, so `posted` and `fetchImpl` keep meaning the answer alone. The
-// default is a server without the word, today's: every row below that does not set it answers through the old door.
+// W7 C7g (D-7185, D-7485) had the worker read `GET /health` before it answered, to choose the door (`questions-v1`).
+// Since C7p (D-7194, D-7540) there is one door and the worker reads nothing first. A GET is
+// still answered here, apart from the answer's POST, so a row can prove none is made (`gets` stays empty) and
+// `posted` and `fetchImpl` keep meaning the answer alone. The default `/health` has no `questions-v1`, an older
+// server's: every row answers through the family's door all the same.
 let gets: string[] = [];
 let healthImpl: () => Promise<unknown>;
 
@@ -152,8 +152,9 @@ describe('push-sw: answering from the notification', () => {
     await click(self, 'ask:abc123:1', { sessionId: 'cc-a' },
       { actions: [{ action: 'ask:abc123:1', title: 'Blue' }] });
     expect(posted).toEqual([
-      { url: '/api/sessions/cc-a/ask', body: { askKey: 'abc123', optionIndexes: [1] } },
+      { url: '/api/questions/session-cc-a/answer', body: { kind: 'ask', askKey: 'abc123', optionIndexes: [1] } },
     ]);
+    expect(gets).toEqual([]);
     expect(shown.at(-1)!.title).toBe('Answered');
     expect(shown.at(-1)!.opts.body).toBe('Blue');
   });
@@ -395,7 +396,7 @@ describe('push-sw: a payload url (design 2026-09-20 §13)', () => {
     const self = load();
     await click(self, 'ask:k:0', { sessionId: 'cc-a', url: '/settings/updates' },
       { actions: [{ action: 'ask:k:0', title: 'Red' }] });
-    expect(posted).toEqual([{ url: '/api/sessions/cc-a/ask', body: { askKey: 'k', optionIndexes: [0] } }]);
+    expect(posted).toEqual([{ url: '/api/questions/session-cc-a/answer', body: { kind: 'ask', askKey: 'k', optionIndexes: [0] } }]);
     expect(opened).toEqual([]);
     expect(shown.at(-1)!.title).toBe('Answered');
   });
@@ -415,16 +416,18 @@ describe('push-sw: the answer-lifecycle region', () => {
     expect(answerRegionOf(SRC)).toBe(renderAnswerRegion());
   });
 
-  // Today's bytes, pinned as a literal beside the sentence table: green against the hand-written fetch and after.
-  it('the request shape: ask:k1:2 on session-a is POST /api/sessions/session-a/ask, JSON, {"askKey":"k1","optionIndexes":[2]}', async () => {
+  // The bytes, pinned as a literal beside the sentence table. Before C7p this row read POST /api/sessions/session-a/ask
+  // with {"askKey":"k1","optionIndexes":[2]}, the old door a server without `questions-v1` was answered through.
+  it('the request shape: ask:k1:2 on session-a is POST /api/questions/session-session-a/answer, JSON, {"kind":"ask",…}', async () => {
     const sent: { url: string; init: unknown }[] = [];
     fetchImpl = async (url, init) => { sent.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; };
     const self = load();
     await click(self, 'ask:k1:2', { sessionId: 'session-a' });
     expect(sent).toEqual([{
-      url: '/api/sessions/session-a/ask',
-      init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"askKey":"k1","optionIndexes":[2]}' },
+      url: '/api/questions/session-session-a/answer',
+      init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"kind":"ask","askKey":"k1","optionIndexes":[2]}' },
     }]);
+    expect(gets).toEqual([]);
   });
 
   it('a malformed action, or no session, still opens the app and sends nothing', async () => {
@@ -439,12 +442,13 @@ describe('push-sw: the answer-lifecycle region', () => {
 
   // The rendered function and answerRequest over one action corpus. `new Function` runs only the renderer's own
   // output, built from this repo's declared shape; the corpus values are arguments, never part of the body.
-  // W7 C7g (D-7185, D-7485): the parser and the request are two rendered functions now, `askOf` and
-  // `askRequestOf(ask, questions)`, so the row holds each to its TypeScript source, the request on both doors.
-  it('the rendered askOf equals askCommandOf, and askRequestOf equals answerRequest on both doors, over the action corpus', () => {
+  // W7 C7g (D-7185, D-7485): the parser and the request are two rendered functions, `askOf` and `askRequestOf(ask)`,
+  // so the row holds each to its TypeScript source. Since C7p the request has one door (before it, the row held
+  // `askRequestOf(ask, questions)` equal to `answerRequest(c, questions)` on both).
+  it('the rendered askOf equals askCommandOf, and askRequestOf equals answerRequest, over the action corpus', () => {
     const { askOf, askRequestOf } = new Function(`${renderAnswerRegion()}\nreturn { askOf, askRequestOf };`)() as {
       askOf: (action: string, sessionId: string | null) => unknown;
-      askRequestOf: (ask: unknown, questions: boolean) => unknown;
+      askRequestOf: (ask: unknown) => unknown;
     };
     const ACTIONS = ['ask:k1:2', 'ask:k1:0', 'ask:a-b_c.9:10', 'ask:k1:x', 'ask::1', 'ask:k1:2:3', 'ask:k1:', 'open', ''];
     const SESSIONS = ['session-a', 'cc a/b?c', null];
@@ -454,34 +458,33 @@ describe('push-sw: the answer-lifecycle region', () => {
         const ask = askOf(action, sid);
         expect(ask, `${action} on ${String(sid)}`).toEqual(c);
         if (c === null) continue;
-        for (const questions of [false, true]) {
-          expect(askRequestOf(ask, questions), `${action} on ${String(sid)}, questions ${String(questions)}`).toEqual({ ...answerRequest(c, questions) });
-        }
+        expect(askRequestOf(ask), `${action} on ${String(sid)}`).toEqual({ ...answerRequest(c) });
       }
     }
   });
 });
 
-// W7 C7g (D-7185, D-7485; ARCH-57 #792, PWA half): the notification answers through W3 Q3f's operator door on a server
-// that advertises `questions-v1`, and through the old door on any other (the rows above, whose default `/health` has no
-// such word). The door is chosen per tap from `GET /health`, by a reader rendered from `lib/serverCaps.ts`.
-describe('push-sw: the door, chosen from GET /health\'s questions-v1', () => {
+// W7 C7g (D-7185, D-7485; ARCH-57 #792, PWA half) chose the notification's door per tap from `GET /health`'s
+// `questions-v1`: the family's on a server that advertised it, the old `/ask` on any other. C7p (D-7194, D-7540; slug
+// c7p-pwa-fallback-retired) retires the old door and the read: the notification answers through W3 Q3f's operator door
+// alone, and reads nothing before its POST.
+describe('push-sw: one door, the family\'s, and no /health read (C7p)', () => {
   const advertising = async () => ({ ok: true, json: async () => ({ ok: true, build: null, caps: ['ask-pairing-v1', 'questions-v1'] }) });
 
-  it('a questions-v1 server: ask:k1:2 on session-a is POST /api/questions/session-session-a/answer, {"kind":"ask",…}', async () => {
+  it('ask:k1:2 on session-a is POST /api/questions/session-session-a/answer, {"kind":"ask",…}, on a server with the word', async () => {
     healthImpl = advertising;
     const sent: { url: string; init: unknown }[] = [];
     fetchImpl = async (url, init) => { sent.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; };
     const self = load();
     await click(self, 'ask:k1:2', { sessionId: 'session-a' });
-    expect(gets).toEqual(['/health']);
+    expect(gets).toEqual([]);
     expect(sent).toEqual([{
       url: '/api/questions/session-session-a/answer',
       init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"kind":"ask","askKey":"k1","optionIndexes":[2]}' },
     }]);
   });
 
-  it('a questions-v1 server: the answer confirms with its label, and a refusal is worded from the table', async () => {
+  it('the answer confirms with its label, and a refusal is worded from the table', async () => {
     healthImpl = advertising;
     let self = load();
     await click(self, 'ask:abc123:1', { sessionId: 'cc-a' }, { actions: [{ action: 'ask:abc123:1', title: 'Blue' }] });
@@ -503,22 +506,24 @@ describe('push-sw: the door, chosen from GET /health\'s questions-v1', () => {
     expect(shown.at(-1)!.opts.body).not.toBe('No reason given (HTTP 400) — tap to open the session.');
   });
 
-  it('a /health that fails, answers non-200 or cannot be read: the old door, and the answer still goes', async () => {
+  // Before C7p: each of these /health answers sent the tap to the old door, POST /api/sessions/session-a/ask.
+  it('a /health that would fail, answer non-200, be unreadable or lack the word changes nothing: the family\'s door, unread', async () => {
     for (const h of [
       async () => { throw new Error('offline'); },
       async () => ({ ok: false, status: 502, json: async () => ({}) }),
       async () => ({ ok: true, json: async () => { throw new Error('not json'); } }),
+      async () => ({ ok: true, json: async () => ({ ok: true, build: null, caps: [] }) }),
     ]) {
       posted = []; gets = [];
       healthImpl = h;
       const self = load();
       await click(self, 'ask:k1:2', { sessionId: 'session-a' });
-      expect(gets).toEqual(['/health']);
-      expect(posted).toEqual([{ url: '/api/sessions/session-a/ask', body: { askKey: 'k1', optionIndexes: [2] } }]);
+      expect(gets).toEqual([]);
+      expect(posted).toEqual([{ url: '/api/questions/session-session-a/answer', body: { kind: 'ask', askKey: 'k1', optionIndexes: [2] } }]);
     }
   });
 
-  it('a malformed action reads no /health and sends nothing', async () => {
+  it('a malformed action reads nothing and sends nothing', async () => {
     healthImpl = advertising;
     const self = load();
     await click(self, 'ask:k1:x', { sessionId: 'session-a' });
@@ -526,17 +531,10 @@ describe('push-sw: the door, chosen from GET /health\'s questions-v1', () => {
     expect(posted).toEqual([]);
   });
 
-  // The rendered reader and `serverCaps.ts#advertisesQuestions` over one corpus. `new Function` runs only the renderer's
-  // own output; the corpus values reach it as a fake fetch's answers, never as part of its body.
-  it('the rendered questionsDoor equals advertisesQuestions over the /health corpus', async () => {
-    const make = new Function('fetch', `${renderAnswerRegion()}\nreturn questionsDoor;`) as
-      (f: (url: string, init: unknown) => Promise<unknown>) => () => Promise<boolean>;
-    for (const [name, body, want] of HEALTH_CORPUS) {
-      const seen: unknown[] = [];
-      const questionsDoor = make(async (url, init) => { seen.push([url, init]); return { ok: true, json: async () => body }; });
-      expect(await questionsDoor(), name).toBe(want);
-      expect(advertisesQuestions(body), name).toBe(want);
-      expect(seen, name).toEqual([['/health', { cache: 'no-store' }]]);
-    }
+  it('the rendered region names no old door and reads no /health', () => {
+    const region = renderAnswerRegion();
+    expect(region).not.toMatch(/\/api\/sessions\//);
+    expect(region).not.toMatch(/\/health/);
+    expect(region).not.toMatch(/questionsDoor/);
   });
 });

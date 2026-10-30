@@ -1692,21 +1692,22 @@ describe('api client — each door sends exactly its own request', () => {
   });
 
   // W7 C7g (D-7185, D-7485): one answer writer, `answerQuestion`. This describe's fetch answers `GET /health` with no
-  // `caps`, a server without `questions-v1`, so these two rows are the old doors' requests, unchanged (the skew row).
-  it('POSTs a dialog answer by INDEX, with the dialog it was shown (a server without questions-v1: /dialog)', async () => {
+  // `caps`, a server without `questions-v1`. Until C7p these two rows were the old doors' requests there (`/dialog`
+  // and `/ask`, the skew row); since C7p (D-7194, D-7540) the family's door is the only one, whatever `/health` says.
+  it('POSTs a dialog answer by INDEX, with the dialog it was shown (a server without questions-v1: still the family)', async () => {
     await api.answerQuestion(ID, { kind: 'dialog', dialogId: 'd7', optionIndex: 2 });
     expect(sent()).toEqual({
-      url: `/api/sessions/${ENC}/dialog`, method: 'POST', body: { dialogId: 'd7', optionIndex: 2 },
+      url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'dialog', dialogId: 'd7', optionIndex: 2 },
     });
   });
 
-  it('POSTs an ask answer with the askKey verbatim (a server without questions-v1: /ask)', async () => {
+  it('POSTs an ask answer with the askKey verbatim (a server without questions-v1: still the family)', async () => {
     // The key is minted server-side and carried back unchanged: the server
     // re-reads the CURRENT envelope and refuses unless it still matches, so a
     // client that reshaped it could answer a question nobody was shown.
     await api.answerQuestion(ID, { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] });
     expect(sent()).toEqual({
-      url: `/api/sessions/${ENC}/ask`, method: 'POST', body: { askKey: 'k-abc', optionIndexes: [0, 2] },
+      url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] },
     });
   });
 
