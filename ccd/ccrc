@@ -19001,20 +19001,30 @@ _inst_graph_noise() {
   echo "install: graphify: default noise list converged ($dest/_default.list)"
 }
 
+# ── _graph_exclude_common <common dir> — the graph's exclude lines, ccrc's one writer of them (graph revision 2, D-7350) ──
+# `graphify-out/` (a tree's old per-tree directory), `graphify-out` with NO slash (the link: spec §6.1 measured that the
+# slash-only line does not ignore a symlink, so `git status` lists it and `git worktree remove` refuses the tree) and
+# `.graphifyignore`, each appended to <common dir>/info/exclude when absent. Prints how many it added. Called by
+# `_inst_graph_excludes` below and by ccd-graph-sweep before it links a repository's trees.
+_graph_exclude_common() {   # <common dir>
+  local c="$1" l n=0
+  mkdir -p "$c/info" || return 1
+  for l in 'graphify-out/' 'graphify-out' '.graphifyignore'; do
+    grep -qxF -- "$l" "$c/info/exclude" 2>/dev/null || { printf '%s\n' "$l" >> "$c/info/exclude" || return 1; n=$((n+1)); }
+  done
+  echo "$n"
+}
 _inst_graph_excludes() {
   [ "$INST_ROLE" = server ] && return 0
-  local roots=("$HOME/projects" "$HOME/worktrees") root d common n=0
+  local roots=("$HOME/projects" "$HOME/worktrees") root d common added n=0
   for root in "${roots[@]}"; do
     [ -d "$root" ] || continue
     for d in "$root"/*/ "$root"/*/*/; do
       [ -d "$d" ] || continue
       git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
       common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir) || continue
-      mkdir -p "$common/info"
-      grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null \
-        || { echo 'graphify-out/' >> "$common/info/exclude"; n=$((n+1)); }
-      grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null \
-        || echo '.graphifyignore' >> "$common/info/exclude"
+      added=$(_graph_exclude_common "$common") || continue
+      [ "${added:-0}" -eq 0 ] || n=$((n+1))
     done
   done
   echo "install: graphify: exclude lines converged (graphify-out/, .graphifyignore; $n new)"
@@ -27572,7 +27582,8 @@ _test_knobs() {
 # environment, so a test's fixture environment is the only one it sees). `file` is the doctor's: ccrc.env alone, which is
 # what the sweep's unit reads. The defaults are neutral, no box's measurements; three are the sweep's own today
 # (BUILD_TIMEOUT 600, MAX_WORKERS 4, HOOKSTATE_FRESH_SECS 1800). REPOS_EXCLUDE's default is the empty string, spelled `''`
-# so the settings census reads it as a default.
+# so the settings census reads it as a default. INCREMENTAL_MAX_FILES is 0, not spec §5.4's 200: the operator ruled a
+# full build on every refresh box-wide (OA-GR2, D-7634), after the measured one-day incremental gap of 10.26%.
 _graph_knobs() {   # [file]
   local m="${1:-}"
   _ccrc_knob CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" ${m:+"$m"}; _test_knob_say CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" $?
@@ -27581,7 +27592,7 @@ _graph_knobs() {   # [file]
   _ccrc_knob CCRC_GRAPH_REFRESH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_REFRESH_SECS 900 $?
   _ccrc_knob CCRC_GRAPH_FETCH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FETCH_SECS 900 $?
   _ccrc_knob CCRC_GRAPH_FULL_REBUILD_SECS 86400 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_REBUILD_SECS 86400 $?
-  _ccrc_knob CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 $?
+  _ccrc_knob CCRC_GRAPH_INCREMENTAL_MAX_FILES 0 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_INCREMENTAL_MAX_FILES 0 $?
   _ccrc_knob CCRC_GRAPH_FULL_FAIL_MAX 2 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_FAIL_MAX 2 $?
   _ccrc_knob CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 $?
   _ccrc_knob CCRC_GRAPH_BUDGET 4 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUDGET 4 $?
