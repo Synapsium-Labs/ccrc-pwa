@@ -8,7 +8,7 @@ plan's own §Deviations found is not edited here (the ledger guard, D-6926); the
 - **D-7649 (2026-10-31)** — GR4's writes under a tree are the link and the ownership-gated stray `.graphifyignore` removal (2 sites, not 1)
 - **D-7650 (2026-10-31)** — the repository sweep sources ccd/ccrc's body, not ccd/lib/ccrc-settings.sh
 - **D-7651 (2026-10-31)** — a committed `.graphifyignore` takes the operator's noise list appended; rule 2's refusal arm is retired
-- **D-7664 (2026-10-31)** — GR4 graph sweep: per-repository checkout directory under the store
+- D-7664 (2026-10-31; defined in `2026-10-31-graphify-r2-gr4-checkout-dir.md`) — GR4 graph sweep: per-repository checkout directory under the store
 
 **D-7648.** Spec §3.4 spells the build's call `"$GRAPH_LIB/ccrc-test" --heavy -- …`. Since the test box landed (D-7410),
 `ccrc test` sends a run to the test box when the registry's switch marker is present and `CCRC_TESTBOX_URL` is set,
