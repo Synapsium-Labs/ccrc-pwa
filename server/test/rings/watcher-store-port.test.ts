@@ -2,17 +2,19 @@
 // The census of what the watcher and its lane files reach on the coordination store: `scan/parse.ts#storeReach`, a
 // type-checked walk (the plan's §What the measurement found, item 3). The CONTROL rows hold each rule exactly on a
 // fixture program, so a rule mutant reds one. The two real-tree rows below them hold at every step of the series. The
-// three REPORT rows print the real tree's counts and every member or key that differs from the record in
-// `watcher-store-port.data.ts`, and pass: before WP10 a census reports and never reds (spec §5.1 rule 3 rev 2). With
+// three REPORT rows print the real tree's counts and every member or key that differs from the record (the reach
+// row's is the port's own list, `coord/ports.ts#WatcherCoordMember`, since D-7579; the other two's are in
+// `watcher-store-port.data.ts`), and pass: before WP10 a census reports and never reds (spec §5.1 rule 3 rev 2). With
 // `WATCHER_PORT_STRICT=1` (the series' own red-first steps and mutation runs; CI never sets it) they assert exactly.
 import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { storeReach, type StoreReach } from '../scan/parse.js';
+import { parseFile, storeReach, type StoreReach } from '../scan/parse.js';
 import { REPO } from './walkSrc.js';
-import { WATCHER_STORE_REACH, WATCHER_WHOLE_HANDOFFS, WATCHER_WHOLE_REACH } from './watcher-store-port.data.js';
+import { WATCHER_WHOLE_HANDOFFS, WATCHER_WHOLE_REACH } from './watcher-store-port.data.js';
 
 const STRICT = process.env['WATCHER_PORT_STRICT'] === '1';
 const DATA = 'server/test/rings/watcher-store-port.data.ts';
+const PORTS_FILE = 'server/src/coord/ports.ts';
 
 const STORE = `export class CoordStore {
   constructor(readonly db: number) {}
@@ -313,22 +315,35 @@ describe('the store census on the real tree (D-7578)', () => {
   });
 
   /** Prints the census's set against the record and, under WATCHER_PORT_STRICT=1, asserts it exactly. */
-  const reportSet = (what: string, got: readonly string[], record: readonly string[], name: string): void => {
+  const reportSet = (what: string, got: readonly string[], record: readonly string[], name: string,
+    where: string = DATA): void => {
     const added = got.filter((m) => !record.includes(m));
     const gone = record.filter((m) => !got.includes(m));
     console.log(`${what}: ${got.length} (record ${record.length}); new: ${added.join(', ') || 'none'}; `
       + `gone: ${gone.join(', ') || 'none'}`);
     if (STRICT) {
       expect({ new: added, gone }, `${what}: the census differs from ${name}; a series task writes what it `
-        + `measures into ${DATA} (${name})`).toEqual({ new: [], gone: [] });
+        + `measures into ${where} (${name})`).toEqual({ new: [], gone: [] });
     }
   };
 
-  it('report: what the watcher and its lane files reach, against WATCHER_STORE_REACH', () => {
+  it('report: what the watcher and its lane files reach, against WatcherCoordPort\'s members', () => {
     const sum = (r: Record<string, number>): number => Object.values(r).reduce((a, b) => a + b, 0);
     console.log(`port reach: ${census.portReach.length}; port members: ${census.portMembers.length}; port entries: `
       + `${sum(census.portEntries)}; bare CoordStore annotations in scope: ${sum(census.bareAnnotations)}`);
-    reportSet('reach', census.reach, WATCHER_STORE_REACH, 'WATCHER_STORE_REACH');
+    // D-7579 (WP2): the record is the port's own member list, read by the checker. `new` is a reached member the port
+    // lacks; `gone` is a port member nothing reaches; with the port absent, every reached member is `new`.
+    reportSet(census.portMembers.length === 0 ? 'reach (the port is absent)' : 'reach', census.reach,
+      census.portMembers, 'WatcherCoordMember', PORTS_FILE);
+  });
+
+  it('WatcherCoordMember is sorted and has no duplicate', () => {
+    const alias = parseFile(path.join(REPO, PORTS_FILE)).exportedTypeAliases
+      .find((a) => a.name === 'WatcherCoordMember');
+    const members = alias?.literals ?? null;
+    expect(members, `${PORTS_FILE} declares no WatcherCoordMember literal union`).not.toBeNull();
+    const sorted = [...new Set(members)].sort();
+    expect(members, `WatcherCoordMember (${PORTS_FILE}) is out of order or holds a duplicate`).toEqual(sorted);
   });
 
   it('report: what they reach through Deps.coord\'s whole store, against WATCHER_WHOLE_REACH', () => {

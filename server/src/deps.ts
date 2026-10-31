@@ -2,7 +2,8 @@
 // builds and `buildServer` and `FleetWatcher` take, and `CollectLaneDeps`, one of its members. They are declared here,
 // not in `server.ts`, so a consumer below L4 that takes `Deps` (`commands.ts`) reads inward only. This file is
 // type-only and emits nothing: a composition-root type, not a domain layer. `server.ts` re-exports both names, so
-// every caller that imports them from there still compiles.
+// every caller that imports them from there still compiles. `WatcherDeps` (D-7579) is `Deps` with `coord` narrowed to
+// the watcher's store port, for `FleetWatcher` alone.
 import type { CcrcConfig } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
@@ -21,6 +22,7 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
+import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
 import type { UpdateIntentLog } from './coord/updateintentlog.js';
@@ -175,3 +177,9 @@ export interface Deps {
    *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */
   linear?: { fetch?: FetchLike; timeoutMs?: number };
 }
+
+/** D-7579 (increment 7, WP2): `Deps` with `coord` narrowed to the watcher's one store port, `WatcherCoordPort`. From
+ *  WP10 on, `FleetWatcher`'s constructor takes this in place of `Deps`, so the watcher and its lane files hold no
+ *  path to the whole store; until then nothing names it. A `Deps` is assignable to it, so `index.ts` hands the same
+ *  bag on. */
+export type WatcherDeps = Omit<Deps, 'coord'> & { coord?: WatcherCoordPort };

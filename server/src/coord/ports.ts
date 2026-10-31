@@ -1,7 +1,9 @@
-// L2 ports (ARCH-03, D-6003): the two capabilities the coordination lanes and the turn reads take from their L4
-// hosts, declared here beside their consumers so no file below L4 imports `server.ts` or `watch.ts`, even for a
-// type. Every top-level statement is a type: tsc emits nothing for this file's declarations.
+// L2 ports (ARCH-03, D-6003): the three capabilities the coordination lanes, the turn reads and the watcher take
+// from their hosts (two from their L4 hosts, and the watcher's narrow view of the store, D-7579), declared here beside
+// their consumers so no file below L4 imports `server.ts` or `watch.ts`, even for a type. Every top-level statement is
+// a type: tsc emits nothing for this file's declarations.
 import type { CcdArgv } from '../ccdargv.js';
+import type { CoordStore } from './store.js';
 import type { NotRan, Unmeasured } from '../unmeasured.js';
 import type { Statusline } from '../pane/statusline.js';
 
@@ -46,3 +48,47 @@ export interface FleetWatcherView {
   currentPending(): Set<string>;
   currentStatuslines(): Map<string, Statusline>;
 }
+
+/** D-7579 (increment 7, WP2): increment 7's one narrow store port. Its members are every `CoordStore` member that the
+ *  watcher (`watch.ts`), its lane files (`*Lane.ts`, `lane*.ts`) and everything they hand the store to reach, as
+ *  D-7578's census (`server/test/scan/parse.ts#storeReach`) measures them; `rings/watcher-store-port.test.ts` reads
+ *  this list through the checker and reports a reached member it lacks or a member nothing reaches. A lane that
+ *  needs a new member adds it here, in its sorted place, in the same PR. Never split it per lane or per callee (the
+ *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
+export type WatcherCoordMember =
+  | 'absorbParkEscalation' | 'activeClaims' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
+  | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
+  | 'cancelDeliveriesTo' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
+  | 'childStaleActivity' | 'claimDigestDay' | 'closeRun' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
+  | 'coordPlacementStamps' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode' | 'db' | 'deadAnchors'
+  | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
+  | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deliveredUnacked'
+  | 'delivery' | 'digestApprovals' | 'digestAsks' | 'dispatchAbandonSetting' | 'dispatchNode' | 'driftAwaitingReview'
+  | 'driftFindingRows' | 'driftFindingsOpenAt' | 'driftHeldQuestions' | 'driftOpenRuns' | 'driftOutstandingDeliveries'
+  | 'driftPushesOnDay' | 'driftStallToldRows' | 'dueDeliveries' | 'firstMailIdWithPrefix' | 'foldPrLineage'
+  | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
+  | 'heldAskFor' | 'heldQuestionRows' | 'holdParked' | 'ingestJournal' | 'insertApproval' | 'insertAsk'
+  | 'insertDelegationEvents' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor'
+  | 'journalGenerations' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor'
+  | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
+  | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats'
+  | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows'
+  | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
+  | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markUnreachable' | 'maxMailDeliveryId'
+  | 'maxRunEventId' | 'mergingRuns' | 'node' | 'nodeByLabel' | 'nodes' | 'noteDispatchRefusal' | 'noteGate'
+  | 'noteLeaseDetail' | 'openAllocations' | 'openCoordinatorIds' | 'outstandingMailFor' | 'parkDelivery'
+  | 'parkedDeliveries' | 'poolEpoch' | 'programOpenRunCount' | 'projectDelegationCheckpoint'
+  | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'queueDelivery'
+  | 'raiseLedgerFloor' | 'recentProvenance' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap'
+  | 'recordObservation' | 'recordRejection' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordStallObservation'
+  | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releases'
+  | 'renewClaimRow' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'rollSettings' | 'run' | 'runEvents'
+  | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
+  | 'setCollectLane' | 'setDeliveryEnvelope' | 'setSession' | 'settleAsk' | 'settleNode' | 'staleAllocations'
+  | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallSettings' | 'stalledDispatchRunIds'
+  | 'strandedClear' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'unlandedBriefs'
+  | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'updateEpoch' | 'upsertNodeMeasurement' | 'wakeParked';
+
+/** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A
+ *  `CoordStore` is assignable to it; it is not assignable back (the store's private members). */
+export type WatcherCoordPort = Pick<CoordStore, WatcherCoordMember>;
