@@ -330,6 +330,8 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
     expect(m.noise_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(fs.statSync(path.join(kd, 'current', 'meta.json')).size).toBeLessThan(8192);   // the hook reads 8 KiB
     expect(calls()).toHaveLength(1);
+    // D-1512: the log names the repository, the kind and the UTC instant before the engine speaks
+    expect(fs.readFileSync(j('.ccrc', 'graph-sweep.log'), 'utf8')).toMatch(new RegExp(`^graph-sweep: build ${rowOf(repo).repo_key} \\(full\\) at \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$`, 'm'));
     // §Review focus 3: no silent queue — the engine was called with acquire_lock=False, and nothing it queues is published
     expect(calls()[0]!['acquire_lock']).toBe(false);
     for (const f of ['.rebuild.lock', '.pending_changes', '.graphify_root', '.started', 'changed.z']) expect(fs.existsSync(path.join(current(repo), f)), f).toBe(false);
@@ -964,11 +966,31 @@ describe('the corpus guard and the generated filter, in the store\'s checkout', 
     expect(rowOf(repo).outcome, why(rowOf(repo))).toBe('rebuilt');
   });
 
-  it('D-1449 — an UNTRACKED non-ASCII path still refuses, and the reason carries the raw name', { timeout: T }, () => {
+  it('D-1449 — an UNTRACKED non-ASCII or backslash-named path still refuses, and the reason carries the raw name', { timeout: T }, () => {
     const repo = makeRepo();
-    sweep({ GRAPH_STUB_DETECT_EXTRA: JSON.stringify(['J\u00e0rn.bin']) });
+    sweep({ GRAPH_STUB_DETECT_EXTRA: JSON.stringify(['J\u00e0rn.bin', 'back\\slash.bin']) });
     expect(rowOf(repo).outcome).toBe('refused-by-guard');
-    expect(why(rowOf(repo))).toBe('untracked paths entered the corpus: J\u00e0rn.bin ');
+    // the order is `sort`'s in the box's locale, so the names are checked, not their order
+    expect(why(rowOf(repo))).toMatch(/^untracked paths entered the corpus: /);
+    expect(why(rowOf(repo)).slice('untracked paths entered the corpus: '.length).trim().split(' ').sort()).toEqual(['J\u00e0rn.bin', 'back\\slash.bin'].sort());
+  });
+
+  it('F2 — the noise list is found by the main checkout\'s name, a name with a space included', { timeout: T }, () => {
+    const repo = makeRepo('project a');
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'project a.list'), '!x\n');
+    sweep();
+    expect(rowOf(repo)).toMatchObject({ outcome: 'refused-by-guard', repo_key: expect.stringMatching(/^project_a-[0-9a-f]{8}$/) });
+    expect(why(rowOf(repo))).toContain("noise list ~/.ccrc/graph-noise/project a.list carries a '!' line");
+  });
+
+  it('a venv python that cannot run is a refusal, never a silent success', { timeout: T }, () => {
+    const repo = makeRepo();
+    fs.writeFileSync(j('.ccrc', 'graphify-venv', 'bin', 'python'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    sweep();
+    expect(rowOf(repo)).toMatchObject({ outcome: 'refused-by-guard', kind: 'full' });
+    expect(why(rowOf(repo))).toBe("detect() failed in the store's checkout");
+    expect(fs.existsSync(path.join(keyDir(repo), 'current'))).toBe(false);
   });
 
   it('a "!" line in either noise list refuses (rule 1), with leading whitespace too', { timeout: T }, () => {
