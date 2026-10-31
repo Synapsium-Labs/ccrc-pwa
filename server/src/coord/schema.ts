@@ -1904,6 +1904,49 @@ export const MIGRATIONS: readonly string[] = [
   );
   INSERT INTO roll_settings (id, targets, updatedAt) VALUES (1, 'coordinators', 0);
   `,
+  // ── 35: user_version 34 -> 35 ─────────────────────────────────────────────
+  // Landing order wave 5e (D-7611, D-7613, D-7614): the landing line's two tables, each complete. `landing_entries`
+  // holds one row per (project, pr): the PR a coordinator pinned at `merging`, at the head it verified. Its ONE writer
+  // is `CoordStore.advanceLanding`, which writes `pinnedSha` and `ejections` in the same transaction as the run's
+  // advance, from the same head as the run's `merging-at:` detail. `landing_projects` holds a project's two flags.
+  // `state` and `ejectionKind` carry NO CHECK, `collect_lane_settings.choice`'s reason: a word a newer build writes
+  // must not stop an older build opening the file; this build reads it as `unknown` (`landingEntryOfRow`), which is
+  // never in the line. `afterIds` (entry ids, a JSON array), `fixesMain`, `setBy` on a run-less entry, `mainRedHold`
+  // and `operatorPaused` hold their defaults until 5f, 5i and 5j. There is NO repo column (D-7612).
+  //
+  // NO SEED ROW: an absent `landing_projects` row reads both flags clear (`CoordStore.landingProject`).
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 35` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (it must print 34 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_entries (
+    id            INTEGER PRIMARY KEY,
+    project       TEXT    NOT NULL,
+    pr            INTEGER NOT NULL,
+    pinnedSha     TEXT    NOT NULL,
+    handoffCommit TEXT    NOT NULL,
+    runId         INTEGER REFERENCES runs(id),
+    state         TEXT    NOT NULL,
+    baseSha       TEXT,
+    ejectionKind  TEXT,
+    ejections     INTEGER NOT NULL DEFAULT 0,
+    afterIds      TEXT    NOT NULL DEFAULT '[]',
+    fixesMain     INTEGER NOT NULL DEFAULT 0,
+    setBy         TEXT    NOT NULL,
+    detail        TEXT,
+    pinnedAt      INTEGER NOT NULL,
+    UNIQUE (project, pr)
+  );
+  CREATE INDEX landing_entries_run ON landing_entries(runId);
+  CREATE TABLE landing_projects (
+    project        TEXT    NOT NULL PRIMARY KEY,
+    operatorPaused INTEGER NOT NULL DEFAULT 0,
+    mainRedHold    INTEGER NOT NULL DEFAULT 0
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
-import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
+import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
+import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
+import type { LandingAdvance, LandingWrite } from './landingEntry.js';
+import type { LandingEntry, LandingEntryState } from '../../../shared/landingLine.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
@@ -143,7 +146,7 @@ import {
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
-  type WorkItemState, type LastReviewReport,
+  type WorkItemState, type LastReviewReport, type RunRefuseCode,
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
@@ -254,6 +257,13 @@ export type AdvanceResult =
   /** `closeRun`'s compare-and-set (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's `claimedBy`
    *  is no longer the id the caller expected — a successor took the programme — so nothing was written. */
   | { ok: false; error: 'claimant-changed'; claimedBy: string | null };
+
+/** `advanceLanding`'s answer: an `AdvanceResult` that carries what the landing line recorded when it succeeded, and
+ *  the one refusal of its own (D-7619), which the route sends on `reject.code`. */
+export type LandingAdvanceResult =
+  | (Extract<AdvanceResult, { ok: true }> & { landing: LandingWrite })
+  | Exclude<AdvanceResult, { ok: true }>
+  | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -2938,6 +2948,77 @@ export class CoordStore {
       }
       return finalAdv;
     });
+  }
+
+  /**
+   * The landing line's one composite write (landing order wave 5e, D-7614): the run's advance and its line entry in ONE
+   * `tx()`, the way `dispatchRun` and `closeRun` compose theirs. It is the ONE writer of `landing_entries.pinnedSha`
+   * and `.ejections`. It decides the edge first, so a refused advance writes no entry and no event; it builds the
+   * `merging-at:` detail itself from the same head it writes as `pinnedSha`, so the two cannot disagree. The choice of
+   * what to write is `decideLandingWrite`'s (L1). The advance is never refused on the line's account (D-7618), and an
+   * ejection body on a run not at `merging` is the one refusal of its own (D-7619). A `LandingAdvance` that pairs
+   * wrongly with `to` is a programming error and throws, rolling everything back.
+   */
+  advanceLanding(input: { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }): LandingAdvanceResult {
+    const { runId, to, causedBy, landing } = input;
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
+        { state: string; kind: string; project: string } | undefined;
+      if (!row) return { ok: false as const, error: 'unknown-run' as const };
+      const from = isRunState(row.state) ? row.state : 'unknown';
+      const kind = isRunKind(row.kind) ? row.kind : 'unknown';
+      if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
+        return { ok: false as const, error: 'bad-transition' as const, from, to };
+      }
+      if ((landing.kind === 'pin') !== (to === 'merging') || (landing.kind === 'retreat' && to !== 'working')) {
+        throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
+      }
+      if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
+        return { ok: false as const, error: 'ejection-not-merging' as const, from };
+      }
+      const episode = landing.kind === 'retreat' ? this.currentEpisode(runId) : null;
+      const pr = landing.kind === 'pin' ? landing.pr : episode?.pr ?? null;
+      const current = pr === null ? null : this.landingEntryOf(row.project, pr);
+      const decision = decideLandingWrite({ landing, from, runId, current, episode });
+      const adv = this.advanceInner(runId, to, causedBy,
+        landing.kind === 'pin' ? mergingAtDetail(landing.head, landing.pr, landing.mode) : undefined);
+      if (!adv.ok) return adv;
+      if (decision.act === 'none') return { ...adv, landing: decision.write };
+      const pinned: LandingEntryState = 'pinned';
+      const ejected: LandingEntryState = 'ejected';
+      if (landing.kind === 'pin' && decision.act === 'insert') {
+        this.db.prepare('INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
+      } else if (landing.kind === 'pin' && decision.act === 'repin') {
+        this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
+          'ejectionKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+      } else if (decision.act === 'eject') {
+        this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ejections + 1 WHERE id = ?')
+          .run(ejected, decision.base, decision.kind, decision.id);
+      }
+      const entry = pr === null ? null : this.landingEntryOf(row.project, pr);
+      if (entry === null) throw new Error('advanceLanding: the entry it just wrote reads back absent');
+      return { ...adv, landing: decision.act === 'eject' ? { kind: 'ejected' as const, entry }
+        : { kind: 'pinned' as const, entry, created: decision.act === 'insert' } };
+    });
+  }
+
+  /** One entry by (project, pr), read through `landingEntryOfRow`; null when there is none. */
+  private landingEntryOf(project: string, pr: number): LandingEntry | null {
+    const row = this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
+      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? AND pr = ?').get(project, pr);
+    return row === undefined ? null : landingEntryOfRow(row);
+  }
+
+  /** A project's landing line, oldest pin first (`pinnedAt`, then `id`). An unreadable row reads `unknown`, never absent. */
+  landingEntries(project: string): LandingEntry[] {
+    return this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
+      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id').all(project).map(landingEntryOfRow);
+  }
+
+  /** A project's two line flags. An absent row, which nothing seeds, reads both clear. */
+  landingProject(project: string): { operatorPaused: boolean; mainRedHold: boolean } {
+    return landingFlagsOfRow(this.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(project));
   }
 
   /** Review findings 8/14: every `queued` or `delivered`-but-unacked delivery

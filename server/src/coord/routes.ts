@@ -81,7 +81,9 @@ import {
   type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
-import { CHECKS_MAIL_TOKEN, mergingAtDetail, type ChecksMode } from '../../../shared/landing.js';
+import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
+import { landingAdvanceOf } from './landingEntry.js';
+import type { LandingEjectionKind } from '../../../shared/landingLine.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { checksModeAt } from './landing.js';
 import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
@@ -1855,6 +1857,7 @@ export function registerCoordRoutes(
    */
   const advanceAct = async (
     coord: CoordStore, reply: FastifyReply, run: RunRow & { sessionId: string }, id: number, to: RunState, claim: DoneClaim,
+    ejection: { base: string; kind: LandingEjectionKind } | null,
   ): Promise<FastifyReply> => {
     // Forward motion toward a review claim re-measures; retreating to `working` does not — see the route's docstring.
     let verdict: Extract<Awaited<ReturnType<typeof verifyDone>>, { ok: true }> | null = null;
@@ -1873,20 +1876,20 @@ export function registerCoordRoutes(
       verdict = measured;
     }
 
-    // PR landing in ccrc (stage 1, spec §3.1 and §3.7): the transition row into `merging` IS the episode, so its detail
-    // is decided here, once, from the verified head and the measured PR, in the one `advance` call. Every other target
-    // keeps its exact call.
+    // PR landing in ccrc (stage 1, spec §3.1 and §3.7): the transition row into `merging` IS the episode. Its mode is
+    // decided here from the verified head's measurement; `CoordStore.advanceLanding` builds the `merging-at:` detail
+    // from that same head and writes the landing line's entry with it, in the one transaction (D-7614). The head is
+    // the one the server VERIFIED (D-7102): the claim's own on an ordinary advance, the live tip on one accepted
+    // through the radar's lineage. The landing compares a PR head to this, and a brief prints it.
     let episodeMode: ChecksMode | null = null;
-    let detail: string | undefined;
     if (to === 'merging' && verdict !== null) {
       const listing = await deps.io.readdir(deps.cfg.registryDir);
       episodeMode = checksModeAt(readSwitches(listing), ccdCan(deps.fleetState, 'prLanding'), verdict.measured);
-      // The head the server VERIFIED (D-7102): the claim's own on an ordinary advance, the live tip on one accepted
-      // through the radar's lineage. The landing compares a PR head to this, and a brief prints it.
-      detail = mergingAtDetail(verdict.measured.branchTip, verdict.measured.prNumber ?? null, episodeMode);
     }
-    const adv = detail === undefined ? coord.advance(id, to, 'coordinator') : coord.advance(id, to, 'coordinator', detail);
-    if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
+    const landing = landingAdvanceOf({ to, measured: verdict?.measured ?? null, mode: episodeMode, handoffCommit: claim.handoffCommit, ejection });
+    const adv = coord.advanceLanding({ runId: id, to, causedBy: 'coordinator', landing });
+    if (!adv.ok) return adv.error === 'ejection-not-merging'
+      ? reply.code(409).send({ ok: false, reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
     // Re-read after the advance for the fresh row. `!` is gone with the type (D-2545): an advance that succeeded and
     // then read back absent or unreadable is a real condition, and answering it honestly is cheaper than a
     // non-null assertion that would throw a bare 500 here.
@@ -1898,6 +1901,8 @@ export function registerCoordRoutes(
       ...(episodeMode === 'live' ? { checksMail: CHECKS_MAIL_TOKEN } : {}),
       // Only an advance accepted through the lineage names its head: absent means the claim was the head.
       ...(verdict?.measured.via === BASE_ONLY_MERGE ? { verifiedHead: verdict.measured.branchTip } : {}),
+      // D-7627: what the line recorded, so a coordinator can tell an ejection it recorded from an advance it could not place.
+      landing: adv.landing,
     } satisfies AdvanceOk);
   };
 
@@ -1941,7 +1946,7 @@ export function registerCoordRoutes(
     // D-6733); this handler gathers their facts and acts.
     const parsed = advanceRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), (req.body ?? {}) as AdvanceBody);
     if (!parsed.ok) return refuseAdvance(reply, parsed.refusal);
-    const { id, to, fingerprint: fp } = parsed.req;
+    const { id, to, fingerprint: fp, ejection } = parsed.req;
     const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber,
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
@@ -1949,7 +1954,7 @@ export function registerCoordRoutes(
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
         overConcurrency: () => capsMeasured(coord).overConcurrency });
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
-      return advanceAct(coord, reply, gate.run, id, to, claim);
+      return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });
   });
 

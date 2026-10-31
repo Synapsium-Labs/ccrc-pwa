@@ -619,6 +619,9 @@ describe('the rejection table is total, in both directions', () => {
       'runs-unreadable',     // the list read's own word: GET /api/runs, all-or-failure
       'ask-unreadable',      // the ask half of the same family, /answer//release//asks
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
+      'no-pr',               // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), read back in-process by advanceAct, never a wire code
+      'no-episode',          // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), read back in-process by advanceAct, never a wire code
+      'no-entry',            // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), read back in-process by advanceAct, never a wire code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
