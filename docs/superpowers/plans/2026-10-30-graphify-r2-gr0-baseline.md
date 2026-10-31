@@ -10,7 +10,9 @@
 
 - **The one-day missing-edge share is 10.26%.** That is ten times the 1% that decides OA-GR2 (plan §Operator acts), so **OA-GR2 goes to the operator before GR4 is dispatched.**
 - **The daily safety net is far too long. Only a safety net of about an hour stays under 1% on average.** The loss accrues with every incremental refresh: on day 1, about 215 edges for each 15-minute window in which main moved, or 0.22% of the graph a window. Day 1 had 47 such windows, about 2 an hour, so 1% is crossed after about 4 to 5 windows, about 2 to 2.5 hours at that pace. A `CCRC_GRAPH_FULL_REBUILD_SECS` of 3600 would hold the average gap near 0.5%. The worst case is not bounded, because one window can carry up to 200 files (`INCREMENTAL_MAX_FILES`), and the replay did not snapshot the chain inside a day.
-- **The recommendation for OA-GR2: a full build on every refresh.** Set `CCRC_GRAPH_INCREMENTAL_MAX_FILES=0`, so any diff makes the build full (spec §3.3's row "the diff names more than … files"). Spec G4 already offers this as "every refresh in full". Measured cost for this repository: about 41 full builds a day at a median of 92 CPU-seconds is **about 63 CPU-minutes a day**, at 55 to 89 s wall and 3.6 to 4.6 GB peak each. The alternatives cost less but miss edges. Incremental with an hourly full costs about 47 CPU-minutes a day. Incremental with the daily full costs about 20 CPU-minutes a day and misses 10% of edges by the end of the day. **Today's sweep** used **410.6 CPU-minutes** on its one full day in the journal, across every repository. Always-full is still about 6.5 times cheaper than today, and it serves a graph identical to a full build. The only cost always-full adds is memory: about 4.1 to 4.6 GB a refresh instead of 0.9 GB, inside the tests slice's 6 GB cap that it shares with test runs.
+- **The recommendation for OA-GR2: a full build on every refresh, box-wide.** Set `CCRC_GRAPH_INCREMENTAL_MAX_FILES=0`, so any diff makes the build full (spec §3.3's row "the diff names more than … files"). Spec G4 already offers this as "every refresh in full". The key is one line in the box's `ccrc.env` (spec §5), so the ruling covers all 24 repositories, not only this one. **Measured for this repository:** about 41 full builds a day at a median of 92 CPU-seconds is **about 63 CPU-minutes a day**, at 55 to 89 s wall and 3.6 to 4.6 GB peak each. **Estimated for the other 23 (§Fleet-wide below; their builds were not measured):** about 13 CPU-minutes a day more, so **about 75 to 80 CPU-minutes a day fleet-wide**, and at most about 130 if every other repository's full build cost as much as this one's largest. **Today's sweep** used **410.6 CPU-minutes** on its one full day in the journal, across every repository. So always-full is about 5 times cheaper than today by the estimate, and at least about 3 times by the bound. It serves a graph identical to a full build.
+- **The alternatives cost less for this repository, but more fleet-wide, and they miss edges.** For this repository alone, incremental with an hourly full costs about 47 CPU-minutes a day, and incremental with the daily full about 20 CPU-minutes a day, missing 10% of edges by the end of the day. But `CCRC_GRAPH_FULL_REBUILD_SECS` is box-wide too, and the safety net builds a repository even when its main has not moved (spec §3.1 step 3: `fresh` needs the last full build to be younger than it). An hourly net would rebuild all 24 repositories every hour: about **220 CPU-minutes a day** fleet-wide by §Fleet-wide's estimate. Always-full builds only a repository whose main moved, plus the daily net for the rest.
+- **What always-full adds is memory, and it is measured for this repository only.** Here it is 4.1 to 4.6 GB a refresh instead of 0.9 GB, inside the tests slice's 6 GB cap that it shares with test runs. 79 of the replay's 297 builds started with the other slot held, and none failed. Every other repository whose main moved in the week has a smaller graph than this one's tip, or one of about the same size (repository 3). The largest graph on the box, repository 8's, has not moved in the week and is built in full under every option (its first build and the daily net), so the ruling does not change its memory. §Fleet-wide lists what remains unmeasured.
 - **Why the loss happens** (read from the pinned 0.9.9 engine, `graphify/watch.py#_rebuild_code`): the incremental path calls `extract()` on the changed files only, so cross-file symbol resolution sees only those files. A changed file's edges into any file outside that call's set are not rebuilt, and its old edges are evicted with its old nodes. 99.4% of day 1's missing edges are owned by a file that changed that day: 5,906 point from a changed file to an unchanged one, 4,130 between two files changed in different windows, and 61 otherwise. The edge kinds are `imports` 4,171, `calls` 2,289, `imports_from` 1,908 and `indirect_call` 1,000. Nodes are not lost: at most 16 nodes differ in either direction on any day. The loss never heals within the chain (below).
 
 ## Step 1: the disk baseline
@@ -87,6 +89,38 @@ Even the lowest one-day increment (day 6, 2.32%, measured on a chain already mis
 Per day: incrementals 33 to 47 a day, 14.6 to 22.1 CPU-minutes a day. Full builds grew with the corpus, from 3,617 MB / 75.7 CPU-s at base to 4,571 MB / 98.1 CPU-s at the tip.
 
 The corpus is the scratch checkout's tracked files only, with no untracked files and no generated `.graphifyignore`: 40,323 nodes and 92,733 edges at base, 51,925 and 123,430 at the tip. Spec §1.4's 48,172 nodes / 114,127 edges came from a development machine at an earlier main. The incremental chain's shape (192 edges missing for 16 files there, about 16 a changed file here) matches.
+
+## Fleet-wide: the other 23 repositories (estimated, not measured)
+
+The review of OA-GR2 found that the recommendation covers the whole box, but Step 3 measured one repository. These figures bound the other 23 from reads only. No other repository's build was run, and no figure here is a measurement of cost.
+
+**Read on 2026-10-31 (UTC).** For each repository, its largest tree's `graphify-out/graph.json` was counted for nodes and edges. The 15-minute windows in which main moved over 7 days were counted as in Step 3, from each repository's `refs/remotes/origin/HEAD` as its clone last fetched it. This repository counted 288 windows, against Step 3's 289. A repository that nobody fetched counts 0 even if its main moved. GR4's store fetches every 900 s, so it may see more movement than this table.
+
+| Repository | Graph nodes / edges | Windows in 7 days | Full builds a day under always-full |
+|---|---|---|---|
+| this repository (Step 3's tip) | 51,925 / 123,430 | 288 | about 41 (measured) |
+| repository 2 | 31,293 / 62,981 | 18 | about 2.6 |
+| repository 3 | 52,241 / 119,718 | 8 | about 1.1 |
+| repository 4 | 10,202 / 22,647 | 56 | 8 |
+| repository 5 | 16,232 / 30,349 | 43 | about 6.1 |
+| repository 6 | 20,527 / 34,413 | 1 | about 0.1 |
+| repository 8 | 46,897 / 202,238 | 0 | the daily net only |
+| the two of repositories 9 to 24 that moved | 9,445 and 11,572 edges | 32 | about 4.6 together |
+| repository 7 and the 14 of repositories 9 to 24 that did not move | 92,082 edges in all, at most 32,837 each | 0 | the daily net only |
+
+Repository 3's `graphify-out` is about 408 MB a tree (Step 1), but its `graph.json` is 72,840 KiB and its graph is about this repository's size. Most of the directory is not the graph, so the directory's size does not measure the build.
+
+**The estimate** assumes a full build's CPU grows in proportion to its edges, at this repository's 92 CPU-s for 123,430 edges. On that assumption, the other repositories' full builds when main moved come to about 9 CPU-minutes a day. The daily net for the ones that did not move adds about 4. That makes about 13 CPU-minutes a day, and the fleet-wide always-full about 76 CPU-minutes. The hourly net in the Answer section rebuilds every other repository 24 times a day, which is about 175 CPU-minutes on top of this repository's 47.
+
+**The bound** does not rely on proportion. It costs every other full build at this repository's largest, 98 CPU-s, and repository 8's at 1.64 times that (its edges against this repository's): 22.6 moved windows a day come to about 37 CPU-minutes, and the daily net for the 16 repositories that did not move to about 27. With this repository's 63, that is about 127 CPU-minutes a day.
+
+**What stays unmeasured,** and is the operator's to accept or to have measured before ruling:
+
+- **Any other repository's CPU and `memory.peak`.** The cheapest check is one cold full build each of repositories 3 and 8, through `ccrc test --heavy --`, shaped like Step 3's builds. Repository 3 is the largest graph that moves, and repository 8 the largest graph on the box.
+- **Who reached the sweep's 6 GB peaks.** 56 of the 236 passes in Step 2 report exactly the unit's `MemoryMax=6G`. Today's sweep builds per tree inside its own unit, and `memory.peak` counts page cache, so the journal does not say which build, if any, came near the cap. GR4's builds each run in their own `ccrc test --heavy` scope, so these peaks do not carry over to GR4.
+- **A per-repository setting.** Spec §5 has none. If the operator wants always-full for this repository only, the spec needs a per-repository override, which neither GR2's table nor the plan has. Without it, the choice is box-wide: always-full for every repository at the estimate above, or the daily net for every repository with this repository's 10% loss.
+
+GR4's done check (OA-GR3) reads a week of the journal and measures the fleet-wide figure that this section estimates.
 
 ## Verify (plan Task GR0)
 
