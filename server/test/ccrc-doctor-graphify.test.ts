@@ -250,7 +250,7 @@ function graphifyHealthy(home: string): void {
   }
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
-    pin: '0.9.9', status: 'ok', trees: [] }] }));
+    pin: '0.9.9', status: 'ok', repos: [], trees: [] }] }));
 }
 
 describe('ccrc doctor: graphify', () => {
@@ -289,7 +289,7 @@ describe('ccrc doctor: graphify', () => {
   it('reds on a probed-zero last pass (the cap-scopes 13-day failure, made visible)', () => {
     const home = healthy('ccrc-doctor-gfx-zero-'); graphifyHealthy(home);
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
-      started: 's', finished: 'f', pin: '0.9.9', status: 'probed-zero', trees: [] }] }));
+      started: 's', finished: 'f', pin: '0.9.9', status: 'probed-zero', repos: [], trees: [] }] }));
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^FAIL graphify:/);
   });
 
@@ -301,7 +301,7 @@ describe('ccrc doctor: graphify', () => {
   it('reds on a failed last pass (R-5: the pass could not run at all, e.g. no pin)', () => {
     const home = healthy('ccrc-doctor-gfx-failed-'); graphifyHealthy(home);
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
-      started: 's', finished: 'f', pin: '0.9.9', status: 'failed', trees: [] }] }));
+      started: 's', finished: 'f', pin: '0.9.9', status: 'failed', repos: [], trees: [] }] }));
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^FAIL graphify:/);
   });
 
@@ -313,7 +313,7 @@ describe('ccrc doctor: graphify', () => {
   it('WARNs (not FAILs) on a failed+pinless last pass once the engine pin now exists (finding 2)', () => {
     const home = healthy('ccrc-doctor-gfx-failed-preprov-'); graphifyHealthy(home);
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
-      started: 's', finished: 'f', pin: '', status: 'failed', trees: [] }] }));
+      started: 's', finished: 'f', pin: '', status: 'failed', repos: [], trees: [] }] }));
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^WARN graphify:/);
   });
@@ -321,7 +321,7 @@ describe('ccrc doctor: graphify', () => {
   it('still FAILs a failed+pinless last pass when the pin file itself is still absent', () => {
     const home = healthy('ccrc-doctor-gfx-failed-nopin-'); graphifyHealthy(home);
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
-      started: 's', finished: 'f', pin: '', status: 'failed', trees: [] }] }));
+      started: 's', finished: 'f', pin: '', status: 'failed', repos: [], trees: [] }] }));
     rmSync(join(home, '.ccrc', 'graphify.pin'));
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^FAIL graphify:/);
@@ -330,7 +330,7 @@ describe('ccrc doctor: graphify', () => {
   it('still FAILs a failed pass that recorded a NON-empty pin, even though the pin file exists now', () => {
     const home = healthy('ccrc-doctor-gfx-failed-realpin-'); graphifyHealthy(home);
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
-      started: 's', finished: 'f', pin: '0.9.9', status: 'failed', trees: [] }] }));
+      started: 's', finished: 'f', pin: '0.9.9', status: 'failed', repos: [], trees: [] }] }));
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^FAIL graphify:/);
   });
@@ -357,7 +357,7 @@ describe('ccrc doctor: graphify', () => {
     const old = new Date(Date.now() - 60 * 60_000).toISOString();
     const census = join(home, '.ccrc', 'graph-sweep.json');
     writeFileSync(census, JSON.stringify({ passes: [{
-      started: old, finished: old, pin: '0.9.9', status: 'ok', trees: [] }] }));
+      started: old, finished: old, pin: '0.9.9', status: 'ok', repos: [], trees: [] }] }));
     const oldSecs = Date.now() / 1000 - 3600;
     utimesSync(census, oldSecs, oldSecs);
     const line = lineFor(runDoctor(home).stdout, 'graphify');
@@ -435,13 +435,13 @@ describe('ccrc doctor: graphify', () => {
     // still saying "in the last graph-sweep pass" — a false sentence with an
     // inflated count. One fixture pass cannot tell the two filters apart.
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
-      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+      started: now, finished: now, pin: '0.9.9', status: 'ok', repos: [], trees: [
         { path: '/h/projects/p', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: p.py', duration_ms: 3 },
         { path: '/h/projects/q', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: q.py', duration_ms: 3 },
         { path: '/h/projects/r', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: r.py', duration_ms: 3 },
         { path: '/h/projects/s', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: s.py', duration_ms: 3 },
       ] }, {
-      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+      started: now, finished: now, pin: '0.9.9', status: 'ok', repos: [], trees: [
         { path: '/h/projects/a', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: x.py', duration_ms: 3 },
         { path: '/h/projects/b', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: y.py', duration_ms: 3 },
         { path: '/h/projects/c', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: z.py', duration_ms: 3 },
@@ -469,11 +469,11 @@ describe('ccrc doctor: graphify', () => {
     // warning about a tree fixed an hour ago — so this fixture pins the
     // window as well as the silence.
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
-      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+      started: now, finished: now, pin: '0.9.9', status: 'ok', repos: [], trees: [
         { path: '/h/projects/a', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: a.py', duration_ms: 3 },
         { path: '/h/projects/b', outcome: 'failed', reason: 'build failed', duration_ms: 9 },
       ] }, {
-      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+      started: now, finished: now, pin: '0.9.9', status: 'ok', repos: [], trees: [
         { path: '/h/projects/a', outcome: 'fresh', reason: '', duration_ms: 1 },
         { path: '/h/projects/b', outcome: 'stale-rebuilt', reason: '', duration_ms: 40 },
         { path: '/h/projects/c', outcome: 'skipped-budget', reason: 'budget spent', duration_ms: 0 },
