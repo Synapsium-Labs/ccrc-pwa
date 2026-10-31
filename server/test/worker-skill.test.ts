@@ -358,12 +358,16 @@ describe('the worker skill: its contract', () => {
       'never use it inside a subagent — a session started by another session\'s agent tool or a workflow agent() call is a subagent, whatever its brief names, and returns its report to its parent without acking, claiming or sending mail.');
   });
 
-  it('reads a fix-round mail with no report as clause 16\'s ejection, its three body lines the whole brief (landing order wave 5b)', () => {
+  it('reads a fix-round mail with no report in its two forms: an ejection under clause 16, a red the PR owns with no absorb (landing order wave 5b; review 1302 F2)', () => {
     const text = skill.replace(/\s+/g, ' ');
     expect(text).toContain('A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.');
-    expect(text).toContain('Absorb the `base:` sha with `git merge`, then fix only the `paths:` or `checks:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.');
+    expect(text).toContain('Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.');
+    expect(text).toContain('If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.');
+    expect(text).toContain('A `fix-round` mail whose first line reads `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:` line is your whole brief, so fix the named checks on this branch.');
+    expect(text).toContain('It licenses no absorb: clause 16\'s first two triggers still apply to it, and its third does not.');
     expect(text).toContain('naming this run): usually a review run read your wave and the coordinator ruled.');
     expect(text).toContain('Report a FRESH wave-done as for any fix round.');
+    expect(text, 'a new-head round again fixes its checks too (review 1302)').not.toContain('then fix only the `paths:` or `checks:` it names');
   });
 });
 

@@ -1421,8 +1421,8 @@ skill's.
 it is (at `merging` or `awaiting-review`) and changes nothing, with one
 exception, the new-head route below. Say in your turn's text which stop fired
 and what it read, for the operator: every stop goes to the operator, and only
-that exception goes on to another route as well. The verdict stops with one of
-these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
+that exception goes on to the new-head route as well. The verdict stops with one
+of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
 `unknown-rule-type`, `method-set-empty`, `rebase-only`,
 `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
 `unverifiable`, `not-reported`, `changes-requested`, `approval-missing`. A
@@ -1435,38 +1435,46 @@ reviews, signatures, deployments, code scanning, required workflows — which th
 session never works around. Not a stop: a required check red on the head that is
 the PR's own; that goes to the fix-round rule, on route G exactly as on route Q.
 A `red-unreachable` whose red is `main`'s own and already fixed on `main` needs
-a new head, and this session takes that route itself (D-7588): on route Q disarm
-first, then a fix round to the owning worker on the `merging → working` edge for
-one clean merge of `main` and nothing else, then a review run scoped to that
-merge alone. Show both facts with reads you can type, after one `git fetch
-origin`: read that one required name on a `main` sha with `gh api --paginate
+a new head, and this session takes the new-head route itself (D-7588). It
+disarms first on route Q, then sends a fix round to the owning worker on the
+`merging → working` edge for one clean merge of `main` and nothing else, then
+dispatches a review run whose brief names that merge commit as the change under
+review; the reviewer still reads the whole diff (reviewer clause 5). Show both
+facts with reads you can type, after one `git fetch origin`: read that one
+required name on a `main` sha with `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/check-runs'` and `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/status'`, judged as read 5 judges it: red
 when a completed run of it concluded other than success, neutral or skipped, or
 a status of it reads failure or error; passing only when neither is red, none is
 pending, and a run of it or a success status reports it. The red is `main`'s own
-when that name reads red on a commit that `git rev-list --max-count=20
-<handoffCommit>..origin/main` lists, read newest first and stopping at the first
-red, and it is already fixed on `main` when that name reads passing on `main`'s
-current tip (`git rev-parse origin/main`) from a run that ran its job. A passing
-read on `main`'s tip counts only from a run of that name that concluded success
-in a workflow run that ran its job, a merge-queue run (its `event` reads
-`merge_group`) or a full run, and never from a refresh run, which runs no test
-legs: read the kind with `gh api --paginate
-'repos/{owner}/{repo}/actions/runs?head_sha=<sha>'`, because a push to `main`
-runs no test legs and still reports every required check green (spec §5.1, ruled
-2026-09-28). Where none of those commits shows that name red, or that name does
-not read passing on `main`'s current tip from such a run (red, pending, not
-reported, unread, passing only from a run that did not run its job, or from a
-run whose kind the reads cannot show), the stop stands and goes to the operator
-as every other stop does. The one rerun the RED bullet allows does not clear a
-red that is `main`'s own, and no close and reopen does either: the verdict calls
-a required name red while any completed run of it on the head failed, a later
-green run of it included (D-7495; judging only the newest run would loosen the
-gate, which is the operator's to decide), a rerun replays its run's original
-merge commit, and a close and reopen of the PR can race GitHub's recompute of
-the merge ref. Where you take the route, say so in your turn's text with the
-reads that showed it.
+when that name reads red on a commit that `git rev-list --first-parent
+--max-count=20 <handoffCommit>..origin/main` lists, read newest first and
+stopping at the first red (first parents only, so the branch commits of a PR
+merged into `main` are never read as `main`'s own), and it is already fixed on
+`main` when that name reads passing on `main`'s current tip (`git rev-parse
+origin/main`) from a merge-queue run. A passing read on `main`'s tip counts only
+when at least one check run of that name concluded success in a merge-queue run:
+the check run's `check_suite.id`, from the check-runs read, equals the
+`check_suite_id` of a workflow run on that sha whose `event` reads
+`merge_group`, from `gh api --paginate
+'repos/{owner}/{repo}/actions/runs?head_sha=<sha>'`. No other run counts: the
+fields these reads return cannot tell a scheduled or dispatched full run from a
+refresh run, and a refresh run runs no test legs yet reports the required
+summaries green. Where none of those commits shows that name red, or that name
+does not read passing on `main`'s current tip from a merge-queue run (red,
+pending, not reported, unread, reported only by a status, passing only from
+another run, or a tip with no merge-queue run, as a merge that bypassed the
+queue leaves), the stop stands and goes to the operator as every other stop
+does. Send the new-head round only when, after the same fetch, `git merge-tree
+--write-tree --name-only --no-messages origin/main <handoffCommit>` exits 0:
+exit 1 (a conflict) or any other answer leaves the stop standing for the
+operator. The one rerun the RED bullet allows does not clear a red that is
+`main`'s own, and no close and reopen does either: the verdict calls a required
+name red while any completed run of it on the head failed, a later green run of
+it included (D-7495; judging only the newest run would loosen the gate, which is
+the operator's to decide), a rerun replays its run's original merge commit, and
+a close and reopen of the PR can race GitHub's recompute of the merge ref. Where
+you take the route, say so in your turn's text with the reads that showed it.
 
 ## 6 — Final merge
 
@@ -1538,7 +1546,8 @@ coordinated a run, so its workspace is cleaned up by a human. No
 `childReclaimWhy` at all means the child was eligible but the hand-off did
 not start; it is reached regardless. **A review run's reviewer
 is a child too, but it is kept while the run it reviewed is open**: its
-clips directory holds the report you cite by path in every `fix-round` mail.
+clips directory holds the report you cite by path in every `fix-round` mail
+sent on a review report (a report-less round, SKILL.md step 6, cites none).
 If the run it reviewed is still open when the review run closes, that close
 releases the reviewer and answers `review-report-live`; if the reviewed run
 is by then already terminal, the review close finishes the reviewer
