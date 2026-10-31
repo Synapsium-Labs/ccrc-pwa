@@ -1,6 +1,6 @@
 // Landing order wave 5e (Task 1): the landing line's entry and its ONE writer, `CoordStore.advanceLanding`. The run's
 // advance and the entry commit in one transaction; a refused edge writes neither. Temporary coord.db files only.
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -9,7 +9,7 @@ import type { LandingEjectionKind } from '../../shared/landingLine.js';
 import { mergingAtDetail } from '../../shared/landing.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
-afterEach(removeTmpFixtures);
+afterEach(() => { vi.useRealTimers(); removeTmpFixtures(); });
 
 const HEAD = 'a'.repeat(40);
 const HEAD2 = 'b'.repeat(40);
@@ -103,6 +103,31 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(r).toMatchObject({ ok: true, landing: { kind: 'pinned', created: false,
       entry: { id: firstId, pinnedSha: HEAD2, state: 'pinned', baseSha: null, ejectionKind: null, ejections: 1 } } });
     expect(coord.landingEntries(P)).toHaveLength(1);
+  });
+
+  it('a re-pin by another run hands the row over: its runId, head, handoffCommit and a later pinnedAt', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_784_600_000_000);
+    const a = atMerging();
+    const first = coord.landingEntries(P)[0]!;
+    expect(first).toMatchObject({ runId: a, pinnedSha: HEAD, handoffCommit: HC, pinnedAt: 1_784_600_000_000 });
+    coord.advanceLanding({ runId: a, to: 'working', causedBy: 'coordinator', landing: eject() });
+    const opened = coord.openRun({ program: 'p', title: 't', project: P, wave: 2, waveOf: 2, claimedBy: 'coord-a' });
+    if (!('id' in opened)) throw new Error('fixture openRun refused');
+    coord.setSession(opened.id, 'project-a-ws2');
+    step(opened.id, 'dispatched');
+    step(opened.id, 'working');
+    step(opened.id, 'awaiting-review');
+    vi.setSystemTime(1_784_600_000_000 + 60_000);
+    const HC2 = 'f'.repeat(40);
+    const r = coord.advanceLanding({ runId: opened.id, to: 'merging', causedBy: 'coordinator',
+      landing: { kind: 'pin', head: HEAD2, pr: 7, mode: 'off', handoffCommit: HC2 } });
+    expect(r).toMatchObject({ ok: true, landing: { kind: 'pinned', created: false } });
+    const entries = coord.landingEntries(P);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: first.id, runId: opened.id, pinnedSha: HEAD2, handoffCommit: HC2,
+      pinnedAt: 1_784_600_000_000 + 60_000, state: 'pinned', ejections: 1 });
+    expect(entries[0]!.pinnedAt).toBeGreaterThan(first.pinnedAt);
   });
 
   it('a second ejection counts two', () => {

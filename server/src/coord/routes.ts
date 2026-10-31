@@ -1892,7 +1892,7 @@ export function registerCoordRoutes(
     const landing = landingAdvanceOf({ to, measured: verdict?.measured ?? null, mode: episodeMode, handoffCommit: claim.handoffCommit, ejection });
     const adv = coord.advanceLanding({ runId: id, to, causedBy: 'coordinator', landing });
     if (!adv.ok) return adv.error === 'ejection-not-merging'
-      ? reply.code(409).send({ ok: false, reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
+      ? refuseAdvance(reply, { reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
     // D-7624: the second ejection of an entry is one operator notice, never a refusal. The written row's count reaching 2 is
     // the once-only raise (the writer is the count's only writer); it names the worker's session, not the review cap's.
     // @anchor landing-ejection-ask
@@ -3812,8 +3812,7 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'GET /api/landing')) return;
     const q = req.query as { project?: unknown };
     if (typeof q.project !== 'string' || q.project.trim() === '') {
-      return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'the landing line is per-project — ?project= is required' });
+      return refuseRoute(reply, 'bad-request', { detail: 'the landing line is per-project — ?project= is required' });
     }
     const project = q.project.trim();
     const entries = deps.coord.landingEntries(project);
