@@ -1146,6 +1146,21 @@ describe('links and excludes', () => {
     expect(why(rowOf(repo))).toContain('1 tree(s) not linked: git check-ignore graphify-out fails there');
   });
 
+  it('spec §6.1 — an exclude holding only the slash line, which the sweep cannot extend, ignores no link: none is made', { timeout: T }, () => {
+    if (process.getuid?.() === 0) return;                    // root writes through any mode; the read-only exclude is the setup
+    const repo = makeRepo();
+    const ex = path.join(repo, '.git', 'info', 'exclude');
+    fs.writeFileSync(ex, 'graphify-out/\n.graphifyignore\n');
+    fs.chmodSync(ex, 0o444);
+    try { sweep(); } finally { fs.chmodSync(ex, 0o644); }
+    expect(fs.readFileSync(ex, 'utf8'), 'the exclude was not extended').toBe('graphify-out/\n.graphifyignore\n');
+    const row = rowOf(repo);
+    expect(row.outcome, why(row)).toBe('rebuilt');
+    expect(fs.existsSync(path.join(repo, 'graphify-out')) || fs.lstatSync(path.join(repo, 'graphify-out'), { throwIfNoEntry: false }) !== undefined, 'no link').toBe(false);
+    expect(row.linked).toBe(0);
+    expect(why(row)).toContain('1 tree(s) not linked: git check-ignore graphify-out fails there');
+  });
+
   it('N16 — no link before the repository\'s current resolves; the link follows the first published build', { timeout: T }, () => {
     const repo = makeRepo();
     sweep({ GRAPH_STUB_MODE: 'false' });
