@@ -224,7 +224,7 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.pool-new-label': META,
     '.acct-disclosure': META,
     '.pool-note': META,
-    '.proj-pending': META,
+    '.proj-pending, .proj-work': META,
     '.fleet-archived-row, .fleet-runs-row': META,
     '.archive-size': META,
     '.accounts-projection': META,

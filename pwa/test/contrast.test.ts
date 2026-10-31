@@ -185,7 +185,6 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.proj-card-busy',
   '.proj-card-pin[data-mixed]',
   '.proj-nest-bracket',
-  '.proj-pending',
   '.proj-pending-glyph',
   '.proj-pending-meta > *:not(:first-child)::before',
   '.proj-pending-program',

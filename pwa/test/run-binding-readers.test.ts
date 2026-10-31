@@ -146,7 +146,7 @@ describe('the skew rows: an older server sends no binding', () => {
   });
   it('the worker-side readers answer as for a session with no run', () => {
     const fleet = [coordS, workerS];
-    const rowsOf = (runs: RunSummary[]): string[] => fleetTree(fleet, [], runs).flatMap((g) => g.rows.map((x) => (x.kind === 'session' ? `${x.session.id}:${x.depth}` : `spawn:${x.run.id}`)));
+    const rowsOf = (runs: RunSummary[]): string[] => fleetTree(fleet, [], runs).flatMap((g) => g.rows.map((x) => (x.kind === 'session' ? `${x.session.id}:${x.depth}` : x.kind === 'pending' ? `spawn:${x.run.id}` : x.kind)));
     expect(rowsOf([r10])).toEqual(rowsOf([]));
     expect(parentIdOf(workerS, [r10])).toBeNull();
     expect(coordinationOf(workerS, fleet, [r10])).toEqual(coordinationOf(workerS, fleet, []));

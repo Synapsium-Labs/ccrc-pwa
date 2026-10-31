@@ -14,6 +14,7 @@ import {
 } from '../src/fleet/sessionFacts';
 import type { ChildRunContext } from '../src/fleet/runWords';
 import { setSkin } from '../src/lib/skin';
+import { activity } from './delegationFixture';
 
 afterEach(cleanup);
 
@@ -341,5 +342,54 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
       if (c.context !== null && c.context.key !== 'programme') expect(head, `${name}: context`).toContain(c.context.text);
       cleanup();
     }
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.8: a programme worker's live delegated work is ONE chip on its row (R9), and the
+// session header holds the same chip, because both read the same activities.
+describe('the R9 chip: a worker\'s live delegated work (delegation broker wave 4)', () => {
+  const worker = s({ role: 'child', child: { kind: 'child', runId: 40 }, status: 'busy', bucket: 'working' });
+  const two = [activity({ activityId: 'a1', parentId: worker.id, displayName: 'map the tree' }),
+    activity({ activityId: 'a2', parentId: worker.id, displayName: 'read the plan' })];
+
+  it('W4-U33: two live activities read "2 delegated" on the card, and the header holds it', () => {
+    const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
+    const card = cardFacts(f);
+    expect(card.delegated?.text).toBe('2 delegated');
+    expect(card.delegated?.title).toContain('map the tree');
+    expect(headerFacts(f).find((h) => h.key === 'delegated')?.text).toBe('2 delegated');
+    expect(cardWithinHeader(card, headerFacts(f))).toEqual([]);
+    // The subset predicate itself counts the chip: a header without it is a header missing a card fact.
+    expect(cardWithinHeader(card, headerFacts(f).filter((h) => h.key !== 'delegated'))).toEqual([card.delegated]);
+    // Only live work counts: a stale or unmeasured activity is no chip.
+    expect(cardFacts(sessionFacts({ session: worker, now: NOW, delegated: [activity({ liveness: 'stale' })] })).delegated).toBeNull();
+  });
+
+  it('W4-U34: a dead worker carries no chip', () => {
+    const dead = s({ ...worker, status: 'dead', bucket: 'dead' });
+    const f = sessionFacts({ session: dead, now: NOW, delegated: two });
+    expect(cardFacts(f).delegated).toBeNull();
+    expect(headerFacts(f).some((h) => h.key === 'delegated')).toBe(false);
+  });
+
+  it('W4-U35: the row draws the chip when handed live work, and is byte-identical without it', () => {
+    const { container: bare } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} />);
+    const today = bare.innerHTML;
+    cleanup();
+    const { container: empty } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} delegated={[]} />);
+    expect(empty.innerHTML).toBe(today);
+    cleanup();
+    const { container } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} delegated={two} />);
+    const chip = container.querySelector('.sess-meta .sess-meta-chip');
+    expect(chip?.textContent).toBe('2 delegated');
+    expect(chip?.getAttribute('title')).toContain('read the plan');
+  });
+
+  it('the rendered header draws the chip the card draws', () => {
+    const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
+    render(<SessionHeaderHost {...headerProps({ session: worker, status: worker.status, facts: f })} />);
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+    expect(visible(document.querySelector('.chat-head')!)).toContain('2 delegated');
   });
 });

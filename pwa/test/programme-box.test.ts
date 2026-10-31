@@ -80,7 +80,7 @@ describe('programmeBoxes', () => {
     const b = only(boxesOf([coord, ...kids], kids.map((k, i) => run(10 + i, 'coord', k.id))));
     expect(b.coordinatorId).toBe('coord');
     expect(b.coordinator.id).toBe('coord');
-    expect(b.children.map((r) => (r.kind === 'session' ? r.session.id : `spawn:${r.run.id}`))).toEqual(['w1', 'w2', 'w3']);
+    expect(b.children.map((r) => (r.kind === 'session' ? r.session.id : r.kind === 'pending' ? `spawn:${r.run.id}` : r.kind))).toEqual(['w1', 'w2', 'w3']);
     expect(b.lead).toMatchObject({ slug: 'port-api', title: 'Port the API' });
     expect(b.more).toBe(0);
   });

@@ -13,7 +13,7 @@ import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow, Icon, useNow } from '@ccrc/ui';
 import type { RunSummary } from '../../../shared/api';
-import type { FleetRow } from './nestFleet';
+import { fleetRowKey, type FleetRow } from './nestFleet';
 import {
   footerWords, movementWords, progressWords, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
 } from './programmeBoxes';
@@ -80,7 +80,7 @@ export function ProgrammeBox({ view, state, tray, drawRow, drawAbroad, hueOf, on
       {(tray.rows.length > 0 || abroad.length > 0) && (
         <div className="pg-tray">
           {tray.rows.map((row) => (
-            <Fragment key={row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`}>{drawRow(row, hueOf(row))}</Fragment>
+            <Fragment key={fleetRowKey(row)}>{drawRow(row, hueOf(row))}</Fragment>
           ))}
           {abroad.length > 0 && <div className="proj-abroad">{abroad.map(drawAbroad)}</div>}
         </div>
