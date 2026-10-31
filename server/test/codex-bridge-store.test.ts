@@ -9,7 +9,9 @@
 // `reduce` op over streams written below. Ids are `<prefix>_fx<n>`, encrypted content `ENC-<n>`.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
@@ -82,6 +84,14 @@ function storeBytes(db: string): Buffer {
   return Buffer.concat(['', '-wal', '-shm'].map((s) => (existsSync(db + s) ? readFileSync(db + s) : Buffer.alloc(0))));
 }
 const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex');
+
+/** A set-aside copy's name in the lane directory (D-7676): the store's basename, `.damaged-`, a UTC stamp. */
+const COPY_RE = /^reasoning\.sqlite\.damaged-\d{8}T\d{6}Z$/;
+/** Every name in the lane directory that starts as a set-aside copy's does, sorted. */
+const damaged = (dir: string): string[] => readdirSync(dir).filter((n) => n.startsWith('reasoning.sqlite.damaged-')).sort();
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+/** The stats file's per-process store entry as construction leaves it (D-7677). */
+const STORE_OK = { state: 'ok', reason: null, at: null, setAside: null };
 
 describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () => {
   it("a call's reasoning comes back by its call_id", async () => {
@@ -371,6 +381,8 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
     expect(dump.rows).toEqual([]);
     expect(sha(storeBytes(db))).toBe(before);
     expect(existsSync(db + '-wal')).toBe(false);
+    // Never checked, never set aside (D-7676).
+    expect(damaged(path.dirname(db))).toEqual([]);
   });
 
   it('nothing but reasoning items is stored', async () => {
@@ -422,5 +434,191 @@ describe.skipIf(!PY)('the reasoning store (codex-bridge spec §2.5, D23)', () =>
     expect(threads.mismatches).toBe(0);
     expect(threads.disabled).toBeNull();
     expect(dump.rows.length).toBe(100);
+  });
+});
+
+describe.skipIf(!PY)('the start check: a damaged store is set aside and started fresh (D-7676, D-7677)', () => {
+  const statsPath = (dir: string): string => path.join(dir, 'bridge.stats.json');
+  const turn = { items: [rs(1)], phase: null };
+
+  it('CONTROL: a healthy store with rows survives a restart, never set aside', async () => {
+    const { home, dir, db } = lane('cb-store-start-ok-');
+    await run(home, [
+      { op: 'store-open', path: db },
+      { op: 'store-put', call: 'call_fx1', turn },
+    ]);
+    const [, open, got, snap] = await run(home, [
+      { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
+      { op: 'store-open', path: db, stats: true },
+      { op: 'store-get', call: 'call_fx1' },
+      { op: 'stats-snapshot' },
+    ]);
+    expect(open.disabled).toBeNull();
+    expect(got.turn).toEqual(turn);
+    expect(damaged(dir)).toEqual([]);
+    expect(snap.doc.store).toEqual(STORE_OK);
+    expect(snap.doc.outcomes).toEqual({});
+  });
+
+  it('NOT A DATABASE: a file whose bytes are not sqlite\'s is set aside, 0600, and the fresh store serves', async () => {
+    const { home, dir, db } = lane('cb-store-start-nadb-');
+    const [planted] = await run(home, [{ op: 'store-damage', path: db, how: 'not-a-database' }]);
+    // Measured, not assumed: the class this shape raises is exactly sqlite3.DatabaseError.
+    expect(planted.probe.raised).toBe('DatabaseError');
+    const bytes = sha(readFileSync(db));
+    expect(statSync(db).mode & 0o777).toBe(0o644);
+    const [, open, put, got, snap] = await run(home, [
+      { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
+      { op: 'store-open', path: db, stats: true },
+      { op: 'store-put', call: 'call_fx1', turn },
+      { op: 'store-get', call: 'call_fx1' },
+      { op: 'stats-snapshot' },
+    ]);
+    expect(open.disabled).toBeNull();
+    expect(put.disabled).toBeNull();
+    expect(got.turn).toEqual(turn);
+    const copies = damaged(dir);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatch(COPY_RE);
+    const copy = path.join(dir, copies[0]);
+    expect(statSync(copy).mode & 0o777).toBe(0o600);
+    expect(sha(readFileSync(copy))).toBe(bytes);
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
+    expect(snap.doc.store).toMatchObject({ state: 'set-aside', reason: 'store:set-aside' });
+    expect(snap.doc.store.at).toMatch(ISO);
+    expect(snap.doc.store.setAside).toEqual({ at: snap.doc.store.at, found: planted.probe.raised, file: copies[0] });
+  });
+
+  it('DAMAGED INDEX OR PAGE: a store quick_check does not pass is set aside, its rows not answered', async () => {
+    for (const how of ['stale-index', 'garbage-page'] as const) {
+      const { home, dir, db } = lane(`cb-store-start-${how}-`);
+      const [planted] = await run(home, [{ op: 'store-damage', path: db, how }]);
+      // Measured: neither shape raises at user_version or at the check; quick_check answers the damage in rows.
+      expect(planted.probe.raised, how).toBeNull();
+      expect(planted.probe.quickCheck, how).not.toEqual(['ok']);
+      if (how === 'stale-index') {
+        expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
+      }
+      const [, open, old, put, got, snap] = await run(home, [
+        { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
+        { op: 'store-open', path: db, stats: true },
+        { op: 'store-get', call: 'call_fx1' },
+        { op: 'store-put', call: 'call_fx9', turn },
+        { op: 'store-get', call: 'call_fx9' },
+        { op: 'stats-snapshot' },
+      ]);
+      expect(open.disabled, how).toBeNull();
+      expect(old.turn, how).toBeNull();
+      expect(put.disabled, how).toBeNull();
+      expect(got.turn, how).toEqual(turn);
+      // The start's own open put the store in WAL mode, so its copy may carry that WAL beside it.
+      const copies = damaged(dir).filter((n) => COPY_RE.test(n));
+      expect(copies, how).toHaveLength(1);
+      for (const n of damaged(dir)) expect([copies[0], `${copies[0]}-wal`, `${copies[0]}-shm`], how).toContain(n);
+      expect(snap.doc.store.setAside, how).toEqual({ at: snap.doc.store.at, found: 'quick-check', file: copies[0] });
+      expect(snap.doc.outcomes, how).toEqual({ 'store:set-aside': 1 });
+    }
+  });
+
+  it('a damaged store\'s WAL goes with its copy: the fresh store never answers its row, and the copy still does', async () => {
+    const { home, dir, db } = lane('cb-store-start-wal-');
+    const [planted] = await run(home, [{ op: 'store-damage', path: db, how: 'stale-index', walCall: 'call_fx_wal' }]);
+    expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
+    expect(existsSync(db + '-wal')).toBe(true);
+    const wal = sha(readFileSync(db + '-wal'));
+    const [open, got] = await run(home, [
+      { op: 'store-open', path: db },
+      { op: 'store-get', call: 'call_fx_wal' },
+    ]);
+    expect(open.disabled).toBeNull();
+    expect(got.turn).toBeNull();
+    const copies = damaged(dir).filter((n) => COPY_RE.test(n));
+    expect(copies).toHaveLength(1);
+    const copy = path.join(dir, copies[0]);
+    // The copy's WAL sits beside it, byte for byte the one the damaged store had (never checkpointed into the copy).
+    expect(existsSync(copy + '-wal')).toBe(true);
+    expect(sha(readFileSync(copy + '-wal'))).toBe(wal);
+    // The copy and its WAL open as one database that still holds the row.
+    const [keys, dump] = await run(home, [
+      { op: 'inbound-keys', call: ['call_fx_wal'] },
+      { op: 'store-dump', path: copy },
+    ]);
+    expect(dump.rows.map((r: Line) => r.key)).toContain(keys.call[0]);
+  });
+
+  it('RETENTION: two damaged starts in a row leave only the newest copy and its siblings', async () => {
+    const { home, dir, db } = lane('cb-store-start-keep-');
+    // An older copy and a stray sibling of another, both in the copy's name shape; two names outside it stay.
+    for (const n of ['reasoning.sqlite.damaged-20200101T000000Z', 'reasoning.sqlite.damaged-20200101T000000Z-wal',
+      'reasoning.sqlite.damaged-20200102T000000Z-shm', 'reasoning.sqlite.damaged-notes',
+      'other.sqlite.damaged-20200101T000000Z']) writeFileSync(path.join(dir, n), 'old', { mode: 0o600 });
+    await run(home, [{ op: 'store-damage', path: db, how: 'stale-index', walCall: 'call_fx_wal' }, { op: 'store-open', path: db }]);
+    const first = damaged(dir).filter((n) => COPY_RE.test(n));
+    expect(first).toHaveLength(1);
+    expect(first[0]).not.toBe('reasoning.sqlite.damaged-20200101T000000Z');
+    // The first start already removed the older copy and the stray sibling; its own copy keeps its WAL.
+    expect(damaged(dir).filter((n) => n.includes('2020'))).toEqual([]);
+    expect(existsSync(path.join(dir, first[0] + '-wal'))).toBe(true);
+    // The stamp has one-second resolution: the second start waits past it, so its copy has a name of its own.
+    await run(home, [
+      { op: 'sleep', s: 1.1 },
+      { op: 'store-damage', path: db, how: 'not-a-database' },
+      { op: 'store-open', path: db },
+    ]);
+    const second = damaged(dir).filter((n) => COPY_RE.test(n));
+    expect(second).toHaveLength(1);
+    expect(second[0]).not.toBe(first[0]);
+    // The first copy's WAL went with it; nothing of the older copies is left but the two names outside the shape.
+    expect(damaged(dir)).toEqual([second[0], 'reasoning.sqlite.damaged-notes'].sort());
+    expect(existsSync(path.join(dir, 'other.sqlite.damaged-20200101T000000Z'))).toBe(true);
+  });
+
+  it('LOCKED: a store another connection holds is disabled as OperationalError, never set aside', async () => {
+    const { home, dir, db } = lane('cb-store-start-locked-');
+    await run(home, [
+      { op: 'store-open', path: db },
+      { op: 'store-put', call: 'call_fx1', turn },
+    ]);
+    const ino = statSync(db).ino;
+    const before = sha(storeBytes(db));
+    const [, , open, , snap] = await run(home, [
+      { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
+      { op: 'store-lock', path: db },
+      { op: 'store-open', path: db, stats: true },
+      { op: 'store-unlock' },
+      { op: 'stats-snapshot' },
+    ], { consts: { 'store.BUSY_TIMEOUT_S': 0.2 } });
+    expect(open.disabled).toBe('store:OperationalError');
+    expect(damaged(dir)).toEqual([]);
+    expect(statSync(db).ino).toBe(ino);
+    expect(sha(storeBytes(db))).toBe(before);
+    expect(snap.doc.store).toMatchObject({ state: 'disabled', reason: 'store:OperationalError', setAside: null });
+    expect(snap.doc.outcomes).toEqual({ 'store:OperationalError': 1 });
+  });
+
+  it('SET-ASIDE FAILS: a rename that fails disables the store as set-aside-failed, and requests are still served', async () => {
+    const { home, dir, db } = lane('cb-store-start-fail-');
+    await run(home, [{ op: 'store-damage', path: db, how: 'not-a-database' }]);
+    const bytes = sha(readFileSync(db));
+    const [, , open, put, got, replay, snap] = await run(home, [
+      { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
+      { op: 'stats-fault', call: 'rename', errno: 'EACCES', times: 1 },
+      { op: 'store-open', path: db, stats: true },
+      { op: 'store-put', call: 'call_fx1', turn },
+      { op: 'store-get', call: 'call_fx1' },
+      {
+        op: 'from-anthropic', lookup: 'store',
+        body: { model: 'model-6.1-alpha', messages: [{ role: 'user', content: 'start' }] },
+      },
+      { op: 'stats-snapshot' },
+    ]);
+    expect(open.disabled).toBe('store:set-aside-failed');
+    expect(put.disabled).toBe('store:set-aside-failed');
+    expect(got.turn).toBeNull();
+    expect(replay.request.items.map((i: Line) => i.type)).toEqual(['message']);
+    expect(damaged(dir)).toEqual([]);
+    expect(sha(readFileSync(db))).toBe(bytes);
+    expect(snap.doc.store).toMatchObject({ state: 'disabled', reason: 'store:set-aside-failed', setAside: null });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside-failed': 1 });
   });
 });

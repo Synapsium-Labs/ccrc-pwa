@@ -140,9 +140,10 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(readdirSync(dir)).toEqual([STATS]);
     const doc = readDoc(file);
     expect(Object.keys(doc).sort()).toEqual([
-      'lane', 'lastUpstreamRequestId', 'names', 'outcomes', 'refusals', 'routes', 'since', 'startedAt', 'unexplained',
-      'updatedAt', 'usageHeaders', 'version',
+      'lane', 'lastUpstreamRequestId', 'names', 'outcomes', 'refusals', 'routes', 'since', 'startedAt', 'store',
+      'unexplained', 'updatedAt', 'usageHeaders', 'version',
     ]);
+    expect(doc.store).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
     expect(doc.version).toBe(1);
     expect(doc.lane).toBe('lane-a');
     expect(doc.since).toMatch(ISO);
@@ -791,5 +792,67 @@ describe.skipIf(!PY)('the stats file\'s write lock and value rules (codex-bridge
     const doc = readDoc(file);
     expect(doc.usageHeaders.values).toEqual({ 'x-codex-fx-ok': '1.5e-3', 'x-codex-fx-n': '-17' });
     expect(doc.names.responseHeader['x-codex-turn-state']).toBe(1); // the name is still counted
+  });
+});
+
+describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this process (D-7677)', () => {
+  const STORE_OK = { state: 'ok', reason: null, at: null, setAside: null };
+  const COPY = 'reasoning.sqlite.damaged-20261028T120000Z';
+
+  it('the entry is reset at construction, never carried, while the outcomes are', async () => {
+    const { home, file } = lane('cb-stats-store-reset-');
+    writeFileSync(file, JSON.stringify({
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      outcomes: { 'store:DatabaseError': 3, 'store:set-aside': 1 },
+      store: {
+        state: 'disabled', reason: 'store:DatabaseError', at: '2026-01-01T00:00:01.000Z',
+        setAside: { at: '2026-01-01T00:00:00.500Z', found: 'quick-check', file: COPY },
+      },
+    }), { mode: 0o600 });
+    const [o, , flushed] = await run(home, [open(file), call('flush', [], { force: true }), { op: 'stats-snapshot' }]);
+    expect(o.doc.store).toEqual(STORE_OK);
+    expect(o.doc.outcomes).toEqual({ 'store:DatabaseError': 3, 'store:set-aside': 1 });
+    expect(flushed.doc.store).toEqual(STORE_OK);
+    expect(readDoc(file).store).toEqual(STORE_OK);
+  });
+
+  it('a set-aside is recorded, and counted through the one method', async () => {
+    const { home, file } = lane('cb-stats-store-aside-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside', 'quick-check', COPY], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store).toEqual({
+      state: 'set-aside', reason: 'store:set-aside', at: '2023-11-14T22:13:20.000Z',
+      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'quick-check', file: COPY },
+    });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
+  });
+
+  it('disabled outranks set-aside in either order, and setAside keeps its record', async () => {
+    for (const order of ['aside-first', 'disabled-first'] as const) {
+      const { home, file } = lane('cb-stats-store-rank-');
+      const aside = call('store_event', ['store:set-aside', 'DatabaseError', COPY], { now: 1_700_000_000 });
+      const failed = call('store_event', ['store:DatabaseError'], { now: 1_700_000_060 });
+      const [, , , snap] = await run(home, [
+        open(file), ...(order === 'aside-first' ? [aside, failed] : [failed, aside]), { op: 'stats-snapshot' },
+      ]);
+      expect(snap.doc.store, order).toEqual({
+        state: 'disabled', reason: 'store:DatabaseError', at: '2023-11-14T22:14:20.000Z',
+        setAside: { at: '2023-11-14T22:13:20.000Z', found: 'DatabaseError', file: COPY },
+      });
+      expect(snap.doc.outcomes, order).toEqual({ 'store:set-aside': 1, 'store:DatabaseError': 1 });
+    }
+  });
+
+  it('a found or file outside NAME_RE is unrecognised, never written as given', async () => {
+    const { home, file } = lane('cb-stats-store-bound-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside', 'a found with spaces', '/an/absolute/path/to/a/copy'], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store.setAside).toEqual({ at: '2023-11-14T22:13:20.000Z', found: 'unrecognised', file: 'unrecognised' });
   });
 });

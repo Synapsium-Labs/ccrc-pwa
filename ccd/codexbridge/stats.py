@@ -10,10 +10,21 @@ THE FILE, VERSION 1 (`bridge.stats.json` in the lane directory; the name is `lan
    "routes": {"<route>/<model>": {"requests", "bytesPerToken", "promptTokensMax", "promptTokensLast"}},
    "refusals": {"<route>/<model>": {"tokens", "window", "at", "estimated": true}},
    "outcomes": {"<key>": n}, "names": {"<family>": {"<name>": n}}, "unexplained": {"<family>": ["<name>", ...]},
-   "usageHeaders": {"at", "values": {...}} or null, "lastUpstreamRequestId": <id> or null}
+   "usageHeaders": {"at", "values": {...}} or null, "lastUpstreamRequestId": <id> or null,
+   "store": {"state": "ok" | "set-aside" | "disabled", "reason": <outcome name> or null, "at": <time> or null,
+             "setAside": null or {"at", "found": "quick-check" | <exception class name>, "file": <copy's basename>}}}
 `since` is the file's first start, carried across restarts; `startedAt` is this process's. `promptTokensMax` is the
 largest upstream `input_tokens` of a reply the model accepted (the caller reports only those); a refusal's `tokens`
 is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with milliseconds.
+
+THE STORE ENTRY (D-7677) is the reasoning store's state for THIS process only: reset to STORE_OK at construction and
+never carried from a loaded file (the store's `outcomes` counts are, as every count is). `set-aside` says D-7676's
+start check set a damaged store aside and made a fresh one (`setAside` says when, what it found and the copy's
+basename); `disabled` says the store answers as empty for the rest of the process, `reason` the outcome that did it,
+and outranks `set-aside` when both happened (a fresh store that later failed: `setAside` keeps its record). One
+writer, `store_event`, the store's callback. A file written before the entry existed has no `store` key: that means
+the bridge predates it, never `ok`. The constructor's state is flushed before the server binds its port
+(`server.serve`), so the file describes this process from its first moment.
 
 NOTHING HERE HOLDS CONTENT. A name is bounded by NAME_RE (else `unrecognised`), at most NAMES_MAX per family (then
 `overflow`); a header's value is never kept, except an `x-codex-` header's, for the usage poller, and only when it has
@@ -58,7 +69,7 @@ import threading
 import time
 from typing import Dict, Mapping, Optional
 
-from . import count, errors, known
+from . import count, errors, known, store
 
 VERSION = 1
 FAMILIES = tuple(known.KNOWN)  # the ten D3 families, in the plan's order; spelled once, in known.KNOWN
@@ -90,6 +101,8 @@ UNKNOWN_FAMILY = "stats:unknown-family"
 # client went away before its answer was written is counted CLIENT_GONE, never `5xx` (the 7-day watch's upstream
 # failure rate); one the drain cut is counted `drain-cut` alone, by the drain, and nothing else.
 CLIENT_GONE = "client-gone"
+# D-7677: the store entry as construction leaves it (copied, never shared).
+STORE_OK = {"state": "ok", "reason": None, "at": None, "setAside": None}
 
 
 def _iso(t: float) -> str:
@@ -164,7 +177,7 @@ class Stats:
         self._doc = {
             "version": VERSION, "lane": lane, "since": started, "startedAt": started, "updatedAt": started,
             "routes": {}, "refusals": {}, "outcomes": {}, "names": {}, "unexplained": {}, "usageHeaders": None,
-            "lastUpstreamRequestId": None,
+            "lastUpstreamRequestId": None, "store": dict(STORE_OK),
         }  # type: dict
         if self._load():
             self.flush(force=True)
@@ -295,6 +308,27 @@ class Stats:
     def outcome(self, key: str) -> None:
         with self._lock:
             self._count(key)
+
+    def store_event(self, reason: str, found: Optional[str] = None, file: Optional[str] = None, *,
+                    now: Optional[float] = None) -> None:
+        """The reasoning store's callback (D-7677): count `reason` as `outcome` does, and set this process's store
+        entry. `store.SET_ASIDE` records `found` and `file` (each bounded by NAME_RE, `file` a basename, never a path)
+        in `setAside`, and sets `state` unless the store is already disabled; any other reason disables. `now` is
+        optional, the wall clock."""
+        with self._lock:
+            self._count(reason)
+            entry = self._doc["store"]
+            at = _stamp(now)
+            if reason == store.SET_ASIDE:
+                name = file if isinstance(file, str) and "/" not in file else None  # a basename, never a path
+                entry["setAside"] = {"at": at, "found": _bounded(found), "file": _bounded(name)}
+                if entry["state"] == "disabled":
+                    return
+                entry["state"] = "set-aside"
+            else:
+                entry["state"] = "disabled"
+            entry["reason"] = _bounded(reason)
+            entry["at"] = at
 
     def _route(self, route: str, model: str) -> dict:
         routes = self._doc["routes"]

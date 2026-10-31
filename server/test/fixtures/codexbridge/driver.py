@@ -61,8 +61,9 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
   store-* op, by store-remember (over the reducer the LAST reduce op built) and by from-anthropic with
   "lookup": "store" (its get in place of the stub). A store key is never passed in: each op names a `call` (keyed by
   inbound.call_key) or a `session` and a `text` (keyed by inbound.text_key). Every store-* op but store-plant,
-  store-swap and store-dump also prints "disabled": the store's reason, or None.
-  store-open       {path, max_bytes?, ttl_s?, umask?} -> {"disabled"}: os.umask(umask) first when given
+  store-swap, store-dump, store-damage, store-lock and store-unlock also prints "disabled": the store's reason, or None.
+  store-open       {path, max_bytes?, ttl_s?, umask?, stats?} -> {"disabled"}: os.umask(umask) first when given; with
+                   `stats: true` the store's callback is the stats-open Stats' `store_event` (D-7677), else none
   store-put        {call | session + text, turn, now?} -> {"disabled"}
   store-get        {call | session + text} -> {"turn", "disabled"}
   store-evict      {now?} -> {"evicted", "disabled"}
@@ -73,6 +74,18 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    without the store
   store-swap       {path, link_to} -> {}: the path replaced, after the start, by a symlink to `link_to` (made at a
                    side name, then os.replace), as a file swapped in under a running store
+  store-damage     {path, how, calls?, walCall?} -> {"probe": {"raised", "quickCheck"}}: a damaged store written without
+                   the store (D-7676). `how` "not-a-database" writes text that is not sqlite's (mode 0644);
+                   "stale-index" plants the store's table at USER_VERSION with a row per `calls` id (keyed by
+                   call_key; default call_fx1..call_fx5), then three more rows, then writes the primary-key index's
+                   page back as it was before them (a torn index: the table holds rows its index does not);
+                   "garbage-page" plants the same rows and fills that index page with 0xff. With `walCall`, the store
+                   is then put in WAL mode and one more row, keyed by call_key(walCall), is written by a connection
+                   that does not checkpoint on close, so it stays in `<path>-wal`. "probe" is what a raw connection
+                   then meets: the class name `PRAGMA user_version` or `PRAGMA quick_check` raised (None when
+                   neither did) and quick_check's rows
+  store-lock       {path} -> {}: a raw connection of this process takes an exclusive lock on the file and holds it
+  store-unlock     -> {}: that connection rolls back and closes
   store-dump       {path} -> {"rows": [{"key", "turn", "created", "size"}] by key, "userVersion", "journalMode",
                    "modes": {"", "-wal", "-shm"}: each file's permission bits, or None when absent, stat'ed BEFORE the
                    dump's own connection opens, so an open store's WAL files are measured while it holds them}:
@@ -348,13 +361,85 @@ def _store_threads(store, cb, n, each):
     return {"mismatches": mismatches[0], "raised_in_threads": raised}
 
 
+_PLANT_SCHEMA = ("CREATE TABLE reasoning(key TEXT PRIMARY KEY, items TEXT NOT NULL, created INTEGER NOT NULL, "
+                 "size INTEGER NOT NULL)")
+
+
+def _plant_rows(conn, cb, calls):
+    turn = json.dumps({"items": [], "phase": None})
+    for c in calls:
+        conn.execute("INSERT INTO reasoning(key, items, created, size) VALUES (?, ?, ?, ?)",
+                     (cb.inbound.call_key(c), turn, int(time.time()), len(turn)))
+
+
+def _store_damage(op, cb):
+    """The store-damage op (the docstring above)."""
+    path, how = op["path"], op["how"]
+    if how == "not-a-database":
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            os.fchmod(fd, 0o644)
+            os.write(fd, b"this file is not an sqlite database, only text in its place\n" * 40)
+        finally:
+            os.close(fd)
+    elif how in ("stale-index", "garbage-page"):
+        calls = op.get("calls") or ["call_fx%d" % n for n in range(1, 6)]
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.execute(_PLANT_SCHEMA)
+        conn.execute("PRAGMA user_version = %d" % cb.store.USER_VERSION)
+        _plant_rows(conn, cb, calls)
+        root = conn.execute("SELECT rootpage FROM sqlite_master "
+                            "WHERE name = 'sqlite_autoindex_reasoning_1'").fetchone()[0]
+        size = conn.execute("PRAGMA page_size").fetchone()[0]
+        conn.close()
+        with open(path, "rb") as f:
+            before = f.read()[(root - 1) * size:root * size]
+        conn = sqlite3.connect(path, isolation_level=None)
+        _plant_rows(conn, cb, ["call_fx_late%d" % n for n in range(3)])
+        conn.close()
+        with open(path, "r+b") as f:
+            f.seek((root - 1) * size)
+            f.write(before if how == "stale-index" else b"\xff" * size)
+    else:
+        _usage("unknown damage " + json.dumps(how))
+    if op.get("walCall"):
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+        _plant_rows(conn, cb, [op["walCall"]])
+        conn.close()
+    probe = {"raised": None, "quickCheck": None}
+    conn = sqlite3.connect(path, isolation_level=None)
+    try:
+        conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+        conn.execute("PRAGMA user_version").fetchone()
+        probe["quickCheck"] = [r[0] for r in conn.execute("PRAGMA quick_check").fetchall()]
+    except Exception as e:  # the class this op reports
+        probe["raised"] = type(e).__name__
+    finally:
+        conn.close()
+    return {"probe": probe}
+
+
 def _store_op(name, op, cb):
     if name == "store-plant":
         conn = sqlite3.connect(op["path"])
-        conn.execute("CREATE TABLE reasoning(key TEXT PRIMARY KEY, items TEXT NOT NULL, created INTEGER NOT NULL, "
-                     "size INTEGER NOT NULL)")
+        conn.execute(_PLANT_SCHEMA)
         conn.execute("PRAGMA user_version = %d" % int(op["user_version"]))
         conn.commit()
+        conn.close()
+        return {}
+    if name == "store-damage":
+        return _store_damage(op, cb)
+    if name == "store-lock":
+        conn = sqlite3.connect(op["path"], isolation_level=None)
+        conn.execute("PRAGMA locking_mode = EXCLUSIVE")
+        conn.execute("BEGIN EXCLUSIVE")
+        _STATE["lock"] = conn
+        return {}
+    if name == "store-unlock":
+        conn = _STATE.pop("lock")
+        conn.execute("ROLLBACK")
         conn.close()
         return {}
     if name == "store-swap":
@@ -381,7 +466,9 @@ def _store_op(name, op, cb):
     if name == "store-open":
         if "umask" in op:
             os.umask(int(op["umask"]))
-        _STATE["store"] = cb.store.ReasoningStore(op["path"], max_bytes=op.get("max_bytes"), ttl_s=op.get("ttl_s"))
+        outcome = _STATE["stats"].store_event if op.get("stats") else None
+        _STATE["store"] = cb.store.ReasoningStore(op["path"], max_bytes=op.get("max_bytes"), ttl_s=op.get("ttl_s"),
+                                                  outcome=outcome)
         out = {}
     elif name == "store-put":
         _STATE["store"].put(_store_key(op, cb), op["turn"], now=op.get("now"))

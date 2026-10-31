@@ -21,7 +21,27 @@ the database's mode.
 THE STORE NEVER FAILS A REQUEST. Any exception inside it (an `sqlite3.Error`, an `OSError`, anything else) disables it
 for the process: `disabled` becomes `store:<exception class>` (or `store:newer-version`, a store written by a newer
 bridge, which is then never written), every later call answers as an empty store, and the optional `outcome` callback
-is told once, so the stats file can count it (Task 5's `Stats.outcome`).
+is told once, so the stats file can count it and say so (D-7677's `Stats.store_event`).
+
+THE START CHECK (D-7676). A store damaged before the start used to be disabled at its first write and stay so for the
+life of the process (both lanes' stores, carried to a new box with a torn primary-key index, ran six hours with nothing
+replayed). So the constructor, once the file is made and the schema ensured on its own thread, runs `PRAGMA
+quick_check` on that connection when the store is not disabled and its `user_version` is USER_VERSION; healthy is one
+row, `ok` (a 50 MB store checks in about 10 ms). DAMAGE is a check that answers anything else, or an
+`sqlite3.DatabaseError` whose class is EXACTLY that (a file that is not sqlite's, a malformed image) raised while
+opening, reading `user_version`, ensuring the schema or checking. Its subclasses are not damage: `OperationalError`
+(locked, busy, I/O, a read-only file), `IntegrityError` and the rest name a condition of the moment, not of the file,
+so they disable the store as above and leave the file untouched; a newer store is never checked, never touched. A
+damaged store is SET ASIDE: the constructing thread's connection is closed without a checkpoint (a damaged WAL is
+never folded into the copy), the file is renamed `<path>.damaged-<UTC YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`,
+each when present, `<that name>-wal` and `<that name>-shm`, so the copy opens as one database and no damaged WAL is
+left at `<path>-wal` for the fresh store. Only then is ONE copy kept: every other name of that shape in the directory
+(an older copy, a stray sibling) is removed, a failed removal ignored. The fresh store is made as a first start makes
+one (`_create`, then `_conn`), and the callback is told `store:set-aside` once, with what was found (`quick-check` or
+the exception's class name) and the copy's basename, never a path. A set-aside that cannot finish (a rename's
+`OSError`, the fresh store failing) disables the store as `store:set-aside-failed`. Nothing raises, and nothing else
+changes: a failure after the start still disables the store for the process, and the next start's check is what
+repairs a store damaged while it ran.
 
 ONE CONNECTION PER THREAD. The server is a ThreadingHTTPServer and sqlite3's default `check_same_thread=True` makes a
 shared connection raise `ProgrammingError` on the first handler thread; each thread opens its own on first use, after
@@ -43,7 +63,7 @@ import sqlite3
 import stat
 import threading
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 
 from . import inbound
 
@@ -56,6 +76,10 @@ BUSY_TIMEOUT_S = 5.0  # sqlite's wait for another thread's write lock
 NEWER_VERSION = "store:newer-version"
 NOT_REGULAR = "store:not-a-regular-file"
 REPLACED = "store:replaced"
+SET_ASIDE = "store:set-aside"  # D-7676: a damaged store was set aside at the start and a fresh one made
+SET_ASIDE_FAILED = "store:set-aside-failed"  # D-7676: the set-aside could not finish; the store is disabled
+QUICK_CHECK = "quick-check"  # what a set-aside found when the check, not an exception, named the damage
+DAMAGED_STAMP = "%Y%m%dT%H%M%SZ"  # the UTC stamp of a set-aside copy's name
 
 # The fields a stored reasoning item keeps; every other field of the upstream item is dropped.
 KEPT_FIELDS = ("type", "id", "summary", "encrypted_content")
@@ -72,6 +96,34 @@ class _Disabled(Exception):
     def __init__(self, reason: str) -> None:
         Exception.__init__(self, reason)
         self.reason = reason
+
+
+def _close_unchecked(conn: sqlite3.Connection) -> None:
+    """Close `conn` without the checkpoint sqlite runs at the last close, so a WAL it read is left as it was (the
+    connection option is Python 3.12's; an older Python's close may checkpoint)."""
+    no_ckpt = getattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE", None)
+    try:
+        if no_ckpt is not None and hasattr(conn, "setconfig"):
+            conn.setconfig(no_ckpt, True)
+    finally:
+        conn.close()
+
+
+def _keep_one(path: str, kept: Set[str]) -> None:
+    """Remove every name in `path`'s directory of a set-aside copy's shape (`<base>.damaged-<stamp>`, with `-wal` or
+    `-shm` or neither) but the `kept` names; a removal that fails is ignored, never raised."""
+    directory, base = os.path.split(path)
+    shape = re.compile(re.escape(base) + r"\.damaged-[0-9]{8}T[0-9]{6}Z(?:-wal|-shm)?")
+    try:
+        names = os.listdir(directory or ".")
+    except OSError:
+        return
+    for name in names:
+        if name not in kept and shape.fullmatch(name):
+            try:
+                os.remove(os.path.join(directory, name))
+            except OSError:
+                pass
 
 
 def _clean_item(item: object) -> Optional[dict]:
@@ -103,7 +155,7 @@ class ReasoningStore:
     """The lane's reasoning store at `path`. Never raises: a failure sets `disabled` and the store answers as empty."""
 
     def __init__(self, path: str, *, max_bytes: Optional[int] = None, ttl_s: Optional[float] = None,
-                 outcome: Optional[Callable[[str], None]] = None) -> None:
+                 outcome: Optional[Callable[..., None]] = None) -> None:
         self.path = path
         self.disabled = None  # type: Optional[str]
         self._max_bytes = max_bytes
@@ -114,7 +166,7 @@ class ReasoningStore:
         self._identity = None  # type: Optional[tuple]  ((st_dev, st_ino) of the file this store created)
         self._last_evict = None  # type: Optional[float]  (time.monotonic() of the last eviction)
         self._guard(self._create)
-        self._guard(self._conn)  # the schema, on the constructing thread
+        self._guard(self._start)  # the schema and the start check, on the constructing thread (D-7676)
 
     # ── the one failure path ──
     def _guard(self, fn: Callable, *args: object) -> object:
@@ -133,11 +185,52 @@ class ReasoningStore:
             if self.disabled is not None:
                 return
             self.disabled = reason
+        self._tell(reason)
+
+    def _tell(self, reason: str, **detail: str) -> None:
         if self._outcome is not None:
             try:
-                self._outcome(reason)
-            except Exception:  # the count is best effort; the store is already disabled
+                self._outcome(reason, **detail)
+            except Exception:  # the count is best effort; the store's state is already set
                 pass
+
+    # ── the start check (D-7676, the module docstring) ──
+    def _start(self) -> None:
+        try:
+            conn = self._conn()
+            rows = conn.execute("PRAGMA quick_check").fetchall()
+            found = None if rows == [("ok",)] else QUICK_CHECK
+        except sqlite3.DatabaseError as e:
+            if type(e) is not sqlite3.DatabaseError:  # a subclass names the moment, not the file: disabled as before
+                raise
+            found = type(e).__name__
+        if found is None:
+            return
+        try:
+            copy = self._set_aside()
+            self._create()
+            self._conn()
+        except Exception:  # never raised: the store is disabled with the set-aside's own reason
+            raise _Disabled(SET_ASIDE_FAILED)
+        self._tell(SET_ASIDE, found=found, file=os.path.basename(copy))
+
+    def _set_aside(self) -> str:
+        """Close this thread's connection without a checkpoint, rename the file and its WAL files to the copy's name,
+        then keep only that copy; the copy's path. Raises when a rename fails."""
+        conn = getattr(self._local, "conn", None)
+        self._local.conn = None
+        if conn is not None:
+            _close_unchecked(conn)
+        copy = self.path + ".damaged-" + time.strftime(DAMAGED_STAMP, time.gmtime())
+        os.rename(self.path, copy)
+        kept = {os.path.basename(copy)}
+        for suffix in ("-wal", "-shm"):
+            if os.path.lexists(self.path + suffix):
+                os.rename(self.path + suffix, copy + suffix)
+                kept.add(os.path.basename(copy + suffix))
+        self._identity = None
+        _keep_one(self.path, kept)
+        return copy
 
     # ── the file and the connections ──
     def _create(self) -> None:
@@ -176,7 +269,7 @@ class ReasoningStore:
                     raise
             conn.execute("PRAGMA journal_mode = WAL")
         except BaseException:
-            conn.close()
+            _close_unchecked(conn)  # a store this open refused is never checkpointed into (D-7676)
             raise
         self._local.conn = conn
         return conn
