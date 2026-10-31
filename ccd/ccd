@@ -40923,11 +40923,12 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 # of EITHER kind is read instead, so that a PR re-enqueued after a removal reads
 # as queued again. The REASON is what tells a landing from a dequeue (landing-
 # order wave 3d): GitHub records a removal with reason `merged` at every
-# successful queue merge, at or one second before the PR reads MERGED (16 of 16
-# queue merges, measured 2026-10-21), so the add is never the last act of a
-# landed PR. `reason` is a free-form String with no documented values; the
-# exact text `merged` is the one this reads, and any other value, null or a
-# type GitHub did not promise keeps the answers this block gave before it.
+# successful queue merge, within a second of the merge, either side (22 of 22
+# queue merges measured 2026-10-21, D-6216), so a landed PR's last act is that
+# removal, or, until the removal is recorded, the add. `reason` is a free-form
+# String with no documented values; the exact text `merged` is the one this
+# reads, and any other value, null or a type GitHub did not promise keeps the
+# answers this block gave before it.
 #
 # WHAT IT ANSWERS, per full line, in the additive `queue` field:
 #   queued      the PR is OPEN and has a queue entry now

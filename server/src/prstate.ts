@@ -269,9 +269,10 @@ export function phaseFor(line: CcdPrLine): PrState {
 /** The merge-queue vocabulary `ccd pr-state --project` answers in (spec §5.2),
  *  ENUMERATED ONCE — the word list below is derived from it, never re-typed.
  *  Since landing-order wave 3d a removal's GitHub `reason` chooses between
- *  `dequeued` and `landed` inside ccd, and never reaches the line: `landed`
- *  can name a line whose phase still reads open, for the second before GitHub
- *  reads the PR merged, so no reader may take `landed` to mean phase merged. */
+ *  `dequeued` and `landed` inside ccd, and never reaches the line. GitHub
+ *  records that removal within a second of the merge, either side (D-6216):
+ *  `landed` can name a line whose phase still reads open, for up to that
+ *  second, so no reader may take `landed` to mean phase merged. */
 const PR_QUEUE_MAP = {
   queued: 'the PR is open and in the merge queue now',
   dequeued: 'the PR is open, out of the queue, and its last queue act was a removal for any reason but a merge',

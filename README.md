@@ -5189,8 +5189,8 @@ server reports how the queue answered: `ccd pr-state --project` makes one GraphQ
 per sweep (the newest open PRs and the most recently merged, under its own 4 s timeout) and stamps
 each line with an additive `queue` word — `queued`, `dequeued`, `landed`, `none`, or `unmeasured`
 when the read failed or the PR is outside its windows, which costs no row — and `queueAt`. GitHub
-records a removal with reason `merged` at every successful queue merge, at or a second before the PR
-reads merged; that removal reads `landed`, never `dequeued`, and, while the PR is open, a removal for
+records a removal with reason `merged` at every successful queue merge, within a second of the merge,
+either side; that removal reads `landed`, never `dequeued`, and, while the PR is open, a removal for
 any other reason, or none, reads `dequeued` on the first sweep that sees it (landing-order wave 3d). The
 landing lane, `sweepLanding` (every decision in the pure `server/src/coord/landing.ts`), mails the
 coordinator of the open run naming that workspace a `status` mail from `operator`: `merged:#<n>` when
