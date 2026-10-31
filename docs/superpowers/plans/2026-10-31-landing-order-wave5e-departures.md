@@ -41,3 +41,6 @@ through the file's helpers with the wire bytes unchanged, and the two L0 pins co
 **D-7633.** The re-pin writes three columns that no suite pinned, and `landingEntry.ts` had a header that promised no
 fs, no `node:sqlite` and no clock but nothing that checked it. The wave added a case and a purity describe, and the
 whole `ejection-not-merging` row of §4 is now pinned, so a deleted sentence is red.
+
+The plan is not edited, because merged plans are append-only. This file is the record, and the programme ledger folds
+it in.
