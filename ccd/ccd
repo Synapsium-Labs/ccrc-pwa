@@ -5634,8 +5634,8 @@ _gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated 
     *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '%s\n' offline ;;
     # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
     # several thousand PRs of history — the slug is operator residue and
-    # stays out of this tree. The 100-PR `statusCheckRollup` window this
-    # function sends answers
+    # stays out of this tree. The 100-PR `statusCheckRollup` window
+    # `_gh_pr_list` sends answers
     # `HTTP 504: We couldn't respond to your request in time. …
     # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
     # standing property of that repo's PR history, not a blip. It went out as
@@ -41107,10 +41107,10 @@ PY
 # leading dash, so `awk -v` escape processing cannot alter it), reaches python3's and awk's argv; it never reaches gh or
 # a shell (the PR-lifecycle spec's "No GitHub-sourced string is ever placed in a prompt, an argv, or a shell", departed
 # from for this one anchored string, D-7595 (b)).
-# The absent test (rc 1 and `Could not resolve to a PullRequest`) is deliberately narrower than `_ws_train_record`'s
-# (which also accepts `is not a pull request`): a train candidate that is an issue is a failed candidate, but a PR-keyed
-# read of an issue number is not GitHub's definite word about a pull request, so it reads `unmeasured` with
-# `_gh_fail_reason`'s word (`error` for that text).
+# The absent test (rc 1 and `Could not resolve to a PullRequest`) is GitHub's definite word that no pull request has
+# that number, whatever else the number names, so an issue number with that answer reads `absent`. Any other rc-1 text,
+# `is not a pull request` included (which `_ws_train_record` also accepts), reads `unmeasured` with `_gh_fail_reason`'s
+# word (`error` for that text).
 PR_GH_VIEW_TIMEOUT=6
 PR_VIEW_FIELDS=number,state,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,labels
 

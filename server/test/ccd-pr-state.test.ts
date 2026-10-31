@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, makePrHarness, mergedRow, trainBlock, trainComment, trainRow,
+import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, makePrHarness, mergedRow, notAPullRequest, trainBlock, trainComment, trainRow,
   type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
@@ -2338,6 +2338,21 @@ describe('the PR-keyed form: pr-state --project <p> --pr <n> (landing order wave
   it('absent only for GitHub\'s definite "Could not resolve to a PullRequest"', () => {
     h.ghViewFail(42);
     expect(byPr()).toBe(lineOf('absent', null, NULLS));
+  });
+
+  it('the resolve text at an rc other than 1 is unmeasured error, not absent (rc 1 AND the text)', () => {
+    h.ghViewFail(42, 2, notAPullRequest(42));
+    expect(byPr()).toBe(lineOf('unmeasured', 'error', NULLS));
+  });
+
+  it('rc 1 with "is not a pull request" is unmeasured error: the narrower test than the train record\'s', () => {
+    h.ghViewFail(42, 1, 'GraphQL: #42 is not a pull request\n');
+    expect(byPr()).toBe(lineOf('unmeasured', 'error', NULLS));
+  });
+
+  it('a MERGED body with a merge commit and no mergedAt is unmeasured missing-field', () => {
+    h.ghView(42, viewRow({ state: 'MERGED', mergedAt: null, mergeCommit: { oid: MERGE } }));
+    expect(byPr()).toBe(lineOf('unmeasured', 'missing-field', NULLS));
   });
 
   it.each([

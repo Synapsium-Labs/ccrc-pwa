@@ -234,7 +234,9 @@ and the class of act that opened the livelock window.
   before the merge's second and said an add could not be the final queue act of a landed PR; one of 22 queue
   merges measured on 2026-10-21 recorded it one second after (D-6216). The clause earlier in this bullet said a
   removal alone cannot tell a merged PR the queue landed after a re-enqueue from one merged by hand after a
-  dequeue; it is restated, since the removal's reason, not the act's kind, is what tells them apart.)
+  dequeue; it is restated, since once the removal is recorded its reason, not the act's kind, tells them apart. In
+  the second before it is recorded the PR reads MERGED with the add still its last act, and the MERGED-plus-add arm
+  answers `landed`, so for that second the act's kind decides.)
 - A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
   `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
   name it), and, when an open run names the PR's workspace, a `status` mail to that run's coordinator, sent as
@@ -394,8 +396,11 @@ prefix grant, gets its own `CcdArgv` brand, and the pr-state header's gh-call bu
 landing entry per sweep. A reader walks entries with it, separate from `sweepMerged`'s per-workspace loop, so
 no-run entries and hand merges are seen. The coordinator's own merge step also reports the result.
 (Amended 2026-10-30, wave 5c: five words, `absent` for GitHub's definite answer only (D-7593); the line echoes
-`baseRefName`, `isCrossRepository` and the train flags, `mergeCommit` flattened to its oid (D-7594); a train claim the
-proof refused or could not read is `unmeasured` (D-7596); gated by the `pr-state-pr-v1` capability.)
+`baseRefName`, `isCrossRepository` and the train flags, `mergeCommit` flattened to its oid (D-7594); the gh fields
+also include `labels`, so the form is one `gh pr view` unless a CLOSED PR carries the train label; a train claim adds the
+train record's own `gh` reads (measured: a second `gh pr view` of the PR, for its comments, and one of the train PR;
+also a search when no named train proves the claim), and the form keeps the proofs it makes, as `pr-state --session` does (D-7595); a train claim
+the proof refused or could not read is `unmeasured` (D-7596); gated by the `pr-state-pr-v1` capability.)
 
 **Next to land.** The radar names the head whose composition against the current base is clean; the server mails
 the coordinator once. Mail is idle-gated: its latency to the coordinator's first nudge-started turn is a plan
