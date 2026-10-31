@@ -96,6 +96,12 @@ describe('a PWA L1 module loads no .tsx, no store and not lib/api.ts (ARCH-04 st
     expect(pwaRing('pwa/src/fleet/openers.ts')).toEqual({ ring: 'L4', why: 'declares L4 in its header' });
   });
 
+  // The skin registry is composition, placed by its `L4 composition` header (OA1, ruled in
+  // docs/superpowers/plans/2026-10-30-ring-drain-pwa/rw7-ruled.md; D-7575): without it the file answers L1.
+  it('pwa/src/skins/index.ts is L4 by its header declaration (OA1)', () => {
+    expect(pwaRing('pwa/src/skins/index.ts')).toEqual({ ring: 'L4', why: 'declares L4 in its header' });
+  });
+
   it('CONTROL: a planted runtime import of a component, a store or the fetch adapter from an L1 module is red', () => {
     const file = 'pwa/src/session/plantedWords.ts';
     const planted = (src: string): string[] => [...l1Violations(file, parseSource(src, file)).keys()];
