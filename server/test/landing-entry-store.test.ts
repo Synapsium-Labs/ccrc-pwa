@@ -149,6 +149,38 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(coord.landingEntries(P)[0]).toMatchObject({ pinnedSha: HEAD2, state });
   });
 
+  it('a pin onto a row this build cannot read keeps it untouched, and the run still advances (the rollback case)', () => {
+    const id = atReview();
+    insertRaw(7, 'later', null);
+    expect(coord.landingEntries(P)[0]).toMatchObject({ state: 'unknown', pinnedSha: HEAD2 });
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: true, from: 'awaiting-review', to: 'merging', landing: { kind: 'kept', state: 'unknown' } });
+    expect(coord.landingEntries(P)).toEqual([expect.objectContaining({ pr: 7, state: 'unknown', pinnedSha: HEAD2, runId: null, ejections: 0 })]);
+    expect(coord.db.prepare('SELECT state FROM landing_entries WHERE pr = 7').get()).toEqual({ state: 'later' });
+  });
+
+  it('a retreat from merging never ejects another run\'s pinned entry for the same PR', () => {
+    const other = coord.openRun({ program: 'p', title: 't', project: P, wave: 2, waveOf: 2, claimedBy: 'coord-a' });
+    if (!('id' in other)) throw new Error('fixture openRun refused');
+    const id = atReview();
+    insertRaw(7, 'pinned', other.id, HEAD2);
+    coord.advance(id, 'merging', 'coordinator', mergingAtDetail(HEAD, 7, 'off'));
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'kept', state: 'pinned' } });
+    expect(coord.landingEntries(P)).toEqual([expect.objectContaining({ pr: 7, state: 'pinned', runId: other.id, pinnedSha: HEAD2,
+      baseSha: null, ejectionKind: null, ejections: 0 })]);
+  });
+
+  it.each(['ejected', 'landed'])('a retreat from merging leaves this run\'s own %s entry alone', (state) => {
+    const id = atReview();
+    insertRaw(7, state, id, HEAD2);
+    coord.advance(id, 'merging', 'coordinator', mergingAtDetail(HEAD, 7, 'off'));
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'kept', state } });
+    expect(coord.landingEntries(P)).toEqual([expect.objectContaining({ pr: 7, state, runId: id, pinnedSha: HEAD2,
+      baseSha: null, ejectionKind: null, ejections: 0 })]);
+  });
+
   it('a retreat whose episode predates the line is no-entry, and never ejects another PR\'s row of the same run', () => {
     const id = atReview();
     insertRaw(8, 'pinned', id, HEAD2);
