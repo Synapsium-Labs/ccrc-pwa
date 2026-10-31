@@ -892,8 +892,10 @@ describe('graphQueries — the read counter the console can see', () => {
 // nobody asked.
 describe('the SessionStart graph card', () => {
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
-   *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
-   *  and run in a bash subshell against this fixture HOME, because the hook is
+   *  `_gs_emit` (the one builder of a row's JSON), `_gs_row`, `_gs_finish` and
+   *  the sweep's `declare -A K_…` lines are lifted verbatim out of
+   *  ccd/ccd-graph-sweep and run from a driver file against this fixture HOME,
+   *  the rows travelling as arguments, because the hook is
    *  a SECOND, hand-rolled reader of that schema (since graph revision 2's
    *  repository sweep, D-7350: `.passes[].repos[]`, one row per repository
    *  carrying `source`/`outcome`/`reason`) with nothing importable to couple it
@@ -918,20 +920,24 @@ describe('the SessionStart graph card', () => {
    *  it. Call twice for two passes; the hook reads the LAST. */
   const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    const script = [
+    const declares = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^declare -A K_/.test(l));
+    expect(declares.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
+    const driver = path.join(home, 'sweep-pass.sh');
+    fs.writeFileSync(driver, [
       'set -uo pipefail',
       'CENSUS="$HOME/.ccrc/graph-sweep.json"',
       'STARTED="2026-09-02T00:00:00Z"', 'PIN="0.9.9"', 'ROWS=()',
-      liftFn('_gs_row'), liftFn('_gs_finish'),
-      'while [ "$#" -gt 0 ]; do _gs_row "$1" >/dev/null; shift; done',
+      ...declares, 'GS_LINKED=0 GS_PENDING=0',
+      liftFn('_gs_row'), liftFn('_gs_finish'), liftFn('_gs_emit'),
+      'n=0',
+      'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
       '_gs_finish ok 0',
-    ].join('\n');
+    ].join('\n'));
     const source = (tree: string): string => {
       const gitDir = path.join(tree, '.git');
       return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
     };
-    execFileSync('bash', ['-c', script, 'sweep',
-      ...rows.map((r) => JSON.stringify({ repo_key: 'project-a-0123abcd', source: source(r.path), outcome: r.outcome, reason: r.reason }))],
+    execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
       { env: { ...process.env, HOME: home }, encoding: 'utf8' });
   };
 

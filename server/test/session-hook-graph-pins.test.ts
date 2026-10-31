@@ -88,12 +88,14 @@ const plantGraph = (tree: string, built: string, content: GraphContent = GRAPH):
   fs.writeFileSync(path.join(out, '.graphify_engine'), `${PIN}\n`);
 };
 
-/** One census pass, written by the sweep's OWN writer (`_gs_row`, `_gs_finish`
- *  lifted out of ccd/ccd-graph-sweep), so the hook's reader is pinned against
- *  the schema the sweep really writes. The lifted text goes into a driver
- *  file; the rows travel as arguments. Since the repository sweep (GR4,
- *  D-7350) a row is one repository's: each row below is given by the tree it is
- *  about and written with `source`, the realpath of that tree's common dir. */
+/** One census pass, written by the sweep's OWN writer (`_gs_emit`, `_gs_row`,
+ *  `_gs_finish` and the sweep's `declare -A K_…` lines, lifted out of
+ *  ccd/ccd-graph-sweep), so the hook's reader is pinned against the row object
+ *  the sweep really builds: a rename of one of `_gs_emit`'s field names reds
+ *  these rows. The lifted text goes into a driver file; the rows travel as
+ *  arguments. Since the repository sweep (GR4, D-7350) a row is one
+ *  repository's: each row below is given by the tree it is about, and its
+ *  `source` is the realpath of that tree's common dir. */
 const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
   const src = fs.readFileSync(SWEEP, 'utf8');
   const lift = (name: string): string => {
@@ -101,20 +103,28 @@ const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): v
     expect(m, `ccd-graph-sweep no longer defines ${name}()`).not.toBeNull();
     return m![0];
   };
+  // The sweep's own per-repository state declarations, verbatim (`_gs_emit` reads them as associative arrays).
+  const declares = (): string[] => {
+    const d = src.split('\n').filter((l) => /^declare -A K_/.test(l));
+    expect(d.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
+    return d;
+  };
   const driver = path.join(home, 'sweep-pass.sh');
   fs.writeFileSync(driver, [
     'set -uo pipefail',
     'CENSUS="$HOME/.ccrc/graph-sweep.json"',
     'STARTED="2026-10-29T00:00:00Z"', `PIN="${PIN}"`, 'ROWS=()',
-    lift('_gs_row'), lift('_gs_finish'),
-    'while [ "$#" -gt 0 ]; do _gs_row "$1" >/dev/null; shift; done',
+    ...declares(), 'GS_LINKED=0 GS_PENDING=0',
+    lift('_gs_row'), lift('_gs_finish'), lift('_gs_emit'),
+    'n=0',
+    'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
     '_gs_finish ok 0',
   ].join('\n'));
   const source = (tree: string): string => {
     const gitDir = path.join(tree, '.git');
     return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
   };
-  execFileSync('bash', [driver, ...rows.map((r) => JSON.stringify({ repo_key: 'project-a-0123abcd', source: source(r.path), outcome: r.outcome, reason: r.reason }))],
+  execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
     { env: { ...process.env, HOME: home }, encoding: 'utf8' });
 };
 
