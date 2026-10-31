@@ -1,7 +1,7 @@
 // The unmeasured registry's sentence, pinned by its inputs and outputs (D-7570, ARCH-05): the chip's title and the
 // row's `unreadable` marker read ONE spelling, wherever the word lives.
 import { describe, expect, it } from 'vitest';
-import { unmeasuredTitle } from '../src/fleet/chips';
+import { unmeasuredTitle } from '../src/fleet/unmeasuredWords';
 import { markers, sessionFacts } from '../src/fleet/sessionFacts';
 import { fleetSession } from './fleetFixture';
 
