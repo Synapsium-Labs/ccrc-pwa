@@ -268,7 +268,9 @@ describe('N23 (migration half) — saved results move to the repository\'s memor
     expect(fs.readFileSync(path.join(go(repo), 'memory', `migrated-${tk}`, 'sub', 'q2.md'), 'utf8')).toBe('saved two\n');
     const t = trash();
     expect(t).toHaveLength(1);
-    expect(t[0]).toMatch(new RegExp(`^${tk.replace(/[.]/g, '\\.')}\\.[0-9]+$`));
+    // `<tree-key>.<digits>`, checked without building a pattern from the key
+    expect(t[0]!.startsWith(`${tk}.`), `${t[0]} is not ${tk}.<n>`).toBe(true);
+    expect(t[0]!.slice(tk.length + 1)).toMatch(/^[0-9]+$/);
     expect(fs.readFileSync(path.join(STORE(), '.trash', t[0]!, 'graph.json'), 'utf8')).toBe('{"nodes":[]}');
     expect(fs.existsSync(path.join(STORE(), '.trash', t[0]!, 'memory'))).toBe(false);
     expect(rowOf(repo).migrate).toEqual({ done: 1, pending: 0, refused: [] });

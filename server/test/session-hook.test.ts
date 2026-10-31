@@ -922,12 +922,19 @@ describe('the SessionStart graph card', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     const declares = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^declare -A K_/.test(l));
     expect(declares.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
+    // The sweep's own top-level counter initialisers, verbatim (`GS_LINKED=0 …`, `GS_MDONE=0 …`): every counter
+    // `_gs_emit` reads must be among them, so a rename or a new counter cannot leave this driver behind.
+    const counters = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^GS_[A-Z]+=0 /.test(l));
+    const initialised = new Set(counters.flatMap((l) => [...l.matchAll(/(GS_[A-Z]+)=/g)].map((m) => m[1])));
+    for (const v of new Set([...liftFn('_gs_emit').matchAll(/\$\{?(GS_[A-Z_]+)/g)].map((m) => m[1]))) {
+      expect(initialised.has(v!), `ccd-graph-sweep no longer initialises ${v} at the top level`).toBe(true);
+    }
     const driver = path.join(home, 'sweep-pass.sh');
     fs.writeFileSync(driver, [
       'set -uo pipefail',
       'CENSUS="$HOME/.ccrc/graph-sweep.json"',
       'STARTED="2026-09-02T00:00:00Z"', 'PIN="0.9.9"', 'ROWS=()',
-      ...declares, 'GS_LINKED=0 GS_PENDING=0',
+      ...declares, ...counters,
       liftFn('_gs_row'), liftFn('_gs_finish'), liftFn('_gs_emit'),
       'n=0',
       'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
