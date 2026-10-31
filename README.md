@@ -6171,14 +6171,16 @@ that figure was not measured on that tick, for example because the tick was inte
 The two mirrors, `enabled` and `lander`, are reconciled in one pass at the start of every tick that runs, before any
 project is measured. `enabled` is written for a valid conf with `lineage=on`, and `lander` for a valid conf with
 `lander=coordinator` whatever `lineage` says, each only for an unpaused project with a real main checkout, and each is
-removed in every other case. Their writes are therefore as far apart as the tick starts, whatever the order or budgets of the projects. Every
-removal first checks that `~/.cc-sessions/landing/` and the project's directory are real, owned directories.
+removed in every other case. Their writes are therefore as far apart as the tick starts, whatever the order or budgets
+of the projects. Every removal first checks that `~/.cc-sessions/landing/` and the project's directory are real, owned
+directories.
 
-**The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are three keys: `base`, a branch name that defaults to `main`; `lineage`, `on` or `off`, which defaults to
-`off`; and `lander`, `coordinator` or `none`, which defaults to `none` and says who lands the project's PRs. A probe
-older than this key reads a conf that names it as `unknown-key` and stops measuring that project, so write `lander=`
-only once the box runs this probe. An
-empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or a conf that is not a
+**The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are
+three keys: `base`, a branch name that defaults to `main`; `lineage`, `on` or `off`, which defaults to `off`; and
+`lander`, `coordinator` or `none`, which defaults to `none` and says who lands the project's PRs. A probe older than
+this key reads a conf that names it as `unknown-key` and stops measuring that project, so write `lander=` only once
+the box runs this probe. An empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or
+a conf that is not a
 regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would refuse. That project is not measured, its `enabled` and `lander` are removed, and the
 journal names the reason (never the bytes).
 
