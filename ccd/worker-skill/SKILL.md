@@ -337,8 +337,20 @@ goes with the tree.
   the disagreement in your `wave-done` mail so the ledger gets it — that is how
   the next wave finds out.
 - **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming
-  this run): a review run read your wave and the coordinator ruled. The report
-  at the path in the mail's `artifacts` — plus the rulings in its body — is
-  your brief for the fix round. Ack it (clause 3), fix on this workspace's own
-  branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never
-  re-send the old numbers.
+  this run): usually a review run read your wave and the coordinator ruled.
+  The report at the path in the mail's `artifacts` — plus the rulings in its
+  body — is your brief for the fix round. Ack it (clause 3), fix on this
+  workspace's own branch (clause 2), and report a FRESH wave-done fingerprint
+  (clause 9); never re-send the old numbers.
+  A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or
+  `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause
+  16's ejection, and its three body lines are your whole brief. Absorb the
+  `base:` sha with `git merge`, then fix only the `paths:` it names; on
+  `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in
+  it. If the new-head merge does not apply cleanly, run `git merge --abort`,
+  push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is
+  not that round's work. A `fix-round` mail whose first line reads
+  `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:`
+  line is your whole brief, so fix the named checks on this branch. It
+  licenses no absorb: clause 16's first two triggers still apply to it, and
+  its third does not. Report a FRESH wave-done as for any fix round.
