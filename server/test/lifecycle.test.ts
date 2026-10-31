@@ -1023,10 +1023,22 @@ describe('GET /api/projects — the program-ready readiness', () => {
 
 describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   // Its L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).
-  it('declares the five graphify classes', () => {
-    const names = LIFECYCLE.map((c) => c.name).sort();
-    for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter',
-      'graph-build-lock', 'graph-sweep-census']) expect(names).toContain(n);
+  // Graph revision 2 GR8 (D-7354; spec §10): the six repository-store classes replace the per-tree ones, whose paths
+  // nothing writes any more. Counted exit: graph classes 5 -> 6.
+  it('declares the six graphify classes of spec §10, and none of the four retired ones', () => {
+    const graph = LIFECYCLE.filter((c) => c.name.startsWith('graph-') || c.name.endsWith('-graph-store'));
+    expect(graph.map((c) => [c.name, c.pattern])).toEqual([
+      ['graph-repo-build', 'E'], ['graph-repo-checkout', 'O'], ['graph-repo-memory', 'O'],
+      ['graph-staging', 'E'], ['graph-tree-link', 'W'], ['graph-sweep-census', 'R'],
+    ]);
+    for (const c of graph) {
+      expect(c.collector, `${c.name} is collected`).toBeTruthy();
+      expect(c.ruling, `${c.name} needs no ruling`).toBeNull();
+    }
+    const names = LIFECYCLE.map((c) => c.name);
+    for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter', 'graph-build-lock']) {
+      expect(names, `${n} is retired`).not.toContain(n);
+    }
   });
   it('every collector-less class carries a non-empty operator ruling', () => {
     for (const c of LIFECYCLE.filter((c) => c.collector === null)) {
@@ -1114,7 +1126,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   // policy's containment row for `node_modules` — it has no class of its own and "dies with" its workspace.
   it('characterization: the manifest\'s classes, and no class of its own for a workspace\'s node_modules (D-7278)', () => {
     expect(LIFECYCLE.map((c) => c.name)).toEqual([
-      'workspace-graph-store', 'project-graph-store', 'graph-corpus-filter', 'graph-build-lock', 'graph-sweep-census',
+      'graph-repo-build', 'graph-repo-checkout', 'graph-repo-memory', 'graph-staging', 'graph-tree-link', 'graph-sweep-census',
       'claude-tmp-session-dirs', 'tmp-sweep-census', 'child-tmp-roots', 'ccd-orphan-worktrees', 'agent-worktrees',
       'cc-tmp-loose-entries', 'child-workspaces', 'workspace-dependency-dirs', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
       'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',

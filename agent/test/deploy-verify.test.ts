@@ -761,9 +761,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'ccrc-agent.service.d',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer',
-      // graphify Task 10 (O3/O6b): the sweep pair, installed the same way.
-      '_unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service',
-      '_unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer',
+      // graphify Task 10 (O3/O6b): the sweep pair — RENDERED from the box's graph settings since D-7354,
+      // through `_graph_units`, which sources the shipped ccrc the way `_slice_limits_unit` does.
+      '_graph_units service ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service',
+      '_graph_units timer ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.timer ~/.config/systemd/user/ccd-account-health.timer',
       // spec 2026-09-07 §C: the keepalive pair, installed the same way.
@@ -1059,6 +1060,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // The slice drop-in is RENDERED on the box by the shipped ccd/ccrc's `_inst_slice_limits`
     // (D-7296), which `_slice_limits_unit` sources out of ~/ccrc, so the fixture tree carries it.
     cpSync(join(deployDir, '..', 'ccd', 'ccrc'), join(src, 'ccd', 'ccrc'));
+    // The graph sweep's units are rendered the same way (D-7354): `_graph_units` reaches `_inst_graph_lib`, which
+    // sources the resolver from beside that ccrc, so the fixture tree carries it too.
+    cpSync(join(deployDir, '..', 'ccd', 'graph-resolve'), join(src, 'ccd', 'graph-resolve'));
     const scriptPath = join(home, 'units.sh');
     writeFileSync(scriptPath, `${script}\n`);
 
@@ -1079,9 +1083,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // install-census.test.ts already holds every `_inst_units` unit to one of
     // deploy.sh's lanes, and this lane places units `_inst_units` does not.
     const unitRoot = /^(?:~|\$HOME)\/\.config\/systemd\/user\//;
-    // `_slice_limits_unit` places the slice drop-in the same way, rendered (D-7296); the fixture HOME
-    // has no ~/.ccrc/ccrc.env, so it must land as the template's own bytes, like every copy.
-    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*(?:_unit_atomic|_slice_limits_unit)\s+(\S+)\s+(\S+)/gm)]
+    // `_slice_limits_unit` places the slice drop-in the same way, rendered (D-7296), and `_graph_units` the graph
+    // sweep's pair (D-7354), after its `service|timer` word; the fixture HOME has no ~/.ccrc/ccrc.env and no graph
+    // settings, so each must land as the template's own bytes, like every copy.
+    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*(?:_unit_atomic|_slice_limits_unit|_graph_units\s+(?:service|timer))\s+(\S+)\s+(\S+)/gm)]
       .map((m) => {
         const from = m[1]!.replace(/^"|"$/g, '');
         const to = m[2]!.replace(/^"|"$/g, '');
