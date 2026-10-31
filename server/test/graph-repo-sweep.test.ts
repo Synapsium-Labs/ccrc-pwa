@@ -463,6 +463,7 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
       expect(fs.statSync(p).mode & 0o222, e).toBe(0);
     }
     expect(fs.statSync(cur).mode & 0o222).toBe(0);
+    if (process.getuid?.() === 0) return;                    // root writes through any mode; the modes above are the guard
     expect(() => fs.writeFileSync(path.join(repo, 'graphify-out', 'graph.json'), '{}')).toThrow();
     expect(() => fs.writeFileSync(path.join(repo, 'graphify-out', 'new.json'), '{}')).toThrow();
   });
@@ -892,6 +893,21 @@ describe('the outcome table: every line', () => {
     expect(r).toMatchObject({ outcome: 'failed', fail: 'setup', reason: `ccrc test --status: ${line}` });
     expect(buildCalls()).toEqual([]);
     expect(calls()).toEqual([]);
+  });
+  // D-7357: the row's peak_mem_kb and cpu_ms are the wrapper's last stdout line, which it reads from its own cgroup
+  // (the `0::` line of /proc/self/cgroup, under CCRC_CGROUP_ROOT); a fixture tree stands in for the scope's files.
+  const cg = fs.existsSync('/proc/self/cgroup') ? /^0::(.*)$/m.exec(fs.readFileSync('/proc/self/cgroup', 'utf8'))?.[1] : undefined;
+  (cg !== undefined ? it : it.skip)('D-7357 — peak_mem_kb and cpu_ms come from the wrapper\'s own cgroup, into the row and meta.json', { timeout: T }, () => {
+    const root = j('cgroup');
+    const dir = path.join(root, cg!.replace(/^\//, ''));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'memory.peak'), `${2048 * 1024}\n`);
+    fs.writeFileSync(path.join(dir, 'cpu.stat'), 'usage_usec 345000\nuser_usec 1\n');
+    const r = after({ CCRC_CGROUP_ROOT: root });
+    expect(r).toMatchObject({ outcome: 'rebuilt', peak_mem_kb: 2048, cpu_ms: 345 });
+    expect(r.reason).not.toContain('peak unmeasured');
+    const m = JSON.parse(fs.readFileSync(path.join(STORE(), r.repo_key, 'current', 'meta.json'), 'utf8')) as Record<string, unknown>;
+    expect([m['peak_mem_kb'], m['cpu_ms']]).toEqual([2048, 345]);
   });
   it('spec §3.4 — a build whose peak the wrapper could not read says "peak unmeasured", and only then', { timeout: T }, () => {
     const r = after({});

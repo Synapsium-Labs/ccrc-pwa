@@ -790,8 +790,9 @@ _gs_build() {   # <key>
   K_DUR["$key"]="$ms"
   [ -e "$stg/.started" ] && started=1
   cat -- "$bout" "$berr" >> "$LOG" 2>/dev/null
-  peak="$(sed -n 's/^graph-build: peak_kb=\([0-9][0-9]*\|null\) cpu_ms=.*$/\1/p' "$bout" | tail -n 1)"
-  cpu="$(sed -n 's/^graph-build: peak_kb=.* cpu_ms=\([0-9][0-9]*\|null\)$/\1/p' "$bout" | tail -n 1)"
+  # -E, so the alternation is the same on GNU and BSD sed (a BRE `\|` is a GNU extension)
+  peak="$(sed -nE 's/^graph-build: peak_kb=([0-9]+|null) cpu_ms=.*$/\1/p' "$bout" | tail -n 1)"
+  cpu="$(sed -nE 's/^graph-build: peak_kb=.* cpu_ms=([0-9]+|null)$/\1/p' "$bout" | tail -n 1)"
   [[ "$peak" =~ ^[0-9]+$ ]] || peak=null
   [[ "$cpu" =~ ^[0-9]+$ ]] || cpu=null
   K_PEAK["$key"]="$peak"; K_CPU["$key"]="$cpu"
