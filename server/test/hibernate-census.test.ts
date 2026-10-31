@@ -63,6 +63,10 @@ const CENSUS: readonly Row[] = [
     why: 'that same rung: `lc === \'stopped\' && f.hibernatedAt !== null` reads asleep' },
   { source: 'tmux-verdict', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
     why: '`PaneFact` mirrors the verdict\'s words; `gone` falls to the hibernated rung' },
+  { source: 'dead-compare', file: 'server/src/coord/delegation-projection.ts', hits: 1, stances: ['held-awake'],
+    why: 'the delegation frame\'s liveness reads a dead parent\'s RUNNING work as stale; it meets no sleeper with running '
+      + 'work, because the verdict\'s `background` and `marker-background` holds keep a session whose delegated work runs '
+      + 'awake, and an ended activity reads `ended` before its parent is asked' },
   { source: 'dead-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
     why: 'the frame row hands `readSession` the turn word and keeps it only while the row is not dead; a sleeping row '
       + 'reads asleep there, so it carries no turn' },

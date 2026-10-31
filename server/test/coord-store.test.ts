@@ -110,6 +110,41 @@ describe('CoordStore: runs', () => {
     });
   });
 
+  // Delegation broker wave 4 (PR1 Task 1.3): the delegation frame's R9 read. Through the real SQL, no spy.
+  describe('CoordStore.delegationRunStamps', () => {
+    const ids = (s: CoordStore, limit: number): number[] => {
+      const read = s.delegationRunStamps(limit);
+      if (!read.ok) throw new Error(read.detail);
+      return read.runs.map((r) => r.id);
+    };
+
+    it('W4-ST1: a stored run whose openedAt or closedAt is not a positive safe integer refuses the whole read, run-unreadable', () => {
+      for (const column of ['openedAt', 'closedAt'] as const) {
+        const s = store();
+        const run = openRun(s) as { id: number };
+        expect(s.advance(run.id, 'failed', 'test-close').ok).toBe(true);
+        expect(s.delegationRunStamps(10).ok, `${column}: readable before the write`).toBe(true);
+        s.db.exec('PRAGMA ignore_check_constraints = ON');
+        s.db.prepare(`UPDATE runs SET ${column} = 0 WHERE id = ?`).run(run.id);
+        s.db.exec('PRAGMA ignore_check_constraints = OFF');
+        expect(s.delegationRunStamps(10), column).toEqual({ ok: false, kind: 'run-unreadable', detail: `${column} is not a positive safe integer` });
+      }
+    });
+
+    it('W4-ST2: every open run, plus exactly the newest closedLimit closed ones, and nothing else', () => {
+      const s = store();
+      const made = [1, 2, 3, 4, 5].map((wave) => (openRun(s, { wave }) as { id: number }).id);
+      for (const i of [0, 1, 3]) expect(s.advance(made[i]!, 'failed', 'test-close').ok).toBe(true);
+      // closed: made[0], made[1], made[3]; open: made[2], made[4]. The newest two closed are made[3] and made[1].
+      expect(ids(s, 2)).toEqual([made[1], made[2], made[3], made[4]]);
+      expect(ids(s, 500)).toEqual(made);
+      const read = s.delegationRunStamps(500);
+      expect(read.ok && read.runs.find((r) => r.id === made[0])).toMatchObject({ sessionId: null, claimedBy: 'ccrc-pwa-coordinator' });
+      expect(read.ok && read.runs.find((r) => r.id === made[0])!.closedAt).not.toBeNull();
+      expect(read.ok && read.runs.find((r) => r.id === made[2])!.closedAt).toBeNull();
+    });
+  });
+
   it('refuses a second coordinator rather than arbitrating', () => {
     // spec:291-292 — one coordinator per program; `claimedBy` exists so a
     // second one REFUSES.
@@ -1719,9 +1754,10 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
     expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(cp));
   });
 
-  it('adds exactly six delegation methods: no health reader, no intent writer, and the compare-and-swap delta projection as the one per-row updater', () => {
+  it('adds exactly seven delegation methods: no health reader, no intent writer, the compare-and-swap delta projection as the one per-row updater, and wave 4\'s one run read', () => {
+    // wave 4 (PR1 Task 1.3): `delegationRunStamps` reads RUNS (the frame's R9 stamps), never a delegation table
     expect(Object.getOwnPropertyNames(CoordStore.prototype).filter((n) => /delegation/i.test(n)).sort())
-      .toEqual(['delegationEventStats', 'insertDelegationEvent', 'insertDelegationEvents', 'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'readDelegationProjection']);
+      .toEqual(['delegationEventStats', 'delegationRunStamps', 'insertDelegationEvent', 'insertDelegationEvents', 'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'readDelegationProjection']);
   });
 });
 

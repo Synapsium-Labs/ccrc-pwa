@@ -169,6 +169,26 @@ export function childrenOf(
     .sort((a, b) => a.id - b.id);
 }
 
+/** One run's names and interval, as the delegation frame's R9 reads them (`CoordStore.delegationRunStamps`). */
+export interface StampedRun {
+  readonly id: number; readonly sessionId: string | null; readonly claimedBy: string | null; readonly openedAt: number; readonly closedAt: number | null;
+}
+
+/** R9 (delegation broker wave 4): the coordinator `sessionId` worked for at the instant `at` (epoch ms): the claimant, other than
+ *  the session itself, of a run that names it as worker and whose interval `[openedAt, closedAt ?? +inf]` holds `at`; the greatest
+ *  run id when several do, `null` when none does. A closed run still answers inside its interval (lineage outlives its run), and
+ *  the answer is never asked again (nesting is one level). Legitimately different from `bindingOf`: that decides a session's
+ *  CURRENT binding by its birth; this asks about a past instant, so the instant binds the run and the id-string rule names it. */
+export function claimantAt(runs: readonly StampedRun[], sessionId: string, at: number): string | null {
+  let best: StampedRun | null = null;
+  for (const r of runs) {
+    if (!runNamesSession(r, sessionId) || r.claimedBy === null || r.claimedBy === sessionId) continue;
+    if (r.openedAt > at || (r.closedAt !== null && r.closedAt < at)) continue;
+    if (best === null || r.id > best.id) best = r;
+  }
+  return best?.claimedBy ?? null;
+}
+
 /** The store verbs that write the binding: bind or move a run's worker, clear it, and move the claimant. */
 export const BINDING_WRITER_VERBS: readonly string[] = ['openRun', 'bindSession', 'setSession', 'clearSession', 'markDispatched', 'reclaimProgram'];
 
