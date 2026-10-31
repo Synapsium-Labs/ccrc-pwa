@@ -1,10 +1,14 @@
 import { IDLE_RUN_STATES, isRegistryId, isRunState, transitionsFor } from '../../../shared/api.js';
 import type { RunKind, RunState } from '../../../shared/api.js';
+import { isHead40 } from '../../../shared/landing.js';
+import { isLandingEjectionKind } from '../../../shared/landingLine.js';
+import type { LandingEjectionKind } from '../../../shared/landingLine.js';
 
 /**
  * `POST /api/runs/:id/advance`'s ordered gates, decided (D-6733, audit ticket ARCH-33, GitHub
  * #550; the pattern of `openRunPreconditions`, ARCH-21). L1: no `fs`, no fastify, no `reply`, no clock; its value
- * imports are L0, `shared/api.ts`. The route (`coord/routes.ts`, L4) gathers the facts, calls `advanceGate` inside
+ * imports are L0 (`shared/api.ts`, `shared/landing.ts`, `shared/landingLine.ts`). The route (`coord/routes.ts`, L4)
+ * gathers the facts, calls `advanceGate` inside
  * `coordMutex`, answers a refusal through `refuse.ts`'s `refuseAdvance`, and acts: the re-measurement
  * (`verifyDone`), `CoordStore.advance` and the read-back are the route's, because each is an effect.
  *
@@ -43,6 +47,7 @@ export type AdvanceReject =
   | { code: 'bad-transition'; detail: string }
   | { code: 'bad-transition'; from: RunState; to: RunState }
   | { code: 'review-in-flight'; reviewRunId: number }
+  | { code: 'ejection-not-merging'; from: RunState }   // D-7619: the route's 409 shape for the one refusal of the landing line
   | { code: 'cap-concurrency'; limit: number; running: number };
 
 /** One refusal: the bare shape `error`, the unreadable store's `error` with its detail, or a `reject`. */
@@ -56,11 +61,15 @@ export type AdvanceRefusal =
 export interface AdvanceBody {
   to?: unknown;
   fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
+  /** Landing order wave 5e (D-7615): the base a retreat from `merging` records; read only on `to: 'working'`. */
+  ejection?: unknown;
 }
 export interface AdvanceRequest {
   id: number;
   to: RunState;
   fingerprint: { branchTip: string; prNumber: number | null; prPhase: string; handoffCommit: string };
+  /** `null` is an absent ejection, the only meaning (a bare retreat); a present one is shaped. */
+  ejection: { base: string; kind: LandingEjectionKind } | null;
 }
 
 /** The request's own three gates, in order and before the run is read: the canonical run id and the body shape
@@ -73,13 +82,25 @@ export function advanceRequest(id: number | null, b: AdvanceBody):
       typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number')) {
     return { ok: false, refusal: { error: 'bad-request' } };
   }
+  // Landing order wave 5e (D-7615): an ejection is a shaped `{base, kind}` on a retreat to `working`, or absent. After the
+  // fingerprint shape and before the target scope, so the shape still answers before the scope. No gate: ADVANCE_GATES
+  // is unchanged, and an ejection on a run not at `merging` is the store's refusal (`ejection-not-merging`).
+  const e = b.ejection as { base?: unknown; kind?: unknown } | null | undefined;
+  let ejection: AdvanceRequest['ejection'] = null;
+  if (e !== undefined) {
+    if (b.to !== 'working' || typeof e !== 'object' || e === null || typeof e.base !== 'string' || !isHead40(e.base) ||
+        !isLandingEjectionKind(e.kind)) {
+      return { ok: false, refusal: { error: 'bad-request' } };
+    }
+    ejection = { base: e.base, kind: e.kind };
+  }
   if (!ADVANCE_TARGETS.includes(b.to)) {
     return { ok: false, refusal: { reject: { code: 'bad-transition',
       detail: `POST /api/runs/:id/advance only reaches ${ADVANCE_TARGETS.join('/')} — ` +
         "'planned'/'dispatched' are POST .../dispatch's job and 'closing'/'done'/'failed' are POST .../close's" } } };
   }
   return { ok: true, req: { id, to: b.to,
-    fingerprint: { branchTip: fp.branchTip, prNumber: fp.prNumber, prPhase: fp.prPhase, handoffCommit: fp.handoffCommit } } };
+    fingerprint: { branchTip: fp.branchTip, prNumber: fp.prNumber, prPhase: fp.prPhase, handoffCommit: fp.handoffCommit }, ejection } };
 }
 
 interface Ctx { readonly f: AdvanceGateFacts<AdvanceRunFacts>; run?: AdvanceRunFacts }

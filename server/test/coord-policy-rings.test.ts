@@ -106,7 +106,7 @@ describe('the coordination policy files have no runtime path to node:sqlite (D-5
   // The five the audit named, and `rundefs.ts` itself: its transaction half is `rundefsTx.ts`, and `tx` is
   // `coord/tx.ts`, which needs only the handle's `exec` and takes `node:sqlite` as a type. `db.ts` re-exports it.
   const POLICY = ['childReclaim.ts', 'close.ts', 'kickoff.ts', 'expireArchived.ts', 'collectTempRoot.ts', 'rundefs.ts',
-    'rundefsTx.ts', 'tx.ts'];
+    'rundefsTx.ts', 'tx.ts', 'landingEntry.ts', 'landingLine.ts'];
   for (const f of POLICY) {
     it(`coord/${f}`, () => {
       expect(existsSync(coord(f)), `coord/${f} is gone — a moved file must turn this red, not disarm it`).toBe(true);

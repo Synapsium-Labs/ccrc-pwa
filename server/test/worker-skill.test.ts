@@ -369,6 +369,23 @@ describe('the worker skill: its contract', () => {
     expect(text).toContain('Report a FRESH wave-done as for any fix round.');
     expect(text, 'a new-head round again fixes its checks too (review 1302)').not.toContain('then fix only the `paths:` or `checks:` it names');
   });
+
+  it('pins the whole fix-round bullet, from its heading to the end of the file, so no sentence can widen a report-less round (review 1303 F2; the fix-round pin)', () => {
+    const from = skill.indexOf('- **A `fix-round` mail arrives**');
+    expect(from, 'the worker skill lost its fix-round bullet').toBeGreaterThanOrEqual(0);
+    const whole = [
+      '- **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming this run): usually a review run read your wave and the coordinator ruled.',
+      'The report at the path in the mail\'s `artifacts` — plus the rulings in its body — is your brief for the fix round.',
+      'Ack it (clause 3), fix on this workspace\'s own branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.',
+      'A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.',
+      'Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.',
+      'If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.',
+      'A `fix-round` mail whose first line reads `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:` line is your whole brief, so fix the named checks on this branch.',
+      'It licenses no absorb: clause 16\'s first two triggers still apply to it, and its third does not.',
+      'Report a FRESH wave-done as for any fix round.',
+    ].join(' ');
+    expect(skill.slice(from).replace(/\s+/g, ' ').trim()).toBe(whole);
+  });
 });
 
 describe('the worker skill: the facts it states about the wire', () => {

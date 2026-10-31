@@ -226,11 +226,11 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
  *  GitHub #550). They travel in a `reject` object, never an `error` key, so they are neither `RouteRefusal`s nor
  *  `OpenRunConflict`s. `unknown-run` and `bad-session` are not `RunRefuseCode`s: the route sent them as bare literals. */
 export type AdvanceRejectCode = 'unknown-run' | 'bad-session'
-  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency'>;
+  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency' | 'ejection-not-merging'>;
 
 /** Each one's status, measured from the advance route's inline sends on landing day, never chosen: 404 for the one
  *  absent run, 409 for every refusal of a run that exists. */
 export const ADVANCE_REJECT_STATUS: Readonly<Record<AdvanceRejectCode, number>> = {
   'unknown-run': 404, 'bad-transition': 409, 'not-dispatched': 409, 'review-in-flight': 409,
-  'cap-concurrency': 409, 'bad-session': 409,
+  'cap-concurrency': 409, 'bad-session': 409, 'ejection-not-merging': 409,   // D-7619: chosen, not measured — the family's 409
 };

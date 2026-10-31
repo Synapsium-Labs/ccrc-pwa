@@ -852,9 +852,9 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     } finally { await f.close(); }
   });
 
-  it('GET /api/digest and GET /api/ledger are masked like their siblings, as one frame each', () => {
+  it('GET /api/digest, GET /api/ledger and GET /api/landing are masked like their siblings, as one frame each', () => {
     // the one answer hook masks both (D-5995)
-    for (const p of ['/api/digest', '/api/ledger']) expect(answerMasked('GET', p), p).toBe(true);
+    for (const p of ['/api/digest', '/api/ledger', '/api/landing']) expect(answerMasked('GET', p), p).toBe(true);
   });
 
   // Review 951 F1: the review cap's ask carries the last review-done's summary and its report path, session-derived

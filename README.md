@@ -1398,8 +1398,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the forty machine lanes the
-fleet host reaches (thirty-seven box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the forty-one machine lanes the
+fleet host reaches (thirty-eight box-token-consulting coordination routes plus
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -3805,8 +3805,8 @@ token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
-`claims list|take|release`, `ledger list|allocate`, `asks list|answer|release`
-and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
+`claims list|take|release`, `ledger list|allocate`, `landing show`,
+`asks list|answer|release` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
@@ -5221,6 +5221,13 @@ cannot parse (`bash -c "…"`, a quoted command word, a variable or alias, a pat
 the rest) is listed in the hook's header, and a jq failure or a hook timeout fails it open
 (`server/test/session-hook-merge-deny.test.ts`). This tree changes no repository setting: requiring
 the queue is the operator's act.
+
+**The landing line (landing-order stage 5).** `GET /api/landing?project=<p>` (box token; `ccrc-api landing show --project <p>`)
+is the coordinator's read of one project's line before it enqueues: every entry — the PR, its `pinnedSha` (the head the line
+pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
+`--match-head-commit`), its `handoffCommit`, its state and its ejections — the
+operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
+while either flag is set. A project the line has never seen answers no entries and both flags off.
 
 **The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:

@@ -179,6 +179,8 @@ describe('the closed route table', () => {
     [['claims', 'release', '3'], 'POST', '/api/claims/3/release'],
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
+    // The landing line's read (landing order wave 5e, D-7625).
+    [['landing', 'show'], 'GET', '/api/landing'],
     [['asks', 'list'], 'GET', '/api/asks'],
     [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer', '/api/questions/ask-7/rule'],
     [['asks', 'release', '7'], 'POST', '/api/asks/7/release', '/api/questions/ask-7/release'],
@@ -237,7 +239,8 @@ describe('the closed route table', () => {
     // Twenty-eight since the approvals rows (coordinator-first routing, plan Task 14).
     // Thirty-one since the claimant's approvals rows (plan Task 16).
     // Thirty-three since the test box's status and tools-sync rows (test box plan TB9, D-7411).
-    expect(keys).toHaveLength(33);
+    // Thirty-four since the landing line's read (landing order wave 5e, D-7625).
+    expect(keys).toHaveLength(34);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -247,7 +250,7 @@ describe('the closed route table', () => {
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
       23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
       27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
-      32: 'thirty-two', 33: 'thirty-three',
+      32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -374,7 +377,7 @@ describe('the four claimant rows send the question door family while the server 
       ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'signals', '12'],
       ['runs', 'route', '12'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
       ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
-      ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
+      ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'], ['asks', 'list'], ['feed', 'list'],
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
       ['testbox', 'status'], ['testbox', 'tools-sync'],
@@ -849,6 +852,11 @@ describe('a query key rides only if its row declared it', () => {
   // Anything else is refused rather than appended, for the same reason the path
   // is a template and not an argument — a client that forwarded arbitrary query
   // keys would be a URL builder with extra steps.
+  it('the landing read carries its project', async () => {
+    await run(['landing', 'show', '--project', 'project-a']);
+    expect(seen[0]!.url).toBe('/api/landing?project=project-a');
+  });
+
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);
     expect(seen[0]!.url).toBe('/api/mail?to=a-workspace');

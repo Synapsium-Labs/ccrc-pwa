@@ -373,30 +373,42 @@ not after.
      (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a
      conflict you measured: after one `git fetch origin`, `git merge-tree
      --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1
-     and lists the conflicted paths. Its body holds three entries, one to a
-     line, and nothing else: `ejected: new-head:#<pr>` or `ejected:
-     dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after
-     one `git fetch origin`, then `checks: <required names that are red>` for
-     the new-head route or `paths: <the conflicted paths>` for the dequeue.
-     Until the landing line records a base (stage 5e), the new-head ejection is
-     clause 15's ejection on the operator's answer of 2026-10-30 to D-7536's
-     question, its base that `origin/main` sha, and the dequeue ejection is the
-     conflict-sync clause 15 allows on a measured conflict. **A red the PR
-     owns** is sent when the queue dequeued the PR for a required check and no
-     conflict was measured, or when the verdict's `RED` line names a required
-     check red on the head that is the PR's own. Its body holds two entries, one
-     to a line, and nothing else: `red: #<pr>`, then `checks: <required names
-     that are red>`. It has no `base:` entry and licenses no absorb: the worker
-     absorbs only on its own clause 16's first two triggers. A dequeue with any
-     other cause, a requested change or a cause you could not read among them,
-     is no report-less round: it stays a stop for the operator. For either form,
-     on route Q disarm first (§5), then make the same advance to `working`, on
-     the `merging → working` edge, and send the same `fix-round` mail with no
-     `artifacts`. The worker's answering wave-done gets a NEW review run (step
-     5), whose brief names that round's commits as the change under review, for
-     the new-head round its merge commit; the reviewer still reads the whole
-     diff (reviewer clause 5), and a merge of `main` is reviewed like any other
-     change.
+     with a tree id on its first line, then the conflicted paths. Its body holds
+     three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`
+     or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you
+     read after one `git fetch origin`, then `checks: <required names that are
+     red>` for the new-head route or `paths: <the conflicted paths>` for the
+     dequeue. Every ejection is clause 15's ejection, its base recorded on the
+     landing line by the advance that sends the run back: first read the line,
+     `GET /api/landing?project=<project>` (`ccrc-api landing show --project
+     <project>`), and send an ejection only where this PR's entry for this run
+     reads `pinned`; with no such entry the round is no ejection, and it stays
+     a stop for the operator. **A red the PR owns** is sent when the queue
+     dequeued the PR for a required check and no conflict was measured, or when
+     the verdict's `RED` line names a required check red on the head that is the
+     PR's own. Its body holds two entries, one to a line, and nothing else:
+     `red: #<pr>`, then `checks: <required names that are red>`. It has no
+     `base:` entry and licenses no absorb: the worker absorbs only on its own
+     clause 16's first two triggers. A dequeue with any other cause, a
+     requested change or a cause you could not read among them, is no
+     report-less round: it stays a stop for the operator. For either form, on
+     route Q disarm first (§5), then make the same advance to `working`, on the
+     `merging → working` edge, and send the same `fix-round` mail with no
+     `artifacts`. Every `ejected:` round's advance carries `ejection`, an
+     object of two fields: `base`, the sha on the mail's `base:` line, and
+     `kind`, `new-head` or `dequeued` as the mail's first line names it; a
+     `red:` round's advance, and any other retreat, carries none. Send the
+     `ejected:` mail once the advance's answer reads `landing.kind` `ejected`
+     with the base you sent. If it reads anything else, the line recorded no
+     base: send no mail, and report it to the operator with the run at
+     `working`. The second ejection of one entry is not refused: where
+     the entry you read counts one ejection already, the advance still answers
+     `ok` and the server raises one notice to the operator, so name the second
+     ejection in your turn's text and send the round as usual. The worker's
+     answering wave-done gets a NEW review run (step 5), whose brief names that
+     round's commits as the change under review, for the new-head round its
+     merge commit; the reviewer still reads the whole diff (reviewer clause 5),
+     and a merge of `main` is reviewed like any other change.
    - **Clean:** update the ledger — Waves row, Decisions, Carried constraints,
      and the **Next-wave brief** — commit it, then `POST /api/runs` **for wave N+1
      first**. Order matters: closing first, even briefly, leaves the program with
