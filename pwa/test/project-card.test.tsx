@@ -19,6 +19,7 @@ import { waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { NO_ROLLUP_PREFS, rollupCard, toggleChildren, type RollupPrefs } from '../src/fleet/rollup';
 import { WARN_GLYPH } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -1525,6 +1526,24 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     const chips = [...container.querySelectorAll('.sess-meta-chip')];
     expect(chips.map((c) => c.textContent)).toEqual(['1 delegated']);
     expect(chips[0]!.closest('.proj-nest')).not.toBeNull();
+  });
+
+  it('a session in no programme folds three delegated activities into one line, as the rollup decided (main\'s boxes)', () => {
+    const w = frame({ activities: ['a1', 'a2', 'a3'].map((id) => activity({ activityId: id, parentId: 'coord-a' })) });
+    // A working session, so the card is active and open by default (rollup rule 2).
+    const g = cardFor(w, [{ ...coordA, status: 'busy', bucket: 'working' }]);
+    const drawn = (prefs: RollupPrefs) => render(<ProjectCard group={g} rollup={rollupCard(g, prefs, Date.now(), null)}
+      onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />);
+    const { container, unmount } = drawn(NO_ROLLUP_PREFS);
+    expect(container.querySelector('section.pg-box'), 'coord-a claims no run: it is no box').toBeNull();
+    const line = screen.getByRole('button', { name: '3 delegated' });
+    expect(line.getAttribute('aria-expanded')).toBe('false');
+    expect(line.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    unmount();
+    const open = drawn(toggleChildren(NO_ROLLUP_PREFS, 'coord-a'));
+    expect(screen.getByRole('button', { name: '3 delegated' }).getAttribute('aria-expanded')).toBe('true');
+    expect(open.container.querySelectorAll('.proj-work')).toHaveLength(3);
   });
 
   it('W4-U30: a group is a closed disclosure by default, opened under its composite key', async () => {

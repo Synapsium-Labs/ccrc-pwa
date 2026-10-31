@@ -1,6 +1,6 @@
 // Delegation broker wave 4, PR2 Task 2.7 (W4-U27, spec §5.13), as fix round 1 of review 1029 (F1) rebuilt it: an older
 // server sends no `delegation` frame, and the screen then claims nothing about delegated work. What it draws is what
-// PR2's base drew for the same world, rendered by the base's own code (`fixtures/older-server/render-7dc486b97.json`,
+// PR2's base drew for the same world, rendered by the base's own code (`fixtures/older-server/render-3ce530dad.json`,
 // whose `capture` says how) and compared byte for byte. The one declared difference is each fleet list's
 // `data-delegation="unavailable"`; nothing else is removed or rewritten. The file renders the world ONCE: React's
 // `useId` counter is per module graph, so a second render, or a case before this one, numbers Instrument's tab ids
@@ -11,8 +11,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WORLD_VIEWS, renderOlderServerWorld, type WorldView } from './olderServerWorld';
 
-const PR2_BASE = '7dc486b975741a88aaecb9fb98929b44de2d681a';
-const baseline = JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', 'older-server', 'render-7dc486b97.json'), 'utf8')) as {
+const PR2_BASE = '3ce530dad93e0276358e7807804f0839b1e17e78';
+const baseline = JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', 'older-server', 'render-3ce530dad.json'), 'utf8')) as {
   source: string; world: string; worldSha256: string; views: Record<WorldView, string>;
 };
 const LIST = 'class="fleet-list"';

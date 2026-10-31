@@ -89,9 +89,14 @@ export function nextRollupBoundary(sessions: readonly FleetSession[], now: numbe
 /** A coordinator's worker children (W) and its delegation children (D: delegated work and worktrees,
  *  delegation broker wave 4). */
 export type WorkerRow = Extract<FleetRow, { kind: 'session' | 'pending' }>;
-export type DelegatedRow = Extract<FleetRow, { kind: 'activity' | 'lease' }>;
+type DelegatedRow = Extract<FleetRow, { kind: 'activity' | 'lease' }>;
 export const isWorker = (r: FleetRow): r is WorkerRow => r.kind === 'session' || r.kind === 'pending';
-export const isDelegated = (r: FleetRow): r is DelegatedRow => r.kind === 'activity' || r.kind === 'lease';
+const isDelegated = (r: FleetRow): r is DelegatedRow => r.kind === 'activity' || r.kind === 'lease';
+
+/** A head's delegated work and worktrees as words (`n delegated`, `n worktree(s)`), its other children left out: the
+ *  summary line's tail, and a programme box's footer's (`footerWords`), so the two never word them differently. */
+export const delegatedWords = (rows: readonly FleetRow[]): string[] =>
+  delegationParts(rows.filter(isDelegated)).map((p) => `${p.n} ${p.word}`);
 
 /** A child's word in the summary line: the row's own state word (`rowStateWord`), `needs you` for an
  *  operator-facing ask. Asked of W only. */

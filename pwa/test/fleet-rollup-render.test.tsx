@@ -152,6 +152,9 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
       .toEqual(['4 more workers', '2 working', '2 delegated']);
     expect(c.querySelectorAll('.proj-work')).toHaveLength(0);
     fireEvent.click(line);
+    // Open, the footer hides the five workers and names the two activities apart from them.
+    const open = within(cardOf('project-c').querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /^hide/ });
+    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers', '2 delegated']);
     const rows = [...cardOf('project-c').querySelectorAll('.proj-work')];
     expect(rows).toHaveLength(2);
     for (const r of rows) expect(r.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);

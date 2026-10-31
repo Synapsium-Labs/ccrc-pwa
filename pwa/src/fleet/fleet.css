@@ -2192,12 +2192,16 @@ button.proj-card-pool::before {
    above (the same inert line: never a tap surface, and nothing in wave 4 acts on one). The chips are words in a
    currentColor frame, the .sess-workson idiom, so nothing is read out of colour. Neutral class names: this sheet names
    no broker word. */
+/* A row WRAPS: on a narrow column (the desk's fleet list at 1280, a phone) its chips drop under its words rather than
+   squeezing the words to nothing and pushing past the card's edge; the words keep one line and end in an ellipsis. */
 .proj-nest > .proj-work {
   flex: 1;
+  flex-wrap: wrap;
   min-width: 0;
 }
 .proj-work-parts {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   min-width: 0;
   overflow: hidden;

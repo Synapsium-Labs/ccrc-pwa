@@ -238,3 +238,38 @@ remain unchanged, independently checked against the characterization commit. The
 - The three post-PR1-merge reruns (`fleet-health`, `delegation-wave3.integration`, `typecheck-tests`) are still owed after
   `main` absorbs PR1.
 - The full merge-queue run is still owed at landing.
+
+## Rebase onto main after PR1 merged (2026-10-31)
+
+PR1 merged as `3ce530dad93e0276358e7807804f0839b1e17e78`. This branch was rebased onto it: the cherry-pick of PR1's Task 1.1
+commit and the one-line spec citation it carried are dropped, because main has both as PR1 landed them. The branch now
+touches no file under `server/` or `shared/` except the licensed D-7010 `fleet-health` row. Main had moved on in four
+places this PR draws into, and each conflict keeps both sides:
+
+- **The run binding (D-7182).** Main's tree reads each worker's run from the wire's binding. The new delegation cases in
+  `nestFleet`, `fleetTree`, `rollup` and `project-card` are fed bound sessions (`withRunBinding`), the same input main's
+  own cases now take. W4-U0's recorders wrap the real call after the binding. Its fingerprints were re-captured on main's
+  code at the characterisation commit, before any behaviour change, and no later commit changes them.
+- **Programme boxes (Task G2).** Main draws a coordinator's open work as a box whose tray and footer replaced the
+  workers line. Delegation rows join that design. A box's tray draws its coordinator's delegation children with the one
+  row renderer. Its footer counts workers as before, then `n delegated` and `n worktree(s)` (`delegatedWords`, in
+  `rollup.ts`). It never counts a delegation row as a worker: open, it reads `hide 5 workers · 2 delegated`. A row outside
+  a box (a worker of a programme elsewhere, a row in no programme, a delegation group) draws its segment of the rolled rows.
+  That segment is its folded children with the old summary line, minus a closed group's members. One row key
+  (`fleetRowKey`, `nestFleet.ts`) serves the card, the tray and the footer. `rowRun` answers `null` for a delegation row,
+  so such a row takes no programme hue. A box draws its coordinator's row itself, so the card reads that row's R9 chips
+  back off the tree by id. W4-U31 now asserts the box footer's parts. A new case pins the fold of a session in no
+  programme.
+- **W4-U27's baseline.** The base is now main after PR1, so the base render was re-captured from it as
+  `fixtures/older-server/render-3ce530dad.json`, by the same recipe. Two processes gave byte-identical output. Today's code
+  matches that render byte for byte except each fleet list's declared mark. A box footer's chevron mutant (`▸` to `›`)
+  reds the `connected` view.
+- **The census.** `programmeBoxes.ts` is not in `W4_PWA_FILES`, so it names no broker word. The footer's delegation words
+  come from `rollup.ts`.
+
+**Widths.** A new real-browser file, `pwa/browser/delegation-rows.browser.test.ts`, checks the card at 390, 1280 and 1920.
+It runs both skins (Instrument in project mode) and both palettes, with every fold and group open. At 1280 the desk's
+fleet column is about 290 px. There, a raw worktree's three chips squeezed its words to nothing and pushed past the card
+by 24 to 44 px (screenshot-checked). `.proj-nest > .proj-work` now wraps: the chips drop under the words, and the words
+keep one line ending in an ellipsis. With that change, all 12 cases pass. With the change reverted, the four 1280 cases
+fail.
