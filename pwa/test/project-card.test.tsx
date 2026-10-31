@@ -2,7 +2,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
+import type { DelegationProjectionWire, FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
 import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
 import type { ProjectPlacementRead } from '../src/fleet/placementWords';
 import { SPAWN_STALL_MS } from '../../shared/api';
@@ -17,6 +17,8 @@ const ProjectCard = (p: Parameters<typeof Card>[0]): ReturnType<typeof Card> =>
   <Card {...p} group={{ ...p.group, sessions: withRunBinding(p.group.sessions, p.runs ?? []) }} />;
 import { waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
+import { fleetTree } from '../src/fleet/fleetTree';
+import { TOOL_USE_ID, frame, lease, unowned } from './delegationFixture';
 import { WARN_GLYPH } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -1460,5 +1462,74 @@ describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
     const { container } = render(
       <ProjectCard collapsed selectedId="demo-amber-delta" group={g} onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-card')).toHaveAttribute('data-holds-selection');
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.7: delegated work, worktrees and the two groups on a project card. The card
+// draws `fleetTree`'s rows and the words module's labels; it decides nothing of its own.
+describe('delegation rows on a project card (delegation broker wave 4)', () => {
+  const coordA = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a' });
+  const workerA = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+  const prun = (over: Partial<RunSummary>): RunSummary => ({
+    id: 7, program: 'port-api', programTitle: 'Port the API', wave: 1, waveOf: 3, project: 'project-a', homeProject: null,
+    sessionId: 'worker-a', workspace: 'worker-a', branch: null, state: 'dispatched', kind: 'work', reviews: null,
+    claimedBy: 'coord-a', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: null,
+    closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true,
+      clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+  });
+  const cardFor = (w: DelegationProjectionWire, sessions = [coordA], runs: RunSummary[] = []) =>
+    fleetTree(sessions, [], runs, {}, w).find((g) => g.project === 'project-a')!;
+  const countText = (root: HTMLElement, text: string): number =>
+    [...root.querySelectorAll('*')].filter((el) => el.childElementCount === 0 && el.textContent === text).length;
+
+  it('W4-U28: a raw worktree under its parent reads inferred and its Bash call, with no control of its own', () => {
+    const { container } = render(<ProjectCard group={cardFor(frame({ leases: [lease({ sourceKind: 'raw' })] }))}
+      onOpen={() => {}} onActions={() => {}} />);
+    const row = container.querySelector<HTMLElement>('.proj-work');
+    if (row === null) throw new Error('no worktree row');
+    expect(row.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    const chips = [...row.querySelectorAll('.proj-work-chip')];
+    expect(chips.map((c) => c.textContent)).toEqual(['inferred', 'Bash call …est_0001']);
+    expect(chips[1]!.getAttribute('title')).toContain(TOOL_USE_ID);
+    expect(chips[0]!.getAttribute('title')).toContain(TOOL_USE_ID);
+    expect(row.querySelector('button')).toBeNull();
+    expect(row.closest('.proj-nest')!.querySelector('button')).toBeNull();
+    // No user-facing word says "lease": the operator's word is "worktree".
+    expect(container.textContent).not.toMatch(/lease/i);
+  });
+
+  it('W4-U29: every raw worktree wears inferred wherever it lands: nested, via a worker, and in the opened groups', () => {
+    const w = frame({
+      leases: [
+        lease({ leaseId: 'l-nested', sourceKind: 'raw' }),
+        lease({ leaseId: 'l-via', sourceKind: 'raw', via: 'worker-a', adminRecord: 'agent-v1', canonicalPath: '/work/project-a/.claude/worktrees/agent-v1' }),
+        lease({ leaseId: 'l-off', sourceKind: 'raw', parentId: 'coord-gone', adminRecord: 'agent-o1', canonicalPath: '/work/project-a/.claude/worktrees/agent-o1' }),
+        lease({ leaseId: 'l-agent', sourceKind: 'agent', adminRecord: 'agent-g1', canonicalPath: '/work/project-a/.claude/worktrees/agent-g1' }),
+      ],
+      unowned: [unowned({ verdict: 'conflicting', adminRecord: 'agent-a1' })],
+    });
+    const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}}
+      offlineOpen unownedOpen />);
+    expect(countText(container, 'inferred')).toBe(3);
+    const via = [...container.querySelectorAll('.proj-work')].find((r) => r.textContent?.includes('via '));
+    expect(via?.textContent).toContain('inferred');
+    expect(container.textContent).toContain('Offline coordinator (1)');
+    expect(container.textContent).toContain('Unowned work (1)');
+  });
+
+  it('W4-U30: a group is a closed disclosure by default, opened under its composite key', async () => {
+    const w = frame({ unowned: [unowned({ adminRecord: 'u1' }), unowned({ adminRecord: 'u2' }), unowned({ adminRecord: 'u3' })] });
+    const onToggle = vi.fn();
+    const { container, rerender } = render(<ProjectCard group={cardFor(w)} onOpen={() => {}} onActions={() => {}} onToggle={onToggle} />);
+    const toggle = screen.getByRole('button', { name: /Unowned work \(3\)/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('title')).toContain('never makes one eligible for removal');
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    await userEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledWith('project-a::unowned');
+    rerender(<ProjectCard group={cardFor(w)} onOpen={() => {}} onActions={() => {}} onToggle={onToggle} unownedOpen />);
+    expect(screen.getByRole('button', { name: /Unowned work \(3\)/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(3);
   });
 });

@@ -344,7 +344,7 @@ describe('nestFleet\'s attentionFirst lookup: the child order under one coordina
     const out: string[] = [];
     for (const x of rows.slice(at + 1)) {
       if (x.depth === 0) break;
-      out.push(x.kind === 'session' ? x.session.id : `pending:${x.run.id}`);
+      out.push(x.kind === 'session' ? x.session.id : x.kind === 'pending' ? `pending:${x.run.id}` : x.kind);
     }
     return out;
   };

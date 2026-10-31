@@ -17,7 +17,7 @@
 // the screen around them always describe one fleet.
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { fleetTree } from './fleetTree';
+import { fleetTree, unplacedActivities } from './fleetTree';
 import { ProjectCard } from './ProjectCard';
 import { isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
@@ -43,6 +43,9 @@ export function FleetCards({ selectedId, onOpen }: {
   const roster = useStore((s) => s.roster);
   const pools = useStore((s) => s.pools);
   const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
+  // Delegation broker wave 4: the `delegation` frame, `null` when unavailable — never defaulted to an empty one, so
+  // an older server's screen claims nothing (spec §5.13).
+  const delegation = useStore((s) => s.delegation);
   // The unseen watermark, subscribed as `FleetScreen` subscribes it (seen.ts publishes; no re-read of storage).
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const flows = useFleetFlows();
@@ -74,7 +77,9 @@ export function FleetCards({ selectedId, onOpen }: {
   // time when it is rebuilt, which is on a new tree, a new preference or selection, or a move of `roll.next` (a window's
   // end, or a box's stall boundary, where the rollup is rebuilt to the same answer: harmless, one rebuild a boundary).
   const tree = useMemo(
-    () => fleetTree(sessions, projects.knownProjects, activeRuns, acks), [sessions, projects.knownProjects, activeRuns, acks]);
+    () => fleetTree(sessions, projects.knownProjects, activeRuns, acks, delegation),
+    [sessions, projects.knownProjects, activeRuns, acks, delegation]);
+  const unplaced = useMemo(() => unplacedActivities(sessions, delegation), [sessions, delegation]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
   const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.next]);
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
@@ -127,7 +132,12 @@ export function FleetCards({ selectedId, onOpen }: {
   const coordOf = useCallback((id: string): FleetSession | null => byId.get(id) ?? null, [byId]);
 
   return (
-    <div className="fleet-list" ref={listRef}>
+    <div
+      className="fleet-list"
+      ref={listRef}
+      data-delegation={delegation === null ? 'unavailable' : 'measured'}
+      data-delegation-unplaced={unplaced > 0 ? unplaced : undefined}
+    >
       {tree.map((g) => (
         <ProjectCard
           key={g.project}
@@ -204,6 +214,9 @@ export function FleetCards({ selectedId, onOpen }: {
           archivedOpen={folded.has(`${g.project}::archived`)}
           /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
           releasedOpen={folded.has(`${g.project}::released`)}
+          /* The same inversion, for the delegation broker's two groups (wave 4): both start closed. */
+          offlineOpen={folded.has(`${g.project}::offline-coordinator`)}
+          unownedOpen={folded.has(`${g.project}::unowned`)}
           onArchiveReleased={flows.openArchiveAll}
           archivingReleased={archiveAll.archiving.has(g.project)}
         />

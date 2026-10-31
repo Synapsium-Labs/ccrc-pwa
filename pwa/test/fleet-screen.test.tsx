@@ -17,6 +17,18 @@ import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
 import { ICONS } from '../../ui/src/icons/lucide';
 import { TEST_ROSTER } from './rosterFixture';
+import { activity, frame } from './delegationFixture';
+
+// W4-U27's pass-through: `fleetTree` exactly as shipped, unless a case sets `strip`, which drops the fifth argument
+// (today's code path) so the same screen can be rendered both ways. Every other case runs the real function.
+const treeMode = vi.hoisted(() => ({ strip: false }));
+vi.mock('../src/fleet/fleetTree', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/fleet/fleetTree')>();
+  return {
+    ...real,
+    fleetTree: (...a: Parameters<typeof real.fleetTree>) => (treeMode.strip ? real.fleetTree(a[0], a[1], a[2], a[3]) : real.fleetTree(...a)),
+  };
+});
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
 // never leak into the next's initial (expanded) expectation. `resetAcks` for
@@ -3351,5 +3363,58 @@ describe('the predicted-conflict chip renders after the claimed-files strip (lan
     const chip = screen.getByRole('status', { name: /No predicted conflicts in 1 measured PR/ });
     expect(strip.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING, 'the chip renders after the strip').not.toBe(0);
     expect(strip.contains(chip), 'the chip is not inside the strip').toBe(false);
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.7 (W4-U27, spec §5.13): an older server sends no `delegation` frame, and the
+// screen then claims nothing about delegated work — `data-delegation="unavailable"`, and every card's body is the
+// render today's code path draws (`fleetTree` with no fifth argument, through the pass-through mock above).
+describe('an older server: no delegation frame, today\'s fleet (delegation broker wave 4)', () => {
+  const bodies = (): string[] => [...document.querySelectorAll('.proj-card')].map((c) => c.innerHTML);
+
+  it('W4-U27: origin/main\'s frame sequence renders unavailable, today\'s card bodies, and no delegation word', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    const coord = session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' });
+    const fleetFrame = { type: 'fleet', sessions: [coord, session({ id: 'main-b', project: 'project-b', workdir: '/work/project-b', status: 'busy', bucket: 'working' })] };
+    // Before the socket has spoken at all, too: a cold start (rows hydrated from the offline snapshot) claims nothing.
+    seed(store, { sessions: fleetFrame.sessions });
+    expect(document.querySelector('.fleet-list')?.getAttribute('data-delegation')).toBe('unavailable');
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'hello', proto: 1, min: 1 });
+      s.message(fleetFrame);
+      s.message({ type: 'runs', runs: [] });
+      s.message({ type: 'coord', coord: { pause: 'clear', mail: 'clear' } });
+      s.message({ type: 'pools', pools: { listed: false, enforcement: 'enforced' } });
+      s.message({ type: 'divergence', divergences: [] });
+    });
+    const list = document.querySelector('.fleet-list');
+    expect(list?.getAttribute('data-delegation')).toBe('unavailable');
+    expect(list?.hasAttribute('data-delegation-unplaced')).toBe(false);
+    const now = bodies();
+    expect(now.length).toBeGreaterThan(0);
+    act(() => { treeMode.strip = true; latestFleetSocket().message(fleetFrame); });
+    try {
+      expect(bodies()).toEqual(now);
+    } finally {
+      treeMode.strip = false;
+    }
+    for (const word of ['inferred', 'Unowned work', 'Offline coordinator']) expect(document.body.textContent).not.toContain(word);
+  });
+
+  it('a measured frame marks the list measured, and counts an activity no card can draw', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [session({ id: 'coord-a', project: 'project-a', status: 'busy', bucket: 'working' })] });
+      s.message({ type: 'delegation', delegation: frame({ activities: [activity({ parentId: 'coord-gone' })] }) });
+    });
+    const list = document.querySelector('.fleet-list');
+    expect(list?.getAttribute('data-delegation')).toBe('measured');
+    expect(list?.getAttribute('data-delegation-unplaced')).toBe('1');
   });
 });

@@ -22,9 +22,10 @@
 // beside the programme's title in words. The map is the FLEET's (`fleetHues`), assigned once per runs frame over every
 // open programme, so a programme keeps one hue on every card and in every view; a card is handed its own entries.
 import type { FleetSession, RunState, RunSummary } from '../../../shared/api';
-import type { FleetRow } from './nestFleet';
+import { fleetRowKey, type FleetRow } from './nestFleet';
 import { formatReset } from './formatReset';
-import { operatorAsk, summaryParts, type RolledRow } from './rollup';
+import { isDelegated, isWorker, operatorAsk, summaryParts, type RolledRow } from './rollup';
+import { delegationParts } from './delegationWords';
 import { RUN_WORD, boundOpenRun, claimedRunsOf, programWave, programmeTitle, runLastMove } from './runWords';
 
 export const PROG_HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
@@ -101,9 +102,11 @@ type LeadFacts = { slug: string; title: string } & Pick<ProgrammeBoxView, 'more'
 
 const WAITING: ReadonlySet<RunState> = new Set<RunState>(['awaiting-review', 'merging']);
 
-/** The run a row is doing: a spawn's own, or the session's open bound run (`boundOpenRun`, the wire's binding). */
+/** The run a row is doing: a spawn's own, or the session's open bound run (`boundOpenRun`, the wire's binding). A
+ *  delegation row (wave 4) does no run: it is in no programme, and takes no programme's hue. */
 export function rowRun(row: FleetRow, runs: readonly RunSummary[]): RunSummary | null {
-  return row.kind === 'pending' ? row.run : boundOpenRun(runs, row.session);
+  if (row.kind === 'pending') return row.run;
+  return row.kind === 'session' ? boundOpenRun(runs, row.session) : null;
 }
 
 /** One card's boxes, the workers of programmes elsewhere, and the rows in no programme. `rows` is the card's tree
@@ -290,18 +293,32 @@ export function trayOf(rolled: readonly RolledRow[], coordinatorId: string): Tra
   return tray;
 }
 
-const rowId = (r: FleetRow): string => (r.kind === 'session' ? r.session.id : `spawn:${r.run.id}`);
+const workersWord = (n: number): string => (n === 1 ? 'worker' : 'workers');
 
 /** The footer's words, the existing children toggle's: folded, `2 more workers · 1 working` over the workers the tray
- *  hides; open, `hide 3 workers`. `null` when the rollup did not fold the children, or folded nothing away. */
+ *  hides; open, `hide 3 workers`. `null` when the rollup did not fold the children, or folded nothing away. A box's
+ *  delegation children (wave 4: delegated work and worktrees) are never counted as workers: after the worker words,
+ *  the rollup's own `n delegated` and `n worktree(s)` (`delegationParts`) over the same rows. */
 export function footerWords(b: ProgrammeBoxView, tray: Tray): readonly string[] | null {
   if (tray.summary === null) return null;
-  if (tray.summary.expanded) return [`hide ${tray.summary.total} ${tray.summary.total === 1 ? 'worker' : 'workers'}`];
-  const shown = new Set(tray.rows.map(rowId));
-  const hidden = b.children.filter((r) => !shown.has(rowId(r)));
+  const delegated = (rows: readonly FleetRow[]): string[] =>
+    delegationParts(rows.filter(isDelegated)).map((p) => `${p.n} ${p.word}`);
+  if (tray.summary.expanded) {
+    const n = b.children.filter(isWorker).length;
+    const d = delegated(b.children);
+    if (n === 0) return d.length === 0 ? null : [`hide ${d[0]!}`, ...d.slice(1)];
+    return [`hide ${n} ${workersWord(n)}`, ...d];
+  }
+  const shown = new Set(tray.rows.map(fleetRowKey));
+  const hidden = b.children.filter((r) => !shown.has(fleetRowKey(r)));
   if (hidden.length === 0) return null;
-  const working = summaryParts(hidden).slice(1).find((p) => p.word === 'working');
-  return [`${hidden.length} more ${hidden.length === 1 ? 'worker' : 'workers'}`, ...(working ? [`${working.n} working`] : [])];
+  const workers = hidden.filter(isWorker);
+  const working = summaryParts(workers).slice(1).find((p) => p.word === 'working');
+  return [
+    ...(workers.length > 0 ? [`${workers.length} more ${workersWord(workers.length)}`] : []),
+    ...(working ? [`${working.n} working`] : []),
+    ...delegated(hidden),
+  ];
 }
 
 /** The kicker's progress: `3/6 waves` with the share of a bar when the programme declared its total, `wave 62` with

@@ -56,6 +56,19 @@ export type FleetRow =
   | { kind: 'unowned'; depth: 1; item: DelegationUnownedWire; group: 'unowned' }
   | { kind: 'delegation-group'; depth: 0; group: DelegationGroupKind; count: number };
 
+/** A row's one React key and identity, spelled ONCE for the card, a programme box's tray and its footer: a session by
+ *  its id, a spawn by its run, and the delegation rows (wave 4) by their own ids. */
+export function fleetRowKey(row: FleetRow): string {
+  switch (row.kind) {
+    case 'session': return row.session.id;
+    case 'pending': return `spawn:${row.run.id}`;
+    case 'activity': return `activity:${row.activity.activityId}`;
+    case 'lease': return `lease:${row.lease.leaseId}`;
+    case 'unowned': return `unowned:${row.item.project}:${row.item.adminRecord}`;
+    case 'delegation-group': return `group:${row.group}`;
+  }
+}
+
 /** The two groups a card's delegation rows can sit in when no listed session is their parent (rules 9 and 10). */
 export type DelegationGroupKind = 'offline-coordinator' | 'unowned';
 

@@ -22,25 +22,27 @@
 // `programmeBoxes.ts`'s; this maps over it with the one row renderer below. A box's movement readout ticks itself.
 import { Fragment, memo } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Button, useNow } from '@ccrc/ui';
+import { BareRow, Button, Icon, useNow } from '@ccrc/ui';
 import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
 import { orphanNote, type OrphanNote } from './orphanWords';
 import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 import { formatElapsed } from './formatReset';
 import { releasedByProgramme, type FleetGroup } from './groupFleet';
 import { archivableReleased } from './archiveReleased';
-import { nestFleet, type FleetRow } from './nestFleet';
+import { fleetRowKey, nestFleet, type DelegationGroupKind, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
 import {
-  cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
+  cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView, type SummaryRow,
 } from './programmeBoxes';
 import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine } from './SessionLine';
 import { sameCardProps } from './lineProps';
 import { OPEN_RUNS } from './openers';
+import { sessionLabel } from './sessionLabel';
+import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine } from './delegationWords';
 import { actionDoor } from '../command/door';
 import './fleet.css';
 
@@ -127,6 +129,8 @@ function ProjectCardView({
   frameSeen = false,
   rollup,
   onToggleChildren,
+  offlineOpen = false,
+  unownedOpen = false,
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -239,6 +243,11 @@ function ProjectCardView({
   rollup?: CardRollup;
   /** Open or close a coordinator's worker line, by the coordinator's id. */
   onToggleChildren?: (parentId: string) => void;
+  /** Whether the delegation broker's "Offline coordinator" and "Unowned work" groups are expanded (wave 4). The
+   *  `archivedOpen` inversion: under `<project>::offline-coordinator` and `<project>::unowned`, presence means EXPANDED,
+   *  so both start closed. */
+  offlineOpen?: boolean;
+  unownedOpen?: boolean;
 }): ReactNode {
   const collapsed = rollup?.collapsed ?? collapsedProp;
   // A measured row carries pool and placement from one `/api/projects` read.
@@ -298,7 +307,36 @@ function ProjectCardView({
   const { prog, ranked } = cardBoxes(tree, runs, claimed, hues, boxNow ?? null, stallQuietMs, coordPaused);
   const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
   const shownAbroad = cardAbroad(abroad, prog.boxes);
-  const rowKey = (row: FleetRow): string => (row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`);
+  const rowKey = fleetRowKey;
+  // Delegation broker wave 4: a group's members render only while the operator holds it open; the header always does.
+  const groupOpen: Readonly<Record<DelegationGroupKind, boolean>> = { 'offline-coordinator': offlineOpen, unowned: unownedOpen };
+  const memberOf = (row: RolledRow): DelegationGroupKind | null =>
+    row.kind === 'activity' || row.kind === 'lease' || row.kind === 'unowned' ? row.group : null;
+  const shown = (row: RolledRow): boolean => { const g = memberOf(row); return g === null || groupOpen[g]; };
+  // A row outside a box (a worker of a programme elsewhere, a row in no programme, a delegation group) draws its
+  // children as the rollup folded them (`foldChildren`): its own segment of the rolled rows, a closed group's members
+  // left out. A box's children are its tray (`trayOf`); this is the same read for every other head.
+  const freeRows = (list: readonly FleetRow[]): RolledRow[] => {
+    const out: RolledRow[] = [];
+    for (let i = 0; i < list.length; i += 1) {
+      const head = list[i]!;
+      if (head.depth !== 0) continue;
+      let end = i + 1;
+      while (end < list.length && list[end]!.depth === 1) end += 1;
+      const at = rows.findIndex((r) => r.depth === 0 && fleetRowKey(r) === fleetRowKey(head));
+      const kids: RolledRow[] = [];
+      if (at < 0) kids.push(...list.slice(i + 1, end));
+      else for (let k = at + 1; k < rows.length && rows[k]!.depth === 1; k += 1) kids.push(rows[k]!);
+      out.push(head, ...kids.filter(shown));
+    }
+    return out;
+  };
+  // A worktree's `via` worker by its display name, or its raw id when the fleet does not carry it.
+  const viaLabel = (id: string | null): string | null => {
+    if (id === null) return null;
+    const s = coordOf(id);
+    return s === null ? id : sessionLabel(s);
+  };
   // Task 5: the hold reason's door, decided HERE because this is the level that
   // holds the runs. `boundOpenRun` answers off the wire's binding and the run
   // rows — never by reading the id out of the hold string, which stays
@@ -356,9 +394,86 @@ function ProjectCardView({
   );
 
   // Task G2: a coordinator's folded workers are its programme box's footer now (`ProgrammeBox`), so a body row is a
-  // session or a spawn; the rollup's summary row is read only as that footer's state (`trayOf`).
-  const rowBody = (row: FleetRow): ReactNode =>
-    row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />;
+  // session, a spawn or a delegation row (wave 4); the rollup's summary row is read only as that footer's state
+  // (`trayOf`), or, for a head outside a box, as its own line (`summaryLine`).
+  /** A delegation row's words, each a cell of one line (delegation broker wave 4). `delegationWords.ts` spells them. */
+  const workLine = (parts: readonly string[], title: string, tail: ReactNode = null): ReactNode => (
+    <div className="proj-work" title={title}>
+      <span className="proj-work-parts">
+        {parts.map((p, i) => <span key={i} className="proj-work-part">{p}</span>)}
+      </span>
+      {tail}
+    </div>
+  );
+
+  const rowBody = (row: FleetRow): ReactNode => {
+    if (row.kind === 'activity') {
+      const a = activityLine(row.activity);
+      return workLine(a.parts, a.title);
+    }
+    if (row.kind === 'lease') {
+      const w = worktreeLine(row.lease, viaLabel(row.via), workingOnCard({ project: row.lease.project }, group.project));
+      // D-6999: the chips are words, never colour alone, and nothing here acts on the row.
+      const chips = [inferredChip(row.lease), creatorChip(row.lease)];
+      return workLine(w.parts, w.title, <>
+        {w.sourceProject !== null && (
+          <span className="sess-workson" data-project={w.sourceProject} title={`works on ${w.sourceProject}’s code`}>
+            <Icon name="folder-code" />
+            <span className="sr-only">works on </span>
+            <span className="sess-workson-name">{w.sourceProject}</span>
+          </span>
+        )}
+        {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
+      </>);
+    }
+    if (row.kind === 'unowned') {
+      const u = unownedLine(row.item);
+      return workLine(u.parts, u.title);
+    }
+    if (row.kind === 'delegation-group') {
+      const open = groupOpen[row.group];
+      return (
+        <BareRow
+          className="proj-group-toggle"
+          aria-expanded={open}
+          title={GROUP_WORDS[row.group].title}
+          onClick={() => onToggle?.(`${group.project}::${row.group}`)}
+        >
+          <span className="proj-card-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          {`${GROUP_WORDS[row.group].label} (${row.count})`}
+        </BareRow>
+      );
+    }
+    return row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />;
+  };
+
+  /** D-6088 rule 6 outside a box (delegation broker wave 4): a head's folded children as one line, the Released
+   *  fold's disclosure in the row's place. A box's own fold is its footer (`ProgrammeBox`). */
+  const summaryLine = (row: SummaryRow): ReactNode => (
+    <div key={`workers:${row.parentId}`} className="proj-nest" data-depth={row.depth}>
+      <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
+      <BareRow
+        className="proj-children-toggle"
+        aria-expanded={row.expanded}
+        onClick={() => onToggleChildren?.(row.parentId)}
+      >
+        <span className="proj-card-chevron" aria-hidden="true">{row.expanded ? '▾' : '▸'}</span>
+        {/* D-6088: each count unbreakable, so a narrow column wraps only between counts; `needs you` in its ink. */}
+        <span className="proj-children-parts">
+          {row.parts.map((p, i) => (
+            <Fragment key={p.word}>
+              {i > 0 && ' · '}
+              <span className={`proj-children-part${p.word === 'needs you' ? ' proj-children-part--needs-you' : ''}`}>
+                {`${p.n} ${p.word}`}
+              </span>
+            </Fragment>
+          ))}
+        </span>
+      </BareRow>
+    </div>
+  );
+  /** A free row (`freeRows`) as the card draws it: the summary line, or the one body row spelling. */
+  const freeRow = (row: RolledRow, hue?: ProgHue): ReactNode => (row.kind === 'summary' ? summaryLine(row) : nested(row, hue));
 
   // ONE spelling of a body row: a depth-0 row exactly as it shipped before the tree existed (a Fragment, no wrapper),
   // a depth-1 row under its bracket, in its programme's hue when it sits in a box's tray.
@@ -435,14 +550,14 @@ function ProjectCardView({
             <>
               <div className="pg-sub">Workers of programmes elsewhere</div>
               <div className="pg-elsewhere">
-                {prog.elsewhere.map((row) => (
+                {freeRows(prog.elsewhere).map((row) => (row.kind === 'summary' ? summaryLine(row) : (
                   <div key={rowKey(row)} className="pg-far" data-hue={hueOf(row)}>{nested(row)}</div>
-                ))}
+                )))}
               </div>
             </>
           )}
           {headed && prog.lone.length > 0 && <div className="pg-sub">Not in a programme</div>}
-          {prog.lone.map((row) => nested(row))}
+          {freeRows(prog.lone).map((row) => freeRow(row))}
           {shownAbroad.length > 0 && <div className="proj-abroad">{shownAbroad.map(abroadLine)}</div>}
           {group.elsewhere.length > 0 && (
             /* Spec §6: an emptied card says where its work went, as PLAIN TEXT —

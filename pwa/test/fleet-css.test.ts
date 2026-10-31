@@ -1507,3 +1507,37 @@ describe('the programme-and-wave label shrinks by its programme, never its wave 
     expect(ruleFor('.sess-held:has(> .sess-pw)')).toMatch(/min-width:\s*calc\(var\(--pw-wave/);
   });
 });
+
+// Delegation broker wave 4, PR2 Task 2.7 (W4-U32): the delegation rows' rules take every value from a token.
+describe('delegation rows read tokens only (delegation broker wave 4)', () => {
+  const rules = (): { sel: string; body: string }[] => {
+    const out: { sel: string; body: string }[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sel = norm(m[1]!);
+      if (/\.proj-(work|group)/.test(sel)) out.push({ sel, body: m[2]! });
+    }
+    return out;
+  };
+
+  it('W4-U32: colour, spacing and size come from var(--…) tokens; currentColor is the one keyword; the chip is bordered in it', () => {
+    const found = rules();
+    expect(found.map((r) => r.sel)).toEqual(expect.arrayContaining(['.proj-work', '.proj-work-chip', '.proj-group-toggle']));
+    const VALUED = /^(color|background(-color)?|border(-color)?|padding.*|margin.*|gap|font-size|min-height|height|width|max-width|border-radius|line-height)$/;
+    for (const { sel, body } of found) {
+      for (const decl of body.split(';')) {
+        const i = decl.indexOf(':');
+        if (i < 0) continue;
+        const prop = norm(decl.slice(0, i));
+        const value = norm(decl.slice(i + 1));
+        expect(prop, `${sel} sets no opacity`).not.toBe('opacity');
+        expect(value, `${sel} { ${prop} } has no var() fallback`).not.toMatch(/var\(--[\w-]+\s*,/);
+        if (!VALUED.test(prop)) continue;
+        // What is left once every token is read: only `0`, `currentColor`, the border's hairline and style words.
+        const rest = value.replace(/var\(--[\w-]+\)/g, '').replace(/\bcurrentColor\b/g, '')
+          .replace(prop === 'border' ? /\b1px\b|\bsolid\b/g : /$^/g, '').replace(/\b0\b/g, '').trim();
+        expect(rest, `${sel} { ${prop}: ${value} }`).toBe('');
+      }
+    }
+    expect(declValue(ruleFor('.proj-work-chip'), 'border')).toMatch(/currentColor/);
+  });
+});
