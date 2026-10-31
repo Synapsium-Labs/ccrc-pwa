@@ -628,6 +628,7 @@ same, and shows as `absent`.
 | `bad-transition` | `to` is not reachable from the run's current state |
 | `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
 | `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
+| `ejection-not-merging` | on an ADVANCE to `working` whose body carries `ejection`, from a run not at `merging`: an ejection rides only the `merging → working` edge. The server recorded nothing: the run and its landing entry are unchanged. Do not retry with the body and send no `fix-round` mail; re-read the run, and a run no longer at `merging` gets no ejection: report it to the operator (SKILL.md step 6). |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 | `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick, at most twice. Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
@@ -897,13 +898,18 @@ the worker's fingerprint exactly as the worker reports it.
    the PR's checks, which ran on a different commit and can read green —
    `gh run list --event merge_group --json databaseId,headBranch,conclusion`
    finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and
-   `gh run view <id> --log-failed` says why, while
-   `gh pr view <pr> --json mergeStateStatus` answers a conflict. Then either
+   `gh run view <id> --log-failed` says why, and a conflict is measured as
+   SKILL.md step 6 measures it: after one `git fetch origin`, `git merge-tree
+   --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1
+   with a tree id on its first line, then the conflicted paths. Then either
    enqueue it again exactly as above — the landing verdict (§5b) again first,
-   then the checks, then the read-back — or
-   send the owning worker a fix round on the `merging → working` edge
-   (SKILL.md step 6's send-back; its fresh wave-done gets a fresh review run,
-   and a fresh `merging`). Closing before the landing would hand a PR still
+   then the checks, then the read-back — or send the owning worker a fix round
+   on the `merging → working` edge in one of the two report-less forms of
+   SKILL.md step 6's send-back (its fresh wave-done gets a fresh review run,
+   and a fresh `merging`). A dequeue that neither a re-enqueue nor one of
+   those two forms answers, a requested change or a cause you could not read
+   among them, is a stop for the operator and no report-less round (SKILL.md
+   step 6). Closing before the landing would hand a PR still
    in the queue to a reclaim: nothing could then tell you of its dequeue, and
    no worker would be left to fix it. A coordinator whose own workspace
    carries a programme-wave hold or the child marker — a self-claimed run's,
@@ -1277,7 +1283,8 @@ decides what this session does, and nothing else does:
 - `RED <names>` — a required check is red on the head, each name with its
   kind. If it is the PR's own, that is the existing fix-round rule (step 3:
   on route Q disarm first, then a fix round to the owning worker on the
-  `merging → working` edge). If it is not the PR's own and its kind is
+  `merging → working` edge), in SKILL.md step 6's `red: #<pr>` form. If it
+  is not the PR's own and its kind is
   `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait,
   then the verdict again. One of kind `[app <id>]` or `[status]` that is not
   the PR's own, which no rerun here reaches, or one still red after the one
@@ -1416,6 +1423,24 @@ disarms it as step 3 does if it is only armed, asks the operator to dequeue it
 if it is in the queue, asks address or ignore, and never enqueues again
 silently. Watching a queued PR continuously is a server follow-up, not this
 skill's.
+
+**The landing line.** Every run that enters `merging` pins an entry for its PR
+on its project's landing line, and the entry's `pinnedSha` is the recorded head
+(**The recorded head**, §5): the server pins it from the same re-measurement
+that answers `verifiedHead`. Before each enqueue, direct merge and re-enqueue,
+once the verdict, and on route Q the checks gate, have answered, read the line:
+`GET /api/landing?project=<project>` (`ccrc-api landing show --project
+<project>`). Land only when its `order` is not paused and this PR's entry for
+this run reads `pinned` with a `pinnedSha` equal to the head you bind. A paused
+line, an entry in another state, a `pinnedSha` that differs from that head or a
+read that fails in any other way than a 404 (a timeout, a 401, a 5xx, a
+transport error or an answer you cannot parse) lands nothing: report what it
+read to the operator and leave the landing stopped, and never bind another head
+to match it. A PR with no entry, which a run that entered `merging` before the
+line existed leaves, lands as the verdict says, and your turn's text names the
+missing entry. A read answered 404 comes from a server older than the line: read
+it as no entry, and land the same way. The order it answers is read and not yet
+acted on: which entry lands next is the line's head, a later stage's.
 
 **A stop.** A stop enqueues nothing and merges nothing. It leaves the run where
 it is (at `merging` or `awaiting-review`) and changes nothing, with one

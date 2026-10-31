@@ -137,6 +137,7 @@ describe('the corpora no longer invoke curl', () => {
       'asks.release',
       'claims.release',
       'claims.take',
+      'landing.show',
       'ledger.allocate',
       'mail.send',
       'peers.list',
