@@ -7,7 +7,8 @@
 #   - which open PRs conflict with the base, and with each other (`probe`);
 #   - whether the base tip's required checks are green (`main-health`);
 #   - each workspace branch's lineage of clean base merges (`<id>.lineage`);
-#   - the opt-in mirror stage 4 reads, with its own time (`enabled`).
+#   - the opt-in mirror stage 4 reads, with its own time (`enabled`);
+#   - the landing line's mirror of lander=coordinator, with its own time (`lander`; for stage 5's landing line, which does not read it yet).
 # The files are JSON with "v": 1, written under `$REG/landing/<project>/`. The formats are the interface the next
 # waves read; the plan's Design section is their grammar.
 #
@@ -62,11 +63,12 @@
 #   1. The bash head: the knobs, the global pause (exit 0), the tool check, the lock.
 #   2. SIGTERM and SIGINT are recorded, never raised where they land (the handler kills the child in flight); a
 #      stale scratch of an earlier tick is cleared. The tick ends at the next checkpoint, with 128 plus the signal.
-#   3. THE `enabled` PRE-PASS, before any project is measured: one pass over every conf and every directory under
-#      $REG/landing/ writes `enabled` for a valid conf with lineage=on, an unpaused project and a real main checkout,
-#      and removes it in every other case (an invalid or missing conf, lineage=off, paused, not a checkout, a
-#      directory with no conf at all). Its spacing is the spacing of tick starts, whatever the order or the budgets of
-#      the projects, so stage 4 can bound its freshness. The measuring loop never writes or removes `enabled`.
+#   3. THE MIRROR PRE-PASS, before any project is measured: one pass over every conf and every directory under
+#      $REG/landing/ writes `enabled` for a valid conf with lineage=on, and `lander` for a valid conf with
+#      lander=coordinator whatever lineage says, each for an unpaused project and a real main checkout, and removes
+#      each in every other case (an invalid or missing conf, its key not set, paused, not a checkout, a directory
+#      with no conf at all). Its spacing is the spacing of tick starts, whatever the order or the budgets of
+#      the projects, so stage 4 can bound its freshness. The measuring loop never writes or removes `enabled` or `lander`.
 #   4. For each conf, sorted, while the tick budget lasts: parse it, skip a paused project, then within the project
 #      budget record store.before, read the open heads, then make the scratch and fetch, measure base x head and the
 #      pairs, write `probe`, `main-health` and each lineage, rewrite `probe` with store.after and the scratch size,
@@ -90,7 +92,7 @@
 #   5. Exit 0, or 128 plus the number of a signal recorded or held after the last checkpoint.
 #
 # PATHS
-#   ~/.ccrc/landing/<project>.conf        the operator, by hand: opts <project> in (base=, lineage=on|off)
+#   ~/.ccrc/landing/<project>.conf        the operator, by hand: opts <project> in (base=, lineage=on|off, lander=coordinator|none)
 #   $REG/land-probe-paused                the operator, by hand: global pause, exit 0 before the lock
 #   $REG/landing/<project>/paused         the operator, by hand: this project is not measured
 #   ~/.ccrc/land-probe.lock               this probe: one tick at a time
@@ -98,6 +100,7 @@
 #   $REG/landing/<project>/main-health    this probe: the base tip's required checks
 #   $REG/landing/<project>/<id>.lineage   this probe: one registry row's workspace-branch lineage
 #   $REG/landing/<project>/enabled        this probe: the mirror of lineage=on
+#   $REG/landing/<project>/lander         this probe: the mirror of lander=coordinator
 #   $TMPDIR/ccd-land-probe.<random>/      this probe: the per-tick scratch
 # Nothing in the tree writes the conf or either pause marker; they are the operator's, by hand. $REG is
 # $HOME/.cc-sessions.
@@ -866,10 +869,13 @@ def write_json(dirpath, name, doc):
                 pass
 
 
+MIRRORS = ('enabled', 'lander')   # the pre-pass's own files: written by write_json in reconcile_enabled, removed by remove_own
+
+
 def remove_own(dirpath, name):
-    """Delete a regular file named `enabled` or `*.lineage` in a real, owned directory under a real, owned
+    """Delete a regular file named `enabled`, `lander` or `*.lineage` in a real, owned directory under a real, owned
     $REG/landing/, and nothing else: both directories are lstat-checked, so a symlinked landing directory is left alone."""
-    if '/' in name or not (name == 'enabled' or name.endswith('.lineage')):
+    if '/' in name or not (name in MIRRORS or name.endswith('.lineage')):
         return
     if not real_dir(LANDING) or not real_dir(dirpath):
         return
@@ -1044,7 +1050,7 @@ def parse_conf(path):
         text = data.decode('utf-8')
     except UnicodeDecodeError:
         return None, 'not-utf8'
-    conf = {'base': 'main', 'lineage': 'off'}
+    conf = {'base': 'main', 'lineage': 'off', 'lander': 'none'}
     seen = set()
     for line in text.split('\n'):
         if line.strip() == '' or line.startswith('#'):
@@ -1052,7 +1058,7 @@ def parse_conf(path):
         key, eq, value = line.partition('=')
         if not eq:
             return None, 'malformed-line'
-        if key not in ('base', 'lineage'):
+        if key not in ('base', 'lineage', 'lander'):
             return None, 'unknown-key'
         if key in seen:
             return None, 'repeated-key'
@@ -1060,7 +1066,10 @@ def parse_conf(path):
         if key == 'base':
             if not BASE_RE.fullmatch(value) or value.startswith('-') or any(k.lower() in value.lower() for k in PINNED_KEYS):
                 return None, 'bad-value'   # the git door would refuse it in the fetch's refspec: refused here, at parse
-        elif value not in ('on', 'off'):
+        elif key == 'lineage':
+            if value not in ('on', 'off'):
+                return None, 'bad-value'
+        elif value not in ('coordinator', 'none'):
             return None, 'bad-value'
         conf[key] = value
     return conf, None
@@ -1510,26 +1519,33 @@ def handle_project(project):
 
 
 def reconcile_enabled(projects):
-    """The opt-in mirror, reconciled in one pass at the start of the tick, before any project is measured: `enabled` is
-    written for each valid conf with lineage=on, an unpaused project and a real main checkout, and removed in every
-    other case (an invalid conf, lineage=off, paused, not a checkout), and for every directory under $REG/landing/
+    """The two mirrors, reconciled in one pass at the start of the tick, before any project is measured: `enabled` is
+    written for each valid conf with lineage=on, and `lander` for each valid conf with lander=coordinator whatever
+    lineage says, each only for an unpaused project with a real main checkout, and each is removed in every other case
+    (an invalid conf, its key not set, paused, not a checkout), and for every directory under $REG/landing/
     with no conf at all. Its time is then the time of the tick's start, whatever the order and the budgets of the
     projects measured after it. Quiet: the measuring names what it skips."""
     for project in projects:
         ldir = LANDING + '/' + project
         conf, _ = parse_conf(CONF_DIR + '/' + project + '.conf')
-        if conf is not None and conf['lineage'] == 'on' and not is_paused(ldir) and is_checkout(project) \
-                and ensure_dir(LANDING, 'landing', True) and ensure_dir(ldir, project, True):
-            write_json(ldir, 'enabled', {'v': 1, 'project': project, 'at': now_iso()})
-        else:
-            remove_own(ldir, 'enabled')
+        live = conf is not None and not is_paused(ldir) and is_checkout(project)
+        at = now_iso()
+        for name, wanted, doc in (
+                ('enabled', live and conf['lineage'] == 'on', {'v': 1, 'project': project, 'at': at}),
+                ('lander', live and conf['lander'] == 'coordinator',
+                 {'v': 1, 'project': project, 'lander': 'coordinator', 'at': at})):
+            if wanted and ensure_dir(LANDING, 'landing', True) and ensure_dir(ldir, project, True):
+                write_json(ldir, name, doc)
+            else:
+                remove_own(ldir, name)
     try:
         names = sorted(os.listdir(LANDING))
     except OSError:
         return
     for n in names:
         if PROJECT_RE.fullmatch(n) and not os.path.lexists(CONF_DIR + '/' + n + '.conf'):
-            remove_own(LANDING + '/' + n, 'enabled')
+            for name in MIRRORS:
+                remove_own(LANDING + '/' + n, name)
 
 
 def main():

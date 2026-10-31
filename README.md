@@ -6125,7 +6125,7 @@ things:
   is a two-parent merge whose second parent is on the base, and whose tree equals what `merge-tree` gives for its
   parents. The walk stops at the first step that is not such a merge, after at most eight steps.
 
-It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project>/`:
+It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project>/`:
 
 | file | what it holds |
 |---|---|
@@ -6133,6 +6133,7 @@ It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
+| `lander` | the mirror of the conf's `lander=coordinator`, with its own time; absent means the project is not a coordinator-lands project, and stage 5's landing line, which does not read it yet |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
 covers a failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write.
@@ -6167,23 +6168,26 @@ its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For 
 kept file, stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
 that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
 
-`enabled` is reconciled in one pass at the start of every tick that runs, before any project is measured. It is
-written for a valid conf with `lineage=on`, an unpaused project and a real main checkout, and removed in every other
-case. Its writes are therefore as far apart as the tick starts, whatever the order or budgets of the projects. Every
+The two mirrors, `enabled` and `lander`, are reconciled in one pass at the start of every tick that runs, before any
+project is measured. `enabled` is written for a valid conf with `lineage=on`, and `lander` for a valid conf with
+`lander=coordinator` whatever `lineage` says, each only for an unpaused project with a real main checkout, and each is
+removed in every other case. Their writes are therefore as far apart as the tick starts, whatever the order or budgets of the projects. Every
 removal first checks that `~/.cc-sessions/landing/` and the project's directory are real, owned directories.
 
-**The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are
-two keys: `base`, a branch name that defaults to `main`, and `lineage`, `on` or `off`, which defaults to `off`. An
+**The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are three keys: `base`, a branch name that defaults to `main`; `lineage`, `on` or `off`, which defaults to
+`off`; and `lander`, `coordinator` or `none`, which defaults to `none` and says who lands the project's PRs. A probe
+older than this key reads a conf that names it as `unknown-key` and stops measuring that project, so write `lander=`
+only once the box runs this probe. An
 empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or a conf that is not a
-regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would refuse. That project is not measured, its `enabled` is removed, and the
+regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would refuse. That project is not measured, its `enabled` and `lander` are removed, and the
 journal names the reason (never the bytes).
 
 **The pauses.** The operator writes both by hand, and the tree has no writer for either:
 - `~/.cc-sessions/land-probe-paused` stops the whole tick before its lock.
 - `~/.cc-sessions/landing/<project>/paused` stops one project.
 
-A paused project is not measured, and its `enabled` is removed, so a pause stops acceptance as well as measurement.
-`ccrc uninstall` removes the units, the binary and every `enabled` file.
+A paused project is not measured, and its `enabled` and `lander` are removed, so a pause stops acceptance and the landing line's declaration as well as measurement.
+`ccrc uninstall` removes the units, the binary and every `enabled` and `lander` file.
 
 **Read-only, by code.** The fetch and every `merge-tree` object go into a per-tick bare scratch repository under
 the temp root. That repository borrows the project's object store as an alternate. It is removed on every exit path,

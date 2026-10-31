@@ -2006,3 +2006,121 @@ describe('ccd-land-probe: every removal of enabled checks $REG/landing/ itself (
     expect(ls(path.join(target, 'proj-a'))).toEqual(['enabled']);
   });
 });
+
+describe('ccd-land-probe: the lander key and its mirror (landing order wave 5d)', () => {
+  const LANDER_KEYS = ['v', 'project', 'lander', 'at'];
+  const arm = (text = 'lander=coordinator\n'): void => {
+    fx.conf(fx.project, text);
+    expect(fx.run().status).toBe(0);
+  };
+
+  it('K1 lander=coordinator is accepted and mirrored, whatever lineage says', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lander=coordinator\n');
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('conf-invalid');
+    const doc = fx.readJson('lander');
+    expect(Object.keys(doc)).toEqual(LANDER_KEYS);
+    expect(doc).toMatchObject({ v: 1, project: 'proj-a', lander: 'coordinator' });
+    expect(Math.abs(Date.parse(doc.at) - Date.now())).toBeLessThan(60_000);
+    expect(fx.exists('enabled')).toBe(false);           // lineage defaults to off
+    expect(fx.exists('probe')).toBe(true);              // the key changes no measurement
+    arm('lineage=on\nlander=coordinator\n');
+    expect(fx.readJson('lander').at).toBe(fx.readJson('enabled').at);   // one pass, one time
+    arm('lineage=off\nlander=coordinator\n');
+    expect(fx.exists('lander')).toBe(true);
+    expect(fx.exists('enabled')).toBe(false);
+  });
+
+  it('K2 lander=none, and no lander key at all, write no marker and remove a standing one', { timeout: 120_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    for (const text of ['lander=none\n', '', 'lineage=on\n', 'lineage=on\nlander=none\n']) {
+      arm();
+      expect(fx.exists('lander'), text).toBe(true);
+      fx.conf(fx.project, text);
+      const r = fx.run();
+      expect(r.status, text).toBe(0);
+      expect(r.stderr, text).not.toContain('conf-invalid');
+      expect(fx.exists('lander'), text).toBe(false);
+      expect(fx.exists('enabled'), text).toBe(text.includes('lineage=on'));
+      expect(fx.exists('probe'), text).toBe(true);
+    }
+  });
+
+  it('K3 any other value is conf-invalid: bad-value, and removes both mirrors', { timeout: 180_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    for (const v of ['Coordinator', 'coordinator ', '', 'on', 'yes', 'operator', 'coordinator\r']) {
+      arm('lineage=on\nlander=coordinator\n');
+      expect(fx.exists('lander'), JSON.stringify(v)).toBe(true);
+      fx.conf(fx.project, `lineage=on\nlander=${v}\n`);
+      const r = fx.run();
+      expect(r.status).toBe(0);
+      expect(r.stderr, JSON.stringify(v)).toContain('conf-invalid proj-a: bad-value');
+      expect(fx.exists('lander'), JSON.stringify(v)).toBe(false);
+      expect(fx.exists('enabled'), JSON.stringify(v)).toBe(false);
+    }
+  });
+
+  it('K4 a repeated lander is conf-invalid: repeated-key, and removes the marker', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    for (const text of ['lander=coordinator\nlander=coordinator\n', 'lander=none\nlander=coordinator\n']) {
+      arm();
+      fx.conf(fx.project, text);
+      const r = fx.run();
+      expect(r.status).toBe(0);
+      expect(r.stderr, text).toContain('conf-invalid proj-a: repeated-key');
+      expect(fx.exists('lander'), text).toBe(false);
+    }
+  });
+
+  it('K5 an unknown key beside lander is still unknown-key, and removes the marker', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    arm();
+    fx.conf(fx.project, 'lander=coordinator\nbogus=1\n');
+    const r = fx.run();
+    expect(r.stderr).toContain('conf-invalid proj-a: unknown-key');
+    expect(fx.exists('lander')).toBe(false);
+  });
+
+  it('K6 removal reaches every other case in the same pass: paused, not a checkout, a conf removed, a directory with no conf; lineage=off keeps it', { timeout: 90_000 }, () => {
+    const plant = (name: string): string => {
+      const d = path.join(fx.reg, 'landing', name);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'lander'), '{}\n');
+      return path.join(d, 'lander');
+    };
+    const off = makeLandFixture(h, { project: 'proj-off', slug: 'o/off' });
+    const gone = makeLandFixture(h, { project: 'proj-gone', slug: 'o/gone' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf('proj-a', 'lander=coordinator\n');
+    fx.pause('project');
+    fx.conf('proj-off', 'lineage=off\nlander=coordinator\n');
+    fx.conf('proj-nocheckout', 'lander=coordinator\n');
+    fx.conf('proj-gone', 'lander=coordinator\n');
+    expect(fx.run().status).toBe(0);
+    expect(gone.exists('lander')).toBe(true);
+    fs.rmSync(gone.confPath());
+    const files = ['proj-a', 'proj-nocheckout', 'orphan'].map(plant);
+    expect(fx.run().status).toBe(0);
+    for (const f of files) expect(fs.existsSync(f), f).toBe(false);
+    expect(gone.exists('lander'), 'a removed conf').toBe(false);
+    expect(off.readJson('lander')).toMatchObject({ v: 1, project: 'proj-off', lander: 'coordinator' });
+  });
+
+  it('K7 a landing directory that is a symlink keeps the lander files in its target', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lander=none\n');
+    const target = path.join(h.home, 'landing-target');
+    const files = ['proj-a', 'orphan'].map((n) => {
+      fs.mkdirSync(path.join(target, n), { recursive: true });
+      const f = path.join(target, n, 'lander');
+      fs.writeFileSync(f, '{}\n');
+      return f;
+    });
+    fs.mkdirSync(fx.reg, { recursive: true });
+    fs.symlinkSync(target, path.join(fx.reg, 'landing'));
+    expect(fx.run().status).toBe(0);
+    for (const f of files) expect(fs.readFileSync(f, 'utf8'), f).toBe('{}\n');
+  });
+});
