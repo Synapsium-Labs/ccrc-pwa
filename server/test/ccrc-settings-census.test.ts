@@ -568,8 +568,6 @@ describe('W24: every ccrc setting is read through _ccrc_knob, and every environm
  *  every other CCRC_ name a sibling reads from the environment outside the reader. Names wave 24's ENV_ONLY already
  *  classes (the health timeout, the cgroup and proc roots) are not repeated here. */
 const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
-  CCRC_GRAPH_STALE_ESCAPE_COMMITS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a tree this many commits behind whatever its idle gate says, a policy number its header does not offer an operator.' },
-  CCRC_GRAPH_STALE_ESCAPE_SECS: { cls: 'tuning', why: 'ccd-graph-sweep\'s stale-escape rule rebuilds a graph this old whatever its idle gate says, a policy number its header does not offer an operator.' },
   CCRC_KEEPALIVE_TURN_TIMEOUT: { cls: 'call-bound', why: 'ccd-telemetry-keepalive bounds one turn with it (`timeout` around the wrapper), overridable so a test need not wait it out.' },
   CCRC_KEEPALIVE_BACKOFF_AFTER: { cls: 'tuning', why: 'ccd-telemetry-keepalive\'s backoff starts after this many failed turns in a row, one of the three plain numbers its header argues rather than offers.' },
   CCRC_KEEPALIVE_BACKOFF_BASE: { cls: 'tuning', why: 'ccd-telemetry-keepalive\'s backoff window starts here and doubles, one of the three plain numbers its header argues rather than offers.' },
@@ -591,17 +589,14 @@ const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_MODELS_PROBE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s one test seam: a file whose bytes stand in for the network answer.' },
 };
 
-/** The graph settings ccd-graph-sweep still reads by its own `: "${NAME:=default}"` line (D-7524). The graphify r2 wave's
- *  GR2 makes them settings (CCRC_SETTINGS) before its GR4 replaces those lines with ccrc's reader, so in between each is
- *  both a setting and an environment read there. Named here, never derived: W29-S2 exempts exactly these names, and only
- *  in ccd-graph-sweep, and W29-S2t holds each to one such line and no other read. GR4 deletes each row with its line. */
+/** The graph settings ccd-graph-sweep read by its own `: "${NAME:=default}"` line between the graphify r2 wave's GR2 and
+ *  GR4 (D-7524), each then both a setting and an environment read there. Named here, never derived: W29-S2 exempts
+ *  exactly these names, and only in ccd-graph-sweep, and W29-S2t holds each to one such line and no other read. GR4
+ *  (D-7350) replaced the four lines with ccrc's reader (`_gr_knobs`, through `_graph_knobs`) and deleted each row with
+ *  its line, so the table is empty; the two stale-escape names left SIBLING_ENV_ONLY with the escape hatch they tuned
+ *  (spec §5.4 "Retired"). A name added back here must come with its line, and W29-S2t says so. */
 const GRAPH_SWEEP = 'ccd/ccd-graph-sweep';
-const GRAPH_TRANSITIONAL: Record<string, string> = {
-  CCRC_GRAPH_BUILD_TIMEOUT: 'ccd-graph-sweep bounds one engine build with it, by its own := default until GR4 reads it through ccrc\'s reader.',
-  CCRC_GRAPH_BUDGET: 'ccd-graph-sweep stops a pass after this many tree rebuilds, by its own := default until GR4 reads it with its repository-build meaning (D-7358).',
-  CCRC_GRAPH_MAX_WORKERS: 'ccd-graph-sweep hands one engine build this many workers, by its own := default until GR4 reads it through ccrc\'s reader.',
-  CCRC_GRAPH_HOOKSTATE_FRESH_SECS: 'ccd-graph-sweep\'s idle gate trusts a hookstate pointer this young, by its own := default until GR4 reads it through ccrc\'s reader.',
-};
+const GRAPH_TRANSITIONAL: Record<string, string> = {};
 
 /** The tracked `.mjs` files ccd/ccrc names in a code line, by repository path or by a path that ends with the file's
  *  path below its top directory (`$CCRC_HERE/history/cli.mjs`, `$HOME/.cc-sessions/compact-card.mjs`). */

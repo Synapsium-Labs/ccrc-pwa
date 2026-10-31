@@ -1404,9 +1404,10 @@ export function healthy(prefix: string): string {
   linkReal(home, 'realpath');
   symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
     join(home, '.local', 'bin', 'graphify'));
+  // repos[] is what the repository sweep writes (GR4, D-7350); the per-tree array stays beside it while the doctor reads it (GR7).
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
-    pin: '0.9.9', status: 'ok', trees: [] }] }));
+    pin: '0.9.9', status: 'ok', repos: [], trees: [] }] }));
   // …and its ccd answers Docs (spec 2026-10-01 §7.2): `docs` is a check, and
   // healthy()'s contract is that every check PASSES. `$HOME/.local/bin/ccd`,
   // the file the agent execs and the check runs, prints the canned ready

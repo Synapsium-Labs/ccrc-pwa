@@ -7762,7 +7762,12 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # `git worktree remove` collects the store WITH the tree (un-ignored, it wedges
   # ws-rm/ws-reap/ws-gc — none pass --force), and so a SIGKILL-orphaned
   # .graphifyignore can never make a workspace unremovable.
+  # Graph revision 2 (D-7350, spec §6.1): the NO-SLASH line too, because a
+  # tree's graphify-out becomes a LINK to the repository's shared graph, and the
+  # slash-only line does not ignore a symlink. (ccd does not source ccrc, so this
+  # is the second writer of these lines beside ccrc's _graph_exclude_common.)
   grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null || echo 'graphify-out/' >> "$common/info/exclude"
+  grep -qxF 'graphify-out' "$common/info/exclude" 2>/dev/null || echo 'graphify-out' >> "$common/info/exclude"
   grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
   # Regenerable build output a project's own tooling writes straight into the
   # workspace (`npm install`, `cdk synth`) is W-pattern by location — it dies

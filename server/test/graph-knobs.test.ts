@@ -85,8 +85,17 @@ function specTable(): { key: string; def: string }[] {
   return out;
 }
 const SPEC_KEYS = specTable().map((r) => r.key);
+/** The defaults the operator RULED away from spec §5.4's table, each named with its ruling and the file that defines
+ *  it. One row: OA-GR2, "always full" (D-7634, the GR0 baseline), makes every refresh a full build box-wide, so
+ *  `CCRC_GRAPH_INCREMENTAL_MAX_FILES` defaults to 0 where the spec writes 200. The row below holds both halves: the
+ *  spec still says 200 and the ruling is defined, so the departure is stated here and nowhere silently. */
+const RULED: Record<string, { def: string; ruling: string; file: string }> = {
+  CCRC_GRAPH_INCREMENTAL_MAX_FILES: { def: '0', ruling: 'D-7634', file: 'docs/superpowers/plans/2026-10-30-graphify-r2-gr0-baseline.md' },
+};
+/** Spec §5.4's table with the ruled defaults applied: what `_graph_knobs` must carry. */
+const ruledTable = (): { key: string; def: string }[] => specTable().map((r) => ({ key: r.key, def: RULED[r.key]?.def ?? r.def }));
 const specDefault = (home: string, key: string): string =>
-  specTable().find((r) => r.key === key)!.def.replace('$HOME', home);
+  ruledTable().find((r) => r.key === key)!.def.replace('$HOME', home);
 
 /** A value of each key that is not its shape, and one that is (a boundary where the shape has one). */
 const BAD: Record<string, string> = {
@@ -240,18 +249,11 @@ function thresholdLiterals(text: string): string[] {
   }
   return out;
 }
-/** Today's literals in the sweep: its five `:=` defaults at the top, the hookstate freshness default above
- *  `_gs_busy`, and the breach list's five-name cut. GR4 moves the defaults to `_graph_knobs` and takes this to []. */
+/** The literals the scanner accepts. GR2's base carried seven in the sweep (its five `:=` defaults at the top, the
+ *  hookstate freshness default above `_gs_busy`, and the breach list's five-name cut); GR4 (D-7350) read every bound
+ *  through `_gr_knobs` and took the sweep's set to [] (counted exit: 7 -> 0). */
 const KNOWN: Record<(typeof SCANNED)[number], string[]> = {
-  'ccd/ccd-graph-sweep': [
-    ': "${CCRC_GRAPH_BUILD_TIMEOUT:=600}"',
-    ': "${CCRC_GRAPH_BUDGET:=8}"',
-    ': "${CCRC_GRAPH_MAX_WORKERS:=4}"',
-    ': "${CCRC_GRAPH_STALE_ESCAPE_COMMITS:=20}"',
-    ': "${CCRC_GRAPH_STALE_ESCAPE_SECS:=21600}"',
-    ': "${CCRC_GRAPH_HOOKSTATE_FRESH_SECS:=1800}"',
-    '[ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"',
-  ],
+  'ccd/ccd-graph-sweep': [],
   // cpu.stat's two-field line shape (`usage_usec <n>`), not a bound a build obeys
   'ccd/graph-build': ["if len(f) == 2 and f[0] == 'usage_usec' and f[1].isdigit():"],
   'ccd/graph-resolve': [],
@@ -268,22 +270,32 @@ describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs 
     expect(raw(box()).map((f) => f[0])).toEqual(SPEC_KEYS);
   });
 
-  it('the defaults table equals spec §5.4 row by row', () => {
+  it('the defaults table equals spec §5.4 row by row, but for the ruled defaults', () => {
     const b = box();
     const rows = raw(b);
-    expect(rows.map((f) => [f[0], f[1]])).toEqual(specTable().map((r) => [r.key, r.def.replace('$HOME', b.home)]));
+    expect(rows.map((f) => [f[0], f[1]])).toEqual(ruledTable().map((r) => [r.key, r.def.replace('$HOME', b.home)]));
     // No ccrc.env, no environment: every value is its default, from `default`.
     expect(rows.map((f) => [f[0], f[2], f[3]])).toEqual(rows.map((f) => [f[0], f[1], 'default']));
   });
 
-  it('the three kept keys keep the defaults the sweep reads today', () => {
-    const sweep = read('ccd/ccd-graph-sweep');
-    const today = (k: string): string => new RegExp(': "\\$\\{' + k + ':=(\\d+)\\}"').exec(sweep)?.[1] ?? '(absent)';
+  it('each ruled default is a ruling defined in its file, and departs from a spec value that still stands', () => {
+    for (const [key, r] of Object.entries(RULED)) {
+      expect(specTable().find((x) => x.key === key)?.def, `${key}: the spec's own default`).not.toBe(r.def);
+      expect(read(r.file), `${key}: ${r.ruling} is defined in ${r.file}`).toMatch(new RegExp('^- \\*\\*' + r.ruling + ' \\(\\d{4}-\\d{2}-\\d{2}\\)\\*\\* — ', 'm'));
+      expect(read('ccd/ccrc'), `${key}: ccd/ccrc names its ruling beside the default`).toContain(r.ruling);
+    }
+  });
+
+  it('the three kept keys keep the defaults the per-tree sweep read (D-7348), and no graph key is read by a := line any more', () => {
+    // GR4 (D-7350) replaced the sweep's own `: "${…:=…}"` lines with `_gr_knobs`; the values they carried are pinned
+    // here as they stood on GR2's base: BUILD_TIMEOUT 600, MAX_WORKERS 4, HOOKSTATE_FRESH_SECS 1800.
     const b = box();
-    for (const k of ['CCRC_GRAPH_BUILD_TIMEOUT', 'CCRC_GRAPH_MAX_WORKERS', 'CCRC_GRAPH_HOOKSTATE_FRESH_SECS'])
-      expect(specDefault(b.home, k), k).toBe(today(k));
-    // Counted exit: the graph keys read by `: "${…:=…}"` lines stay at 6 until GR4 takes them to 0.
-    expect(sweep.split('\n').filter((l) => /^\s*: "\$\{CCRC_GRAPH_[A-Z0-9_]+:=/.test(l))).toHaveLength(6);
+    const before: Record<string, string> = { CCRC_GRAPH_BUILD_TIMEOUT: '600', CCRC_GRAPH_MAX_WORKERS: '4', CCRC_GRAPH_HOOKSTATE_FRESH_SECS: '1800' };
+    for (const [k, v] of Object.entries(before)) expect(specDefault(b.home, k), k).toBe(v);
+    // Counted exit: the graph keys read by `: "${…:=…}"` lines, 6 -> 0 (GR4).
+    const sweep = read('ccd/ccd-graph-sweep');
+    expect(sweep.split('\n').filter((l) => /^\s*: "\$\{CCRC_GRAPH_[A-Z0-9_]+:=/.test(l))).toHaveLength(0);
+    expect(sweep, 'the sweep reads its settings through _gr_knobs').toMatch(/^_gr_knobs \|\| /m);
   });
 
   it('a key in the fixture ccrc.env is what _gr_knobs returns, in both modes, with no warning', () => {
