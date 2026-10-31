@@ -9,7 +9,10 @@
  * `server/src` imports it, and this file is its one importer (`single-definition.test.ts`, the ARCH-40 describe). A
  * later swap of the parser touches this file alone.
  *
- * Syntax only, no type checker: import-edge and symbol rules do not need one.
+ * Syntax only, except ONE typed walk: import-edge and symbol rules need no type checker, but the store census
+ * (`storeReach`, D-7578) does, because a value's type, not its text, decides whether it is the store, a port of it or
+ * a carrier of it, and which implementation a call through a function-typed value reaches; it builds its own program
+ * from a tsconfig (memoized, one per process) or from fixture sources.
  * D-5854 (Task C0g; ARCH-06 (#554)) adds `calls` and `bindings`, which `scan/symbols.ts` (`callsIn`) and the literal
  * source-pin ratchet (`single-definition.test.ts`, the ARCH-40 describe) read, so neither imports the parser.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
@@ -17,7 +20,8 @@
  * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges; a `Record<X, true>`
  * counts only as a variable's annotation or a `satisfies` type, and only with `X` named bare (D-6048).
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import ts from 'typescript-api';
 
 /** One module edge: an `import`, an `export … from`, an `import x = require(…)`, a literal `import(…)` or a type
@@ -774,4 +778,513 @@ export function statementStartAt(text: string, pos: number, fileName = 'source.t
   };
   visit(sf);
   return found;
+}
+
+/** D-7578 (plan docs/superpowers/plans/2026-10-30-consolidation-increment7-watcher-store-port.md, Task WP1; increment
+ *  7): what the census is asked. Every file name is relative to `base` (`server/src`), and so is every name it prints. */
+export interface StoreReachOptions {
+  /** The tsconfig whose program is walked (`server/tsconfig.json`). Unused with `files`. */
+  tsconfig?: string;
+  /** The directory names are relative to. Required with `tsconfig`; with `files` it is a fixed virtual root. */
+  base?: string;
+  /** The scope: a file name, or a one-level glob (`*Lane.ts`, `lane*.ts`) matched against `base`'s own listing, so a
+   *  new file the glob names is in scope at birth. */
+  scope: readonly string[];
+  /** The store class (`CoordStore` in `coord/store.ts`). */
+  store: { file: string; name: string };
+  /** The port alias (`WatcherCoordPort` in `coord/ports.ts`); absent from the program is allowed (before WP2). */
+  port: { file: string; name: string };
+  /** Fixture sources by name under the virtual root: the program is built over these instead (the CONTROL rows). */
+  files?: Readonly<Record<string, string>>;
+}
+
+/** The census, as plain data. `units` maps every walked unit in scope (`watch.ts#FleetWatcher.tick`) to the members
+ *  it reaches; `reach` is every member reached, `wholeReach` and `portReach` those reached on a whole-store value and
+ *  on a port value; `portMembers` the port alias's members ([] when it is absent); `wholeHandoffs` each whole hand-off
+ *  key with its call-site count, and `chains` its chain of out-of-scope functions taking the whole store, bottom-up;
+ *  `portEntries` each place a whole value enters the port, by call site; `bareAnnotations` the bare store-class type
+ *  references in scope, by unit. */
+export interface StoreReach {
+  diagnostics: string[];
+  files: string[];
+  units: Record<string, string[]>;
+  reach: string[];
+  wholeReach: string[];
+  portReach: string[];
+  portMembers: string[];
+  wholeHandoffs: Record<string, number>;
+  chains: Record<string, string[]>;
+  portEntries: Record<string, number>;
+  bareAnnotations: Record<string, number>;
+}
+
+/** One typed program per tsconfig, per process. */
+const reachPrograms = new Map<string, ts.Program>();
+/** Library declaration files, parsed once and shared by every fixture program. */
+const reachLibFiles = new Map<string, ts.SourceFile>();
+/** The function-typed implementation index, built once per program. */
+const reachImplIndexes = new WeakMap<ts.Program, Map<ts.Node, Set<ts.Node>>>();
+const REACH_FIXTURE_ROOT = '/store-reach-fixture/src';
+const REACH_WRAPPERS: ReadonlySet<string> = new Set(['Pick', 'Partial', 'Omit', 'Readonly']);
+
+const reachRealProgram = (tsconfig: string): ts.Program => {
+  const hit = reachPrograms.get(tsconfig);
+  if (hit) return hit;
+  const read = ts.readConfigFile(tsconfig, ts.sys.readFile);
+  if (read.error) throw new Error(`storeReach: ${ts.flattenDiagnosticMessageText(read.error.messageText, ' ')}`);
+  const cfg = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(tsconfig));
+  const program = ts.createProgram({ rootNames: cfg.fileNames, options: cfg.options,
+    configFileParsingDiagnostics: cfg.errors });
+  reachPrograms.set(tsconfig, program);
+  return program;
+};
+
+const reachFixtureProgram = (files: Readonly<Record<string, string>>): ts.Program => {
+  const options: ts.CompilerOptions = { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler, strict: true, noEmit: true, skipLibCheck: true, types: [],
+    lib: ['lib.es2022.d.ts'] };
+  const virtual = new Map(Object.entries(files).map(([n, t]) => [path.posix.join(REACH_FIXTURE_ROOT, n), t]));
+  const host = ts.createCompilerHost(options, true);
+  const { getSourceFile, fileExists, readFile } = host;
+  host.getSourceFile = (name, lang, onError, fresh) => {
+    const text = virtual.get(name);
+    if (text !== undefined) return ts.createSourceFile(name, text, lang, true, scriptKindOf(name));
+    const lib = reachLibFiles.get(name);
+    if (lib) return lib;
+    const sf = getSourceFile.call(host, name, lang, onError, fresh);
+    if (sf) reachLibFiles.set(name, sf);
+    return sf;
+  };
+  const dirs = new Set([...virtual.keys()].flatMap((f) => {
+    const out: string[] = [];
+    for (let d = path.posix.dirname(f); d !== '/'; d = path.posix.dirname(d)) out.push(d);
+    return out;
+  }));
+  const { directoryExists } = host;
+  host.directoryExists = (d) => dirs.has(d) || (directoryExists?.call(host, d) ?? false);
+  host.fileExists = (name) => virtual.has(name) || fileExists.call(host, name);
+  host.readFile = (name) => virtual.get(name) ?? readFile.call(host, name);
+  host.getCurrentDirectory = () => REACH_FIXTURE_ROOT;
+  return ts.createProgram({ rootNames: [...virtual.keys()], options, host });
+};
+
+const reachGlob = (entry: string): RegExp =>
+  new RegExp(`^${entry.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`);
+
+const sortedRecord = <V>(m: ReadonlyMap<string, V>): Record<string, V> =>
+  Object.fromEntries([...m].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+
+type ReachClass = 'whole' | 'port' | 'narrow';
+/** A store value's kind: the whole class, or a port or narrow type with its members. */
+type ReachKind = { cls: 'whole' } | { cls: 'port' | 'narrow'; members: readonly string[] };
+interface ReachAcc {
+  members: Map<string, Set<ReachClass>>;
+  handoffs: Map<string, number>;
+  chains: Map<string, string[]>;
+  portEntries: Map<string, number>;
+  bare: number;
+  /** Callee mode: the out-of-scope functions below it that take the whole store, bottom-up. */
+  wholeChain: string[];
+}
+const reachAcc = (): ReachAcc =>
+  ({ members: new Map(), handoffs: new Map(), chains: new Map(), portEntries: new Map(), bare: 0, wholeChain: [] });
+const bump = (m: Map<string, number>, k: string): void => { m.set(k, (m.get(k) ?? 0) + 1); };
+const dedupe = (xs: readonly string[]): string[] => [...new Set(xs)];
+
+/**
+ * D-7578 (Task WP1; increment 7): the type-checked census of the store members a scope reaches (the watcher and its
+ * lane files on the real tree). The rules, as the plan's §What the measurement found, item 3, states them:
+ *  - a STORE VALUE is an expression whose static type, without `null` and `undefined`, is the store class (WHOLE), the
+ *    port alias (PORT), or a `Pick`, `Partial`, `Omit` or `Readonly` of either (a Pick of the port is a port value; any
+ *    other is NARROW);
+ *  - (a) a member read on a store value is reached;
+ *  - (b) a store value in a NARROW SLOT reaches the slot type's members, classified by the value's own type. A slot is a
+ *    parameter, an annotated local, or an object-literal property (plain or shorthand) into a narrow field of a
+ *    parameter's type, a declared return type or an annotated variable's type; narrow is a Pick/Partial/Omit/Readonly
+ *    of the store, or an interface whose every property names a store member;
+ *  - a CARRIER is a value whose object type has a property typed as a store value (an identifier, a property access,
+ *    `this`, an object literal or a call); a THUNK is a function value whose return type carries one;
+ *  - (c) a store value, carrier or thunk handed to a parameter that takes the whole store or the port is followed into
+ *    the callee (a function, a method, or the class for `new`), memoized with cycles cut; never into the store's own
+ *    file or a declaration file, and never into a function in scope (its body is walked as its own unit);
+ *  - (d) a call whose signature has no body (an interface or type-literal method signature, a function-typed field,
+ *    an indexed type of one) is followed into every implementation that flows into that signature, by an index built
+ *    once over the program (a function whose contextual type has the signature, or a value whose own signature is
+ *    assigned to it: an object-literal property, an assignment, an annotated initializer or an argument), recursively
+ *    with cycles cut; the hand-off is keyed by the signature (`coord/routes.ts#CoordRoutesHandle.withSweepAbandon`), and
+ *    one with no implementation is reported as the member and key `UNRESOLVED <signature>`, which no list holds;
+ *  - a whole value whose contextual type is exactly the port is a PORT ENTRY and reaches nothing itself;
+ *  - a WHOLE HAND-OFF is a call or `new` in scope passing a whole value, carrier or thunk to an out-of-scope parameter
+ *    that takes the whole store, keyed `<scope file>#<Unit> -> <callee file>#<callee>`, counted per call site.
+ * KNOWN WIDTH: a `Function.prototype.call` or `apply` thisArg is not followed (nor reported: its signature is in a
+ * declaration file); a cast through `any` or `unknown` hides a store value; a computed element access on a store value
+ * is reported as the member `[<expr>]`, which no list holds; a carrier is looked into three properties deep.
+ */
+export function storeReach(opts: StoreReachOptions): StoreReach {
+  const fixture = opts.files !== undefined;
+  if (!fixture && (opts.tsconfig === undefined || opts.base === undefined)) {
+    throw new Error('storeReach: a real-tree census names its tsconfig and its base');
+  }
+  const program = fixture ? reachFixtureProgram(opts.files!) : reachRealProgram(path.resolve(opts.tsconfig!));
+  const base = fixture ? REACH_FIXTURE_ROOT : path.resolve(opts.base!);
+  const checker = program.getTypeChecker();
+  const rel = (f: string): string => path.relative(base, f).split(path.sep).join('/');
+  const diagnostics = ts.getPreEmitDiagnostics(program).map((d) =>
+    `${d.file ? rel(d.file.fileName) : '<program>'}: TS${d.code} ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
+
+  const listing = fixture ? Object.keys(opts.files!).filter((n) => !n.includes('/'))
+    : readdirSync(base, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name);
+  const files = [...new Set(opts.scope.flatMap((entry) =>
+    (entry.includes('*') ? listing.filter((n) => reachGlob(entry).test(n)) : [entry])))].sort();
+  const scopeAbs = new Set(files.map((f) => path.join(base, f)));
+  const storeAbs = path.join(base, opts.store.file);
+
+  const storeDecl = program.getSourceFile(storeAbs)?.statements.find((s): s is ts.ClassDeclaration =>
+    ts.isClassDeclaration(s) && s.name?.text === opts.store.name);
+  if (!storeDecl?.name) throw new Error(`storeReach: no class ${opts.store.name} in ${opts.store.file}`);
+  const storeSym = checker.getSymbolAtLocation(storeDecl.name)!;
+  const storeType = checker.getDeclaredTypeOfSymbol(storeSym);
+  const storeMembers = new Set(checker.getPropertiesOfType(storeType)
+    .filter((p) => !p.name.startsWith('__#') && !(p.valueDeclaration
+      && ts.getCombinedModifierFlags(p.valueDeclaration) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)))
+    .map((p) => p.name));
+  const portDecl = program.getSourceFile(path.join(base, opts.port.file))?.statements.find(
+    (s): s is ts.TypeAliasDeclaration => ts.isTypeAliasDeclaration(s) && s.name.text === opts.port.name);
+  const portSym = portDecl ? checker.getSymbolAtLocation(portDecl.name) : undefined;
+  const portMembers = portSym ? checker.getPropertiesOfType(checker.getDeclaredTypeOfSymbol(portSym)).map((p) => p.name).sort() : [];
+
+  const ownedByStore = (d: ts.Declaration): boolean =>
+    d.parent === storeDecl || (ts.isParameter(d) && d.parent.parent === storeDecl);
+  const strip = (t: ts.Type | undefined): ts.Type | undefined => {
+    if (!t || !t.isUnion()) return t;
+    const rest = t.types.filter((x) => !(x.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void)));
+    return rest.length === 1 ? rest[0] : undefined;
+  };
+  const isExactPort = (t: ts.Type | undefined): boolean => !!portSym && strip(t)?.aliasSymbol === portSym;
+  const portDerived = (t: ts.Type | undefined): boolean => {
+    const a = t?.aliasSymbol;
+    if (!t || !a || !portSym) return false;
+    if (a === portSym) return true;
+    return REACH_WRAPPERS.has(a.name) && portDerived(t.aliasTypeArguments?.[0]);
+  };
+  const kindMemo = new Map<ts.Type, ReachKind | null>();
+  const kindOf = (t0: ts.Type | undefined): ReachKind | null => {
+    const t = strip(t0);
+    if (!t) return null;
+    const hit = kindMemo.get(t);
+    if (hit !== undefined) return hit;
+    let k: ReachKind | null = null;
+    if (t === storeType) k = { cls: 'whole' };
+    else if (t.flags & ts.TypeFlags.Object) {
+      const props = checker.getPropertiesOfType(t);
+      if (props.length > 0 && props.every((p) => (p.declarations ?? []).some(ownedByStore))) {
+        k = { cls: portDerived(t) ? 'port' : 'narrow', members: props.map((p) => p.name) };
+      }
+    }
+    kindMemo.set(t, k);
+    return k;
+  };
+  /** An interface (or type literal) whose every property names a store member: a structural narrow slot. */
+  const structural = (t: ts.Type | undefined): string[] | null => {
+    const s = strip(t);
+    if (!s || !(s.flags & ts.TypeFlags.Object) || s.getCallSignatures().length > 0) return null;
+    const names = checker.getPropertiesOfType(s).map((p) => p.name);
+    return names.length > 0 && names.every((n) => storeMembers.has(n)) ? names : null;
+  };
+  type Leaf = (t: ts.Type) => boolean;
+  const leafWhole: Leaf = (t) => kindOf(t)?.cls === 'whole';
+  const leafPort: Leaf = (t) => isExactPort(t);
+  const leafStore: Leaf = (t) => kindOf(t) !== null;
+  const carryMemo = new Map<Leaf, Map<ts.Type, boolean>>([[leafWhole, new Map()], [leafPort, new Map()], [leafStore, new Map()]]);
+  /** Whether `t` is, or carries (a property three deep, or a call signature's return: a thunk), what `leaf` accepts. */
+  const carries = (t0: ts.Type | undefined, leaf: Leaf, depth = 0): boolean => {
+    if (!t0 || depth > 3) return false;
+    const t = strip(t0);
+    if (!t) return t0.isUnion() ? t0.types.some((x) => carries(x, leaf, depth)) : false;
+    if (leaf(t)) return true;
+    if (kindOf(t) !== null || !(t.flags & ts.TypeFlags.Object)) return false;
+    const memo = carryMemo.get(leaf)!;
+    const hit = memo.get(t);
+    if (hit !== undefined) return hit;
+    memo.set(t, false);
+    let r = t.getCallSignatures().some((s) => carries(s.getReturnType(), leaf, depth + 1));
+    if (!r && depth < 3) {
+      r = checker.getPropertiesOfType(t).some((p) => {
+        const d = p.valueDeclaration ?? p.declarations?.[0];
+        return !!d && !d.getSourceFile().isDeclarationFile && carries(checker.getTypeOfSymbol(p), leaf, depth + 1);
+      });
+    }
+    memo.set(t, r);
+    return r;
+  };
+
+  // ---- (d): the implementation index, once per program ----
+  const sigDecl = (t: ts.Type | undefined): ts.Node | null => {
+    const s = strip(t);
+    const sigs = s ? s.getCallSignatures() : [];
+    return sigs.length === 1 ? sigs[0]!.declaration ?? null : null;
+  };
+  const implIndex = ((): Map<ts.Node, Set<ts.Node>> => {
+    const hit = reachImplIndexes.get(program);
+    if (hit) return hit;
+    const index = new Map<ts.Node, Set<ts.Node>>();
+    const add = (target: ts.Node | null, source: ts.Node | null): void => {
+      if (!target || !source || target === source) return;
+      if (!index.has(target)) index.set(target, new Set());
+      index.get(target)!.add(source);
+    };
+    for (const f of program.getSourceFiles()) {
+      if (f.isDeclarationFile) continue;
+      const visit = (n: ts.Node): void => {
+        if (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) {
+          add(sigDecl(checker.getContextualType(n)), n);
+        } else if (ts.isObjectLiteralExpression(n)) {
+          const c = strip(checker.getContextualType(n));
+          if (c) {
+            for (const p of n.properties) {
+              const nm = p.name !== undefined ? nameText(p.name) : null;
+              const tp = nm === null ? undefined : c.getProperty(nm);
+              if (!tp) continue;
+              const target = sigDecl(checker.getTypeOfSymbolAtLocation(tp, n));
+              if (ts.isMethodDeclaration(p)) add(target, p);
+              else if (ts.isShorthandPropertyAssignment(p)) {
+                const v = checker.getShorthandAssignmentValueSymbol(p);
+                if (v) add(target, sigDecl(checker.getTypeOfSymbolAtLocation(v, p)));
+              } else if (ts.isPropertyAssignment(p)) add(target, sigDecl(checker.getTypeAtLocation(p.initializer)));
+            }
+          }
+        } else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+          add(sigDecl(checker.getTypeAtLocation(n.left)), sigDecl(checker.getTypeAtLocation(n.right)));
+        } else if (ts.isVariableDeclaration(n) && n.type && n.initializer) {
+          add(sigDecl(checker.getTypeFromTypeNode(n.type)), sigDecl(checker.getTypeAtLocation(n.initializer)));
+        } else if ((ts.isCallExpression(n) || ts.isNewExpression(n)) && n.arguments) {
+          const sig = checker.getResolvedSignature(n);
+          if (sig) {
+            n.arguments.forEach((a, i) => {
+              const p = sig.parameters[Math.min(i, sig.parameters.length - 1)];
+              if (p) add(sigDecl(checker.getTypeOfSymbolAtLocation(p, n)), sigDecl(checker.getTypeAtLocation(a)));
+            });
+          }
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(f);
+    }
+    reachImplIndexes.set(program, index);
+    return index;
+  })();
+  const bodied = (d: ts.Node): boolean => 'body' in d && (d as { body?: ts.Node }).body !== undefined;
+  /** Whether a call resolved to `d` goes through a function-typed value (a signature with no body of its own). */
+  const viaSignature = (d: ts.Node): boolean =>
+    !(bodied(d) || ts.isClassLike(d) || ts.isFunctionDeclaration(d) || ts.isMethodDeclaration(d) || ts.isConstructorDeclaration(d));
+  const resolveImpls = (d: ts.Node, seen = new Set<ts.Node>()): ts.Node[] => {
+    if (seen.has(d)) return [];
+    seen.add(d);
+    if (ts.isConstructorDeclaration(d)) return [d.parent];
+    if (bodied(d) || ts.isClassLike(d)) return [d];
+    if ((ts.isFunctionDeclaration(d) || ts.isMethodDeclaration(d)) && d.name) {
+      const impl = checker.getSymbolAtLocation(d.name)?.declarations?.find(bodied);
+      return impl ? [impl] : [];
+    }
+    return [...(implIndex.get(d) ?? [])].flatMap((s) => resolveImpls(s, seen));
+  };
+
+  const inScope = (n: ts.Node): boolean => scopeAbs.has(n.getSourceFile().fileName);
+  const notFollowed = (n: ts.Node): boolean => n.getSourceFile().fileName === storeAbs || n.getSourceFile().isDeclarationFile;
+  const declName = (d: ts.Node): string => {
+    const parts: string[] = [];
+    for (let n: ts.Node | undefined = d; n && !ts.isSourceFile(n); n = n.parent) {
+      if (ts.isConstructorDeclaration(n)) parts.unshift('constructor');
+      else if ((ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n) || ts.isClassDeclaration(n) || ts.isPropertyDeclaration(n)
+        || ts.isVariableDeclaration(n) || ts.isGetAccessor(n) || ts.isMethodSignature(n) || ts.isPropertySignature(n)
+        || ts.isInterfaceDeclaration(n) || ts.isTypeAliasDeclaration(n) || ts.isPropertyAssignment(n))
+        && n.name && ts.isIdentifier(n.name)) parts.unshift(n.name.text);
+    }
+    return `${rel(d.getSourceFile().fileName)}#${parts.join('.') || '<anon>'}`;
+  };
+
+  const record = (acc: ReachAcc, member: string, cls: ReachClass): void => {
+    if (!acc.members.has(member)) acc.members.set(member, new Set());
+    acc.members.get(member)!.add(cls);
+  };
+  const isTypePosition = (n: ts.Node): boolean => {
+    let p = n.parent;
+    while (p && ts.isQualifiedName(p)) p = p.parent;
+    return !!p && p.kind >= ts.SyntaxKind.FirstTypeNode && p.kind <= ts.SyntaxKind.LastTypeNode;
+  };
+  const isCallArgument = (n: ts.Node): boolean => {
+    const args: readonly ts.Node[] = ts.isCallExpression(n.parent) || ts.isNewExpression(n.parent) ? n.parent.arguments ?? [] : [];
+    return args.includes(n);
+  };
+  const isBareStore = (n: ts.TypeReferenceNode): boolean => {
+    if (ts.isIndexedAccessTypeNode(n.parent) && n.parent.objectType === n) return false;
+    if (ts.isTypeReferenceNode(n.parent) || ts.isExpressionWithTypeArguments(n.parent)) return false;
+    let s = checker.getSymbolAtLocation(n.typeName);
+    if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
+    return s === storeSym;
+  };
+
+  const calleeMemo = new Map<ts.Node, ReachAcc>();
+  const calleeReach = (d: ts.Node): ReachAcc => {
+    const hit = calleeMemo.get(d);
+    if (hit) return hit;
+    const acc = reachAcc();
+    calleeMemo.set(d, acc);
+    walk(d, acc, null);
+    acc.wholeChain = dedupe(acc.wholeChain);
+    return acc;
+  };
+
+  /** A store value in a slot: (b), or a port entry. */
+  const slot = (n: ts.Expression, acc: ReachAcc, unit: string | null): void => {
+    const k = kindOf(checker.getTypeAtLocation(n));
+    if (!k) return;
+    const p = n.parent;
+    let c: ts.Type | undefined;
+    if (ts.isShorthandPropertyAssignment(p) && p.name === n) {
+      const ct = strip(checker.getContextualType(p.parent));
+      const prop = ct?.getProperty(p.name.text);
+      c = prop ? checker.getTypeOfSymbolAtLocation(prop, p.parent) : undefined;
+    } else {
+      c = checker.getContextualType(n);
+    }
+    if (!c) return;
+    if (isExactPort(c)) {
+      if (k.cls === 'whole' && unit !== null && !isCallArgument(n)) bump(acc.portEntries, `${unit} -> <slot>`);
+      return;
+    }
+    const ck = kindOf(c);
+    if (ck && ck.cls !== 'whole') { for (const m of ck.members) record(acc, m, k.cls); return; }
+    if (!ck) for (const m of structural(c) ?? []) record(acc, m, k.cls);
+  };
+
+  /** (c) and (d): a call or `new` that hands a store value, carrier or thunk to the whole store or the port. */
+  const handOff = (n: ts.CallExpression | ts.NewExpression, acc: ReachAcc, unit: string | null): void => {
+    const sig = checker.getResolvedSignature(n);
+    if (!sig) return;
+    let whole = false;
+    let port = false;
+    let entry = false;
+    (n.arguments ?? []).forEach((a, i) => {
+      const ps = sig.parameters[Math.min(i, sig.parameters.length - 1)];
+      if (!ps) return;
+      const at = checker.getTypeAtLocation(a);
+      const argWhole = carries(at, leafWhole);
+      if (!argWhole && !carries(at, leafStore)) return;
+      const pt = checker.getTypeOfSymbolAtLocation(ps, n);
+      if (carries(pt, leafWhole)) { if (argWhole) whole = true; else port = true; }
+      else if (carries(pt, leafPort)) { port = true; if (argWhole) entry = true; }
+    });
+    if (!whole && !port) return;
+    let decl: ts.Node | undefined = sig.declaration;
+    if (!decl && ts.isNewExpression(n)) {
+      let s = checker.getSymbolAtLocation(n.expression);
+      if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
+      decl = s?.valueDeclaration;
+    }
+    if (!decl || notFollowed(decl)) return;
+    const signature = viaSignature(decl);
+    const impls = resolveImpls(decl).filter((d) => !notFollowed(d));
+    if (impls.length === 0) {
+      const unresolved = `UNRESOLVED ${declName(decl)}`;
+      record(acc, unresolved, whole ? 'whole' : 'port');
+      if (unit !== null && whole) {
+        bump(acc.handoffs, `${unit} -> ${unresolved}`);
+        acc.chains.set(`${unit} -> ${unresolved}`, acc.chains.get(`${unit} -> ${unresolved}`) ?? []);
+      }
+      if (unit !== null && entry) bump(acc.portEntries, `${unit} -> ${unresolved}`);
+      return;
+    }
+    const target = signature ? declName(decl) : declName(impls[0]!);
+    if (unit !== null && entry) bump(acc.portEntries, `${unit} -> ${target}`);
+    const outside = impls.filter((d) => !inScope(d));
+    if (outside.length === 0) return;
+    const chain: string[] = [];
+    for (const d of outside) {
+      const sub = calleeReach(d);
+      for (const [m, cls] of sub.members) for (const c of cls) record(acc, m, c);
+      if (whole) chain.push(...sub.wholeChain, declName(d));
+    }
+    if (!whole) return;
+    if (unit === null) { acc.wholeChain.push(...chain); return; }
+    const key = `${unit} -> ${target}`;
+    bump(acc.handoffs, key);
+    acc.chains.set(key, dedupe([...(acc.chains.get(key) ?? []), ...chain]));
+  };
+
+  const walk = (root: ts.Node, acc: ReachAcc, unit: string | null): void => {
+    const visit = (n: ts.Node): void => {
+      if (unit !== null && ts.isTypeReferenceNode(n) && isBareStore(n)) acc.bare += 1;
+      if (ts.isPropertyAccessExpression(n)) {
+        const k = kindOf(checker.getTypeAtLocation(n.expression));
+        if (k) record(acc, n.name.text, k.cls);
+      } else if (ts.isElementAccessExpression(n)) {
+        const k = kindOf(checker.getTypeAtLocation(n.expression));
+        const a = n.argumentExpression;
+        if (k) record(acc, ts.isStringLiteralLike(a) ? a.text : `[${a.getText()}]`, k.cls);
+      }
+      if ((ts.isIdentifier(n) || ts.isPropertyAccessExpression(n) || ts.isCallExpression(n) || ts.isNonNullExpression(n)
+        || n.kind === ts.SyntaxKind.ThisKeyword) && !isTypePosition(n)) {
+        const p = n.parent;
+        const objectOfAccess = (ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === n;
+        const aName = (ts.isPropertyAccessExpression(p) && p.name === n)
+          || (!ts.isShorthandPropertyAssignment(p) && 'name' in p && (p as { name?: ts.Node }).name === n)
+          || ts.isImportSpecifier(p) || ts.isExportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p);
+        if (!objectOfAccess && !aName) slot(n as ts.Expression, acc, unit);
+      }
+      if (ts.isCallExpression(n) || ts.isNewExpression(n)) handOff(n, acc, unit);
+      ts.forEachChild(n, visit);
+    };
+    visit(root);
+  };
+
+  const units = new Map<string, ReachAcc>();
+  const unitWalk = (name: string, node: ts.Node): void => {
+    if (!units.has(name)) units.set(name, reachAcc());
+    walk(node, units.get(name)!, name);
+  };
+  for (const f of files) {
+    const sf = program.getSourceFile(path.join(base, f));
+    if (!sf) throw new Error(`storeReach: ${f} is not in the program`);
+    for (const st of sf.statements) {
+      if (ts.isImportDeclaration(st) || ts.isExportDeclaration(st) || ts.isImportEqualsDeclaration(st)) continue;
+      if (ts.isClassDeclaration(st)) {
+        const cls = st.name?.text ?? 'default';
+        for (const m of st.members) {
+          const nm = ts.isConstructorDeclaration(m) ? 'constructor' : (m.name !== undefined ? nameText(m.name) : null) ?? '<computed>';
+          unitWalk(`${f}#${cls}.${nm}`, m);
+        }
+      } else if (ts.isVariableStatement(st)) {
+        for (const d of st.declarationList.declarations) unitWalk(`${f}#${nameText(d.name) ?? '<binding>'}`, d);
+      } else {
+        const nm = (ts.isFunctionDeclaration(st) || ts.isInterfaceDeclaration(st) || ts.isTypeAliasDeclaration(st)
+          || ts.isEnumDeclaration(st)) && st.name ? st.name.text : '<top>';
+        unitWalk(`${f}#${nm}`, st);
+      }
+    }
+  }
+
+  const all = new Map<string, Set<ReachClass>>();
+  const handoffs = new Map<string, number>();
+  const chains = new Map<string, string[]>();
+  const portEntries = new Map<string, number>();
+  const bare = new Map<string, number>();
+  const unitMembers = new Map<string, string[]>();
+  for (const [u, a] of units) {
+    unitMembers.set(u, [...a.members.keys()].sort());
+    for (const [m, cls] of a.members) {
+      if (!all.has(m)) all.set(m, new Set());
+      for (const c of cls) all.get(m)!.add(c);
+    }
+    for (const [k, v] of a.handoffs) handoffs.set(k, (handoffs.get(k) ?? 0) + v);
+    for (const [k, v] of a.chains) chains.set(k, dedupe([...(chains.get(k) ?? []), ...v]));
+    for (const [k, v] of a.portEntries) portEntries.set(k, (portEntries.get(k) ?? 0) + v);
+    if (a.bare > 0) bare.set(u, a.bare);
+  }
+  const having = (cls: ReachClass): string[] => [...all].filter(([, c]) => c.has(cls)).map(([m]) => m).sort();
+  return {
+    diagnostics, files, units: sortedRecord(unitMembers), reach: [...all.keys()].sort(), wholeReach: having('whole'),
+    portReach: having('port'), portMembers, wholeHandoffs: sortedRecord(handoffs), chains: sortedRecord(chains),
+    portEntries: sortedRecord(portEntries), bareAnnotations: sortedRecord(bare),
+  };
 }
