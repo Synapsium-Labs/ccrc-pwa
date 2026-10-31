@@ -1,52 +1,81 @@
 #!/usr/bin/env bash
-# ccd-graph-sweep — keep one AST graph fresh per git tree (spec §C). Serialized
-# oneshot driven by ccd-graph-sweep.timer; every knob env-overridable for the
-# test harness (CCRC_DOCTOR_GH_TIMEOUT precedent). HOME-derived roots, no
-# override — HOME is the harness's isolation boundary, exactly as in ccd.
+# ccd-graph-sweep — one graph per REPOSITORY, built from its main line in ccrc's graph store and shared by every
+# worktree of the repository through one ignored link (graph revision 2, D-7350; spec §2, §3, §4, §7). A serialized
+# oneshot driven by ccd-graph-sweep.timer. HOME-derived roots, no override — HOME is the harness's isolation
+# boundary, exactly as in ccd.
+#
+# A PASS, in order:
+#   1. the pass lock (`flock -n` on ~/.ccrc/graph-sweep.lock; a second entrant is `pass-locked` at once), then the
+#      pause file (~/.ccrc/graph-sweep-paused: the pass is `paused` before any fetch, store write or build, and the
+#      sweep never removes the file — it is the wave's hold, D-7365);
+#   2. the library (spec §5.2): GRAPH_LIB is this script's directory when ccrc, ccrc-test, graph-build and
+#      graph-resolve sit beside it (a checkout, a test), else $HOME/ccrc/ccd, the shipped tree. The installed copy at
+#      ~/.local/bin sits beside the generated `ccrc` LAUNCHER, never the body, and never sources or runs it. A
+#      GRAPH_LIB without all four is pass status `failed`, naming the missing file. The sweep sources ccd/ccrc's body
+#      (whose dispatch runs only when it is executed) for `_graph_knobs`, the platform shims and
+#      `_graph_exclude_common`, and ccd/graph-resolve for `_gr_knobs`, the store, the repository key and the source
+#      ref (D-7500, D-7650: the generated settings library carries `_ccrc_knob` and its closure only, so it cannot
+#      stand in);
+#   3. the store (`_gr_store_init`: its realpath and its marker), then the trees (`_gs_trees`), grouped by the realpath
+#      of their git common dir: one repository each;
+#   4. per repository (spec §3.1): CCRC_GRAPH_REPOS_EXCLUDE (`excluded`), the store's shared clone of it (§2.2), the
+#      throttled fetch, the source ref (`no-source`), the checkout moved to the ref's commit with the generated
+#      .graphifyignore written in it, and the decision (`_gs_decide`, §3.3, §3.3.1);
+#   5. the builds due, within CCRC_GRAPH_BUDGET, repositories with no published build first, then the one last
+#      skipped for the budget, then the most commits behind: staging (§3.5 step 1), the corpus guard, `ccrc test
+#      --status` (a refusal is `failed`, `fail: setup`, D-7356), the wrapper through `ccrc test --local --heavy`
+#      with the pass lock's fd 9 CLOSED, the plan's outcome table, the stamp, the publish checks and the publish;
+#   6. per published repository: the exclude lines (`_graph_exclude_common`), then one link per tree whose
+#      graphify-out is absent and ignored (`git check-ignore -q graphify-out`, no slash): the ONLY write this sweep
+#      makes under a tree, besides removing a stray `.graphifyignore` an old sweep generated (ownership-gated; D-7649);
+#   7. collection of superseded builds and leftover staging (§3.5 step 6), the store's settings.json (§5.3), and the
+#      census: one `repos[]` row per repository (§7), each also printed as one `graph-sweep: row {json}` stdout line,
+#      so the journal keeps a week of them where the census keeps 10 passes (D-7357).
+#
+# EVERY BOUND IS A SETTING. Each size, interval, count and percentage this file obeys is a CCRC_GRAPH_* key read by
+# `_gr_knobs` into GK[…], with its default in ccd/ccrc's `_graph_knobs`; graph-knobs.test.ts scans this file for a
+# numeric literal compared against a quantity.
 set -uo pipefail
 
 REG="$HOME/.cc-sessions"
 PROJECTS_ROOT="$HOME/projects"
 WORKTREES_ROOT="$HOME/worktrees"
 VENV="$HOME/.ccrc/graphify-venv"
-ENGINE="$VENV/bin/graphify"
 PIN_FILE="$HOME/.ccrc/graphify.pin"
 CENSUS="$HOME/.ccrc/graph-sweep.json"
 PAUSE="$HOME/.ccrc/graph-sweep-paused"
 LOCK="$HOME/.ccrc/graph-sweep.lock"
-: "${CCRC_GRAPH_BUILD_TIMEOUT:=600}"
-: "${CCRC_GRAPH_BUDGET:=8}"
-: "${CCRC_GRAPH_MAX_WORKERS:=4}"
-: "${CCRC_GRAPH_STALE_ESCAPE_COMMITS:=20}"
-: "${CCRC_GRAPH_STALE_ESCAPE_SECS:=21600}"
+LOG="$HOME/.ccrc/graph-sweep.log"
 
 PIN="$(cat "$PIN_FILE" 2>/dev/null || true)"
 STARTED="$(date -u +%FT%TZ)"
-ROWS=()          # jq-ready per-tree objects
-BUILT=0          # rebuilds this pass, against CCRC_GRAPH_BUDGET
+ROWS=()          # one jq-ready object per repository
+PASS_REASON=""   # why a pass that ended early ended, when it says (spec §5.2)
 
-_gs_row() {      # path outcome reason duration_ms
-  ROWS+=("$(jq -cn --arg p "$1" --arg o "$2" --arg r "$3" --argjson d "${4:-0}" \
-    '{path:$p, outcome:$o, reason:$r, duration_ms:$d}')")
+_gs_row() {      # <row json> — keep one repos[] row for the census, and print it to the journal (D-7357)
+  ROWS+=("$1")
+  printf 'graph-sweep: row %s\n' "$1"
 }
 
 _gs_finish() {   # pass-status ; exit-code
-  local status="$1" rc="$2" tmp
+  local status="$1" rc="$2" tmp pass
+  pass='{started:$started, finished:$finished, pin:$pin, status:$status, repos:.} + (if $reason == "" then {} else {reason:$reason} end)'
   tmp="$(mktemp "$CENSUS.XXXXXX")"
   # NB: printf of an EMPTY array must emit nothing — a lone newline breaks
   # `jq -cs` (slurp of empty input is [], of "\n" is a parse error).
   { [ "${#ROWS[@]}" -gt 0 ] && printf '%s\n' "${ROWS[@]}"; true; } | jq -cs \
     --arg started "$STARTED" --arg finished "$(date -u +%FT%TZ)" \
-    --arg pin "$PIN" --arg status "$status" \
-    '{started:$started, finished:$finished, pin:$pin, status:$status, trees:.}' > "$tmp" \
+    --arg pin "$PIN" --arg status "$status" --arg reason "${PASS_REASON:-}" "$pass" > "$tmp" \
     || { rm -f "$tmp"; echo "graph-sweep: census assembly failed" >&2; exit 1; }
   # append, keep last 10 passes, atomic
   jq -c --slurpfile p "$tmp" '.passes = ((.passes // []) + $p | .[-10:])' \
     "$CENSUS" 2>/dev/null > "$tmp.2" \
     || jq -cn --slurpfile p "$tmp" '{passes: $p}' > "$tmp.2"
   mv "$tmp.2" "$CENSUS"; rm -f "$tmp"
+  [ -z "${PASS_REASON:-}" ] || echo "graph-sweep: $status: $PASS_REASON" >&2
   exit "$rc"
 }
+
 
 # D-1367 — canonical path, or NOTHING. `realpath` and `readlink -f` are both
 # acceptable on both userlands (macos-platform.test.ts refuses neither), but an
@@ -212,72 +241,11 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
       if [ ! -L "$d" ] && [ -L "${named[$dup]}" ]; then named["$dup"]="$d"; fi
       continue
     fi
+    # shellcheck disable=SC2190  # both are indexed (local -a above); shellcheck confuses them with this file's maps
     seen+=("$real"); named+=("$d")
   done
   [ "${#named[@]}" -gt 0 ] && printf '%s\n' "${named[@]}"
   return 0
-}
-
-# D-1368 — FRESHNESS IS CONTENT, NOT COMMIT IDENTITY. This file's ONE spelling
-# of that predicate; `_gs_stale` and `_gs_busy` both ask it here.
-#
-# `built_at_commit != HEAD` was spent as "the graph is of another commit", and
-# after a squash merge — or any rewrite that keeps the tree — that is false:
-# HEAD's tree is byte-identical to the built commit's, so the graph describes
-# THIS tree exactly. graphify's own `update` then writes nothing, the stamp
-# keeps the old sha, and every pass records `stale-rebuilt` for that tree for
-# ever. MEASURED on the live fleet 2026-09-03: graph.json mtime 01:18, census
-# "stale-rebuilt … head" at 16:09, built 0281e084 vs HEAD 6a26a9a3, and
-# `git rev-parse 0281e084^{tree} 6a26a9a3^{tree}` identical.
-#
-# EITHER SIDE ANSWERING EMPTY IS NOT A MATCH. The built commit may have been
-# garbage-collected, in which case the content cannot be compared at all and
-# the tree falls through to today's behaviour (stale, reason `head`) rather
-# than to a freshness nobody measured — the same rule the card's own freshness
-# clause states ("staleness is measured or it is not claimed").
-_gs_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
-  local t="$1" bt ht
-  # D-1369 — THE BUILT SHA IS REPO-CONTROLLED TEXT, AND THIS IS THE FIRST PLACE
-  # THE SWEEP SPENDS IT AS A GIT REVISION. `built_at_commit` comes out of a
-  # graph.json any tree can write; the old `[ "$built" = "$head" ]` compared it
-  # as a STRING, where a rev NAME is simply unequal and the tree rebuilds. A
-  # peel resolves it: `HEAD^{tree}` on both sides of an equality is trivially
-  # equal, so a graph stamped `"built_at_commit":"HEAD"` (or `@`, or a branch
-  # name) would read `fresh` for ever and never be rebuilt again — the mirror
-  # image of the wedge D-1368 was written to fix, and invisible in the census
-  # because `fresh` is what it reports. The card already holds this contract
-  # one line earlier than its own peel (`ccd/session-hook.sh`:
-  # `[[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""`); the sweep holds it here.
-  # MEASURED against the shipped script with a fixture HOME: `built_at_commit`
-  # `HEAD` plus a real content commit read `fresh`, engine calls 1.
-  [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || return 1
-  bt="$(git -C "$t" rev-parse --verify -q "$2^{tree}" 2>/dev/null)" || bt=""
-  ht="$(git -C "$t" rev-parse --verify -q 'HEAD^{tree}' 2>/dev/null)" || ht=""
-  [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
-}
-
-# D-1509 — ONE SPELLING OF "THE STAMP". `built_at_commit` is read by the
-# freshness predicate, by the idle gate's escape hatch and — since D-1509 — by
-# the build itself, which re-measures it to find out whether the engine wrote
-# anything at all. Three hand-written `jq -r '.built_at_commit // empty'` reads
-# are three places a later change can part; the restamp splices the value this
-# helper reads, so a second spelling here is a restamp that verifies one field
-# and rewrites another.
-_gs_stamp() {    # <tree> -> graph.json's built_at_commit, or nothing
-  jq -r '.built_at_commit // empty' "$1/graphify-out/graph.json" 2>/dev/null
-}
-
-_gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
-  local tree="$1" head built pin_stamp
-  head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || { REASON=unreadable-head; return 0; }
-  [ -f "$tree/graphify-out/graph.json" ] || { REASON=never-built; return 0; }
-  built="$(_gs_stamp "$tree")"
-  pin_stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
-  [ "$pin_stamp" = "$PIN" ] || { REASON=engine; return 0; }
-  if [ "$built" != "$head" ]; then
-    _gs_same_tree "$tree" "$built" || { REASON=head; return 0; }
-  fi
-  return 1
 }
 
 # Idle gate (spec §C.5 + R2). READ-ONLY against $REG. Authority is the live
@@ -285,8 +253,16 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
 # on hookstate.state alone is bug F6b, already fixed once (watch.ts:2197-2209).
 # O5: ws-audit persists no artifact (Task 0); reap's own state-changed refusal
 # is the fail-safe (ledger R-1).
-: "${CCRC_GRAPH_HOOKSTATE_FRESH_SECS:=1800}"
-BUSY_OUTCOME=""; BUSY_REASON=""
+#
+# GRAPH REVISION 2: no build runs in a session's tree any more, so nothing here
+# gates a build, and the O3 escape hatch that let a build interrupt a working
+# session past a staleness bound is retired with the per-tree build (spec §5.4
+# "Retired"). The gate stays for the one write left that a working session must
+# not have under it: the migration of a tree's old graphify-out (GR6). Its
+# freshness bound is CCRC_GRAPH_HOOKSTATE_FRESH_SECS, read by `_gr_knobs`.
+# shellcheck disable=SC2034  # BUSY_REASON is read by the migration's caller (GR6)
+BUSY_REASON=""
+# shellcheck disable=SC2329  # called by the migration (GR6); kept here, without its hatch, as the plan rules
 _gs_busy() {
   local tree="$1" id="" hs pid wrapper cfg sf now age
   # D-1562 — one spelling of "which session lives here", and it compares
@@ -295,8 +271,8 @@ _gs_busy() {
   [ -n "$id" ] || return 1                       # no session on this tree -> idle
   hs="$REG/$id.hookstate.json"
   [ -f "$hs" ] || return 1
-  now=$(date +%s); age=$(( now - $(stat -c %Y "$hs") ))
-  [ "$age" -le "$CCRC_GRAPH_HOOKSTATE_FRESH_SECS" ] || return 1   # stale pointer -> idle
+  now=$(date +%s); age=$(( now - $(_plat_mtime "$hs") ))
+  [ "$age" -le "${GK[CCRC_GRAPH_HOOKSTATE_FRESH_SECS]}" ] || return 1   # stale pointer -> idle
   pid="$(jq -r '.pid // empty' "$hs" 2>/dev/null)"; [ -n "$pid" ] || return 1
   wrapper="$(cat "$REG/$id.wrapper" 2>/dev/null)"; [ -n "$wrapper" ] || return 1
   # shellcheck source=/dev/null
@@ -305,35 +281,11 @@ _gs_busy() {
   sf="$cfg/sessions/$pid.json"
   [ -f "$sf" ] || return 1
   [ "$(jq -r '.state // empty' "$sf" 2>/dev/null)" = working ] || return 1
-  # O3 escape hatch: bounded staleness beats politeness past the thresholds.
-  local built commits stamp_age
-  built="$(_gs_stamp "$tree")"
-  if [ -n "$built" ]; then
-    # D-1368: the same predicate, once more and spelled once — `rev-list
-    # --count "$built..HEAD"` for a NON-ANCESTOR counts everything since the
-    # merge-base, so a squashed history could fire the build-anyway escape
-    # against a graph that is already of HEAD's content.
-    if _gs_same_tree "$tree" "$built"; then
-      commits=0
-    else
-      commits="$(git -C "$tree" rev-list --count "$built..HEAD" 2>/dev/null || echo 0)"
-    fi
-    stamp_age=$(( now - $(stat -c %Y "$tree/graphify-out/.graphify_engine" 2>/dev/null || echo "$now") ))
-    if [ "$commits" -ge "$CCRC_GRAPH_STALE_ESCAPE_COMMITS" ] \
-       || [ "$stamp_age" -ge "$CCRC_GRAPH_STALE_ESCAPE_SECS" ]; then
-      return 1                                   # build anyway
-    fi
-  fi
-  BUSY_OUTCOME=skipped-busy; BUSY_REASON="session $id working"
+  # shellcheck disable=SC2034
+  BUSY_REASON="session $id working"
   return 0
 }
 
-# Pre-build corpus guard (spec §E): there is NO publish seam — to_json writes
-# graph.json in place — so the only refusal that protects the previous graph
-# is refusing to RUN the build. Corpus definition: every detect() path must be
-# git-tracked; graphify-out/memory/ is exempt (detect.py:1101 re-adds it by
-# design and it is untracked by design).
-GUARD_REASON=""
 # A .graphifyignore is OURS only if its first line carries the generated
 # marker (finding 1, whole-branch review): a repo that adopts graphify
 # upstream may COMMIT a .graphifyignore of its own — tracked, so ignore rules
@@ -347,502 +299,379 @@ _gs_owns_ignore() {   # tree -> 0 (absent or ours) / 1 (foreign — leave alone)
   return 1
 }
 
-# D-1161 — the generated filter's cleanup, as a NAMED pair, because the trap
-# that removed it inline was wrong in two ways that only became reachable when
-# D-1160 shipped a default list to every box.
+# A STRAY FILTER from the per-tree sweep (graph revision 1 wrote one into a tree for each build and removed it after;
+# a SIGKILL, an OOM kill or a reboot mid-build left it behind). Removed as before, and ownership-gated as before: only
+# a marker-bearing file this sweep generated, never a .graphifyignore the repository owns (spec §9.1, "as today").
+_gs_rm_stray() {   # <tree>
+  local tree="$1"
+  _gs_owns_ignore "$tree" || return 0
+  rm -f -- "$tree/.graphifyignore"
+}
+
+# ── the library (spec §5.2, N25) ──────────────────────────────────────────
+GRAPH_LIB=""
+_gs_lib() {   # -> GRAPH_LIB, or rc 1 with PASS_REASON naming the missing file
+  local here d f miss=""
+  here="${BASH_SOURCE[0]}"
+  [[ "$here" == */* ]] || here="./$here"
+  here="$(cd "${here%/*}" 2>/dev/null && pwd)" || here=""
+  for d in ${here:+"$here"} "$HOME/ccrc/ccd"; do
+    miss=""
+    for f in ccrc ccrc-test graph-build graph-resolve; do
+      [ -f "$d/$f" ] || { miss="$d/$f"; break; }
+    done
+    if [ -z "$miss" ]; then GRAPH_LIB="$d"; return 0; fi
+  done
+  PASS_REASON="the graph library is incomplete: ${miss/#"$HOME"/\~} is missing (ccrc update --force places the shipped tree)"
+  return 1
+}
+
+# Every git call on a tree, a checkout or a common dir runs with the caller's GIT_* environment removed, so a GIT_DIR
+# or GIT_COMMON_DIR inherited from anywhere can never answer for the repository named on the command line.
+_gs_git() {   # <work dir> <git args…>
+  local d="$1"; shift
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE GIT_TERMINAL_PROMPT=0 git -C "$d" "$@"
+}
+
+_gs_iso() { jq -rn --argjson s "$1" '$s | todate'; }   # <epoch seconds> -> ISO 8601 UTC, on either userland
+
+_gs_common() {   # <tree> -> the realpath of its git common dir, or nothing (rc 1)
+  local c
+  c="$(_gs_git "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$c" ] || return 1
+  (cd -P -- "$c" 2>/dev/null && pwd -P)
+}
+
+# ── a repository's state for this pass, by repository key ─────────────────
+# K_* hold what the census row needs; `_gs_end` is the ONE place an outcome is decided, with its fail class (`-` for
+# none) and its reason, so graph-outcomes.test.ts reads the sweep's whole outcome vocabulary off its calls.
+declare -A K_COMMON=() K_DIR=() K_CK=() K_TIP=() K_REF=() K_OUTCOME=() K_FAIL=() K_REASON=() K_KIND=()
+declare -A K_CHANGED=() K_DUR=() K_PEAK=() K_CPU=() K_FF=() K_FFAT=() K_DIGEST=() K_BEHIND=() K_PUB=()
+declare -A K_PREV=() K_PFAIL=() K_FFATS=() K_WHY=() K_BUILT=() K_NOTE=() K_TREES=() K_RK=() T_OF=()
+K_ORDER=()
+CUR=""
+_gs_end() {   # <outcome> <fail class, or -> <reason> — for the repository in CUR
+  K_OUTCOME["$CUR"]="$1"
+  if [ "$2" = - ]; then K_FAIL["$CUR"]=""; else K_FAIL["$CUR"]="$2"; fi
+  K_REASON["$CUR"]="$3"
+}
+# The census's last repos[] row for this repository, the outcome of its LAST ATTEMPT (spec §2.3): read once, at the
+# start of the repository's turn, so a row that ends early still carries the full-build backoff forward (§3.3.1).
+_gs_last_row() {   # <key>
+  local key="$1" r="" prev="" pfail="" ff=0 ffat="" ffat_s=""
+  r="$(jq -r --arg k "$key" '[(.passes // [])[] | (.repos // [])[] | select(.repo_key == $k)] | last // empty
+      | [.outcome // "", .fail // "", (.full_failures // 0 | tostring), .full_failed_at // "",
+         (try (.full_failed_at | fromdateiso8601 | floor | tostring) catch "")] | join("\u001f")' "$CENSUS" 2>/dev/null)" || r=""
+  IFS=$'\x1f' read -r prev pfail ff ffat ffat_s <<<"$r"
+  [[ "$ff" =~ ^[0-9]+$ ]] || ff=0
+  K_PREV["$key"]="$prev"; K_PFAIL["$key"]="$pfail"; K_FF["$key"]="$ff"; K_FFAT["$key"]="$ffat"; K_FFATS["$key"]="$ffat_s"
+}
+_gs_note() {   # <text> — appended to the row's reason (a fetch that failed, an uncontained run, an unmeasured peak)
+  K_NOTE["$CUR"]="${K_NOTE[$CUR]:+${K_NOTE[$CUR]}; }$1"
+}
+
+# ── the generated .graphifyignore (spec §2.2; rules 1 and 2 of the per-tree guard, kept for the noise sources) ──
+# Written into the store's checkout, never into a session's tree, and excluded in the checkout's own
+# .git/info/exclude. Its content is the corpus definition, so its digest is meta.json's `noise_digest` (§2.3, §3.3).
 #
-#  1. It interpolated `$tree` at FIRE time from whatever scope was current.
-#     After the sweep loop hits EOF `tree` is EMPTY, so a leaked EXIT trap ran
-#     `rm -f /.graphifyignore` — at the filesystem root, every pass. Measured.
-#  2. Its `rm` was the one removal site in this file NOT ownership-gated, so a
-#     SIGTERM mid-pass (a systemd stop, a reboot) deleted whatever
-#     `.graphifyignore` the tree in flight happened to own — including a
-#     tracked one the repo committed. Measured: `git status` reported
-#     ` D .graphifyignore` afterwards.
-#
-# Both are now structural: the tree is carried in a GLOBAL set at arm time, and
-# the removal re-checks ownership at FIRE time like every other removal site.
-GS_FILTER_TREE=""
-_gs_rm_generated() {   # remove ONLY a filter this sweep generated — never a foreign file
-  local t="${1:-}"
-  [ -n "$t" ] || return 0          # empty tree => the root-level rm; never
-  _gs_owns_ignore "$t" || return 0 # foreign => hands off
-  rm -f "$t/.graphifyignore"
-}
-_gs_disarm() { trap - EXIT INT TERM; GS_FILTER_TREE=""; }
-
-# D-1458 — the generated filter is opened ONCE and appended to, because it is
-# now written in two steps (the noise patterns, then whatever the first
-# measurement proves the corpus needs). Idempotent: the header — the ownership
-# marker `_gs_owns_ignore` and `_gs_rm_generated` both read — is written only
-# when the file is ABSENT (by the time the test below runs, "absent or ours" is
-# all that can reach it), and the trap is (re-)armed either way.
-# D-1459 — a FOREIGN `.graphifyignore` is refused HERE, in the helper, and not
-# only by the two callers' preconditions. Both callers still carry theirs (RULE
-# 2 empties `patterns`; the derivation skips on `foreign`), so this line is
-# unreachable today — but before D-1458 the single write site carried the
-# ownership test INLINE, and moving the write into a shared helper turned a
-# mechanism into a comment enumerating the callers it trusts, an enumeration
-# that goes stale the moment a third appears. Refusing costs the happy paths
-# nothing (`_gs_owns_ignore` already answers 0 for "absent or ours"), and the
-# failure it forecloses is D-1161's one step worse: the marker header written
-# over a TRACKED file, which `_gs_rm_generated` — reading its own marker on what
-# is now a marker-bearing file — then DELETES at exit. Callers MUST treat a
-# non-zero return as "no filter written, append nothing".
-_gs_open_filter() {   # tree -> 0 filter open (trap armed) / 1 foreign, nothing written
-  _gs_owns_ignore "$1" || return 1
-  if [ ! -f "$1/.graphifyignore" ]; then
-    echo "# generated by ccd-graph-sweep for one build — never committed, never edited" > "$1/.graphifyignore"
-  fi
-  GS_FILTER_TREE="$1"
-  trap '_gs_rm_generated "$GS_FILTER_TREE"' EXIT INT TERM
-}
-
-# The corpus, as detect() would ingest it from this tree right now — read
-# through whatever `.graphifyignore` is in place at the moment of the call.
-# Named because D-1458 calls it twice: once over the noise patterns alone, and
-# again only if that first answer proves something has to be derived.
-_gs_detect() {   # tree -> one relative path per line
-  ( cd "$1" && "$VENV/bin/python" - <<'GFXPY' 2>/dev/null
-import os
-from pathlib import Path
-from graphify.detect import detect
-r = detect(Path('.')); root = os.path.abspath('.')
-for k in ('code','document','paper','image','video'):
-    for f in r['files'].get(k, []):
-        print(os.path.relpath(f, root))
-GFXPY
-  )
-}
-
-# corpus minus tracked, less the query results detect re-adds whatever the
-# ignore rules say (detect.py:1160-1166). Named for the same reason as
-# `_gs_detect`: the breach is measured before the derivation and again after.
-_gs_breach() {   # corpus tracked -> the corpus paths git does not track
-  comm -23 <(sort -u <<<"$1") <(sort -u <<<"$2") | grep -v '^graphify-out/memory/' || true
-}
-_gs_guard() {
-  local tree="$1" repo noise="" line
-  repo="$(basename "$(dirname "$(git -C "$tree" rev-parse --path-format=absolute --git-common-dir)")")"
-  # stray filter from a crashed pass: remove it BEFORE measuring anything —
-  # but only OUR OWN leftover (marker-bearing); a foreign .graphifyignore this
-  # repo owns (e.g. committed upstream) is never ours to delete.
-  _gs_owns_ignore "$tree" && rm -f "$tree/.graphifyignore"
-  # D-1160 — TWO NOISE SOURCES, UNIONED, default first.
-  #
-  # `_default.list` is ccrc's own footprint (`.remember/`, `.superpowers/`,
-  # `.claude/`, `CLAUDE.local.md`) and ccrc owns it; `<repo>.list` is the
-  # operator's and ccrc never writes it. Before the default existed, the
-  # artifacts ccrc's OWN skills write into every repo a session touches were
-  # held against that repo by the corpus guard, refusing its build for ever —
-  # measured on the reference fleet as 14 of 57 trees refused, 186 of 304
-  # breach paths being those four names, and five repos blocked by nothing but
-  # ccrc's own mess.
-  #
-  # The '!' check runs over EVERY source, not just the last: a negation in
-  # either file re-includes gitignored paths (spec §3.6), and a default that
-  # could smuggle one past a per-repo check would be worse than no default.
-  local def="$HOME/.ccrc/graph-noise/_default.list"
-  local own="$HOME/.ccrc/graph-noise/$repo.list"
-  local -a noise_files=()
-  [ -f "$def" ] && noise_files+=("$def")
-  [ -f "$own" ] && noise_files+=("$own")
-  # RULE 1 — a '!' in EITHER source refuses the build. Checked over every
-  # source, not just the last: a negation re-includes gitignored files (spec
-  # §3.6), and a default that could smuggle one past a per-repo check would be
-  # worse than shipping no default at all. This one rule is symmetric because a
-  # negation is not an instruction the operator can be entitled to either.
-  for noise in "${noise_files[@]}"; do
-    if grep -qE '^[[:space:]]*!' "$noise"; then
-      GUARD_REASON="noise list $noise carries a '!' line — a negation re-includes gitignored files (spec §3.6); refusing"
+# D-1160 — TWO NOISE SOURCES, UNIONED, default first: `_default.list` is ccrc's own footprint and ccrc owns it;
+# `<repo>.list` is the operator's and ccrc never writes it.
+# RULE 1 — a '!' line in EITHER source refuses: a negation re-includes gitignored files (spec §3.6 of 08-27), and a
+#   default that could smuggle one past a per-repository check would be worse than no default.
+# RULE 2 (D-7651) — the DEFAULT yields to a repository that commits its own .graphifyignore: the default is hygiene the
+#   repository never asked for, and hygiene yields to a repository that has stated its corpus policy. The committed
+#   file is kept and the operator's list is appended to it (spec §2.2). Its refusal arm, which existed because the
+#   per-tree sweep would have had to overwrite a file a session's tree owned, has nothing left to protect: the
+#   checkout is the store's own, and `checkout --force` restores the committed file before every build.
+# RULE 3 (D-1161) — a DEFAULT pattern is withheld when the commit TRACKS anything it would hide (`ls-files -c -i -X`,
+#   git's own gitignore semantics); an operator pattern is honoured as written, and the withholding is said.
+# The untracked-file derivation of the per-tree guard (D-1451, D-1458) is gone: the checkout is clean, exactly the
+# tracked files at the commit, so there is no ignored untracked file for detect() to pick up.
+GS_DIGEST="" GS_WHY=""
+_gs_noise() {   # <checkout> <repository name> -> 0 written (GS_DIGEST) / 1 refused (GS_WHY)
+  local ck="$1" name="$2" def="$HOME/.ccrc/graph-noise/_default.list" own="$HOME/.ccrc/graph-noise/$2.list"
+  local src pat probe withheld="" gen
+  local -a sources=() patterns=()
+  GS_DIGEST="" GS_WHY=""
+  [ -f "$def" ] && sources+=("$def")
+  [ -f "$own" ] && sources+=("$own")
+  for src in ${sources[@]+"${sources[@]}"}; do
+    if grep -qE '^[[:space:]]*!' "$src"; then
+      GS_WHY="noise list ${src/#"$HOME"/\~} carries a '!' line — a negation re-includes gitignored files; refusing"
       return 1
     fi
   done
-  # RULE 2 — a foreign `.graphifyignore` refuses ONLY when the operator wrote a
-  # list for this repo. D-1161: before this asymmetry existed, shipping the
-  # default to every box made this refusal universal, and any repo that COMMITS
-  # its own `.graphifyignore` — the exact case `_gs_owns_ignore` was written to
-  # protect — became `refused-by-guard` for ever, with no remedy on the box.
-  # Measured: the same fixture built on origin/main and was refused here.
-  # An operator's list is an instruction about THIS repo that cannot be
-  # honoured, so it refuses; the default is hygiene the repo never asked for,
-  # and hygiene yields to a repo that has stated its own corpus policy.
-  local foreign=0
-  if [ -f "$tree/.graphifyignore" ] && ! _gs_owns_ignore "$tree"; then
-    if [ -f "$own" ]; then
-      GUARD_REASON="$tree/.graphifyignore exists and was not written by ccd-graph-sweep — refusing to overwrite a file this tree owns"
-      return 1
-    fi
-    noise_files=(); foreign=1
+  gen="$ck/.graphifyignore"
+  if _gs_git "$ck" ls-files --error-unmatch -- .graphifyignore >/dev/null 2>&1; then
+    sources=(); [ -f "$own" ] && sources=("$own")              # rule 2: the default yields
+    cp -- "$gen" "$ck/.git/graphifyignore.committed" || { GS_WHY="cannot read the committed .graphifyignore"; return 1; }
+  else
+    : > "$ck/.git/graphifyignore.committed"
   fi
-  # RULE 3 — a DEFAULT pattern is withheld when this repo TRACKS anything it
-  # would hide; an operator pattern is honoured as written. D-1161: a
-  # `.graphifyignore` is a pure path filter that knows nothing about git, so
-  # the default list's own stated contract — "only what ccrc and its skills
-  # create" — was a comment, not a mechanism. In a repo that COMMITS
-  # `.claude/settings.json` (seven do on the reference fleet, three of them
-  # among the five D-1160 set out to unblock) the default silently dropped
-  # TRACKED nodes from the corpus; graphify's shrink guard then saw a net loss
-  # with `had_explicit_deletions=False` and refused the write, wedging the tree
-  # at `refused-shrink` on every pass — strictly worse than the staleness
-  # D-1160 was fixing. The collision test is git's own
-  # (`ls-files -c -i -X` = "tracked files these patterns would hide"), so it is
-  # exact gitignore semantics rather than a reimplementation in bash.
-  local -a patterns=()
-  local withheld="" probe src pat
-  if [ "${#noise_files[@]}" -gt 0 ]; then
-    probe="$(mktemp)" || { GUARD_REASON="cannot create a temp file to test noise patterns"; return 1; }
-    for src in "${noise_files[@]}"; do
-      while IFS= read -r pat || [ -n "$pat" ]; do
-        pat="${pat%$'\r'}"
-        case "$pat" in ''|'#'*) continue ;; esac
-        case "$pat" in *[![:space:]]*) ;; *) continue ;; esac
-        if [ "$src" = "$own" ]; then patterns+=("$pat"); continue; fi
-        printf '%s\n' "$pat" > "$probe"
-        if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
-          withheld="$withheld $pat"
-        else
-          patterns+=("$pat")
-        fi
-      done < "$src"
-    done
-    rm -f "$probe"
-  fi
-  # NOT SILENT. A withheld pattern means this repo keeps whatever ccrc wrote
-  # into it in its corpus, so it may still be refused below for a path the
-  # default would otherwise have covered — an operator reading the journal has
-  # to be able to see why, and the remedy (a `<repo>.list`, which is honoured
-  # as written) named.
-  [ -n "$withheld" ] && echo "graph-sweep: $tree: default noise withheld, repo tracks matching files:$withheld (a $repo.list is honoured as written)" >&2
-  # ── the corpus, measured with the noise filter alone (D-1458) ─────────────
-  # The generated filter is now written in TWO steps: the noise patterns here,
-  # and — only if this measurement finds a breach git itself ignores — the
-  # derived entries below. Everything from here to the refusal is one loop:
-  # measure, derive from what the measurement actually caught, measure again.
-  # `&&` (D-1459): a refusal from `_gs_open_filter` means NO FILTER WAS WRITTEN
-  # — the tree owns its own — so nothing may be appended either. RULE 2 has
-  # already emptied `patterns` on such a tree; this is the belt behind it.
-  if [ "${#patterns[@]}" -gt 0 ] && _gs_open_filter "$tree"; then
-    printf '%s\n' "${patterns[@]}" >> "$tree/.graphifyignore"
-  fi
-  local corpus tracked breach breach_all breach_n
-  corpus="$(_gs_detect "$tree")" || { GUARD_REASON="detect() failed in $tree"; return 1; }
-  # D-1449, widened by D-1450 — COMPARE GIT'S TRUTH, NOT GIT'S QUOTING.
-  # `ls-files` C-quotes a path (wrapping it in double quotes) in FOUR classes,
-  # not one: a non-ASCII byte (`"J\303\240rn.py"`), a backslash
-  # (`"back\\slash.py"`), a double quote (`"quo\"te.py"`) and any control byte
-  # (`"tab\tname.py"`). detect() prints raw UTF-8 relative paths, so `comm -23`
-  # read a TRACKED file as untracked and refused the tree for ever, with no
-  # remedy on the box. Measured on the live fleet: project-t refused over two
-  # tracked files (a JSON named with a/o diacritics, a PNG named with an
-  # umlaut). `-c core.quotepath=false` silences ONLY the non-ASCII class and
-  # leaves the other three quoting exactly as before (measured), so the fix is
-  # `-z`, which is raw for every class in one call and makes core.quotepath
-  # irrelevant. The one shape `-z | tr` cannot represent is a newline inside a
-  # filename — and that breaks the line-based corpus side identically, so the
-  # two sides stay in step. The `ls-files -c -i -X` probe above quotes too, but
-  # its output is only ever tested for EMPTINESS, never compared to a path, so
-  # quoting cannot change its answer and it is left as it is.
-  tracked="$(git -C "$tree" ls-files -z | tr '\0' '\n')"
-  breach_all="$(_gs_breach "$corpus" "$tracked")"
-  # D-1451 — WHAT GIT IGNORES NEVER ENTERS THE CORPUS. D-1458 — AND NOTHING
-  # ELSE DOES, EITHER: the derivation is driven by the BREACH, not by git's
-  # whole ignored census.
-  #
-  # detect() reads `.gitignore` only along the ANCESTOR CHAIN from the VCS root
-  # down to the scan root (`_load_graphifyignore`, detect.py:793-836: it walks
-  # `ceiling` → `root`, never below). A NESTED `.gitignore` under the scan root
-  # is therefore never applied at all, so a gitignored build artifact enters the
-  # corpus, is untracked, and this guard refuses the tree — for ever, with no
-  # remedy on the box (nothing an operator does to the tree changes what detect
-  # picks up, and `<repo>.list` does not apply because the path is not ccrc's
-  # noise). MEASURED on the live fleet: project-k refused over
-  # `frontend/site-k/.astro/settings.json` (ignored by
-  # `frontend/site-k/.gitignore`), project-f/swift-harbor over
-  # `.husky/_/*` (ignored by `.husky/_/.gitignore`).
-  #
-  # D-1458 — A MEASURED COST WAS ACCEPTED INSTEAD OF REMOVED. D-1451..D-1453
-  # derived EVERY path git ignores, and the ledger measured what that costs and
-  # signed it off as "inside the timeout". MEASURED on the live fleet
-  # (2026-09-04, project-d): 308 derived entries — 211 files under
-  # `.superpowers/`, 59 under `tools/`, 24 under `.remember/`, because
-  # `--directory` collapses a directory only when it holds no TRACKED file — and
-  # detect spends ~50 us per (pattern, path) with the path re-resolved inside
-  # the per-pattern loop (detect.py:891-895), so 308 entries over a 1938-file
-  # corpus is ~600k matches, ~30 s added to EVERY pass over that tree. And the
-  # value was near zero: detect() run read-only over that tree with no
-  # ephemeral filter shows only 22 of the 308 entries cover a file it would
-  # ingest AT ALL, every one of them under `.remember/`, which the DEFAULT
-  # noise list already excludes. The three cases the derivation exists for
-  # (`.astro/`, `.husky/_/`, `apps/web/static/parts/`) are ONE entry each.
-  #
-  # So derive what the corpus needs and nothing else. The breach — corpus ∖
-  # tracked, already computed above for the refusal — is exactly the set of
-  # paths where detect and git disagree; every other ignored path in the tree
-  # is a pattern detect would evaluate against 1938 files to no effect. Ask git
-  # whether each BREACH path is ignored (`check-ignore -z --stdin`, one call,
-  # NUL-framed for the same four quoting classes as D-1450 — a non-ASCII name
-  # must survive the round trip), and derive one entry per ignored one. On a
-  # tree like project-d that is ZERO entries and ZERO extra cost; on the
-  # trees this was written for it is one to three.
-  #
-  # Each entry is ANCHORED at the tree root with a leading `/` (detect.py:883-895
-  # anchors on that, against the directory holding the file — here the root), a
-  # directory keeping its trailing `/` so the ancestor walk (detect.py:924-931)
-  # takes everything under it. Anchoring is not cosmetic: `build/` unanchored
-  # matches at EVERY depth, which is how an ignored root `build/` would hide a
-  # tracked `src/build/`.
-  #
-  # D-1452 lives on, inverted: git's `--directory` census still names the
-  # directories it COLLAPSES (those holding no tracked file), and a breach path
-  # under one is derived as THAT DIRECTORY instead of itself — so a whole
-  # ignored tree costs one line however many of its files reached the corpus.
-  # The census is only ever read when the breach holds something git ignores,
-  # so the tree that has nothing to derive never pays for it either.
-  #
-  # The seam here is THREE-WAY, not two-way (D-1453, correcting D-1452): git
-  # spells an entry as a PATH; the RULE-3 probe spends it as a WILDMATCH glob
-  # (`git ls-files -X`, where `*` does NOT cross `/`); detect spends it as an
-  # `fnmatch.fnmatch` glob (detect.py:866, anchored arm, where `*` DOES cross
-  # `/`). A filename carrying a glob metacharacter parts all three, and the two
-  # glob dialects part from each other — so the probe alone CANNOT stand in for
-  # detect. MEASURED: `.gitignore` `/a\*.py` (a LITERAL star) with a tracked
-  # `ax/b.py` and an untracked `a*.py` — git derives `a*.py`; the probe answers
-  # EMPTY (wildmatch will not let `*` cross the `/` in `ax/b.py`), so the entry
-  # is kept; and real detect (0.9.9) then returns ['keep.py'] where it returned
-  # ['a*.py', 'ax/b.py', 'keep.py'] — the TRACKED `ax/b.py` is gone from the
-  # corpus, SILENTLY: no withheld line, no breach, exit 0. That is exactly the
-  # wedge graph-noise.default.list's D-1160/D-1161 header names (shrink guard
-  # sees an unaccounted net loss and every pass ends `refused-shrink`).
-  #
-  # So make the entry LITERAL IN BOTH DIALECTS before anyone spends it:
-  # neutralize each metacharacter into a single-character class — `[` -> `[[]`
-  # first (so the brackets the next two insert are not re-escaped), then
-  # `*` -> `[*]`, `?` -> `[?]`. Both wildmatch and fnmatch read `[*]` as one
-  # literal star. Measured on the same fixture: with `/a[*].py` the probe still
-  # reports no tracked file AND detect returns ['ax/b.py', 'keep.py'] — the
-  # tracked file survives, the untracked `a*.py` is still excluded.
-  #
-  # The RULE-3 probe stays, and is now a genuine belt rather than the load-
-  # bearing member the previous comment claimed: after neutralization an entry
-  # matches exactly the path git named (plus, for a collapsed directory, its
-  # subtree). Its one remaining reachable class is the OTHER dialect gap, and
-  # it errs SAFE there: a backslash is literal to fnmatch but an ESCAPE to
-  # wildmatch, so an ignored untracked `a\b.log` beside a tracked `ab.log` makes
-  # the probe fire on a file detect would never have hidden — withheld and
-  # reported, and the tree is then refused over that path in the open rather
-  # than losing a tracked file in silence. A test pins that row. The probe runs
-  # ONCE over the whole set in the common case (git's answer over a union is
-  # empty iff it is empty for every member), and only falls back to one call per
-  # entry when that union is non-empty, i.e. when there is a culprit.
-  #
-  # Not capped: a capped list is a corpus this guard cannot explain. The count
-  # is logged instead — and it is now a count of what the corpus needed, so a
-  # tree that logs nothing is a tree that cost nothing.
-  # The `foreign` skip keeps this derivation away from a repo's own COMMITTED
-  # `.graphifyignore` — and since D-1459 it is no longer the ONLY thing doing
-  # so: `_gs_open_filter` refuses a foreign tree itself, so deleting this skip
-  # costs the file nothing (the derivation runs and then writes nowhere). What
-  # this skip still owns is the WORK: on a tree the sweep may not filter, none
-  # of it is worth doing. Pinned by ownership row (d), the only ownership
-  # fixture carrying a gitignored untracked path IN THE CORPUS — i.e. the only
-  # one where the derivation has anything to write — through the stderr line
-  # that only a derivation which RAN can print.
-  local -a derived=()
-  local dheld="" e esc
-  if [ -n "$breach_all" ] && [ "$foreign" -eq 0 ]; then
-    local -a ignored=()
-    # ONE call over the whole breach. `-z` makes input AND output NUL-framed,
-    # so a non-ASCII or backslash-bearing name survives the round trip raw
-    # (D-1450's four classes).
-    #
-    # `--no-index` is LOAD-BEARING, not tidiness. Without it `check-ignore`
-    # first drops every input the index matches — and it matches it as a
-    # PATHSPEC, not as a pathname, so a filename carrying a glob metacharacter
-    # is dropped because some OTHER, tracked file matches it. MEASURED (git
-    # 2.43.0) on D-1453's own fixture: with a tracked `ax/b.py` and an ignored
-    # untracked `a*.py`, `check-ignore --stdin` answers NOTHING for `a*.py`
-    # (exit 1) while `--no-index` correctly answers `.gitignore:1:/a\*.py`;
-    # same for `a\b.log` beside a tracked `ab.log`, where the backslash is a
-    # pathspec escape. Skipping the index costs nothing here: the input IS the
-    # breach, i.e. corpus paths git does not track, so a tracked path can never
-    # reach this call in the first place.
-    while IFS= read -r e; do
-      [ -n "$e" ] && ignored+=("$e")
-    done < <(printf '%s\n' "$breach_all" | tr '\n' '\0' \
-             | git -C "$tree" check-ignore --no-index -z --stdin 2>/dev/null | tr '\0' '\n')
-    if [ "${#ignored[@]}" -gt 0 ]; then
-      # The collapsed-directory census, read ONLY now that something needs it.
-      local -A dirset=() seenent=()
-      local -a entries=()
-      local p acc rest
-      while IFS= read -r e; do
-        case "$e" in */) dirset["$e"]=1 ;; esac
-      done < <(git -C "$tree" ls-files -o -i --exclude-standard --directory -z 2>/dev/null | tr '\0' '\n')
-      for p in "${ignored[@]}"; do
-        # the OUTERMOST collapsed ancestor wins — it covers the most subtree
-        # for one entry. Walking prefixes is O(depth), never entries x dirs.
-        acc=""; rest="$p"
-        while [ -n "$rest" ]; do
-          case "$rest" in */*) acc="$acc${rest%%/*}/"; rest="${rest#*/}" ;; *) break ;; esac
-          if [ -n "${dirset["$acc"]+x}" ]; then p="$acc"; break; fi
-        done
-        [ -n "${seenent["$p"]+x}" ] && continue
-        seenent["$p"]=1; entries+=("$p")
-      done
-      for e in "${entries[@]}"; do
-        # literal in BOTH glob dialects before the probe or detect sees it —
-        # see the three-way-seam note above. `[` first, then `*`, then `?`.
-        esc="${e//\[/[[]}"; esc="${esc//\*/[*]}"; esc="${esc//\?/[?]}"
-        derived+=("/$esc")
-      done
-    fi
-    if [ "${#derived[@]}" -gt 0 ]; then
-      probe="$(mktemp)" || { GUARD_REASON="cannot create a temp file to test derived ignore entries"; return 1; }
-      printf '%s\n' "${derived[@]}" > "$probe"
-      if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
-        local -a kept=()
-        for e in "${derived[@]}"; do
-          printf '%s\n' "$e" > "$probe"
-          if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
-            dheld="$dheld $e"
-          else
-            kept+=("$e")
-          fi
-        done
-        derived=(${kept[@]+"${kept[@]}"})
+  probe="$ck/.git/graphifyignore.probe"
+  for src in ${sources[@]+"${sources[@]}"}; do
+    while IFS= read -r pat || [ -n "$pat" ]; do
+      pat="${pat%$'\r'}"
+      case "$pat" in ''|'#'*) continue ;; esac
+      case "$pat" in *[![:space:]]*) ;; *) continue ;; esac
+      if [ "$src" = "$own" ]; then patterns+=("$pat"); continue; fi
+      printf '%s\n' "$pat" > "$probe"
+      if [ -n "$(_gs_git "$ck" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
+        withheld="$withheld $pat"
+      else
+        patterns+=("$pat")
       fi
-      rm -f "$probe"
+    done < "$src"
+  done
+  rm -f -- "$probe"
+  [ -z "$withheld" ] || echo "graph-sweep: $name: default noise withheld, the repository tracks matching files:$withheld (a $name.list is honoured as written)" >&2
+  if ! { echo "# generated by ccd-graph-sweep for the repository's graph — never committed, never edited"
+          cat -- "$ck/.git/graphifyignore.committed"
+          [ "${#patterns[@]}" -eq 0 ] || printf '%s\n' "${patterns[@]}"; } > "$ck/.git/graphifyignore.new" \
+     || ! mv -f -- "$ck/.git/graphifyignore.new" "$gen"; then
+    GS_WHY="cannot write the generated .graphifyignore in the checkout"; return 1
+  fi
+  rm -f -- "$ck/.git/graphifyignore.committed"
+  GS_DIGEST="$(_plat_sha256 < "$gen")"; GS_DIGEST="${GS_DIGEST%% *}"
+  [ -n "$GS_DIGEST" ] || { GS_WHY="cannot hash the generated .graphifyignore"; return 1; }
+}
+
+# ── the store's per-repository directory and its checkout of main (spec §2.1, §2.2, §3.1 steps 1-2) ──
+# Runs for every repository of the pass, building or not: the checkout is moved to the source ref's commit and the
+# generated filter written, because the filter's digest is one input of the decision. A failure here ends the
+# repository's row (`failed`, `fail: setup`, or `no-source`); nothing is built.
+_gs_prepare() {   # <common dir> -> 0 ready (CUR set) / 1 the row is ended
+  local c="$1" key name raw kd ck fh age b=""
+  if ! _gr_repo_key "$c" >/dev/null; then
+    CUR="unkeyed:$c"; K_ORDER+=("$CUR"); K_COMMON["$CUR"]="$c"; K_RK["$CUR"]=""
+    _gs_end failed setup "$GR_WHY"; return 1
+  fi
+  key="$GR_REPO_KEY"; CUR="$key"
+  if [ -n "${K_COMMON[$key]+x}" ]; then   # two common dirs, one key: never shared, never overwritten
+    CUR="collision:$c"; K_ORDER+=("$CUR"); K_COMMON["$CUR"]="$c"; K_RK["$CUR"]="$key"
+    _gs_end failed setup "repository key $key is already this pass's key for ${K_COMMON[$key]}"; return 1
+  fi
+  K_ORDER+=("$key"); K_COMMON["$key"]="$c"; K_RK["$key"]="$key"
+  _gs_last_row "$key"
+  case " ${GK[CCRC_GRAPH_REPOS_EXCLUDE]} " in
+    *" $key "*) _gs_end excluded - "CCRC_GRAPH_REPOS_EXCLUDE names $key"; return 1 ;;
+  esac
+  name="${key%-*}"
+  if [ "${c##*/}" = .git ]; then raw="${c%/.git}"; raw="${raw##*/}"; else raw="${c##*/}"; raw="${raw%.git}"; fi
+  kd="$GS_STORE/$key"; ck="$kd/$name"; K_DIR["$key"]="$kd"; K_CK["$key"]="$ck"
+  if ! mkdir -p -- "$kd/memory" || ! chmod 0755 "$kd" "$kd/memory"; then
+    _gs_end failed setup "cannot create ${kd/#"$HOME"/\~}"; return 1
+  fi
+  if [ -f "$kd/source" ]; then
+    if [ "$(cat "$kd/source" 2>/dev/null)" != "$c" ]; then
+      _gs_end failed setup "${kd/#"$HOME"/\~} belongs to $(cat "$kd/source" 2>/dev/null), not this repository's $c"; return 1
+    fi
+  elif ! printf '%s\n' "$c" > "$kd/source"; then
+    _gs_end failed setup "cannot write ${kd/#"$HOME"/\~}/source"; return 1
+  fi
+  # 1. the throttled fetch (spec §3.1 step 1): only a remote-tracking source ref of `origin` is fetched, only its
+  #    branch, and a failure is a reason on the row, never an outcome.
+  if [ "${GK[CCRC_GRAPH_FETCH_SECS]}" -gt 0 ] && _gr_source_ref "$c" >/dev/null; then
+    case "$GR_SOURCE_REF" in refs/remotes/origin/*) b="${GR_SOURCE_REF#refs/remotes/origin/}" ;; esac
+    [ "$b" != HEAD ] || b=""
+    fh="$c/FETCH_HEAD"; age=-1
+    [ -f "$fh" ] && age=$(( $(date +%s) - $(_plat_mtime "$fh") ))
+    if [ -n "$b" ] && { [ "$age" -lt 0 ] || [ "$age" -ge "${GK[CCRC_GRAPH_FETCH_SECS]}" ]; }; then
+      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+        -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE GIT_TERMINAL_PROMPT=0 \
+        timeout 60 git --git-dir="$c" fetch --no-tags -q origin "$b" >/dev/null 2>&1 \
+        || _gs_note "fetch of origin $b failed; using the refs this box has"
     fi
   fi
-  # NOT SILENT either — and a withheld derived entry is a stronger signal than a
-  # withheld default: it means git's own verdicts disagree with git's own index
-  # about a path, so the tree WILL be refused below for that path (it is in the
-  # corpus; that is why it was derived at all).
-  [ -n "$dheld" ] && echo "graph-sweep: $tree: derived ignore entries withheld, repo tracks matching files:$dheld" >&2
-  [ "${#derived[@]}" -gt 0 ] && echo "graph-sweep: $tree: git-ignored entries derived into the corpus filter: ${#derived[@]}" >&2
-  # The SECOND detect() run, and the only one this fix ever adds — reached only
-  # when something was derived, i.e. when the first measurement caught a path
-  # git ignores. Without it the derivation would be inert: the census below
-  # re-reads `corpus`, and the breach it saw the first time is still there.
-  # `&&` again (D-1459): if the helper refuses, nothing was written, so nothing
-  # is appended and nothing is re-measured — `breach_all` stands and the tree is
-  # refused below over the very path the derivation would have filtered away,
-  # which is the honest outcome for a repo whose filter this sweep may not touch.
-  # WHAT IT COSTS, measured, not bounded by adjective (D-1458's timing table,
-  # completed on review): on a deriving tree the FIRST run also pays, because it
-  # sees the ignored subtree unfiltered. 2000 tracked files with a nested
-  # `.gitignore` over a 5000-file ignored subtree — 4.4 s (step 1, 7000 files
-  # ingested) + 1.4 s (here, 2000) against 1.4 s for the old single run, i.e.
-  # ~+3 s, scaling with the IGNORED SUBTREE and paid only where the derivation
-  # earns it. A tree that derives nothing runs detect() once, as it always did.
-  if [ "${#derived[@]}" -gt 0 ] && _gs_open_filter "$tree"; then
-    printf '%s\n' "${derived[@]}" >> "$tree/.graphifyignore"
-    corpus="$(_gs_detect "$tree")" || { GUARD_REASON="detect() failed in $tree"; return 1; }
-    breach_all="$(_gs_breach "$corpus" "$tracked")"
+  # 2. the source ref (spec §3.1 step 2).
+  if ! _gr_source_ref "$c" >/dev/null; then _gs_end no-source - "${GR_WHY#no-source: }"; return 1; fi
+  K_TIP["$key"]="$GR_SOURCE_COMMIT"; K_REF["$key"]="$GR_SOURCE_REF"
+  # The shared clone (spec §2.2): a separate repository borrowing the main repository's objects, so it appears in no
+  # `git worktree list`; it never runs gc and runs no hooks.
+  if [ ! -d "$ck/.git" ]; then
+    rm -rf -- "$ck"
+    if ! env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+        -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE GIT_TERMINAL_PROMPT=0 \
+        git clone --shared --no-checkout --no-tags -q -- "$c" "$ck" >/dev/null 2>&1; then
+      rm -rf -- "$ck"; _gs_end failed setup "cannot make the store's shared clone of $c"; return 1
+    fi
   fi
-  # D-1454 — THE CAP STAYS, THE SIZE OF THE BREACH STOPS BEING A SECRET. Five
-  # paths is all a census row can carry (it is read on a phone, and this one
-  # line is the only place the refusal is ever stated), but "6 untracked paths"
-  # and "60" are different problems with different remedies — one commit
-  # against a corpus filter — and the capped reason spelled them identically.
-  # So the FULL breach is computed once and the cap applied after, with the
-  # remainder counted: `head -5` on its own can never report what it dropped.
-  # `wc -l` over a non-empty capture is exact here — every line comm emits ends
-  # in a newline, and the empty case never reaches it (the `-n` test above).
-  if [ -n "$breach_all" ]; then
-    breach="$(head -5 <<<"$breach_all")"
-    breach_n="$(wc -l <<<"$breach_all")"
-    breach_n="${breach_n//[![:digit:]]/}"   # BSD `wc` pads its count with spaces
-    local more=""
-    [ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"
-    # NB the `tr` above leaves a TRAILING SPACE (the here-string's own final
-    # newline becomes one), so the suffix needs no separator of its own and the
-    # uncapped reason keeps the exact text it has always had.
-    GUARD_REASON="untracked paths entered the corpus: $(tr '\n' ' ' <<<"$breach")$more"
-    _gs_owns_ignore "$tree" && rm -f "$tree/.graphifyignore"
-    return 1
+  if ! _gs_git "$ck" config gc.auto 0 || ! _gs_git "$ck" config core.hooksPath /dev/null; then
+    _gs_end failed setup "cannot configure the store's checkout of $key"; return 1
   fi
+  grep -qxF '/.graphifyignore' "$ck/.git/info/exclude" 2>/dev/null \
+    || { mkdir -p -- "$ck/.git/info" && printf '%s\n' '/.graphifyignore' >> "$ck/.git/info/exclude"; } \
+    || { _gs_end failed setup "cannot exclude the generated .graphifyignore in the store's checkout"; return 1; }
+  if ! _gs_git "$ck" checkout -q --detach --force "$GR_SOURCE_COMMIT" >/dev/null 2>&1 \
+     || ! _gs_git "$ck" clean -ffdxq -e /.graphifyignore >/dev/null 2>&1; then
+    _gs_end failed setup "cannot move the store's checkout of $key to ${GR_SOURCE_COMMIT:0:12}"; return 1
+  fi
+  if ! _gs_noise "$ck" "$raw"; then K_KIND["$key"]=full; _gs_end refused-by-guard - "$GS_WHY"; return 1; fi
+  K_DIGEST["$key"]="$GS_DIGEST"
   return 0
 }
 
-# D-1509 — THE SWEEP WRITES THE STAMP GRAPHIFY WOULD HAVE WRITTEN, AND ONLY
-# THAT. Reached from `_gs_build` alone, and only after the engine exited 0 AND
-# printed one of its two "left untouched" verdicts, each of which is a full
-# fresh extraction of the disk compared against the graph on disk. graphify's
-# own stamp is `_git_head()` at build time (export.py:537) whatever the working
-# tree holds, so this splices exactly the value the engine skipped writing —
-# it invents no freshness of its own (D-1511 records the hole that leaves, and
-# the row names the dirty count so the census does not hide it).
-#
-# WHAT IT MAY TOUCH: `graph.json`'s last `built_at_commit` and
-# `GRAPH_REPORT.md`'s "- Built from commit:" line. NEVER `manifest.json`,
-# `cache/` or `.graphify_labels.json` — those are the engine's own fingerprints
-# of the corpus, and a stamp is not a fingerprint.
-#
-# HOW IT WRITES: copy, splice, ONE rename. The card reads this file with
-# `tail -c 4096` while the sweep runs (`ccd/session-hook.sh`:131), so an
-# in-place rewrite of an 8 MB file is a torn read waiting for a session hook;
-# `mv -f` over the same directory is atomic and a concurrent reader sees either
-# file whole. The splice itself seeks to the tail's base offset and truncates,
-# so a shorter or longer replacement sha is fine.
-#
-# WHAT IT REFUSES: a graph.json whose last `built_at_commit` in the tail is
-# absent, or is not the value `_gs_stamp` measured before the engine ran (the
-# file moved under us). Refusal writes NOTHING and the build reads `failed`.
-# The report's absence is not a failure — it is graphify's human echo, not the
-# stamp any reader in ccrc spends. Every refusal below is now a census reading
-# a test spends (D-1509's second mutation table): outcome `failed`, a reason
-# that NAMES it, graph.json byte-identical to what the pass found.
-#
-# AND WHAT IT NO LONGER REFUSES (D-1509, review finding). graph.json is renamed
-# at the END of its own loop iteration, so a refusal raised for GRAPH_REPORT.md
-# (unreadable file, an interpreter that dies, a failed rename) used to return 1
-# over a graph.json ALREADY carrying HEAD: `failed` — a word the doctor's WARN
-# set counts — for a tree whose stamp had advanced and which both readers then
-# read as fresh. Two conditions on one census word. The report step is
-# best-effort now (`_gs_restamp_refuse`): a miss there is one line in
-# `graph-sweep.log` and the row still reads `restamped`. Every refusal that
-# remains is raised for graph.json BEFORE its rename, so "refusal writes
-# NOTHING" is now true of all of them without exception.
-
-# D-1509 (review finding) — GRAPH.JSON IS THE STAMP; THE REPORT IS AN ECHO.
-# graph.json is what every reader in ccrc spends (`_gs_stale`, and the session
-# card's `tail -c 4096`); GRAPH_REPORT.md's "- Built from commit" line is
-# graphify's human echo — the card reads only the node count, from its head. So
-# a failure rewriting the report is named in the log and the restamp stands,
-# while the same failure on graph.json is still a refusal the census reads.
-_gs_restamp_refuse() {   # <tree> <file> <why> -> 0 the caller goes on / 1 refuse the restamp
-  if [ "$2" = graph.json ]; then RESTAMP_WHY="$3"; return 1; fi
-  printf 'graph-sweep: %s: GRAPH_REPORT.md not restamped (%s)\n' "$1" "$3" \
-    >> "$HOME/.ccrc/graph-sweep.log"
-  return 0
+# ── the decision (spec §3.1 step 3, §3.3, §3.3.1; N5, N27, N28) ───────────
+# ONE function, and it reads exactly two state files: the current build's meta.json (the state of the PUBLISHED
+# build) and the census's last repos[] row for this repository (the outcome of the LAST ATTEMPT). git answers the
+# questions about history. Sets K_KIND to fresh, full, incremental or skipped-backoff, with K_WHY, the reasons.
+_gs_decide() {   # <key>
+  local key="$1" kd="${K_DIR[$1]}" tip="${K_TIP[$1]}" m="" now
+  local built="" engine="" digest="" lfat="" prev pfail ff ffat_s
+  local -a hard=() soft=()
+  now=$(date +%s)
+  if [ -d "$kd/current" ]; then
+    m="$(head -c 65536 "$kd/current/meta.json" 2>/dev/null | jq -r 'select(.schema == 1)
+      | [.commit // "", .engine // "", .noise_digest // "", (try (.last_full_at | fromdateiso8601 | floor | tostring) catch "")]
+      | join("\u001f")' 2>/dev/null)" || m=""
+  fi
+  IFS=$'\x1f' read -r built engine digest lfat <<<"$m"
+  [[ "$built" =~ ^[0-9a-f]{40}$ ]] || built=""
+  prev="${K_PREV[$key]}" pfail="${K_PFAIL[$key]}" ff="${K_FF[$key]}" ffat_s="${K_FFATS[$key]}"
+  K_BUILT["$key"]="$built"
+  K_CHANGED["$key"]=0; K_BEHIND["$key"]=0; K_PUB["$key"]=0
+  if [ -z "$built" ]; then
+    hard+=("no published build")
+  else
+    K_PUB["$key"]=1
+    [ "$engine" = "$PIN" ] || hard+=("engine ${engine:-unknown} is not the pin $PIN")
+    [ "$digest" = "${K_DIGEST[$key]}" ] || hard+=("the corpus definition changed (noise digest)")
+    if [ "$built" != "$tip" ]; then
+      if ! _gr_git "${K_COMMON[$key]}" merge-base --is-ancestor "$built" "$tip" 2>/dev/null; then
+        hard+=("main was rewritten (${built:0:12} is not an ancestor of ${tip:0:12})")
+      else
+        K_BEHIND["$key"]="$(_gr_git "${K_COMMON[$key]}" rev-list --count "$built..$tip" 2>/dev/null || echo 0)"
+        local n
+        n="$(_gs_git "${K_CK[$key]}" diff -z --no-renames --name-only "$built" "$tip" 2>/dev/null | tr -cd '\0' | wc -c)"
+        n="${n//[![:digit:]]/}"; K_CHANGED["$key"]="${n:-0}"
+        if _gs_git "${K_CK[$key]}" diff --no-renames --name-only "$built" "$tip" -- .graphifyignore 2>/dev/null | grep -q .; then
+          hard+=("the commit changes .graphifyignore")
+        fi
+        [ "${K_CHANGED[$key]}" -le "${GK[CCRC_GRAPH_INCREMENTAL_MAX_FILES]}" ] \
+          || soft+=("${K_CHANGED[$key]} files changed, above CCRC_GRAPH_INCREMENTAL_MAX_FILES=${GK[CCRC_GRAPH_INCREMENTAL_MAX_FILES]}")
+      fi
+    fi
+    if [ "${#hard[@]}" -eq 0 ] && [ "$built" = "$tip" ] && [ -n "$lfat" ] \
+       && [ $(( now - lfat )) -lt "${GK[CCRC_GRAPH_FULL_REBUILD_SECS]}" ]; then
+      K_KIND["$key"]=fresh; K_WHY["$key"]=""; return 0
+    fi
+    if [ -z "$lfat" ] || [ $(( now - lfat )) -ge "${GK[CCRC_GRAPH_FULL_REBUILD_SECS]}" ]; then
+      soft+=("the last full build is older than CCRC_GRAPH_FULL_REBUILD_SECS=${GK[CCRC_GRAPH_FULL_REBUILD_SECS]}")
+    fi
+    case "$prev:$pfail" in
+      refused-shrink:*|refused-by-guard:*|failed:engine|failed:publish)
+        soft+=("the last attempt was ${prev}${pfail:+ (fail: $pfail)}") ;;
+    esac
+  fi
+  if [ "${#hard[@]}" -eq 0 ] && [ "${#soft[@]}" -eq 0 ]; then
+    K_KIND["$key"]=incremental; K_WHY["$key"]="main moved ${K_BEHIND[$key]} commit(s)"; return 0
+  fi
+  # §3.3.1: in backoff no full build starts; a soft-only pass refreshes incrementally where main moved.
+  if [ "$ff" -ge "${GK[CCRC_GRAPH_FULL_FAIL_MAX]}" ] && [ -n "$ffat_s" ] \
+     && [ $(( now - ffat_s )) -lt "${GK[CCRC_GRAPH_FAIL_BACKOFF_SECS]}" ]; then
+    local until; until="$(_gs_iso "$(( ffat_s + GK[CCRC_GRAPH_FAIL_BACKOFF_SECS] ))")"
+    if [ "${#hard[@]}" -eq 0 ] && [ "$built" != "$tip" ]; then
+      K_KIND["$key"]=incremental
+      K_WHY["$key"]="in full-build backoff until ${until:-later} ($ff failed full attempt(s)); refreshing incrementally"
+      return 0
+    fi
+    K_KIND["$key"]="skipped-backoff"
+    K_WHY["$key"]="$ff failed full attempt(s); no full build until ${until:-later} (CCRC_GRAPH_FAIL_BACKOFF_SECS=${GK[CCRC_GRAPH_FAIL_BACKOFF_SECS]})"
+    if [ "${#hard[@]}" -gt 0 ]; then K_WHY["$key"]="${K_WHY[$key]}; it needs a full build: ${hard[0]}"; fi
+    return 0
+  fi
+  K_KIND["$key"]=full
+  local w=""; local x
+  for x in ${hard[@]+"${hard[@]}"} ${soft[@]+"${soft[@]}"}; do w="${w:+$w; }$x"; done
+  K_WHY["$key"]="$w"
 }
-_gs_restamp() {   # <tree> <old-sha> <new-sha> -> 0 rewrote / 1 refused (RESTAMP_WHY)
-  local tree="$1" old="$2" new="$3" out="$1/graphify-out" f res rc
-  RESTAMP_WHY=""
-  [[ "$new" =~ ^[0-9a-f]{7,40}$ ]] || { RESTAMP_WHY="HEAD unreadable"; return 1; }
-  [[ "$old" =~ ^[0-9a-f]{7,40}$ ]] || { RESTAMP_WHY="no built_at_commit to replace"; return 1; }
+
+# ── a tree to delete, read-only parts included (a published build's directories are 0555) ──
+_gs_rmtree() {   # <dir> — only ever a directory of the store
+  local doomed="$1"
+  [ -e "$doomed" ] || [ -L "$doomed" ] || return 0
+  if [ ! -L "$doomed" ]; then find "$doomed" -type d ! -perm -u+w -exec chmod u+w {} + 2>/dev/null; fi
+  if command -v ionice >/dev/null 2>&1; then ionice -c3 rm -rf -- "$doomed"; else rm -rf -- "$doomed"; fi
+}
+
+# ── staging (spec §3.5 step 1) ────────────────────────────────────────────
+# Created empty, then the current build's four outputs copied in WRITABLE (`install -m 0644`: the published originals
+# are 0444 and the engine and the stamper rewrite them in place), and the absolute memory link. No lock file, queue
+# file or .graphify_root is ever copied. GS_STAGING names it for the trap until the build ends.
+GS_STAGING=""
+_gs_drop_staging() { [ -z "$GS_STAGING" ] || _gs_rmtree "$GS_STAGING"; GS_STAGING=""; }
+_gs_stage() {   # <key> -> 0 staged / 1 (GS_WHY)
+  local kd="${K_DIR[$1]}" stg f
+  stg="$kd/staging"
+  _gs_rmtree "$stg"
+  GS_STAGING="$stg"
+  if ! mkdir -m 0755 -- "$stg" || ! mkdir -m 0755 -- "$stg/graphify-out"; then GS_WHY="cannot create $stg"; return 1; fi
+  for f in graph.json manifest.json .graphify_labels.json GRAPH_REPORT.md; do
+    [ -f "$kd/current/$f" ] || continue
+    install -m 0644 -- "$kd/current/$f" "$stg/graphify-out/$f" || { GS_WHY="cannot stage the current build's $f"; return 1; }
+  done
+  ln -s -- "$kd/memory" "$stg/graphify-out/memory" || { GS_WHY="cannot place the memory link in staging"; return 1; }
+}
+
+# ── the corpus guard (spec §2.2), on the checkout ─────────────────────────
+# detect() over the checkout, with the build's own GRAPHIFY_OUT, must be a subset of the commit's tracked files. Two
+# exemptions: the generated .graphifyignore, and every path under realpath(<store>/<repo-key>/memory)/ — detect()
+# always adds the files under GRAPHIFY_OUT/memory, here the link to the repository's saved results, which no
+# `git ls-tree` holds. Paths are compared as realpaths against the checkout's, so no spelling of either can slip a
+# file past. On a clean checkout it should never fire; when it does, nothing is built.
+_gs_guard() {   # <key> -> 0 / 1 (GS_WHY)
+  local ck="${K_CK[$1]}" stg="${K_DIR[$1]}/staging" mem corpus tracked breach n shown more
+  mem="$(cd -P -- "${K_DIR[$1]}/memory" 2>/dev/null && pwd -P)" || { GS_WHY="the memory directory cannot be resolved"; return 1; }
+  corpus="$( cd "$ck" && GRAPHIFY_OUT="$stg/graphify-out" "$VENV/bin/python" -s -P - "$mem" 2>>"$LOG" <<'GFXPY'
+import os, sys
+from pathlib import Path
+from graphify.detect import detect
+mem = sys.argv[1].rstrip('/') + '/'
+root = os.path.realpath('.')
+r = detect(Path('.'))
+for k in ('code', 'document', 'paper', 'image', 'video'):
+    for f in r['files'].get(k, []):
+        p = os.path.realpath(os.path.join(root, str(f)))
+        if p.startswith(mem) or p == os.path.join(root, '.graphifyignore'):
+            continue
+        sys.stdout.write((os.path.relpath(p, root) if p.startswith(root + '/') else p) + '\n')
+GFXPY
+  )" || { GS_WHY="detect() failed in the store's checkout"; return 1; }
+  tracked="$(_gs_git "$ck" ls-tree -r -z --name-only HEAD 2>/dev/null | tr '\0' '\n')"
+  breach="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") | grep -v '^$' || true)"
+  [ -n "$breach" ] || return 0
+  n="$(wc -l <<<"$breach")"; n="${n//[![:digit:]]/}"
+  shown="$(head -n 5 <<<"$breach" | tr '\n' ' ')"
+  more=$(( n - $(head -n 5 <<<"$breach" | wc -l) ))
+  GS_WHY="untracked paths entered the corpus: ${shown}"
+  [ "$more" -le 0 ] || GS_WHY="${GS_WHY}(+$more more)"
+  return 1
+}
+
+# ── the stamp (spec §3.5 step 3): today's `_gs_restamp`, retargeted from a tree's graphify-out to a directory ──
+# When the engine leaves its outputs untouched (an incremental with no topology change, §1.3), graph.json still
+# carries the previous commit. This splices <sha> over graph.json's LAST `built_at_commit` in its last 4 KiB and over
+# GRAPH_REPORT.md's "- Built from commit:" line, by copy and ONE rename each. With <old>, only a stamp naming <old>
+# is replaced: a value naming any other commit is left as the engine wrote it, so the publish check refuses it
+# (N9). graph.json without the key is a refusal (`cannot stamp`); a report that cannot be rewritten is one log line.
+_gs_stamp_dir() {   # <dir> <sha> [<old sha>] -> 0 / 1 (GS_WHY)
+  local dir="$1" sha="$2" old="${3:-}" f spliced rc
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { GS_WHY="cannot stamp: '$sha' is not a commit"; return 1; }
   for f in graph.json GRAPH_REPORT.md; do
-    if [ ! -f "$out/$f" ]; then
+    if [ ! -f "$dir/$f" ]; then
       [ "$f" = graph.json ] || continue
-      RESTAMP_WHY="no graph.json"; return 1
+      GS_WHY="cannot stamp: no graph.json"; return 1
     fi
-    # stdout is the temp path (or the refusal line); stderr — a traceback from
-    # a python that could not run at all — goes to the log, never swallowed.
-    res="$("$VENV/bin/python" - "$out/$f" "$old" "$new" 2>>"$HOME/.ccrc/graph-sweep.log" <<'GFXPY'
+    spliced="$("$VENV/bin/python" -s -P - "$dir/$f" "$sha" "$old" 2>>"$LOG" <<'GFXPY'
 import os, re, shutil, sys, tempfile
-path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+path, new, old = sys.argv[1], sys.argv[2], sys.argv[3]
 name = os.path.basename(path)
 is_graph = name == 'graph.json'
-try:
-    size = os.path.getsize(path)
-except OSError:
-    print('cannot measure %s' % name); sys.exit(1)
-# graph.json is 8 MB on a real tree and `built_at_commit` is its LAST key, so
-# it is read from the tail exactly as the card reads it; the report is small.
+size = os.path.getsize(path)
+# graph.json is tens of MB and `built_at_commit` is its LAST key, read from the tail as every reader reads it.
 base = max(0, size - 4096) if is_graph else 0
-pat = (re.compile(rb'"built_at_commit"\s*:\s*"([0-9a-f]+)"') if is_graph
+pat = (re.compile(rb'"built_at_commit"\s*:\s*"([0-9a-f]*)"') if is_graph
        else re.compile(rb'- Built from commit: `([0-9a-f]+)`'))
 with open(path, 'rb') as fh:
     fh.seek(base); tail = fh.read()
@@ -851,26 +680,14 @@ for m in pat.finditer(tail):
     pass
 if m is None:
     if is_graph:
-        print('no built_at_commit in the last %d bytes of graph.json' % len(tail)); sys.exit(1)
+        print('cannot stamp: no built_at_commit in the last %d bytes of graph.json' % len(tail)); sys.exit(1)
     sys.exit(0)
 val = m.group(1).decode()
-if val != (old if is_graph else old[:len(val)]):
-    if is_graph:
-        print('graph.json holds %s, not the %s this build measured' % (val, old)); sys.exit(1)
+full = new if is_graph else new[:len(val)]
+if val == full:
     sys.exit(0)
-repl = (new if is_graph else new[:len(val)]).encode()
-# D-1509 (review finding) — THE TEMP LIVES INSIDE graphify-out/, SO NOTHING
-# AFTER THIS LINE MAY DIE HOLDING IT: a copy of an 8 MB graph.json left by an
-# ENOSPC or a killed interpreter is never named by the sweep again, and it sits
-# in the very directory the corpus guard measures. The reason travels on stdout
-# like every other refusal, so the census names it instead of a bare
-# "python refused".
-#
-# `copyfile` + `copymode`, not `copy2`: the mode is the engine's, the mtime is
-# the RESTAMP's. (copy2's mtime never survived the splice write below anyway —
-# MEASURED — so the old comment claimed a preservation the code did not do;
-# graph.json's mtime is the signal D-1509 was found by, and it now says when
-# the stamp last moved.)
+if not old or val != (old if is_graph else old[:len(val)]):
+    sys.exit(0)
 fd, tmp = tempfile.mkstemp(prefix='.' + name + '.', dir=os.path.dirname(path) or '.')
 os.close(fd)
 try:
@@ -878,236 +695,320 @@ try:
     shutil.copymode(path, tmp)
     with open(tmp, 'r+b') as fh:
         fh.seek(base)
-        fh.write(tail[:m.start(1)] + repl + tail[m.end(1):])
+        fh.write(tail[:m.start(1)] + full.encode() + tail[m.end(1):])
         fh.truncate()
 except Exception as exc:
     try:
         os.unlink(tmp)
     except OSError:
         pass
-    print('%s: %s' % (name, exc)); sys.exit(1)
+    print('cannot stamp: %s: %s' % (name, exc)); sys.exit(1)
 print(tmp)
 GFXPY
     )"; rc=$?
     if [ "$rc" -ne 0 ]; then
-      _gs_restamp_refuse "$tree" "$f" "${res:-python refused ($f)}" || return 1
-      continue
+      [ "$f" = graph.json ] || { printf 'graph-sweep: %s: GRAPH_REPORT.md not stamped (%s)\n' "$dir" "${spliced:-python refused}" >> "$LOG"; continue; }
+      GS_WHY="${spliced:-cannot stamp: the stamper could not run}"; return 1
     fi
-    if [ -z "$res" ]; then
-      # nothing to rewrite: only ever the report (graph.json either printed a
-      # path or exited non-zero), and only when its line is absent or already
-      # carries another commit.
+    [ -n "$spliced" ] || continue
+    if ! mv -f -- "$spliced" "$dir/$f"; then
+      rm -f -- "$spliced"
       [ "$f" = graph.json ] || continue
-      RESTAMP_WHY="no replacement written for graph.json"; return 1
-    fi
-    if [ ! -f "$res" ]; then
-      _gs_restamp_refuse "$tree" "$f" "replacement for $f is not a file" || return 1
-      continue
-    fi
-    if ! mv -f "$res" "$out/$f"; then
-      rm -f "$res"
-      _gs_restamp_refuse "$tree" "$f" "rename failed ($f)" || return 1
-      continue
+      GS_WHY="cannot stamp: rename failed (graph.json)"; return 1
     fi
   done
   return 0
 }
 
-_gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 1 build-failed / 2 skipped-locked
-  local tree="$1" out="$tree/graphify-out"
-  # Non-blocking lock probe (spec §C.3): graphify's own updates block on this
-  # flock by design; a held lock means a writer is live, so defer — timeout
-  # then again means only "wedged".
-  if [ -e "$out/.rebuild.lock" ] && ! flock -n -E 99 "$out/.rebuild.lock" true 2>/dev/null; then
-    BUILD_OUTCOME=skipped-locked; BUILD_REASON="rebuild lock held"; return 2
+# ── the plan's outcome table (finding 3; D-7366): how a build ended, by the outer `timeout`'s exit ──
+# Only the engine and publish classes force a full build next pass (spec §3.3); an exit the wrapper did not classify
+# after `.started` (an external SIGKILL, another signal, an uncaught exception) is `fail: unknown`, which never
+# escalates. The sweep reads only the last `graph-build: <class>:` line and the one `ccrc test` OOM sentence.
+GS_OOM_SENTENCE="the test slice's memory cap killed a process during this run"
+_gs_outcome() {   # <rc> <started 1|0> <elapsed ms> <stderr file>
+  local rc="$1" st="$2" ms="$3" err="$4" last="" bt="${GK[CCRC_GRAPH_BUILD_TIMEOUT]}"
+  last="$(grep -E '^graph-build: (setup|slot-wait|engine|publish): ' "$err" 2>/dev/null | tail -n 1)"
+  case "$rc:$st" in
+    0:1) _gs_end refreshed - "" ;;   # provisional: the publish decides (spec §3.5)
+    1:1) if [ "$last" = "graph-build: engine: _rebuild_code returned False" ]; then _gs_end failed engine "${last#graph-build: }"
+         else _gs_end failed unknown "exit 1${last:+: ${last#graph-build: }}"; fi ;;
+    1:0|2:0)
+      if [ -n "$last" ]; then _gs_end failed setup "${last#graph-build: }"
+      else _gs_end failed setup "exit $rc before the build started: $(tail -n 1 "$err" 2>/dev/null)"; fi ;;
+    3:0) _gs_end skipped-slots - "${last#graph-build: }" ;;
+    124:0) _gs_end skipped-slots - "no heavy test slot within CCRC_GRAPH_SLOT_WAIT_SECS=${GK[CCRC_GRAPH_SLOT_WAIT_SECS]} (the outer bound fired in the queue)" ;;
+    124:1) _gs_end timed-out - "the build exceeded CCRC_GRAPH_BUILD_TIMEOUT=${bt}s" ;;
+    137:1)
+      if grep -qF "$GS_OOM_SENTENCE" "$err" 2>/dev/null; then
+        _gs_end oom-killed - "$(grep -F "$GS_OOM_SENTENCE" "$err" | tail -n 1)"
+      elif [ "$ms" -ge $(( bt * 1000 )) ]; then
+        _gs_end timed-out - "killed after CCRC_GRAPH_BUILD_TIMEOUT=${bt}s (the --kill-after KILL)"
+      else
+        _gs_end failed unknown "killed by signal 9"
+      fi ;;
+    *:1) _gs_end failed unknown "exit $rc" ;;
+    *) _gs_end failed setup "exit $rc before the build started" ;;
+  esac
+}
+
+# ── one build (spec §3.4, §3.5, §4) ───────────────────────────────────────
+_gs_build() {   # <key>
+  local key="$1" kd="${K_DIR[$1]}" ck="${K_CK[$1]}" tip="${K_TIP[$1]}" kind="${K_KIND[$1]}" built="${K_BUILT[$1]}"
+  local stg="${K_DIR[$1]}/staging" st_line st_rc launched t0 rc ms started=0 bout berr peak cpu
+  local slot="${GK[CCRC_GRAPH_SLOT_WAIT_SECS]}" bt="${GK[CCRC_GRAPH_BUILD_TIMEOUT]}" ts id
+  local -a changed=()
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  if ! _gs_stage "$key"; then _gs_end failed setup "$GS_WHY"; return 0; fi
+  if [ "$kind" = incremental ]; then
+    _gs_git "$ck" diff -z --no-renames --name-only "$built" "$tip" > "$stg/changed.z" 2>/dev/null \
+      || { _gs_end failed setup "cannot list the files changed since ${built:0:12}"; return 0; }
+    changed=(--changed "$stg/changed.z")
+  else
+    K_CHANGED["$key"]=0
   fi
-  local before_sz=0 before_mt=0 errf outf head
-  if [ -f "$out/graph.json" ]; then
-    before_sz=$(stat -c %s "$out/graph.json"); before_mt=$(stat -c %Y "$out/graph.json")
+  if ! _gs_guard "$key"; then _gs_end refused-by-guard - "$GS_WHY"; return 0; fi
+  # D-7356: `ccrc test` DEGRADES, it never refuses, so the refusal of a missing slice is the sweep's own check.
+  st_line="$("$GRAPH_LIB/ccrc-test" --status 2>&1 9>&-)"; st_rc=$?
+  st_line="$(tail -n 1 <<<"$st_line")"
+  if [ "$st_rc" -ne 0 ]; then _gs_end failed setup "ccrc test --status: $st_line"; return 0; fi
+  case "$st_line" in *"not contained"*) _gs_note "uncontained: $st_line" ;; esac
+  bout="$stg/build.stdout"; berr="$stg/build.stderr"
+  printf 'graph-sweep: build %s (%s) at %s\n' "$key" "$kind" "$(date -u +%FT%TZ)" >> "$LOG"
+  launched="$(date +%s)"; t0="$(_plat_epoch_ms)"
+  # The call of spec §3.4, from the checkout's realpath, with the pass lock's descriptor CLOSED (9>&-): an orphaned
+  # build can never hold the pass lock. `--local` (D-7648): a graph build is this box's own work, never the test box's.
+  ( cd "$ck" || exit 2
+    GRAPHIFY_OUT="$stg/graphify-out" GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
+    GRAPHIFY_MAX_WORKERS="${GK[CCRC_GRAPH_MAX_WORKERS]}" GIT_TERMINAL_PROMPT=0 \
+    exec timeout --kill-after=30 "$(( slot + bt ))" "$GRAPH_LIB/ccrc-test" --local --heavy -- \
+      nice -n "${GK[CCRC_GRAPH_BUILD_NICE]}" ionice -c3 timeout --kill-after=30 "$bt" \
+      "$VENV/bin/python" -s -P "$GRAPH_LIB/graph-build" --root "$ck" --out "$stg/graphify-out" --commit "$tip" \
+        --pin "$PIN" --memory "$kd/memory" --launched "$launched" --slot-wait "$slot" ${changed[@]+"${changed[@]}"}
+  ) > "$bout" 2> "$berr" 9>&-
+  rc=$?
+  ms=$(( $(_plat_epoch_ms) - t0 ))
+  K_DUR["$key"]="$ms"
+  [ -e "$stg/.started" ] && started=1
+  cat -- "$bout" "$berr" >> "$LOG" 2>/dev/null
+  peak="$(sed -n 's/^graph-build: peak_kb=\([0-9][0-9]*\|null\) cpu_ms=.*$/\1/p' "$bout" | tail -n 1)"
+  cpu="$(sed -n 's/^graph-build: peak_kb=.* cpu_ms=\([0-9][0-9]*\|null\)$/\1/p' "$bout" | tail -n 1)"
+  [[ "$peak" =~ ^[0-9]+$ ]] || peak=null
+  [[ "$cpu" =~ ^[0-9]+$ ]] || cpu=null
+  K_PEAK["$key"]="$peak"; K_CPU["$key"]="$cpu"
+  _gs_outcome "$rc" "$started" "$ms" "$berr"
+  [ "$rc:$started" = 0:1 ] || return 0
+  [ "$peak" != null ] || _gs_note "peak unmeasured"
+  # ── stamp, publish checks, publish (spec §3.5 steps 3-5) ──
+  local g gtip nodes edges files pred lhs rhs id lfc lfa
+  g="$stg/graphify-out"
+  if ! _gs_stamp_dir "$g" "$tip" "$built"; then _gs_end failed publish "$GS_WHY"; return 0; fi
+  if ! read -r gtip nodes edges files < <(jq -r '[(.built_at_commit // ""), (.nodes // [] | length),
+        ((.links // .edges // []) | length), ([(.nodes // [])[] | .source_file // empty] | unique | length)] | @tsv' \
+        "$g/graph.json" 2>/dev/null); then
+    _gs_end failed publish "graph.json does not parse"; return 0
   fi
-  errf="$(mktemp "${TMPDIR:-/tmp}/gfx-stderr.XXXXXX")"
-  # D-1509 — STDOUT IS EVIDENCE NOW, not only log freight. graphify announces
-  # its two short-circuits there ("... left untouched."), and that announcement
-  # is the only thing that earns a restamp, so it is captured to a temp and
-  # appended to the log afterwards rather than streamed straight into it.
-  outf="$(mktemp "${TMPDIR:-/tmp}/gfx-stdout.XXXXXX")"
-  # HEAD as it stood when the engine started — the value graphify's own
-  # `_git_head()` would have stamped (export.py:537). Measured BEFORE the build
-  # because a commit landing mid-build must not be claimed by it.
-  head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || head=""
-  # D-1512 — THE LOG NAMES ITS TREE. Attributing "No code-graph topology
-  # changes detected" to a tree used to mean correlating re-extracted file
-  # counts and durations against the census; one header line ends that.
-  printf 'graph-sweep: build %s at %s\n' "$tree" "$(date -u +%FT%TZ)" \
-    >> "$HOME/.ccrc/graph-sweep.log"
-  ( cd "$tree" && GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
-      GRAPHIFY_MAX_WORKERS="$CCRC_GRAPH_MAX_WORKERS" \
-      nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" "$ENGINE" update . ) \
-      >"$outf" 2>"$errf"
-  local rc=$? first full said
-  # NB `head` above is the local sha; `head -n1` here is the command — bash
-  # keeps variables and commands in different namespaces.
-  first="$(head -n1 "$errf" 2>/dev/null || true)"
-  said="$(cat "$outf" 2>/dev/null || true)"
-  cat "$outf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$outf"
-  # Full stderr, not just the first line: a real `graphify update` can print
-  # conditional warnings BEFORE the shrink refusal on the same invocation
-  # (e.g. build.py:384's extraction-warning line, watch.py:510's invalid-
-  # community-id line) — grepping only $first let those precede the refusal
-  # and collapse a genuine refused-shrink to failed (review finding, Task 7
-  # fix). $first stays the reason for the generic `failed` arm below.
-  full="$(cat "$errf" 2>/dev/null || true)"
-  cat "$errf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$errf"
-  if [ "$rc" -eq 0 ]; then
-    # D-1509 (review finding) — THE PIN IS A RECEIPT, NOT AN ANNOUNCEMENT. It
-    # was written HERE, before the stamp was re-measured, so both `failed` arms
-    # below still advanced `.graphify_engine` for a build that wrote nothing:
-    # the next pass reads the engine dimension as fresh and falls through to
-    # `head`, and `_gs_busy`'s O3 seconds hatch measures the age of a stamp no
-    # build ever earned. It is written on the two arms that return 0 — the
-    # stamp advanced, or the sweep restamped it — and nowhere else.
-    #
-    # D-1509 — A REBUILD IS A CLAIM UNTIL THE STAMP ADVANCES. graphify's full
-    # rebuild exits 0 without writing anything when the candidate graph's
-    # topology equals the existing one (watch.py `_rebuild_code`, 0.9.9: two
-    # short-circuits, `save_manifest` then `to_json` to a temp), and `graphify
-    # update` still prints "Code graph updated." So rc 0 alone said only that
-    # the engine ran; the loop wrote `stale-rebuilt`, `_gs_stale` read the same
-    # old stamp against the same HEAD on the next pass, and the tree rebuilt
-    # every 15 minutes for ever (MEASURED on the live fleet, six consecutive
-    # passes 2026-09-04T23:19Z -> 2026-09-05T00:35Z, 6.8 s and 73.8 s a pass).
-    # The success of a build is now re-measured on the stamp itself.
-    local stamp; stamp="$(_gs_stamp "$tree")"
-    if [ -n "$stamp" ] && { [ "$stamp" = "$head" ] || _gs_same_tree "$tree" "$stamp"; }; then
-      printf '%s\n' "$PIN" > "$out/.graphify_engine"
-      BUILD_OUTCOME=""; BUILD_REASON=""; return 0    # advanced: the loop's own words
+  [ "$gtip" = "$tip" ] || { _gs_end failed publish "graph.json's built_at_commit is ${gtip:-empty}, not the tip ${tip:0:12}"; return 0; }
+  pred="$(jq -r '.nodes // 0' "$kd/current/meta.json" 2>/dev/null)"; [[ "$pred" =~ ^[0-9]+$ ]] || pred=0
+  lhs=$(( nodes * 100 )); rhs=$(( pred * (100 - GK[CCRC_GRAPH_MAX_SHRINK_PCT]) ))
+  if [ "$lhs" -lt "$rhs" ]; then
+    _gs_end refused-shrink - "$nodes nodes against the served build's $pred, a shrink past CCRC_GRAPH_MAX_SHRINK_PCT=${GK[CCRC_GRAPH_MAX_SHRINK_PCT]}"
+    return 0
+  fi
+  id="${tip:0:12}-$PIN-$ts"
+  if [ "$kind" = full ]; then lfc="$tip"; lfa="$(date -u +%FT%TZ)"
+  else
+    lfc="$(jq -r '.last_full_commit // ""' "$kd/current/meta.json" 2>/dev/null)"
+    lfa="$(jq -r '.last_full_at // ""' "$kd/current/meta.json" 2>/dev/null)"
+  fi
+  local doc='{schema:1, build_id:$build_id, repo_key:$repo_key, source:$source, store:$store, ref:$ref, commit:$commit,
+    engine:$engine, kind:$kind, changed_files:$changed_files, last_full_commit:$last_full_commit,
+    last_full_at:$last_full_at, noise_digest:$noise_digest, nodes:$nodes, edges:$edges, files:$files,
+    built_at:$built_at, duration_ms:$duration_ms, peak_mem_kb:$peak_mem_kb, cpu_ms:$cpu_ms}'
+  if ! jq -n --arg build_id "$id" --arg repo_key "$key" --arg source "${K_COMMON[$key]}" --arg store "$GS_STORE" \
+      --arg ref "${K_REF[$key]}" --arg commit "$tip" --arg engine "$PIN" --arg kind "$kind" \
+      --argjson changed_files "${K_CHANGED[$key]}" --arg last_full_commit "$lfc" --arg last_full_at "$lfa" \
+      --arg noise_digest "${K_DIGEST[$key]}" --argjson nodes "$nodes" --argjson edges "$edges" --argjson files "$files" \
+      --arg built_at "$(_gs_iso "$launched")" \
+      --argjson duration_ms "$ms" --argjson peak_mem_kb "$peak" --argjson cpu_ms "$cpu" "$doc" > "$g/meta.json"; then
+    _gs_end failed publish "cannot write meta.json"; return 0
+  fi
+  mkdir -p -- "$kd/builds" || { _gs_end failed publish "cannot create the builds directory"; return 0; }
+  if [ -e "$kd/builds/$id" ] || [ -L "$kd/builds/$id" ]; then _gs_end failed publish "build id exists: $id"; return 0; fi
+  # Everything below the build's own directory first: renaming a directory into another parent needs write permission
+  # on the directory itself (its `..` entry changes), so the top loses it once it is in place.
+  find "$g" -mindepth 1 ! -type l -exec chmod a-w {} + 2>/dev/null
+  if ! _plat_mv_notdir "$g" "$kd/builds/$id"; then
+    find "$g" -type d -exec chmod u+w {} + 2>/dev/null
+    _gs_end failed publish "cannot move the build into builds/$id"; return 0
+  fi
+  chmod a-w "$kd/builds/$id" 2>/dev/null
+  if ! _plat_ln_swap "builds/$id" "$kd/current"; then _gs_end failed publish "cannot point current at builds/$id"; return 0; fi
+  _gs_drop_staging
+  if [ "$kind" = full ]; then _gs_end rebuilt - "${K_WHY[$key]}"; else _gs_end refreshed - "${K_WHY[$key]}"; fi
+}
+
+# ── links (spec §6.1; N1, N16) ────────────────────────────────────────────
+# One absolute link per tree, `<tree>/graphify-out -> <store>/<repo-key>/current`, made only where graphify-out is
+# ABSENT (a real directory waits for migration, GR6), only once `current` resolves to a published build, and only
+# after `git check-ignore -q graphify-out` (no slash) passes: the slash-only exclude line does not ignore a link.
+GS_LINKED=0 GS_PENDING=0 GS_UNIGNORED=0
+_gs_link() {   # <key> <1: link where due | 0: count only>
+  local key="$1" may="$2" tgt="${K_DIR[$1]:-}/current" tree
+  GS_LINKED=0 GS_PENDING=0 GS_UNIGNORED=0
+  while IFS= read -r tree; do
+    [ -n "$tree" ] || continue
+    if [ -L "$tree/graphify-out" ]; then
+      [ "$(readlink "$tree/graphify-out")" != "$tgt" ] || GS_LINKED=$((GS_LINKED+1))
+      continue
     fi
-    # Not advanced. graphify's own verdict — a full fresh extraction of the
-    # disk compared against the graph — is what earns the stamp it skipped.
-    if grep -qF 'left untouched' <<<"$said"; then
-      if _gs_restamp "$tree" "$stamp" "$head"; then
-        printf '%s\n' "$PIN" > "$out/.graphify_engine"
-        BUILD_OUTCOME=restamped
-        BUILD_REASON="unchanged topology; ${stamp:0:8} -> ${head:0:8}"
-        # D-1511 — commit-keyed freshness cannot see a working tree that
-        # differs from HEAD, and the engine's verdict is TRUE OF THE DISK. The
-        # count is named in the row so the census does not hide the gap.
-        local dirty
-        dirty="$(git -C "$tree" status --porcelain --untracked-files=no 2>/dev/null | wc -l)"
-        dirty="${dirty//[![:digit:]]/}"            # BSD `wc` pads its count
-        [ "${dirty:-0}" -gt 0 ] && BUILD_REASON="$BUILD_REASON; $dirty tracked file(s) modified"
-        return 0
-      fi
-      BUILD_OUTCOME=failed; BUILD_REASON="restamp refused: $RESTAMP_WHY"; return 1
-    fi
-    # Exit 0, nothing written, nothing said: a stamp nobody verified is not a
-    # stamp. Write NOTHING and report it — `failed` is already in the doctor's
-    # WARN set, where a silent forever-rebuild never was.
-    BUILD_OUTCOME=failed
-    BUILD_REASON="exit 0 but built_at_commit did not advance and graphify reported no unchanged verdict"
-    return 1
+    if [ -e "$tree/graphify-out" ]; then GS_PENDING=$((GS_PENDING+1)); continue; fi
+    [ "$may" = 1 ] && [ -d "$tgt" ] || continue
+    if ! _gs_git "$tree" check-ignore -q graphify-out 2>/dev/null; then GS_UNIGNORED=$((GS_UNIGNORED+1)); continue; fi
+    ln -s -- "$tgt" "$tree/graphify-out" && GS_LINKED=$((GS_LINKED+1))
+  done <<<"${K_TREES[$key]:-}"
+}
+
+# ── collection (spec §3.5 step 6, §9.2 for this repository's builds and staging) ──
+_gs_collect() {   # <key>
+  local kd="${K_DIR[$1]:-}" cur b keep now
+  [ -n "$kd" ] && [ -d "$kd" ] || return 0
+  _gs_rmtree "$kd/staging"
+  [ -d "$kd/builds" ] || return 0
+  cur="$(readlink "$kd/current" 2>/dev/null)"; cur="${cur#builds/}"
+  keep=$(( GK[CCRC_GRAPH_KEEP_BUILDS] - 1 )); now=$(date +%s)
+  while IFS= read -r b; do
+    [ -n "$b" ] && [ "$b" != "$cur" ] || continue
+    if [ "$keep" -gt 0 ]; then keep=$((keep-1)); continue; fi
+    [ $(( now - $(_plat_mtime "$kd/builds/$b") )) -ge "${GK[CCRC_GRAPH_BUILD_GRACE_SECS]}" ] || continue
+    _gs_rmtree "$kd/builds/$b"
+  done < <(for b in "$kd/builds"/*/; do b="${b%/}"; b="${b##*/}"; [ "$b" != '*' ] && printf '%s %s\n' "${b##*-}" "$b"; done \
+           | sort -r | cut -d' ' -f2)
+}
+
+# ── settings.json (spec §5.3): the three read-side settings, as the session hook reads them ──
+_gs_settings() {
+  [ -n "$GS_STORE" ] && [ -d "$GS_STORE" ] || return 0
+  jq -cn --argjson a "${GK[CCRC_GRAPH_GATE_MAX_DIFF_PCT]}" --argjson b "${GK[CCRC_GRAPH_GATE_MAX_DENIALS]}" \
+    --argjson c "${GK[CCRC_GRAPH_CARD_DIFF_LIST_MAX]}" \
+    '{schema:1, gate_max_diff_pct:$a, gate_max_denials:$b, card_diff_list_max:$c}' > "$GS_STORE/.settings.json.new" \
+    && mv -f -- "$GS_STORE/.settings.json.new" "$GS_STORE/settings.json"
+}
+
+# ── the census row (spec §7, plus cpu_ms, D-7357) ─────────────────────────
+_gs_emit() {   # <key>
+  local key="$1" kd="${K_DIR[$1]:-}" served="" nodes=0 edges=0 ff="${K_FF[$1]:-0}" ffat="${K_FFAT[$1]:-}" o="${K_OUTCOME[$1]}"
+  local nt=0 reason
+  if [ -n "$kd" ] && [ -d "$kd/current" ]; then
+    read -r served nodes edges < <(jq -r '[.commit // "", .nodes // 0, .edges // 0] | @tsv' "$kd/current/meta.json" 2>/dev/null) \
+      || { served=""; nodes=0; edges=0; }
   fi
-  if [ "$rc" -eq 124 ]; then
-    BUILD_OUTCOME=timed-out; BUILD_REASON="exceeded ${CCRC_GRAPH_BUILD_TIMEOUT}s"; return 1
+  [[ "$nodes" =~ ^[0-9]+$ ]] || nodes=0; [[ "$edges" =~ ^[0-9]+$ ]] || edges=0
+  # §3.3.1: consecutive FULL attempts that did not publish; a published full build resets the count.
+  if [ "${K_KIND[$key]:-}" = full ]; then
+    case "$o" in
+      rebuilt) ff=0; ffat="" ;;
+      failed|timed-out|oom-killed|refused-shrink|refused-by-guard) ff=$((ff+1)); ffat="$(date -u +%FT%TZ)" ;;
+    esac
   fi
-  local after_sz=0 after_mt=0
-  if [ -f "$out/graph.json" ]; then
-    after_sz=$(stat -c %s "$out/graph.json"); after_mt=$(stat -c %Y "$out/graph.json")
-  fi
-  # refused-shrink: exit 1 AND graph.json untouched AND the shrink message.
-  # D-1062 (Task 7): the brief anchored this pin on export.py's `to_json` guard
-  # (grep 'shrank\|shrink' export.py) — that guard exists (export.py:486-500)
-  # but is NOT the code path `graphify update .` runs (0.9.9, installed at
-  # ~/.local/lib/python3.12/site-packages/graphify). `update` dispatches to
-  # watch._rebuild_code -> watch._check_shrink, whose message never contains
-  # "shrink" at all. Pinned instead against _check_shrink's own literal
-  # (watch.py:643-646): "[graphify] WARNING: new graph has {N} nodes but
-  # existing graph.json has {M}. Refusing to overwrite — you may be missing
-  # chunk files from a previous session. Pass --force to override." The
-  # fragment below is the one substring with no interpolated numbers.
-  # A pin bump revisits this literal (O1's acceptance) — re-grep both
-  # export.py and watch.py in the installed package, not export.py alone.
-  # Grepped against the FULL stderr, not $first: a conditional warning line
-  # (build.py:384, watch.py:510) can print before the refusal on the same
-  # invocation, and BUILD_REASON is the actual matching line, not $first.
-  if [ "$after_sz" = "$before_sz" ] && [ "$after_mt" = "$before_mt" ] \
-     && grep -qi 'refusing to overwrite' <<<"$full"; then
-    BUILD_OUTCOME=refused-shrink
-    BUILD_REASON="$(grep -i -m1 'refusing to overwrite' <<<"$full")"
-    return 1
-  fi
-  BUILD_OUTCOME=failed; BUILD_REASON="${first:-exit $rc}"; return 1
+  [ -z "${K_TREES[$key]:-}" ] || nt="$(grep -c . <<<"${K_TREES[$key]}")"
+  reason="${K_REASON[$key]:-}"; [ -z "${K_NOTE[$key]:-}" ] || reason="${reason:+$reason; }${K_NOTE[$key]}"
+  local kind="${K_KIND[$key]:-}"; case "$kind" in full|incremental) ;; *) kind="" ;; esac
+  case "$o" in fresh|excluded|no-source|skipped-backoff) kind="" ;; esac
+  _gs_row "$(jq -cn --arg repo_key "${K_RK[$key]:-}" --arg source "${K_COMMON[$key]}" --arg ref "${K_REF[$key]:-}" \
+    --arg tip "${K_TIP[$key]:-}" --arg served "$served" --arg outcome "$o" --arg kind "$kind" \
+    --argjson changed_files "${K_CHANGED[$key]:-0}" --arg reason "$reason" --arg fail "${K_FAIL[$key]:-}" \
+    --argjson duration_ms "${K_DUR[$key]:-0}" --argjson peak_mem_kb "${K_PEAK[$key]:-null}" --argjson cpu_ms "${K_CPU[$key]:-null}" \
+    --argjson full_failures "$ff" --arg full_failed_at "$ffat" --argjson nodes "$nodes" --argjson edges "$edges" \
+    --argjson nt "$nt" --argjson linked "$GS_LINKED" --argjson pending "$GS_PENDING" \
+    '{repo_key:$repo_key, source:$source, ref:$ref, tip:$tip, served:$served, outcome:$outcome, kind:$kind,
+      changed_files:$changed_files, reason:$reason, fail:$fail, duration_ms:$duration_ms, peak_mem_kb:$peak_mem_kb,
+      cpu_ms:$cpu_ms, full_failures:$full_failures, full_failed_at:$full_failed_at, nodes:$nodes, edges:$edges,
+      "trees":$nt, linked:$linked, migrate:{done:0, pending:$pending, refused:[]}}')"
 }
 
 # ── the pass ──────────────────────────────────────────────────────────────
 exec 9>"$LOCK"
 flock -n 9 || { ROWS=(); _gs_finish pass-locked 0; }
+# The wave's hold (D-7365): checked right after the lock, before the library, the store, any fetch or any build, and
+# never removed here.
 [ -e "$PAUSE" ] && _gs_finish paused 0
-[ -n "$PIN" ] || { echo "graph-sweep: no pin at $PIN_FILE — run ccrc install first" >&2; _gs_finish failed 1; }
+_gs_lib || _gs_finish failed 1
+# shellcheck source=SCRIPTDIR/ccrc
+. "$GRAPH_LIB/ccrc" || { PASS_REASON="cannot load $GRAPH_LIB/ccrc"; _gs_finish failed 1; }
+# shellcheck source=SCRIPTDIR/graph-resolve
+. "$GRAPH_LIB/graph-resolve" || { PASS_REASON="cannot load $GRAPH_LIB/graph-resolve"; _gs_finish failed 1; }
+_gr_knobs || { PASS_REASON="${GK_WARN[*]:-the graph settings cannot be read}"; _gs_finish failed 1; }
+for w in ${GK_WARN[@]+"${GK_WARN[@]}"}; do echo "graph-sweep: setting: $w" >&2; done
+[ -n "$PIN" ] || { PASS_REASON="no pin at ${PIN_FILE/#"$HOME"/\~} — run ccrc install first"; _gs_finish failed 1; }
+# staging/ never outlives its build (spec §3.5): the trap names it while a build holds it.
+trap '_gs_drop_staging' EXIT
+trap '_gs_drop_staging; exit 143' TERM
+trap '_gs_drop_staging; exit 130' INT
 
 if [ ! -d "$PROJECTS_ROOT" ] && [ ! -d "$WORKTREES_ROOT" ]; then
   _gs_finish no-trees-configured 0
 fi
+GS_STORE=""
+_gr_store_init >/dev/null || { PASS_REASON="${GR_WHY:-the graph store cannot be created}"; _gs_finish failed 1; }
+GS_STORE="$GR_STORE"
 
 PROBED=0
-while IFS= read -r tree; do
+COMMONS=()
+mapfile -t TREES < <(_gs_trees)
+for tree in ${TREES[@]+"${TREES[@]}"}; do
   PROBED=$((PROBED+1))
-  if ! git -C "$tree" check-ignore -q graphify-out/; then
-    _gs_row "$tree" refused-no-exclude "git check-ignore graphify-out/ failed — run: ccrc install (the exclude writer)" 0
-    continue
-  fi
-  # stray-file cleanup (spec §E, row 11b): a leftover .graphifyignore from a
-  # SIGKILL/OOM/reboot mid-build must not accumulate even on a tree that turns
-  # out fresh this pass (a fresh tree never reaches _gs_guard, which carries
-  # its own internal instance of this same rm as defense-in-depth for calls
-  # that DO reach it — this outer sweep is what actually reaches every tree).
-  # Ownership-gated (finding 1): only a marker-bearing leftover WE wrote is
-  # swept — a foreign .graphifyignore a repo commits upstream is left alone.
-  _gs_owns_ignore "$tree" && rm -f "$tree/.graphifyignore"
-  if ! _gs_stale "$tree"; then _gs_row "$tree" fresh "" 0; continue; fi
-  stale_reason="$REASON"
-  if _gs_busy "$tree"; then _gs_row "$tree" "$BUSY_OUTCOME" "$BUSY_REASON" 0; continue; fi
-  if [ "$BUILT" -ge "$CCRC_GRAPH_BUDGET" ]; then
-    _gs_row "$tree" skipped-budget "pass budget $CCRC_GRAPH_BUDGET reached" 0; continue
-  fi
-  if ! _gs_guard "$tree"; then
-    # D-1161: a refusal AFTER the filter was written left the trap armed, and
-    # the loop's `continue` skipped the only disarm (the post-build one). The
-    # leak then fired at pass end with `$tree` empty. One cleanup+disarm here
-    # covers every `return 1` in the guard, present and future.
-    _gs_rm_generated "$tree"; _gs_disarm
-    _gs_row "$tree" refused-by-guard "$GUARD_REASON" 0; continue
-  fi
-  t0=$(date +%s%3N)
-  _gs_build "$tree"; rc=$?
-  dur=$(( $(date +%s%3N) - t0 ))
-  # The ephemeral filter never persists past the build, whatever rc was. The
-  # EXIT/INT/TERM trap _gs_guard armed covers only the crash window of the tree
-  # in flight — THIS is the real per-tree cleanup, and disarming here means a
-  # later pass-ending exit (the final `_gs_finish ok 0` below) never fires it.
-  # D-1161: the trap now names its tree through `GS_FILTER_TREE`, set at arm
-  # time, rather than expanding a caller-scope `$tree` at FIRE time — that
-  # expansion is what made a leaked trap run `rm -f /.graphifyignore` once the
-  # loop had hit EOF and `tree` was empty. Ownership-gated (finding 1) like
-  # every other removal site, in `_gs_rm_generated` itself rather than at each
-  # call: this only ever deletes a file _gs_guard wrote, never a foreign
-  # .graphifyignore the tree owns.
-  _gs_rm_generated "$tree"; _gs_disarm
-  case "$rc" in
-    0)   BUILT=$((BUILT+1))
-         # D-1509: `restamped` still counts toward BUILT — the engine RAN (it
-         # re-extracted the whole corpus and compared), it merely had nothing
-         # to write, and that cost is what the budget is for.
-         if [ "$BUILD_OUTCOME" = restamped ]; then _gs_row "$tree" restamped "$BUILD_REASON" "$dur"
-         elif [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
-         else _gs_row "$tree" stale-rebuilt "$stale_reason" "$dur"; fi ;;
-    2)   _gs_row "$tree" skipped-locked "$BUILD_REASON" 0 ;;   # deferred; never counts against the budget
-    *)   BUILT=$((BUILT+1)); _gs_row "$tree" "$BUILD_OUTCOME" "$BUILD_REASON" "$dur" ;;
-  esac
-done < <(_gs_trees)
+  _gs_rm_stray "$tree"
+  c="$(_gs_common "$tree")" || { echo "graph-sweep: $tree: its git common dir cannot be read" >&2; continue; }
+  [ -n "${T_OF[$c]+x}" ] || COMMONS+=("$c")
+  T_OF["$c"]="${T_OF[$c]:+${T_OF[$c]}$'\n'}$tree"
+done
 
 if [ "$PROBED" -eq 0 ]; then
   echo "graph-sweep: tree roots exist but zero trees probed — the ccd-cap-scopes failure shape; investigate" >&2
+  _gs_settings
   _gs_finish probed-zero 1
 fi
+
+DUE=()
+for c in ${COMMONS[@]+"${COMMONS[@]}"}; do
+  _gs_prepare "$c" < /dev/null; prc=$?
+  K_TREES["$CUR"]="${T_OF[$c]}"
+  [ "$prc" -eq 0 ] || continue
+  _gs_decide "$CUR" < /dev/null
+  case "${K_KIND[$CUR]}" in
+    fresh) _gs_end fresh - "" ;;
+    skipped-backoff) _gs_end skipped-backoff - "${K_WHY[$CUR]}" ;;
+    *) DUE+=("$CUR") ;;
+  esac
+done
+
+# Budget order (spec §3.1 step 4): no published build first, then a repository the last pass skipped for the budget
+# (it "goes first next pass"), then the most commits behind its tip.
+mapfile -t ORDER < <(for key in ${DUE[@]+"${DUE[@]}"}; do
+    s=1; [ "${K_PREV[$key]}" != skipped-budget ] || s=0
+    printf '%s %s %s %s\n' "${K_PUB[$key]}" "$s" "${K_BEHIND[$key]}" "$key"
+  done | sort -k1,1n -k2,2n -k3,3nr | cut -d' ' -f4)
+BUILT=0
+for key in ${ORDER[@]+"${ORDER[@]}"}; do
+  CUR="$key"
+  if [ "$BUILT" -ge "${GK[CCRC_GRAPH_BUDGET]}" ]; then
+    _gs_end skipped-budget - "pass budget CCRC_GRAPH_BUDGET=${GK[CCRC_GRAPH_BUDGET]} reached"; continue
+  fi
+  BUILT=$((BUILT+1))
+  _gs_build "$key" < /dev/null
+  _gs_drop_staging
+done
+
+for key in ${K_ORDER[@]+"${K_ORDER[@]}"}; do
+  CUR="$key"; may=0
+  if [ -n "${K_DIR[$key]:-}" ] && [ -d "${K_DIR[$key]}/current" ] && [ "${K_OUTCOME[$key]}" != excluded ]; then
+    may=1
+    _graph_exclude_common "${K_COMMON[$key]}" >/dev/null || _gs_note "cannot write the exclude lines in ${K_COMMON[$key]}/info/exclude"
+  fi
+  _gs_link "$key" "$may" < /dev/null
+  [ "$GS_UNIGNORED" -eq 0 ] || _gs_note "$GS_UNIGNORED tree(s) not linked: git check-ignore graphify-out fails there"
+  _gs_collect "$key"
+  _gs_emit "$key"
+done
+_gs_settings
 _gs_finish ok 0

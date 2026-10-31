@@ -894,9 +894,12 @@ describe('the SessionStart graph card', () => {
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
    *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
    *  and run in a bash subshell against this fixture HOME, because the hook is
-   *  a SECOND, hand-rolled reader of that schema (`.passes[].trees[]` carrying
-   *  `path`/`outcome`/`reason`) with nothing importable to couple it to the
-   *  writer — the shape D-306 is the scar from. Hand-written JSON here would
+   *  a SECOND, hand-rolled reader of that schema (since graph revision 2's
+   *  repository sweep, D-7350: `.passes[].repos[]`, one row per repository
+   *  carrying `source`/`outcome`/`reason`) with nothing importable to couple it
+   *  to the writer — the shape D-306 is the scar from. A row is given here by the
+   *  tree it is about and written for that tree's repository: `source` is the
+   *  realpath of its common dir, the key the hook selects by. Hand-written JSON here would
    *  let a `reason` -> `why` rename leave every suite green while the shipped
    *  card went permanently silent on the no-graph path. install-session-hooks
    *  .test.ts derives its event list from the hook's own `case` block for
@@ -920,11 +923,15 @@ describe('the SessionStart graph card', () => {
       'CENSUS="$HOME/.ccrc/graph-sweep.json"',
       'STARTED="2026-09-02T00:00:00Z"', 'PIN="0.9.9"', 'ROWS=()',
       liftFn('_gs_row'), liftFn('_gs_finish'),
-      'while [ "$#" -gt 0 ]; do _gs_row "$1" "$2" "$3" 0; shift 3; done',
+      'while [ "$#" -gt 0 ]; do _gs_row "$1" >/dev/null; shift; done',
       '_gs_finish ok 0',
     ].join('\n');
+    const source = (tree: string): string => {
+      const gitDir = path.join(tree, '.git');
+      return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+    };
     execFileSync('bash', ['-c', script, 'sweep',
-      ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
+      ...rows.map((r) => JSON.stringify({ repo_key: 'project-a-0123abcd', source: source(r.path), outcome: r.outcome, reason: r.reason }))],
       { env: { ...process.env, HOME: home }, encoding: 'utf8' });
   };
 

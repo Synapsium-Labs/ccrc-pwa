@@ -91,7 +91,9 @@ const plantGraph = (tree: string, built: string, content: GraphContent = GRAPH):
 /** One census pass, written by the sweep's OWN writer (`_gs_row`, `_gs_finish`
  *  lifted out of ccd/ccd-graph-sweep), so the hook's reader is pinned against
  *  the schema the sweep really writes. The lifted text goes into a driver
- *  file; the rows travel as arguments. */
+ *  file; the rows travel as arguments. Since the repository sweep (GR4,
+ *  D-7350) a row is one repository's: each row below is given by the tree it is
+ *  about and written with `source`, the realpath of that tree's common dir. */
 const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
   const src = fs.readFileSync(SWEEP, 'utf8');
   const lift = (name: string): string => {
@@ -105,10 +107,14 @@ const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): v
     'CENSUS="$HOME/.ccrc/graph-sweep.json"',
     'STARTED="2026-10-29T00:00:00Z"', `PIN="${PIN}"`, 'ROWS=()',
     lift('_gs_row'), lift('_gs_finish'),
-    'while [ "$#" -gt 0 ]; do _gs_row "$1" "$2" "$3" 0; shift 3; done',
+    'while [ "$#" -gt 0 ]; do _gs_row "$1" >/dev/null; shift; done',
     '_gs_finish ok 0',
   ].join('\n'));
-  execFileSync('bash', [driver, ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
+  const source = (tree: string): string => {
+    const gitDir = path.join(tree, '.git');
+    return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+  };
+  execFileSync('bash', [driver, ...rows.map((r) => JSON.stringify({ repo_key: 'project-a-0123abcd', source: source(r.path), outcome: r.outcome, reason: r.reason }))],
     { env: { ...process.env, HOME: home }, encoding: 'utf8' });
 };
 

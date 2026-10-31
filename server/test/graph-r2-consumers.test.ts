@@ -66,12 +66,13 @@ const censusReaders = (files: Map<string, string>): ReaderRow[] => {
  *  empties this object, and the row then reads "absent everywhere" (the test
  *  below asserts no file reads `trees` at all once this is `{}`). */
 const TREES_CEILING: Record<string, number> = {
-  'ccd/ccd-graph-sweep': 1,                         // the writer
+  // GR4 (D-7350): the sweep writes repos[] and no per-tree array (1 -> 0, so it moved to NAMES_ONLY), and the per-tree
+  // sweep's test file is gone (22 -> 0); session-hook.test.ts's sweep-writer fixture reads the repository rows now
+  // (2 -> 1: its hand-written old-shape pass, which the hook still reads, stays).
   'ccd/session-hook.sh': 1,
   'ccd/ccrc-doctor-checks': 5,
-  'server/test/graph-sweep.test.ts': 22,
   'server/test/ccrc-doctor-graphify.test.ts': 12,
-  'server/test/session-hook.test.ts': 2,
+  'server/test/session-hook.test.ts': 1,
   'server/test/ccrc-doctorFixture.ts': 1,
 };
 /** Files that name the census and read no per-tree row: documentation of the
@@ -81,7 +82,9 @@ const TREES_CEILING: Record<string, number> = {
  *  row that declares it. A new consumer of the census is added to one of the two
  *  lists in the PR that adds it, so a reviewer sees it. */
 const NAMES_ONLY = [
+  'ccd/ccd-graph-sweep',                            // the writer (GR4: repos[] only)
   'README.md',
+  'server/test/graph-repo-sweep.test.ts',           // GR4's rows read repos[]
   'server/test/session-hook-graph-pins.test.ts',
   'server/test/session-hook-graph-repo.test.ts',
   'server/test/single-definition/vocabularies.test.ts',
@@ -240,10 +243,9 @@ const fmt = (s: WriteSite): string => `${s.fn} ${s.verb} ${s.target}`;
 const treeWriteSites = (text: string): string[] => writeSites(SWEEP, text).filter((s) => UNDER_TREE.test(s.target)).map(fmt);
 const otherWriteSites = (text: string): string[] => writeSites(SWEEP, text).filter((s) => !UNDER_TREE.test(s.target)).map(fmt);
 
-/** The base harvest (GR1 Step 1), in file order: the seven `.graphifyignore`
- *  write/remove sites (in and around `_gs_guard`), the restamp's rename and its
- *  temp's removal, and the two `.graphify_engine` receipts. GR4 lowers this to
- *  the link alone; GR6 adds only `_gs_migrate_one`'s named moves. */
+/** The base harvest (GR1 Step 1), kept as the record GR4's counted exit is measured from: the seven
+ *  `.graphifyignore` write/remove sites (in and around the per-tree `_gs_guard`), the restamp's rename and its temp's
+ *  removal, and the two `.graphify_engine` receipts. */
 const TREE_WRITES_BASE = [
   '_gs_rm_generated rm "$t/.graphifyignore"',
   '_gs_open_filter > "$1/.graphifyignore"',
@@ -258,53 +260,112 @@ const TREE_WRITES_BASE = [
   '_gs_build > "$out/.graphify_engine"',
   '(main) rm "$tree/.graphifyignore"',
 ];
+/** GR4 (D-7350, D-7649): what the repository sweep writes under a tree, literal — the link (spec §6.1) and the
+ *  ownership-gated removal of a stray `.graphifyignore` a per-tree sweep left behind (spec §9.1, "as today"). Counted
+ *  exit 12 -> 2; the `.graphifyignore` write-or-remove sites 7 -> 1, that one removal. GR6 adds only
+ *  `_gs_migrate_one`'s named moves. */
+const TREE_WRITES = [
+  '_gs_rm_stray rm "$tree/.graphifyignore"',
+  '_gs_link ln "$tree/graphify-out"',
+];
+/** Every other write target of the sweep, literal: the census, the store (the per-repository directory, the
+ *  checkout's generated filter and exclude line, staging, the stamp's temp, meta.json, the build's publish, settings.json),
+ *  the log, and the pass lock. Harvested on GR4's tip; a write through a NEW variable shows up here. */
 const OTHER_WRITES_BASE = [
-  '_gs_finish > "$tmp"',
-  '_gs_finish rm "$tmp"',
-  '_gs_finish > "$tmp.2"',
-  '_gs_finish > "$tmp.2"',
-  '_gs_finish mv "$tmp.2"',
-  '_gs_finish mv "$CENSUS"',
-  '_gs_finish rm "$tmp"',
-  '_gs_guard > "$probe"',
-  '_gs_guard rm "$probe"',
-  '_gs_guard > "$probe"',
-  '_gs_guard > "$probe"',
-  '_gs_guard rm "$probe"',
-  '_gs_restamp_refuse >> "$HOME/.ccrc/graph-sweep.log"',
-  '_gs_restamp 2>> "$HOME/.ccrc/graph-sweep.log"',
-  '_gs_build >> "$HOME/.ccrc/graph-sweep.log"',
-  '_gs_build > "$outf"',
-  '_gs_build 2> "$errf"',
-  '_gs_build >> "$HOME/.ccrc/graph-sweep.log"',
-  '_gs_build rm "$outf"',
-  '_gs_build >> "$HOME/.ccrc/graph-sweep.log"',
-  '_gs_build rm "$errf"',
-  '(main) 9> "$LOCK"',
+  "_gs_finish > \"$tmp\"",
+  "_gs_finish rm \"$tmp\"",
+  "_gs_finish > \"$tmp.2\"",
+  "_gs_finish > \"$tmp.2\"",
+  "_gs_finish mv \"$tmp.2\"",
+  "_gs_finish mv \"$CENSUS\"",
+  "_gs_finish rm \"$tmp\"",
+  "_gs_noise cp \"$gen\"",
+  "_gs_noise cp \"$ck/.git/graphifyignore.committed\"",
+  "_gs_noise > \"$ck/.git/graphifyignore.committed\"",
+  "_gs_noise > \"$probe\"",
+  "_gs_noise rm \"$probe\"",
+  "_gs_noise > \"$ck/.git/graphifyignore.new\"",
+  "_gs_noise mv \"$ck/.git/graphifyignore.new\"",
+  "_gs_noise mv \"$gen\"",
+  "_gs_noise rm \"$ck/.git/graphifyignore.committed\"",
+  "_gs_prepare mkdir \"$kd/memory\"",
+  "_gs_prepare chmod 0755",
+  "_gs_prepare chmod \"$kd\"",
+  "_gs_prepare chmod \"$kd/memory\"",
+  "_gs_prepare > \"$kd/source\"",
+  "_gs_prepare rm \"$ck\"",
+  "_gs_prepare rm \"$ck\"",
+  "_gs_prepare >> \"$ck/.git/info/exclude\"",
+  "_gs_prepare mkdir \"$ck/.git/info\"",
+  "_gs_rmtree chmod u+w",
+  "_gs_rmtree chmod {}",
+  "_gs_rmtree chmod +",
+  "_gs_rmtree chmod 2>/dev/null",
+  "_gs_rmtree rm \"$doomed\"",
+  "_gs_rmtree rm \"$doomed\"",
+  "_gs_stage mkdir 0755",
+  "_gs_stage mkdir \"$stg\"",
+  "_gs_stage mkdir 0755",
+  "_gs_stage mkdir \"$stg/graphify-out\"",
+  "_gs_stage ln \"$kd/memory\"",
+  "_gs_stage ln \"$stg/graphify-out/memory\"",
+  "_gs_guard 2>> \"$LOG\"",
+  "_gs_stamp_dir 2>> \"$LOG\"",
+  "_gs_stamp_dir >> \"$LOG\"",
+  "_gs_stamp_dir mv \"$spliced\"",
+  "_gs_stamp_dir mv \"$dir/$f\"",
+  "_gs_stamp_dir rm \"$spliced\"",
+  "_gs_build > \"$stg/changed.z\"",
+  "_gs_build >> \"$LOG\"",
+  "_gs_build > \"$bout\"",
+  "_gs_build 2> \"$berr\"",
+  "_gs_build >> \"$LOG\"",
+  "_gs_build > \"$g/meta.json\"",
+  "_gs_build mkdir \"$kd/builds\"",
+  "_gs_build chmod a-w",
+  "_gs_build chmod {}",
+  "_gs_build chmod +",
+  "_gs_build chmod 2>/dev/null",
+  "_gs_build chmod u+w",
+  "_gs_build chmod {}",
+  "_gs_build chmod +",
+  "_gs_build chmod 2>/dev/null",
+  "_gs_build chmod a-w",
+  "_gs_build chmod \"$kd/builds/$id\"",
+  "_gs_build chmod 2>/dev/null",
+  "_gs_link ln \"$tgt\"",
+  "_gs_settings > \"$GS_STORE/.settings.json.new\"",
+  "_gs_settings mv \"$GS_STORE/.settings.json.new\"",
+  "_gs_settings mv \"$GS_STORE/settings.json\"",
+  "(main) 9> \"$LOCK\"",
 ];
 
 describe('treeWriteSites: what the sweep writes under a tree (D-7347)', () => {
   const sweep = fs.readFileSync(path.join(ROOT, SWEEP), 'utf8');
 
-  it('the base list, literal', () => {
-    expect(treeWriteSites(sweep)).toEqual(TREE_WRITES_BASE);
-    expect(TREE_WRITES_BASE.filter((s) => s.includes('.graphifyignore')), 'the seven filter sites').toHaveLength(7);
+  it('the link and the stray removal, literal (GR4: 12 -> 2)', () => {
+    expect(treeWriteSites(sweep)).toEqual(TREE_WRITES);
+    expect(TREE_WRITES_BASE.filter((s) => s.includes('.graphifyignore')), 'the base\'s seven filter sites').toHaveLength(7);
+    expect(TREE_WRITES.filter((s) => s.includes('.graphifyignore')), 'one left: the ownership-gated removal').toEqual(['_gs_rm_stray rm "$tree/.graphifyignore"']);
+    expect([TREE_WRITES_BASE.length, TREE_WRITES.length], 'the counted exit').toEqual([12, 2]);
   });
 
   it('every other write target is a named one outside the tree', () => {
     expect(otherWriteSites(sweep)).toEqual(OTHER_WRITES_BASE);
   });
 
-  it('`$out` is the tree\'s graphify-out wherever the sweep sets it', () => {
+  it('`$out`, the per-tree sweep\'s spelling of a tree\'s graphify-out, is set nowhere any more', () => {
+    // GR4: the sweep names a tree's graphify-out only as "$tree/graphify-out" (the link); every output directory
+    // it writes is the store's, spelled from $kd, $stg or $g, which UNDER_TREE does not match.
     const outs = [...sweep.matchAll(/\bout="([^"]*)"/g)].map((m) => m[1]);
-    expect(outs).toEqual(['$1/graphify-out', '$tree/graphify-out']);
+    expect(outs).toEqual([]);
   });
 
   it('calibration: an extra write under the tree goes red, and comments and messages are not writes', () => {
     const mutated = sweep.replace(/^_gs_build\(\) \{[^\n]*\n/m, (m) => `${m}  : > "$tree/x"\n`);
     expect(mutated).not.toBe(sweep);
     expect(treeWriteSites(mutated)).toContain('_gs_build > "$tree/x"');
-    expect(treeWriteSites(mutated)).not.toEqual(TREE_WRITES_BASE);
+    expect(treeWriteSites(mutated)).not.toEqual(TREE_WRITES);
     expect(treeWriteSites('f() {\n  # rm -f "$tree/a"\n  echo "x -> y > z" >&2\n}\n')).toEqual([]);
   });
 });
@@ -320,8 +381,8 @@ const engineCalls = (files: Map<string, string>): string[] =>
   ccdFiles(files).flatMap(([f, t]) => codeLines(f, t).filter((l) => ENGINE_CALL.test(l.code)).map((l) => `${f}#${l.fn}`));
 
 describe('engineCalls: who runs the engine (D-7347)', () => {
-  it('one invocation in ccd/, the sweep\'s build', () => {
-    expect(engineCalls(trackedText())).toEqual(['ccd/ccd-graph-sweep#_gs_build']);
+  it('no invocation in ccd/: the wrapper imports the engine instead (GR4: 1 -> 0, the sweep\'s `_gs_build`)', () => {
+    expect(engineCalls(trackedText())).toEqual([]);
   });
 
   it('calibration: the assignment, a comment, the card\'s prohibition and a test of the path are not calls; a bare, a quoted-path and a local-variable call are', () => {
@@ -372,17 +433,9 @@ const graphPathReaders = (files: Map<string, string>): string[] => {
 };
 
 /** The base harvest, in file order (plan item 10's sites, measured). */
+/** GR4 (D-7350) took the sweep's ten rows to none: it reads no tree's graphify-out member; what it reads of a build
+ *  is the store's (`$kd/current/meta.json`, `$g/graph.json`), never through a tree. */
 const GRAPH_READERS_BASE = [
-  'ccd/ccd-graph-sweep#_gs_stamp: graph.json',
-  'ccd/ccd-graph-sweep#_gs_stale: graph.json',
-  'ccd/ccd-graph-sweep#_gs_stale: .graphify_engine',
-  'ccd/ccd-graph-sweep#_gs_busy: .graphify_engine',
-  'ccd/ccd-graph-sweep#_gs_restamp: $f',
-  'ccd/ccd-graph-sweep#_gs_restamp: $f',
-  'ccd/ccd-graph-sweep#_gs_build: graph.json',
-  'ccd/ccd-graph-sweep#_gs_build: graph.json',
-  'ccd/ccd-graph-sweep#_gs_build: graph.json',
-  'ccd/ccd-graph-sweep#_gs_build: graph.json',
   'ccd/session-hook.sh#_hook_graph_measure: graph.json',
   'ccd/session-hook.sh#_hook_graph_measure: graph.json',
   'ccd/session-hook.sh#_hook_graph_measure: GRAPH_REPORT.md',
