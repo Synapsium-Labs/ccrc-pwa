@@ -5223,8 +5223,9 @@ the rest) is listed in the hook's header, and a jq failure or a hook timeout fai
 the queue is the operator's act.
 
 **The landing line (landing-order stage 5).** `GET /api/landing?project=<p>` (box token; `ccrc-api landing show --project <p>`)
-is the coordinator's read of one project's line before it enqueues: every entry — the PR, its `pinnedSha` (the head the
-advance to `merging` recorded, which `--match-head-commit` reads), its `handoffCommit`, its state and its ejections — the
+is the coordinator's read of one project's line before it enqueues: every entry — the PR, its `pinnedSha` (the head the line
+pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
+`--match-head-commit`), its `handoffCommit`, its state and its ejections — the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
 while either flag is set. A project the line has never seen answers no entries and both flags off.
 

@@ -628,7 +628,7 @@ same, and shows as `absent`.
 | `bad-transition` | `to` is not reachable from the run's current state |
 | `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
 | `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
-| `ejection-not-merging` | on an ADVANCE to `working` whose body carries `ejection`, from a run not at `merging`: an ejection rides only the `merging → working` edge. The server recorded nothing: the run and its landing entry are unchanged. Do not retry with the body and send no `fix-round` mail; re-read the run, and a run no longer at `merging` gets no ejection: report it to the operator (SKILL.md step 6). |
+| `ejection-not-merging` | on an ADVANCE to `working` whose body carries `ejection`, from a run not at `merging`: an ejection rides only the `merging → working` edge, so a run at `dispatched` or `awaiting-review` answers this code, while the edge gate's `bad-transition` (a run at `working`, among others), a review in flight and, from `awaiting-review`, the dispatch cap answer first, each with its own code. The server recorded nothing: the run and its landing entry are unchanged. Do not retry with the body and send no `fix-round` mail; re-read the run, and a run no longer at `merging` gets no ejection: report it to the operator (SKILL.md step 6). |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 | `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick, at most twice. Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
@@ -1462,11 +1462,12 @@ the PR's own; that goes to the fix-round rule, on route G exactly as on route Q.
 A `red-unreachable` whose red is `main`'s own and already fixed on `main` needs
 a new head, and this session takes the new-head route itself (D-7588). It
 disarms first on route Q, then sends a fix round to the owning worker on the
-`merging → working` edge for one clean merge of `main` and nothing else, then
-dispatches a review run whose brief names that merge commit as the change under
-review; the reviewer still reads the whole diff (reviewer clause 5). Show both
-facts with reads you can type, after one `git fetch origin`: read that one
-required name on a `main` sha with `gh api --paginate
+`merging → working` edge, in SKILL.md step 6's `ejected: new-head:#<pr>` form,
+which records the base on the advance, for one clean merge of `main` and nothing
+else, then dispatches a review run whose brief names that merge commit as the
+change under review; the reviewer still reads the whole diff (reviewer clause
+5). Show both facts with reads you can type, after one `git fetch origin`:
+read that one required name on a `main` sha with `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/check-runs'` and `gh api --paginate
 'repos/{owner}/{repo}/commits/<sha>/status'`, judged as read 5 judges it: red
 when a completed run of it concluded other than success, neutral or skipped, or
