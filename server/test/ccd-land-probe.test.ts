@@ -1847,6 +1847,23 @@ describe('ccd-land-probe: a registry the probe cannot read decides no row (fix r
     expect(fx.exists(`${ALPHA}.lineage`), 'the old file of a row with no .branch').toBe(false);
     expect(m.stderr).not.toContain('lineage-skip');
   });
+
+  it('1171-a the two lineage-skip lines stay apart: an unreadable row and two malformed rows (one a git-valid name the grammar does not hold, ws/gamma+b) log one line each, every held file byte-identical', { timeout: 120_000 }, () => {
+    const GAMMA = 'lane-a-proj-a-gamma';
+    const old = seeded([ALPHA, BETA, GAMMA]);
+    fs.writeFileSync(path.join(fx.reg, `${ALPHA}.branch`), 'ws/alpha\nws/other\n');   // unreadable (two lines)
+    fs.writeFileSync(path.join(fx.reg, `${BETA}.branch`), 'ws/beta~0\n');             // malformed: a revision expression
+    fs.writeFileSync(path.join(fx.reg, `${GAMMA}.branch`), 'ws/gamma+b\n');           // malformed by the grammar, valid to git
+    const m = fx.run();
+    expect(m.status).toBe(0);
+    expect(fx.readJson('probe').state).toBe('measured');
+    unchanged(old, 'measured tick');
+    const skip = (t: string): string[] => lines(m.stderr).filter((l) => l === `land-probe: lineage-skip: ${t}`);
+    expect(skip('a registry row could not be read'), 'the unreadable line, once').toHaveLength(1);
+    expect(skip(MALFORMED), 'the malformed line, once for two rows').toHaveLength(1);
+    expect(lines(m.stderr).filter((l) => l.startsWith('land-probe: lineage-skip: ')), 'exactly the two lines').toHaveLength(2);
+    said(m.stderr, MALFORMED, [ALPHA, BETA, GAMMA], 'measured tick');
+  });
 });
 
 describe('ccd-land-probe: a failure never leaves an old record (fix round 1, review 1109 F6, A3, A5, A12)', () => {
@@ -2122,5 +2139,48 @@ describe('ccd-land-probe: the lander key and its mirror (landing order wave 5d)'
     fs.symlinkSync(target, path.join(fx.reg, 'landing'));
     expect(fx.run().status).toBe(0);
     for (const f of files) expect(fs.readFileSync(f, 'utf8'), f).toBe('{}\n');
+  });
+});
+
+describe('ccd-land-probe: the tick measures the least recently measured project first (review 1125 N6, D-7268)', () => {
+  const order = (stderr: string): string[] =>
+    [...stderr.matchAll(/^land-probe: unmeasured (proj-[ab]) main-health /gm)].map((x) => x[1]);
+
+  it('N6-a an older probe goes first whatever the names, and a project with no probe goes before both', { timeout: 120_000 }, () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', '');
+    fx.conf('proj-b', '');
+    const t1 = fx.run();
+    expect(t1.status).toBe(0);
+    expect(order(t1.stderr), 'tick 1: neither has a probe, so by name').toEqual(['proj-a', 'proj-b']);
+    const past = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(path.join(b.landDir, 'probe'), past, past);
+    const t2 = fx.run();
+    expect(t2.status).toBe(0);
+    expect(order(t2.stderr), 'tick 2: proj-b\'s probe is older').toEqual(['proj-b', 'proj-a']);
+    fs.rmSync(path.join(fx.landDir, 'probe'));
+    const t3 = fx.run();
+    expect(t3.status).toBe(0);
+    expect(order(t3.stderr), 'tick 3: proj-a has no probe').toEqual(['proj-a', 'proj-b']);
+  });
+
+  it('N6-b a project the tick budget left unstarted is measured first on the next tick', { timeout: 180_000 }, () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    for (let n = 1; n <= 6; n++) fx.addHead(n, { [`f${n}.txt`]: 'x\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', '');
+    fx.conf('proj-b', '');
+    expect(fx.run().status).toBe(0);
+    fx.wrapGit('case " $* " in *" merge-tree "*) sleep 6;; esac');
+    const t2 = fx.run({ CCD_LAND_PROBE_TICK_BUDGET: '30' });
+    expect(t2.status).toBe(0);
+    expect(t2.stderr, 'tick 2 left proj-b unstarted').toContain('land-probe: tick-budget: proj-b not started');
+    const before = fs.statSync(path.join(b.landDir, 'probe'));
+    const t3 = fx.run({ CCD_LAND_PROBE_TICK_BUDGET: '30' });
+    expect(t3.status).toBe(0);
+    expect(t3.stderr, 'tick 3 starts with proj-b').not.toContain('land-probe: tick-budget: proj-b not started');
+    expect(fs.statSync(path.join(b.landDir, 'probe')).mtimeMs, 'proj-b\'s probe was rewritten').toBeGreaterThan(before.mtimeMs);
   });
 });

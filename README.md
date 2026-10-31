@@ -6135,38 +6135,43 @@ It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
 | `lander` | the mirror of the conf's `lander=coordinator`, with its own time; absent means the project is not a coordinator-lands project, and stage 5's landing line, which does not read it yet |
 
-Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
-covers a failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write.
-A child the project budget cut says `why: budget`, and so does a step the spent budget kept from starting. That
-happens at each of these: the scratch's `init`, the fetch URL's `ls-remote --get-url`, the fetch itself and the
-fetched base's `rev-parse` (in `probe` and `main-health`); every `merge-tree` of a head or a pair (in `probe`); the
-forge reads behind the base's checks (the rules, the branch view, the check runs and the status, in `main-health`);
-and the lineage walk, which checks the budget before each step and says `budget` for its `rev-list`, `merge-base`,
+Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That covers a
+failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write. A child the
+project budget cut says `why: budget`, and so does a step the spent budget kept from starting. That happens at each of
+these: the scratch's `init`, the fetch URL's `ls-remote --get-url`, the fetch itself and the fetched base's
+`rev-parse` (in `probe` and `main-health`); every `merge-tree` of a head or a pair (in `probe`); the forge reads
+behind the base's checks (the rules, the branch view, the check runs and the status, in `main-health`); and the
+lineage walk, which checks the budget before each step and says `budget` for its `rev-list`, `merge-base`,
 `merge-tree` and tree reads (in a lineage file). A budget cut on the first read of `remote.origin.url`, whether the
 read itself was cut or `store.before`'s count had already spent the budget, writes `probe` `repo-unreadable`,
 `main-health` `fetch-failed`, and the lineage files `repo-unreadable` as the lineage pass decides them (below).
-`fetch-failed` also covers a scratch, alternates or refspec failure before the first write, since the probe's set
-has no closer word. A failed or cut fetch, or an error before the first write, rewrites `probe`, `main-health` and
-the project's lineage files, so none of them keeps an older measurement, with three exceptions. When the registry
-cannot be listed, no lineage file is written or removed. A row is held, and its file left as it was, when its
-registry `.project` or `.branch` exists but cannot be read, or when its `.branch` starts with `ws/` but does not
-name a well-formed branch after it (corrupt registry content, such as a NUL byte, `ws/a~0` or `ws/a.lock`); each
-case logs its own `lineage-skip:` line. And a signal leaves the lineage files as they were only when it is recorded
-before the last read checkpoint the tick's route passes through. Recorded later on a failed or cut fetch, or when no
-GitHub repository could be read from the origin URL, it lets the rewrite and the removal of stale files finish. On a measured
-base, rows rewritten before a later row's walk checkpoint raises stay rewritten. The before-first-write fallback
-raises at no checkpoint, so it always finishes. On every route, `probe` and `main-health` are this tick's by the
-time the lineage files are written; a signal at the fetch's own checkpoint, before any write, leaves the old ones
-standing and runs no fallback. On a measured base, a row the tick could not decide keeps its last lineage file,
-with that file's own `at`: when the budget ran out after the fetch, or when one row's read timed out, was killed or
-answered anything but a sha (rc 0) or rc 1. On a failed or cut fetch, when no GitHub repository could
-be read from the origin URL, or in the before-first-write fallback, such a row with an old file is rewritten unmeasured with
-`tip: null`. The last file also stands when the tick never reached the project, when the registry could not be
-listed, and, on every route, when the row is held. rc 1 is git's answer that
-the ref is not there: a missing ref, and also one git itself ignores as broken or cannot read. That row is decided,
-its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For a
-kept file, stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
-that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
+`fetch-failed` also covers an error before the first write (a scratch that cannot be made, or a refspec the git door
+refuses), since the probe's set has no closer word; a failure to write the scratch's alternates file is the failed
+fetch's own `fetch-failed`. A failed or cut fetch, or an error before the first write, rewrites `probe`, `main-health`
+and the project's lineage files, so none of them keeps an older measurement, with three exceptions. When the registry
+cannot be listed, no lineage file is written or removed. A row is held, and its file left as it was, when its registry
+`.project` or `.branch` exists but cannot be read, or when its `.branch` starts with `ws/` but does not name a
+well-formed branch after it (corrupt registry content, such as a NUL byte, `ws/a~0` or `ws/a.lock`, or a name git
+allows but the probe's narrower grammar does not, such as `ws/a+b`); each case logs its own `lineage-skip:` line. And
+a signal leaves the lineage files as they were only when it is recorded before the last read checkpoint the tick's
+route passes through. Recorded later on a failed or cut fetch, or when no GitHub repository could be read from the
+origin URL, it lets the rewrite and the removal of stale files finish. On a measured base, rows rewritten before a
+later row's walk checkpoint raises stay rewritten. The before-first-write fallback raises at no checkpoint, so it
+always finishes. On every route, `probe` and `main-health` are this tick's by the time the lineage files are written;
+a signal at the fetch's own checkpoint, before any write, leaves the old ones standing and runs no fallback. On a
+measured base, a row the tick could not decide keeps its last lineage file, with that file's own `at`: when the budget
+ran out after the fetch, or when one row's read timed out, was killed or answered anything but a sha (rc 0) or rc 1.
+On a failed or cut fetch, when no GitHub repository could be read from the origin URL, or in the before-first-write
+fallback, such a row with an old file is rewritten unmeasured with `tip: null`. The last file also stands when the
+tick never reached the project, when the registry could not be listed, and, on every route, when the row is held. rc 1
+is git's answer that the ref is not there: a missing ref, and also one git itself ignores as broken or cannot read.
+That row is decided, its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For a kept file,
+stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means that figure
+was not measured on that tick, for example because the tick was interrupted or the count failed.
+
+**The order.** Each tick measures the projects least recently measured first: it orders them by the modification time
+of each one's `probe`, a project with none first and ties by name. So a project the tick budget left unstarted (the
+journal's `tick-budget: <project> not started`) is the first one measured on the next tick.
 
 The two mirrors, `enabled` and `lander`, are reconciled in one pass at the start of every tick that runs, before any
 project is measured. `enabled` is written for a valid conf with `lineage=on`, and `lander` for a valid conf with
