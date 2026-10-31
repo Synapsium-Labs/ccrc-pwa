@@ -35,7 +35,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; Decisions, 2026-10-31 15:52); run 1311 (the run's wave 17) |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
-| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | to plan; run 1312 |
+| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); run 1312 remains planned and undispatched pending publication checks and the operator's reading of the exact proposed CLAUDE.md amendments |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
@@ -1691,6 +1691,25 @@ carries it (spec §5.1, amended 2026-09-24).
     raised, and each important finding that held is answered.
   - **The operator writes `lander=`** only after the fleet box runs this wave's probe. An older probe reads the key
     as `unknown-key` and stops measuring the whole conf.
+- **2026-10-31 20:00 — wave 5f planned (D-7652 to D-7663), not dispatched.**
+  - The plan is `docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`.
+    The twelve planning deviations were issued and immediately defined there; no unused execution block was reserved.
+  - **Authority is not a measured projection.** The journal recovers subject identity, creation evidence, order,
+    `fixesMain` and attribution, never a current run, pin or landed state. Contradictory surviving binding evidence
+    holds the line; only a successful verified pin may write the exact DB-only witness. A wholly lost, unjournalled
+    change remains undetectable. Target-only recovery, strict numeric reads and stale-head quarantine are bounded
+    explicitly, rather than repaired with fabricated defaults.
+  - **Failure stays uncertain.** Append, apply and COMMIT failures close the global landing fence, including a pin
+    or retreat that makes no append. Durable replay needs a proved clean transaction boundary; an uncertain rollback
+    needs restart. Failed writes and replay send no changed-order notice.
+  - **Review is qualified.** One independent Opus reader read the entire consolidated plan and found no verified
+    material blocker in the covered areas. Source corroboration was partial, as listed in the plan; this is not
+    executable verification or operator approval. The supported method-local `log.append` census spelling is now
+    explicit, and Task 2's known intermediate corpus red remains documented until Task 4.
+  - **Instruction proposals remain proposals.** Exact Before/After blocks for the coord.db recovery invariant and
+    the two attributed token-only doors are in the plan. They have not been applied to CLAUDE.md. Run 1312 remains
+    planned and undispatched until publication checks finish and the operator reads those exact amendments.
+    No implementation, test pass or mutation kill is claimed by this planning decision.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2246,5 +2265,5 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   the skill text. Its read is advisory until 5i, and a server older than the line answers 404, which reads as no entry.
 - **5d is planned** (`docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, run 1311; Decisions, 2026-10-31 15:52): the `lander=` key and D-7546's restatement,
   with the radar's carried wording. It ships to the fleet box first.
-- **5f is next in line** (run 1312), then 5g to 5k in order, each planned against `main` as it then stands. 5h also
-  waits until the fleet box runs 5c.
+- **5f is planned, not dispatched** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, run 1312; Decisions, 2026-10-31 20:00). Publication checks and the operator's reading of its exact proposed CLAUDE.md amendments precede dispatch; independent whole-plan review is complete with the source-coverage limits recorded in the plan.
+- **5g to 5k follow in order**, each planned against `main` as it then stands. 5h also waits until the fleet box runs 5c.
