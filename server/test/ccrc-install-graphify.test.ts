@@ -1728,6 +1728,14 @@ describe('ccrc install: graphify exclude writer (_inst_graph_excludes)', () => {
       .not.toThrow();
     rmSync(join(ws1, 'graphify-out'), { recursive: true });
 
+    // Graph revision 2 (D-7350, spec §6.1): the no-slash line beside the slash one, through ccrc's one writer of the
+    // three (`_graph_exclude_common`), so a graphify-out LINK in a worktree is ignored too.
+    expect(excl.split('\n').filter((l) => ['graphify-out/', 'graphify-out', '.graphifyignore'].includes(l)))
+      .toEqual(['graphify-out/', 'graphify-out', '.graphifyignore']);
+    symlinkSync(join(home, 'graph-store-current'), join(ws1, 'graphify-out'));
+    expect(() => execFileSync('git', ['-C', ws1, 'check-ignore', '-q', 'graphify-out'])).not.toThrow();
+    rmSync(join(ws1, 'graphify-out'));
+
     // A second run converges the same lines, not a second copy of them.
     const first = readFileSync(excludeFile, 'utf8');
     const r2 = runInstall(home, ['install']);
