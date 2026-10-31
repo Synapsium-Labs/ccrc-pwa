@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Waiting on you — mockups</title>
+<style>
+html,body{margin:0}
+/* Layout: the console's own dark/light tokens; a left rail of programmes on desktop, one column on a phone. */
+:root{
+  --bg-page:#F4F6F3;--bg-surface:#FFFFFF;--bg-raised:#EAEEEA;--edge-subtle:#DDE2DC;--edge-strong:#C3CAC2;
+  --ink-1:#1A201B;--ink-2:#4E5850;--ink-3:#5F6962;--accent:#0E7B3F;--accent-tint:#DFF2E5;--on-accent:#FFFFFF;
+  --attn:#B27400;--attn-text:#8A5A0A;--attn-tint:#F7E9CF;--dead:#B2402C;--dead-tint:rgba(178,64,44,.10);
+  --busy-text:#106E39;
+  --cyan:#0A6377;--cyan-tint:#DAF0F6;--violet:#6D3FB4;--violet-tint:#EDE6FA;--blue:#2F55B8;--blue-tint:#E3EAFA;--magenta:#A62667;--magenta-tint:#FAE3EE;
+  --font:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --r:8px;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg-page:#0B0D0C;--bg-surface:#141715;--bg-raised:#1C201D;--edge-subtle:#262B27;--edge-strong:#39403A;
+  --ink-1:#ECF0EC;--ink-2:#ADB6AE;--ink-3:#8B948C;--accent:#45D67E;--accent-tint:#12291B;--on-accent:#082312;
+  --attn:#F2B84B;--attn-text:#F2B84B;--attn-tint:#2E2413;--dead:#E06A55;--dead-tint:rgba(224,106,85,.12);--busy-text:#57E08B;
+  --cyan:#5CC8E0;--cyan-tint:#0F2A31;--violet:#B79AF0;--violet-tint:#241A38;--blue:#8AA8F2;--blue-tint:#18213A;--magenta:#EC86B8;--magenta-tint:#331624;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg-page:#0B0D0C;--bg-surface:#141715;--bg-raised:#1C201D;--edge-subtle:#262B27;--edge-strong:#39403A;
+  --ink-1:#ECF0EC;--ink-2:#ADB6AE;--ink-3:#8B948C;--accent:#45D67E;--accent-tint:#12291B;--on-accent:#082312;
+  --attn:#F2B84B;--attn-text:#F2B84B;--attn-tint:#2E2413;--dead:#E06A55;--dead-tint:rgba(224,106,85,.12);--busy-text:#57E08B;
+  --cyan:#5CC8E0;--cyan-tint:#0F2A31;--violet:#B79AF0;--violet-tint:#241A38;--blue:#8AA8F2;--blue-tint:#18213A;--magenta:#EC86B8;--magenta-tint:#331624;
+  color-scheme:dark}
+body{background:var(--bg-page);color:var(--ink-1);font-family:var(--font);font-size:14px;line-height:1.45}
+*{box-sizing:border-box}
+.wrap{max-width:1180px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.note{color:var(--ink-3);font-size:13px;max-width:70ch}
+h1{font-size:20px;margin:0 0 4px;text-wrap:balance}
+h2{font-size:15px;margin:0;text-wrap:balance}
+h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:0 0 8px;font-weight:600}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 18px}
+.tabs a{padding:7px 12px;border-radius:999px;border:1px solid var(--edge-strong);color:var(--ink-2);text-decoration:none;font-size:13px}
+.tabs a[aria-current="page"]{background:var(--ink-1);color:var(--bg-page);border-color:var(--ink-1)}
+.tabs a:focus-visible,button:focus-visible,input:focus-visible,label:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.frame{border:1px solid var(--edge-strong);border-radius:12px;background:var(--bg-page);overflow:hidden}
+.bar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-surface);border-bottom:1px solid var(--edge-subtle);flex-wrap:wrap}
+.bar .brand{font-family:var(--mono);font-weight:600}
+.nav{display:flex;gap:4px;flex-wrap:wrap}
+.nav span{padding:4px 10px;border-radius:6px;color:var(--ink-2);font-size:13px}
+.nav span.on{background:var(--bg-raised);color:var(--ink-1)}
+.count{display:inline-block;min-width:18px;padding:0 6px;border-radius:999px;background:var(--attn);color:var(--bg-surface);font-size:11px;font-weight:700;text-align:center;margin-left:4px}
+.body{padding:16px}
+.grid{display:grid;grid-template-columns:240px minmax(0,1fr);gap:16px}
+@media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
+.rail{display:flex;flex-direction:column;gap:4px}
+.rail .r{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;color:var(--ink-2)}
+.rail .r.on{background:var(--bg-surface);color:var(--ink-1);border:1px solid var(--edge-subtle)}
+.sw{width:10px;height:10px;border-radius:3px;flex:none}
+.rail .r .n{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.summary{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid transparent}
+.p-block{background:var(--attn-tint);color:var(--attn-text);border-color:var(--attn)}
+.p-soon{background:var(--bg-raised);color:var(--ink-2)}
+.p-check{background:var(--accent-tint);color:var(--busy-text)}
+.p-bounce{background:var(--dead-tint);color:var(--dead)}
+.p-ask{background:var(--attn-tint);color:var(--attn-text)}
+.group{margin-bottom:18px}
+.ghead{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+.ghead .t{font-weight:600}
+.ghead .w{color:var(--ink-3);font-size:12px;font-family:var(--mono)}
+.ghead a{margin-left:auto;font-size:12px;color:var(--accent)}
+.items{display:flex;flex-direction:column;gap:6px}
+.item{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--edge-subtle);border-left:4px solid var(--hue,var(--edge-strong));border-radius:var(--r);cursor:pointer}
+.item:hover{border-color:var(--edge-strong);border-left-color:var(--hue)}
+.item.blocking{box-shadow:inset 0 0 0 1px var(--attn)}
+.item.checking{opacity:.62}
+.kind{font-family:var(--mono);font-size:11px;padding:2px 6px;border-radius:4px;background:var(--bg-raised);color:var(--ink-2);white-space:nowrap;margin-top:1px}
+.item .what{font-weight:600}
+.item .why{color:var(--ink-2);font-size:13px;margin-top:2px}
+.item .meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:12px;color:var(--ink-3);white-space:nowrap}
+.bounce-note{margin-top:6px;font-size:12.5px;color:var(--dead);border-left:2px solid var(--dead);padding-left:8px}
+.cleared{border-top:1px dashed var(--edge-strong);padding-top:10px;margin-top:8px}
+.cleared li{color:var(--ink-3);font-size:13px;margin:3px 0}
+.cleared ul{list-style:none;padding:0;margin:0}
+.cleared s{color:var(--ink-2)}
+/* programme view */
+.phead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;border-radius:var(--r);background:var(--hue-tint);border-left:4px solid var(--hue);margin-bottom:14px}
+.phead .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--hue);font-weight:700}
+.phead .sub{color:var(--ink-2);font-size:13px}
+.two{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px}
+@media (max-width:900px){.two{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--bg-surface);border:1px solid var(--edge-subtle);border-radius:var(--r);padding:14px}
+.inshort{background:var(--bg-raised);border-radius:6px;padding:10px 12px;margin:8px 0 10px}
+.inshort b{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin-bottom:4px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:6px;border:1px solid var(--edge-strong);background:var(--bg-surface);color:var(--ink-1);font:inherit;font-size:13px;cursor:pointer;text-decoration:none}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.amends{list-style:none;padding:0;margin:10px 0 0;display:flex;flex-direction:column;gap:8px}
+.amends li{display:grid;grid-template-columns:86px minmax(0,1fr);gap:10px;font-size:13px}
+.amends time{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.amends .src{color:var(--ink-3);font-size:12px}
+.goals-list{margin:6px 0 0;padding-left:18px}
+.goals-list li{margin:3px 0}
+.goals-list .chg{color:var(--hue);font-weight:600;font-size:12px}
+/* item view */
+.detail{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
+@media (max-width:900px){.detail{grid-template-columns:minmax(0,1fr)}}
+.sec{margin-top:14px}
+.steps{margin:6px 0 0;padding-left:20px}
+.steps li{margin:6px 0}
+code{font-family:var(--mono);font-size:12.5px;background:var(--bg-raised);padding:1px 5px;border-radius:4px}
+.act{display:flex;flex-direction:column;gap:12px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--edge-subtle);border-radius:6px;cursor:pointer}
+.opt input{margin-top:3px}
+.opt small{display:block;color:var(--ink-3)}
+textarea,input[type=text],input[type=password]{width:100%;font:inherit;padding:8px 10px;border-radius:6px;border:1px solid var(--edge-strong);background:var(--bg-page);color:var(--ink-1)}
+.secret{border:1px solid var(--edge-strong);border-radius:6px;padding:12px;background:var(--bg-raised)}
+.secret p{margin:6px 0 0;font-size:12.5px;color:var(--ink-2)}
+.status{padding:10px 12px;border-radius:6px;font-size:13px}
+.status.checking{background:var(--accent-tint);color:var(--busy-text)}
+.timeline{list-style:none;padding:0;margin:8px 0 0;font-size:12.5px;color:var(--ink-3)}
+.timeline li{padding:3px 0 3px 14px;border-left:2px solid var(--edge-strong);margin-left:4px}
+.flowcap{font-size:12.5px;color:var(--ink-3);margin-top:12px}
+.ex{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em}
+.fleetsnip{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--edge-strong);border-left:4px solid var(--violet);border-radius:var(--r);background:var(--bg-surface);margin-bottom:14px;flex-wrap:wrap}
+.fleetsnip .k{color:var(--violet);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.chipw{margin-left:auto;padding:2px 8px;border-radius:999px;background:var(--attn-tint);color:var(--attn-text);font-size:12px;font-weight:600;border:1px solid var(--attn)}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <h1>Waiting on you: rough screens</h1>
+  <p class="note">Three views of the same list. Example programmes and items, not live data. Click an item to open it; the item view's "Mark done" shows what happens next.</p>
+  <nav class="tabs" aria-label="Views">
+    <a href="#all" data-v="all">1 · All programmes</a>
+    <a href="#programme" data-v="programme">2 · One programme</a>
+    <a href="#item" data-v="item">3 · One item</a>
+  </nav>
+
+  <!-- ============ VIEW 1: combined ============ -->
+  <section id="v-all" class="frame" hidden>
+    <div class="bar"><span class="brand">ccrc</span>
+      <div class="nav"><span>Fleet</span><span class="on">Waiting on you<span class="count">7</span></span><span>Runs</span><span>Docs</span><span>Settings</span></div>
+    </div>
+    <div class="body">
+      <div class="summary">
+        <span class="pill p-block">1 blocking now</span>
+        <span class="pill p-ask">1 question from a session</span>
+        <span class="pill p-soon">3 needed soon</span>
+        <span class="pill p-check">1 being checked</span>
+        <span class="pill p-bounce">1 came back</span>
+      </div>
+      <div class="grid">
+        <div class="rail" aria-label="Programmes">
+          <div class="r on"><span class="sw" style="background:var(--ink-3)"></span>All programmes<span class="n">7</span></div>
+          <div class="r"><span class="sw" style="background:var(--violet)"></span>Desktop polish<span class="n">3</span></div>
+          <div class="r"><span class="sw" style="background:var(--cyan)"></span>Native Docs reader<span class="n">2</span></div>
+          <div class="r"><span class="sw" style="background:var(--blue)"></span>Landing order<span class="n">2</span></div>
+          <div class="r"><span class="sw" style="background:var(--magenta)"></span>Workspace cleanup<span class="n">0</span></div>
+        </div>
+        <div>
+          <div class="group">
+            <div class="ghead"><span class="sw" style="background:var(--cyan)"></span><span class="t">Native Docs reader</span><span class="w">wave 5 of 8 · stopped, waiting on you</span><a href="#programme">Open programme</a></div>
+            <div class="items">
+              <div class="item blocking" style="--hue:var(--cyan)" data-go="item"><span class="kind">Decide</span>
+                <div><div class="what">Choose the order of the remaining waves</div><div class="why">The next wave can't start until you pick. Whether the rich spec layout arrives early depends on this.</div></div>
+                <div class="meta"><span class="pill p-block">Blocking</span><span>raised 2h ago</span></div></div>
+              <div class="item" style="--hue:var(--cyan)" data-go="item"><span class="kind">Value · secret</span>
+                <div><div class="what">Paste the package publish token</div><div class="why">Needed to publish the next library release. It goes straight to the protected store; the coordinator never sees it.</div></div>
+                <div class="meta"><span class="pill p-soon">Before release</span><span>raised yesterday</span></div></div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="ghead"><span class="sw" style="background:var(--violet)"></span><span class="t">Desktop polish</span><span class="w">wave 71 · working</span><a href="#programme">Open programme</a></div>
+            <div class="items">
+              <div class="item" style="--hue:var(--violet)" data-go="item"><span class="kind">Question</span>
+                <div><div class="what">A worker asks: keep the old status flag or drop it?</div><div class="why">Asked by a session 6 minutes ago. Its coordinator passed it to you because the plan doesn't settle it.</div></div>
+                <div class="meta"><span class="pill p-ask">Session waiting</span><span>6 min ago</span></div></div>
+              <div class="item" style="--hue:var(--violet)" data-go="item"><span class="kind">Decide</span>
+                <div><div class="what">Approve the spec for the two programme ledgers</div><div class="why">The plan and the next run start from it.</div></div>
+                <div class="meta"><span class="pill p-soon">Before next wave</span><span>raised 20 min ago</span></div></div>
+              <div class="item checking" style="--hue:var(--violet)" data-go="item"><span class="kind">Do</span>
+                <div><div class="what">Review the requested change on PR #2017</div><div class="why">You marked this done 12 min ago.</div></div>
+                <div class="meta"><span class="pill p-check">Checking…</span><span>mailed coordinator</span></div></div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="ghead"><span class="sw" style="background:var(--blue)"></span><span class="t">Landing order</span><span class="w">wave 5 · working</span><a href="#programme">Open programme</a></div>
+            <div class="items">
+              <div class="item" style="--hue:var(--blue)" data-go="item"><span class="kind">Do</span>
+                <div><div class="what">Switch the cleanup lane from "record only" to live</div><div class="why">Old workspaces keep piling up until it's live.</div>
+                  <div class="bounce-note">Came back: you marked it done at 09:40, but Settings still shows "record only". Nothing changed on the server.</div></div>
+                <div class="meta"><span class="pill p-bounce">Came back</span><span>raised 2 days ago</span></div></div>
+              <div class="item" style="--hue:var(--blue)" data-go="item"><span class="kind">Value</span>
+                <div><div class="what">Give the review-round limit for long tasks</div><div class="why">Today's limit is 3; the next wave has two large tasks.</div></div>
+                <div class="meta"><span class="pill p-soon">Before wave 6</span><span>raised today</span></div></div>
+            </div>
+          </div>
+          <div class="cleared"><h3>Recently cleared</h3>
+            <ul>
+              <li>✓ <s>Approve prototype v6 of the programme boxes</s>: Desktop polish · confirmed 29 Oct</li>
+              <li>✓ <s>Lift the review cap for one task</s>: Landing order · confirmed 30 Oct</li>
+            </ul></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW 2: programme ============ -->
+  <section id="v-programme" class="frame" hidden style="--hue:var(--violet);--hue-tint:var(--violet-tint)">
+    <div class="bar"><span class="brand">ccrc</span>
+      <div class="nav"><span class="on">Fleet</span><span>Waiting on you<span class="count">7</span></span><span>Runs</span><span>Docs</span><span>Settings</span></div>
+    </div>
+    <div class="body">
+      <p class="ex">In the fleet list, the programme box gains a chip that opens this view</p>
+      <div class="fleetsnip"><span class="k">Programme</span><b>Desktop polish</b><span class="note">coordinator · wave 71 · 1 worker</span><span class="chipw">3 waiting on you</span></div>
+
+      <div class="phead"><span class="k">Programme</span><h2>Desktop polish</h2><span class="sub">wave 71 · working · started 22 Oct</span></div>
+      <div class="two">
+        <div class="card">
+          <h3>Goals</h3>
+          <div class="inshort"><b>In short (as approved 22 Oct)</b>
+            Make the console comfortable at a desk: calmer chrome, plain words in the fleet list and header, questions answered in the pane, and new sessions that open at once.</div>
+          <a class="btn" href="#programme" onclick="return false">Open the approved spec in Docs ↗</a>
+          <div class="sec"><h3>Amended since</h3>
+            <ol class="amends">
+              <li><time>31 Oct</time><div>Added: two programme ledgers, Goals and Waiting on you. <div class="src">Your ruling in chat, 31 Oct · ledger entry R124</div></div></li>
+              <li><time>29 Oct</time><div>Programmes show as boxes, one hue each (prototype v6). <div class="src">Your ruling “v6 looks good, implement” · R117</div></div></li>
+              <li><time>27 Oct</time><div>No “hibernated” marker in the status view, as long as hibernated sessions stay visible. <div class="src">Your ruling · R123</div></div></li>
+              <li><time>24 Oct</time><div>Dropped: the “unprompted session” notice for new sessions. <div class="src">Your ruling · R39</div></div></li>
+            </ol></div>
+        </div>
+        <div class="card">
+          <h3>Waiting on you · 3</h3>
+          <div class="items">
+            <div class="item" style="--hue:var(--violet)" data-go="item"><span class="kind">Question</span><div><div class="what">A worker asks: keep the old status flag or drop it?</div></div><div class="meta"><span class="pill p-ask">Session waiting</span></div></div>
+            <div class="item" style="--hue:var(--violet)" data-go="item"><span class="kind">Decide</span><div><div class="what">Approve the spec for the two programme ledgers</div></div><div class="meta"><span class="pill p-soon">Before next wave</span></div></div>
+            <div class="item checking" style="--hue:var(--violet)" data-go="item"><span class="kind">Do</span><div><div class="what">Review the requested change on PR #2017</div></div><div class="meta"><span class="pill p-check">Checking…</span></div></div>
+          </div>
+          <div class="cleared"><h3>Recently cleared</h3><ul><li>✓ <s>Approve prototype v6 of the programme boxes</s>: confirmed 29 Oct</li></ul></div>
+          <p class="flowcap">When nothing is waiting on you, this card says what the programme is waiting on instead, for example: “Nothing needs you. Waiting on: review of task G4.”</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW 3: item ============ -->
+  <section id="v-item" class="frame" hidden style="--hue:var(--cyan);--hue-tint:var(--cyan-tint)">
+    <div class="bar"><span class="brand">ccrc</span>
+      <div class="nav"><span>Fleet</span><span class="on">Waiting on you<span class="count">7</span></span><span>Runs</span><span>Docs</span><span>Settings</span></div>
+    </div>
+    <div class="body">
+      <div class="tabs" style="margin-top:0" role="group" aria-label="Item kind">
+        <a href="#item" data-k="decide" aria-current="page">Decide</a>
+        <a href="#item" data-k="do">Do</a>
+        <a href="#item" data-k="value">Give a value</a>
+        <a href="#item" data-k="secret">Give a secret</a>
+      </div>
+      <div class="phead"><span class="k">Native Docs reader</span><span class="sub">wave 5 of 8</span><span class="pill p-block" style="margin-left:auto" id="i-pill">Blocking</span></div>
+      <div class="detail">
+        <div class="card">
+          <h2 id="i-what">Choose the order of the remaining waves</h2>
+          <div class="sec"><h3>Why</h3><p id="i-why" style="margin:0">The next wave can't start until you pick. Moving the library wave earlier brings the rich spec layout (In short box, numbered sections, Agreed / Waiting on you / Later) to the console sooner, but pushes sharing and export back about a week.</p></div>
+          <div class="sec"><h3>How</h3><ol class="steps" id="i-how">
+            <li>Read the two options on the right. The coordinator's recommendation is marked.</li>
+            <li>If you want the background, open the ledger's entry on wave order: <a class="btn" href="#item" onclick="return false" style="padding:3px 8px">Ledger · R88 ↗</a></li>
+            <li>Pick one and mark done. The coordinator records your choice and amends the goals if it changes them.</li>
+          </ol></div>
+          <div class="sec"><h3>History</h3><ul class="timeline" id="i-tl">
+            <li>Raised by the coordinator · 31 Oct 15:02</li>
+            <li>Became blocking when wave 5 finished · 31 Oct 16:40</li>
+          </ul></div>
+        </div>
+        <div class="card act" id="i-act"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const KINDS={
+ decide:{pill:['p-block','Blocking'],what:'Choose the order of the remaining waves',
+  why:'The next wave can\'t start until you pick. Moving the library wave earlier brings the rich spec layout (In short box, numbered sections, Agreed / Waiting on you / Later) to the console sooner, but pushes sharing and export back about a week.',
+  how:['Read the two options on the right. The coordinator\'s recommendation is marked.','If you want the background, open the ledger entry on wave order.','Pick one and mark done. The coordinator records your choice and amends the goals if it changes them.'],
+  act:`<h3>Your decision</h3>
+   <label class="opt"><input type="radio" name="d" id="d1" checked><span><b>Library wave next</b> (recommended)<small>Rich layout first; sharing and export a week later.</small></span></label>
+   <label class="opt"><input type="radio" name="d" id="d2"><span><b>Keep the current order</b><small>Sharing and export first; rich layout after.</small></span></label>
+   <label for="note" class="ex">Note to the coordinator (optional)</label><textarea id="note" rows="2" placeholder="Anything it should know"></textarea>`},
+ do:{pill:['p-soon','Before wave 6'],what:'Switch the cleanup lane from "record only" to live',
+  why:'Old workspaces keep piling up until it\'s live. It has run in record-only mode for a week with no wrong picks.',
+  how:['Open Settings → Cleanup.','Set "Workspace cleanup" to <code>Live</code> and confirm it\'s you.','Come back here and mark done. The coordinator checks the setting on the server itself.'],
+  act:`<h3>When you've done it</h3><p class="note" style="margin:0">Nothing to fill in. The coordinator checks the setting itself and either closes the item or sends it back with what it found.</p>`},
+ value:{pill:['p-soon','Before wave 6'],what:'Give the review-round limit for long tasks',
+  why:'Today\'s limit is 3 rounds. The next wave has two large tasks that may need more before you see them.',
+  how:['Enter a number of review rounds (3 to 6 is typical).','Mark done. The coordinator records it in the programme ledger and applies it to the next wave\'s runs.'],
+  act:`<h3>Your value</h3><label for="val" class="ex">Review rounds per task</label><input type="text" id="val" inputmode="numeric" placeholder="e.g. 4">
+   <p class="note" style="margin:0">This is an ordinary value: it is sent to the coordinator and written into the programme ledger.</p>`},
+ secret:{pill:['p-soon','Before release'],what:'Paste the package publish token',
+  why:'Needed to publish the next library release. Without it the release waits.',
+  how:['Create a publish-only token for the package on the registry, valid for 30 days.','Paste it below and confirm it\'s you.','Mark done. The coordinator checks that a token is stored and that a dry-run publish succeeds. It never sees the token.'],
+  act:`<h3>Your secret</h3><div class="secret"><label for="sec" class="ex">Publish token</label><input type="password" id="sec" autocomplete="off" placeholder="Paste here">
+   <p>🔒 Goes straight to the protected store on the server. The coordinator only learns that it's set, and checks it by using it. It never appears in mail, the ledger or any session.</p></div>`}
+};
+function renderItem(k){
+  const d=KINDS[k];
+  document.querySelectorAll('[data-k]').forEach(a=>a.setAttribute('aria-current',a.dataset.k===k?'page':'false'));
+  const pill=document.getElementById('i-pill');pill.className='pill '+d.pill[0];pill.textContent=d.pill[1];pill.style.marginLeft='auto';
+  document.getElementById('i-what').textContent=d.what;
+  document.getElementById('i-why').textContent=d.why;
+  document.getElementById('i-how').innerHTML=d.how.map(s=>'<li>'+s+'</li>').join('');
+  document.getElementById('i-tl').innerHTML='<li>Raised by the coordinator · 31 Oct 15:02</li>'+(k==='decide'?'<li>Became blocking when wave 5 finished · 31 Oct 16:40</li>':'');
+  document.getElementById('i-act').innerHTML=d.act+`<button class="btn primary" id="done">${k==='secret'?'Save secret and mark done':'Mark done'}</button><div id="after"></div>`;
+  document.getElementById('done').addEventListener('click',()=>{
+    const b=document.getElementById('done');b.disabled=true;b.textContent='Marked done';
+    document.getElementById('after').innerHTML=`<div class="status checking">Checking… The coordinator has been told and will confirm or send this back. You can leave this page.</div>
+     <ul class="timeline"><li>You marked it done · just now</li><li>Mailed to the programme's coordinator · just now</li><li style="opacity:.6">Waiting for its check</li></ul>`;
+  });
+}
+document.querySelectorAll('[data-k]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();renderItem(a.dataset.k)}));
+function show(){
+  const v=(location.hash||'#all').slice(1);const view=['all','programme','item'].includes(v)?v:'all';
+  ['all','programme','item'].forEach(x=>document.getElementById('v-'+x).hidden=x!==view);
+  document.querySelectorAll('.tabs a[data-v]').forEach(a=>a.setAttribute('aria-current',a.dataset.v===view?'page':'false'));
+}
+document.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click',()=>{location.hash='#'+el.dataset.go}));
+window.addEventListener('hashchange',show);renderItem('decide');show();
+</script>
+</body>
+</html>
