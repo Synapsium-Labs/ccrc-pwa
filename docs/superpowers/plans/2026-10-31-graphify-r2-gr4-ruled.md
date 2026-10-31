@@ -1,13 +1,14 @@
-# Graphify revision 2, Task GR4: four departures of the repository sweep, recorded
+# Graphify revision 2, Task GR4: five departures of the repository sweep, recorded
 
 **Plan:** `docs/superpowers/plans/2026-10-29-graphify-r2-shared-graphs.md`, Task GR4 (D-7350). **Spec:**
 `docs/superpowers/specs/2026-10-28-graphify-shared-graphs-design.md`. Numbers issued by the ledger on 2026-10-31. The
-plan's own §Deviations found is not edited here (the ledger guard, D-6926); the coordinator folds these four into it.
+plan's own §Deviations found is not edited here (the ledger guard, D-6926); the coordinator folds these five into it.
 
 - **D-7648 (2026-10-31)** — graph builds run through `ccrc test --local --heavy --`, never the test box
 - **D-7649 (2026-10-31)** — GR4's writes under a tree are the link and the ownership-gated stray `.graphifyignore` removal (2 sites, not 1)
 - **D-7650 (2026-10-31)** — the repository sweep sources ccd/ccrc's body, not ccd/lib/ccrc-settings.sh
 - **D-7651 (2026-10-31)** — a committed `.graphifyignore` takes the operator's noise list appended; rule 2's refusal arm is retired
+- **D-TBD-gr4-checkout-dir (2026-10-31)** — the store's checkout is `<repo-key>/checkout/<repo-name>/`, not `<repo-key>/<repo-name>/`
 
 **D-7648.** Spec §3.4 spells the build's call `"$GRAPH_LIB/ccrc-test" --heavy -- …`. Since the test box landed (D-7410),
 `ccrc test` sends a run to the test box when the registry's switch marker is present and `CCRC_TESTBOX_URL` is set,
@@ -45,3 +46,17 @@ not appended to a committed file) and the refusal goes: the operator's list is a
 is what an operator's list for that repository asks for. Rule 1 (a `!` line in either list refuses) and rule 3 (a
 default pattern that would hide tracked files is withheld and said) stand. `graph-repo-sweep.test.ts` pins the
 generated file's lines for the committed case.
+
+**D-TBD-gr4-checkout-dir.** Spec §2.1 puts the checkout of main at `<repo-key>/<repo-name>/`, beside the fixed
+entries `source`, `builds/`, `current`, `memory/` and `staging/`. The repository's name is free text (`_gr_repo_key`
+only maps characters outside its shape to `_`), so a repository whose main checkout is named after one of those
+entries put its checkout on top of it. Measured on the GR4 head with a fixture box: `memory` had its saved results
+deleted by the checkout's re-clone and `clean -ffdx` on every pass, and the corpus guard's memory exemption covered
+the whole checkout; `staging` lost its checkout to `_gs_stage` before every build, so every pass was
+`refused-by-guard`; `source` failed setup from the second pass on (`cannot write …/source`); `builds` failed setup
+from the second pass on (the checkout could not be moved); `current` failed every publish (`cannot point current at
+builds/…`). So the checkout lives one level down, at `<repo-key>/checkout/<repo-name>/`: `checkout/` is a fixed entry
+of its own, and inside it the name collides with nothing. Its basename is still the repository's name, which spec §3.4
+needs (the report's root label). The sweep's store layout is new in GR4, so no box holds a checkout at the old path.
+`graph-repo-sweep.test.ts` pins one row per fixed name (and `checkout` itself): each builds, rebuilds on a new commit
+and is then fresh, and a repository named `memory` keeps a saved result over two passes that rebuild it.

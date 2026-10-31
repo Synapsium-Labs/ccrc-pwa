@@ -119,6 +119,8 @@ const rowOf = (repo: string, pass: Pass = lastPass()): Row => {
 const why = (r: Row): string => r.reason.replace(/(^|; )peak unmeasured$/, '');
 const treeCount = (r: Row): unknown => (r as unknown as Record<string, unknown>)['trees'];
 const keyDir = (repo: string): string => path.join(STORE(), rowOf(repo).repo_key);
+/** The store's checkout of a repository: <repo-key>/checkout/<name> (spec §2.1, D-TBD-gr4-checkout-dir). */
+const checkoutOf = (repo: string, name = 'project-a'): string => path.join(keyDir(repo), 'checkout', name);
 const current = (repo: string): string => fs.realpathSync(path.join(keyDir(repo), 'current'));
 interface Meta { schema: number; build_id: string; commit: string; engine: string; kind: string; nodes: number; files: number; store: string; source: string; ref: string; last_full_at: string; noise_digest: string; changed_files: number }
 const meta = (repo: string): Meta => JSON.parse(fs.readFileSync(path.join(keyDir(repo), 'current', 'meta.json'), 'utf8'));
@@ -319,7 +321,7 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
   it('cold build: one rebuilt row, the store laid out as §2.1, the link made, a second pass fresh', { timeout: T }, () => {
     const repo = published();
     const kd = keyDir(repo);
-    for (const f of ['source', 'memory', 'project-a', 'builds', 'current']) expect(fs.existsSync(path.join(kd, f)), f).toBe(true);
+    for (const f of ['source', 'memory', 'checkout/project-a', 'builds', 'current']) expect(fs.existsSync(path.join(kd, f)), f).toBe(true);
     expect(fs.readFileSync(path.join(kd, 'source'), 'utf8')).toBe(`${sourceOf(repo)}\n`);
     expect(fs.existsSync(path.join(STORE(), '.ccrc-graph-store'))).toBe(true);
     expect(fs.readlinkSync(path.join(kd, 'current'))).toMatch(/^builds\/[0-9a-f]{12}-0\.9\.9-\d{8}T\d{6}Z$/);
@@ -353,7 +355,7 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
     expect(row.outcome).toBe('rebuilt');
     expect(treeCount(row)).toBe(2);
     const call = calls()[0]!;
-    expect(call['cwd']).toBe(fs.realpathSync(path.join(keyDir(repo), 'project-a')));
+    expect(call['cwd']).toBe(fs.realpathSync(checkoutOf(repo)));
     expect(graphOf(current(repo)).built_at_commit).toBe(tip);
     expect(graphOf(current(repo)).nodes.map((n) => n.source_file).sort(), 'the branch\'s own file is not in main\'s graph').toEqual(['a.py', 'lib/b.py']);
     expect(git(repo, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')))
@@ -389,7 +391,7 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
     const argv = buildCalls()[0]!;
     const arg = (k: string): string => argv[argv.indexOf(k) + 1]!;
     const kd = keyDir(repo);
-    expect(arg('--root')).toBe(fs.realpathSync(path.join(kd, 'project-a')));
+    expect(arg('--root')).toBe(fs.realpathSync(checkoutOf(repo)));
     expect(arg('--out')).toBe(path.join(fs.realpathSync(kd), 'staging', 'graphify-out'));
     expect(arg('--commit')).toBe(git(repo, 'rev-parse', 'HEAD'));
     expect(arg('--memory')).toBe(path.join(fs.realpathSync(kd), 'memory'));
@@ -439,7 +441,7 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
     sweep(INCR);
     expect(rowOf(repo)).toMatchObject({ outcome: 'refreshed', kind: 'incremental', changed_files: 1 });
     const call = calls().at(-1)!;
-    expect(call['changed_paths']).toEqual([path.join(fs.realpathSync(path.join(keyDir(repo), 'project-a')), 'lib/b.py')]);
+    expect(call['changed_paths']).toEqual([path.join(fs.realpathSync(checkoutOf(repo)), 'lib/b.py')]);
     expect(buildCalls().at(-1)).toContain('--changed');
     const g = graphOf(current(repo));
     expect(g.nodes.map((n) => [n.source_file, n.by])).toEqual([['a.py', 'full'], ['lib/b.py', 'incremental']]);
@@ -942,6 +944,44 @@ describe('the outcome table: every line', () => {
   }
 });
 
+// ── a main checkout named like a store entry (spec §2.1; D-TBD-gr4-checkout-dir) ──
+// The checkout sits at <repo-key>/checkout/<name>, never beside memory/, staging/, source, builds/ and current: a
+// repository's own name is free text, and a checkout named after one of those entries was deleted, refused or
+// overwritten by the pass that owns that entry.
+describe('a repository named like a store entry keeps its checkout apart (spec §2.1; D-TBD-gr4-checkout-dir)', () => {
+  for (const name of ['memory', 'staging', 'source', 'builds', 'current', 'checkout']) {
+    it(`a repository named ${name} builds, rebuilds on a new commit and is fresh after it`, { timeout: T }, () => {
+      const repo = published(name);
+      const kd = keyDir(repo);
+      expect(fs.existsSync(path.join(kd, 'checkout', name, '.git')), 'the checkout').toBe(true);
+      const tip = bump(repo);
+      let r = sweep();
+      expect(r.status, r.stderr).toBe(0);
+      expect(rowOf(repo).outcome, why(rowOf(repo))).toBe('rebuilt');
+      expect(meta(repo).commit).toBe(tip);
+      r = sweep();
+      expect(r.status, r.stderr).toBe(0);
+      expect(rowOf(repo).outcome, why(rowOf(repo))).toBe('fresh');
+      expect(fs.readFileSync(path.join(kd, 'source'), 'utf8')).toBe(`${sourceOf(repo)}\n`);
+      expect(fs.statSync(path.join(kd, 'memory')).isDirectory(), 'memory/').toBe(true);
+      expect(fs.readlinkSync(path.join(repo, 'graphify-out'))).toBe(path.join(kd, 'current'));
+    });
+  }
+
+  it('a repository named memory keeps its saved results over two passes that move its checkout', { timeout: T }, () => {
+    const repo = published('memory');
+    const kd = keyDir(repo);
+    fs.writeFileSync(path.join(kd, 'memory', 'saved.md'), '# a saved result\n');
+    bump(repo);
+    sweep();
+    expect(rowOf(repo).outcome, why(rowOf(repo))).toBe('rebuilt');
+    bump(repo);
+    sweep();
+    expect(rowOf(repo).outcome, why(rowOf(repo))).toBe('rebuilt');
+    expect(fs.readFileSync(path.join(kd, 'memory', 'saved.md'), 'utf8')).toBe('# a saved result\n');
+  });
+});
+
 // ── the corpus guard on the checkout (spec §2.2; 08-27 rows 2, 3, 19, D-1160, D-1161) ──
 describe('the corpus guard and the generated filter, in the store\'s checkout', () => {
   it('an untracked path in detect()\'s corpus refuses the build: refused-by-guard, nothing published', { timeout: T }, () => {
@@ -1011,7 +1051,7 @@ describe('the corpus guard and the generated filter, in the store\'s checkout', 
     fs.copyFileSync(path.join(REPO, 'ccd', 'graph-noise.default.list'), j('.ccrc', 'graph-noise', '_default.list'));
     fs.writeFileSync(j('.ccrc', 'graph-noise', 'project-a.list'), 'vendor/\n');
     sweep();
-    const ck = path.join(keyDir(repo), 'project-a');
+    const ck = checkoutOf(repo);
     const gen = fs.readFileSync(path.join(ck, '.graphifyignore'), 'utf8').split('\n');
     expect(gen[0]).toBe('# generated by ccd-graph-sweep for the repository\'s graph — never committed, never edited');
     expect(gen).toEqual(expect.arrayContaining(['.remember/', '.claude/', 'vendor/']));
@@ -1027,7 +1067,7 @@ describe('the corpus guard and the generated filter, in the store\'s checkout', 
     fs.writeFileSync(j('.ccrc', 'graph-noise', 'project-a.list'), 'vendor/\n');
     const r = sweep();
     expect(r.stderr).toContain('graph-sweep: project-a: default noise withheld, the repository tracks matching files: .claude/ (a project-a.list is honoured as written)');
-    const gen = fs.readFileSync(path.join(keyDir(repo), 'project-a', '.graphifyignore'), 'utf8').split('\n');
+    const gen = fs.readFileSync(path.join(checkoutOf(repo), '.graphifyignore'), 'utf8').split('\n');
     expect(gen).toContain('.remember/');
     expect(gen).not.toContain('.claude/');
     expect(gen).toContain('vendor/');
@@ -1041,7 +1081,7 @@ describe('the corpus guard and the generated filter, in the store\'s checkout', 
     fs.writeFileSync(j('.ccrc', 'graph-noise', 'project-a.list'), 'vendor/\n');
     sweep();
     expect(rowOf(repo).outcome, why(rowOf(repo))).toBe('rebuilt');
-    const gen = fs.readFileSync(path.join(keyDir(repo), 'project-a', '.graphifyignore'), 'utf8').split('\n');
+    const gen = fs.readFileSync(path.join(checkoutOf(repo), '.graphifyignore'), 'utf8').split('\n');
     expect(gen.slice(0, 3)).toEqual(['# generated by ccd-graph-sweep for the repository\'s graph — never committed, never edited', 'docs/', 'vendor/']);
     expect(gen).not.toContain('.remember/');
     expect(fs.readFileSync(path.join(repo, '.graphifyignore'), 'utf8'), 'the tree\'s committed file is untouched').toBe('docs/\n');
