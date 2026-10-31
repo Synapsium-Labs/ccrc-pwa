@@ -1905,7 +1905,8 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
 D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
 suite's macOS failures, D-7083 to D-7089, D-7093, D-7094, D-7119 and D-7120 for what the first live step, the flip and the rollout measured,
-and D-7143 and D-7144 for the tool-change blocks honoured and the second lane's switch). A further
+D-7143 and D-7144 for the tool-change blocks honoured and the second lane's switch, and D-7676 and D-7677 for the
+reasoning store's start check and its state in the stats file). A further
 departure found while executing is written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
@@ -4137,3 +4138,66 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   first window carried a by-value tool addition the bridge then dropped (D-7143). The unserved gap grows with the
   box's load, and Claude Code meets it with `CLAUDE_CODE_MAX_RETRIES=2`: a longer gap under heavier load could exhaust
   those retries for a request sent inside it. The flip back is `ccrc codex switch lane-a litellm`.
+
+### D-7676 — the reasoning store is checked at start, and a damaged store is set aside and started fresh
+
+- **Departs from:** Task 4's "THE STORE NEVER FAILS A REQUEST" as built: any exception inside the store disabled it
+  for the life of the process, so a store that was already damaged when the bridge started was disabled at its first
+  write and every request after it was answered without the model's earlier reasoning replayed, until someone
+  restarted the bridge on a repaired file. Nothing in the plan checked the file at start.
+- **What changed:** `ReasoningStore.__init__` (`ccd/codexbridge/store.py`), once the file is created and the schema
+  ensured on the constructing thread, runs `PRAGMA quick_check` on that connection when the store is not disabled and
+  its `user_version` is `USER_VERSION`; healthy is exactly one row, `ok`. Damage is a `quick_check` answer other than
+  that, or an `sqlite3.DatabaseError` whose class is exactly `sqlite3.DatabaseError` (never a subclass) raised while
+  opening, reading `user_version`, ensuring the schema or checking. `OperationalError` (locked, busy, I/O, read-only),
+  `IntegrityError` and every other subclass keep the old behaviour: the store is disabled as `store:<class name>` and
+  the file is left as it is. A newer store (`store:newer-version`) is never checked and never touched. A damaged store
+  is set aside: the constructing thread's connection is closed without a checkpoint (so a damaged WAL is never folded
+  into the copy), the file is renamed to `<path>.damaged-<UTC stamp YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`, when
+  present, to the same name with those suffixes, so the copy stays openable as one database and no damaged WAL is
+  left at `<path>-wal` for the fresh store; only then every older copy in the directory, with its siblings, is
+  removed (a failed removal is ignored), and the fresh store is made by the first start's own path (`_create`, then
+  `_conn`). The set-aside is reported once to the store's callback as `store:set-aside`, with what was found
+  (`quick-check` or the exception class name) and the copy's basename. A set-aside that cannot finish (a rename's
+  `OSError`, the fresh store failing) disables the store as `store:set-aside-failed`. Nothing raises, and nothing else
+  changes at runtime: a failure after the start still disables the store for the process, and the next start's check
+  is what repairs a store damaged while running.
+- **Why:** On 2026-10-28 the fleet box moved to a new machine and each lane's directory was carried over with its
+  `reasoning.sqlite`. Both lanes' stores arrived damaged: `PRAGMA quick_check` on them as they stood answered
+  `wrong # of entries in index sqlite_autoindex_reasoning_1`, a torn primary-key index, which fits a live sqlite file
+  copied while it was being written (how it was copied was not measured). Each bridge started on its damaged store,
+  met an `sqlite3.DatabaseError` at its first write and disabled its store; both lanes then ran for about six hours
+  with no reasoning replayed, until both bridges were restarted by hand on a hand-repaired store. `quick_check` on the
+  live stores (47 to 55 MB) took 8 to 10 ms, so the check costs nothing a start notices. The store holds only replay
+  material, so starting it fresh loses nothing a request needs; the one copy is kept for the operator to read.
+  The subclasses are left out because each names a condition of the moment (a lock another process holds, an I/O
+  error, a read-only file), not of the file, and setting aside a healthy store behind a lock would discard it.
+- **Cost if wrong:** A store that `quick_check` passes but that fails at its first write is still disabled for the
+  process, as before (the stats entry of D-7677 says so). A store damaged in a way sqlite reports only as a subclass
+  (an I/O error on a bad sector, say) is never set aside, and stays disabled at every start until it is repaired by
+  hand. A damaged store that is set aside loses its replay rows: the requests after the start replay nothing older
+  than the start, which is what a disabled store gave anyway. Keeping one copy bounds the disk to one store's size
+  beside the live one.
+
+### D-7677 — the store's state for this process is written to the stats file
+
+- **Departs from:** Task 5's "THE FILE, VERSION 1", which had no field for the store: a disabled store was counted
+  only in the cumulative `outcomes` (`store:<class name>`), which a reader cannot tell from a disable that happened
+  days ago in another process.
+- **What changed:** The stats document (still version 1: the field is additive) gains `"store": {"state": "ok" |
+  "set-aside" | "disabled", "reason", "at", "setAside": null | {"at", "found", "file"}}`
+  (`ccd/codexbridge/stats.py`). It describes this process only: it is reset to `{"state": "ok", "reason": null,
+  "at": null, "setAside": null}` at construction and never carried from a loaded file, unlike `outcomes`, which stay
+  cumulative. `disabled` outranks `set-aside` in `state` when both happen (a fresh store that later failed), and
+  `setAside` keeps its record. One writer, `Stats.store_event(reason, found=None, file=None)`, sets the entry and
+  counts `reason` in `outcomes` as `outcome()` does; `serve()` (`ccd/codexbridge/server.py`) passes it to the
+  `ReasoningStore` as its callback, and forces a stats flush after the store is built and before the server binds
+  its port, so the file describes this process from its first moment. A reader of an older file finds no `store`
+  key, which means the bridge predates the entry, never `ok`. The doctor's WARN that reads the entry lands in a later
+  commit of the same pull request: its file is held by another change.
+- **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
+  the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
+  nothing. A per-process entry, written before the first request, is what a reader can rule on.
+- **Cost if wrong:** One more forced write of the stats file at each start, before the port is bound (the file is a
+  few kilobytes). A reader that took the absence of `store` for `ok` would read an older bridge as healthy; the
+  docstring's schema listing says it is not.
