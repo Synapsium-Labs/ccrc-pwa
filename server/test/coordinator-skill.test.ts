@@ -3439,8 +3439,13 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'No other run counts: the fields these reads return cannot tell a scheduled or dispatched full run from a refresh run, and a refresh run runs no test legs yet reports the required summaries green.',
       'Where none of those commits shows that name red, or that name does not read passing on `main`\'s current tip from a merge-queue run (red, pending, not reported, unread, reported only by a status, passing only from another run, or a tip with no merge-queue run, as a merge that bypassed the queue leaves), the stop stands and goes to the operator as every other stop does.',
       'Send the new-head round only when, after the same fetch, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 0: exit 1 (a conflict) or any other answer leaves the stop standing for the operator.',
-      'The one rerun the RED bullet allows does not clear a red that is `main`\'s own, and no close and reopen does either: the verdict calls a required name red while any completed run of it on the head failed, a later green run of it included (D-7495; judging only the newest run would loosen the gate, which is the operator\'s to decide), a rerun replays its run\'s original merge commit, and a close and reopen of the PR can race GitHub\'s recompute of the merge ref.',
+      'The one rerun the RED bullet allows does not clear a red that is `main`\'s own, and no close and reopen does either: a rerun replays its run\'s original merge commit, which still carries `main`\'s red, and a close and reopen of the PR can race GitHub\'s recompute of the merge ref.',
       'Where you take the route, say so in your turn\'s text with the reads that showed it.',
+      '**The latest attempt decides** (D-7546, which amends the strict reading of D-7495).',
+      'The verdict judges the latest attempt of each required name, which is GitHub\'s own merge rule and all read 5 lists: `commits/<sha>/check-runs` with no `filter` answers only the newest run of each name, so a name that failed and then passed on a rerun of the same head reads passing.',
+      'So a red that the one rerun the RED bullet allows turns green is cleared. A red that no rerun reaches, or one still red after that rerun, stays the stop `red-unreachable`.',
+      'Before each enqueue, direct merge and re-enqueue, read every attempt as well, with `gh api --paginate \'repos/{owner}/{repo}/commits/<handoffCommit>/check-runs?filter=all\'`, and name in your turn\'s text, apart from the verdict\'s line, each check name of which any completed run concluded other than success, neutral or skipped, or none.',
+      'That line is a report: it is never a stop and decides nothing, and a read of it that fails is named as unread and is no stop either.',
     ].join(' ');
     expect(prose.slice(from).trim()).toBe(whole);
   });
@@ -3716,8 +3721,10 @@ describe('landing order wave 5a: §5b names the train-landed proof and the new-h
     expect(prose).toContain('for it the verdict prints `STOP not-at-head: the PR is CLOSED`');
   });
 
-  it('the strict rule the stop paragraph states is the block\'s own arm (D-7495)', () => {
+  it('the red arm is the block\'s own, over the latest attempt read 5 lists (D-7495, D-7546)', () => {
     expect(block).toContain('elif any($r[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))');
+    expect(block, 'read 5 no longer reads the head\'s check runs').toContain('"repos/{owner}/{repo}/commits/$HC/check-runs"');
+    expect(block, 'read 5 now reads every attempt: the prose\'s latest-attempt rule is false').not.toContain('filter=');
   });
 
   it('no 5a sentence holds a double quote', () => {
@@ -3936,6 +3943,62 @@ describe('landing order wave 5e: the landing line read before every landing', ()
       'The second ejection of one entry', '**The landing line.** Every run', 'Before each enqueue, direct merge and re-enqueue',
       'Land only when its `order`', 'A paused line, an entry', 'A PR with no entry, which a run that entered', 'The order it answers',
       'A dequeue that neither a re-enqueue', 'On `dequeued:`, read why',
+    ]) {
+      const from = flatAll.indexOf(s);
+      expect(from, s).toBeGreaterThanOrEqual(0);
+      const sentence = flatAll.slice(from, flatAll.indexOf('. ', from));
+      expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
+    }
+  });
+});
+
+describe('landing order wave 5d: the latest attempt decides (D-7546)', () => {
+  const wl = refs('wave-lifecycle.md');
+  const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
+  const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
+  const fence = /```bash\n([\s\S]*?)```/;
+  const block = fence.exec(sec)?.[1] ?? '';
+  const prose = flat(sec.replace(fence, ''));
+  void block;
+
+  it('states the latest-attempt rule, and keeps the every-attempt read a report line in the turn text, never a stop (D-7546)', () => {
+    expect(prose).toContain('**The latest attempt decides** (D-7546, which amends the strict reading of D-7495).');
+    expect(prose).toContain('The verdict judges the latest attempt of each required name, which is GitHub\'s own merge rule and all read 5 lists');
+    expect(prose).toContain('`commits/<sha>/check-runs` with no `filter` answers only the newest run of each name');
+    expect(prose).toContain('So a red that the one rerun the RED bullet allows turns green is cleared. A red that no rerun reaches, or one still red after that rerun, stays the stop `red-unreachable`.');
+    expect(prose).toContain('`gh api --paginate \'repos/{owner}/{repo}/commits/<handoffCommit>/check-runs?filter=all\'`');
+    expect(prose).toContain('and name in your turn\'s text, apart from the verdict\'s line, each check name of which any completed run concluded other than success, neutral or skipped, or none.');
+    expect(prose).toContain('That line is a report: it is never a stop and decides nothing, and a read of it that fails is named as unread and is no stop either.');
+    expect(prose, 'the any-attempt rule is back (D-7495)').not.toContain('while any completed run of it on the head failed');
+    expect(prose, 'the any-attempt rule is back (D-7495)').not.toContain('a later green run of it included');
+    expect(prose, 'the any-attempt rule is back (D-7495)').not.toContain('judging only the newest run would loosen the gate');
+  });
+
+  it('a rerun still does not clear a red that is main\'s own, for the reason that holds under the latest attempt', () => {
+    expect(prose).toContain('The one rerun the RED bullet allows does not clear a red that is `main`\'s own, and no close and reopen does either: a rerun replays its run\'s original merge commit, which still carries `main`\'s red,');
+  });
+
+  it('the latest-attempt paragraph follows the stop paragraph and ends §5b', () => {
+    const stop = prose.indexOf('**A stop.**');
+    const rule = prose.indexOf('**The latest attempt decides**');
+    expect(stop, '§5b lost its stop paragraph').toBeGreaterThanOrEqual(0);
+    expect(rule, 'the latest-attempt paragraph sits before the stop paragraph').toBeGreaterThan(stop);
+    expect(prose.trim().endsWith('and is no stop either.'), 'something follows the latest-attempt paragraph in §5b').toBe(true);
+  });
+
+  it('wraps §5b from the stop paragraph to its end at 80 columns', () => {
+    const from = wl.indexOf('**A stop.**');
+    const to = wl.indexOf('\n## 6 — ', from);
+    expect(from).toBeGreaterThanOrEqual(0);
+    expect(to).toBeGreaterThan(from);
+    for (const l of wl.slice(from, to).split('\n')) expect(l.length, `a line past the file's width: ${l}`).toBeLessThanOrEqual(80);
+  });
+
+  it('no 5d sentence holds a double quote', () => {
+    const flatAll = flat(allSkillText);
+    for (const s of [
+      '**The latest attempt decides**', 'The verdict judges the latest attempt', 'So a red that the one rerun',
+      'Before each enqueue, direct merge and re-enqueue, read every attempt', 'That line is a report',
     ]) {
       const from = flatAll.indexOf(s);
       expect(from, s).toBeGreaterThanOrEqual(0);
