@@ -461,9 +461,9 @@ _gs_prepare() {   # <common dir> -> 0 ready (CUR set) / 1 the row is ended
   if [ "${c##*/}" = .git ]; then raw="${c%/.git}"; raw="${raw##*/}"; else raw="${c##*/}"; raw="${raw%.git}"; fi
   # The checkout is <key>/checkout/<name>, never <key>/<name>: the name is the repository's own, and beside memory/,
   # staging/, source, builds/ and current it could BE one of them (D-TBD-gr4-checkout-dir). Its basename stays the
-  # repository's name, which is the graph's root name.
+  # repository's name, which is the graph's root name. `git clone` makes checkout/ itself.
   kd="$GS_STORE/$key"; ck="$kd/checkout/$name"; K_DIR["$key"]="$kd"; K_CK["$key"]="$ck"
-  if ! mkdir -p -- "$kd/memory" "$kd/checkout" || ! chmod 0755 "$kd" "$kd/memory" "$kd/checkout"; then
+  if ! mkdir -p -- "$kd/memory" || ! chmod 0755 "$kd" "$kd/memory"; then
     _gs_end failed setup "cannot create the store's directory for $key"; return 1
   fi
   if [ -f "$kd/source" ]; then
