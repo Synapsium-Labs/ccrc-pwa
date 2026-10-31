@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, makePrHarness, mergedRow, trainBlock, trainComment, trainRow,
+import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, makePrHarness, mergedRow, notAPullRequest, trainBlock, trainComment, trainRow,
   type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
@@ -41,6 +41,19 @@ describe('pr-state argv', () => {
     expect(h.run('cmd_pr_state --session a --project b').code).toBe(1);
     expect(h.run('cmd_pr_state --session "a b"').stderr).toMatch(/bad session/);
     expect(h.run('cmd_pr_state --project "a b"').stderr).toMatch(/bad project/);
+  });
+
+  it('the PR-keyed form dies on a bad number, a bad project or a wrong shape, before any gh call (landing order wave 5c)', () => {
+    h.makeGhRepo('demo');
+    for (const argv of ['--project demo --pr 0', '--project demo --pr abc', '--project demo --pr 12345678901',
+      '--project demo --pr -1', '--project demo --pr', '--project demo --pr 42 x', '--pr 42 --project demo',
+      '--project demo --session 42']) {
+      expect(h.run(`${GH_STUB} cmd_pr_state ${argv}`).code, argv).toBe(1);
+    }
+    expect(h.run(`${GH_STUB} cmd_pr_state --project "a b" --pr 42`).stderr).toMatch(/bad project/);
+    expect(h.run(`${GH_STUB} cmd_pr_state --project demo --pr 0`).stderr).toMatch(/bad pr number/);
+    expect(h.ghCalls()).toEqual([]);
+    expect(h.ghPoison()).toEqual([]);
   });
 
   it('refuses an id it does not hold, and a main checkout that has no branch', () => {
@@ -2276,5 +2289,167 @@ describe('a workspace whose worktree is parked on another branch', () => {
     expect(l.reason).not.toBe('branch-drift');
     expect(l.tip).toBeNull();
     expect(l.ahead).toBeNull();
+  });
+});
+
+describe('the PR-keyed form: pr-state --project <p> --pr <n> (landing order wave 5c)', () => {
+  const HEAD = 'a'.repeat(40);
+  const MERGE = 'b'.repeat(40);
+  const TRAIN_MERGE = 'e'.repeat(40);
+  const AT = '2026-07-20T10:00:00Z';
+  const FIELDS = 'number,state,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,labels';
+  const viewRow = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    number: 42, state: 'OPEN', headRefOid: HEAD, baseRefName: 'main', isCrossRepository: false,
+    mergedAt: null, mergeCommit: null, labels: [], ...over });
+  const NULLS = { headRefOid: null, baseRefName: null, isCrossRepository: null, mergedAt: null, mergeCommit: null,
+    landedInTrain: false, trainUnproven: false, trainUnread: false, train: null, trainMergeCommit: null };
+  const ECHO = { headRefOid: HEAD, baseRefName: 'main', isCrossRepository: false, mergedAt: null, mergeCommit: null,
+    landedInTrain: false, trainUnproven: false, trainUnread: false, train: null, trainMergeCommit: null };
+  /** The line, key order included: `_pr_py by-pr` prints compact JSON in exactly this order (`h.sh` trims the newline). */
+  const lineOf = (state: string, reason: string | null, rest: Record<string, unknown>): string =>
+    JSON.stringify({ number: 42, state, reason, ...rest });
+  const byPr = (env = ''): string => h.sh(`${GH_STUB} ${env} cmd_pr_state --project demo --pr 42`);
+  const viewed = (): string[] => h.ghCalls().filter((c) => c.startsWith('pr view')).map((c) => c.split(' ')[2]!);
+  const REG = (): string => path.join(h.home, '.cc-sessions');
+  const proofsFile = (): string => {
+    const f = path.join(REG(), '.train-proofs');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  beforeEach(() => { h.makeGhRepo('demo'); });
+
+  it.each([
+    ['open', viewRow(), 'open', {}],
+    ['merged', viewRow({ state: 'MERGED', mergedAt: AT, mergeCommit: { oid: MERGE } }), 'merged',
+      { mergedAt: AT, mergeCommit: MERGE }],
+    ['closed, no label', viewRow({ state: 'CLOSED' }), 'closed', {}],
+    ['open, from a fork', viewRow({ isCrossRepository: true }), 'open', { isCrossRepository: true }],
+  ])('%s: one gh pr view under its own timeout, one line, no workspace and nothing written', (_n, row, state, over) => {
+    h.sh(`${GH_STUB} :`);
+    const before = fs.readdirSync(REG()).sort();
+    h.ghView(42, row);
+    expect(byPr()).toBe(lineOf(state as string, null, { ...ECHO, ...(over as object) }));
+    expect(h.ghCalls()).toEqual([
+      `timeout ${ccdSeconds('PR_GH_VIEW_TIMEOUT')} gh pr view 42 --repo o/r --json ${FIELDS}`,
+      `pr view 42 --repo o/r --json ${FIELDS}`,
+    ]);
+    expect(fs.readdirSync(REG()).sort()).toEqual(before);
+  });
+
+  it('absent only for GitHub\'s definite "Could not resolve to a PullRequest"', () => {
+    h.ghViewFail(42);
+    expect(byPr()).toBe(lineOf('absent', null, NULLS));
+  });
+
+  it('the resolve text at an rc other than 1 is unmeasured error, not absent (rc 1 AND the text)', () => {
+    h.ghViewFail(42, 2, notAPullRequest(42));
+    expect(byPr()).toBe(lineOf('unmeasured', 'error', NULLS));
+  });
+
+  it('rc 1 with "is not a pull request" is unmeasured error: the narrower test than the train record\'s', () => {
+    h.ghViewFail(42, 1, 'GraphQL: #42 is not a pull request\n');
+    expect(byPr()).toBe(lineOf('unmeasured', 'error', NULLS));
+  });
+
+  it('a MERGED body with a merge commit and no mergedAt is unmeasured missing-field', () => {
+    h.ghView(42, viewRow({ state: 'MERGED', mergedAt: null, mergeCommit: { oid: MERGE } }));
+    expect(byPr()).toBe(lineOf('unmeasured', 'missing-field', NULLS));
+  });
+
+  it.each([
+    ['a timeout', () => h.ghViewFail(42, 124), 'timeout'],
+    ['an HTTP 502', () => h.ghViewFail(42, 1, GH_HTTP_502), 'unavailable'],
+    ['a rate limit', () => h.ghViewFail(42, 1, GH_RATE_LIMITED), 'rate-limit'],
+    ['rc 1 with no stderr', () => h.ghViewFail(42, 1, ''), 'error'],
+    ['a signal', () => h.ghViewFail(42, 137), 'error'],
+    ['a body that is not JSON', () => fs.writeFileSync(path.join(h.home, 'gh-view-42.json'), '<html>'), 'unreadable'],
+    ['an empty body', () => fs.writeFileSync(path.join(h.home, 'gh-view-42.json'), ''), 'unreadable'],
+    ["another PR's object", () => h.ghView(42, viewRow({ number: 43 })), 'unreadable'],
+    ['a JSON list', () => h.ghView(42, [viewRow()]), 'unreadable'],
+    ['a float number', () => fs.writeFileSync(path.join(h.home, 'gh-view-42.json'),
+      JSON.stringify(viewRow()).replace('"number":42', '"number":42.0')), 'unreadable'],
+    ['no headRefOid', () => h.ghView(42, viewRow({ headRefOid: undefined })), 'missing-field'],
+    ['a short headRefOid', () => h.ghView(42, viewRow({ headRefOid: 'abc1234' })), 'missing-field'],
+    ['MERGED with a short merge commit', () => h.ghView(42, viewRow({ state: 'MERGED', mergedAt: AT, mergeCommit: { oid: 'abc1234' } })), 'missing-field'],
+    ['isCrossRepository as a string', () => h.ghView(42, viewRow({ isCrossRepository: 'false' })), 'missing-field'],
+    ['an unknown state', () => h.ghView(42, viewRow({ state: 'DRAFT' })), 'missing-field'],
+    ['MERGED with no merge commit', () => h.ghView(42, viewRow({ state: 'MERGED', mergedAt: AT })), 'missing-field'],
+    ['no labels', () => h.ghView(42, viewRow({ labels: undefined })), 'missing-field'],
+    ['a base name with a space', () => h.ghView(42, viewRow({ baseRefName: 'ma in' })), 'missing-field'],
+  ])('%s is unmeasured, never absent', (_n, plant, reason) => {
+    (plant as () => void)();
+    expect(byPr()).toBe(lineOf('unmeasured', reason as string, NULLS));
+  });
+
+  it('a project whose origin is not GitHub is unmeasured no-remote, with no gh call', () => {
+    h.makeRepo('plain');
+    expect(h.sh(`${GH_STUB} cmd_pr_state --project plain --pr 42`))
+      .toBe(JSON.stringify({ number: 42, state: 'unmeasured', reason: 'no-remote', ...NULLS }));
+    expect(h.ghCalls()).toEqual([]);
+  });
+
+  describe('a PR closed with the train claim is never a bare closed', () => {
+    const claimed = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+      ({ ...viewRow({ state: 'CLOSED', labels: [{ name: 'landed-in-train' }] }), ...trainComment(50), ...over });
+    const CLAIM_ECHO = { ...ECHO };
+
+    it('proved: merged, landedInTrain, the train and its merge commit; the proof is kept and reused', () => {
+      h.ghView(42, claimed());
+      h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, HEAD]]));
+      const proved = lineOf('merged', null, { ...CLAIM_ECHO, landedInTrain: true, train: 50, trainMergeCommit: TRAIN_MERGE });
+      expect(byPr()).toBe(proved);
+      expect(viewed()).toEqual(['42', '42', '50']);
+      expect(proofsFile()).toBe(`o/r main 42 ${HEAD} 50 ${TRAIN_MERGE}\n`);
+      const calls = h.ghCalls().length;
+      expect(byPr()).toBe(proved);
+      expect(h.ghCalls().slice(calls).filter((c) => c.startsWith('pr view')).map((c) => c.split(' ')[2])).toEqual(['42']);
+    });
+
+    it.each([
+      ['the train PR is CLOSED unmerged', () => h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, HEAD]],
+        { state: 'CLOSED', mergedAt: null, mergeCommit: null }))],
+      ['the train lists another sha', () => h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, 'c'.repeat(40)]]))],
+    ])('refused (%s): unmeasured train-unproven, nothing kept', (_n, plant) => {
+      h.ghView(42, claimed());
+      (plant as () => void)();
+      h.ghSearch([]);
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unproven', { ...CLAIM_ECHO, trainUnproven: true }));
+      expect(proofsFile()).toBe('');
+    });
+
+    it('no train names it: unmeasured train-unproven', () => {
+      h.ghView(42, claimed({ comments: [] }));
+      h.ghSearch([]);
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unproven', { ...CLAIM_ECHO, trainUnproven: true }));
+    });
+
+    it('a train read the budget or GitHub cuts short: unmeasured train-unread, never closed', () => {
+      h.ghView(42, claimed());
+      h.ghViewFail(50, 124);
+      h.ghSearch([]);
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unread', { ...CLAIM_ECHO, trainUnread: true }));
+    });
+
+    it('a claimed PR from a fork reads no train: unmeasured train-unread', () => {
+      h.ghView(42, claimed({ isCrossRepository: true }));
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unread', { ...CLAIM_ECHO, isCrossRepository: true, trainUnread: true }));
+      expect(viewed()).toEqual(['42']);
+      expect(proofsFile()).toBe('');
+    });
+
+    it('a claimed row whose base is not a ref name is unmeasured missing-field and no train is read', () => {
+      h.ghView(42, claimed({ baseRefName: '-x' }));
+      expect(byPr()).toBe(lineOf('unmeasured', 'missing-field', NULLS));
+      expect(viewed()).toEqual(['42']);
+    });
+
+    it('the label turned off (CCD_LANDED_LABEL empty) is a plain closed, and no train is read', () => {
+      h.ghView(42, claimed());
+      expect(byPr('CCD_LANDED_LABEL=')).toBe(lineOf('closed', null, CLAIM_ECHO));
+      expect(viewed()).toEqual(['42']);
+    });
+  });
+
+  it('ccd caps advertises pr-state-pr-v1', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('pr-state-pr-v1');
   });
 });

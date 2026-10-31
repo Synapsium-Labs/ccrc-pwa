@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CCD_ARGV, CCD_CAN, CHILD_ARGV_CAP, COLLECT_CAP, EXPIRE_CAP, ORPHAN_CAP,
-  HIBERNATE_HOLD_OK_CAP, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, ccdCan,
+  HIBERNATE_HOLD_OK_CAP, POOLS_CAP, PR_STATE_PR_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, ccdCan,
 } from '../src/ccdargv.js';
 import type { FleetState } from '../src/fleetstate.js';
 
@@ -15,6 +15,16 @@ const stateOf = (v: readonly string[] | null): FleetState =>
 const ROWS = Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[];
 
 describe('ccdCan(state, row) answers by the row\'s own token and default (D-5866)', () => {
+  it('prStatePr refuses on no evidence and answers by pr-state-pr-v1 alone, never by the pr-state verb (landing order wave 5c)', () => {
+    expect(CCD_CAN.prStatePr).toEqual({ token: 'pr-state-pr-v1', default: 'refuse' });
+    expect(CCD_ARGV.prStatePr('demo', 41)[0]).toBe(CCD_ARGV.prStateProject('demo')[0]);
+    expect(ccdCan(undefined, 'prStatePr')).toBe(false);
+    expect(ccdCan(stateOf(null), 'prStatePr')).toBe(false);
+    expect(ccdCan(stateOf([]), 'prStatePr')).toBe(false);
+    expect(ccdCan(stateOf(['pr-state', 'caps']), 'prStatePr'), 'the bare verb is not the token').toBe(false);
+    expect(ccdCan(stateOf(['pr-state', 'caps']), 'prStateProject'), 'CONTROL: the older form still permits on its verb').toBe(true);
+    expect(ccdCan(stateOf([PR_STATE_PR_CAP]), 'prStatePr')).toBe(true);
+  });
   it('no evidence (no list, no state) gives the row\'s default', () => {
     for (const s of [stateOf(null), undefined]) {
       expect(ccdCan(s, 'wsExpire'), 'a refusing row').toBe(false);

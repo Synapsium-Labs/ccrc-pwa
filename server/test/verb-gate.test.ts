@@ -142,6 +142,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   wsCollectLoose: ['x', '00', null],
   // D-6784: `prLanding` takes a list of {id, pr} pairs, not a string.
   prLanding: ['x', [{ id: 'x', pr: 1 }]],
+  // Landing order wave 5c: `prStatePr`'s pr number is checked (`PR_NUMBER_RE`), so the default probe `'x'` would throw at load.
+  prStatePr: ['x', 1],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather

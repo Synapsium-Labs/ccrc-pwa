@@ -149,7 +149,7 @@ describe('the five answers', () => {
 
   // Wave 3d: a removal whose reason is `merged` is the queue's own landing (below). Any other reason, or none, on a
   // MERGED PR is a removal the PR outlived: it was merged by hand after it.
-  it.each([['absent'], ['manual'], ['failed_checks'], ['merge_conflict'], [null], ['some_new_reason'], ['MERGED']])(
+  it.each([['absent'], ['manual'], ['failed_checks'], ['merge_conflict'], [null], ['some_new_reason'], ['MERGED'], [7], [['merged']]])(
     'none — a MERGED PR whose last queue act is a removal for any reason but merged (reason %j)', (why) => {
       const tip = workspaceWithCommit('demo', 'quiet-basin');
       h.ghRows([mergedRow({ headRefOid: tip })]);
@@ -228,8 +228,8 @@ describe('the five answers', () => {
   });
 });
 
-// Landing-order wave 3d. GitHub records a removal with reason `merged` at every successful queue merge, at or one
-// second before the PR reads MERGED (16 of 16 queue merges, measured 2026-10-21). That removal is the landing, never
+// Landing-order wave 3d. GitHub records a removal with reason `merged` at every successful queue merge, within a second
+// of the merge, either side (22 of 22 queue merges, measured 2026-10-21, D-6216). That removal is the landing, never
 // a dequeue. The reason only chooses the word: it never reaches the line.
 describe('the removal\'s reason (landing-order wave 3d)', () => {
   const T = '2026-10-21T07:24:15Z';

@@ -215,9 +215,10 @@ and the class of act that opened the livelock window.
   pending run per group and cancels the older one even without `cancel-in-progress`, so a shared group would drop a
   queue entry's checks. No full run per merge (2026-09-23). (Amended 2026-09-29, on #183's shape.)
 - `ccd pr-state` gains one GraphQL query per repository per sweep (`pullRequest.mergeQueueEntry` and the last
-  queue act of either kind, `ADDED_TO_MERGE_QUEUE_EVENT` or `REMOVED_FROM_MERGE_QUEUE_EVENT`, in `timelineItems`:
-  a removal alone cannot tell a merged PR the queue landed after a re-enqueue from one merged by hand after a
-  dequeue), separate from its `gh pr list --json` call, under its own bounded timeout (`PR_GH_QUEUE_TIMEOUT`, 4 s;
+  queue act of either kind, `ADDED_TO_MERGE_QUEUE_EVENT` or `REMOVED_FROM_MERGE_QUEUE_EVENT`, in `timelineItems`,
+  so that a PR re-enqueued after a removal reads as queued again; since wave 3d the removal's `reason`, not the
+  act's kind, tells a queue landing from a hand merge after a dequeue), separate from its `gh pr list --json`
+  call, under its own bounded timeout (`PR_GH_QUEUE_TIMEOUT`, 4 s;
   the query measured 0.72–1.39 s), answering `queued | dequeued | landed | none | unmeasured` in an additive
   `queue` field; the pr-state header's gh-call budget is updated to say so. The server's outer bound on
   `pr-state` (`CCD_VERB_TIMEOUT_MS`) rises from 20 s to 25 s, so the three calls' timeouts (8 + 5 + 4 s) stay
@@ -225,10 +226,17 @@ and the class of act that opened the livelock window.
   verb, so `--session` rises with `--project` (ruled 2026-09-24); child reclamation's close gate reads it up to
   twice inside `coordMutex`, so a close's worst case is about 50 s against its 30 s client timeout — accepted by
   the operator 2026-09-29 (§11), and every comment that stated the old bound says 25 s. (Amended 2026-10-21,
-  wave 3d: GitHub records a removal with reason `merged` at every successful queue merge, at or one second before
-  the PR reads MERGED, so the add is never a landed PR's last act. The query also reads the removal's `reason`. A
-  removal with reason `merged` reads `landed`, whether the PR still reads open or already reads merged; any other
-  reason, or none, keeps the answers above. The reason chooses the word and never reaches the line.)
+  wave 3d: GitHub records a removal with reason `merged` at every successful queue merge, within a second of the
+  merge, either side, so a landed PR's last act is that removal or, until the removal is recorded, the add. The
+  query also reads the removal's `reason`. A removal with reason `merged` reads `landed`, whether the PR still
+  reads open or already reads merged; any other reason, or none, keeps the answers above. The reason chooses the
+  word and never reaches the line.) (Restated 2026-10-30, wave 5c: this amendment first put the removal in or
+  before the merge's second and said an add could not be the final queue act of a landed PR; one of 22 queue
+  merges measured on 2026-10-21 recorded it one second after (D-6216). The clause earlier in this bullet said a
+  removal alone cannot tell a merged PR the queue landed after a re-enqueue from one merged by hand after a
+  dequeue; it is restated, since once the removal is recorded its reason, not the act's kind, tells them apart. In
+  the second before it is recorded the PR reads MERGED with the add still its last act, and the MERGED-plus-add arm
+  answers `landed`, so for that second the act's kind decides.)
 - A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
   `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
   name it), and, when an open run names the PR's workspace, a `status` mail to that run's coordinator, sent as
@@ -387,6 +395,12 @@ the spec does not claim it.
 prefix grant, gets its own `CcdArgv` brand, and the pr-state header's gh-call budget counts one call per open
 landing entry per sweep. A reader walks entries with it, separate from `sweepMerged`'s per-workspace loop, so
 no-run entries and hand merges are seen. The coordinator's own merge step also reports the result.
+(Amended 2026-10-30, wave 5c: five words, `absent` for GitHub's definite answer only (D-7593); the line echoes
+`baseRefName`, `isCrossRepository` and the train flags, `mergeCommit` flattened to its oid (D-7594); the gh fields
+also include `labels`, so the form is one `gh pr view` unless a CLOSED PR carries the train label; a train claim adds the
+train record's own `gh` reads (measured: a second `gh pr view` of the PR, for its comments, and one of the train PR;
+also a search when no named train proves the claim), and the form keeps the proofs it makes, as `pr-state --session` does (D-7595); a train claim
+the proof refused or could not read is `unmeasured` (D-7596); gated by the `pr-state-pr-v1` capability.)
 
 **Next to land.** The radar names the head whose composition against the current base is clean; the server mails
 the coordinator once. Mail is idle-gated: its latency to the coordinator's first nudge-started turn is a plan

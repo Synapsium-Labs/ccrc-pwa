@@ -5626,6 +5626,54 @@ _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
   printf '%s\n' "$rest"
 }
 
+_gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated | rate-limit | offline | unavailable | truncated | error
+  # The one `case` that decides what a gh failure IS: `_gh_pr_list` and `_pr_state_by_pr` both name a failure through it.
+  case "$1" in
+    *"gh auth login"*|*"not logged in"*|*"HTTP 401"*) printf '%s\n' unauthenticated ;;
+    *"rate limit"*|*"HTTP 403"*)                      printf '%s\n' rate-limit ;;
+    *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '%s\n' offline ;;
+    # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
+    # several thousand PRs of history — the slug is operator residue and
+    # stays out of this tree. The 100-PR `statusCheckRollup` window
+    # `_gh_pr_list` sends answers
+    # `HTTP 504: We couldn't respond to your request in time. …
+    # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
+    # standing property of that repo's PR history, not a blip. It went out as
+    # `error`, which the cap renders "GitHub could not be read." and which
+    # reached a coordinator as `pr-unmeasurable` with nothing in it to act on.
+    #
+    # It is a different FACT from every arm above and from the default: the
+    # token is fine, DNS resolved, the request arrived — the far side could
+    # not finish it. That distinction is the whole of what a reader needs,
+    # because it says the same query will fail the same way and the remedy is
+    # to ask GitHub for less, not to go and check `gh auth` on the box.
+    #
+    # Matched on the CODE and never on the prose, which is GitHub's to reword
+    # whenever it likes. All four of 500/502/503/504 are here because an
+    # outage emits them interchangeably and an arm that knows only the one
+    # code we happened to catch is an arm that lapses at the next one.
+    *"HTTP 500"*|*"HTTP 502"*|*"HTTP 503"*|*"HTTP 504"*) printf '%s\n' unavailable ;;
+    # A BODY THAT STARTED AND STOPPED. Same repo, same day, the same query at
+    # `--limit 50`: `unexpected end of JSON input` — Go's decoder meeting EOF
+    # mid-value, so gh was being answered and the answer ran out. rc 1 and an
+    # empty stdout, indistinguishable from the 504 at the exit code, and a
+    # different thing entirely.
+    #
+    # Not `unavailable`: nothing here says the far side is unwell, and unlike
+    # a 504 an identical retry may simply succeed. Not `error`: "the answer
+    # was cut off" IS a shape, and it is the one shape in this case statement
+    # that says the read was interrupted rather than refused — which is the
+    # difference between waiting and narrowing the question.
+    *"unexpected end of JSON input"*|*"unexpected EOF"*) printf '%s\n' truncated ;;
+    # Still the default, and still `error` — the honest name for a fault with
+    # no known shape. Every arm above it earned its token by being MEASURED
+    # against a live repo; inventing a sixth classification from a string
+    # nobody has seen would put a confident sentence on the phone about a
+    # condition nobody diagnosed, which is the failure `error` exists to avoid.
+    *)                                                printf '%s\n' error ;;
+  esac
+}
+
 _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
                   # the answer object instead and returns non-zero. NEVER
                   # partially prints.
@@ -5670,7 +5718,7 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
   #
   # The window and the classification are still shared, and they are the halves
   # that made one reader worth having: one place decides what "100 PRs, all
-  # states" means and one `case` decides what a failure IS. A caller still
+  # states" means and one `case` (`_gh_fail_reason`) decides what a failure IS. A caller still
   # cannot invent a fifth failure vocabulary or a different window by calling
   # this differently.
   local repo="$1" head="${2:-}" errf out rc err fields="$PR_JSON_FIELDS"
@@ -5684,50 +5732,7 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
   if (( rc != 0 )); then
     # `gh auth status` is NOT probed first: it is another network call on the
     # unhappy path. The stderr we already have is the cheaper signal.
-    case "$err" in
-      *"gh auth login"*|*"not logged in"*|*"HTTP 401"*) printf '{"phase":"unknown","reason":"unauthenticated"}\n' ;;
-      *"rate limit"*|*"HTTP 403"*)                      printf '{"phase":"unknown","reason":"rate-limit"}\n' ;;
-      *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '{"phase":"unknown","reason":"offline"}\n' ;;
-      # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
-      # several thousand PRs of history — the slug is operator residue and
-      # stays out of this tree. The 100-PR `statusCheckRollup` window this
-      # function sends answers
-      # `HTTP 504: We couldn't respond to your request in time. …
-      # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
-      # standing property of that repo's PR history, not a blip. It went out as
-      # `error`, which the cap renders "GitHub could not be read." and which
-      # reached a coordinator as `pr-unmeasurable` with nothing in it to act on.
-      #
-      # It is a different FACT from every arm above and from the default: the
-      # token is fine, DNS resolved, the request arrived — the far side could
-      # not finish it. That distinction is the whole of what a reader needs,
-      # because it says the same query will fail the same way and the remedy is
-      # to ask GitHub for less, not to go and check `gh auth` on the box.
-      #
-      # Matched on the CODE and never on the prose, which is GitHub's to reword
-      # whenever it likes. All four of 500/502/503/504 are here because an
-      # outage emits them interchangeably and an arm that knows only the one
-      # code we happened to catch is an arm that lapses at the next one.
-      *"HTTP 500"*|*"HTTP 502"*|*"HTTP 503"*|*"HTTP 504"*) printf '{"phase":"unknown","reason":"unavailable"}\n' ;;
-      # A BODY THAT STARTED AND STOPPED. Same repo, same day, the same query at
-      # `--limit 50`: `unexpected end of JSON input` — Go's decoder meeting EOF
-      # mid-value, so gh was being answered and the answer ran out. rc 1 and an
-      # empty stdout, indistinguishable from the 504 at the exit code, and a
-      # different thing entirely.
-      #
-      # Not `unavailable`: nothing here says the far side is unwell, and unlike
-      # a 504 an identical retry may simply succeed. Not `error`: "the answer
-      # was cut off" IS a shape, and it is the one shape in this case statement
-      # that says the read was interrupted rather than refused — which is the
-      # difference between waiting and narrowing the question.
-      *"unexpected end of JSON input"*|*"unexpected EOF"*) printf '{"phase":"unknown","reason":"truncated"}\n' ;;
-      # Still the default, and still `error` — the honest name for a fault with
-      # no known shape. Every arm above it earned its token by being MEASURED
-      # against a live repo; inventing a sixth classification from a string
-      # nobody has seen would put a confident sentence on the phone about a
-      # condition nobody diagnosed, which is the failure `error` exists to avoid.
-      *)                                                printf '{"phase":"unknown","reason":"error"}\n' ;;
-    esac
+    printf '{"phase":"unknown","reason":"%s"}\n' "$(_gh_fail_reason "$err")"
     return 1
   fi
   printf '%s\n' "$out"
@@ -5947,6 +5952,34 @@ def label_names(r):
         ls = ls.get('nodes')
     return [l.get('name') for l in ls if isinstance(l, dict)] if isinstance(ls, list) else []
 
+def train_flags(r):
+    """(landedInTrain, trainUnproven, trainUnread) of one row: the ONE judge of a train claim (D-7362, D-7378)."""
+    claim = labelled(r)
+    key = (str(r.get('number')), r.get('headRefOid'))
+    landed = claim and key in TRAIN_PROOFS
+    unproven = claim and not landed and key in TRAIN_REFUSED
+    return landed, unproven, claim and not landed and not unproven
+
+def train_cand(r):
+    """A labelled row's (number, 40-hex head), shapes anchored, or None. Never a proof."""
+    n, head = r.get('number'), r.get('headRefOid')
+    if (labelled(r) and isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10 ** 10
+            and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)):
+        return n, head
+    return None
+
+def view_in():
+    """`gh pr view`'s body as one dict, or None when it is not one JSON object."""
+    try:
+        v = json.loads(sys.stdin.read())
+    except Exception:
+        return None
+    return v if isinstance(v, dict) else None
+
+def base_ok(b):
+    """A base ref name in `_ws_train_keyable`'s grammar: no space, no backslash, no leading dash."""
+    return isinstance(b, str) and re.fullmatch(r'[A-Za-z0-9._/-]+', b) is not None and not b.startswith('-')
+
 def annotate(rows, main, tip, branch, base_short):
     out = [r for r in rows if isinstance(r, dict)]
     for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
@@ -5959,11 +5992,7 @@ def annotate(rows, main, tip, branch, base_short):
         # was read and failed is `trainUnproven`, which reads as closed; one
         # whose record was NOT read is `trainUnread`, which reads as
         # unmeasured (D-7378) — never closed, so nothing ends on it.
-        claim = labelled(r)
-        key = (str(r.get('number')), r.get('headRefOid'))
-        r['landedInTrain'] = claim and key in TRAIN_PROOFS
-        r['trainUnproven'] = claim and not r['landedInTrain'] and key in TRAIN_REFUSED
-        r['trainUnread'] = claim and not r['landedInTrain'] and not r['trainUnproven']
+        r['landedInTrain'], r['trainUnproven'], r['trainUnread'] = train_flags(r)
     return out
 
 def bound(r, branch, base_short):
@@ -6648,14 +6677,53 @@ elif mode == 'train-cands':
     # shell can anchor both before either reaches an argv. Never a proof.
     (branch, base_short) = sys.argv[2:4]
     for r in rows_in() or []:
-        if not isinstance(r, dict) or not labelled(r):
-            continue
-        n, head = r.get('number'), r.get('headRefOid')
-        if (isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10 ** 10
-                and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)
-                and r.get('headRefName') == branch and r.get('baseRefName') == base_short
+        c = train_cand(r) if isinstance(r, dict) else None
+        if (c and r.get('headRefName') == branch and r.get('baseRefName') == base_short
                 and r.get('isCrossRepository') is False):
-            sys.stdout.write('%d\t%s\n' % (n, head))
+            sys.stdout.write('%d\t%s\n' % c)
+
+elif mode == 'by-pr-cand':
+    # `pr-state --pr`'s train candidate from a view body: `<head>\t<base>`, both anchored; never a proof.
+    r = view_in()
+    c = train_cand(r) if r else None
+    if c and c[0] == int(sys.argv[2]) and r.get('isCrossRepository') is False and base_ok(r.get('baseRefName')):
+        sys.stdout.write('%s\t%s\n' % (c[1], r['baseRefName']))
+
+elif mode == 'by-pr':
+    # `pr-state --pr`'s ONE line: a verdict ('absent' or a reason) reads no stdin, '' parses the view body.
+    n, verdict = int(sys.argv[2]), sys.argv[3]
+    line = {'number': n, 'state': 'unmeasured', 'reason': None, 'headRefOid': None, 'baseRefName': None,
+            'isCrossRepository': None, 'mergedAt': None, 'mergeCommit': None, 'landedInTrain': False,
+            'trainUnproven': False, 'trainUnread': False, 'train': None, 'trainMergeCommit': None}
+    r = view_in() if verdict == '' else None
+    if verdict == 'absent':
+        line['state'] = 'absent'
+    elif verdict:
+        line['reason'] = verdict
+    elif r is None or type(r.get('number')) is not int or r['number'] != n:
+        line['reason'] = 'unreadable'
+    else:
+        st, head, mc, at = r.get('state'), r.get('headRefOid'), r.get('mergeCommit'), r.get('mergedAt')
+        oid = mc.get('oid') if isinstance(mc, dict) else None
+        if not (st in ('OPEN', 'MERGED', 'CLOSED') and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)
+                and base_ok(r.get('baseRefName')) and isinstance(r.get('isCrossRepository'), bool)
+                and isinstance(r.get('labels'), list)
+                and (at is None or (isinstance(at, str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z', at)))
+                and (mc is None or (isinstance(oid, str) and re.fullmatch(r'[0-9a-f]{40}', oid)))
+                and (st != 'MERGED' or (at is not None and oid is not None))):
+            line['reason'] = 'missing-field'
+        else:
+            line.update(headRefOid=head, baseRefName=r['baseRefName'], isCrossRepository=r['isCrossRepository'],
+                        mergedAt=at, mergeCommit=oid)
+            landed, unproven, unread = train_flags(r)
+            line['state'] = {'OPEN': 'open', 'MERGED': 'merged', 'CLOSED': 'closed'}[st]
+            if landed:
+                proof = TRAIN_PROOFS[(str(n), head)]
+                line.update(state='merged', landedInTrain=True, train=int(proof[0]), trainMergeCommit=proof[1])
+            elif unproven or unread:
+                line.update(reason='train-unproven' if unproven else 'train-unread', state='unmeasured',
+                            trainUnproven=unproven, trainUnread=unread)
+    sys.stdout.write(json.dumps(line, separators=(',', ':')) + '\n')
 
 elif mode == 'bind':
     # `pr-landing`'s binding (spec 3.3): `annotate` then `pick` over the ONE row a GraphQL alias answered, in a
@@ -9161,6 +9229,7 @@ EOF
   # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
   # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
   echo pr-landing-v1   # `ccd pr-landing`: the checks lane's read-only PR read; sent only behind this word
+  echo pr-state-pr-v1   # `ccd pr-state --project <p> --pr <n>`: one PR by number; sent only behind this word
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
   echo refusal-v1   # #560: `_lc_refuse` prints `ccd-refusal: <act> <word>` on stderr before its die; the server reads it first and keeps its prose matchers as the fallback
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
@@ -11325,22 +11394,26 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
     "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
 }
 
-cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
+cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]
   # A CONSTANT NUMBER OF gh CALLS PER REPO, never one per session — one for
   # `--session`, three for `--project` (the rows, the rollups, and the merge
-  # queue read `_pr_queue_stamp` makes), and no number moves when a project
-  # grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
+  # queue read `_pr_queue_stamp` makes), and one for `--project <p> --pr <n>`
+  # (`_pr_state_by_pr`'s `gh pr view`, under PR_GH_VIEW_TIMEOUT), plus, only when
+  # that PR is CLOSED with the train label and has no kept proof, the train
+  # record's reads inside PR_STATE_TRAIN_TIMEOUT — and no number moves when a
+  # project grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
   # ~ 5 % of the GraphQL allowance) survives tripling and would not survive
-  # going per session, and `pr-timeout-budget.test.ts` sums the three calls'
+  # going per session, and `pr-timeout-budget.test.ts` sums each form's calls'
   # timeouts against the server's outer bound on this verb. Read-only apart
-  # from the three registry fields it persists so a ccrc restart degrades to
-  # honest stale.
-  [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>"
+  # from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
+  # honest stale, and the kept train proofs and tried lines a train claim's record writes (`--session` and `--pr`).
+  [[ $# -eq 4 && $1 == --project && $3 == --pr ]] && { _pr_state_by_pr "$2" "$4"; return; }
+  [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]"
   local mode=$1 arg=$2
   case "$mode" in
     --session) [[ $arg =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id" ;;
     --project) [[ $arg =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project" ;;
-    *)         die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>" ;;
+    *)         die "usage: ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]" ;;
   esac
 
   local -a ids=()
@@ -11565,18 +11638,29 @@ import json, os, sys, tempfile, time
 mode = sys.argv[1]
 NAME_MAX, LIST_MAX = 120, 32
 
-def doc(fd):
+def docs(fd):
+    """Every JSON value on fd, in order: `gh api --paginate` prints one per page, run together (review 1109). None when
+    the fd is empty or anything on it is not JSON: a rule set read in part could miss a required name."""
     try:
         with open('/dev/fd/%d' % fd) as f:
-            raw = f.read().strip()
+            raw = f.read()
     except OSError:
         return None
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+    dec, out, i, n = json.JSONDecoder(), [], 0, len(raw)
+    while True:
+        while i < n and raw[i] in ' \t\r\n':
+            i += 1
+        if i >= n:
+            return out or None
+        try:
+            v, i = dec.raw_decode(raw, i)
+        except Exception:
+            return None
+        out.append(v)
+
+def doc(fd):
+    vals = docs(fd)
+    return vals[0] if vals is not None and len(vals) == 1 else None
 
 def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
@@ -11619,9 +11703,10 @@ if mode == 'rows':
                                  for i in range(k)]) + '\n')
 
 elif mode == 'names-rules':
-    d = doc(4)
-    if not isinstance(d, list):
+    pages = docs(4)
+    if pages is None or not all(isinstance(pg, list) for pg in pages):
         sys.exit(1)
+    d = [r for pg in pages for r in pg]
     names, pins = [], []
     for r in d:
         if isinstance(r, dict) and r.get('type') == 'required_status_checks':
@@ -11797,8 +11882,8 @@ PY
 }
 
 _pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JSON line, always
-  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`) and the public branch view
-  # (`branches/<base>`), each under its own timeout, both plain GETs. A read failure is a miss and is never cached.
+  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`, every page: one holds 30 rules, review 1109)
+  # and the public branch view (`branches/<base>`), each under its own timeout, both plain GETs; a failure is a miss, never cached.
   # A fourth argument of `0` forbids the REST reads: a miss then answers rules-unread (nothing cached), so the caller
   # can keep one call's worst path at 6 + 4 + 4 s whatever number of bases are bound.
   local project="$1" repo="$2" base="$3" rest="${4:-1}" cache got r="" p="" enc="_"
@@ -11810,7 +11895,7 @@ _pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JS
     printf '%s\n' "$got"; return 0
   fi
   if [[ "$rest" == 1 && "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
-    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" 2>/dev/null) || r=""
+    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" --paginate 2>/dev/null) || r=""
     p=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/branches/$enc" 2>/dev/null) || p=""
     r=$(_pr_landing_py names-rules 4<<<"$r" 2>/dev/null) || r=""
     p=$(_pr_landing_py names-protection 4<<<"$p" 2>/dev/null) || p=""
@@ -40838,11 +40923,12 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 # of EITHER kind is read instead, so that a PR re-enqueued after a removal reads
 # as queued again. The REASON is what tells a landing from a dequeue (landing-
 # order wave 3d): GitHub records a removal with reason `merged` at every
-# successful queue merge, at or one second before the PR reads MERGED (16 of 16
-# queue merges, measured 2026-10-21), so the add is never the last act of a
-# landed PR. `reason` is a free-form String with no documented values; the
-# exact text `merged` is the one this reads, and any other value, null or a
-# type GitHub did not promise keeps the answers this block gave before it.
+# successful queue merge, within a second of the merge, either side (22 of 22
+# queue merges measured 2026-10-21, D-6216), so a landed PR's last act is that
+# removal, or, until the removal is recorded, the add. `reason` is a free-form
+# String with no documented values; the exact text `merged` is the one this
+# reads, and any other value, null or a type GitHub did not promise keeps the
+# answers this block gave before it.
 #
 # WHAT IT ANSWERS, per full line, in the additive `queue` field:
 #   queued      the PR is OPEN and has a queue entry now
@@ -41009,6 +41095,49 @@ for raw in sys.stdin.read().split('\n'):
     else:
         sys.stdout.write(raw + '\n')
 PY
+}
+
+# ── `ccd pr-state --project <p> --pr <n>`: ONE pull request by number, no workspace (landing order wave 5c) ──
+# Five words: open | merged | closed | unmeasured | absent. `absent` is GitHub's definite answer ONLY (rc 1 and "Could
+# not resolve to a PullRequest"); every other failure is `unmeasured` with a closed reason, and `_gh_fail_reason` names
+# the gh failures. The line is `_pr_py by-pr`'s alone, failure lines included. A PR CLOSED with the train label is
+# never a bare `closed`: its proof enters at `_ws_train_record` (the entry `pr-train-prove` uses), not at
+# `_pr_train_proofs`, because the form has no workspace branch for `train-cands` to bind (D-7595). The base it keys the
+# proof by is GitHub's: A GitHub-sourced base name, anchored to `_ws_train_keyable`'s grammar (no backslash, space or
+# leading dash, so `awk -v` escape processing cannot alter it), reaches python3's and awk's argv; it never reaches gh or
+# a shell (the PR-lifecycle spec's "No GitHub-sourced string is ever placed in a prompt, an argv, or a shell", departed
+# from for this one anchored string, D-7595 (b)).
+# The absent test (rc 1 and `Could not resolve to a PullRequest`) is GitHub's definite word that no pull request has
+# that number, whatever else the number names, so an issue number with that answer reads `absent`. Any other rc-1 text,
+# `is not a pull request` included (which `_ws_train_record` also accepts), reads `unmeasured` with `_gh_fail_reason`'s
+# word (`error` for that text).
+PR_GH_VIEW_TIMEOUT=6
+PR_VIEW_FIELDS=number,state,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,labels
+
+_pr_state_by_pr() {   # project number -> ONE JSON line: one PR by number, no workspace (landing order wave 5c)
+  local project="$1" n="$2" main repo out rc errf err="" h="" b="" trc
+  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  _pr_num_valid "$n" || die "bad pr number"
+  main="$PROJECTS_ROOT/$project"
+  repo=$(_gh_repo_slug "$main") || { _pr_py by-pr "$n" no-remote </dev/null; return 0; }
+  errf=$(_plat_mktemp 2>/dev/null) || errf=""
+  out=$(_plat_timeout "$PR_GH_VIEW_TIMEOUT" gh pr view "$n" --repo "$repo" --json "$PR_VIEW_FIELDS" 2>"${errf:-/dev/null}"); rc=$?
+  [[ -n "$errf" ]] && { err=$(cat "$errf" 2>/dev/null); rm -f "$errf"; }
+  if (( rc == 124 )); then _pr_py by-pr "$n" timeout </dev/null; return 0; fi
+  if (( rc != 0 )); then
+    if (( rc == 1 )) && [[ "$err" == *"Could not resolve to a PullRequest"* ]]; then _pr_py by-pr "$n" absent </dev/null
+    else _pr_py by-pr "$n" "$(_gh_fail_reason "$err")" </dev/null; fi
+    return 0
+  fi
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_REFUSED=""
+  IFS=$'\t' read -r h b < <(printf '%s' "$out" | _pr_py by-pr-cand "$n")
+  if [[ -n "$h" && -n "$b" ]]; then
+    local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))
+    _ws_train_record "$main" "$repo" "$n" "$h" "$b" 1 < /dev/null; trc=$?
+    (( trc == 0 )) && _PR_TRAIN_PROOFS="$n $h $_WS_TRAIN_NUM $_WS_TRAIN_MERGE"
+    (( trc == 1 )) && _PR_TRAIN_REFUSED="$n $h"
+  fi
+  printf '%s' "$out" | _pr_py by-pr "$n" ""
 }
 
 # ── DOCS: the four docs verbs (spec 2026-10-01 §2) ──────────────────────────
