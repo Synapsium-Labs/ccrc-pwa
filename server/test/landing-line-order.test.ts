@@ -1,9 +1,9 @@
 // Landing order wave 5e, Task 2: the landing line's decider (`landingOrder`) and the second-ejection notice's decider
 // (`landingEjectionAsk`), both pure L1 folds in `coord/landingLine.ts`. The cases are data: C1 to C18 of the plan.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { builtinModules } from 'node:module';
+import { identifierReferences, parseSource, type ImportEdge, type ParsedFile } from './scan/parse.js';
+import { parsedFile } from './scan/symbols.js';
 import { landingOrder, landingEjectionAsk, LANDING_EJECTION_ASK_AT } from '../src/coord/landingLine.js';
 import {
   LANDING_PAUSE_BY, LANDING_PAUSE_BYS, type LandingEntry, type LandingLineFlags, type LandingOrder,
@@ -90,52 +90,92 @@ describe('landingOrder is pure', () => {
 });
 
 describe('landingLine.ts is the pure L1 module its header says it is', () => {
-  const SRC = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'landingLine.ts'), 'utf8');
-  /** Comments blanked, positions kept: the header names the things it promises not to use. */
-  const code = (): string => SRC
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
-  const NODE_BUILTIN = /\bfrom\s*['"]node:/;
-  const SIDE_EFFECT_IMPORT = /^\s*import\s*['"]/m;
-  const RE_EXPORT = /^\s*export\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\b/m;
-  /** The specifier of every import that is not `import type`; the clause holds no quote, so a match cannot run on
-   *  into a later import's specifier. */
-  const valueImportSpecifiers = (c: string): string[] =>
-    [...c.matchAll(/^\s*import\s+(type\s+)?[^'"]*?\bfrom\s*(['"])([^'"]+)\2/gm)]
-      .filter((m) => m[1] === undefined).map((m) => m[3]!);
+  // Keyed on the scan library (scan/parse.ts through scan/symbols.ts), not on a literal source pin: the file is parsed,
+  // so a comment that names what the header promises not to use cannot trip a check, and a reformat cannot hide one.
+  // KNOWN WIDTH: the parse is syntax only. `CallSite` records no `new` expression, so the clock is read through
+  // `identifierReferences` (any use of the identifier `Date` or `performance`, which sees `new Date()` and `Date.now()`
+  // alike); a clock reached through an alias bound from another module, `globalThis['Date']` or a computed name is out
+  // of width, and so is a `require` of a builtin (`require(…)` is no import edge; its identifier is what is pinned).
+  const FILE = 'server/src/coord/landingLine.ts';
+  const NODE_BUILTINS = new Set(builtinModules.map((m) => m.replace(/^node:/, '')));
+  /** `node:fs`, `fs`, `fs/promises`, `node:test`: a builtin by its scheme or by its bare name. */
+  const isNodeBuiltin = (specifier: string): boolean =>
+    specifier.startsWith('node:') || NODE_BUILTINS.has(specifier.split('/')[0]!);
+  /** An edge binding a value: not `import type`, and not an edge whose every name is a per-name `type`. A side-effect
+   *  import (no names) binds nothing but runs the module, so it is an edge of its own kind below. */
+  const bindsValue = (edge: ImportEdge): boolean => {
+    if (edge.kind === 'type-query' || edge.typeOnly) return false;
+    if (edge.names.length === 0) return true;
+    return !edge.names.every((n) => (edge.typeNames ?? []).includes(n));
+  };
+  const valueSpecifiers = (p: ParsedFile): string[] => p.imports.filter(bindsValue).map((x) => x.specifier);
+  const nodeBuiltinSpecifiers = (p: ParsedFile): string[] => p.imports.map((x) => x.specifier).filter(isNodeBuiltin);
+  const sideEffectImports = (p: ParsedFile): ImportEdge[] => p.imports.filter((x) => x.kind === 'import' && !x.typeOnly && x.names.length === 0);
+  const dynamicOrReExport = (p: ParsedFile): ImportEdge[] => p.imports.filter((x) => x.kind === 'dynamic' || x.kind === 'export-from');
+  const CLOCK_AND_FS = new Set(['Date', 'performance', 'fs', 'require', 'readFileSync', 'writeFileSync', 'readFile', 'writeFile']);
+  const clockAndFsReferences = (p: ParsedFile): string[] =>
+    identifierReferences(p.text, p.path, CLOCK_AND_FS).map((x) => `${x.line} ${x.name}`);
+  const STORE_NAMES = new Set(['CoordStore', 'coord', 'db']);
+  const storeReaches = (p: ParsedFile): string[] => [
+    ...identifierReferences(p.text, p.path, STORE_NAMES).map((x) => `${x.line} ${x.name}`),
+    ...p.calls.filter((c) => c.head !== null && STORE_NAMES.has(c.head)).map((c) => `${c.line} ${c.callee}`),
+    ...p.imports.filter((x) => /(^|\/)(store|db|schema)(\.js)?$/.test(x.specifier)).map((x) => `${x.line} ${x.specifier}`),
+  ];
+  const probe = (src: string): ParsedFile => parseSource(src, 'probe.ts');
 
   it('the scan is over real code, not an empty string', () => {
-    expect(code()).toContain('export function landingOrder');
-    expect(code()).toContain('export function landingEjectionAsk');
-    expect(code().replace(/\s/g, '').length).toBeGreaterThan(400);
+    const p = parsedFile(FILE);
+    const fns = p.symbols.filter((s) => s.kind === 'function' || s.kind === 'variable-function').map((s) => s.name);
+    expect(fns).toContain('landingOrder');
+    expect(fns).toContain('landingEjectionAsk');
+    expect(p.symbols.length).toBeGreaterThanOrEqual(3);
+    expect(p.calls.length).toBeGreaterThan(10);
+    expect(p.imports.length).toBeGreaterThan(0);
   });
-  it('CONTROL: the scans see either quote, a re-export, and a second import behind a first', () => {
-    expect(NODE_BUILTIN.test(`import { readFileSync } from "node:fs";`)).toBe(true);
-    expect(NODE_BUILTIN.test(`import { readFileSync } from 'node:fs';`)).toBe(true);
-    expect(NODE_BUILTIN.test(`import { x } from '../../../shared/landingLine.js';`)).toBe(false);
-    expect(SIDE_EFFECT_IMPORT.test(`import "./rundefs.js";`)).toBe(true);
-    expect(SIDE_EFFECT_IMPORT.test(`import { x } from './rundefs.js';`)).toBe(false);
-    expect(RE_EXPORT.test(`export { survivorOf } from './rundefs.js';`)).toBe(true);
-    expect(RE_EXPORT.test(`export const x = 1;`)).toBe(false);
-    expect(valueImportSpecifiers(`import { survivorOf } from "./rundefs.js";\nimport { x } from '../../../shared/landingLine.js';`))
+  it('CONTROL: the scans see a builtin, either quote, a re-export, a dynamic import, a clock and a store reach', () => {
+    expect(nodeBuiltinSpecifiers(probe(`import { readFileSync } from "node:fs";`))).toEqual(['node:fs']);
+    expect(nodeBuiltinSpecifiers(probe(`import { readFileSync } from 'node:fs';`))).toEqual(['node:fs']);
+    expect(nodeBuiltinSpecifiers(probe(`import { join } from 'path';`))).toEqual(['path']);
+    expect(nodeBuiltinSpecifiers(probe(`import { readFile } from 'fs/promises';`))).toEqual(['fs/promises']);
+    expect(nodeBuiltinSpecifiers(probe(`import { x } from '../../../shared/landingLine.js';`))).toEqual([]);
+    expect(sideEffectImports(probe(`import "./rundefs.js";`)).length).toBe(1);
+    expect(sideEffectImports(probe(`import { x } from './rundefs.js';`)).length).toBe(0);
+    expect(sideEffectImports(probe(`import type { x } from './rundefs.js';`)).length).toBe(0);
+    expect(dynamicOrReExport(probe(`export { survivorOf } from './rundefs.js';`)).length).toBe(1);
+    expect(dynamicOrReExport(probe(`export * from './rundefs.js';`)).length).toBe(1);
+    expect(dynamicOrReExport(probe(`const m = await import('./rundefs.js');`)).length).toBe(1);
+    expect(dynamicOrReExport(probe(`export const x = 1;`)).length).toBe(0);
+    expect(valueSpecifiers(probe(`import { survivorOf } from "./rundefs.js";\nimport { x } from '../../../shared/landingLine.js';`)))
       .toEqual(['./rundefs.js', '../../../shared/landingLine.js']);
-    expect(valueImportSpecifiers(`import type { A } from './rundefs.js';`)).toEqual([]);
+    expect(valueSpecifiers(probe(`import type { A } from './rundefs.js';`))).toEqual([]);
+    expect(valueSpecifiers(probe(`import { type A, type B } from './rundefs.js';`))).toEqual([]);
+    expect(valueSpecifiers(probe(`import { type A, b } from './rundefs.js';`))).toEqual(['./rundefs.js']);
+    expect(clockAndFsReferences(probe(`const t = Date.now();`))).toEqual(['1 Date']);
+    expect(clockAndFsReferences(probe(`const t = new Date(1);`))).toEqual(['1 Date']);
+    expect(clockAndFsReferences(probe(`const t = performance.now();`))).toEqual(['1 performance']);
+    expect(clockAndFsReferences(probe(`const t = fs.readFileSync('x');`)).length).toBeGreaterThan(0);
+    expect(clockAndFsReferences(probe(`const m = require('node:fs');`))).toEqual(['1 require']);
+    expect(clockAndFsReferences(probe(`// Date.now() is not used\nconst t = 1;`))).toEqual([]);
+    expect(storeReaches(probe(`const r = db.prepare('x');`)).length).toBeGreaterThan(0);
+    expect(storeReaches(probe(`const r = coord.landingProject('a');`)).length).toBeGreaterThan(0);
+    expect(storeReaches(probe(`import { CoordStore } from './store.js';`)).length).toBeGreaterThan(0);
+    expect(storeReaches(probe(`const r = [1].map((x) => x);`))).toEqual([]);
   });
   it('has no clock, no fs and no other node builtin', () => {
-    expect(code(), 'landingLine.ts reads the clock').not.toMatch(/\bDate\s*\.\s*now\s*\(|performance\s*\.\s*now|\bnew\s+Date\b/);
-    expect(code(), 'landingLine.ts imports a node builtin').not.toMatch(NODE_BUILTIN);
-    expect(code(), 'landingLine.ts reaches for a filesystem').not.toMatch(/\bfs\s*\.|require\s*\(/);
+    const p = parsedFile(FILE);
+    expect(clockAndFsReferences(p), 'landingLine.ts reads the clock or reaches for a filesystem').toEqual([]);
+    expect(nodeBuiltinSpecifiers(p), 'landingLine.ts imports a node builtin').toEqual([]);
   });
   it('imports values only from shared/landingLine.ts (L0)', () => {
-    expect(valueImportSpecifiers(code())).toEqual(['../../../shared/landingLine.js']);
+    expect(valueSpecifiers(parsedFile(FILE))).toEqual(['../../../shared/landingLine.js']);
   });
   it('has no side-effect import, dynamic import or re-export', () => {
-    expect(code(), 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
-    expect(code(), 'a dynamic import').not.toMatch(/\bimport\s*\(/);
-    expect(code(), 'a re-export').not.toMatch(RE_EXPORT);
+    const p = parsedFile(FILE);
+    expect(sideEffectImports(p), 'a side-effect import').toEqual([]);
+    expect(dynamicOrReExport(p), 'a dynamic import or a re-export').toEqual([]);
   });
   it('reaches no store', () => {
-    expect(code(), 'landingLine.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bdb\s*\./);
+    expect(storeReaches(parsedFile(FILE)), 'landingLine.ts reaches the store').toEqual([]);
   });
 });
 
