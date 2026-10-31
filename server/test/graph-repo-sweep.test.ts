@@ -512,12 +512,13 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
 
   it('N22 — a build at one commit that starts in a second already holding a build waits for a free one, never `build id exists`', { timeout: T }, () => {
     const repo = published();
-    // occupy this second and the next with builds at the served commit: the start must move past both
+    // occupy this second and the next with builds at the served commit: the start must move past both (the served
+    // build may already be this second's, which is the race itself, so an existing one is left as it is)
     const stem = `${meta(repo).commit.slice(0, 12)}-${meta(repo).engine}-`;
     const sec = (d: Date): string => d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
     const now = Date.now();
     const taken = [0, 1000].map((dt) => `${stem}${sec(new Date(now + dt))}`);
-    for (const id of taken) fs.mkdirSync(path.join(keyDir(repo), 'builds', id));
+    for (const id of taken) fs.mkdirSync(path.join(keyDir(repo), 'builds', id), { recursive: true });
     fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
     fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n');
     sweep(INCR);
