@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { componentFamily } from '../sourceScan.js';
 import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, SPAWN_VERDICTS } from '../../../shared/api.js';
+import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
 import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
@@ -1325,5 +1326,26 @@ describe('one scratch-slug predicate — four prefixes and one infix, three bash
       .map(rel)
       .sort();
     expect(holders).toEqual(['server/test/scratchSlugs.ts']);
+  });
+});
+
+describe('landing order wave 5c — the PR-keyed pr-state words, defined once and derived', () => {
+  const PRSTATE = path.join(ccrcRoot, 'server/src/prstate.ts');
+  it('PR_STATE_PR_MAP and PR_STATE_PR_WORDS are declared in exactly one file, prstate.ts', () => {
+    expect(ALL.filter((f) => /^\s*const PR_STATE_PR_MAP\b/m.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/prstate.ts']);
+    expect(ALL.filter((f) => /^\s*export const PR_STATE_PR_WORDS\b/m.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/prstate.ts']);
+  });
+  it('DERIVES the list from the map, never a hand-written array', () => {
+    const DERIVED = /export const PR_STATE_PR_WORDS: readonly PrStatePrWord\[\] =\s*\n?\s*Object\.keys\(PR_STATE_PR_MAP\)/;
+    expect(DERIVED.test(readFileSync(PRSTATE, 'utf8'))).toBe(true);
+    expect(/PR_STATE_PR_WORDS(?::[^=\n]*)?=\s*\[/.test(readFileSync(PRSTATE, 'utf8'))).toBe(false);  // the name, an optional same-line type annotation, then '= ['
+  });
+  it('spells four or more of the five nowhere as a free-standing list', () => {
+    const M = `(?:${PR_STATE_PR_WORDS.join('|')})`;
+    const LIST = new RegExp(`\\[\\s*'${M}'\\s*(?:,\\s*'${M}'\\s*){${PR_STATE_PR_WORDS.length - 2},}\\]`);
+    expect(LIST.test(`['${[...PR_STATE_PR_WORDS].reverse().join("', '")}']`), 'CONTROL: the five, reversed').toBe(true);
+    expect(LIST.test(`['${PR_STATE_PR_WORDS.slice(1).join("','")}']`), 'CONTROL: four of them').toBe(true);
+    expect(LIST.test("['open', 'merged', 'closed']"), 'CONTROL: three is not a list of these').toBe(false);
+    expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 });

@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -44,6 +44,15 @@ const literalSpellings = (token: string): number => {
 };
 
 describe('capSupported', () => {
+  it('spells the pr-state-pr token exactly once in server/src, and it REFUSES on no evidence (landing order wave 5c)', () => {
+    expect(PR_STATE_PR_CAP).toBe('pr-state-pr-v1');
+    expect(literalSpellings(PR_STATE_PR_CAP)).toBe(1);
+    expect(capSupported(state(null), PR_STATE_PR_CAP)).toBe(false);
+    expect(capSupported(undefined, PR_STATE_PR_CAP)).toBe(false);
+    expect(capSupported(state(['pr-state']), PR_STATE_PR_CAP), 'the verb is not the token').toBe(false);
+    expect(capSupported(state([PR_STATE_PR_CAP]), PR_STATE_PR_CAP)).toBe(true);
+    expect(verbSupported(state(null), ['pr-state'])).toBe(true);
+  });
   it('answers true only when the deployed ccd advertised the token', () => {
     expect(capSupported(state(['ws-archive', ACTOR_FLAGS_CAP]), ACTOR_FLAGS_CAP)).toBe(true);
     expect(capSupported(state(['ws-archive']), ACTOR_FLAGS_CAP)).toBe(false);

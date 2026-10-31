@@ -2,6 +2,7 @@ import type { PrChecks, PrReason, PrState, PrView, ProjectRepoWire, TaskItem } f
 import { isPrReason, UNCHECKED_PR } from '../../shared/api.js';
 import type { CcdResult } from './coord/ports.js';
 import { ccdEnding } from './lifecycle.js';
+import { isHead40 } from '../../shared/landing.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -503,4 +504,67 @@ export function readPrLandingLine(x: unknown): PrLandingLine | null {
     landedInTrain: x['landedInTrain'] === true,
     unmeasured: shape ? [...unmeasured, 'shape'] : unmeasured,
   };
+}
+
+// ── `ccd pr-state --project <p> --pr <n>` (landing order wave 5c; spec §5.5 "Landed state is PR-keyed") ──
+// One PR's state by number, with no workspace binding. The five words are defined once in the map and the list is derived
+// from it. The form is behind `PR_STATE_PR_CAP` (`CCD_CAN.prStatePr`); nothing in the server calls it yet.
+
+const PR_STATE_PR_MAP = {
+  open: 'GitHub reads the PR OPEN (a draft included)',
+  merged: 'GitHub reads it MERGED, or it reads CLOSED with the train claim and the train record proves it landed (landedInTrain)',
+  closed: 'GitHub reads it CLOSED, and it carries no train claim',
+  unmeasured: 'ccd asked and got no definite answer: a timeout, a non-zero exit, an unparsable body, a missing field, or a train claim the proof refused or could not read',
+  absent: 'GitHub answered definitely that the number names no pull request in the repository',
+} as const;
+export type PrStatePrWord = keyof typeof PR_STATE_PR_MAP;
+export const PR_STATE_PR_WORDS: readonly PrStatePrWord[] = Object.keys(PR_STATE_PR_MAP) as PrStatePrWord[];
+
+export interface PrStatePrFacts {
+  headRefOid: string; baseRefName: string; isCrossRepository: boolean; mergedAt: string | null; mergeCommit: string | null;
+}
+/** What the PR-keyed form's one line says, every distinction kept. `unmeasured` says who could not follow: `by: 'ccd'` is
+ *  ccd's own answer (a fleet retry, with ccd's `reason`), `by: 'reader'` is a line this reader could not follow (build
+ *  skew, a different remedy). `absent` is GitHub's definite answer and is never folded into `unmeasured`. */
+export type PrStatePrRead =
+  | { state: 'open' | 'closed'; pr: number; facts: PrStatePrFacts; train: null }
+  | { state: 'merged'; pr: number; facts: PrStatePrFacts; train: 'proved' | null }
+  | { state: 'unmeasured'; pr: number; by: 'ccd' | 'reader'; reason: string; train: 'unproven' | 'unread' | null }
+  | { state: 'absent'; pr: number };
+
+/** The ONE reader of the PR-keyed form's stdout, for the PR `pr` the caller asked about; the line's `number` must equal it.
+ *  Pure. It stops at the first rule that fails, and every refusal is the reader's own `unmeasured`. */
+export function readPrStatePrLine(stdout: string, pr: number): PrStatePrRead {
+  const refuse = (reason: string): PrStatePrRead => ({ state: 'unmeasured', pr, by: 'reader', reason, train: null });
+  const lines = stdout.split('\n').filter((l) => l.trim() !== '');
+  if (lines.length !== 1) return refuse('line-count');
+  let x: unknown;
+  try { x = JSON.parse(lines[0]!); } catch { return refuse('not-json'); }
+  if (!isPlainObject(x)) return refuse('not-json');
+  if (!positiveSafe(x['number']) || x['number'] !== pr) return refuse('pr-mismatch');
+  const state = x['state'];
+  if (typeof state !== 'string' || !(PR_STATE_PR_WORDS as readonly string[]).includes(state)) return refuse('word');
+  const word = state as PrStatePrWord;
+  const landed = x['landedInTrain'] === true, unproven = x['trainUnproven'] === true, unread = x['trainUnread'] === true;
+  if (word === 'absent') return landed || unproven || unread ? refuse('train-flags') : { state: 'absent', pr };
+  if (word === 'unmeasured') {
+    if (unproven && unread) return refuse('train-flags');
+    const reason = typeof x['reason'] === 'string' && x['reason'] !== '' ? x['reason'] : 'unstated';
+    return { state: 'unmeasured', pr, by: 'ccd', reason, train: unread ? 'unread' : unproven ? 'unproven' : null };
+  }
+  if (unproven || unread || (landed && word !== 'merged')) return refuse('train-flags');
+  const { headRefOid, baseRefName, isCrossRepository, mergedAt, mergeCommit } = x;
+  if (typeof headRefOid !== 'string' || !isHead40(headRefOid)) return refuse('fields');
+  if (typeof baseRefName !== 'string' || baseRefName === '') return refuse('fields');
+  if (typeof isCrossRepository !== 'boolean') return refuse('fields');
+  if (mergedAt !== null && !(typeof mergedAt === 'string' && QUEUE_AT_RE.test(mergedAt))) return refuse('fields');
+  if (mergeCommit !== null && !(typeof mergeCommit === 'string' && isHead40(mergeCommit))) return refuse('fields');
+  const facts: PrStatePrFacts = { headRefOid, baseRefName, isCrossRepository, mergedAt, mergeCommit };
+  if (word === 'merged') {
+    if (landed) return { state: 'merged', pr, facts, train: 'proved' };
+    if (mergedAt === null || mergeCommit === null) return refuse('fields');
+    return { state: 'merged', pr, facts, train: null };
+  }
+  if (mergedAt !== null || mergeCommit !== null) return refuse('fields');
+  return { state: word, pr, facts, train: null };
 }
