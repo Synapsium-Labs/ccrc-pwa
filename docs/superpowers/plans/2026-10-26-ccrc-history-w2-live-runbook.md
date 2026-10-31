@@ -10,6 +10,49 @@ CP-39d (#1693, `5377d23c1`, first released as `v0.0.767`): it is the fleet box's
 is byte-identical to `v0.0.767`'s (see "Before act 7"). On that tag, re-read each verb's usage before running it.
 Plan text is never ground truth; the merged code is.
 
+## Amendment of 2026-10-30: the observation is seven days (prospective)
+
+By the operator's ruling of 2026-10-30, W2's observation window is **seven days**. This amendment is prospective and
+changes only live guidance in this runbook: the decisions document and the spec are historical and unchanged, and where
+this runbook still quotes a 14-day figure it is history or a different quantity (the three are told apart below). It
+starts no live act, spends nothing and writes nothing on any box.
+
+- **When the seven days run.** The seven observation days begin only at the valid measured start after setup and pilot:
+  the window start `<S_ms>`, once act 19's verifications are `ok` and the coordinator has recorded both stamps at act 20.
+  Step 0a, pilot sourcing, the census, Q18, the pilot, quiz sourcing and the markers are setup, and are not counted.
+  **No finish date is promised or posted before that measured start.** `<E_ms>` sits in the private record only. A start
+  that is not valid at `<S_ms>` does not count as the start: the operator rules, and the existing pre-window route
+  (`open --finalize --prior-final`, act 17) is the only one; any new `<E_ms>` is again `<S_ms>` + 604800000.
+- **How it is signed.** Every draft sets `window_plan.planned_days` to 7 explicitly, through `open --draft --overrides`,
+  before part 1 is signed (act 10). Part 2's final window is then exactly `window.end_ms = window.start_ms + 604800000`
+  (act 17). The shipped schema and template default for `window_plan.planned_days` stays 14 (`history-gate.mjs`, the
+  part 1 record's `window_plan` field): selecting 7 needs no runtime, default, test or release change. The existing
+  one-day tolerance on the final window's length is unchanged and is **not** authority to schedule an eighth day.
+- **Every draft reapplies it.** A superseding draft (for a power or node change, the quiz-floor remedy, a raised
+  `pilot_budget`, a re-pilot, an added node or any other cause) re-runs act 10 with the existing overrides file, which
+  must carry `window_plan.planned_days` 7 under the current ruling. `--supersedes` carries only the predecessor's seed,
+  never its overrides, so an override left out silently reverts to 14. Power is recomputed for each new signed record.
+- **Three different quantities.** `q18_settings.lookback_days` (14) is the census look-back, and its value and the act 11
+  command are unchanged: never shorten the census to seven days. `active_rule.lookback_ms` (604800000, seven days) is
+  the active-family rule's look-back and is unchanged. `window_plan.planned_days` (7) is the observation. Q18's projection
+  uses the 7 planned days: `n_f = round(windows_f × 7 / covered_days)`, a family whose `n_f` is 0 dropped. Never reuse
+  a projected count made for 14 days.
+- **If seven days cannot meet the unchanged bars** (sample, power, quality or budget), W2 halts and the operator
+  disposes. There is no automatic extension and no weaker gate. A `lengthen` below is available only if a new express
+  operator ruling supersedes the seven days: it is not authorised now, and a different future duration is not carried
+  out by retaining `planned_days` 7.
+- **Unchanged by this amendment:** the pilot's fidelity and usage checks, the quiz floor (at least 60 questions and 12
+  families), the statistical, bootstrap, quality and PASS bars, the explicit budgets set before each record and the final
+  spend approval, the operator's own hand labels, the private signed and hash-checked records kept off-repo, the
+  freezes and forced-change halts (R-B1 to R-B4), the rollout and re-clean checks on any named, family or added node,
+  and the completed backfill. The release and history-byte proof stays with the coordinator's act 5, against the
+  `v0.0.767`-equivalent history-byte baseline after CP-39d; a version string alone proves nothing, and seven days needs
+  no new release. W2 start has no W1-acceptance prerequisite, and W3 and W4 stay gated on the operator's recorded W2
+  PASS.
+- **Owners.** The operator owns the named node, the account, the exact non-Fable arm model and exact writer and judge
+  ids, the budgets, the rollout, pin and off, and restoring the prior update intent. The coordinator owns measurements,
+  not selections, and makes no live history write.
+
 ## In short
 
 - **What the window is.** A pre-registered live A/B over the fleet box's session families active at W2 open, plus a frozen
@@ -18,10 +61,12 @@ Plan text is never ground truth; the merged code is.
   `report`. Nothing that scores moves between part 1 and close (W2-D6 build freeze, W2-D7 maintenance freeze). From act 6 to act 28
   no release is installed and the account's wrapper does not change. If either is forced, W2 halts and closes with no
   verdict (the operator's ruling of 2026-10-26, R-B2).
-- **Minimum calendar time: about 15 to 17 days.** The window is `planned_days` long, 14 by default, and may be up to one
-  day longer, never shorter (W2-D25). Before it come step 0a, pilot sourcing, the census, Q18, the pilot, quiz sourcing and
-  part 2. That takes hours to a few days, and it depends on the account's limits: every batch stops at 70% (W2-D55). After
-  it come the counters, the hand-check labelling and the report, about a day. The quiz arms (about 30M token-equivalents,
+- **Observation: seven days, from the measured start (the amendment of 2026-10-30, above).** The window is
+  `planned_days` long, signed as 7 (the shipped default of 14 is overridden in every draft), and part 2 signs
+  `window.end_ms = window.start_ms + 604800000`. The seven days do not include what comes before the start: step 0a,
+  pilot sourcing, the census, Q18, the pilot, quiz sourcing and part 2. That setup takes hours to a few days, depends on
+  the account's limits (every batch stops at 70%, W2-D55), and has no promised finish date. After the window come the
+  counters, the hand-check labelling and the report, about a day. The quiz arms (about 30M token-equivalents,
   spec §10.2 "The cost", **I**) run during the window (W2-D77), paced by the same limits stop.
 - **Who does what.**
   - **The operator** runs every command on the fleet box and labels the hand-check sheet (W2-D81). The operator also owns
@@ -272,8 +317,17 @@ Every line must be measured and recorded before step 0a.
   (`labeller.sha_min_prefix`, `quiz.writer_input`, `quiz.baseline_files`, `pilot.n_fidelity`, `pilot.n_usage`); and
   `rubric_sha256`.
 
-  For a superseding draft, pass the superseded draft's overrides file with only the new key added: `--supersedes`
-  carries only the seed (act 12, "Any superseding draft").
+  **Under the ruling of 2026-10-30 the overrides file always carries the seven-day plan**, so every draft names it,
+  the first one included:
+  ```
+  {"window_plan": {"planned_days": 7}}      # plus any other override, such as "settings_mode"
+  ```
+  Sign nothing whose `window_plan.planned_days` is not 7: read it back from the printed part 1 (`jq .window_plan.planned_days
+  <P>/part1.v<k>.json`) before posting `H1`. The schema default is 14 and nothing else selects 7.
+
+  For a superseding draft, pass the superseded draft's overrides file again, with its `planned_days` 7 kept and only
+  the cause's own key added: `--supersedes` carries only the seed, not the predecessor's overrides (act 12, "Any
+  superseding draft").
 
   Confirm the fixed `row_cap` of 400 when signing (part 1 table).
 - **Inputs:** `H_0A` and `H_PS`.
@@ -306,7 +360,8 @@ Every line must be measured and recorded before step 0a.
   replay verify --registry --record <P>/part1.json --record-sha256 <H1> \
     --census <P>/census.json --census-sha256 <H_C> > <P>/verify-registry.json     # sha256 <H_VR> on stderr
   ```
-- **`--since`:** T0 minus 14 days, as act 11 writes it. It must equal `q18_settings.lookback_days` (14) exactly: `power`
+- **`--since`:** T0 minus 14 days, as act 11 writes it. The 14 is the census look-back, `q18_settings.lookback_days`,
+  and the seven-day observation does not change it (the amendment of 2026-10-30). It must equal `q18_settings.lookback_days` (14) exactly: `power`
   refuses `input-invalid` `census <store_id> since-mismatch` unless `--as-of` minus `--since` is that many days, so an
   overridden `lookback_days` needs `--since "$((T0 - <days> * 86400000))"`. The active rule's 7-day look-back reads each
   family's last main entry before T0, which `--since` does not bound.
@@ -330,19 +385,30 @@ Every line must be measured and recorded before step 0a.
     > <P>/power.json                                       # sha256 <H_PW> on stderr
   ```
 - **Decide:** one of the words `keep`, `lengthen` or `add-nodes` (`Q18_DECISIONS`). Read the headline figure, the 80%
-  figure and the rho 0 figure from the output.
+  figure and the rho 0 figure from the output. `power` projects over the record's 7 planned days:
+  `n_f = round(windows_f × 7 / covered_days)`, dropping a family whose `n_f` is 0, with `covered_days` from the 14-day
+  census. A figure projected for 14 days is never reused. If the unchanged sample, power, quality and budget
+  conditions cannot be met in seven days, **halt and seek the operator's disposition**: not an automatic `lengthen`,
+  and not a weaker gate.
 - **Post, before step 0b:** `H_PW`, the decision, and only these scalar figures from `power.json`: `headline`,
   `at_power_80`, `at_rho_0`, `rho_hat`, `population` and `registry_drops` (a count). Post nothing else from the file:
   `inputs`, `n_f`, `coverage` and `pre_window_uptake` are keyed by store id, and `n_f.per_family` by family key (store
   id, ccrc id and generation), which W2-D25 keeps private.
-- **On `lengthen`:** supersede the draft with the same seed, as below, with `window_plan.planned_days` the one key
-  added. Then repeat acts 11 and 12 under the new part 1, with a new T0, writing to new versioned names (Conventions).
-- **Any superseding draft** (`lengthen`, the quiz-floor remedy, a raised `pilot_budget`, the re-pilot after a failed
-  step 0b (R-B3, act 14a), whose new key is the one its fix changes, if any):
+- **On `lengthen` (history, not authorised now):** this is the 14-day-era procedure, kept as history. It is available
+  only if a NEW express operator ruling supersedes the seven days, and no such ruling exists. Even then it is not a
+  matter of retaining `planned_days` 7: the new ruling names the duration, and this runbook does not choose one. The
+  old procedure: supersede the draft with the same seed, as below, with `window_plan.planned_days` the one key
+  changed. Then repeat acts 11 and 12 under the new part 1, with a new T0, writing to new versioned names (Conventions).
+- **Any superseding draft** (the quiz-floor remedy, a raised `pilot_budget`, a power or node change, an added node, the
+  re-pilot after a failed step 0b (R-B3, act 14a), or `lengthen` if it is ever ruled, whose new key is the one its fix
+  changes, if any):
   - Re-run act 10 with the same flags and the SAME overrides file as the draft it supersedes, with only the new key
     added, plus `--supersedes <old part 1> --supersedes-sha256 <old H1>`. `--supersedes` carries only the seed: every
     other field is rebuilt from the defaults and this call's `--overrides`, so an override left out silently reverts to
-    its default. The chain check refuses a seed change, and nothing else that differs.
+    its default. The chain check refuses a seed change, and nothing else that differs. **The overrides file must carry
+    `window_plan.planned_days` 7 under the ruling of 2026-10-30**, on every such draft: the predecessor's overrides are
+    not retained, and without the key the draft reverts to the default of 14. The diff below would show a `planned_days`
+    of 14 if it did.
   - Before posting the new `H1`, diff the two parts:
     `diff <(jq -S 'del(.drafted_ms, .supersedes)' <old part 1>) <(jq -S 'del(.drafted_ms, .supersedes)' <new part 1>)`.
     Only the intended key may differ. Keep the diff private: it shows store ids.
@@ -355,9 +421,12 @@ Every line must be measured and recorded before step 0a.
     refuses the old `sourced.json` (`sourced record-mismatch`). So re-run act 12 (`power`; act 11's census and
     `verify --registry` files are not bound to part 1 and carry over while `active_rule.lookback_ms` is unchanged), act 13
     (marker and verify under the new part 1), all of act 14 on a fresh `<OUT_PILOT>`, act 15, and act 16 on a fresh
-    `<OUT_QUIZ>`. Only then run act 17. The new pilot spends `pilot_budget` again, on a new ledger.
+    `<OUT_QUIZ>`. Only then run act 17. The new pilot spends `pilot_budget` again, on a new ledger. Power is recomputed
+    for the new signed record. This list is the existing one: a superseding draft adds no act 11 rerun of its own (a
+    census and registry rerun happens only where a separate trigger above already calls for it, as `lengthen`'s does).
 - **On `add-nodes`:** this contradicts the one-node ruling. It needs an operator ruling, and then W2-D8's added-node
-  checks: acts 2-4, 6 and 7 on the new node, and its own maintenance-freeze start.
+  checks: acts 2-4, 6 and 7 on the new node, and its own maintenance-freeze start. Its draft is a superseding draft
+  like any other, and reapplies the overrides with `planned_days` 7.
 - **Note:** `power` has no upper bound on `sims` (section 7 residual). A huge value runs without practical end; supersede
   such a draft.
 - **Words:** `input-invalid` (`census <store_id> since-mismatch`, `census <store_id> no-tick-coverage`, or a verify
@@ -401,7 +470,8 @@ Every line must be measured and recorded before step 0a.
   - If the turn bound reads `unmeasured` because the max-turns stop is spelled other than `error_max_turns`, step 0b did
     not pass. The coordinator's ruling on the spelling (W2-D57 amendment) names the cause; the rest is as below.
   - Any other failure, too: W2 halts. By the operator's ruling of 2026-10-26 (R-B3, K2's letter), nothing is accepted past a
-    failed step 0b. Fix the cause, then re-pilot on a superseding draft: act 10 again, then acts 12 to 17, with all of
+    failed step 0b. Fix the cause, then re-pilot on a superseding draft: act 10 again (with the overrides file
+    reapplied, `planned_days` 7), then acts 12 to 17, with all of
     act 14 on a fresh `<OUT_PILOT>` (act 12, "Any superseding draft"). Never run 14b to 14d without `--step0b` after a
     failed step 0b, and never take it to act 17 with `--accept-failed-pilot`. If the fix needs a release install, R-B2's
     bar applies: W2 halts and closes with no verdict. To abort, follow the halts table.
@@ -492,8 +562,10 @@ Every line must be measured and recorded before step 0a.
   refuses `args-invalid`, and the refusal prints the derived figure and its inputs: `spend-budget <given> is not the derived
   <B> = ceil(5 x <n> x <total> / (4 x <pilot questions>))`. `pilot-result.json`'s `at_target` figure is for `quiz.target`
   questions, not the frozen count, so echo the derived figure, never `at_target`'s.
-- **The window.** `<E_ms> − <S_ms>` must lie in [planned_days × 86,400,000, planned_days × 86,400,000 + 86,400,000]
-  (W2-D25).
+- **The window.** The signed plan is `planned_days` 7 (act 10), so sign `<E_ms> = <S_ms> + 604800000` exactly. The
+  code accepts any `<E_ms> − <S_ms>` in [planned_days × 86,400,000, planned_days × 86,400,000 + 86,400,000] (W2-D25), but
+  that one-day tolerance is unchanged and is not authority to schedule an eighth day. The seven days count from the
+  valid measured start (act 20), and no finish date is posted before it.
   - Choose `<S_ms>` far enough ahead to finish acts 18 and 19 plus at least one sweep tick.
   - After `<S_ms>`, part 2 can be superseded only by `open --amend` (W2-D90). Before it, a pre-window amendment may
     supersede part 2 wholesale, through `--prior-final`.
@@ -505,7 +577,7 @@ Every line must be measured and recorded before step 0a.
     ruling: it re-runs acts 12 to 17, a full re-pilot and its spend included; see act 12, "Any superseding draft"); `power inputs-mismatch`; a pilot result written under another part 1 (K21);
   - `pilot-failed`: a failed pilot without `--accept-failed-pilot`. The flag on a passed pilot is refused;
   - `args-invalid`: the spend-budget echo, `q18-decision`, or `--accept-failed-pilot` on a passed pilot;
-  - `record-invalid`: for example a 13-day window.
+  - `record-invalid`: for example a window shorter than the signed seven days (a 6-day one).
 
 ## Act 18: the recall-off writes (operator)
 
@@ -824,8 +896,8 @@ The **markers in place** at each point:
 | Step 0b fails (W2-D57, W2-D58) | act 14a `pilot-failed` | freeze, intent, pilot-HO, outs | none: re-pilot (the operator's ruling of 2026-10-26, R-B3). Fix the cause, then a superseding draft and acts 12 to 17, as act 14a says. Nothing is accepted. If W2 closes instead: 27 (pilot-HO), 28, 29; 26 is not needed | No: a halt before window start closes W2 without W2-D86's counter report, and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4). With no part 2 there is nothing to count. |
 | Fidelity or usage pilot fails (W2-D76, K13) | acts 14b and 14d `pilot-failed` | the same | by ruling: re-pilot as for step 0b, or close with 27 (pilot-HO), 28, 29. Or, to accept: after a 14b failure, finish 14c and 14d (after a 14d failure `pilot-result.json` already exists), then act 17 with `--accept-failed-pilot` | No (as above) |
 | A failed fidelity or usage pilot accepted (never a failed step 0b, R-B3) | act 17 `--accept-failed-pilot` (Q27) | none extra | none: continue | Yes, at act 23. The coordinator records the use (K14). |
-| Q18 change (`lengthen` or `add-nodes`) | act 12 | freeze, intent, outs | none for `lengthen`: supersede the draft and repeat 11-12. `add-nodes` needs a ruling. | n/a (no halt) |
-| Quiz floor (fewer than 60 questions or 12 families) | act 16; finalize refuses `below-floor` | freeze, intent, outs (pilot-HO already gone) | to abort: 28, 29. To proceed: a ruling, then a superseding draft that lowers `quiz.halt_floor`, built from the old draft's overrides file with that key added (act 12, "Any superseding draft"). That draft changes `H1`, so pilot-result's `record_sha256` no longer matches (K21). Finalize binds power, the quiz meta and the pilot result to part 1's sha, so acts 12-17 re-run. Act 11's census and `verify --registry` outputs are not bound to `H1` and carry over while `active_rule.lookback_ms` is unchanged. | No: an abort here closes W2 without W2-D86's counter report (R-B4) |
+| Q18 change (`lengthen` or `add-nodes`) | act 12 | freeze, intent, outs | `lengthen` is not authorised: it needs a NEW express operator ruling superseding the seven days (the amendment of 2026-10-30). If the unchanged bars cannot be met in seven days, halt for the operator's disposition. Were it ruled, the old procedure is to supersede the draft and repeat 11-12. `add-nodes` needs a ruling, and its superseding draft reapplies `planned_days` 7. | n/a (no halt) |
+| Quiz floor (fewer than 60 questions or 12 families) | act 16; finalize refuses `below-floor` | freeze, intent, outs (pilot-HO already gone) | to abort: 28, 29. To proceed: a ruling, then a superseding draft that lowers `quiz.halt_floor`, built from the old draft's overrides file with that key added and `planned_days` 7 kept (act 12, "Any superseding draft"). That draft changes `H1`, so pilot-result's `record_sha256` no longer matches (K21). Finalize binds power, the quiz meta and the pilot result to part 1's sha, so acts 12-17 re-run. Act 11's census and `verify --registry` outputs are not bound to `H1` and carry over while `active_rule.lookback_ms` is unchanged. | No: an abort here closes W2 without W2-D86's counter report (R-B4) |
 | Failed re-pilot (K22 (c)) | act 21 | all, incl. RO and quiz-HO | if the window does not stand: 26, 27, 28, 29 | Only at or after `<E_ms>` (`window-open` otherwise). Either keep the markers until `<E_ms>` and run act 23, or record an operator ruling to close without it. |
 | A release install or a wrapper change from act 6 to act 28 (`tree-moved`, `code-changed`, `wrapper-moved`; the operator's ruling of 2026-10-26, R-B2) | any preflight or batch | all present at that point | 26 (only if act 18 ran), 27, 28, 29, with no verdict. There is no freeze exception and no roll back and resume | No: R-B2 closes W2 with acts 26 to 29 only. Before window start, R-B4 says the same |
 | Absent rate over `absent_rate_max` in either arm (W2-D64, W2-D89) | act 24 verdict `halt` | RO and quiz-HO already handled by the order 23 → 24; clearing waits for 26 | 26-29 after the ruling | Yes: act 23 ran before the report |
@@ -852,6 +924,10 @@ and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
   sha (R-B1, D-7063).
 - **Re-measure the release stamp and the live Claude Code version** at window start (act 20) and at window end (act 23).
   Both go in the report (W2-D6).
+- **Measure the seven-day plan and the start (the amendment of 2026-10-30).** Before `H1` is posted, confirm from the
+  operator's posted draft that `window_plan.planned_days` is 7 (the operator reads it back, act 10); after part 2, that the
+  window is `<S_ms>` to `<S_ms>` + 604800000. Record the measured start at act 20 and the measured end at act 23. Promise
+  and post no finish date before the start is measured. A start that is not valid is the operator's to rule on.
 - **Record every posted sha** (`H_0A`, `H_PS`, `H_PF`, `H1`, `H_C`, `H_VR`, `H_PW` with the Q18 decision and its scalar figures, `H_0B`, `H_PR`,
   `H_Q`, `H2` and every amended `H2`, `H_V`) and the freeze start and end times. Check each public line against the
   private-name rule before posting.
@@ -863,6 +939,11 @@ and the ledger records the halt (the operator's ruling of 2026-10-26, R-B4).
 ## Where things stand
 
 **Agreed**
+- The observation is seven days (the operator's ruling of 2026-10-30, prospective): `window_plan.planned_days` 7 in every
+  draft's overrides, `window.end_ms = window.start_ms + 604800000`, counted from the valid measured start, with no
+  finish date promised before it. The census look-back stays 14 days and `active_rule.lookback_ms` stays seven; the
+  schema default stays 14. If the unchanged bars cannot be met in seven days, W2 halts for the operator; `lengthen` needs
+  a new express ruling.
 - One named node, the fleet box (ruling 2026-10-25). Acts 7 to 29 run there in §5's order.
 - Every W2 PR is merged; W2-5b1 (#1497), W2-6 (#1547), W2-5b2 with K25 to K27 (#1560) and W2-7 (#1641) were the last,
   and CP-39d (#1693) merged after them. Every verb, flag, refusal word and output path here was checked against
