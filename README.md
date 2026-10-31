@@ -6185,15 +6185,16 @@ three keys: `base`, a branch name that defaults to `main`; `lineage`, `on` or `o
 `lander`, `coordinator` or `none`, which defaults to `none` and says who lands the project's PRs. A probe older than
 this key reads a conf that names it as `unknown-key` and stops measuring that project, so write `lander=` only once
 the box runs this probe. An empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or
-a conf that is not a
-regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would refuse. That project is not measured, its `enabled` and `lander` are removed, and the
-journal names the reason (never the bytes).
+a conf that is not a regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would
+refuse. That project is not measured, its `enabled` and `lander` are removed, and the journal names the reason (never
+the bytes).
 
 **The pauses.** The operator writes both by hand, and the tree has no writer for either:
 - `~/.cc-sessions/land-probe-paused` stops the whole tick before its lock.
 - `~/.cc-sessions/landing/<project>/paused` stops one project.
 
-A paused project is not measured, and its `enabled` and `lander` are removed, so a pause stops acceptance and the landing line's declaration as well as measurement.
+A paused project is not measured, and its `enabled` and `lander` are removed, so a pause stops acceptance and the
+landing line's declaration as well as measurement.
 `ccrc uninstall` removes the units, the binary and every `enabled` and `lander` file.
 
 **Read-only, by code.** The fetch and every `merge-tree` object go into a per-tick bare scratch repository under
