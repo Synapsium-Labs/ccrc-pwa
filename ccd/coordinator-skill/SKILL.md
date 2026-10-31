@@ -367,6 +367,22 @@ not after.
      `{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<worker session id>","runId":<work run id>,"kind":"status","subject":"fix-round","body":"<the report's absolute path on the first line, then your rulings — which findings to fix, which you overruled and why>","artifacts":["<report path>"]}`.
      The idle-gated delivery lane wakes the worker; its fix round ends in a new
      wave-done and a NEW review run (step 5); review runs are never reused.
+     **A fix round with no report behind it** comes from `merging`: a dequeue
+     you answer with a fix round rather than a re-enqueue
+     (`references/wave-lifecycle.md` §5), or the new-head route for a red that
+     is `main`'s own (§5b). On route Q disarm first (§5), then make the same
+     advance to `working`, on the `merging → working` edge, and send the same
+     `fix-round` mail with no `artifacts`. Its body holds three entries, one
+     to a line, and nothing else: `ejected: dequeued:#<pr>` or `ejected:
+     new-head:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after
+     one `git fetch origin`, then `paths: <paths in conflict>` or `checks:
+     <required names that are red>`. Until the landing line records a base
+     (stage 5e), this round is clause 15's ejection, and the base it names is
+     that `origin/main` sha; a `paths:` round is also the conflict-sync clause
+     15 allows on a measured conflict (the operator's answer of 2026-10-30 to
+     D-7536's question). The worker's answering wave-done gets a NEW review
+     run (step 5), scoped to the change that round made; a merge of `main` is
+     reviewed like any other change.
    - **Clean:** update the ledger — Waves row, Decisions, Carried constraints,
      and the **Next-wave brief** — commit it, then `POST /api/runs` **for wave N+1
      first**. Order matters: closing first, even briefly, leaves the program with

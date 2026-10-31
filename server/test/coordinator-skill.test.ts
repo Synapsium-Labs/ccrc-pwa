@@ -3788,3 +3788,38 @@ describe('landing order wave 5b: the new-head route, the train words, the reques
     }
   });
 });
+
+describe('landing order wave 5b: the report-less fix round from merging', () => {
+  const sendBack = (): string => {
+    const step6 = skill.slice(skill.indexOf('6. **Rule on the report**'), skill.indexOf('\n7. **Final merge:**'));
+    const start = step6.indexOf('**Send back:**');
+    return flat(step6.slice(start, step6.indexOf('**Clean:**', start + 1)));
+  };
+  const worker = flat(readFileSync(path.join(root, 'ccd/worker-skill/SKILL.md'), 'utf8'));
+
+  it('sends a fix round with no report from merging: its two sources, its edge, its three entries, its clause 15 reading and its review (wave 1 ruling 2)', () => {
+    const s = sendBack();
+    expect(s).toContain('**A fix round with no report behind it** comes from `merging`: a dequeue you answer with a fix round rather than a re-enqueue (`references/wave-lifecycle.md` §5), or the new-head route for a red that is `main`\'s own (§5b).');
+    expect(s).toContain('On route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.');
+    expect(s).toContain('Its body holds three entries, one to a line, and nothing else: `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `paths: <paths in conflict>` or `checks: <required names that are red>`.');
+    expect(s).toContain('The worker\'s answering wave-done gets a NEW review run (step 5), scoped to the change that round made; a merge of `main` is reviewed like any other change.');
+    expect(s).toContain('Until the landing line records a base (stage 5e), this round is clause 15\'s ejection, and the base it names is that `origin/main` sha; a `paths:` round is also the conflict-sync clause 15 allows on a measured conflict (the operator\'s answer of 2026-10-30 to D-7536\'s question).');
+  });
+
+  it('names the report-less first lines the worker skill reads (wave 1 ruling 2)', () => {
+    for (const w of ['`ejected: dequeued:#<pr>`', '`ejected: new-head:#<pr>`']) {
+      expect(sendBack(), `the coordinator no longer sends ${w}`).toContain(w);
+      expect(worker, `the worker skill no longer reads ${w}`).toContain(w);
+    }
+  });
+
+  it('no report-less sentence holds a double quote', () => {
+    const flatAll = flat(allSkillText);
+    for (const s of ['**A fix round with no report behind it**', 'On route Q disarm first (§5), then make', 'Its body holds three entries', 'Until the landing line records a base', 'The worker\'s answering wave-done gets a NEW review run']) {
+      const from = flatAll.indexOf(s);
+      expect(from, s).toBeGreaterThanOrEqual(0);
+      const sentence = flatAll.slice(from, flatAll.indexOf('. ', from));
+      expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
+    }
+  });
+});

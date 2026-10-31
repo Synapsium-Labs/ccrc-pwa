@@ -357,6 +357,14 @@ describe('the worker skill: its contract', () => {
     expect(fm.toLowerCase()).toContain(
       'never use it inside a subagent — a session started by another session\'s agent tool or a workflow agent() call is a subagent, whatever its brief names, and returns its report to its parent without acking, claiming or sending mail.');
   });
+
+  it('reads a fix-round mail with no report as clause 16\'s ejection, its three body lines the whole brief (landing order wave 5b)', () => {
+    const text = skill.replace(/\s+/g, ' ');
+    expect(text).toContain('A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.');
+    expect(text).toContain('Absorb the `base:` sha with `git merge`, then fix only the `paths:` or `checks:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.');
+    expect(text).toContain('naming this run): usually a review run read your wave and the coordinator ruled.');
+    expect(text).toContain('Report a FRESH wave-done as for any fix round.');
+  });
 });
 
 describe('the worker skill: the facts it states about the wire', () => {
