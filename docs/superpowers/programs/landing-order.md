@@ -31,7 +31,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 4c | 4, hardening | the lineage hardening carried from wave 4's reviews (Carried constraints), kept apart from 4b so that no PR mixes an acceptance change with a display change (D-4329's reason) | server, skills | wave 4 | #1911 | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed, under the title "wave 4b: lineage hardening" given before this row was split from 4b (Decisions, 2026-10-29 17:38); planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4c-lineage-hardening.md`, D-7469 to D-7476); the coordinator-side re-proof moved to the operator (Decisions, 2026-10-29 18:40); accepted on `0a9ff1b2` after review run 1220, then one clean merge of `main` reviewed alone (run 1223), and merged through the native queue as `9ec4fc54` (Decisions, 2026-10-29 22:55); D-7486–D-7495 defined after the merge |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | split 2026-10-30 into sub-waves 5b to 5k (Decisions, 2026-10-30 23:24); run 1227 (the run's wave 13) opened 2026-10-30, before run 1224 closed (Decisions, 2026-10-30 02:32) |
 | 5a | 3 and 4, hardening | the hardening that the reviews of waves 4c and 4b, and three older review items (1141, 1216, 1222), carried forward: the lineage parser, the radar lane, the chip's words, and text and pins (Carried constraints). Kept apart from 5 so that the landing line's PR carries only its own data, routes and verb (D-4329's reason) | server, pwa, skills | waves 4c and 4b | #1960 (plan #1944) | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, D-7528 to D-7539; Decisions, 2026-10-30 03:40); run 1228 (the run's wave 14) opened 2026-10-30; reviewed once (run 1232) and accepted with no fix round; merged 2026-10-30 (`d196d8b3`); five departures, D-7544 to D-7548, in `docs/superpowers/plans/2026-10-30-landing-order-wave5a-departures.md` (Decisions, 2026-10-30 08:16) |
-| 5b | 5, skill text | the new-head route is the coordinator's own act (the operator's answer to D-7536's question), the evidence that a red is `main`'s own, the report-less fix round from `merging`, review 1232's F9 (a) and (c), and **A requested change** against clause 19; D-7546's restatement is a droppable task, held for the operator | skills | wave 5a | — | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md`, D-7588 to D-7592; Decisions, 2026-10-30 23:24) |
+| 5b | 5, skill text | the new-head route is the coordinator's own act (the operator's answer to D-7536's question), the evidence that a red is `main`'s own, the report-less fix round from `merging`, review 1232's F9 (a) and (c), and **A requested change** against clause 19; D-7546's restatement is a droppable task, held for the operator | skills | wave 5a | — | merged 2026-10-31 (#2015 `83c3544c`; `docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md`, D-7588 to D-7592, and its departures note, D-7606 to D-7608; Decisions, 2026-10-31 02:45); Task 2 (D-7546) not taken, held for the operator |
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599; Decisions, 2026-10-30 23:24) |
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads | ccd (fleet box first) | — | — | to plan; waits on the operator's question 3 |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, the `landing.log` journal and its replay, an entry pinned at `advance → merging`, ejection and the second-ejection ask, the order and hold decider, and the coordinator's read of the line | server, skills | wave 5a | — | to plan |
@@ -1512,6 +1512,42 @@ carries it (spec §5.1, amended 2026-09-24).
     reach.
   - **Clause 19.** The coordinator's own workflows now run as clause 19 says: short, time-capped and at `medium`
     effort. Earlier ones in this programme ran at `high`.
+- **2026-10-31 02:45 — wave 5b sent back once, then merged; D-7606 to D-7608 defined.**
+  - **Task 2 (D-7546) was not taken.** No ruling reached the worker, so Tasks 1, 3 and 4 ran without it, and the
+    D-7495 sentence is unchanged. If the operator rules for it, it is a run of its own.
+  - **Review run 1302** (`22e68b1a`) found two important findings. Its 18 measured mutation rows were red, and every
+    suite was green.
+    - **F1:** the new-head route's red-on-`main` read did not follow first parents. On a project that lands with
+      merge commits, it would list another PR's branch commits as `main`'s own.
+    - **F2:** step 6 read every report-less round as clause 15's ejection, the dequeue round included. The operator's
+      answer of 2026-10-30 covers the new-head route only.
+
+    It also found that the reads named could not tell a full run from a refresh run (F3, F4), and it put four
+    questions for a ruling.
+  - **Fix round 1 took every item** (R1 to R8). Each narrows the text, so a case it does not cover stays a stop for
+    the operator:
+    - the red-on-`main` read follows first parents;
+    - only a merge-queue run shows "already fixed", tied to its check suite;
+    - the new-head round is sent only on a merge `git merge-tree` measures clean, and the worker aborts and asks on a
+      conflict;
+    - a report-less round takes one of two forms. An ejection, for the new-head route or a dequeue on a measured
+      conflict, carries a base. A red the PR owns (`red: #<pr>`) carries none and licenses no absorb. A dequeue's other
+      causes stay a stop;
+    - three text items, and a departures note.
+  - **Three numbers are defined** in `docs/superpowers/plans/2026-10-30-landing-order-wave5b-departures.md`:
+    - D-7606 is the worker's whitespace-only rewrap;
+    - D-7607 narrows D-7590's reading of clause 15 to the operator's ruling;
+    - D-7608 amends D-7589's evidence.
+
+    This PR corrects D-7606's line count (review 1303, F3).
+  - **Review run 1303** (`9e3d7c8d`, scoped to the round) found R1 to R8 done as written. Walking each case literally,
+    it found no absorb the text leads to that clause 15 or the operator's answer does not license. All 30 mutation rows
+    were red, and every suite was green. **Accepted, with no second round:** its four findings are minor or advisory,
+    and none leads to a wrong act. They are carried (Carried constraints, "From wave 5b's reviews").
+  - **Landed.** The verdict on the head read `ROUTE Q method=squash admin=never strict=no`, and the required-checks gate
+    exited `0`. No attempt of a required check on the head failed (`filter=all`, 44 runs). PR #2015 was enqueued at
+    `9e3d7c8d` and merged as `83c3544c`, with no dequeue. Each of its six files on `main` is byte-identical to the
+    reviewed head.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1919,22 +1955,34 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
     word is unmeasured. Every one fails closed.
   - **Text and wrap:**
     - the golden's comment in `registry-bounded-read.test.ts` still says the golden was generated on the base;
-    - §5b's "On every route" paragraph needs rewrapping;
-    - once the operator answers D-7536, one clause saying when the new-head route is taken;
-    - `trainUnread` has two remedies under one word;
+    - §5b's "On every route" paragraph needs rewrapping (taken by wave 5b, #2015);
+    - once the operator answers D-7536, one clause saying when the new-head route is taken (taken by wave 5b, #2015);
+    - `trainUnread` has two remedies under one word (taken by wave 5b, #2015);
     - the `mergeBaseFiles` docstring omits its `null` answer.
   - **Guard reach:**
     - the `new Date(` scan reads `watch.ts`, `server.ts` and `fleet.ts` whole;
     - T4-2's two scans go red by a bare ENOENT, not by their own message;
     - the double-quote census leaves out two new sentences of §5b.
+- **From wave 5b's reviews (1302, 1303), carried to the next wave that edits the skills (5e).** None leads to a wrong
+  act: each is text or a gap in a guard.
+  - **§5's dequeue paragraph** still names `gh pr view <pr> --json mergeStateStatus` as the conflict read. It also
+    offers a fix round for a dequeue of any cause, with no pointer to the stop step 6 names for the other causes. Step 6
+    names the `git merge-tree` read, and its fix-round arm stops or sends a form.
+  - **The narrowing's pins are per sentence.** A sentence added to step 6's report-less paragraph or to the worker's
+    fix-round bullet that widens it again passes both skill suites (review 1303, F2, measured). Pin each paragraph
+    whole.
+  - **The dequeue ejection's conflict read** should say "a tree id on its first line, then the paths", as worker
+    clause 16 does: `git merge-tree` also exits 1 for a ref that does not resolve.
+  - **A requested change the operator answers "address"** has no mail form of its own.
+  - **The RED bullet** does not point at step 6's `red:` form.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
 
 ## Next-wave brief
 
-Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c, 4b and 5a are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
-#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`, #1960 `d196d8b3`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
+Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c, 4b, 5a and 5b are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
+#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`, #1960 `d196d8b3`, #2015 `83c3544c`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
 it stays on by the operator's ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose
 reason is `merged` reads `landed` (Decisions, 2026-10-21 14:49 and 19:17).
 
@@ -1988,8 +2036,9 @@ past its window, and the chip ages a frame it already holds.
   `landing` for that project's bound sessions, and the chip. The ledger then records the release, the rollout date
   (which starts §10's stage 3 clock for the operator's view only, D-7483) and the first fresh landing seen.
 
-**Waiting on the operator** (Decisions, 2026-10-30 23:24): question 3 (the `lander=` key), D-7546, D-7472, a look at
-wave 4b's chip, and whether the PRs that must carry `CLAUDE.md` lines wait for the operator's read.
+**Waiting on the operator** (Decisions, 2026-10-30 23:24 and 2026-10-31 02:45): question 3 (the `lander=` key),
+D-7546 (wave 5b landed without its Task 2, so a ruling for it is a run of its own), D-7472, a look at wave 4b's chip,
+and whether the PRs that must carry `CLAUDE.md` lines wait for the operator's read.
 
 **Wave 5a is merged** (#1960 `d196d8b3`; Decisions, 2026-10-30 08:16). It carries the hardening that the reviews of
 waves 4c and 4b, and three older review items, left for wave 5:
@@ -2004,7 +2053,7 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
 
 **Wave 5**, the landing line, is split into sub-waves 5b to 5k (Waves table; Decisions, 2026-10-30 23:24). Questions
 1, 2, 4 and 5 and D-7536 are answered.
-- **5b and 5c are planned** and share no file, so they run in parallel: `docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md` and `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`. 5b's Task 2 (D-7546)
-  waits on the operator, and is dropped if the operator rules against it.
+- **5b is merged** (#2015 `83c3544c`; Decisions, 2026-10-31 02:45), without its Task 2 (D-7546).
+- **5c is in progress**: `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`.
 - **5c reaches the fleet box** before 5h reads it.
 - **5d waits on question 3.** 5e to 5k are planned in order, each against `main` as it then stands.

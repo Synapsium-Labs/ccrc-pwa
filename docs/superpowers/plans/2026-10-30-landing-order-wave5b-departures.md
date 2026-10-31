@@ -11,8 +11,9 @@
 
 **D-7606.** The plan asked for only the lines of the changed sentence to be rewrapped. The added word pushed that
 sentence past the bullet's width, so the bullet's other original sentences were reflowed too. Review 1302 measured it:
-flattened, the only change to the original sentences is the added word "usually". The five old lines are six new ones,
-all within 80 columns, and no other wording changed. This is a whitespace-only departure.
+flattened, the only change to the original sentences is the added word "usually". The bullet's five lines after its
+first are reflowed into five new ones, all within 80 columns, and no other wording changed. This is a whitespace-only
+departure.
 
 **D-7607.** The operator's answer of 2026-10-30 to D-7536's question covers the new-head route only. D-7590 read every
 report-less round from `merging` as clause 15's ejection, the queue's dequeue included. Under that reading, a dequeue
