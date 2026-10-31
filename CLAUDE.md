@@ -46,7 +46,9 @@ When a change and the aim conflict, or a change bends the rings, say so in the P
 Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
 Sessions working in other projects often file ccrc issues and PRs about what they saw on a fleet. Describe the
 behaviour, not the deployment. Never include:
-- names of other projects, products, clients or programmes, or of workspaces built from them;
+- names of other projects, products, clients or programmes, or of workspaces built from them. One exception:
+  Horkos, the merge gate for this repository, may be named here, and so may its `horkos` check, its
+  GitHub App and the files it generates. Horkos's code never appears here;
 - lane, account or login names (new test fixtures use neutral ones, such as `lane-a`);
 - hostnames, IP addresses, tailnet names, cloud volume IDs or absolute home paths;
 - other private repositories, or their branches, PR numbers or issue numbers;
