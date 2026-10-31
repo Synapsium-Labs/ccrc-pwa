@@ -83,6 +83,7 @@ import {
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
 import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
 import { landingAdvanceOf } from './landingEntry.js';
+import { landingEjectionAsk } from './landingLine.js';
 import type { LandingEjectionKind } from '../../../shared/landingLine.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { checksModeAt } from './landing.js';
@@ -1890,6 +1891,13 @@ export function registerCoordRoutes(
     const adv = coord.advanceLanding({ runId: id, to, causedBy: 'coordinator', landing });
     if (!adv.ok) return adv.error === 'ejection-not-merging'
       ? reply.code(409).send({ ok: false, reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
+    // D-7624: the second ejection of an entry is one operator notice, never a refusal. The written row's count reaching 2 is
+    // the once-only raise (the writer is the count's only writer); it names the worker's session, not the review cap's.
+    // @anchor landing-ejection-ask
+    const entry = adv.landing.kind === 'pinned' || adv.landing.kind === 'ejected' ? adv.landing.entry : null;
+    const ask = entry === null ? { due: false as const } : landingEjectionAsk(entry);
+    if (ask.due) notice({ kind: 'run', sessionId: run.sessionId, title: ask.title, body: ask.body, runId: id }, 'record-always',
+      { tag: ask.tag, degraded: 'ejection recorded, feed archive degraded' });
     // Re-read after the advance for the fresh row. `!` is gone with the type (D-2545): an advance that succeeded and
     // then read back absent or unreadable is a real condition, and answering it honestly is cheaper than a
     // non-null assertion that would throw a bare 500 here.

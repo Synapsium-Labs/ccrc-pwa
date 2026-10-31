@@ -47,3 +47,20 @@ export interface LandingEntry {
   /** Epoch ms of the (re-)pin; a re-pin moves the entry to the back (D-7617). */
   pinnedAt: number;
 }
+
+/** The project's two booleans (spec §5.5 Data): the line is paused while either is set. `CoordStore.landingProject`
+ *  answers this. */
+export interface LandingLineFlags { operatorPaused: boolean; mainRedHold: boolean }
+
+/** Why the line is paused, each word naming the flag that sets it. The order of the keys is the order of `by`. */
+export const LANDING_PAUSE_BY = { operator: 'operatorPaused', 'main-red': 'mainRedHold' } as const satisfies Record<string, keyof LandingLineFlags>;
+export type LandingPauseBy = keyof typeof LANDING_PAUSE_BY;
+export const LANDING_PAUSE_BYS = Object.keys(LANDING_PAUSE_BY) as LandingPauseBy[];
+
+/** The decider's answer (`coord/landingLine.ts#landingOrder`). `order` is every `pinned` entry in the order they may
+ *  land, a blocked remainder last. Not paused: `head` is the entry that may land next, or `null` when the line is
+ *  empty or every entry waits on an `ejected` or `unknown` target or on a cycle. Paused: `by` names the flags, and
+ *  there is no head. */
+export type LandingOrder =
+  | { paused: false; order: LandingEntry[]; head: LandingEntry | null }
+  | { paused: true; by: LandingPauseBy[]; order: LandingEntry[] };
