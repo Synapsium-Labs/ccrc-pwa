@@ -34,8 +34,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5b | 5, skill text | the new-head route is the coordinator's own act (the operator's answer to D-7536's question), the evidence that a red is `main`'s own, the report-less fix round from `merging`, review 1232's F9 (a) and (c), and **A requested change** against clause 19; D-7546's restatement is a droppable task, held for the operator | skills | wave 5a | — | merged 2026-10-31 (#2015 `83c3544c`; `docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md`, D-7588 to D-7592, and its departures note, D-7606 to D-7608; Decisions, 2026-10-31 02:45); Task 2 (D-7546) not taken, held for the operator |
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads | ccd (fleet box first) | — | — | to plan; waits on the operator's question 3 |
-| 5e | 5, the line's core | `landing_entries` and `landing_projects`, the `landing.log` journal and its replay, an entry pinned at `advance → merging`, ejection and the second-ejection ask, the order and hold decider, and the coordinator's read of the line | server, skills | wave 5a | — | to plan; run 1307 (the run's wave 16) opened 2026-10-31, before run 1227 closed (Decisions, 2026-10-31 07:06) |
-| 5f | 5, attributed writes | `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events | server, skills | 5e | — | to plan |
+| 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627; Decisions, 2026-10-31 08:14); run 1307 (the run's wave 16) |
+| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | to plan |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
@@ -1591,6 +1591,28 @@ carries it (spec §5.1, amended 2026-09-24).
       operator to read there. At landing, the coordinator compares the PR's lines to the approved text: identical
       lands with no hold, and any difference waits for the operator.
     - **Clause 15:** no separate amendment now. 5e, which first records a base, proposes the amendment in its plan.
+- **2026-10-31 08:14 — wave 5e planned (D-7610 to D-7627).**
+  - **The journal moves to 5f** (D-7610). Every fact the journal protects is first written in 5f, 5g or 5j: order
+    edges, `fixesMain`, run-less entries, intents, the operator pause and withdrawals. So 5e would ship a journal with
+    nothing to journal. 5e keeps the tables (one migration, both tables complete, D-7611; no `repo` column, D-7612),
+    the entry pinned at `merging` by one writer (D-7614), the order decider, the second-ejection notice (D-7624) and
+    the read `GET /api/landing` (with the client verb `ccrc-api landing show`, D-7625).
+  - **Clause 15 needs no amendment.** A `merging → working` advance records the ejection's base on the line (D-7615),
+    so clause 15's "an ejection naming the base sha the landing line recorded" is literally true. The interim reading
+    (D-7590, narrowed by D-7607) is retired. An ejection is sent only for a run whose entry reads `pinned`, and only
+    once the advance answers that the line recorded the base (D-7627). Otherwise the round is a stop for the operator.
+  - **The read is advisory in 5e** (D-7626). The coordinator checks the pause and its own entry's pin. The order is
+    read, not obeyed, until 5i. A server older than the line answers 404, which reads as no entry, and any other failed
+    read stops the landing.
+  - **Two `CLAUDE.md` lines,** for the operator to read in the plan's block **CLAUDE.md (for the operator to read)**.
+    `the landing line` goes first in the coord.db bullet's loss list (D-7620), and `GET /api/landing` joins the
+    box-token bullet. The worker's PR must carry those bytes, and the coordinator compares them at landing and holds
+    the PR until the operator has read them.
+  - **Plan review.** Each task was drafted against `main` by an Opus reader and checked by a Sonnet reader. Three Opus
+    lenses then reviewed the whole plan, and Sonnet refuters checked the serious findings. Two critical findings held
+    and are answered: the new refusal arrives on `reject.code`, and the route fixtures open real runs. So is each
+    important finding.
+  - **Clause 19.** The coordinator's drafting, fix and review workflows ran at `medium` effort with time caps.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2102,9 +2124,9 @@ past its window, and the chip ages a frame it already holds.
   `landing` for that project's bound sessions, and the chip. The ledger then records the release, the rollout date
   (which starts §10's stage 3 clock for the operator's view only, D-7483) and the first fresh landing seen.
 
-**Waiting on the operator** (recommendations: Decisions, 2026-10-31 07:06): question 3 (the `lander=` key), D-7546
-(wave 5b landed without its Task 2, so a ruling for it is a run of its own), D-7472, a look at wave 4b's chip, the
-`CLAUDE.md` lines read at plan time, and clause 15's amendment in 5e's plan.
+**Waiting on the operator** (recommendations: Decisions, 2026-10-31 07:06 and 08:14): question 3 (the `lander=`
+key), D-7546 (wave 5b landed without its Task 2, so a ruling for it is a run of its own), D-7472, a look at wave 4b's
+chip, and a read of 5e's two `CLAUDE.md` bullets (its plan's operator block); 5e's PR is held at landing until then.
 
 **Wave 5a is merged** (#1960 `d196d8b3`; Decisions, 2026-10-30 08:16). It carries the hardening that the reviews of
 waves 4c and 4b, and three older review items, left for wave 5:
@@ -2122,6 +2144,7 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
 - **5b is merged** (#2015 `83c3544c`; Decisions, 2026-10-31 02:45), without its Task 2 (D-7546).
 - **5c is merged** (#2017 `a77811e5`; Decisions, 2026-10-31 07:06). It reaches the fleet box with the next
   release the operator rolls out, and 5h reads it only once the fleet box runs it.
-- **5e is next** (run 1307). Its plan proposes its `CLAUDE.md` lines and clause 15's amendment word for word, and it
-  takes the items carried from wave 5b's reviews.
+- **5e is planned** (`docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, run 1307; Decisions, 2026-10-31 08:14). It is dispatched once its plan lands, and its PR is
+  held at landing until the operator has read its two `CLAUDE.md` bullets. It takes the items carried from wave 5b's reviews, and clause 15 needs no amendment
+  (D-7615).
 - **5d waits on question 3.** 5e to 5k are planned in order, each against `main` as it then stands.
