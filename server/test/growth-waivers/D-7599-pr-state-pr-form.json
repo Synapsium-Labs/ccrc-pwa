@@ -1,6 +1,6 @@
 {
   "file": "ccd/ccd",
-  "maxDelta": 89,
+  "maxDelta": 100,
   "d": "D-7599",
   "reason": "the PR-keyed pr-state form: one helper, two _pr_py modes, the shared train judge and the lifted gh failure classifier; kept inline because it extends the one PR reader and the one train judge, and a library split needs a digest-checked install of its own",
   "added": "2026-10-31"

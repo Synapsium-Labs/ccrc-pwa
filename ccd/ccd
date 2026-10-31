@@ -11638,18 +11638,29 @@ import json, os, sys, tempfile, time
 mode = sys.argv[1]
 NAME_MAX, LIST_MAX = 120, 32
 
-def doc(fd):
+def docs(fd):
+    """Every JSON value on fd, in order: `gh api --paginate` prints one per page, run together (review 1109). None when
+    the fd is empty or anything on it is not JSON: a rule set read in part could miss a required name."""
     try:
         with open('/dev/fd/%d' % fd) as f:
-            raw = f.read().strip()
+            raw = f.read()
     except OSError:
         return None
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+    dec, out, i, n = json.JSONDecoder(), [], 0, len(raw)
+    while True:
+        while i < n and raw[i] in ' \t\r\n':
+            i += 1
+        if i >= n:
+            return out or None
+        try:
+            v, i = dec.raw_decode(raw, i)
+        except Exception:
+            return None
+        out.append(v)
+
+def doc(fd):
+    vals = docs(fd)
+    return vals[0] if vals is not None and len(vals) == 1 else None
 
 def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
@@ -11692,9 +11703,10 @@ if mode == 'rows':
                                  for i in range(k)]) + '\n')
 
 elif mode == 'names-rules':
-    d = doc(4)
-    if not isinstance(d, list):
+    pages = docs(4)
+    if pages is None or not all(isinstance(pg, list) for pg in pages):
         sys.exit(1)
+    d = [r for pg in pages for r in pg]
     names, pins = [], []
     for r in d:
         if isinstance(r, dict) and r.get('type') == 'required_status_checks':
@@ -11870,8 +11882,8 @@ PY
 }
 
 _pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JSON line, always
-  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`) and the public branch view
-  # (`branches/<base>`), each under its own timeout, both plain GETs. A read failure is a miss and is never cached.
+  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`, every page: one holds 30 rules, review 1109)
+  # and the public branch view (`branches/<base>`), each under its own timeout, both plain GETs; a failure is a miss, never cached.
   # A fourth argument of `0` forbids the REST reads: a miss then answers rules-unread (nothing cached), so the caller
   # can keep one call's worst path at 6 + 4 + 4 s whatever number of bases are bound.
   local project="$1" repo="$2" base="$3" rest="${4:-1}" cache got r="" p="" enc="_"
@@ -11883,7 +11895,7 @@ _pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JS
     printf '%s\n' "$got"; return 0
   fi
   if [[ "$rest" == 1 && "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
-    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" 2>/dev/null) || r=""
+    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" --paginate 2>/dev/null) || r=""
     p=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/branches/$enc" 2>/dev/null) || p=""
     r=$(_pr_landing_py names-rules 4<<<"$r" 2>/dev/null) || r=""
     p=$(_pr_landing_py names-protection 4<<<"$p" 2>/dev/null) || p=""

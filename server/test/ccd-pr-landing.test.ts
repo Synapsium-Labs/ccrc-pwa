@@ -25,7 +25,9 @@ const ccdSeconds = (name: string): number => {
 };
 
 /** A `gh` recording every call's argv NUL-separated (a record ends in 0x1e), answering the GraphQL read from
- *  `gql.json`, the rules read from `rules.json` and the branch view from `branch.json`, each with its own rc file. */
+ *  `gql.json`, the rules read from `rules.json` and the branch view from `branch.json`, each with its own rc file.
+ *  With `rules-page1.json` present, the rules endpoint pages: a read with `--paginate` gets page 1 and then page 2, run
+ *  together as gh prints them; a read without it gets page 1 alone, as GitHub's thirty-rule page would. */
 const GH = `
 gh() {
   { printf '%s\\0' "$@"; printf '\\x1e'; } >> "$HOME/gh-landing.log"
@@ -35,6 +37,7 @@ gh() {
   esac
   case "$1 $2" in
     'api repos/o/r/rules/branches/'*) [[ -f "$HOME/rules-rc" ]] && rc=$(cat "$HOME/rules-rc")
+      if [[ -f "$HOME/rules-page1.json" ]]; then cat "$HOME/rules-page1.json"; [[ " $* " == *' --paginate '* ]] && cat "$HOME/rules-page2.json"; return "$rc"; fi
       if [[ -f "$HOME/rules-\${2##*/}.json" ]]; then cat "$HOME/rules-\${2##*/}.json"; elif [[ -f "$HOME/rules.json" ]]; then cat "$HOME/rules.json"; fi; return "$rc" ;;
     'api repos/o/r/branches/'*) if [[ -f "$HOME/branch-\${2##*/}.json" ]]; then cat "$HOME/branch-\${2##*/}.json"; elif [[ -f "$HOME/branch.json" ]]; then cat "$HOME/branch.json"; fi; return 0 ;;
     'pr list') echo '[]'; return 0 ;;
@@ -632,6 +635,50 @@ describe('the rules cache', () => {
     put('gql.json', answer([null]));
     landing('demo', 'demo-quiet-basin:41');
     expect(restCalls()).toEqual([]);
+  });
+});
+
+describe('the rules read, every page (review 1109)', () => {
+  const REQ = (context: string): Ctx => ({ type: 'required_status_checks', parameters: { required_status_checks: [{ context }] } });
+  const rulesCalls = (): string[][] => calls().filter((c) => c[0] === 'api' && (c[1] ?? '').startsWith('repos/o/r/rules/'));
+  const cacheFile = (): string => path.join(h.home, '.cc-sessions', 'pr-landing', 'demo.rules.main.json');
+  const setup = (): void => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [run('lint', 'SUCCESS')])]));
+    put('branch.json', { protected: false });
+  };
+
+  it('a required_status_checks rule only on the second page is named: a full first page never reads as the whole set', () => {
+    setup();
+    // The stub's page holds two rules, as GitHub's holds thirty: the required rule is the third, so on page 2.
+    put('rules-page1.json', [{ type: 'pull_request', parameters: {} }, { type: 'deletion' }]);
+    put('rules-page2.json', [REQ('e2e')]);
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.rulesNamed).toEqual(['e2e']);
+    expect(l.unmeasured).toEqual([]);
+    expect(rulesCalls()).toEqual([['api', 'repos/o/r/rules/branches/main', '--paginate']]);
+    expect(JSON.parse(fs.readFileSync(cacheFile(), 'utf8')).rules.names).toEqual(['e2e']);
+  });
+
+  it('several pages are one set: a required rule on each page counts', () => {
+    setup();
+    put('rules-page1.json', [REQ('lint'), { type: 'creation' }]);
+    put('rules-page2.json', [REQ('e2e')]);
+    expect(landing('demo', 'demo-quiet-basin:41').lines[0]!.rulesNamed).toEqual(['lint', 'e2e']);
+  });
+
+  it.each([
+    ['an object', '{"message":"Bad credentials"}'],
+    ['not JSON', 'HTTP 502 <html>'],
+  ])('a page that is %s makes the rules unmeasured and is never cached', (_what, page2) => {
+    setup();
+    put('rules-page1.json', [REQ('lint')]);
+    put('rules-page2.json', page2);
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.unmeasured).toEqual(['rules']);
+    expect(l.rulesNamed).toEqual([]);
+    expect(l.bound).toBe(true);
+    expect(fs.existsSync(cacheFile())).toBe(false);
   });
 });
 
