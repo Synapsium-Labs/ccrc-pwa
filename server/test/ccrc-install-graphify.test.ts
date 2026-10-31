@@ -2358,7 +2358,7 @@ describe('N20: ccrc uninstall removes a marked store and its links, and nothing 
     const r = runInstall(home, ['uninstall', '--force'], { CCRC_GRAPH_STORE: foreign });
     expect(r.code, r.stderr).toBe(0);
     expect(readFileSync(join(foreign, 'keep.txt'), 'utf8')).toBe('mine\n');
-    expect(r.stdout).toMatch(/^uninstall: graphify: .*not-a-store has no \.ccrc-graph-store marker — left in place$/m);
+    expect(r.stdout).toMatch(/^uninstall: graphify: .*not-a-store has no graph-store marker — left in place$/m);
     expect(existsSync(join(home, '.ccrc', 'graphs', '.ccrc-graph-store')), 'the default store is not the configured one: untouched').toBe(true);
   });
 });

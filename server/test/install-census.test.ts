@@ -840,8 +840,13 @@ function placedUnits(): Set<string> {
   }
   const local = assignments(body);
   bindsExactlyOnce(fn, local, 'dir', UNIT_DIR);
-  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), unitDirs(), local);
+  // D-7354: the graph sweep's two units are RENDERED from the box's graph settings, not copied, by the two functions
+  // of RENDERED_UNIT_FNS; each takes `<template> <dest>`, as `_inst_atomic` does, so their destinations read the same.
+  const dests = ['_inst_atomic', ...RENDERED_UNIT_FNS].flatMap((cmd) => argAt(fn, cmd, calls(body, cmd), 1));
+  return census(fn, 'placement', dests, unitDirs(), local);
 }
+/** The `<template> <dest>` renderers `_inst_units` places a unit through instead of `_inst_atomic` (D-7354). */
+const RENDERED_UNIT_FNS = ['_inst_graph_service', '_inst_graph_timer'];
 
 /** `_uninst_units`' body with its Darwin arm cut out (header: Darwin). */
 function uninstUnitsSystemdArm(): string {
@@ -1066,6 +1071,16 @@ function deployPlaced(cmd: 'install_atomic' | '_unit_atomic', dirs: string[]): S
   return census(DEPLOY_WHERE, 'placement', dests, dirs, new Map());
 }
 
+/** Every unit deploy.sh's agent lane RENDERS through `_graph_units <kind> <template> <dest>` (D-7354): the box-side
+ *  call of `_inst_units`' renderers, so its destination is argument 3. Read under the same no-silent-drops rule. */
+function deployRenderedUnits(): Set<string> {
+  const all = calls(deployCode(), '_graph_units');
+  everyMentionRead('_graph_units', (g) => calls(g, '_graph_units').length, 'call(s) of it');
+  return census(DEPLOY_WHERE, 'placement', argAt(DEPLOY_WHERE, '_graph_units', all, 2), DEPLOY_UNIT_DIRS, new Map());
+}
+/** Every unit file deploy.sh places: copied by `_unit_atomic`, or rendered by `_graph_units`. */
+const deployPlacedUnits = (): Set<string> => new Set([...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS), ...deployRenderedUnits()]);
+
 /** The `systemctl` verbs that enable a unit: `reenable` is disable-then-enable,
  *  the same effect. The ones that arm a unit another way are declared, not read
  *  (header: Enables). */
@@ -1192,6 +1207,13 @@ function deployTreeSources(): Set<string> {
       }
       out.add(p.slice(root.length));
     }
+  }
+  // D-7354: the templates `_graph_units` renders, on the box, out of the rsynced ~/ccrc tree (argument 2).
+  for (const word of argAt(DEPLOY_WHERE, '_graph_units', calls(code, '_graph_units'), 1)) {
+    if (word.includes('$') || !word.startsWith('~/ccrc/')) {
+      throw new Error(`install-census.test.ts: unresolvable source "${word}" of a \`_graph_units\` call in ${DEPLOY_WHERE}: spell it literally under ~/ccrc/`);
+    }
+    out.add(path.posix.normalize(word).slice('~/ccrc/'.length));
   }
   // ccd's pair, run ON THE BOX out of the rsynced ~/ccrc tree.
   if (calls(code, 'install_ccd_pair').length > 0) {
@@ -1639,7 +1661,7 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
 
   it('every systemd unit file _inst_units places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.units)', () => {
     const placed = placedUnits();
-    const deployed = deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS);
+    const deployed = deployPlacedUnits();
     expect(placed.size,
       'the _inst_units extractor found too few placed unit files — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(UNIT_FLOOR);
@@ -1689,7 +1711,7 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
     // would have dropped it silently, and a deploy that armed one of ITS
     // instances would arm another tool's publisher.
     const shipped = [...trackedFiles()].map((f) => path.posix.basename(f)).filter(isTemplate);
-    const templates = [...placedUnits(), ...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS), ...shipped].filter(isTemplate);
+    const templates = [...placedUnits(), ...deployPlacedUnits(), ...shipped].filter(isTemplate);
     expect(templates.length,
       'neither installer places a template unit and the repository ships none, so the instance half of this case would check nothing — an extractor has gone stale')
       .toBeGreaterThan(0);
@@ -1726,6 +1748,7 @@ describe('neither installer ever writes a name another repository owns on the li
       ['_inst_units', placedUnits()],
       [`${DEPLOY_WHERE}'s install_atomic`, deployPlacedBins()],
       [`${DEPLOY_WHERE}'s _unit_atomic`, deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS)],
+      [`${DEPLOY_WHERE}'s _graph_units`, deployRenderedUnits()],
     ];
     // Vacuity, before anything else: an empty destination set would pass
     // every assertion below for free, and say nothing about the live box.
@@ -2228,6 +2251,7 @@ const OTHER_INST_ATOMIC_FNS: Readonly<Record<string, string>> = {
   _inst_units_darwin: 'launchd plists, macOS only; deploy.sh deploys only to the Linux fleet box',
   _exp_ddns_units: 'the opt-in public endpoint\'s DNS units, placed by its own verb, never by install',
   _inst_slice_limits: 'the session slice\'s rendered limits drop-in, inside the user unit directory the units describe\'s',
+  _inst_graph_render: 'the graph sweep\'s rendered timer and service (D-7354), whose destinations the units describe reads off `_inst_units`\' RENDERED_UNIT_FNS calls',
 };
 
 /** `for NAME in a b c; do` loops in a body, as more values of NAME. */

@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the graph sweep every 15 minutes (O3)
+Description=Refresh each repository's code graph from its main line (graph revision 2; period from CCRC_GRAPH_REFRESH_SECS)
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=15min

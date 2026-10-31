@@ -507,7 +507,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccrc-update-watchdog.timer` | server, both | 60 s | re-measures a self-update that died with its updater ("Releases") | — |
 | `ccd-history-sweep.timer` | fleet, both | 2 min | copies every rostered home's transcripts verbatim, secrets a session printed included, into the store `ccrc history` reads ("Session history", below) | `~/.ccrc/history-off` |
 | `ccd-land-probe.timer` | fleet, both | 5 min | measures, for each project opted in by `~/.ccrc/landing/<project>.conf`, which open PRs conflict with the base and each other, the base's required checks, and each workspace branch's lineage of clean base merges, read-only ("Conflict radar", below) | `~/.cc-sessions/land-probe-paused`; per project `~/.cc-sessions/landing/<project>/paused` |
-| `ccd-graph-sweep.timer` | fleet, both | 15 min | refreshes per-tree code graphs | `~/.ccrc/graph-sweep-paused` |
+| `ccd-graph-sweep.timer` | fleet, both | 15 min (`CCRC_GRAPH_REFRESH_SECS`) | refreshes one code graph per repository, built from its main line in the graph store and linked into each of its trees ("Graph layer", below) | `~/.ccrc/graph-sweep-paused` |
 | `ccd-account-health.timer` | fleet, both | 15 min | probes each setup-token account's credential, spending no tokens | `~/.ccrc/account-health-paused` |
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
 | `ccrc-models.timer` | fleet, both | 1 h | `ccrc models refresh --all`: every lane's model catalogue, and on a Codex lane the advance step ("Model classes per lane") | — |
@@ -1313,6 +1313,20 @@ containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
 way as the rest; a value that is not its shape keeps its default and warns.
+Twenty-two are the graph sweep's (graph revision 2, D-7348; see **The sweep** under "Graph layer"): `CCRC_GRAPH_STORE`,
+`CCRC_GRAPH_SOURCE_REF`, `CCRC_GRAPH_REPOS_EXCLUDE`, `CCRC_GRAPH_REFRESH_SECS`, `CCRC_GRAPH_FETCH_SECS`,
+`CCRC_GRAPH_FULL_REBUILD_SECS`, `CCRC_GRAPH_INCREMENTAL_MAX_FILES` (box-wide default 0: every refresh is a full build,
+OA-GR2, D-7634), `CCRC_GRAPH_FULL_FAIL_MAX`, `CCRC_GRAPH_FAIL_BACKOFF_SECS`, `CCRC_GRAPH_BUDGET`,
+`CCRC_GRAPH_BUILD_TIMEOUT`, `CCRC_GRAPH_SLOT_WAIT_SECS`, `CCRC_GRAPH_BUILD_NICE`, `CCRC_GRAPH_MAX_WORKERS`,
+`CCRC_GRAPH_MAX_SHRINK_PCT`, `CCRC_GRAPH_KEEP_BUILDS`, `CCRC_GRAPH_BUILD_GRACE_SECS`, `CCRC_GRAPH_MIGRATE_BUDGET`,
+`CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS` and
+`CCRC_GRAPH_CARD_DIFF_LIST_MAX`. `_graph_knobs` reads them and `ccd/graph-resolve` checks each against its shape; a
+value that is not its shape keeps its default and warns with the key, the value and where it came from, so a typo never
+removes a bound. The sweep's unit sets no environment, so on the fleet box `ccrc.env` is where they go. Four are
+rendered into the sweep's units by `ccrc install`/`update` and `deploy.sh agent` (`CCRC_GRAPH_REFRESH_SECS` into the
+timer's period, and `CCRC_GRAPH_BUDGET`, `CCRC_GRAPH_SLOT_WAIT_SECS` and `CCRC_GRAPH_BUILD_TIMEOUT` into the service's
+start timeout, D-7354), so a change to them takes effect at the next update; the three read-side values reach sessions
+through the store's `settings.json`, and every other key at the next pass.
 Two of the fleet box's ccd-* sweeps read their settings the same way (wave 29, D-6981): `CCRC_KEEPALIVE_MODEL`,
 `CCRC_KEEPALIVE_PROMPT` and `CCRC_KEEPALIVE_FRESH` (`ccd-telemetry-keepalive`) and `CCRC_USAGE_SWEEP_DAYS`
 (`ccd-usage-sweep`). Their units have no shell and no `EnvironmentFile=`, so each sweep sources
@@ -5557,7 +5571,9 @@ who a message claims to be from.
 
 ### Graph layer (graphify)
 
-**graphify** keeps one AST-derived knowledge graph fresh per git tree on the fleet host.
+**graphify** keeps one AST-derived knowledge graph fresh per **repository** on the fleet host (graph revision 2):
+built from the repository's main line in ccrc's graph store and shared by every tree of the repository through one
+ignored link, `<tree>/graphify-out`.
 `ccrc install`/`update` provision it in six role-gated steps (a server box has no rostered wrapper
 homes to graph, so all six skip there): an **engine**, a ccrc-owned venv at
 `~/.ccrc/graphify-venv` (`pip install graphifyy==$GRAPHIFY_PIN`, the single-definition pin in
@@ -5567,8 +5583,12 @@ remove); a **skill**, assembled from the *installed package* — unlike the coor
 skills, it has no vendored tree — into every rostered account's skills directory; the **read-rule
 removal** (below), which takes back what D-1243 wrote into each rostered home's `CLAUDE.md`; the
 **default noise list**, ccrc's own footprint converged to
-`~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
-into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
+`~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/`, `graphify-out` (no slash: the slash-only line
+does not ignore a symlink, so without it `git status` lists the link and `git worktree remove` refuses the tree) and
+`.graphifyignore` converged into each tree's common-dir `info/exclude` through `_graph_exclude_common`, the one writer
+the sweep calls too, after which the step creates the graph store's root and its `.ccrc-graph-store` marker through
+`_gr_store_init` (D-7360; a root it refuses, such as a non-empty directory without the marker, is a WARN, never a failed
+install); and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
 content. (`server/test/ccrc-install-*.test.ts` pins that sequence, and
 `ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
@@ -5616,9 +5636,17 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   distance**: the card says `fresh`, `N commits behind HEAD`, `not an ancestor of HEAD` — the graph
   was built on a tree this session cannot reach, so it describes code the session does not have —
   or `freshness unmeasured`, which is said out loud rather than left silent, because a card that
-  names a sha and then says nothing about it reads as neutral. No `graph.json` prints **nothing**, except that when
-  `~/.ccrc/graph-sweep.json` carries a row for the tree the sweep's own refusal reason is printed
-  instead, clipped to 400 characters (it is repo-controlled text off an engine's stderr).
+  names a sha and then says nothing about it reads as neutral. That is the card of a tree whose `graphify-out` is
+  still a real per-tree directory. A **linked tree** (graph revision 2, D-7351) is measured off the published
+  build's `meta.json`, read through its link: the card says the graph is *the graph of this repository's main at*
+  its commit, how long ago it was refreshed, how many commits main has moved since (`GM_MAIN_MOVED`), and how many
+  files this tree differs from it in, naming this branch's own changed files first (at most
+  `CCRC_GRAPH_CARD_DIFF_LIST_MAX`, the rest as a count) so the session reads those directly; the gate's thresholds
+  come from the store's `settings.json`, which the sweep rewrites every pass, since a session never reads
+  `ccrc.env`. No `graph.json` prints **nothing**, except that when `~/.ccrc/graph-sweep.json`'s last pass carries a
+  `repos[]` row for this tree's repository (matched by the realpath of its git common dir, so every worktree and the
+  main checkout share it) with a reason, the sweep's own outcome and reason are printed instead, clipped to 400
+  characters (it is repo-controlled text off an engine's stderr).
   `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never
   by parsing the file; the node count comes off `GRAPH_REPORT.md`'s summary line with `head -c 4096`,
   because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
@@ -6013,24 +6041,45 @@ queries/denials, `nullPeerRead` (every row carrying no `ccrcPeerReads` field at 
 proves the hook shipped), `heldN` and `coTenantN` among the roll-ups. It is the instrument the R4 and R7
 adoption readings are taken from; nothing in this repository writes it, ships it, or tests it.
 
-**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
-`OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
-own flock, and writes a rolling census to `~/.ccrc/graph-sweep.json` (last 10 passes). A pass status
-is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`; each tree's row
-carries an outcome (`never-built · fresh · stale-rebuilt · restamped · refused-no-exclude ·
-skipped-busy · skipped-budget · skipped-locked · refused-by-guard · timed-out · refused-shrink ·
-failed`) and a reason. `restamped` is D-1509's: graphify's full rebuild exits 0 without writing
-anything when the candidate graph's topology equals the existing one, so a build is re-measured on
-`built_at_commit` — advanced, or the engine said "left untouched" and the sweep splices in the stamp
-it skipped, or nothing is written and the row reads `failed`. A Claude Code worktree under a repo's
-`.claude/worktrees/` is discovered too, but **only while a registered session's workdir names it**
-(`~/.cc-sessions/<id>.workdir`, compared by realpath — Claude Code mints `agent-*` and `wf_*`
-worktrees for its own isolation, and eight cold builds of throwaways starved the tree the rule was
-written for, D-1563); project roots and ccd workspaces are discovered session or not. A tree with a
-live, working session on it is deferred (the idle gate, tmux-free — read off the session registry
-and its status file) unless it is ≥20 commits or ≥6h stale, the O3 escape hatch.
-`touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
-operator who needs the fleet host quiet.
+**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`, `OnUnitActiveSec=` rendered
+from `CCRC_GRAPH_REFRESH_SECS`, default `15min`), builds **one graph per repository** (graph revision 2, D-7350). A
+pass takes its own flock (a second entrant is `pass-locked`), then reads the pause file:
+`touch ~/.ccrc/graph-sweep-paused` makes every pass `paused` before any fetch, store write or build, and nothing in
+ccrc removes it — not the sweep, not `ccrc install`/`update`, not `deploy.sh agent`, though those enable and start the
+timer (D-7365); only you do, with `rm`. The pass then loads its library from the shipped tree (`ccd/ccrc`'s body and
+`ccd/graph-resolve`, which owns the store, the repository key and the source ref), creates or checks the store
+(`CCRC_GRAPH_STORE`, default `~/.ccrc/graphs`, always used as its realpath and refused inside `~/projects` or
+`~/worktrees`), and groups every tree under `~/projects` and `~/worktrees` by the realpath of its git common dir: one
+repository each, keyed `<basename of the main checkout>-<8 hex of the common dir's digest>`. Per repository it keeps a
+ccrc-owned checkout of the main line (`CCRC_GRAPH_SOURCE_REF`, default `origin/HEAD`, then `origin/main`,
+`origin/master` and the local default branch) inside the store, fetched at most every `CCRC_GRAPH_FETCH_SECS`, and
+builds there when main has moved: up to `CCRC_GRAPH_BUDGET` builds a pass, repositories with no published build
+first. Every build is a **full** build on this fleet (`CCRC_GRAPH_INCREMENTAL_MAX_FILES=0`, the box-wide default the
+operator ruled after the measured one-day incremental gap of 10.26%, OA-GR2, D-7634), plus the safety-net rebuild every
+`CCRC_GRAPH_FULL_REBUILD_SECS`; a repository whose full builds fail `CCRC_GRAPH_FULL_FAIL_MAX` times in a row waits
+`CCRC_GRAPH_FAIL_BACKOFF_SECS` between attempts. A build runs through `ccd/graph-build`, the only caller of the engine,
+inside `ccrc test --local --heavy` (the tests slice and its heavy queue: it waits at most `CCRC_GRAPH_SLOT_WAIT_SECS`
+for a slot, runs at `nice` `CCRC_GRAPH_BUILD_NICE` with `CCRC_GRAPH_MAX_WORKERS` workers, and is stopped after
+`CCRC_GRAPH_BUILD_TIMEOUT`), so the sweep's unit no longer carries the build's memory. A build is staged in
+`<repo-key>/staging/`, checked (the corpus guard, and a graph that shrank by more than `CCRC_GRAPH_MAX_SHRINK_PCT` is
+refused), and published read-only as `<repo-key>/builds/<commit12>-<pin>-<UTC time>/`; `current` then names it in one
+rename, so a session never reads a half-written graph. The unit's `TimeoutStartSec=` is rendered as
+`CCRC_GRAPH_BUDGET × (CCRC_GRAPH_SLOT_WAIT_SECS + CCRC_GRAPH_BUILD_TIMEOUT) + 600` (default 5400). After the builds,
+each repository with a published build gets its exclude lines and one link per tree whose `graphify-out` is absent and
+ignored (`git check-ignore -q graphify-out`): `<tree>/graphify-out -> <store>/<repo-key>/current`, absolute. That link,
+and removing a stray `.graphifyignore` an old per-tree sweep generated, are the only writes the sweep makes under a
+tree; `graphify update .` run through the link fails with `EACCES` and changes nothing shared, while
+`graphify save-result` writes to `graphify-out/memory/`, which links to the repository's writable `memory/`. A
+repository named in `CCRC_GRAPH_REPOS_EXCLUDE` gets no graph. The census, `~/.ccrc/graph-sweep.json`, keeps the last 10
+passes; a pass status is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`, and each pass
+holds one `repos[]` row per repository with its outcome (`fresh · refreshed · rebuilt · skipped-budget ·
+skipped-slots · skipped-backoff · refused-by-guard · refused-shrink · timed-out · oom-killed · failed · no-source ·
+excluded`; `failed` names its `fail` class), the build's duration, peak memory and CPU, and each row is also printed
+to the unit's journal as one `graph-sweep: row {json}` line (D-7357). At the end of the pass the sweep writes the
+store's `settings.json` with the three read-side values (`CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS`,
+`CCRC_GRAPH_CARD_DIFF_LIST_MAX`) for the session hook. A change to `CCRC_GRAPH_REFRESH_SECS` or to a value in the
+service's start timeout takes effect at the next `ccrc update` (or `deploy.sh agent`), which re-renders both units;
+every other graph setting takes effect at the next pass.
 
 **Noise lists.** Two sources, unioned, and they are not the same kind of thing.
 `~/.ccrc/graph-noise/_default.list` is **ccrc's own**, converged by `ccrc install` and shipped on
@@ -6038,8 +6087,8 @@ the agent deploy lane; it carries only ccrc's own footprint (`.claude/`, `.remem
 `.superpowers/`, `CLAUDE.local.md`), because the artifacts ccrc's skills write into every repo a
 session touches were otherwise held against that repo by the corpus guard and refused its build for
 ever. `~/.ccrc/graph-noise/<repo>.list` beside it is the **operator's**, and ccrc never writes it.
-One path-glob per line; together they become that tree's `.graphifyignore` for the sweep's own
-builds.
+One path-glob per line; together they become the `.graphifyignore` the sweep generates in a repository's
+checkout in the store, for its own builds.
 
 The distinction between them decides every case where they would act differently: **a `<repo>.list`
 is an instruction about one repo; the default is hygiene applied to repos that never asked.** So —
@@ -6095,13 +6144,25 @@ per-home skill drift, per-tree excludes, the census's last pass, and free space 
 graph root (`~/worktrees`, falling back to `~/projects`) — the same 2 GiB FAIL / 10 GiB WARN floors
 `disk` uses over `$HOME`.
 
-**Reclaiming space (O7).** A graph is regenerable and disposable: `rm -rf <repo>/graphify-out` loses
-nothing durable, and the next sweep pass rebuilds it cold (`shared/lifecycle.ts` carries this as the
-project-graph-store class's own ruling).
+**Reclaiming space (O7).** A graph is regenerable and disposable. The store holds one checkout and at most
+`CCRC_GRAPH_KEEP_BUILDS` published builds per repository; the sweep collects at the end of every pass, under
+`ionice -c3`: a superseded build once it is beyond the keep count and older than `CCRC_GRAPH_BUILD_GRACE_SECS`, a
+staging directory a crashed build left, `.trash/` entries older than the grace, and a repository's whole directory
+(checkout, builds and saved results) once its source common dir is gone or it is excluded, for the grace. A tree's old
+per-tree `graphify-out` directory is migrated, at most `CCRC_GRAPH_MIGRATE_BUDGET` trees a pass and only in a
+repository with a published build: it must be ignored, its session idle (`CCRC_GRAPH_HOOKSTATE_FRESH_SECS` decides how
+recent a hook state counts as busy), and hold only entries graphify writes; its `memory/` is kept under
+`<repo-key>/memory/migrated-<tree-key>/`, the directory is moved to the store's `.trash/` (or removed in place on
+another filesystem), and the link takes its place. Anything else is left alone and named in the row's
+`migrate.refused`. `shared/lifecycle.ts` declares the six classes: `graph-repo-build`, `graph-repo-checkout`,
+`graph-repo-memory`, `graph-staging`, `graph-tree-link` and `graph-sweep-census` (D-7354). `ccrc uninstall` resolves the
+store through the same settings and removes it **only** when it carries the `.ccrc-graph-store` marker, with the
+`graphify-out` links under `~/projects` and `~/worktrees` that point into it; a store root without the marker is left
+in place and named, and a link it cannot find dangles harmlessly, since it is ignored.
 
 **Bumping the pin.** Edit `GRAPHIFY_PIN` in `ccd/ccrc`, run `ccrc install` (or `update`) on the fleet
-box, and expect every tree to re-stamp stale on the next sweep pass — a full-fleet rebuild over
-roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). Re-verify the
+box, and expect every repository to rebuild on the next sweep passes — the pin is part of each build's id, so a
+full-fleet rebuild takes the repository count divided by `CCRC_GRAPH_BUDGET` (default 4 builds a pass) passes. Re-verify the
 shrink-refusal literal the build discriminator greps for (the comment at its check in
 `ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
 the message has already moved once between minor versions.

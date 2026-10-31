@@ -16547,6 +16547,38 @@ _inst_slice_limits() {   # <template> <dest>
   rm -f -- "$out"
 }
 
+# ── THE GRAPH SWEEP'S UNITS ARE RENDERED FROM THE GRAPH SETTINGS (graph revision 2 GR8, D-7354; spec §5.2) ──
+# `deploy/systemd/ccd-graph-sweep.{timer,service}` are templates whose `OnUnitActiveSec=` and `TimeoutStartSec=` are
+# the defaults. Both lanes render them through the two functions below, as the slice drop-in above is: `_inst_units`
+# calls them, and deploy.sh's agent lane through its `_graph_units`, which sources the shipped ccrc on the box. The
+# values are `_gr_knobs`' (ccd/graph-resolve, sourced from beside this file: GRAPH_LIB is CCRC_HERE), so a value of
+# the wrong shape keeps its default with a WARN. Unset, each renders its template's bytes (900 s is `15min`;
+# 4 x (600 + 600) + 600 is 5400). A change takes effect at the next install, update or agent deploy.
+_inst_graph_lib() {   # load the resolver once and read the graph settings into GK; WARN each kept default
+  [ -n "${INST_GRAPH_LIB:-}" ] && return 0
+  declare -F _gr_knobs >/dev/null || . "$CCRC_HERE/graph-resolve" || _ccrc_die "cannot load $CCRC_HERE/graph-resolve"
+  _gr_knobs || _ccrc_die "${GK_WARN[*]}"; INST_GRAPH_LIB=1
+  local w; for w in ${GK_WARN[@]+"${GK_WARN[@]}"}; do echo "$PROG: graphify: WARN: $w" >&2; done
+}
+# _inst_graph_render <template> <dest> <directive> <value> — <template> with its one <directive>= line set to <value>,
+# installed through `_inst_atomic` at 644; a template without exactly one such line dies with nothing replaced.
+_inst_graph_render() {
+  local out="$2.tmp.r$$"
+  [ -f "$1" ] || _ccrc_die "the shipped tree has no $1 — is this a complete ccrc tree? (re-run after: bash install.sh)"
+  if ! LC_ALL=C awk -v d="$3=" -v v="$4" 'index($0, d) == 1 { print d v; n++; next } { print } END { exit (n == 1) ? 0 : 3 }' "$1" > "$out"; then
+    rm -f -- "$out"; _ccrc_die "could not render $2 from $1 (it must carry exactly one $3= line) — nothing at that path was replaced"
+  fi
+  _inst_atomic "$out" "$2" 644; rm -f -- "$out"
+}
+_inst_graph_timer() {   # <template> <dest>: OnUnitActiveSec= is CCRC_GRAPH_REFRESH_SECS, whole minutes as `<n>min`
+  _inst_graph_lib; local s="${GK[CCRC_GRAPH_REFRESH_SECS]}"
+  if [ $((s % 60)) -eq 0 ]; then s="$((s / 60))min"; else s="${s}s"; fi
+  _inst_graph_render "$1" "$2" OnUnitActiveSec "$s"
+}
+_inst_graph_service() {   # <template> <dest>: TimeoutStartSec= is BUDGET x (SLOT_WAIT_SECS + BUILD_TIMEOUT) + 600
+  _inst_graph_lib; _inst_graph_render "$1" "$2" TimeoutStartSec "$((GK[CCRC_GRAPH_BUDGET] * (GK[CCRC_GRAPH_SLOT_WAIT_SECS] + GK[CCRC_GRAPH_BUILD_TIMEOUT]) + 600))"
+}
+
 # ── _inst_tree_copy — `_inst_atomic` for a DIRECTORY ─────────────────────
 # `_inst_atomic` is single-file by construction (one `cmp`, one `cp`, one
 # `chmod`, one `mv`), and a skill is a DIRECTORY: a `SKILL.md` beside a
@@ -17584,8 +17616,9 @@ _inst_units() {
   # box runs no per-tree AST sweep at all, so its unit files stay off it
   # entirely (`_inst_enable`'s own gate on the ENABLE side matches this one).
   if [ "$INST_ROLE" != server ]; then
-    _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.service" 644
-    _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.timer" "$dir/ccd-graph-sweep.timer" 644
+    # Rendered, not copied: the period and the start timeout are the box's graph settings (D-7354, above).
+    _inst_graph_service "$tree/deploy/systemd/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.service"
+    _inst_graph_timer "$tree/deploy/systemd/ccd-graph-sweep.timer" "$dir/ccd-graph-sweep.timer"
     _inst_atomic "$tree/deploy/systemd/ccd-usage-sweep.service" "$dir/ccd-usage-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-usage-sweep.timer" "$dir/ccd-usage-sweep.timer" 644
     # The temp-dir reaper's pair, role-gated for its own reason rather than by
@@ -19027,7 +19060,11 @@ _inst_graph_excludes() {
       [ "${added:-0}" -eq 0 ] || n=$((n+1))
     done
   done
-  echo "install: graphify: exclude lines converged (graphify-out/, .graphifyignore; $n new)"
+  echo "install: graphify: exclude lines converged (graphify-out/, graphify-out, .graphifyignore; $n new)"
+  # D-7360: the store root and its marker, through the resolver's one creator; a root it refuses is a WARN (the
+  # doctor FAILs it), never a failed install.
+  _inst_graph_lib
+  if _gr_store_init >/dev/null; then echo "install: graphify: graph store converged ($GR_STORE)"; else echo "$PROG: graphify: WARN: $GR_WHY" >&2; fi
 }
 
 # ── _inst_ws_build_excludes — converge node_modules/cdk.out excludes ──────
@@ -26294,6 +26331,7 @@ cmd_uninstall() {
   _uninst_wrappers
   _uninst_cc_sessions
   _uninst_graphify_skills
+  _uninst_graph_store
   _uninst_tree_bins
   _uninst_keep_asides
   [ "$purge" -eq 1 ] && _uninst_purge "$purge_memory" "$purge_history"
@@ -26320,6 +26358,26 @@ cmd_uninstall() {
       echo "uninstall: $(_uninst_history_kept_line)"
     fi
   fi
+}
+
+# ── _uninst_graph_store — the graph store, only with its marker, and the in-tree links into it (D-7354; spec §9.2) ──
+# The root is resolved through `_gr_knobs`/`_gr_store` (ccd/graph-resolve) before anything is touched; one without the
+# `.ccrc-graph-store` marker is left in place and named, so a typo never deletes someone else's directory. The links
+# are the `graphify-out` symlinks under the two roots the exclude writer walks whose target is inside the store; a
+# link it cannot find dangles harmlessly (it is ignored). Published builds are read-only, so the store is made
+# writable before it is removed. Runs before `_uninst_tree_bins`, which removes the tree the resolver is read from.
+_uninst_graph_store() {
+  local s l n=0
+  [ -f "$CCRC_HERE/graph-resolve" ] || { echo "uninstall: graphify: no graph resolver beside ccrc — no graph store to remove"; return 0; }
+  _inst_graph_lib; _gr_store >/dev/null || { echo "uninstall: graphify: $GR_WHY — nothing removed"; return 0; }
+  s="$GR_STORE"
+  [ -e "$s" ] || { echo "uninstall: graphify: no graph store at $s"; return 0; }
+  _gr_store_marked || { echo "uninstall: graphify: $s has no graph-store marker — left in place"; return 0; }
+  for l in "$HOME/projects"/*/graphify-out "$HOME/projects"/*/*/graphify-out "$HOME/worktrees"/*/graphify-out "$HOME/worktrees"/*/*/graphify-out; do
+    [ -L "$l" ] && [[ "$(readlink -- "$l")" == "$s"/* ]] && rm -f -- "$l" && n=$((n+1))
+  done
+  chmod -R -- u+w "$s" 2>/dev/null; rm -rf -- "$s" || _ccrc_die "removing the graph store $s failed"
+  echo "uninstall: graphify: the graph store $s removed, and $n link(s) into it"
 }
 
 # ── ccrc's usage INSTANCES, on the way out (Plan 3a Task 7; spec §13) ─────
