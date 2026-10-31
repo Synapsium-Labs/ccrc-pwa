@@ -135,9 +135,9 @@ export const HALT_WORDS = Object.freeze(['absent-rate', 'run-failed', 'handcheck
 /** @typedef {(typeof HALT_WORDS)[number]} HaltWord */
 
 // ── The open record (W2-D22, W2-D24, W2-D25, W2-D72, W2-D90) ─────────────────────────────────────────────────
-/** The kinds an amendment to part 2 may carry (W2-D90, chosen set).
- *  @type {readonly ['version-move', 'freeze-exception', 'forced-act']} */
-export const AMENDMENT_KINDS = Object.freeze(['version-move', 'freeze-exception', 'forced-act']);
+/** The kinds an amendment to part 2 may carry (W2-D90, chosen set). `budget-raise` added by W2-7 under the operator's ruling R-B1 (D-7063).
+ *  @type {readonly ['version-move', 'freeze-exception', 'forced-act', 'budget-raise']} */
+export const AMENDMENT_KINDS = Object.freeze(['version-move', 'freeze-exception', 'forced-act', 'budget-raise']);
 /** @typedef {(typeof AMENDMENT_KINDS)[number]} AmendmentKind */
 
 /** The four files whose installed bytes `gate_code.files` hashes, by repo-relative path (W2-D24).
@@ -150,7 +150,7 @@ export const GATE_CODE_FILES = Object.freeze([
  *  `code-changed`, `code-unmeasured` for a sha missing on either side), the question writer's discards (W2-D72), decideGate's one refusal (W2-D89), and validateOpenRecord's, one
  *  word per remedy for W2-D25's bullets and W2-D90's rule (a code-sha mismatch in step 0a or the pilot reuses `code-changed`).
  *  Only this module declares the list (W2-D12); W2-4's DRIVER_REASONS shares three spellings, `code-changed`, `code-unmeasured` and `assignment-mismatch`.
- *  @type {readonly ['store-id-null', 'store-id-duplicate', 'store-id-unlisted', 'family-unassigned', 'row-cap-mismatch', 'window-mismatch', 'code-changed', 'code-unmeasured', 'writer-malformed', 'writer-leak', 'question-not-run', 'field-missing', 'field-unknown', 'field-malformed', 'constant-mismatch', 'value-outside-set', 'model-alias', 'model-forbidden', 'signed-text-mismatch', 'release-mismatch', 'flag-rejected', 'seed-changed', 'pilot-drift', 'quiz-mismatch', 'quiz-holds-control', 'pilot-quiz-overlap', 'window-length', 'assignment-mismatch', 'draft-mismatch', 'chain-mismatch', 'post-start-change', 'amendment-kind', 'amendment-detail-mismatch', 'version-move-unpiloted']} */
+ *  @type {readonly ['store-id-null', 'store-id-duplicate', 'store-id-unlisted', 'family-unassigned', 'row-cap-mismatch', 'window-mismatch', 'code-changed', 'code-unmeasured', 'writer-malformed', 'writer-leak', 'question-not-run', 'field-missing', 'field-unknown', 'field-malformed', 'constant-mismatch', 'value-outside-set', 'model-alias', 'model-forbidden', 'signed-text-mismatch', 'release-mismatch', 'flag-rejected', 'seed-changed', 'pilot-drift', 'quiz-mismatch', 'quiz-holds-control', 'pilot-quiz-overlap', 'window-length', 'assignment-mismatch', 'draft-mismatch', 'chain-mismatch', 'post-start-change', 'amendment-kind', 'amendment-detail-mismatch', 'version-move-unpiloted', 'budget-not-raised']} */
 export const GATE_REASONS = Object.freeze([
   // assembleReports (W2-D22, with W2-D13's echoed window) and the gate_code re-check (W2-D24)
   'store-id-null', 'store-id-duplicate', 'store-id-unlisted', 'family-unassigned', 'row-cap-mismatch', 'window-mismatch', 'code-changed', 'code-unmeasured',
@@ -162,7 +162,7 @@ export const GATE_REASONS = Object.freeze([
   'field-missing', 'field-unknown', 'field-malformed', 'constant-mismatch', 'value-outside-set', 'model-alias', 'model-forbidden',
   'signed-text-mismatch', 'release-mismatch', 'flag-rejected', 'seed-changed', 'pilot-drift', 'quiz-mismatch', 'quiz-holds-control',
   'pilot-quiz-overlap', 'window-length', 'assignment-mismatch', 'draft-mismatch', 'chain-mismatch', 'post-start-change',
-  'amendment-kind', 'amendment-detail-mismatch', 'version-move-unpiloted',
+  'amendment-kind', 'amendment-detail-mismatch', 'version-move-unpiloted', 'budget-not-raised',
 ]);
 /** @typedef {(typeof GATE_REASONS)[number]} GateReason */
 
@@ -2309,6 +2309,17 @@ function recPartOneView(r) {
   }
   return view;
 }
+/** W2-D55 as D-7063 amends it (W2-7, the operator's ruling R-B1): the spend budget in force on a part 2, the newest
+ *  `budget-raise` amendment's `detail.spend_budget` in array order (amendments only append, W2-D90), else the signed
+ *  `spend_budget`. The one walk of the chain for the budget (W2-D12): the validator holds each raise above it, and the
+ *  driver's armNodeOf spends under it. It ranges nothing: the validator does, before any consumer reads it. Pure.
+ *  @param {{spend_budget: unknown, amendments?: ReadonlyArray<{kind: unknown, detail: any}>}} record  @returns {unknown} */
+export function spendBudgetInForce(record) {
+  let inForce = record.spend_budget;
+  for (const a of record.amendments ?? []) if (a.kind === 'budget-raise') inForce = a.detail.spend_budget;
+  return inForce;
+}
+
 /** What W2-D90 leaves free after window start: everything but these three is frozen. */
 const REC_AMEND_FREE = Object.freeze(['finalized_ms', 'supersedes', 'amendments']);
 
@@ -2559,11 +2570,22 @@ function recValidate(record, ctx, checkLink) {
     if (pilotKeys.has(recKeyOf(q))) refuse(`quiz.families[${i}]`, 'pilot-quiz-overlap');
   });
 
-  // Amendments (W2-D90): a closed kind set, a version move carries its re-pilot sha, and every detail_sha256 is
-  // recomputed from its detail (W2-D25, amended 2026-10-19).
+  // Amendments (W2-D90): a closed kind set, a version move carries its re-pilot sha, a budget raise carries one figure
+  // above the budget in force before it and names no node (D-7063), and every detail_sha256 is recomputed from its
+  // detail (W2-D25, amended 2026-10-19).
   r.amendments.forEach((a, i) => {
     if (!AMENDMENT_KINDS.includes(a.kind)) refuse(`amendments[${i}].kind`, 'amendment-kind');
     else if (a.kind === 'version-move' && !REC_TYPE_OK.hex64(a.detail.repilot_sha256)) refuse(`amendments[${i}].detail.repilot_sha256`, 'version-move-unpiloted');
+    else if (a.kind === 'budget-raise') {   // W2-7 (R-B1, D-7063): it only raises, and carries nothing that scores
+      if (a.node_label_ref !== null) refuse(`amendments[${i}].node_label_ref`, 'value-outside-set');
+      for (const k of Object.keys(a.detail)) if (k !== 'spend_budget') refuse(`amendments[${i}].detail.${k}`, 'field-unknown');
+      const raised = a.detail.spend_budget;
+      const before = spendBudgetInForce({ spend_budget: r.spend_budget, amendments: r.amendments.slice(0, i) });
+      if (raised === undefined || raised === null) refuse(`amendments[${i}].detail.spend_budget`, 'field-missing');
+      else if (!REC_TYPE_OK.integer(raised)) refuse(`amendments[${i}].detail.spend_budget`, 'field-malformed');
+      // a figure before it that is no safe integer was refused where it stands, so it is no comparand: one defect, one word
+      else if (REC_TYPE_OK.integer(before) && !(raised > before)) refuse(`amendments[${i}].detail.spend_budget`, 'budget-not-raised');
+    }
     if (a.detail_sha256 !== sha256Hex(canonicalJson(a.detail))) refuse(`amendments[${i}].detail_sha256`, 'amendment-detail-mismatch');
   });
 

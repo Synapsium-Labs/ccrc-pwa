@@ -541,6 +541,93 @@ describe.skipIf(!PY)('the scrubber: a recording becomes a corpus stream (codex-b
     const text = readFileSync(outFile, 'utf8');
     for (const block of text.split('\n\n').filter(Boolean)) expect(block).toMatch(/^event: [a-z_.]+\ndata: \{.*\}$/);
   });
+
+  // The backend's usage carries `attribution.items`, keyed by item id: one key per input item and per output item
+  // (runbook step 2, 2026-10-27; D-7086). The stream below is synthetic, in the shape measured: a message, two function
+  // calls and a reasoning item, and an input-only message whose id appears nowhere but as a key.
+  it('the scrubber rewrites a usage.attribution.items key through the id map, so the scrub succeeds and each key names its item', async () => {
+    const home = mkTmp('cb-live-scrub-attribution-');
+    const hex = (n: number): string => randomBytes(n).toString('hex');
+    const id = (prefix: string): string => `${prefix}_a7${hex(24)}`; // id-shaped (a digit, 8+ characters), as measured
+    const ids = { input: id('msg'), msg: id('msg'), fc1: id('fc'), fc2: id('fc'), rs: id('rs'), resp: id('resp') };
+    const four = (input: number, output: number): Json => ({ input_tokens: input, cached_tokens: 0, cache_write_tokens: 0, output_tokens: output });
+    const items: Json = {
+      [ids.input]: { ...four(15, 0), content: [four(15, 0)] },
+      [ids.rs]: four(0, 4),
+      [ids.msg]: { ...four(0, 3), content: [four(0, 3)] },
+      [ids.fc1]: { ...four(0, 16), content: [four(0, 16)] },
+      [ids.fc2]: { ...four(0, 17), content: [four(0, 17)] },
+    };
+    const output = [
+      { type: 'reasoning', id: ids.rs, summary: [], encrypted_content: `gAAAAAB${hex(16)}` },
+      msgItem(ids.msg, 'Calling twice'),
+      { type: 'function_call', id: ids.fc1, call_id: `call_${hex(12)}`, name: 'probe_echo', arguments: '{"word":"one"}', status: 'completed' },
+      { type: 'function_call', id: ids.fc2, call_id: `call_${hex(12)}`, name: 'probe_echo', arguments: '{"word":"two"}', status: 'completed' },
+    ];
+    const attribution = { items, request_fields: { tools: four(35, 0) } };
+    const inFile = path.join(home, 'in.sse');
+    const outFile = path.join(home, 'out.sse');
+    writeFileSync(inFile, 'HTTP/1.1 200\ncontent-type: text/event-stream\n\n'
+      + ev('response.created', { response: { id: ids.resp, status: 'in_progress', output: [] } })
+      + output.map((item, i) => ev('response.output_item.done', { output_index: i, item })).join('')
+      + ev('response.completed', { response: { id: ids.resp, status: 'completed', output,
+        usage: { input_tokens: 50, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 }, output_tokens: 40, attribution } } }));
+    const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
+    expect(r.status, r.stderr).toBe(0);
+    const out = readFileSync(outFile, 'utf8');
+    for (const v of Object.values(ids)) expect(out, 'an original id').not.toContain(v);
+    const data = out.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as Json);
+    const done = data.find((d) => d.type === 'response.completed')!.response;
+    const keys = Object.keys(done.usage.attribution.items);
+    // each output item's key is the synthetic id its item got, the reasoning item's (rs_) included
+    const scrubbedIds = (done.output as Json[]).map((i) => i.id as string);
+    expect(scrubbedIds).toEqual(['rs_fx1', 'msg_fx1', 'fc_fx1', 'fc_fx2']);
+    // the keys in the order they came: the input-only message's own number, then each output item's synthetic id
+    expect(keys).toEqual(['msg_fx2', 'rs_fx1', 'msg_fx1', 'fc_fx1', 'fc_fx2']);
+    expect(scrubbedIds).not.toContain(keys[0]);
+    // the counts are unchanged, each under its item's key, and so are the request fields
+    expect(Object.values(done.usage.attribution.items)).toEqual(Object.values(items));
+    expect(done.usage.attribution.items.rs_fx1).toEqual(items[ids.rs]);
+    expect(done.usage.attribution.items.fc_fx2).toEqual(items[ids.fc2]);
+    expect(done.usage.attribution.items.msg_fx1).toEqual(items[ids.msg]);
+    expect(done.usage.attribution.request_fields).toEqual({ tools: four(35, 0) });
+    expect(done.usage.input_tokens).toBe(50);
+  });
+
+  // The key rewrite is anchored on the `attribution` object inside `usage` (record.py#ID_KEYED; D-7086): a tool schema
+  // the backend echoes in `response.created`, with a property named `attribution` of array type, keeps its `items`'s
+  // keys, while the usage's `attribution.items` beside it is still keyed by its items' synthetic ids.
+  it('the scrubber leaves a tool schema property named attribution alone and still rewrites usage.attribution.items', async () => {
+    const home = mkTmp('cb-live-scrub-schema-attribution-');
+    const hex = (n: number): string => randomBytes(n).toString('hex');
+    const ids = { msg: `msg_a7${hex(24)}`, resp: `resp_a7${hex(24)}` };
+    const tool = {
+      type: 'function', name: 'probe_tag', strict: false,
+      parameters: { type: 'object', properties: { attribution: { type: 'array', items: { type: 'string' } } } },
+    };
+    const output = [msgItem(ids.msg, 'Tagged')];
+    const inFile = path.join(home, 'in.sse');
+    const outFile = path.join(home, 'out.sse');
+    writeFileSync(inFile, 'HTTP/1.1 200\ncontent-type: text/event-stream\n\n'
+      + ev('response.created', { response: { id: ids.resp, status: 'in_progress', output: [], tools: [tool] } })
+      + ev('response.output_item.done', { output_index: 0, item: output[0] })
+      + ev('response.completed', { response: { id: ids.resp, status: 'completed', output, tools: [tool],
+        usage: { input_tokens: 30, output_tokens: 2, attribution: { items: { [ids.msg]: { input_tokens: 0, output_tokens: 2 } } } } } }));
+    const r = await runCli(home, RECORD_PY, ['scrub', inFile, outFile]);
+    expect(r.status, r.stderr).toBe(0);
+    const out = readFileSync(outFile, 'utf8');
+    for (const v of Object.values(ids)) expect(out, 'an original id').not.toContain(v);
+    const data = out.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as Json);
+    const created = data.find((d) => d.type === 'response.created')!.response;
+    const done = data.find((d) => d.type === 'response.completed')!.response;
+    // the schema's `items` keeps its `type` key (and its kept structural value), in both echoes
+    for (const echoed of [created.tools[0], done.tools[0]]) {
+      expect(echoed.parameters.properties.attribution).toEqual({ type: 'array', items: { type: 'string' } });
+    }
+    // the usage keys still map to their items' synthetic ids, with the counts unchanged
+    expect(done.output[0].id).toBe('msg_fx1');
+    expect(done.usage.attribution.items).toEqual({ msg_fx1: { input_tokens: 0, output_tokens: 2 } });
+  });
 });
 
 /** A fixed base64url segment of `s`, for a token-shaped fixture value. */
@@ -681,6 +768,59 @@ describe.skipIf(!PY)('the live probe: the first live step, bounded (codex-bridge
       expect(files[0]).toMatch(/^liveprobe-1-[0-9]{8}T[0-9]{6}Z-1\.sse$/);
       expect(mode(path.join(dir, files[0]))).toBe(0o600);
       expect(readFileSync(path.join(dir, files[0]), 'utf8').endsWith(sse)).toBe(true);
+    } finally {
+      await up.close();
+    }
+  });
+
+  // The backend sends its request id as x-oai-request-id only (runbook step 2, 2026-10-27; D-7084).
+  it('the live probe prints the request id from x-oai-request-id', async () => {
+    const home = mkTmp('cb-live-probe-oai-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    const up = await fakeResponses([{ status: 200, sse: textReply('ok'), headers: { 'x-oai-request-id': 'oai-req-fx7' } }]);
+    try {
+      const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain('liveprobe: request-id oai-req-fx7\n');
+      expect(r.stdout).toContain('liveprobe: header x-oai-request-id\n');
+    } finally {
+      await up.close();
+    }
+  });
+
+  // The backend's usage carries `attribution.items`, keyed by item id (runbook step 2, 2026-10-27; D-7085): each key
+  // there prints as its kind, so the counts print and no id does.
+  it('the live probe prints a usage.attribution.items key as its kind, never the id, and keeps every count', async () => {
+    const home = mkTmp('cb-live-probe-attribution-');
+    const lane = plantBridgeLane(home, LANE);
+    touch(path.join(lane.laneDir, 'liveprobe-allowed'));
+    const long = `fc_a7${randomBytes(24).toString('hex')}`; // id-shaped, as the measured keys are
+    const four = (input: number, output: number): Json => ({ input_tokens: input, cached_tokens: 0, cache_write_tokens: 0, output_tokens: output });
+    const attribution = {
+      items: { msg_fx1: { ...four(15, 0), content: [four(15, 0)] }, [long]: four(0, 16), rs_fx3: four(0, 4) },
+      request_fields: { tools: four(35, 0) },
+    };
+    const sse = ev('response.created', { response: { id: 'resp_fx1' } })
+      + ev('response.output_item.done', { output_index: 0, item: msgItem('msg_fx2', 'ok') })
+      + ev('response.completed', { response: { id: 'resp_fx1', status: 'completed', usage: { ...usage(50, 20), attribution } } });
+    const up = await fakeResponses([{ status: 200, sse }]);
+    try {
+      const r = await probe(home, 1, { CCGPT_BRIDGE_UPSTREAM_BASE: up.base });
+      expect(r.status, r.stderr).toBe(0);
+      for (const s of ['msg_fx1', long, 'rs_fx3', long.slice(3)]) expect(r.stdout, s).not.toContain(s);
+      for (const line of r.stdout.split('\n').filter((l) => l.startsWith('liveprobe: usage '))) {
+        expect(line).toMatch(/^liveprobe: usage (?:[a-z_]+|<[a-z]+>)(?:\.(?:[a-z_]+|<[a-z]+>))* [0-9]+$/);
+      }
+      const lines = r.stdout.split('\n');
+      for (const want of [
+        'liveprobe: usage attribution.items.<msg>.input_tokens 15',
+        'liveprobe: usage attribution.items.<fc>.output_tokens 16',
+        'liveprobe: usage attribution.items.<rs>.output_tokens 4',
+        'liveprobe: usage attribution.request_fields.tools.input_tokens 35',
+        'liveprobe: usage input_tokens 50',
+      ]) expect(lines, want).toContain(want);
+      expect(lines.filter((l) => l.startsWith('liveprobe: usage attribution.items.'))).toHaveLength(12);
     } finally {
       await up.close();
     }

@@ -36,7 +36,7 @@ const MEAS: LifecycleMeas = {
   rc: 0, mode: 'resume', inUnit: 1, from: null, dropped: null, registered: 0,
   state: null, bytes: null, resumed: null, tombstone: null,
   home: null, pool: null, reason: null, unremoved: null,
-  childOf: null, wip: null, residueBytes: null, tmpRootKept: null, clipsKept: null, leaf: null,
+  childOf: null, wip: null, residueBytes: null, tmpRootKept: null, clipsKept: null, leaf: null, childRun: null,
 };
 const EVENT: LifecycleEvent = {
   uid: '1755000000123456789.4242.1', at: 1_755_000_000_123,
@@ -103,7 +103,7 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
     // — by a scan rather than by the commit that emitted it.
     expect(Object.keys(MEAS).sort()).toEqual(
       ['archivedAt', 'archivedReason', 'attic', 'atticsrc', 'base', 'branch',
-       'bytes', 'childOf', 'clipsKept', 'dropped', 'from', 'held', 'home', 'inUnit', 'leaf', 'manifestBytes',
+       'bytes', 'childOf', 'childRun', 'clipsKept', 'dropped', 'from', 'held', 'home', 'inUnit', 'leaf', 'manifestBytes',
        'mode', 'old', 'pool', 'project', 'rc', 'reason', 'registered',
        'residueBytes', 'resumed', 'state', 'tip', 'tmpRootKept', 'tombstone', 'unremoved', 'uuid', 'wip', 'workdir',
        'workspace', 'wrapper'].sort());
@@ -118,6 +118,7 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
       from: null, dropped: null, registered: null, state: null, bytes: null,
       resumed: null, tombstone: null, home: null, pool: null, reason: null,
       unremoved: null, childOf: null, wip: null, residueBytes: null, tmpRootKept: null, clipsKept: null, leaf: null,
+      childRun: null,
     };
     expect(Object.values(nothing).every((v) => v === null)).toBe(true);
     // `attic: 0` is "the pin ran and created no refs"; `attic: null` is "no

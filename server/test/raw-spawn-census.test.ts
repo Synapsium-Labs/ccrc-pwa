@@ -285,7 +285,9 @@ const SOURCES: Src[] = ROOTS.flatMap((r) => walk(path.join(REPO, r)))
   .map((rel) => toSrc(rel, fs.readFileSync(path.join(REPO, rel), 'utf8')));
 const lineOf = (s: Src, at: number): number => s.raw.slice(0, at).split('\n').length;
 
-interface Paths { scripts: Set<string>; dirs: Set<string> }
+/** `texts`: the exported FUNCTIONS whose body reads a script's text and so return it (`ccdWsHelpers.ts`'s `ccdSource`,
+ *  ccd with its library spliced in, D-6913): a call to one is a READ of a script, for `slicedAt`. */
+interface Paths { scripts: Set<string>; dirs: Set<string>; texts?: Set<string> }
 interface Names extends Paths {
   scoped: Array<{ name: string; from: number; to: number }>;
   /** Whether a name used at an offset is a script (or the scripts' directory): its binding decides (D-5256). */
@@ -408,11 +410,21 @@ function exportsOf(srcs: Src[]): Map<string, Paths> {
     const own = namesOf(s, { scripts: new Set(), dirs: new Set() });
     const ex = [...s.code.matchAll(/\bexport\s+(?:const|let)\s+([A-Za-z_$][\w$]*)/g)]
       .map((m) => ({ name: m[1]!, at: m.index! + m[0].length }));
+    const texts = new Set<string>();
+    for (const m of s.code.matchAll(/\bexport\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const open = s.code.indexOf('{', closeOf(s.code, m.index! + m[0].length - 1));
+      if (open < 0) continue;
+      const close = closeOf(s.code, open);
+      const code = s.code.slice(open, close + 1);
+      const text = s.text.slice(open, close + 1);
+      if (READS_TEXT.test(code) && (SCRIPT_PATH.test(text) || own.namesAt(code, text, open))) texts.add(m[1]!);
+    }
     const p: Paths = {
       scripts: new Set(ex.filter((x) => own.isScript(x.name, x.at)).map((x) => x.name)),
       dirs: new Set(ex.filter((x) => own.isDir(x.name, x.at)).map((x) => x.name)),
+      texts,
     };
-    if (p.scripts.size + p.dirs.size > 0) out.set(s.rel, p);
+    if (p.scripts.size + p.dirs.size + texts.size > 0) out.set(s.rel, p);
   }
   return out;
 }
@@ -420,7 +432,7 @@ function exportsOf(srcs: Src[]): Map<string, Paths> {
 /** The script and directory names a file imports: by name (an `as` alias kept), or as `<ns>.<name>` through a
  *  namespace import. */
 function importsOf(s: Src, exported: Map<string, Paths>): Paths {
-  const out: Paths = { scripts: new Set(), dirs: new Set() };
+  const out: Paths = { scripts: new Set(), dirs: new Set(), texts: new Set() };
   const target = (spec: string): string =>
     path.relative(REPO, path.resolve(REPO, path.dirname(s.rel), spec)).replace(/\.js$/, '.ts');
   for (const m of s.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](\.{1,2}\/[^'"]+)['"]/g)) {
@@ -432,6 +444,7 @@ function importsOf(s: Src, exported: Map<string, Paths>): Paths {
       const as = (alias ?? o).trim();
       if (ex.scripts.has(o)) out.scripts.add(as);
       if (ex.dirs.has(o)) out.dirs.add(as);
+      if (ex.texts?.has(o)) out.texts!.add(as);
     }
   }
   for (const m of s.text.matchAll(/import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*['"](\.{1,2}\/[^'"]+)['"]/g)) {
@@ -439,6 +452,7 @@ function importsOf(s: Src, exported: Map<string, Paths>): Paths {
     if (!ex) continue;
     for (const n of ex.scripts) out.scripts.add(`${m[1]}.${n}`);
     for (const n of ex.dirs) out.dirs.add(`${m[1]}.${n}`);
+    for (const n of ex.texts ?? []) out.texts!.add(`${m[1]}.${n}`);
   }
   return out;
 }
@@ -492,7 +506,9 @@ function programOf(s: Src, open: number, close: number, member: string): string 
  *  binding already sliced. Decided per binding, an identifier resolving to its nearest earlier binding, so a later
  *  `src` that holds something else is not caught by an earlier one, and a script NAME bound elsewhere in the file
  *  under the same name (script names are per file, not per binding) does not hide a read. */
-function slicedAt(s: Src, bs: Binding[], scripts: Set<string>): (name: string, at: number) => boolean {
+function slicedAt(s: Src, bs: Binding[], scripts: Set<string>, texts: Set<string> = new Set()):
+  (name: string, at: number) => boolean {
+  const callsText = (code: string): boolean => [...texts].some((n) => new RegExp(`${word(n).source}\\s*\\(`).test(code));
   const byName = new Map<string, Binding[]>();
   for (const b of bs) byName.set(b.name, [...(byName.get(b.name) ?? []), b]);
   const sliced = new Set<number>();
@@ -506,7 +522,8 @@ function slicedAt(s: Src, bs: Binding[], scripts: Set<string>): (name: string, a
       if (sliced.has(b.at)) continue;
       const text = s.text.slice(...b.init);
       const code = s.code.slice(...b.init);
-      const reads = READS_TEXT.test(code) && (SCRIPT_PATH.test(text) || [...scripts].some((n) => word(n).test(code)));
+      const reads = (READS_TEXT.test(code) && (SCRIPT_PATH.test(text) || [...scripts].some((n) => word(n).test(code))))
+        || callsText(code);
       if (reads || idents(code).some((n) => is(n, b.at))) { sliced.add(b.at); changed = true; }
     }
   }
@@ -682,9 +699,10 @@ function analyse(srcs: Src[]): Census {
   const exported = exportsOf(srcs);
   const spawns: Spawn[] = [];
   for (const s of srcs) {
-    const n = namesOf(s, importsOf(s, exported));
+    const imported = importsOf(s, exported);
+    const n = namesOf(s, imported);
     const bs = bindingsOf(s);
-    const sliced = slicedAt(s, bs, n.scripts);
+    const sliced = slicedAt(s, bs, n.scripts, imported.texts);
     const callees = calleesOf(s);
     for (const m of s.code.matchAll(spawnRe(callees))) {
       const member = callees.get(m[1]!.replace(/\s+/g, '')) ?? m[1]!;
@@ -833,6 +851,8 @@ describe('every spawn of the real ccd or ccrc script gets a contained env (wave 
     for (const r of ROOTS) expect(SOURCES.filter((s) => s.rel.startsWith(`${r}/`)).length, r).toBeGreaterThan(5);
     expect([...(c.exported.get('server/test/ccdWsHelpers.ts')?.scripts ?? [])], 'the harness exports the ccd script path')
       .toContain('CCD');
+    expect([...(c.exported.get('server/test/ccdWsHelpers.ts')?.texts ?? [])],
+      'the harness exports ccd\'s text, library spliced in, as a READ of the script (D-6913)').toContain('ccdSource');
     expect(c.spawns.filter((x) => x.kind === 'script').length, 'spawns that execute a script').toBeGreaterThan(100);
   });
 

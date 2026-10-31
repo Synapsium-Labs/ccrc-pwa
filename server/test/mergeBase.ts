@@ -60,3 +60,38 @@ export function mergeBaseText(cwd: string, rel: string): string | null {
     return null;
   }
 }
+
+/** One entry of a tree listing: the mode, the object type, the object id and the repo-relative path. */
+export interface TreeEntry { readonly mode: string; readonly type: string; readonly oid: string; readonly path: string }
+
+/** Every entry `rev`'s tree holds under `dir` (repo-relative, recursive), as `git ls-tree -r -z` lists them, or null when
+ *  the listing cannot be read or a record does not parse: one record that is not `<mode> <type> <oid>\t<path>` makes the
+ *  whole answer null, never a shorter list. */
+export function treeEntriesAt(cwd: string, rev: string, dir: string): TreeEntry[] | null {
+  let out: string;
+  try {
+    out = execFileSync('git', ['ls-tree', '-r', '-z', rev, '--', `${dir}/`], { cwd, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+  } catch {
+    return null;
+  }
+  const entries: TreeEntry[] = [];
+  for (const record of out.split('\0').filter(Boolean)) {
+    const m = /^(\d{6}) (blob|commit|tree) ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(record);
+    if (m === null) return null;
+    entries.push({ mode: m[1]!, type: m[2]!, oid: m[3]!, path: m[4]! });
+  }
+  return entries;
+}
+
+/** The merge-base with `origin/main` and every entry its tree holds under `dir` (repo-relative, recursive), with the
+ *  paths of them as `files`, or null when there is no `origin/main`, no merge-base or no readable listing. */
+export function mergeBaseFiles(cwd: string, dir: string): { base: string; files: string[]; entries: TreeEntry[] } | null {
+  try {
+    const base = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const entries = treeEntriesAt(cwd, base, dir);
+    if (entries === null) return null;
+    return { base, files: entries.map((e) => e.path), entries };
+  } catch {
+    return null;
+  }
+}

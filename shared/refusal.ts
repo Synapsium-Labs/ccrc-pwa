@@ -42,8 +42,9 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
+import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -103,7 +104,11 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal
   | ArchiveRefusal
   // The coordinator's route door (D-6735, ARCH-20): `decideRoute` answers a `RunRouteRefuseCode`, sent through `refuseRoute`.
-  | RunRouteRefuseCode;
+  | RunRouteRefuseCode
+  // The question door family (W3 Q3f, D-7030): its one word of its own, `kind-mismatch`.
+  | QuestionDoorRefusal
+  // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
+  | DispatchAbandonRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -187,6 +192,12 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [ARCHIVE_REFUSALS.runOpen]: 409, [ARCHIVE_REFUSALS.coordinatorHasOpenRuns]: 409,
   [ARCHIVE_REFUSALS.programmePartlyEnded]: 409, [ARCHIVE_REFUSALS.worktreeGone]: 409,
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 409,
+  // The question door family (W3 Q3f, D-7030): CHOSEN, not measured — a new word. 400: an id of the other principal's
+  // kind, or a body kind that disagrees with the id's, is the caller's to fix, like a malformed body.
+  'kind-mismatch': 400,
+  // The dead-dispatch switch door (D-7319): CHOSEN, not measured — a new word. 503, the status the other `-unreadable`
+  // words answer: the switch's one row could not be read, which is the box's fault and not the operator's.
+  'state-unreadable': 503,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -215,11 +226,11 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
  *  GitHub #550). They travel in a `reject` object, never an `error` key, so they are neither `RouteRefusal`s nor
  *  `OpenRunConflict`s. `unknown-run` and `bad-session` are not `RunRefuseCode`s: the route sent them as bare literals. */
 export type AdvanceRejectCode = 'unknown-run' | 'bad-session'
-  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency'>;
+  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency' | 'ejection-not-merging'>;
 
 /** Each one's status, measured from the advance route's inline sends on landing day, never chosen: 404 for the one
  *  absent run, 409 for every refusal of a run that exists. */
 export const ADVANCE_REJECT_STATUS: Readonly<Record<AdvanceRejectCode, number>> = {
   'unknown-run': 404, 'bad-transition': 409, 'not-dispatched': 409, 'review-in-flight': 409,
-  'cap-concurrency': 409, 'bad-session': 409,
+  'cap-concurrency': 409, 'bad-session': 409, 'ejection-not-merging': 409,   // D-7619: chosen, not measured — the family's 409
 };

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-limit-stale-'); });
@@ -82,7 +82,7 @@ describe('_auto_stale_check presses Enter for a stale auto-continue (D-2360)', (
   it('a ready pane: nothing', () => { seed(); check({ PANE_TEXT: READY }); expect(enters()).toEqual([]); });
   it('a blank pane: nothing', () => { seed(); check({ PANE_TEXT: '' }); expect(enters()).toEqual([]); });
   it('the tick runs the stale check BEFORE the swap arm (source pin)', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('_sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"');
   });
 });

@@ -4,15 +4,21 @@
 // characters after the trailing-newline strip. A registered block over the cap renders as plain text and labels
 // itself "{label} · not highlighted ({KiB} KiB)", KiB being its characters / 1024 rounded up. (Not
 // `code-block.test.tsx`: open PR #111 creates that file.)
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import { defaultUrlTransform } from 'react-markdown';
-import { CHAT_COMPONENTS, CodeBlock } from '../src/lib/markdown';
-import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from '../src/lib/markdownLimits';
+import hljs from 'highlight.js/lib/core';
+import {
+  CHAT_COMPONENTS, CodeBlock, HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_CACHE_MAX_ENTRIES, boundedHighlight,
+} from '../src/lib/markdown';
+import { MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 /** A TypeScript body of exactly `chars` characters, every line a keyword, ending in `x` (never a newline, which
  *  the strip would take). */
@@ -96,5 +102,101 @@ describe('the highlight prop and the other two conditions', () => {
     expect(label(big)).toBe('mermaid');
     cleanup();
     expect(label(block('mermaid', tsBody(1000)))).toBe('mermaid');
+  });
+});
+
+// Desktop polish Task C7: `boundedHighlight` keeps what highlight.js answered in a bounded module cache keyed by the
+// language and the block, read only after every bound has passed. Each case starts from an empty cache: the shared
+// `afterEach` in `test/setup.ts` empties it. Each case in this block also highlights text that no other case in this file
+// does, so no count here depends on that reset. (The file's earlier cases repeat bodies, `tsBody(1000)` and
+// `pyBody(65 536)`, but count no calls: they read the markup, which a held answer leaves unchanged.)
+describe('the highlight cache (C7)', () => {
+  it('hljs.highlight runs once per (lang, code)', () => {
+    const spy = vi.spyOn(hljs, 'highlight');
+    const body = `${tsBody(400)} // once-per-pair`;
+    const first = block('ts', body);
+    expect(keywords(first)).toBeGreaterThan(0);
+    const html = first.querySelector('pre > code.hljs')?.innerHTML;
+    cleanup();
+    const second = block('ts', body);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // The same markup, from the cache.
+    expect(second.querySelector('pre > code.hljs')?.innerHTML).toBe(html);
+    cleanup();
+    // Another language is another pair, even over the same text.
+    block('javascript', body);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('a block the bounds refuse is highlighted never and cached never', () => {
+    const spy = vi.spyOn(hljs, 'highlight');
+    // Over the word bound: plain, labelled, and highlight.js is never asked, however often it renders.
+    const long = `const ${'w'.repeat(MD_HIGHLIGHT_MAX_WORD_CHARS + 1)} = 1;`;
+    for (let i = 0; i < 2; i += 1) {
+      const c = block('ts', long);
+      expect(keywords(c)).toBe(0);
+      expect(label(c)).toBe(`TypeScript · not highlighted (a ${MD_HIGHLIGHT_MAX_WORD_CHARS + 1}-character word)`);
+      cleanup();
+    }
+    expect(spy).not.toHaveBeenCalled();
+    // A pair already in the cache, then refused by a page budget (`highlight={false}`): the refusal is decided before
+    // the cache is read, so the block renders plain and nothing is highlighted again.
+    const body = `${tsBody(300)} // cached-then-refused`;
+    expect(keywords(block('ts', body))).toBeGreaterThan(0);
+    cleanup();
+    expect(spy).toHaveBeenCalledTimes(1);
+    const refused = block('ts', body, false);
+    expect(keywords(refused)).toBe(0);
+    expect(code(refused)).toBe(body);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  // The bounds the module cache is built with, pinned by what it holds (review 1128 F2): a constant alone would not
+  // notice a cache built with another number.
+  it(`the cache holds ${HIGHLIGHT_CACHE_MAX_ENTRIES} entries, and one more drops the least recently used`, () => {
+    expect(HIGHLIGHT_CACHE_MAX_ENTRIES).toBe(256);
+    const spy = vi.spyOn(hljs, 'highlight');
+    const small = (i: number): string => `const entry${i} = ${i}; // entry-bound`;
+    for (let i = 0; i < HIGHLIGHT_CACHE_MAX_ENTRIES; i += 1) boundedHighlight(small(i), 'ts');
+    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES);
+    // Every one is held: asked again in the same order, none is highlighted again, and the order is unchanged.
+    for (let i = 0; i < HIGHLIGHT_CACHE_MAX_ENTRIES; i += 1) boundedHighlight(small(i), 'ts');
+    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES);
+    // One more drops the least recently used, the first, and keeps the second.
+    boundedHighlight(small(HIGHLIGHT_CACHE_MAX_ENTRIES), 'ts');
+    boundedHighlight(small(1), 'ts');
+    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES + 1);
+    boundedHighlight(small(0), 'ts');
+    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES + 2);
+  });
+
+  it(`the cache holds ${HIGHLIGHT_CACHE_MAX_CHARS} characters of markup, and a block past them drops the least recently used`, () => {
+    expect(HIGHLIGHT_CACHE_MAX_CHARS).toBe(4_000_000);
+    // Dense JSON blocks of one size, about 858 000 characters of markup each (C7's Step 0).
+    const dense = (i: number): string =>
+      JSON.stringify(Array.from({ length: 3000 }, (_, k) => [i, k, true, null]), null, 1).slice(0, MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    // How many fit the bound together, measured from highlight.js itself, outside the cache.
+    const markupOf = (i: number): number => hljs.highlight(dense(i), { language: 'json', ignoreIllegals: true }).value.length;
+    let fit = 0;
+    let markup = 0;
+    // Each block's markup is computed once (review 1132 A7): the condition and the sum read the same figure.
+    for (let next = markupOf(fit); markup + next <= HIGHLIGHT_CACHE_MAX_CHARS; next = markupOf(fit)) {
+      markup += next;
+      fit += 1;
+    }
+    expect(fit).toBeGreaterThan(1);
+    expect(fit).toBeLessThan(10); // single-digit `i`: every block the same size
+    const spy = vi.spyOn(hljs, 'highlight');
+    for (let i = 0; i < fit; i += 1) expect(boundedHighlight(dense(i), 'json').html).not.toBeNull();
+    expect(spy).toHaveBeenCalledTimes(fit);
+    // Every one is held: asked again in the same order, none is highlighted again.
+    for (let i = 0; i < fit; i += 1) boundedHighlight(dense(i), 'json');
+    expect(spy).toHaveBeenCalledTimes(fit);
+    // One more passes the bound: the least recently used, the first, goes, and the second stays.
+    boundedHighlight(dense(fit), 'json');
+    boundedHighlight(dense(1), 'json');
+    expect(spy).toHaveBeenCalledTimes(fit + 1);
+    boundedHighlight(dense(0), 'json');
+    expect(spy).toHaveBeenCalledTimes(fit + 2);
   });
 });

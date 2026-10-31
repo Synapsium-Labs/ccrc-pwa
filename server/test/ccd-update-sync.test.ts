@@ -30,6 +30,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { SERVER_CAPS, SERVER_CAPS_FILE, isServerCapWord, parseServerCaps } from '../../shared/api.js';
+import { REGIONS, ccdFunctionDefinition, checkRegion, extractRegion } from '../../shared/hook-helpers.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SYNC = join(REPO, 'ccd', 'ccd-update-sync');
@@ -347,17 +348,26 @@ describe('ccd-update-sync: a transport failure writes nothing', () => {
 });
 
 describe('ccd-update-sync: no credential or absolute home path in a printed line (fix round 1 item 11 / review 155 C18)', () => {
-  // W6 Task 8A, review 167's F5: `redact`'s HOME rule is anchored BEFORE the
-  // home as well as after it, exactly as ccd/ccrc's `_upd_redact` is — and the
-  // two copies' HOME sections are byte-identical, so neither can drift.
-  it('redact: a HOME that is the suffix of a longer path stays whole (`/srv/home/u/x`), a real one still becomes ~, and the section equals _upd_redact\'s (review 167 F5)', () => {
+  // W6 Task 8A, review 167's F5: the HOME rule is anchored BEFORE the home as
+  // well as after it. W5 C5i (D-7078, D-7289): `say` applies the generated copy
+  // of ccd/ccrc's `_upd_redact` (the log-line region), called as `say` calls it,
+  // `_upd_redact "$input" bare-host`; the region is current against ccd/ccrc, so
+  // the two cannot drift. Each call goes through a fixed stdin script, the
+  // definition and the input in files passed as arguments.
+  it('the generated _upd_redact: a HOME that is the suffix of a longer path stays whole (`/srv/home/u/x`), a real one still becomes ~, and the region is current against ccd/ccrc (review 167 F5)', () => {
     const src = readFileSync(SYNC, 'utf8');
-    const block = /^redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
-    expect(block, 'ccd-update-sync has no redact block').not.toBeNull();
+    const block = ccdFunctionDefinition(src, '_upd_redact');
+    expect(block, 'ccd-update-sync has no generated _upd_redact').not.toBeNull();
     const home = mkTmp('upd-sync-redact-unit-');
+    const defs = join(home, 'upd-redact.sh');
+    writeFileSync(defs, `${block!}\n`);
+    let n = 0;
     const call = (text: string, h: string): string => {
+      const input = join(home, `input-${n++}`);
+      writeFileSync(input, text);
       const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true });
-      const p = spawnSync('bash', ['-c', [block![0], 'redact "$1"'].join('\n'), '_', text], { env, encoding: 'utf8' });
+      const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', defs, input],
+        { env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n', encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
     };
@@ -368,13 +378,18 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     expect(call('K=/home/u/x', '/home/u')).toBe('K=~/x');
     expect(call('/home/u', '/home/u')).toBe('~');
     expect(call('http://h/p', '/')).toBe('http://h/p');
-    const section = (text: string, fn: string): string => {
-      const i = text.indexOf('  local home="${HOME:-}"\n', text.indexOf(`${fn}() {`));
-      return text.slice(i, text.indexOf("  printf '%s' \"$s\"\n}", i));
-    };
+    // _upd_redact strips every @-ended run in a scheme authority, even if curl refuses that base.
+    expect(call('https://u:p@x@host', '/fixture-home')).toBe('https://host');
+    expect(call('u:p@x@host/path', '/fixture-home')).toBe('host/path');
+    // A slash, query or fragment ends the authority; later @ text stays whole.
+    for (const url of ['https://host/path@x', 'https://host?a@b', 'https://host#a@b']) {
+      expect(call(url, '/fixture-home')).toBe(url);
+    }
+    expect(call('https://u:p@host?a@b#c@d', '/fixture-home')).toBe('https://host?a@b#c@d');
     const ccrcSrc = readFileSync(CCRC, 'utf8');
-    expect(section(src, 'redact').length, 'the HOME section was not found').toBeGreaterThan(200);
-    expect(section(src, 'redact')).toBe(section(ccrcSrc, '_upd_redact'));
+    const LL = REGIONS.find((r) => r.name === 'log-line')!;
+    expect(checkRegion(LL, src, ccrcSrc)).toBe('current');
+    expect(extractRegion(LL, src)).toContain(`${ccdFunctionDefinition(ccrcSrc, '_upd_redact')!}\n`);
   });
 
   it('a CCRC_SERVER_URL carrying userinfo never reaches stderr on a curl failure (rc 6)', () => {
@@ -479,6 +494,83 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     } finally {
       chmodSync(join(home, '.ccrc'), 0o755);
     }
+  });
+});
+
+// wave 29 (R45, D-6984): curl authenticates with a scheme followed by one slash (`https:/u:p@h`), so the mask takes
+// the userinfo there too, and the header says which of `_upd_redact`'s rules this script applies.
+describe('W29: the sync never prints a URL\'s userinfo', () => {
+  const failingSync = (url: string) => {
+    const home = box('upd-sync-w29-userinfo-', { url });
+    answer(home, intentDoc());
+    writeFileSync(join(home, 'fixture-curl-rc'), '6\n');   // exit 6's line is the one that names the URL
+    return sync(home);
+  };
+
+  it('W29-Y1: a one-slash base loses its userinfo', () => {
+    const r = failingSync('https:/u:hunter2@127.0.0.1:9/');
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain('could not resolve host in https:/127.0.0.1:9)');
+  });
+
+  it('W29-Y2: the two-slash base still does (the control)', () => {
+    const r = failingSync('https://u:hunter2@127.0.0.1:9/');
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain('could not resolve host in https://127.0.0.1:9)');
+  });
+
+  it.each(['https:///', 'https:////'])('W29-Y5: a base with 3+ slashes (%s) loses its userinfo', (base) => {
+    const r = failingSync(`${base}u:hunter2@127.0.0.1:9/`);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain(`could not resolve host in ${base}127.0.0.1:9)`);
+  });
+
+  it('W29-Y4: a base with no scheme, which curl takes as http, loses its userinfo too (the coordinator\'s ruling on R45)', () => {
+    const r = failingSync('u:hunter2@127.0.0.1:9');
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain('hunter2');
+    expect(r.stderr).toContain('could not resolve host in 127.0.0.1:9)');
+  });
+
+  it('W29-Y6: under a UTF-8 locale, invalid UTF-8 inside userinfo is still masked (D-6984)', ({ skip }) => {
+    const locales = spawnSync('locale', ['-a'], { encoding: 'utf8' }).stdout ?? '';
+    const locale = locales.split('\n').find((l) => /^en_US\.utf-?8$/i.test(l));
+    if (!locale) { skip(); return; }
+    const src = readFileSync(SYNC, 'utf8');
+    const block = ccdFunctionDefinition(src, '_upd_redact');
+    expect(block, 'ccd-update-sync has no generated _upd_redact').not.toBeNull();
+    const home = mkTmp('upd-sync-w29-invalid-userinfo-');
+    const fixture = join(home, 'url \' " $(printf expanded) [*]');
+    writeFileSync(fixture, Buffer.from([
+      ...Buffer.from('u:hun', 'ascii'), 0xff,
+      ...Buffer.from('ter2@127.0.0.1:9', 'ascii'),
+    ]));
+    const redactor = join(home, 'redactor \' " $(printf expanded) [*].sh');
+    writeFileSync(redactor, block!);
+    const env = ghContainedEnv(home, {
+      HOME: home, LC_ALL: locale, PATH: process.env['PATH'] ?? '',
+    }, { systemd: true, tmux: true });
+    const p = spawnSync('bash', ['--noprofile', '--norc', '-s', '--', redactor, fixture], {
+      env, input: '. "$1"\ninput="$(cat -- "$2")"\n_upd_redact "$input" bare-host\n',
+    });
+    expect(p.status, p.stderr.toString()).toBe(0);
+    expect(p.stdout).toEqual(Buffer.from('127.0.0.1:9', 'ascii'));
+  });
+
+  it('W29-Y3: the comment above say() names the rules it applies, not "the same two rules"', () => {
+    const src = readFileSync(SYNC, 'utf8');
+    const END = '\n# ── END GENERATED LOG-LINE REDACTOR ──\n';
+    const end = src.indexOf(END);
+    const at = src.indexOf('\nsay() {', end);
+    expect(end, 'ccd-update-sync carries the log-line region').toBeGreaterThanOrEqual(0);
+    expect(at, 'say() follows the region').toBeGreaterThan(end);
+    const header = src.slice(end + END.length - 1, at);
+    expect(header).toContain('`_upd_redact <text> bare-host`');
+    expect(header).not.toContain('the same two rules');
+    expect(header.replace(/\n# ?/g, ' ')).toMatch(/every rule of ccd\/ccrc's `_upd_redact`/);
   });
 });
 

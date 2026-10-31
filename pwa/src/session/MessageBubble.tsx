@@ -2,7 +2,7 @@
 // right-aligned raised bubbles with a mono receipt. Assistant turns are
 // output: full-width flush prose with rendered markdown (code blocks in dark
 // wells that scroll inside the bubble). System events are centered dividers.
-import { useState, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import { Prose } from '@ccrc/ui';
 import type { ChatEvent } from '../../../shared/api';
 import { isImageClip, splitClipPaths } from '../../../shared/api';
@@ -33,19 +33,24 @@ export function linkify(text: string): ReactNode[] {
 // A /compact turn injects a long "This session is being continued …/Summary:"
 // block that's noise to a reader driving the session. Collapse it to a quiet
 // card (like a tool call) — expandable when you actually want the recap.
-const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
 
 /** Whether this row renders as a `FoldedCard` — one collapsed row, whatever its
  *  text — rather than as its text: a /compact recap (user- or assistant-kind),
  *  or a `system` row carrying a BODY (more than one line) rather than a label.
  *  The harness's own system rows (`origin`) are pills and never fold.
  *
+ *  THE RECAP IS THE SERVER'S FACT (D-7187, ARCH-64): `ChatEvent`'s `compaction`
+ *  flag, set by `server/src/transcript/parse.ts` from Claude Code's
+ *  `isCompactSummary` marker or the recap sentence (D-7186). The PWA reads the
+ *  flag and matches no text; a row without it (a server older than C7h) folds
+ *  nothing and renders as its text.
+ *
  *  ONE DEFINITION for two readers: `MessageBubble` decides the fold by it, and
  *  the chat list prices the row by it (`ChatList.tsx`'s `shapeOf`) — a recap
  *  priced by its text was thousands of px for a 47px row. */
 export function foldsAway(event: MessageEvent): boolean {
   if (event.kind === 'system') return event.origin === undefined && event.text.includes('\n');
-  return COMPACTION_RE.test(event.text);
+  return event.compaction === true;
 }
 
 /** The fold, now used by TWO callers: the /compact recap above, and a `system`
@@ -146,7 +151,10 @@ function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
   );
 }
 
-export function MessageBubble({
+/** One transcript message. Memoised on its props, `event`, `id`, `streaming` and `day` (desktop polish Task C7): the
+ *  store keeps an event's identity across frames, so a bubble whose event, session, caret and day are unchanged renders
+ *  nothing again, its markdown and highlighting included. */
+export const MessageBubble = memo(function MessageBubble({
   event,
   id,
   streaming = false,
@@ -156,6 +164,12 @@ export function MessageBubble({
   id: string;
   /** Last assistant turn while the session is busy — shows the block caret. */
   streaming?: boolean;
+  /** The viewer's local day (`lib/clock.ts#dayKey`). No line here reads it: the usage-limit pill reads the clock when it
+   *  draws (`resetClock`), and a new day is a new prop, so the memo lets the pill draw again at local midnight
+   *  (review 1128). Every bubble gets it, but the row barrier compares it only for a row that reads the clock, so for
+   *  any other bubble a new day lands only with another prop change, as one memo miss that `ChatMarkdown`'s memo
+   *  absorbs. */
+  day?: string;
 }): ReactNode {
   if (event.kind === 'system') {
     // D-2228: the harness's resume pair. The prompt line is neutral (whether it
@@ -259,4 +273,4 @@ export function MessageBubble({
       {streaming && <span className="stream-caret" aria-hidden="true" />}
     </Prose>
   );
-}
+});

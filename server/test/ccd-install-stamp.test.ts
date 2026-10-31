@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, canonicalPython3 } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, CCD_REDACT, CCD_REDACT_CLI, canonicalPython3, installedCcdBody, seedAccountsSh } from './ccdWsHelpers.js';
 import { verifyMarker, markGenerated } from '../../shared/mark.mjs';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -29,11 +29,22 @@ const entry = (): string => path.join(home, '.local', 'bin', 'ccd');
 const body = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
 const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
 
-/** A shipped-tree copy at `<home>/ccrc` holding THIS checkout's real ccd body, template and installer. */
+const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
+/** A fixture body: the pin placeholders the installer renders (the two libraries', D-6913 and D-7463, and the docs
+ *  redactor's two, D-7077) and one line of its own. */
+const FIXTURE = `#!/usr/bin/env bash\n${CCD_LIB_PIN_PLACEHOLDER}\n${CCD_TRAIN_LIB_PIN_PLACEHOLDER}\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\necho fixture\n`;
+
+/** A shipped-tree copy at `<home>/ccrc` holding THIS checkout's real ccd body, library, template and installer. */
 function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {
   const dir = path.join(tree(), 'ccd');
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'ccd'), ccdText, { mode: 0o755 });
+  fs.copyFileSync(CCD_LIB, path.join(dir, 'lib', 'disk-retention.sh'));
+  fs.copyFileSync(CCD_TRAIN_LIB, path.join(dir, 'lib', 'train-proof.sh'));   // the second library (D-7463)
+  // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
+  fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
+  fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));
+  fs.copyFileSync(CCD_REDACT_CLI, path.join(tree(), 'shared', 'redact-cli.mjs'));
   for (const f of ['ccd-entry.py', 'ccd-entry-install.py']) fs.copyFileSync(path.join(REPO, 'ccd', f), path.join(dir, f));
 }
 function install(): { code: number; stdout: string; stderr: string } {
@@ -94,7 +105,7 @@ describe('the committed ccd/ccd carries no generated stamp (install-time stampin
     expect(lines[0]).toBe('#!/usr/bin/env bash');
     expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
     expect(lines.length, 'the marker replaced the placeholder in place').toBe(committed.split('\n').length);
-    expect(text).toBe(markGenerated(committed.split('\n').filter((_l, i) => i !== 1).join('\n')));
+    expect(text).toBe(installedCcdBody(committed, fs.readFileSync(CCD_LIB)));
     expect(verifyMarker(text)).toBe('ccrc-unmodified');
   });
 
@@ -110,16 +121,40 @@ describe('the committed ccd/ccd carries no generated stamp (install-time stampin
   });
 
   it('stamps a body with no placeholder by inserting after the shebang, exactly as markGenerated does', () => {
-    const plain = '#!/usr/bin/env bash\necho fixture\n';
-    plantTree(plain);
+    plantTree(FIXTURE);
     expect(install().code).toBe(0);
-    expect(fs.readFileSync(body(), 'utf8')).toBe(markGenerated(plain));
+    expect(fs.readFileSync(body(), 'utf8')).toBe(installedCcdBody(FIXTURE, fs.readFileSync(CCD_LIB)));
   });
 
   it('re-stamps a body that still carries a legacy marker, hashing the body without it', () => {
-    const legacy = markGenerated('#!/usr/bin/env bash\necho fixture\n').replace(/sha256=[0-9a-f]{64}/, `sha256=${'0'.repeat(64)}`);
+    const legacy = markGenerated(FIXTURE).replace(/sha256=[0-9a-f]{64}/, `sha256=${'0'.repeat(64)}`);
     plantTree(legacy);
     expect(install().code).toBe(0);
-    expect(fs.readFileSync(body(), 'utf8')).toBe(markGenerated('#!/usr/bin/env bash\necho fixture\n'));
+    expect(fs.readFileSync(body(), 'utf8')).toBe(installedCcdBody(FIXTURE, fs.readFileSync(CCD_LIB)));
+  });
+});
+
+describe('the library pin is rendered at install time, under the stamp (D-6913)', () => {
+  it('the installed body pins the installed library, and its stamp verifies over that pin', () => {
+    plantTree();
+    expect(install().code).toBe(0);
+    const text = fs.readFileSync(body(), 'utf8');
+    expect(text.match(/^__CCD_LIB_SHA256=.*$/gm)).toEqual([`__CCD_LIB_SHA256=${sha(fs.readFileSync(lib(), 'utf8'))}`]);
+    expect(verifyMarker(text)).toBe('ccrc-unmodified');
+  });
+
+  it('the installed pair starts; a library tampered with after install refuses every start with lib-digest', () => {
+    plantTree();
+    expect(install().code).toBe(0);
+    seedAccountsSh(home);   // ccd dies without a roster before it reaches its foot, where the library loads
+    const env = { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' };   // a Bash >= 4.4 on it: the launcher proves one
+    const ok = spawnSync(entry(), ['version'], { encoding: 'utf8', cwd: home, env });
+    expect(ok.stderr).not.toContain('ccd: refused');
+    expect(ok.status, ok.stderr).not.toBe(125);
+    fs.appendFileSync(lib(), 'echo ran > "$HOME/lib-ran"\n');
+    const r = spawnSync(entry(), ['version'], { encoding: 'utf8', cwd: home, env });
+    expect(r.status).toBe(125);
+    expect(r.stderr).toContain('ccd: refused (lib-digest)');
+    expect(fs.existsSync(path.join(home, 'lib-ran'))).toBe(false);
   });
 });

@@ -4,7 +4,8 @@
 // `server/src/coord/routes.ts:1060`, refusing a second claimant in
 // `server/src/coord/store.ts:443-451`) and this build does not add a route that both spawns
 // a session and opens a run. The flow is three EXISTING calls —
-// `api.projects`, `api.createSession`, `api.kickoff` — plus `useProjectedHome`
+// `api.projects` (through the one project loader, `useProjectRows.ts#loadProjects`),
+// `api.createSession`, `api.kickoff` — plus `useProjectedHome`
 // as the old-server and untagged-project placement fallback, composed here and
 // nowhere else. A present `ProjectRow.placement` owns the account name.
 //
@@ -69,6 +70,7 @@ import {
 } from './startProgramPolicy';
 import { KickoffRecovery, PROGRAM_GO } from './KickoffRecovery';
 import { useProjectList } from './useProjectList';
+import { loadProjects as loadProjectsDefault } from './useProjectRows';
 import { useProgramAttempt } from './useProgramAttempt';
 import './fleet.css';
 
@@ -138,16 +140,16 @@ export function StartProgramSheet({
   fleet = useFleetStore,
   createSession = api.createSession,
   queueKickoff = api.kickoff,
-  loadProjects = api.projects,
+  loadProjects = loadProjectsDefault,
 }: StartProgramSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
   const coord = fleet((s) => s.coord);
   // `active: open` — this sheet is mounted UNCONDITIONALLY at RunsScreen
-  // level (review fix round 1, Minor 2): without gating the poll, `/runs`
-  // would ask `/api/accounts` every 20s whether or not the door is ever
-  // tapped, the exact shape `useProjectedHome.ts`'s own docstring (citing
-  // `useAccountUsage`) warns against.
+  // level (review fix round 1, Minor 2), so a closed sheet answers the hook's
+  // inactive `undefined`. The hook reads the fleet store's `projected`, which
+  // the store's one `/api/accounts` poll writes (C8, D-6440); this sheet
+  // polls nothing.
   const projected = useProjectedHome(open);
 
   const [slug, setSlug] = useState('');

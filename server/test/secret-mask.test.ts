@@ -4,7 +4,7 @@
 // every web-push payload.
 //
 // Every credential here is ASSEMBLED at run time from neutral filler, so no file in the tree holds a whole shape.
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -40,8 +40,9 @@ import { PushService } from '../src/push.js';
 import { askPushBody } from '../src/askbody.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, shapeMatchers, RUNS_PER_CHUNK, MAX_CHUNKS,
+  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, RUNS_PER_CHUNK, MAX_CHUNKS,
 } from '../src/accounts/mask.js';
+import { SHAPE_MASK, shapeMatchers } from '../src/accounts/shapes.js';
 import { approvalsFixture, CHILD, PARENT } from './approvalsHarness.js';
 import { saveSnapshot } from '../src/fleetstate.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -49,6 +50,9 @@ import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStrea
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
+import { isDeepStrictEqual } from 'node:util';
+import { parseTranscriptLine } from '../src/transcript/parse.js';
+import type { ChatEvent } from '../../shared/api.js';
 
 // ── assembled credentials ──────────────────────────────────────────────────
 const fill = (n: number, salt: string, alphabet = 'base64url'): string => {
@@ -465,7 +469,7 @@ describe('every other egress of session-derived text (D-5513)', () => {
     // the push payload, captured at the push stub
     sent.length = 0;
     const push = new PushService({ publicKey: 'p', privateKey: 'k', subject: 'mailto:ops@example.invalid' },
-      path.join(home, '.ccrc', 'push-subs.json'));
+      path.join(home, '.ccrc', 'push-subs.json'), SHAPE_ONLY_MASKER);
     await push.subscribe({ endpoint: 'https://push.example.invalid/1', keys: { p256dh: 'x', auth: 'y' } });
     await push.notify({ title: `ask ${OAT}`, body: askPushBody(null, { title: `paste ${ORKEY}` }), actions: [{ action: 'a', title: OAT }] });
     expect(sent).toHaveLength(1);
@@ -483,7 +487,7 @@ describe('secret_fingerprints never leaves the server (D-5513)', () => {
       .map((f) => path.relative(srcRoot, f)).sort();
     expect(holders).toEqual(['accounts/mask.ts', 'coord/schema.ts']);
     // mask.ts registers no route and answers no request
-    const mask = readFileSync(path.join(srcRoot, 'accounts', 'mask.ts'), 'utf8');
+    const mask = parsedFile('server/src/accounts/mask.ts').text;
     expect(mask).not.toMatch(/app\.(get|post|put|delete)\(|reply\.|FastifyInstance/);
     // and the table holds no column a secret could sit in: the fingerprint, its lane, its generation and a time
     const db = new DatabaseSync(':memory:');
@@ -848,9 +852,9 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     } finally { await f.close(); }
   });
 
-  it('GET /api/digest and GET /api/ledger are masked like their siblings, as one frame each', () => {
+  it('GET /api/digest, GET /api/ledger and GET /api/landing are masked like their siblings, as one frame each', () => {
     // the one answer hook masks both (D-5995)
-    for (const p of ['/api/digest', '/api/ledger']) expect(answerMasked('GET', p), p).toBe(true);
+    for (const p of ['/api/digest', '/api/ledger', '/api/landing']) expect(answerMasked('GET', p), p).toBe(true);
   });
 
   // Review 951 F1: the review cap's ask carries the last review-done's summary and its report path, session-derived
@@ -1161,6 +1165,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/sessions/:id/clip/:name': 'a file the operator uploaded, served back as it was',
     '/api/coord/caps': 'capacity settings',
     '/api/coord/collect-lane': "the collector's settings and counters",
+    '/api/coord/dispatch-abandon': "the dead-dispatch switch's choice and bound (D-7319)",
+    '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
+    '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
     '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
     '/api/approvals/key': 'a public key',
     '/api/updates': 'release metadata',
@@ -1236,22 +1243,63 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     m.close();
   });
 
-  it('a 2 MB TUI pane history is masked in slices that each stay within the bound, with the same answer as one string, a key a slice cut splits included', async () => {
+  /** The 2 MB pane history of the two slicing rows below: a key that a slice cut splits sits in its first slice. */
+  const slicingFixture = (): { m: SecretMasker; text: string } => {
     const { m } = maskerOver(() => TOKEN_1, [CMP]);
     // a key that ends the row the first slice's cut follows, wrapped onto an indented row past the cut
     const head = listing(64 * 1024 - 400);
     const keyRows = `\nkey ${'x'.repeat(300)} ${CMP.slice(0, 25)}\n    ${CMP.slice(25)} ${'y'.repeat(200)}\n`;
     const text = `${head}${keyRows}${tuiRows(2 * 1024 * 1024)}`;
     expect(text.lastIndexOf('\n', 64 * 1024 - 1)).toBe(head.length + keyRows.indexOf(`\n    ${CMP.slice(25)}`));
+    return { m, text };
+  };
+
+  // No clock here: the wall-clock bound lives in the gated row below (D-6929's principle, no wall-clock assertion in a
+  // required check). Measured: the cold first slice (JIT) and a major GC inside one early slice each outrun it, and
+  // neither is per-slice work the masker controls. What this row pins is the load-independent shape: slice size and a pause.
+  it('a 2 MB TUI pane history is masked in slices of at most 64 Ki units with a pause between every two, with the same answer as one string, a key a slice cut splits included', async () => {
+    const { m, text } = slicingFixture();
+    const events: ('pause' | number)[] = [];
+    const overlaps: number[] = [];
+    const inner = (m as unknown as { maskWithCarry: (t: string, o?: unknown) => unknown }).maskWithCarry.bind(m);
+    (m as unknown as { maskWithCarry: (t: string, o?: unknown) => unknown }).maskWithCarry = (t: string, o?: unknown): unknown => {
+      events.push(t.length);
+      const { context, lookahead } = (o ?? {}) as { context?: string; lookahead?: string };
+      overlaps.push((context ?? '').length, (lookahead ?? '').length);
+      return inner(t, o);
+    };
+    const pause = async (): Promise<void> => { events.push('pause'); await new Promise((r) => setImmediate(r)); };
+    let sliced: string;
+    try {
+      sliced = await m.maskTextSliced(text, { rows: true }, pause);
+    } finally {
+      delete (m as unknown as Record<string, unknown>)['maskWithCarry'];
+    }
+    const slices = events.filter((e): e is number => e !== 'pause');
+    expect(slices.length).toBeGreaterThan(30);
+    expect(Math.max(...slices)).toBeLessThanOrEqual(64 * 1024);
+    // The overlap a slice carries (its context and its lookahead) is a few KiB: one held run plus slack. This bound pins
+    // that it does not grow with the text, the load-independent part of the per-slice cost the old wall-clock row bounded
+    // (a quadratic regression such as `context: text.slice(0, at)` would otherwise pass).
+    expect(overlaps.length).toBe(slices.length * 2);
+    expect(Math.max(...overlaps)).toBeLessThanOrEqual(16 * 1024);
+    // slice, pause, slice, ..., slice: never two slices or two pauses adjacent
+    expect(events.map((e) => (e === 'pause' ? 'p' : 's')).join('')).toBe(Array.from({ length: slices.length * 2 - 1 }, (_, i) => (i % 2 === 0 ? 's' : 'p')).join(''));
+    expect(leaksNone(sliced, CMP)).toBe(true);
+    expect(sliced).toBe(m.maskText(text, { rows: true }));
+    m.close();
+  });
+
+  it.runIf(process.env['CCRC_PERF'] === '1')('a 2 MB TUI pane history: after a warm-up pass, no slice holds the event loop past BOUND / 5 (perf job only, D-6929)', async () => {
+    const { m, text } = slicingFixture();
+    await m.maskTextSliced(text, { rows: true }); // one discarded warm-up pass
     const gaps: number[] = [];
     let last = performance.now();
     const pause = async (): Promise<void> => { gaps.push(performance.now() - last); await new Promise((r) => setImmediate(r)); last = performance.now(); };
-    const sliced = await m.maskTextSliced(text, { rows: true }, pause);
+    await m.maskTextSliced(text, { rows: true }, pause);
     gaps.push(performance.now() - last);
     expect(gaps.length).toBeGreaterThan(30);
-    expect(Math.max(...gaps)).toBeLessThan(BOUND / 5);
-    expect(leaksNone(sliced, CMP)).toBe(true);
-    expect(sliced).toBe(m.maskText(text, { rows: true }));
+    expect(Math.max(...gaps), `gaps (ms): ${gaps.map((g) => Math.round(g)).join(', ')}`).toBeLessThan(BOUND / 5);
     m.close();
   });
 
@@ -2007,5 +2055,148 @@ describe('the final audit: a row joined to the next row never hides a key that r
         expect(o, ln).toContain(run.slice(0, 3));
       }
     }
+  });
+});
+
+// ── the transcript parse's tool input, over this file's corpus (D-7513) ────
+// APPENDED, and LAST on purpose. While the file is collected, `SecretMasker.prototype.maskWithCarry` and `maskDeep`
+// are wrapped by hand-written pass-through recorders (never `vi.spyOn`: vitest's `clearMocks` empties a spy's calls
+// before each test), so by the time the block below runs, every input the rows above fed any masker is recorded. The
+// block's `beforeAll` stops the recorder and copies the corpus; a file-level `afterAll` puts the originals back.
+const recorded: { strings: string[]; deep: unknown[] } = { strings: [], deep: [] };
+let recording = true;
+const ORIGINAL_MASK_WITH_CARRY = SecretMasker.prototype.maskWithCarry;
+const ORIGINAL_MASK_DEEP = SecretMasker.prototype.maskDeep;
+SecretMasker.prototype.maskWithCarry = function (this: SecretMasker, ...args: Parameters<SecretMasker['maskWithCarry']>) {
+  if (recording) recorded.strings.push(args[0]);
+  return ORIGINAL_MASK_WITH_CARRY.call(this, ...args);
+};
+SecretMasker.prototype.maskDeep = function <T>(this: SecretMasker, value: T): T {
+  if (recording) recorded.deep.push(value);
+  return ORIGINAL_MASK_DEEP.call(this, value) as T;
+};
+afterAll(() => {
+  SecretMasker.prototype.maskWithCarry = ORIGINAL_MASK_WITH_CARRY;
+  SecretMasker.prototype.maskDeep = ORIGINAL_MASK_DEEP;
+});
+
+describe('the transcript parse masks tool input as the shape-only masker does, over this file\'s corpus (D-7513)', () => {
+  const corpus: { strings: string[]; deep: unknown[] } = { strings: [], deep: [] };
+  const inputs = (): unknown[] => [...corpus.strings, ...corpus.deep];
+  beforeAll(() => {
+    recording = false;
+    corpus.strings = [...new Set(recorded.strings)];
+    corpus.deep = [...recorded.deep];
+  });
+  /** An assistant record whose one content block is a `tool_use` holding `input`. */
+  const toolUseLine = (input: unknown): string => JSON.stringify({
+    type: 'assistant', uuid: 'u', timestamp: 't',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Bash', input }] },
+  });
+  const toolUseOf = (line: string): Extract<ChatEvent, { kind: 'tool_use' }> => {
+    const evs = parseTranscriptLine(line).filter((e): e is Extract<ChatEvent, { kind: 'tool_use' }> => e.kind === 'tool_use');
+    expect(evs.length).toBe(1);
+    return evs[0]!;
+  };
+  const masks = (s: string): number => s.split(SECRET_MASK).length - 1;
+
+  it('CONTROL: the recorded corpus is not thin', () => {
+    const changed = inputs().filter((v) => !isDeepStrictEqual(new SecretMasker().maskDeep(v), v)).length;
+    const counts = {
+      strings: corpus.strings.length, deep: corpus.deep.length, changed,
+      esc: corpus.strings.filter((s) => s.includes('\x1b')).length,
+      long: corpus.strings.filter((s) => s.length > 4000).length,
+    };
+    expect(counts.strings, JSON.stringify(counts)).toBeGreaterThanOrEqual(2000);
+    expect(counts.deep, JSON.stringify(counts)).toBeGreaterThanOrEqual(40);
+    expect(counts.changed, JSON.stringify(counts)).toBeGreaterThanOrEqual(1000);
+    expect(counts.esc, JSON.stringify(counts)).toBeGreaterThanOrEqual(500);
+    expect(counts.long, JSON.stringify(counts)).toBeGreaterThanOrEqual(40);
+  });
+
+  it('every tool input the parse emits is what a fresh keyless SecretMasker masks it to, cut at 4,000 units', () => {
+    const bad: string[] = [];
+    inputs().forEach((v, i) => {
+      const line = toolUseLine(v);
+      const decoded = (JSON.parse(line) as { message: { content: { input?: unknown }[] } }).message.content[0]!.input;
+      const want = JSON.stringify(new SecretMasker().maskDeep(decoded ?? null)) ?? '';
+      const ev = toolUseOf(line);
+      const ok = want.length <= 4000
+        ? ev.input === want && ev.truncatedBytes === 0
+        : want.startsWith(ev.input) && ev.input.length <= 4000
+          && Buffer.byteLength(want) - Buffer.byteLength(ev.input) === ev.truncatedBytes;
+      if (!ok) bad.push(`#${i} (${masks(want)} masks)`);
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('the shape-only singleton keeps no state: it masks every input as a fresh keyless SecretMasker does', () => {
+    const bad: string[] = [];
+    inputs().forEach((v, i) => {
+      const want = new SecretMasker().maskDeep(v);
+      if (!isDeepStrictEqual(SHAPE_ONLY_MASKER.maskDeep(v), want)) bad.push(`#${i} (${masks(JSON.stringify(want) ?? '')} masks)`);
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('SHAPE_MASK, the shape-only mask with no masker behind it, answers every input as the shape-only singleton does', () => {
+    const bad: string[] = [];
+    inputs().forEach((v, i) => {
+      const want = SHAPE_ONLY_MASKER.maskDeep(v);
+      if (!isDeepStrictEqual(SHAPE_MASK.maskDeep(v), want)) bad.push(`#${i} (${masks(JSON.stringify(want) ?? '')} masks)`);
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('the shape-only pass is keyless: no fingerprint, no timer and no clock while the corpus is masked and parsed', () => {
+    expect(SHAPE_ONLY_MASKER.fingerprintMax()).toBeNull();
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      for (const v of inputs()) {
+        SHAPE_ONLY_MASKER.maskDeep(v);
+        parseTranscriptLine(toolUseLine(v));
+      }
+      expect(timers.mock.calls.length).toBe(0);
+      expect(clock.mock.calls.length).toBe(0);
+    } finally {
+      timers.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
+  it('overlapping shape spans give one mask, in both maskers and through the parse', () => {
+    const GEN = [SK, fill(20, 'g', 'hex')].join('-');
+    const a = '{"access_token": "' + GEN + '\\u0041' + fill(10, 'b', 'hex') + '"}';
+    const b = '{"id_token": "' + JWT + '\\"q"}';
+    const maskedA = '{"access_token": "' + SECRET_MASK + '"}';
+    const maskedB = '{"id_token": "' + SECRET_MASK + '"}';
+    for (const m of [SHAPE_ONLY_MASKER, new SecretMasker()]) {
+      expect(m.maskText(a)).toBe(maskedA);
+      expect(m.maskText(b)).toBe(maskedB);
+    }
+    expect(toolUseOf(toolUseLine({ command: a, other: [b] })).input).toBe(JSON.stringify({ command: maskedA, other: [maskedB] }));
+  });
+
+  it('maskDeep passes bytes and times through as the same instances, and walks a toJSON answer, not the fields', () => {
+    const d = new Date(0);
+    const u8 = new Uint8Array([1, 2]);
+    const ab = new ArrayBuffer(2);
+    const tj = { hidden: OAT, toJSON() { return { k: 'x ' + OAT + ' y' }; } };
+    for (const m of [SHAPE_ONLY_MASKER, new SecretMasker()]) {
+      const out = m.maskDeep({ d, u8, ab, tj, n: null, b: true, k: 3, s: OAT });
+      expect(out.d).toBe(d);
+      expect(out.u8).toBe(u8);
+      expect(out.ab).toBe(ab);
+      expect(out).toEqual({ d, u8, ab, tj: { k: 'x ' + SECRET_MASK + ' y' }, n: null, b: true, k: 3, s: SECRET_MASK });
+    }
+  });
+
+  it('the too-large notice comes last, after the spliced shape and the runs ahead of the cut', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const ceiling = RUNS_PER_CHUNK * MAX_CHUNKS;
+    const runs = Array.from({ length: ceiling + 10 }, (_, i) => `filler${String(i).padStart(CMP.length - 6, '0')}`);
+    expect(m.maskText(OAT + ' ' + runs.join(' ') + ' ' + CMP + ' after'))
+      .toBe(SECRET_MASK + ' ' + runs.slice(0, ceiling).join(' ') + ' ' + SECRET_MASK_TOO_LARGE);
   });
 });

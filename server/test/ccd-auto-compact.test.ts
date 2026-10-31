@@ -37,7 +37,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE, BOUNDED } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, BOUNDED, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-auto-compact-'); });
@@ -878,7 +878,7 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
     // not for reaching back past a compaction. Too small and the scan answers
     // "no real turn", which the caller FAILS OPEN on — the pre-D-3103
     // behaviour, never a false refusal, but also never the fix.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('tail -n "$COMPACT_TURN_TAIL_LINES" -- "$f" 2>/dev/null');
     expect(Number(h.sh('echo "$COMPACT_TURN_TAIL_LINES"'))).toBeGreaterThan(
       Number(h.sh('echo "$REDRIVE_TAIL_LINES"')));

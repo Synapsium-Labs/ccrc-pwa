@@ -42,13 +42,14 @@ import { Button, Chip, Keycap, Sheet } from '@ccrc/ui';
 import { api } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
+import { pageStorage, type StorageSource } from '../lib/storage';
 import { wsUrl } from '../lib/ws';
 import { PINNED_WINDOW_COLS } from '../../../shared/api';
 import { BASE_CONSOLE_FONT_PX, consoleFit, type ConsoleFit } from './consoleFit';
 import { rowText } from './drawerModel';
 import {
   chooseView, readViewOverride, viewChip, writeViewOverride,
-  type DrawerViewKind, type StorageLike,
+  type DrawerViewKind,
 } from './drawerView';
 import { KeyBar, useKeyInput } from './KeyBarView';
 import { insertedFrame, inputLetter, keyLetter, reattachVerdict, typedFrame } from './typedFrame';
@@ -76,9 +77,9 @@ export interface TerminalDrawerProps {
   makeSocket?: (url: string) => WebSocket; // injectable for tests
   makeTerm?: MakeTerm; // injectable for tests
   makeHistoryTerm?: MakeHistoryTerm; // injectable for tests
-  /** Where the view chip's per-device choice is kept; `localStorage` by
-   *  default. Injectable for tests, which hand it a store that throws. */
-  viewStorage?: () => StorageLike;
+  /** Where the view chip's per-device choice is kept; the storage port's page
+   *  store by default. Injectable for tests, which hand it a store that throws. */
+  viewStorage?: StorageSource;
 }
 
 export function TerminalDrawer({
@@ -125,7 +126,7 @@ export function TerminalDrawer({
   /** The per-device override: read once, at mount, from a store that may
    *  throw (`readViewOverride`), and held here for this drawer whatever the
    *  store does with a write. */
-  const store = viewStorage ?? ((): StorageLike => window.localStorage);
+  const store = viewStorage ?? pageStorage;
   const [storedOverride] = useState(() => readViewOverride(store));
   const overrideRef = useRef<DrawerViewKind | null>(storedOverride);
   /** While the not-Claude offer's grid is standing in for the device's own

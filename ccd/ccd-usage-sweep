@@ -19,7 +19,6 @@ SCANNER="$HOME/.local/bin/ccd-usage-sweep.py"
 # definition, and handed to the scanner as data — never copied into it.
 : "${CCRC_TREE:=$HOME/ccrc}"
 MODELS_MJS="$CCRC_TREE/shared/models.mjs"
-: "${CCRC_USAGE_SWEEP_DAYS:=7}"
 STARTED="$(date -u +%FT%TZ)"
 
 _us_finish() {   # status records rc
@@ -36,6 +35,17 @@ _us_finish() {   # status records rc
 }
 
 [ -e "$PAUSE" ] && { echo "usage-sweep: paused ($PAUSE exists)"; exit 0; }
+# The days, through ccrc's one reader (wave 29, D-6981), AFTER the pause check, so a paused sweep stays paused whatever
+# ~/.ccrc/ccrc.env holds, and before the lock: a set environment, else a line in that file, else 7. A value the reader
+# cannot read, or one out of range, stops the pass, exit 1, naming the setting, its source and what was refused.
+_settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib" ] || _settings_lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"
+. "$_settings_lib" 2>/dev/null && declare -F _ccrc_knob >/dev/null 2>&1 || { echo "${0##*/}: the settings reader is missing or broken (~/.local/libexec/ccrc/ccrc-settings.sh) — this pass did nothing; 'ccrc update --force' places it" >&2; exit 1; }
+_ccrc_knob CCRC_USAGE_SWEEP_DAYS 7 && CCRC_USAGE_SWEEP_DAYS="$KNOB" || { echo "usage-sweep: $KNOB_WHY — nothing was swept" >&2; exit 1; }
+[[ "$CCRC_USAGE_SWEEP_DAYS" =~ ^[123456789][0123456789]{0,2}$ ]] || {
+  v="$CCRC_USAGE_SWEEP_DAYS"; src="~/.ccrc/ccrc.env"; [ "$KNOB_FROM" != environment ] || src="the environment"
+  v="$(LC_ALL=C; v="${v:0:32}"; printf '%s' "${v//[^[:print:]]/?}")"
+  echo "usage-sweep: CCRC_USAGE_SWEEP_DAYS must be a whole number from 1 to 999 — got '$v', as set in $src; nothing was swept" >&2; exit 1
+}
 for bin in jq python3 node; do
   command -v "$bin" >/dev/null 2>&1 || { echo "usage-sweep: $bin is required" >&2; exit 1; }
 done

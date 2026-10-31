@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import { CCD_FUNCTION_DEF, bashCodeOf, ccdCallGraph, ccdFunctionDefinitions } from './consolidationCensus.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { writeField } from './worktreeIdentityFixture.js';
@@ -273,7 +273,7 @@ describe('the composer: one line in the platform block, a brace-free fragment or
   });
 
   it('the grammar is spelled once, as the regex of the reader', () => {
-    const lines = fs.readFileSync(CCD, 'utf8').split('\n');
+    const lines = ccdSource().split('\n');
     const at = lines.flatMap((l, i) => (bashCodeOf(l).includes('|pending)') ? [i] : []));
     expect(at, 'one code line spells the grammar').toHaveLength(1);
     expect(lines[at[0]!]!.trim()).toBe(GRAMMAR);
@@ -282,7 +282,7 @@ describe('the composer: one line in the platform block, a brace-free fragment or
   });
 
   it('the spelling .workdirid stands in the code of these functions only', () => {
-    const lines = fs.readFileSync(CCD, 'utf8').split('\n');
+    const lines = ccdSource().split('\n');
     const owner = ownerIn(lines);
     const owners = new Set(lines.flatMap((l, i) => (bashCodeOf(l).includes('.workdirid') ? [owner(i)] : [])));
     expect([...owners].sort()).toEqual([...WORKDIRID_SPELLERS].sort());

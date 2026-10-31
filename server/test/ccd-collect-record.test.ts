@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { seedRoster } from './helpers.js';
 import { localIO } from '../src/io.js';
@@ -416,7 +416,7 @@ describe('$REG/tmpquarantine is invisible to every registry walker (spec §5.10,
     // The census of THIS directory. The name-agnostic walker census in
     // `ccd-child-tmproot-witness.test.ts` proves no registry glob or find can
     // see a dotless subdirectory; this proves who may name this one.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const b = src.indexOf('COLLECT-BEGIN');
     const e = src.indexOf('COLLECT-END');
     expect(b, 'COLLECT-BEGIN').toBeGreaterThan(-1);

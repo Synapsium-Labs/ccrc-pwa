@@ -24,7 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync, statSync,
+  cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, statSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,12 +178,12 @@ const PROMPTS = /(DuckDNS subdomain|DuckDNS token|Public origin|Passkey rp id|Ad
  *  without a terminal the only reachable branch is the refusal. */
 function runExposeTty(
   home: string, args: string[], entries: string[],
-  opts: { systemctlOk?: boolean; launchctlOk?: boolean } = {},
+  opts: { systemctlOk?: boolean; launchctlOk?: boolean; extra?: Record<string, string> } = {},
 ): Promise<Result> {
   return new Promise((resolve) => {
     const p = pty.spawn(BASH, [ccrcIn(home), 'expose', ...args], {
       name: 'xterm-color', cols: 200, rows: 40, cwd: home,
-      env: env(home, opts) as Record<string, string>,
+      env: { ...env(home, opts), ...(opts.extra ?? {}) } as Record<string, string>,
     });
     let out = '';
     let sent = 0;
@@ -818,6 +818,207 @@ describe('ccrc expose: the duckdns updater units', () => {
     expect(r.stdout).toMatch(
       /systemctl --user daemon-reload && systemctl --user enable --now ccrc-ddns\.timer/);
   });
+});
+
+// ── the ddns job's cadence, from its timer (D-7053, D-7062; ARCH-69) ───────
+//
+// W8 Task C8a's characterization pin, written green on the code before the
+// move: `_exp_ddns_units` writes `StartInterval` from the period
+// `_timer_period_s` reads out of the shipped `ccrc-ddns.timer`, and on the
+// shipped tree nothing it writes or prints may change by a byte. Both arms are
+// FORCED (`OSTYPE`, from which ccrc computes `CCD_OS` at source time), so each
+// row runs on either host: the Darwin arm under a recording `launchctl` and a
+// recording `plutil`, the Linux arm under a recording `systemctl`. `ss` is
+// stubbed empty, so the `:443` sentence is this fixture's and not the runner's.
+// The fixture-varying tokens (the sandbox HOME, the uid, the generator's pid)
+// are the only bytes normalised.
+const FORCE_DARWIN = { OSTYPE: 'darwin23' };
+const FORCE_LINUX = { OSTYPE: 'linux-gnu' };
+const DDNS_LABEL = 'app.ccrc.ccrc-ddns';
+const ddnsPlist = (home: string): string => join(home, 'Library', 'LaunchAgents', `${DDNS_LABEL}.plist`);
+
+/** A recording stub for one tool, planted beside the harness's others. */
+function recorder(home: string, name: string): void {
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', name),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-argv"\nexit 0\n`, { mode: 0o755 });
+}
+
+/** `ss -ltn` answering a header and no listener: nothing holds :443 here. */
+function quietSs(home: string): void {
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'ss'),
+    '#!/bin/sh\necho "State Recv-Q Send-Q Local Address:Port Peer Address:Port"\nexit 0\n', { mode: 0o755 });
+}
+
+const uid = (): string => String(process.getuid?.() ?? spawnSync('id', ['-u'], { encoding: 'utf8' }).stdout.trim());
+/** The run's text with the sandbox HOME, the uid and a temp file's pid replaced by placeholders. */
+const normal = (home: string, text: string): string =>
+  text.split(home).join('<HOME>').split(`gui/${uid()}`).join('gui/<uid>').replace(/\.tmp\.\d+\.new/g, '.tmp.<pid>.new');
+
+/** The ddns job, whole, as the shipped tree's run writes it. */
+const DDNS_PLIST_BYTES = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+  '<plist version="1.0">',
+  '<dict>',
+  '  <key>Label</key><string>app.ccrc.ccrc-ddns</string>',
+  '  <key>ProgramArguments</key>',
+  '  <array>',
+  '    <string>/bin/bash</string>',
+  '    <string>-c</string>',
+  "    <string>set -a; . '<HOME>/.ccrc/exposure.env'; set +a; exec /usr/bin/curl -fsS --max-time 30 \"https://www.duckdns.org/update?domains=${CCRC_DDNS_DOMAIN}&amp;token=${CCRC_DDNS_TOKEN}&amp;ip=\"</string>",
+  '  </array>',
+  '  <key>RunAtLoad</key><true/>',
+  '  <key>StartInterval</key><integer>300</integer>',
+  '  <key>ProcessType</key><string>Background</string>',
+  '</dict>',
+  '</plist>',
+].join('\n') + '\n';
+
+/** The transcript both arms share up to the ddns lines, and after them. */
+const TRANSCRIPT_HEAD = [
+  'ccrc: exposing this box through DuckDNS (the token is never echoed; Ctrl-C aborts)',
+  'DuckDNS subdomain (the <sub> of <sub>.duckdns.org): mybox',
+  'DuckDNS token (from duckdns.org; not echoed): ',
+  "ccrc: nothing else appears to hold :443 on this box, so caddy can take every address (blank is the right answer). Name one only if you run something like 'tailscale serve' that binds :443 later.",
+  'Address for caddy to bind (blank = all interfaces): ',
+  'expose: wrote <HOME>/.ccrc/exposure.env (0600) — CCRC_ORIGIN=https://mybox.duckdns.org, CCRC_AUTH=on',
+  'expose: DEGRADED — this box now arms its gate but has no passphrase, so it will refuse every request including yours. Set one before you restart the server: ccrc passwd',
+  'expose: wrote <HOME>/.ccrc/Caddyfile — caddy will serve https://mybox.duckdns.org and proxy to 127.0.0.1:7788',
+];
+const transcriptTail = (restart: string): string[] => [
+  'expose: this run started NO system service — caddy binds ports 80/443 as root, and ccrc never escalates (the commands below are printed, not run). Three steps are yours:',
+  'expose:   1. install caddy from your distro (Debian/Ubuntu: apt install caddy) — the stock binary; no plugins needed',
+  "expose:   2. sudo install -m 0644 <HOME>/.ccrc/Caddyfile /etc/caddy/Caddyfile   (a COPY — do NOT symlink it: caddy runs as another user and cannot read inside your home. Re-run this line after every 'ccrc expose'; 'ccrc doctor' measures whether you did)",
+  'expose:   3. sudo systemctl enable --now caddy',
+  'expose: prerequisite: your router must forward ports 80 and 443 to this box — stock caddy\'s certificate issuance (ACME HTTP-01/TLS-ALPN-01) fails loudly without it, and nothing inside the box can check it for you',
+  `expose: then restart the server so it reads the new origin: ${restart} — and RE-ENROL every passkey (passkeys are origin-bound; the old ones will be refused by name)`,
+  'expose: once all of the above are done, https://mybox.duckdns.org is this box — ccrc doctor measures each piece',
+];
+const crlf = (lines: string[]): string => lines.map((l) => `${l}\r\n`).join('');
+
+describe('ccrc expose: the ddns job\'s cadence comes from its timer (D-7053; ARCH-69), characterized', () => {
+  it('forced Darwin: the job file whole, its plutil -lint call, the bootstrap sequence and the whole stdout, byte for byte', async () => {
+    const home = box('ccrc-expose-c8a-darwin-');
+    recorder(home, 'plutil');
+    quietSs(home);
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, ''], { launchctlOk: true, extra: FORCE_DARWIN });
+    expect(r.code, r.stdout).toBe(0);
+    expect(normal(home, readFileSync(ddnsPlist(home), 'utf8'))).toBe(DDNS_PLIST_BYTES);
+    expect(mode(ddnsPlist(home))).toBe(0o644);
+    expect(readdirSync(join(home, 'Library', 'LaunchAgents'))).toEqual([`${DDNS_LABEL}.plist`]);
+    expect(normal(home, readFileSync(join(home, 'plutil-argv'), 'utf8')))
+      .toBe(`-lint <HOME>/Library/LaunchAgents/${DDNS_LABEL}.plist.tmp.<pid>.new\n`);
+    expect(normal(home, readFileSync(join(home, 'launchctl-argv'), 'utf8'))).toBe([
+      `bootout gui/<uid>/${DDNS_LABEL}`,
+      `enable gui/<uid>/${DDNS_LABEL}`,
+      `bootstrap gui/<uid> <HOME>/Library/LaunchAgents/${DDNS_LABEL}.plist`,
+    ].join('\n') + '\n');
+    expect(normal(home, r.stdout)).toBe(crlf([
+      ...TRANSCRIPT_HEAD,
+      `expose: installed ${DDNS_LABEL} in $HOME/Library/LaunchAgents (the token stays in <HOME>/.ccrc/exposure.env — the job reads it, never carries it; a missed refresh waits for the next 5-minute tick, where systemd's Persistent=true would catch up immediately)`,
+      `expose: ${DDNS_LABEL} enabled — the DuckDNS record refreshes every 5 minutes`,
+      ...transcriptTail(`launchctl kickstart -k gui/<uid>/app.ccrc.ccrc`),
+    ]));
+  });
+
+  it('forced Linux: the whole stdout byte for byte, the shipped units copied, the systemctl sequence', async () => {
+    const home = box('ccrc-expose-c8a-linux-');
+    quietSs(home);
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, ''], { systemctlOk: true, extra: FORCE_LINUX });
+    expect(r.code, r.stdout).toBe(0);
+    expect(bytesAt(ddnsUnit(home, 'timer')))
+      .toBe(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-ddns.timer'), 'utf8'));
+    expect(readFileSync(join(home, 'systemctl-argv'), 'utf8')).toBe(
+      '--user daemon-reload\n--user enable --now ccrc-ddns.timer\n');
+    expect(normal(home, r.stdout)).toBe(crlf([
+      ...TRANSCRIPT_HEAD,
+      'expose: installed ccrc-ddns.service + ccrc-ddns.timer in $HOME/.config/systemd/user (the token stays in <HOME>/.ccrc/exposure.env — the units read it, never carry it)',
+      'expose: ccrc-ddns.timer enabled — the DuckDNS record refreshes every 5 minutes',
+      ...transcriptTail('systemctl --user restart ccrc.service'),
+    ]));
+  });
+});
+
+/** A box whose tree ships `deploy/systemd/` as a real copy, its `ccrc-ddns.timer` replaced by `text` (absent for
+ *  `null`). */
+function ddnsTimerBox(prefix: string, text: string | null): string {
+  const home = mkTmp(prefix);
+  const ccd = join(home, 'ccrc', 'ccd');
+  mkdirSync(ccd, { recursive: true });
+  symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
+  const units = join(home, 'ccrc', 'deploy', 'systemd');
+  cpSync(join(REPO, 'deploy', 'systemd'), units, { recursive: true });
+  rmSync(join(units, 'ccrc-ddns.timer'));
+  if (text !== null) writeFileSync(join(units, 'ccrc-ddns.timer'), text);
+  return home;
+}
+
+/** The shipped `ccrc-ddns.timer` with its cadence line replaced by `line` (dropped for `null`). */
+const ddnsTimerWith = (line: string | null): string =>
+  readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-ddns.timer'), 'utf8').split('\n')
+    .flatMap((l) => (l.startsWith('OnCalendar=') ? (line === null ? [] : [line]) : [l])).join('\n');
+
+/** A box whose `ccrc-ddns.timer` is broken one way: `absent`, or `no-cadence` (its `OnCalendar=` line gone, every
+ *  other line kept). */
+const brokenTimerBox = (prefix: string, how: 'absent' | 'no-cadence'): string =>
+  ddnsTimerBox(prefix, how === 'absent' ? null : ddnsTimerWith(null));
+
+/** `pathVar` with every directory holding `name` replaced by a farm of links to its other entries: the tool is gone,
+ *  everything beside it still resolves. */
+function pathWithout(home: string, name: string, pathVar: string): string {
+  return pathVar.split(':').map((d, i) => {
+    if (d === '' || !existsSync(join(d, name))) return d;
+    const farm = join(home, `path-without-${name}-${i}`);
+    mkdirSync(farm, { recursive: true });
+    for (const e of readdirSync(d)) {
+      if (e === name) continue;
+      try { symlinkSync(join(d, e), join(farm, e)); } catch { /* an entry already linked */ }
+    }
+    return farm;
+  }).join(':');
+}
+
+describe('ccrc expose: the Darwin ddns job and its two sentences follow the timer (D-7053)', () => {
+  it('a 90-second timer writes StartInterval 90 and says "90-second tick" and "every 90 seconds"', async () => {
+    const home = ddnsTimerBox('ccrc-expose-c8a-90s-', ddnsTimerWith('OnUnitActiveSec=90s'));
+    quietSs(home);
+    recorder(home, 'plutil');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, ''], { launchctlOk: true, extra: FORCE_DARWIN });
+    expect(r.code, r.stdout).toBe(0);
+    expect(normal(home, readFileSync(ddnsPlist(home), 'utf8')))
+      .toBe(DDNS_PLIST_BYTES.replace('<integer>300</integer>', '<integer>90</integer>'));
+    expect(r.stdout).toContain('a missed refresh waits for the next 90-second tick, where');
+    expect(r.stdout).toMatch(/^expose: app\.ccrc\.ccrc-ddns enabled — the DuckDNS record refreshes every 90 seconds\r?$/m);
+  });
+});
+
+describe('ccrc expose: an unreadable ddns timer refuses the Darwin job (OA-C8c (a), D-7062)', () => {
+  for (const how of ['absent', 'no-cadence'] as const) {
+    for (const plutil of [true, false]) {
+      it(`an unreadable ccrc-ddns.timer places no job, writes no plist and says why (${how}, plutil ${plutil ? 'on' : 'off'} PATH)`, async () => {
+        const home = brokenTimerBox(`ccrc-expose-c8a-refuse-${how}-`, how);
+        quietSs(home);
+        const extra: Record<string, string> = { ...FORCE_DARWIN };
+        if (plutil) recorder(home, 'plutil');
+        else {
+          extra['PATH'] = pathWithout(home, 'plutil', env(home, { launchctlOk: true })['PATH'] ?? '');
+          expect(spawnSync('/bin/sh', ['-c', 'command -v plutil'], { env: { PATH: extra['PATH'] } }).status,
+            'the fixture PATH still holds a plutil').not.toBe(0);
+        }
+        const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, ''], { launchctlOk: true, extra });
+        expect(r.code, r.stdout).toBe(1);
+        const agents = join(home, 'Library', 'LaunchAgents');
+        expect(existsSync(agents) ? readdirSync(agents) : [], 'a job file, or its temp file, was written').toEqual([]);
+        expect(existsSync(join(home, 'launchctl-argv')), 'launchctl was asked to place a job').toBe(false);
+        expect(existsSync(join(home, 'plutil-argv')), 'a plist was generated and linted').toBe(false);
+        expect(normal(home, r.stdout)).toMatch(
+          /^ccrc: cannot place the app\.ccrc\.ccrc-ddns job: the period of ccrc-ddns\.timer cannot be read from the shipped tree\. Nothing was placed\.\r?$/m);
+        expect(r.stdout).not.toMatch(/enabled — the DuckDNS record refreshes/);
+      });
+    }
+  }
 });
 
 // ── the bind address, and the class of loss it stands for ─────────────────

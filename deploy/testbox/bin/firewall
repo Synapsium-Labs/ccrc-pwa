@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# The test box's one firewall load step: `firewall <nft file>`, as root (D-7409, D-7568; spec §2.0, §2.3 "Network").
+# The installer copies it to /usr/local/sbin/ccrc-testbox-firewall (on the root filesystem, so nftables.service can run
+# it early in boot) and runs it in its last phase; nftables.service's drop-in runs it as ExecStartPost= and ExecReload=,
+# after the distribution's own start or reload, either of which may begin with `flush ruleset`. So every path ends in
+# the same state:
+#   1. the file is loaded (it keeps every set's elements and flushes only its own two chains; a flush before it has
+#      emptied them);
+#   2. each unit the firewall lets out that runs now has its cgroup added to its set, since NFTSet= adds a unit's cgroup
+#      only when the unit starts, and the network units below do not restart with nftables.service: the tailnet client
+#      (tailnet_cg), the resolver (dns_cg), the time client (ntp_cg), the service (service_cg) and the tools unit
+#      (tools_cg). A unit that is not running is left out: its cgroup joins its set when it starts;
+#   3. the egress unit is asked, without waiting, to fill the address sets again.
+# It exits 1 only when the load fails. Every system call goes through one seam, TB_SYS (empty on a box), so the tests
+# run it against a fixture firewall and system manager.
+set -uo pipefail
+
+UNITS=("tailscaled.service tailnet_cg" "systemd-resolved.service dns_cg" "systemd-timesyncd.service ntp_cg"
+  "ccrc-testbox.service service_cg" "ccrc-testbox-tools.service tools_cg")
+_sys() { if [ -n "${TB_SYS:-}" ]; then "$TB_SYS" "$@"; else "$@"; fi; }
+say() { printf 'ccrc-testbox-firewall: %s\n' "$*" >&2; }
+
+[ "$#" -eq 1 ] || { say "usage: firewall <nft file>"; exit 2; }
+_sys nft -f "$1" || { say "nft refused $1"; exit 1; }
+for u in "${UNITS[@]}"; do
+  unit=${u% *} set=${u#* }
+  cg=$(_sys systemctl show -P ControlGroup "$unit" 2>/dev/null) || cg=''
+  cg=${cg#/}
+  [ -n "$cg" ] || continue
+  [[ $cg =~ ^[A-Za-z0-9@._:/-]+$ ]] || { say "$unit's cgroup is not a path nft takes: $cg"; continue; }
+  _sys nft add element inet ccrc_testbox "$set" "{ \"$cg\" }" || say "$unit's cgroup is not in $set; it joins when $unit next starts"
+done
+_sys systemctl start --no-block ccrc-testbox-egress.service || say "the egress unit did not start; ccrc-testbox-egress.timer tries again"
+exit 0

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 // `single-definition.test.ts` scans for a second copy, so it is imported here
 // rather than joined — the same reason `ownership.test.ts` states at its own
 // import.
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 /**
  * `_reg_get`'s header argues that widening it to a three-answer read is a
@@ -52,7 +52,7 @@ function statedCensus(src: string): { calls: number; lines: number } {
 
 describe('the `_reg_get` header states a census that stays honest', () => {
   it('both numbers the header claims match what its own cited commands count', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src.indexOf('THE FOLD `_reg_get` KEEPS'),
       'the `_reg_get` census header could not be found').toBeGreaterThan(-1);
     const { calls: statedCalls, lines: statedLines } = statedCensus(src);
@@ -81,7 +81,7 @@ describe('the `_reg_get` header states a census that stays honest', () => {
     // site" instead of carrying its own copy of the figure, so the only digits
     // left inside it are the census itself and the dated history of what the
     // number USED to be. A new bare cardinal here is a new place to go stale.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('`-f` FIRST, FOR THE SAME REASON `_reg_read` HAS ONE');
     const to = src.indexOf('HOW MANY C1 CONVERTED');
     expect(from, 'the hang-surface header could not be found').toBeGreaterThan(-1);
@@ -134,7 +134,7 @@ describe('the `_reg_get` header states a census that stays honest', () => {
  */
 describe('the `_reg_read "$id" project` census stays honest too', () => {
   it('both numbers `cmd_prefer` claims match its own cited command, filtered and bare', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('THE CENSUS, SPELLED SO IT DOES NOT COUNT ITSELF');
     expect(from, "cmd_prefer's `.project` census header could not be found").toBeGreaterThan(-1);
     const block = src.slice(from, from + 700);

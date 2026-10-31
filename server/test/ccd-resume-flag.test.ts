@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import { RESUME_PROMPT_PREFIX } from '../../shared/api.js';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 // D-2227 — Claude Code's interrupted-turn resume is env-gated
 // (CLAUDE_CODE_RESUME_INTERRUPTED_TURN); ccd never set it, so every `--resume`
@@ -49,7 +49,7 @@ const seed = (): void => {
  *  The line is found by its STRUCTURAL markers (the `"isMeta":true` glob
  *  clause and the `state=1` transition), not by the sentence itself. */
 const detectorLiteral = (): string => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const line = src.split('\n').find((l) => l.includes(`*'"isMeta":true'*`) && l.includes('then state=1; continue; fi'));
   if (!line) throw new Error('_transcript_stalled_pair detector line not found in ccd/ccd');
   const literals = [...line.matchAll(/\*'([^']*)'\*/g)].map((m) => m[1]!);

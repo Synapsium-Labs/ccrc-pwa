@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE, BOUNDED, ghContainedEnv } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { RATE_LIMIT_ERROR } from '../../shared/api.js';
 
 let h: CcdHarness;
@@ -214,7 +214,7 @@ BEGIN {
     }
   });
   it("the detector's error literal is shared's RATE_LIMIT_ERROR — one bash copy, one TS copy, pinned", () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const line = src.split('\n').find((l) => l.includes('row.get("error") =='));
     if (!line) throw new Error('_transcript_limit_banner detector line not found in ccd/ccd');
     const m = /row\.get\("error"\) == "([a-z_]+)"/.exec(line);
@@ -484,7 +484,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     // `session_activity` would move on every redraw and silently discard every
     // 401 as "earlier"; the harness's tmux stub answers any display-message, so
     // only the source can hold the format.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain(`tmux display-message -p -t "$(_tmux_t "$1")" '#{session_created}' 2>/dev/null`);
     expect(src).toContain('born=$(_pane_born "$id")');
     // The rescue's marker write reads the bound ONCE (D-3524) and hands the same
@@ -518,7 +518,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     expect(dispatches()).toEqual([]);
   });
   it('both call sites go through _session_hard_blocked (source pin)', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('_session_hard_blocked "$id" "$pane" && hard_blocked=1');
     expect(src).toContain('_session_hard_blocked "$1" "$pane" && blocked=1');
   });

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { STRANDED_UNREADABLE, SUBSTRATE_UNREADABLE } from '../src/registry.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -41,7 +42,7 @@ const fixture = (fields: Record<string, string>, alive: boolean) => {
 
 const one = async (fields: Record<string, string>, alive: boolean) => {
   const { cfg, tmux } = fixture(fields, alive);
-  const fleet = await assembleFleet(localIO, cfg, tmux, NOW_SEC);
+  const fleet = await assembleFleet(localIO, cfg, tmux, liveStateReaderOver(localIO), NOW_SEC);
   return fleet.find((s) => s.id === ID)!;
 };
 
@@ -87,7 +88,7 @@ describe('assembleFleet ships the lifecycle', () => {
     // session nobody managed to look at.
     const { cfg, tmux } = fixture({ stopped: `${NOW_SEC - 90} pwa`, started: '1' }, false);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.stopped`));
-    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    const fleet = await assembleFleet(blind, cfg, tmux, liveStateReaderOver(blind), NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.lifecycle).toBe('unmeasurable');
   });
 
@@ -152,7 +153,7 @@ describe('assembleFleet ships the lifecycle', () => {
     // wire contract; a future renderer must not fabricate a 1970 stamp.
     const { cfg, tmux } = fixture({ stranded: `${NOW_SEC - 300} nowhere` }, false);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.stranded`));
-    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    const fleet = await assembleFleet(blind, cfg, tmux, liveStateReaderOver(blind), NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.stranded)
       .toEqual({ at: 0, reason: STRANDED_UNREADABLE });
   });
@@ -218,7 +219,7 @@ describe('the substrate axis reaches the wire — projected, not re-read (D-310 
     // text-only instead of a confident "since 1970".
     const { cfg, tmux } = fixture({ started: '1', substrate: `${NOW_SEC - 120} x` }, true);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.substrate`));
-    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    const fleet = await assembleFleet(blind, cfg, tmux, liveStateReaderOver(blind), NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.substrate).toEqual({ at: 0, text: SUBSTRATE_UNREADABLE });
   });
 

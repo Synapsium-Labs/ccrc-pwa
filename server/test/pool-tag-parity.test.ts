@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { POOL_TAG_CASES, stateWordForCcd } from './fixtures/poolTag.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { loadConfig } from '../src/config.js';
@@ -366,7 +366,7 @@ describe('the locale shadows are present in the source (D-2520/D-2522/D-2542)', 
   // requires to be the ONE file spelling the path to the ccd script — measured,
   // because an earlier draft joined it here and that scan went red. The doctor
   // sits beside it, so it is derived rather than spelled a second time.
-  const ccdSrc = fs.readFileSync(CCD, 'utf8');
+  const ccdSrc = ccdSource();
   const checksSrc = fs.readFileSync(path.join(path.dirname(CCD), 'ccrc-doctor-checks'), 'utf8');
 
   /** The body of a bash function, from its `name() {` to the first line that is

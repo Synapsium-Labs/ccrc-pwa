@@ -13,12 +13,9 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
-.insp-empty,
 .insp-lane-name {
   margin: 0;
   font-size: var(--fs-meta);
-}
-.insp-lane-name {
   font-family: var(--family-mono);
   overflow-wrap: anywhere;
 }
@@ -47,23 +44,30 @@
 .insp-note {
   font-size: var(--fs-meta);
 }
-.insp-routing {
-  display: grid;
-  gap: var(--sp-2);
-  margin: 0;
-}
+/* The routing line (T3d): one wrapping line whose model and effort words are the two chooser doors. It stays INLINE
+   flow, not a flex row: the line's spaces are real text between the pieces, which a flex container would collapse
+   (each text run becomes an item) and a copy of the line would come out broken across lines. */
 .insp-routing-row {
-  display: grid;
-  grid-template-columns: 4.5em minmax(0, 1fr);
-  align-items: center;
-  gap: var(--sp-2);
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-meta);
 }
-/* The model and effort doors reach the tap floor here: the rail has the room the header's chip row does not. A
-   full-width field with the chip's own ink and edge, so a short value ("high") never draws as a 44px circle. */
+/* The doors reach the tap floor here: the rail has the room the header's chip row does not. They are inline chips
+   (`.metachip` is inline-flex), set on the line's middle. */
 .insp-routing-row button {
-  width: 100%;
   min-height: var(--tap-min);
+  min-width: var(--tap-min);
   border-radius: var(--r-md);
+  vertical-align: middle;
+}
+/* The pending pill is the header's, set on an inline span: it never breaks across two lines as two half-pills. */
+.insp-routing-row .route-queued {
+  white-space: nowrap;
+}
+/* A separator, the words after it and the door, ask or note they lead to stay on one line: the line may break at
+   the <wbr> before the " · ", never after it. */
+.insp-routing-tail {
+  white-space: nowrap;
 }
 /* The whole value, wrapped: the header's row shows the full model id, so the rail (a superset) never cuts it. */
 .insp-routing-row .metachip-text {
@@ -81,17 +85,6 @@
 /* The mail strip's own sheet insets it from a chat column's edge; the section already has its gutter. */
 .insp-section .mail-strip {
   margin: 0;
-}
-.insp-routing-row dt {
-  font-size: var(--fs-meta);
-}
-.insp-routing-row dd {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: 0;
-  min-width: 0;
 }
 .insp-link {
   justify-self: start;

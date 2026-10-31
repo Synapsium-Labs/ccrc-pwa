@@ -6,7 +6,8 @@ import v8 from 'node:v8';
 import vm from 'node:vm';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
-import { connectFleet, FleetClient, LinkNotSentError, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
+import { connectFleet, FleetClient, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
+import { LinkNotSentError } from '../src/remote/errors.js';
 import { MAX_CAP_WORDS } from '../../shared/api.js';
 import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
@@ -44,17 +45,18 @@ describe('connectFleet — connection lifecycle', () => {
     // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
     // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
     // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
-    // `agentOps: ['update', 'token-sync', 'account', 'disk']`: the REAL agent advertises the ops it
+    // `agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync']`: the REAL agent advertises the ops it
     // answers beyond the closed set (design 2026-09-20 §10, programme wave 5
     // Task 2; `token-sync` from box-token lifecycle wave 1, spec 4.4; `account`
-    // from the accounts plan's A8, spec §13.2), read
+    // from the accounts plan's A8, spec §13.2; `disk` from D-6614; `pressure`
+    // the host-pressure read of #1170; `testbox` and `testbox-tools-sync` from the test box plan's TB9, D-7411), read
     // through `readReadyOps`. This literal read `[]` while the agent sent
     // no `ops`; a ready frame that stops sending the word reds HERE — §18 "an
     // agent without the op is never sent it", on the agent's side.
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
-        agentOps: ['update', 'token-sync', 'account', 'disk'],
+        agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync'],
       }),
       { timeout: 3000 });
   });
@@ -464,6 +466,19 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
   it('a malformed ccdVerbs (non-string elements) is discarded as null, never trusted partially', async () => {
     server = await fakeReadyAgent({ ccdVerbs: [1, 2, 3] });
     fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.ccdVerbs).toBeNull();
+  });
+
+  // D-7079 characterization: the ready frame RESETS, `null` included. A reconnect to an older agent (no `ccdVerbs`
+  // in its ready frame) must not keep the list the previous agent advertised.
+  it('a ready frame with no ccdVerbs resets: null after a list stood', async () => {
+    let readies = 0;
+    server = await fakeReadyAgent(() => (++readies === 1 ? { ccdVerbs: ['start', 'ws-audit'] } : {}));
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.ccdVerbs).toEqual(['start', 'ws-audit']), { timeout: 3000 });
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(readies).toBe(2), { timeout: 5000 });
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
     expect(fleet.state.ccdVerbs).toBeNull();
   });

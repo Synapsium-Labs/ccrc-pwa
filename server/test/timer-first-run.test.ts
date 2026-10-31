@@ -99,6 +99,19 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
     }
   });
 
+  it('the conflict radar is armed relative to ITSELF, three minutes in, and ticks every five (landing order wave 3b)', () => {
+    // The census below accepts `OnBootSec=` and `OnActiveSec=` alike, so only this case pins which one the radar uses: a
+    // boot-relative first elapse is already past on the box a deploy arms it on, and the first tick would land on top of
+    // the deploy's supervisor sweep (D-1981).
+    const k = keys('ccd-land-probe.timer');
+    expect(k, 'the radar timer lost its OnActiveSec anchor').toContain('OnActiveSec=3min');
+    expect(k.filter((l) => l.startsWith('OnBootSec=')),
+      'the radar timer is anchored to boot again: on a deploy that is no delay at all').toEqual([]);
+    expect(k, 'the radar timer lost its five-minute cadence').toContain('OnUnitActiveSec=5min');
+    expect(k.filter((l) => l.startsWith('Persistent=')), 'Persistent= does nothing on a monotonic timer').toEqual([]);
+    expect(unit('ccd-land-probe.timer'), 'the timer no longer cites D-1981 where it states the anchor').toContain('D-1981');
+  });
+
   it('every timer in deploy/systemd carries exactly one first-run anchor', () => {
     // The census, so a timer joining the others cannot arrive with no anchor
     // at all (first run then waits for OnUnitActiveSec from an activation that

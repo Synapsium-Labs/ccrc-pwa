@@ -8,20 +8,28 @@
 import type { ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChatEvent, Dialog, FleetSession, HookAsk } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerSeam, spyApiAnswer, type AnswerSeamMocks } from './answerSeam';
 import { heldAskLine } from '../src/session/askWords';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import {
   ASKER_COORD, ASKER_PROJECT, ASKER_SESSION, ASK_DEBRIS, DEBRIS_LABEL, HOOK_QUESTIONS, askFixture, type AskFixture,
 } from './askFixtures';
 import { fleetSession } from './fleetFixture';
+
+// D-7183: the sheet's answers go through its injected seam; each test gets fresh writers (`answerSeam.ts`).
+let answers: AnswerSeamMocks = answerSeam();
+beforeEach(() => {
+  answers = answerSeam();
+});
 
 // The transcript's rows, all of them in order: virtuoso measures nothing in jsdom and would render none.
 vi.mock('react-virtuoso', async () => {
@@ -46,7 +54,7 @@ const fakeSocket = (): WebSocket =>
 
 /** A store holding what `fx`'s frames left, applied in the order the stream sent them. */
 function storeFor(fx: AskFixture): SessionStore {
-  const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+  const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
   act(() => {
     for (const frame of fx.frames) store.getState().apply(frame);
   });
@@ -61,7 +69,7 @@ function renderSheet(n: number, props: Partial<Parameters<typeof DialogSheet>[0]
   const onOpenTerminal = vi.fn();
   render(
     <>
-      <DialogSheet id={ID} store={store} onOpenTerminal={onOpenTerminal} {...props} />
+      <DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={onOpenTerminal} {...props} />
       <ToastHost />
     </>,
   );
@@ -126,7 +134,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
         options: multi.multi!.options.map((o) => ({ ...o, description: DEBRIS_LABEL })),
       },
     };
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({
@@ -137,7 +145,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
         }] },
       });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     for (const label of ['North', 'East', 'South']) expect(screen.getByText(label)).toBeInTheDocument();
     expect(dom()).not.toContain(DEBRIS_LABEL);
@@ -153,7 +161,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
   ])('a pick-several question with the cursor on a commit row labelled %j names it %j, never the pane\'s label', (commit, word) => {
     const multi = askFixture(9).dialog!;
     const dialog: Dialog = { ...multi, multi: { ...multi.multi!, commit, cursor: 'commit' } };
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({
@@ -164,7 +172,7 @@ describe('no text from Dialog.body, Dialog.raw, Dialog.title or a scraped label 
         }] },
       });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     expect(screen.getByRole('button', { name: word })).toBeInTheDocument();
     expect(dom()).toContain(`In the terminal the cursor is on the ${word} row`);
@@ -267,12 +275,12 @@ describe('the tab strip (D-6325)', () => {
       raw: fx.dialog!.raw.replace(/^←.*→$/m, '←  ☐ Alpha  ☒ Beta  ☐ Gamma  ✔ Submit  →'),
     };
     expect(dialog.raw).toContain('Alpha');
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({ type: 'ask', ask: fx.ask!, key: null });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
 
     const strip = screen.getByRole('group', { name: 'Questions in this ask' });
     const chips = within(strip).getAllByRole('button').map((b) => b.getAttribute('aria-label'));
@@ -287,23 +295,23 @@ describe('the tab strip (D-6325)', () => {
     const ask = structuredClone(fx.ask!);
     if (!('questions' in ask)) throw new Error('fixture 1 is a question envelope');
     delete ask.questions[1]!.header;
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog: fx.dialog! });
       store.getState().apply({ type: 'ask', ask, key: null });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getByRole('button', { name: /^Go to Question 2,/ })).toBeInTheDocument();
 
     // Two tabs on the pane for three questions: the words cannot be matched to the marks, so there is no strip.
     cleanup();
     const two: Dialog = { ...fx.dialog!, raw: fx.dialog!.raw.replace(/^←.*→$/m, '←  ☐ Alpha  ☐ Beta  ✔ Submit  →') };
-    const store2 = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store2 = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store2.getState().apply({ type: 'dialog', dialog: two });
       store2.getState().apply({ type: 'ask', ask: fx.ask!, key: null });
     });
-    render(<DialogSheet id={ID} store={store2} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store2} onOpenTerminal={vi.fn()} />);
     expect(screen.queryByRole('group', { name: 'Questions in this ask' })).toBeNull();
   });
 });
@@ -391,7 +399,7 @@ describe('who asks (D-6325)', () => {
 
 describe('the answer path is unchanged (D-6325)', () => {
   it('a tap answers through /dialog with the same dialogId and printed index as today', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     // The hook's envelope (fixture 1), the transcript's copy (fixture 2) and a plain menu (fixture 4): three sources, one
     // route, and the digit printed on the pane, whatever the sheet calls the row.
     renderSheet(1);
@@ -409,7 +417,7 @@ describe('the answer path is unchanged (D-6325)', () => {
   });
 
   it('the review answers Submit answers with its printed digit, and Cancel with its own', () => {
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderSheet(8);
     fireEvent.click(screen.getByRole('button', { name: /^Submit answers/ }));
     expect(spy).toHaveBeenLastCalledWith(ID, 'dlg-review', 1);
@@ -422,7 +430,7 @@ describe('the answer path is unchanged (D-6325)', () => {
 
   it('a stale answer toasts the structured sentence for a structured sheet, and the menu\'s for a menu', async () => {
     const { ApiError } = await import('../src/lib/api');
-    vi.spyOn(api, 'answerDialog').mockRejectedValue(new ApiError(409, { ok: false, error: 'stale-dialog' }));
+    answers.answerDialog.mockReset().mockRejectedValue(new ApiError(409, { ok: false, error: 'stale-dialog' }));
     renderSheet(1);
     fireEvent.click(screen.getByRole('button', { name: /^In-process/ }));
     expect(await screen.findByText(/moved on in the terminal/i)).toBeInTheDocument();
@@ -480,12 +488,12 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
         { index: 5, label: 'Chat about this' },
       ],
     };
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog });
       store.getState().apply({ type: 'ask', ask, key: null });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     const labels = [...document.querySelectorAll('.opt-label')].map((l) => l.firstChild?.textContent);
     expect(labels.slice(0, 3)).toEqual(['Fast path', 'Recommended reading', 'Read the (Recommended) docs first']);
     const tagged = [...document.querySelectorAll('.opt-label .chip')].map((c) => c.closest('.opt'));
@@ -510,8 +518,8 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
   });
 
   it('Other is a row; choosing it shows the field and Send; Send answers through /dialog/text with the same body as today', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = answers.answerDialogText.mockReset().mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderSheet(1);
     // A row of the list, after the three options, at the free-text row's printed index (4), saying what it does.
     const other = rowOf(/^Other/);
@@ -540,7 +548,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
   });
 
   it('the Chat row reads Talk it over in the chat instead, and answers by its printed index', () => {
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const option = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderSheet(1);
     const chat = rowOf(/^Talk it over in the chat instead/);
     expect(chat.querySelector('.opt-idx')?.textContent).toBe('5');
@@ -568,7 +576,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
 
   it('a refused send keeps the field open with the text, and says why', async () => {
     const { ApiError } = await import('../src/lib/api');
-    vi.spyOn(api, 'answerDialogText').mockRejectedValue(new ApiError(409, { ok: false, error: 'not-free-text' }));
+    answers.answerDialogText.mockReset().mockRejectedValue(new ApiError(409, { ok: false, error: 'not-free-text' }));
     renderSheet(1);
     fireEvent.click(rowOf(/^Other/));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Memcached' } });
@@ -586,7 +594,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
     cleanup();
     // A pick-several question: the boxes, no Other row, and the line that sends the operator to the terminal.
     const multi = askFixture(9).dialog!;
-    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const store = served(createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } }));
     act(() => {
       store.getState().apply({ type: 'dialog', dialog: multi });
       store.getState().apply({
@@ -597,7 +605,7 @@ describe('the rows\' copy: Recommended, label over description, Other (D-6325)',
         }] },
       });
     });
-    render(<DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} />);
+    render(<DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} />);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     expect(screen.queryByRole('button', { name: /^Other/ })).toBeNull();
     expect(screen.getByText('To add your own answer, use the terminal')).toBeInTheDocument();
@@ -666,10 +674,10 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   function connected(fx: AskFixture): SessionStore {
     sockets = [];
     const mine = sockets;
-    const store = createSessionStore(ID, {
+    const store = served(createSessionStore(ID, {
       makeSocket: (url) => new ScriptedSocket(url, mine) as unknown as WebSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
-    });
+    }));
     built.push(store);
     act(() => {
       store.getState().connect();
@@ -693,7 +701,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   const panel = (): Element | null => document.querySelector('[role="dialog"]');
   const status = (): HTMLElement | null => screen.queryByRole('status');
   const mount = (store: SessionStore) =>
-    render(<><DialogSheet id={ID} store={store} onOpenTerminal={vi.fn()} /><ToastHost /></>);
+    render(<><DialogSheet answers={answers} id={ID} store={store} onOpenTerminal={vi.fn()} /><ToastHost /></>);
 
   // Every kind of surface: a question with Other open, a plan approval's menu, a permission prompt, the review, an
   // ask this screen cannot read and an unparsed pane. The gap ends with the new connection's first deciding frame.
@@ -732,7 +740,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   );
 
   it('a reconnect keeps the Other field\'s node, its text and its focus, and sends work again once the connection speaks', () => {
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const text = spyApiAnswer('answerDialogText').mockReturnValue(new Promise(() => {}));
     const fx = askFixture(1);
     const store = connected(fx);
     mount(store);
@@ -761,8 +769,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
 
   it('a tap during the gap sends nothing', () => {
     holdClosingContent();
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = spyApiAnswer('answerDialogText').mockReturnValue(new Promise(() => {}));
     const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
     const store = connected(askFixture(1));
     mount(store);
@@ -784,7 +792,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     fireEvent.click(screen.getByTestId('sheet-overlay'));
     expect(panel()?.getAttribute('data-state'), 'the scrim in the gap').toBe('closed');
     cleanup();
-    // The × is the desktop arm's (`min-width: 900px`); a phone has the scrim and the handle.
+    // D-6326: at the desk (`min-width: 900px`) the ask is the inline card, which has no × (a phone has the scrim and the
+    // handle): there is nothing to hide, so the gap holds the card, read-only, and no Close exists to press.
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q === '(min-width: 900px)', media: q, onchange: null,
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
@@ -792,9 +801,11 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     try {
       mount(connected(askFixture(1)));
       drop();
-      expect(panel()?.getAttribute('data-state')).toBe('open');
-      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-      expect(panel()?.getAttribute('data-state'), 'the close button in the gap').toBe('closed');
+      const card = document.querySelector('[data-ask-surface="inline"]');
+      expect(card, 'the inline card holds through the gap').not.toBeNull();
+      expect(panel(), 'no dialog at the desk').toBeNull();
+      expect(screen.queryByRole('button', { name: 'Close' }), 'inline has no ×').toBeNull();
+      expect(screen.getByRole('status').textContent, 'the gap says so').toMatch(/Reconnecting/);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -878,12 +889,14 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     for (const box of screen.getAllByRole('checkbox')) expect(box, 'a box in the gap').toBeEnabled();
   });
 
-  it('a permission prompt\'s Deny sends nothing in the gap', () => {
+  it('a permission prompt\'s Deny is disabled in the gap, and a click on it sends nothing', () => {
     const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
     const store = connected(askFixture(7));
     mount(store);
     drop();
-    fireEvent.click(screen.getByRole('button', { name: /^Deny/ }));
+    const deny = screen.getByRole('button', { name: /^Deny/ });
+    expect(deny, 'Deny in the gap').toBeDisabled();
+    fireEvent.click(deny);
     expect(interrupt).not.toHaveBeenCalled();
   });
 
@@ -964,7 +977,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     'after a reconnect whose stream sends ask_cleared and no dialog, the pre-drop menu is not offered live: fixture %i',
     (n) => {
       holdClosingContent();
-      const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
       const interrupt = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never);
       const store = connected(askFixture(n));
       mount(store);
@@ -1063,8 +1076,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   it('hiding the sheet works in the gap, makes no call, and the hidden sheet stays hidden when the connection speaks', () => {
     holdClosingContent();
     const calls = [
-      vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {})),
-      vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {})),
+      spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {})),
+      spyApiAnswer('answerDialogText').mockReturnValue(new Promise(() => {})),
       vi.spyOn(api, 'interrupt').mockResolvedValue(undefined as never),
     ];
     const fx = askFixture(1);
@@ -1088,9 +1101,9 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   });
 
   it('a tab move, a pick-several commit and the review\'s Submit send nothing in the gap', () => {
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const answer = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
-    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const multi = spyApiAnswer('answerDialogMulti').mockReturnValue(new Promise(() => {}));
 
     // A multi-tab question (fixture 1): the strip's chip and the arrow key.
     const one = connected(askFixture(1));
@@ -1137,7 +1150,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   // `answering…`, every row disabled and Escape refused, until a menu with another id arrives.
   it('the same menu asked again after an answered ask opens free: no in-flight marker, rows enabled, Escape hides it', async () => {
     holdClosingContent();
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue({ next: null } as never);
+    const answer = spyApiAnswer('answerDialog').mockResolvedValue({ next: null } as never);
     const fx = askFixture(4);
     const store = connected(fx);
     mount(store);
@@ -1171,7 +1184,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   // ending, and the same screen coming back must not find them still set.
   it('own words sent before an ask ended do not lock the same question asked again', async () => {
     holdClosingContent();
-    const send = vi.spyOn(api, 'answerDialogText').mockResolvedValue({} as never);
+    const send = spyApiAnswer('answerDialogText').mockResolvedValue({} as never);
     const fx = askFixture(1);
     const store = connected(fx);
     mount(store);
@@ -1204,7 +1217,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
 
   it('a pick commit sent before an ask ended does not lock the same question asked again', async () => {
     holdClosingContent();
-    const commit = vi.spyOn(api, 'answerDialogMulti').mockResolvedValue({} as never);
+    const commit = spyApiAnswer('answerDialogMulti').mockResolvedValue({} as never);
     const base = askFixture(9).dialog!;
     const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
     const ask = { questions: [{
@@ -1240,7 +1253,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     ['accepted but not yet moved on', () => Promise.resolve({} as never)],
   ])('a gap keeps an answer %s: the marker, the disabled rows and the refused dismissal, through the reconnect', async (_name, reply) => {
     holdClosingContent();
-    const answer = vi.spyOn(api, 'answerDialog').mockImplementation(reply);
+    const answer = spyApiAnswer('answerDialog').mockImplementation(reply);
     const fx = askFixture(4);
     const store = connected(fx);
     mount(store);
@@ -1290,8 +1303,8 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     ['with a next', true],
   ])('own words whose reply settles in the gap stay landed through the reconnect, and no second answer goes: %s', async (_name, withNext) => {
     const reply = later<unknown>();
-    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(reply.promise as never);
-    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = spyApiAnswer('answerDialogText').mockReturnValue(reply.promise as never);
+    const option = spyApiAnswer('answerDialog').mockReturnValue(new Promise(() => {}));
     const fx = askFixture(1);
     const store = connected(fx);
     mount(store);
@@ -1322,7 +1335,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
     ['with a next', true],
   ])('a pick commit whose reply settles in the gap stays landed through the reconnect, and no second commit goes: %s', async (_name, withNext) => {
     const reply = later<unknown>();
-    const commit = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(reply.promise as never);
+    const commit = spyApiAnswer('answerDialogMulti').mockReturnValue(reply.promise as never);
     const base = askFixture(9).dialog!;
     const dialog: Dialog = { ...base, multi: { ...base.multi!, commit: 'Submit' } };
     const ask = { questions: [{
@@ -1362,7 +1375,7 @@ describe('the ask holds through a reconnect, and an ask that ends closes with it
   it('an answer\'s next that arrives in the gap is not taken as the current menu', async () => {
     holdClosingContent();
     const reply = later<unknown>();
-    vi.spyOn(api, 'answerDialog').mockReturnValue(reply.promise as never);
+    spyApiAnswer('answerDialog').mockReturnValue(reply.promise as never);
     const store = connected(askFixture(4));
     mount(store);
     fireEvent.click(screen.getByRole('button', { name: /^Yes, and auto-accept edits/ }));

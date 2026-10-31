@@ -5,7 +5,6 @@
 import webpush, { type PushSubscription, WebPushError } from 'web-push';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 
 export interface PushConfig {
   publicKey: string;
@@ -25,17 +24,22 @@ export interface PushPayload {
   actions?: { action: string; title: string }[];
 }
 
+/** What the service masks a payload with: `SecretMasker`'s `maskDeep`, declared here so `push.ts` loads no masker
+ *  (D-7510). The composition root passes the shape-only masker at construction. */
+export interface PayloadMasker {
+  maskDeep<T>(value: T): T;
+}
+
 export class PushService {
   private subs = new Map<string, PushSubscription>(); // keyed by endpoint
   private loaded = false;
   /** Every payload's `title`, `body` and action titles came off a session (the pane-parsed ask, a mail subject): masked
    *  here, the one door to a push service, before serialization (D-5513, accounts plan Task A10). The composition root
-   *  hands the wired masker in with `setMasker`, since the service is built before coord.db is open. */
-  private masker: SecretMasker = SHAPE_ONLY_MASKER;
+   *  builds the service with the shape-only masker and hands the wired one in with `setMasker`, since the service is
+   *  built before coord.db is open (D-7510). */
+  setMasker(m: PayloadMasker): void { this.masker = m; }
 
-  setMasker(m: SecretMasker): void { this.masker = m; }
-
-  constructor(private cfg: PushConfig, private storePath: string) {
+  constructor(private cfg: PushConfig, private storePath: string, private masker: PayloadMasker) {
     webpush.setVapidDetails(cfg.subject, cfg.publicKey, cfg.privateKey);
   }
 

@@ -1318,23 +1318,26 @@ describe('store.mjs: writeBackup (W1-B2 Task 22)', () => {
     const finalPath = path.join(P.backups, '20261006T120000Z.db');
     fs.writeFileSync(finalPath, 'an operator file');
     const db = openWriter(P.dbFile);
+    // The seam writes through the module object; @types/node 22 declares its
+    // functions `export const`, so the write needs the module's mutable view.
+    const fsSeam = fs as { lstatSync: typeof fs.lstatSync };
     const realLstat = fs.lstatSync;
     let seamFired = 0;
     try {
-      fs.lstatSync = ((p: fs.PathLike, ...rest: unknown[]) => {
+      fsSeam.lstatSync = ((p: fs.PathLike, ...rest: unknown[]) => {
         if (String(p) === finalPath) { seamFired += 1; throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }); }
         return (realLstat as (...a: unknown[]) => unknown)(p, ...rest);
       }) as typeof fs.lstatSync;
       syncBuiltinESMExports();
       let got: unknown = null;
-      try { writeBackup(db, home, { nowMs }); } catch (e) { got = e; } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); }
+      try { writeBackup(db, home, { nowMs }); } catch (e) { got = e; } finally { fsSeam.lstatSync = realLstat; syncBuiltinESMExports(); }
       expect(seamFired, 'CONTROL: the pre-check consulted the seam once and was told the name was free, so only the publish can refuse').toBe(1);
       expect(got, 'the publish refused where rename() would have replaced').toBeInstanceOf(StoreError);
       expect((got as StoreError).word).toBe('backup-exists');
       expect((got as StoreError).message, 'link() refused, not the pre-check ("already exists")').toMatch(/appeared while it was written$/);
       expect(fs.readFileSync(finalPath, 'utf8'), 'the operator file is as it was').toBe('an operator file');
       expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual([]);
-    } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); closeWriter(db); }
+    } finally { fsSeam.lstatSync = realLstat; syncBuiltinESMExports(); closeWriter(db); }
   });
 
   it('a dangling link at the final name is refused backup-exists BEFORE the copy runs, worded "already exists" (lstat, not a link-following existsSync; H-69)', () => {

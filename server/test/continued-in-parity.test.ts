@@ -33,7 +33,7 @@ import { localIO } from '../src/io.js';
 // and that scan matches on sight — even inside a comment naming the literal
 // it hunts for, which is why this note uses no quotes around the path at
 // all) — imported rather than re-derived here with a second copy of it.
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +41,7 @@ const ccrcRoot = path.resolve(here, '..', '..');
 const DOCTOR = path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks');
 
 const MODULE = path.join(ccrcRoot, 'ccd', 'lib', 'transcript.jq');
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 const doctor = readFileSync(DOCTOR, 'utf8');
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 

@@ -90,6 +90,10 @@ def read_lines(path):
 #         (`[a-z-]+`), so a word ccd adds later is counted, never `other`.
 #         §9's stage-1 target: `exdev-*` copies at 0 on a box whose filesystem
 #         has a read-write mount exposing every account root.
+#         THE BACKLOG COLLECTED (#317 items 3-4). `ccd carry-dedupe --apply`
+#         logs one `carry-dedupe <uuid> kept=… unlinked=N bytes=B refused=…`
+#         line per uuid; `dedupe_lines` counts them in the window and
+#         `dedupe_reclaimed_bytes` sums B. Additive: a log with none reads 0.
 # resume  every Workflow tool call carrying `resumeFromRunId`, deduplicated by
 #         tool-use id across the account-root copies a swapping session
 #         accumulates, classified by its tool result: ok, journal-missing
@@ -117,6 +121,7 @@ MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)(?:, deferred (\d+))?"
 MERGED_VIA = re.compile(r", via-mount (\d+)")
 MERGED_COPY = re.compile(r", copy: ([a-z-]+) (\d+) files (\d+) bytes")
 COPY = re.compile(r"^copy: ([a-z-]+) (\d+|\?) bytes$")
+DEDUPE = re.compile(TS + r" carry-dedupe \S+ kept=\S+ unlinked=\d+ bytes=(\d+) refused=\S+")
 KEPT_REASONS = ("busy", "budget", "error")
 
 
@@ -188,10 +193,17 @@ def carry_section(ctx):
     deployed = ctx["deployed"]
     early = lambda t: deployed is not None and t is not None and t < deployed
     carries, diverged_rows = [], 0          # carries: (t, uuid, root, mode) inside the window
+    dedupe_lines = dedupe_bytes = 0
     pending = collections.defaultdict(list)  # uuid -> roots its sidecar lines named, awaiting its swap line
     root_of = {}                             # wrapper -> account root, learned from the log
     stranded, visits = set(), []             # (uuid, root) pairs; (uuid, from, to) swap lines before --deployed
     for line in lines:
+        m = DEDUPE.match(line)
+        if m:
+            if in_window(epoch(m.group(1)), ctx):
+                dedupe_lines += 1
+                dedupe_bytes += int(m.group(2))
+            continue
         m = DIVERGED.match(line)
         if m:
             if in_window(epoch(m.group(1)), ctx):
@@ -220,6 +232,7 @@ def carry_section(ctx):
                 stranded.add((uuid, root_of[w]))
     out = carry_counts(mode for _, _, _, mode in carries)
     out["diverged_rows"] = diverged_rows
+    out["dedupe_lines"], out["dedupe_reclaimed_bytes"] = dedupe_lines, dedupe_bytes
     out["excluding_stranded"] = None if deployed is None else \
         carry_counts(mode for _, u, r, mode in carries if (u, r) not in stranded)
     return out

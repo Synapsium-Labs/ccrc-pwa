@@ -9,9 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
-import {
-  makeCcdHarness, ghContainedEnv, harnessBin, seedAccountsSh, CCD, type CcdHarness,
-} from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, seedAccountsSh, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
@@ -122,7 +120,7 @@ describe('ccd-account-auth — the argv contract', () => {
 });
 
 describe('ccd-account-auth — the platform shim it had to carry', () => {
-  const ccd = fs.readFileSync(CCD, 'utf8');
+  const ccd = ccdSource();
   const helper = fs.readFileSync(HELPER, 'utf8');
   const body = (src: string, name: string): string => {
     const m = new RegExp(`${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)\\n\\}`).exec(src);
@@ -184,7 +182,8 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
   const REGION_FROM = '# R-3, wave review.';
   const REGION_TO = '# THAT SKIP IS THE LOOP';
   const CARDINAL = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
-    'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN'];
+    'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN',
+    'EIGHTEEN', 'NINETEEN'];
 
   /** What a scan for `$REG/.<name>` literals CANNOT see, each with its reason
    *  — and each SELF-CHECKED below, so this cannot quietly become the memory
@@ -193,6 +192,16 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
   const UNSCANNABLE: Record<string, string> = {
     prstate: "built inside `_pr_py`'s embedded PYTHON, not by bash — "
       + "os.path.join(reg, '.prstate-' + id_ + '.lock')",
+  };
+
+  /** Named through a constant, `"$REG/$<CONSTANT>"`, so the literal scan cannot
+   *  see it: each maps to its constant, and each is SELF-CHECKED below — absent
+   *  from the scan (or it is stale), assigned `<CONSTANT>=.<name>` and read
+   *  through `"$REG/$<CONSTANT>"` in ccd's source (or it names nothing). Owner
+   *  and reason: the PR lane's kept train proofs (D-7362), appended by
+   *  `_ws_train_record` and read by `_ws_train_kept`. */
+  const CONSTANT_NAMED: Record<string, string> = {
+    'train-proofs': 'PR_TRAIN_PROOFS_FILE',
   };
 
   /** Written by a bash file the scan sees, and NOT YET in the paragraph, because
@@ -217,10 +226,12 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
    *  the scan by naming an artifact nothing creates. */
   const derived = (): Set<string> => {
     const out = new Set<string>();
-    for (const name of fs.readdirSync(CCD_ROOT, { withFileTypes: true })
+    // `ccd/lib/*.sh` is ccd's own code, loaded at its foot (D-6913): it has no shebang, and is scanned all the same.
+    const libs = fs.readdirSync(path.join(CCD_ROOT, 'lib')).filter((n) => n.endsWith('.sh')).map((n) => path.join('lib', n));
+    for (const name of [...fs.readdirSync(CCD_ROOT, { withFileTypes: true })
       .filter((e) => e.isFile())
       .map((e) => e.name)
-      .filter((n) => fs.readFileSync(path.join(CCD_ROOT, n), 'utf8').startsWith('#!'))) {
+      .filter((n) => fs.readFileSync(path.join(CCD_ROOT, n), 'utf8').startsWith('#!')), ...libs]) {
       const code = fs.readFileSync(path.join(CCD_ROOT, name), 'utf8')
         .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
       for (const m of code.matchAll(/\$(?:REG|_SVC_REG)\/\.([a-z][a-z0-9-]*)/g)) {
@@ -231,7 +242,7 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
   };
 
   it('names every dot-prefixed artifact the shipped bash actually writes', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf(REGION_FROM);
     const to = src.indexOf(REGION_TO, from);
     expect(from, 'the R-3 block moved — re-anchor this test').toBeGreaterThan(-1);
@@ -263,12 +274,22 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
       expect(region, `$REG/.${name} exists and the R-3 boundary paragraph does not name it`)
         .toContain(`.${name}`);
     }
+    for (const [name, constant] of Object.entries(CONSTANT_NAMED)) {
+      expect(found, `$REG/.${name} is now reachable by the literal scan — drop its CONSTANT_NAMED entry`)
+        .not.toContain(name);
+      expect(src, `ccd no longer assigns ${constant}=.${name} — drop its CONSTANT_NAMED entry`)
+        .toMatch(new RegExp(`^${constant}=\\.${name}$`, 'm'));
+      expect(src, `ccd no longer reads "$REG/$${constant}" — drop its CONSTANT_NAMED entry`)
+        .toContain(`"$REG/$${constant}"`);
+      expect(region, `$REG/.${name} exists and the R-3 boundary paragraph does not name it`)
+        .toContain(`.${name}`);
+    }
     // The cardinal is DERIVED, not remembered: what the scan found, plus the
     // declared blind spots, plus the two whose name is an interpolated id.
     // That arithmetic is what keeps the written number tied to a measurement.
     const total = found.length - Object.keys(PENDING_PARAGRAPH).length + Object.keys(UNSCANNABLE).length
-      + VARIABLE_NAMED;
-    expect(region, `the boundary paragraph's cardinal disagrees with the ${total} artifacts measured (${found.length} scanned + ${Object.keys(UNSCANNABLE).length} unscannable + ${VARIABLE_NAMED} variable-named)`)
+      + Object.keys(CONSTANT_NAMED).length + VARIABLE_NAMED;
+    expect(region, `the boundary paragraph's cardinal disagrees with the ${total} artifacts measured (${found.length} scanned + ${Object.keys(UNSCANNABLE).length} unscannable + ${Object.keys(CONSTANT_NAMED).length} constant-named + ${VARIABLE_NAMED} variable-named)`)
       .toContain(`${CARDINAL[total]} dot-prefixed`);
   });
 });
@@ -1922,7 +1943,7 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
     // …and it is NOT dispatchable: `ccd account-v1` is not a command. Through
     // the shared `CCD` constant, not a second spelling of that path —
     // `single-definition.test.ts` holds it to one file and is right to.
-    expect(fs.readFileSync(CCD, 'utf8')).not.toMatch(/^ {2}account-v1\)/m);
+    expect(ccdSource()).not.toMatch(/^ {2}account-v1\)/m);
   });
 
   it('the capability is named in the list that partitions caps output', () => {

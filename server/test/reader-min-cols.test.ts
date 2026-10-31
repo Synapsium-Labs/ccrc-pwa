@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { READER_MIN_COLS } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -22,7 +22,7 @@ const API = path.resolve(here, '..', '..', 'shared', 'api.ts');
  *  is interpolated, conditional, or written twice is a drift shape this cannot
  *  see — so the count is asserted, not just the first hit. */
 const bashCopy = (): number => {
-  const hits = readFileSync(CCD, 'utf8').split('\n')
+  const hits = ccdSource().split('\n')
     .map((l) => /^READER_MIN_COLS=(\d+)\b/.exec(l))
     .filter((m): m is RegExpExecArray => m !== null);
   expect(hits.length, 'ccd/ccd must assign READER_MIN_COLS exactly once, at column 0').toBe(1);
@@ -76,7 +76,7 @@ describe('READER_MIN_COLS is one number in two languages', () => {
         .toContain(needle);
     }
 
-    const ccdWindow = defWindow(readFileSync(CCD, 'utf8'), /^READER_MIN_COLS=\d+\b/);
+    const ccdWindow = defWindow(ccdSource(), /^READER_MIN_COLS=\d+\b/);
     for (const needle of ['wrap-ansi', '69', '37', '120']) {
       expect(ccdWindow, `ccd/ccd: the ${WINDOW_BEFORE} lines above READER_MIN_COLS= must contain "${needle}"`)
         .toContain(needle);

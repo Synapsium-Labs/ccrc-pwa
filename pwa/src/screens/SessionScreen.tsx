@@ -3,7 +3,8 @@
 // banners for every degraded state (offline, dead/read-only, missing
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
-// DialogSheet and the TerminalDrawer mount at the bottom.
+// DialogSheet mounts between the transcript and the strips (its card is inline at the desk), the TerminalDrawer at the
+// bottom.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
@@ -11,35 +12,37 @@ import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, t
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
-import { accountHue, accountLabel } from '../lib/accounts';
+import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
+import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
+import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { heldAskLine } from '../session/askWords';
-import { heldCoordinatorWords } from '../session/sessionHeaderView';
+import { deepLinkFallback, heldCoordinatorWords } from '../session/sessionHeaderView';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
+import { ensureSession, useEnsure } from '../session/useEnsure';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
 import { useFrameSet } from '../skins/frame';
-import { INSPECTOR_QUERY } from '../inspector/useInspectorSession';
-import { useMediaQuery } from '../lib/useMediaQuery';
+import { useInspectorShown } from '../inspector/inspectorShown';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
 import { sessionFacts } from '../fleet/sessionFacts';
-import { coordPresence } from '../fleet/coordWords';
+import { coordinatorPresence } from '../fleet/presence';
 import { orphanGuidance } from '../fleet/orphanWords';
 import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
 import { isRunClosed } from '../fleet/runWords';
@@ -109,8 +112,8 @@ export function useWakeOnOpen(
 
   useEffect(() => {
     const onChange = (): void => { setVisible(document.visibilityState === 'visible'); };
-    document.addEventListener('visibilitychange', onChange);
-    return () => document.removeEventListener('visibilitychange', onChange);
+    const stops = [onPageVisible(onChange), onPageHidden(onChange)];
+    return () => { for (const stop of stops) stop(); };
   }, []);
 
   // One screen per id: a screen re-pointed at another session starts that session's wake from scratch.
@@ -120,7 +123,7 @@ export function useWakeOnOpen(
   // `pending`, and a failure toast's Wake checks before it calls.
   const wake = useCallback((): void => {
     set('pending');
-    api.ensure(id).then(
+    ensureSession(id).then(
       // A row still asleep stays `sent` (nothing more until it reads alive); a row that already reads alive
       // re-arms here, since the effect below skipped it while the call was out.
       () => { if (phase.current === 'pending') set(asleepRef.current ? 'sent' : 'armed'); },
@@ -199,18 +202,40 @@ export function SessionScreen({
   const roster = useFleet((s) => s.roster);
   const projects = useFleet((s) => s.projects);
   // D-5527: the fleet tree's facts about who this session works for, read off
-  // the same sessions and active runs the fleet's rows are drawn from.
-  const fleetSessions = useFleet((s) => s.sessions);
+  // the same sessions and active runs the fleet's rows are drawn from. Only the
+  // PARENT's row is subscribed (C6, D-6438): `parentIdOf` and `coordinationOf`
+  // read no other row, so a fleet frame that changes another session's row must
+  // not re-render this screen, and a change to the coordinator's row must.
+  const parent = useFleet((s) => {
+    const self = s.sessions.find((x) => x.id === id);
+    if (self === undefined) return null;
+    const pid = parentIdOf(self, s.runs.filter((r) => !isRunClosed(r)));
+    return pid === null ? null : s.sessions.find((x) => x.id === pid) ?? null;
+  });
   const fleetRuns = useFleet((s) => s.runs);
   const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
 
   const kbInset = useKeyboardInsets();
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [terminalOpen, setTerminalOpen] = useState(false);
   // D-286 (was D-B4-13)'s nonce. Bumped by the transcript's one `Answer` control; read by
   // `DialogSheet` to clear a dismissal the reader had made. It carries no
   // answer and cannot send — raising the sheet is the entire contract.
   const [raise, setRaise] = useState(0);
+  // D-6326: is the INLINE ask card mounted (the desk)? Told by `DialogSheet` through `AskSurface`, so one fact answers
+  // for the transcript (its live ask card points at the card), the Escape interrupt (it stands down) and the composer
+  // (Send holds). A phone's sheet never reports, so none of the three changes there.
+  const [askInline, setAskInline] = useState(false);
+  // The transcript's row callbacks keep their identity across this screen's renders (desktop polish Task C7): each is a
+  // prop of every row, so a new one on every render (a roster answer, a status word) would draw every row again.
+  // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the same
+  // fact); nothing is queued to go when the card leaves.
+  const onRetry = useCallback((key: string): void => {
+    if (askInline) return;
+    useStore.getState().retry(key);
+  }, [askInline, useStore]);
+  const onDiscard = useCallback((key: string): void => { useStore.getState().discard(key); }, [useStore]);
+  const onAnswer = useCallback((): void => { setRaise((n) => n + 1); }, []);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -278,15 +303,20 @@ export function SessionScreen({
   // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
   const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
-  const coordination = live === null ? null : coordinationOf(live, fleetSessions, activeRuns);
+  const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
   // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
   // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
-  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordPresence`, the orphan
+  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordinatorPresence`, the orphan
   // marker's) — so the header can never know less than the card.
-  const lookup = (sid: string): FleetSession | null => fleetSessions.find((x) => x.id === sid) ?? null;
+  const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
   const parentId = live === null ? null : parentIdOf(live, activeRuns);
   const factsNow = useNow(30_000);
-  const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
+  // Desktop polish Task C7, review 1128: the transcript's day, from this same clock. A row whose words read the clock
+  // (the usage-limit pill) draws again when it changes, within one tick of local midnight. The row barrier skips the
+  // day for every other row, so midnight alone redraws none of them; a bubble that another prop change redraws after
+  // midnight sees the new day too, which costs it one memo miss and no markdown work (`ChatMarkdown`'s own memo).
+  const day = dayKey(factsNow);
+  const presence = parentId === null ? null : coordinatorPresence(parentId, lookup(parentId), fleetFrameSeen);
   const facts = live === null ? null : sessionFacts({
     session: live, now: factsNow, roster,
     projectPool: poolOfPlacement(placementOfRow(projects?.find((r) => r.name === live.project))),
@@ -307,7 +337,7 @@ export function SessionScreen({
   // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  const route = routeView(live, wrapper);
+  const route = routeView(live, wrapper, accountProvider(roster, wrapper));
   const { classIntended, effortIntended, classInert, effortInert,
           classUnreadable, effortUnreadable } = route;
   // Exclusively one source or the other, never both: with `route` present the
@@ -377,17 +407,8 @@ export function SessionScreen({
   const { asleepAt, waking, pending: wakePending, wake } = useWakeOnOpen(id, live, fault);
   const asleep = asleepAt !== null;
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(id);
-    } catch (err) {
-      toast(`Couldn't restart — ${err instanceof Error ? err.message : String(err)}`, 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  const restart = (): Promise<void> =>
+    ensureNow(id, (err) => `Couldn't restart — ${err instanceof Error ? err.message : String(err)}`);
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
   // quietly; anything else is a real failure. `background-only` (D-5236): the
@@ -493,6 +514,7 @@ export function SessionScreen({
   useEscapeInterrupt({
     busy: effectiveStatus === 'busy',
     onInterrupt: () => void interrupt('escape-key'),
+    askInline,
   });
 
   // The chrome is the skin's (W2 Task S7c, D-5471): Refined's short header, or the shared header where a skin places
@@ -501,8 +523,10 @@ export function SessionScreen({
   const frameSet = useFrameSet();
   const SkinChrome = frameSet?.SessionChrome ?? null;
   // ONE INSTANCE PER WIDTH (W2 Task S8, D-5474): where the skin's inspector holds the plan and the mail (at >=1600, a
-  // skin that places one), the column does not render their strips. Asked of the set, never of the skin's id.
-  const inspectorHoldsStrips = useMediaQuery(INSPECTOR_QUERY) && (frameSet?.Inspector ?? null) !== null;
+  // skin that places one, and shown: a person may hide it, T3e D-6385), the column does not render their strips, and a
+  // hidden rail brings them back. Asked of the set, never of the skin's id.
+  const inspectorShown = useInspectorShown();
+  const inspectorHoldsStrips = inspectorShown && (frameSet?.Inspector ?? null) !== null;
   const chromeInputs: SessionHeaderProps = {
     session: live,
     status,
@@ -514,7 +538,7 @@ export function SessionScreen({
     onInterrupt: (source) => void interrupt(source),
     onBack: () => navigate('/'),
     queuedField,
-    fallback: { title: project, wrapper },
+    fallback: deepLinkFallback(id, roster, projects, { title: project, wrapper }),
   };
 
   return (
@@ -522,6 +546,7 @@ export function SessionScreen({
     <div
       className="chat"
       data-acct={acct}
+      data-ask-inline={askInline ? 'true' : undefined}
       data-kb={kbInset > 0 ? 'true' : undefined}
       style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}
     >
@@ -631,14 +656,29 @@ export function SessionScreen({
             events={events}
             pending={pending}
             busy={pulsing}
-            onRetry={(key) => useStore.getState().retry(key)}
-            onDiscard={(key) => useStore.getState().discard(key)}
+            onRetry={onRetry}
+            onDiscard={onDiscard}
             askPending={askPending}
+            askBelow={askInline}
             answerLabel={answerLabel}
-            onAnswer={() => setRaise((n) => n + 1)}
+            onAnswer={onAnswer}
+            day={day}
           />
         )}
       </div>
+
+      {/* D-6326: the ask, answered where it is asked. At the desk the controller draws an inline card here, between the
+          transcript and the strips, in a keyed slot of its own (never keyed by the skin, so a switch keeps the card
+          and the composer's text); on a phone it draws the Sheet, which portals, and this slot holds nothing. */}
+      <DialogSheet
+        key="ask"
+        id={id}
+        store={useStore}
+        onOpenTerminal={openTerminal}
+        raise={raise}
+        asker={asker}
+        onInline={setAskInline}
+      />
 
       {/* The strips in ONE container under the transcript, in both skins (W2 Task S7c), until S8 and S12 place them
           by width. */}
@@ -671,10 +711,10 @@ export function SessionScreen({
           // Stop in the send slot (W2 Task S7b, D-5471): the same LIVE `busy` the Escape interrupt reads.
           busy={effectiveStatus === 'busy'}
           onInterrupt={(source) => void interrupt(source)}
+          askUp={askInline}
         />
       </div>
 
-      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} asker={asker} />
       <PickSheet
         open={picker === 'model'}
         onClose={() => setPicker(null)}

@@ -35,12 +35,14 @@ export interface BannerRank {
 }
 
 /** Every global banner: one per fleet, above the list. */
-export type BannerId = 'fleet-host' | 'disk' | 'halt' | 'substrate' | 'offline' | 'connecting' | 'notice' | 'passkey';
+export type BannerId = 'fleet-host' | 'pressure' | 'disk' | 'halt' | 'substrate' | 'offline' | 'connecting' | 'notice' | 'passkey';
 
 /** A `Record` over the id union, so a new banner id without a rank is a compile error. The ranks are the order
  *  the fleet rendered its banners in before the stack, so a fleet with two or fewer looks as it did. */
 export const BANNER_ORDER: Readonly<Record<BannerId, BannerRank>> = {
   'fleet-host': { rank: 1, role: 'status', module: 'FleetHostBanner' },
+  // The host's pressure (#1170): right after the fleet host, whose unreachable line it explains when the host thrashes.
+  pressure: { rank: 1.5, role: 'status', module: 'PressureBanner' },
   halt: { rank: 2, role: 'status', module: 'HaltBanner' },
   // The fleet's disk alarm (D-6617): ranks after the fleet host, which it can follow from. Rank 3 was free.
   disk: { rank: 3, role: 'status', module: 'DiskBanner' },

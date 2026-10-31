@@ -48,7 +48,7 @@ export const GIT_FLOOR = ['source-bytes', 'topology-clean', 'deviation-refs', 'd
   'modelenv-single-writer', 'install-census', 'gitignore-secrets'].map((n) => `server/test/${n}.test.ts`);
 // The single-definition guard is split by area (`server/test/single-definition/<area>.test.ts`); each area file
 // imports the helpers that walk the four source roots, so each one lists, and each is a floor member.
-export const WALK_FLOOR = [...['advance-switches', 'ask-digest', 'child-reclaim', 'core-vocab', 'docs-l0', 'docs-ring', 'late-census', 'roster-bash', 'switches-history', 'update-stall', 'vocabularies'].map((n) => `server/test/single-definition/${n}.test.ts`),
+export const WALK_FLOOR = [...['advance-switches', 'ask-digest', 'child-reclaim', 'core-vocab', 'docs-l0', 'docs-ring', 'kernel-tail-cadence', 'kernel-tail-journal', 'kernel-tail-spawn', 'late-census', 'roster-bash', 'switches-history', 'update-stall', 'vocabularies'].map((n) => `server/test/single-definition/${n}.test.ts`),
   'server/test/typecheck-tests.test.ts'];
 export const FLOOR_GIT = 'floor: git is false';
 export const FLOOR_WALK = 'floor: lists nothing';

@@ -39,6 +39,7 @@ import type { MeasuredStat } from '../io.js';
 import { turnSays, turnWordOf } from '../sessionReading.js';
 import type { CloseOutcome } from './close.js';
 import type { OpenSibling, OpenSiblingsResult } from './store.js';
+import type { SessionBindings } from './bindingReads.js';
 
 /** The consents a request carries, read once. `force` and `interrupt` are honoured only as `true` (anything else is
  *  absent, as `force` always was); `programme` is `'end'` or absent — a consent to end a programme is exact or it is
@@ -209,8 +210,9 @@ export function worktreeOf(s: MeasuredStat): ArchiveMeasure['worktree'] {
  *  and the two functions `CoordRoutesHandle.withAbandon` hands it; `null` on a box with no coordination database,
  *  which archives exactly as it did before coordination existed. */
 export interface ArchiveCoordPort {
-  openRunsForSession(sessionId: string): OpenSiblingsResult;
-  openRunsClaimedBy(claimantId: string): OpenSiblingsResult;
+  /** The session's open binding, asked through the one query (`CoordStore.bindingsOf`, ARCH-42): its open runs as worker
+   *  and as claimant. */
+  bindingsOf(sessionId: string): Pick<SessionBindings, 'worker' | 'claimant'>;
   /** What the abandon arm would refuse for this run from its row alone, read without acting (close.ts's
    *  `abandonRefusal`); `null` when it can move it. */
   abandonRefusal(runId: number): Extract<CloseOutcome, { ok: false }> | null;
@@ -270,13 +272,13 @@ export async function decideArchive(
   let claimed: readonly OpenSibling[] = [];
   if (port !== null) {
     if (!flags.force) {
-      const worker = measured(() => port.openRunsForSession(id));
+      const worker = measured(() => port.bindingsOf(id).worker());
       // D-2545: refused as CLAIMED with an EMPTY `runs` — the field's shape does not change with the condition — and
       // the store's own `detail`, which this answer used to drop (workspace lifecycle wave 3b, the carried follow-up).
       if (!worker.ok) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: [], detail: worker.detail });
       if (worker.siblings.length > 0) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: worker.siblings });
     }
-    const coordinates = measured(() => port.openRunsClaimedBy(id));
+    const coordinates = measured(() => port.bindingsOf(id).claimant());
     // Fail-shut, with or without `programme:'end'`: a programme this box cannot enumerate cannot be ended.
     if (!coordinates.ok) return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
     claimed = coordinates.siblings;

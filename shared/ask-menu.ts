@@ -1,6 +1,6 @@
 // AskUserQuestion's own rows, the ones Claude Code paints under a question's options (D-5045, plan
-// docs/superpowers/plans/2026-10-15-ask-server-half.md). L0: imports nothing. The PWA bundles `shared/`, and the drawer's
-// menu taps (D-5008, Task 16) need the same rule the server's guard reads.
+// docs/superpowers/plans/2026-10-15-ask-server-half.md). L0: imports only its sibling `./api.js`'s types. The PWA
+// bundles `shared/`, and the drawer's menu taps (D-5008, Task 16) need the same rule the server's guard reads.
 //
 // What lives here, once (`single-definition.test.ts` holds each home):
 // - `FREE_TEXT_PLACEHOLDER_RE`: the label of the EMPTY free-text row. Enter on that row while it is empty does not answer
@@ -15,10 +15,16 @@
 // - `REVIEW_READY_RE`, `REVIEW_SUBMIT_ROW_RE`, `REVIEW_CANCEL_ROW_RE`, `REVIEW_HEADING_RE` (D-5089, plan
 //   docs/superpowers/plans/2026-10-15-ask-sheet-half.md): the review screen a multi-question or multiSelect ask ends on,
 //   read by the sheet (`pwa/src/session/askLive.ts`).
+// - `transcriptQuestion` and `usableQuestions` (D-7212, plan docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md,
+//   Task C7q): the transcript copy's reading and a usable question envelope, moved here unchanged from
+//   `pwa/src/session/askLive.ts`, so the PWA's `askSource` and the server's pairing (`server/src/pane/askPairing.ts`)
+//   choose a question's source by one rule (`census-w7/pwa.ts#transcriptCopyRules` counts each: 1).
 //
 // D-5008's stage 1b moves the pane-menu reader (`OPTION_RE`, `CHECKBOX_RE`, `leftCol`, `paneOptionRows`, `OptionRow`) to
 // `shared/pane-menu.ts`. These rules can join it there or stay here; either way they keep one home. `OptionRow` gained
 // `checked` (D-5048) before that move, so the move carries it.
+
+import type { AskOption, DialogAsk, HookAskQuestion } from './api.js';
 
 /** The empty free-text row's label, as a pane-menu row reads it (number, cursor and checkbox already gone).
  *  - Single-select paints `n+1. Type something.` (with the period).
@@ -191,4 +197,35 @@ export function reviewQuestions(dialog: ReviewScreen | null): string[] | null {
     if (m !== null) listed.push(m[1]!.trim());
   }
   return listed;
+}
+
+/** One of Claude's own questions as a surface renders it (D-6325): the hook envelope's question, or the transcript's copy
+ *  of one. The transcript's options may carry a `preview` (an option's worked example), which the hook's never do. */
+export type StructuredQuestion = Omit<HookAskQuestion, 'options'> & { options: readonly AskOption[] };
+
+/** The transcript's copy of the question as a structured one, or null while any row did not align (a `null` option) or
+ *  the question is blank. An option's `preview` is kept (D-6325): it is Claude's own worked example for that row, and
+ *  the surface draws it under the row as the scraped sheet did. Moved here unchanged from `askLive.ts` (D-7212). */
+export function transcriptQuestion(a: DialogAsk | undefined): StructuredQuestion | null {
+  if (a === undefined || a.question.trim() === '' || a.options.some((o) => o === null)) return null;
+  const q: StructuredQuestion = {
+    question: a.question,
+    multiSelect: a.multiSelect,
+    options: a.options.map((o) => {
+      const { label, description, preview } = o!;
+      return {
+        label,
+        ...(description === undefined ? {} : { description }),
+        ...(preview === undefined ? {} : { preview }),
+      };
+    }),
+  };
+  if (a.header !== undefined) q.header = a.header;
+  return q;
+}
+
+/** I4's question arm (`askLive.ts#isUsableAsk`, moved here unchanged, D-7212): is a question envelope anything a
+ *  surface can show? At least one question, and the first not blank; a blank one is treated as absent. */
+export function usableQuestions(ask: { readonly questions: readonly { readonly question: string }[] }): boolean {
+  return ask.questions.length > 0 && ask.questions[0]!.question.trim() !== '';
 }

@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 160,
+  "d": "D-7081",
+  "reason": "W5 C5h (D-7077): the docs helper redacts through shared/redact.mjs's docs profile via shared/redact-cli.mjs, one node per verb: the python redactor seam in _docs_py's heredoc (the read-once start and its digest check, the explicit node environment, the per-verb budget, the sticky failure and the close), _docs_redact_cli, the docs front's node and redactor probe with its digest check, and the two redactor pin lines (G-1 ruled 160, D-7129; maxDelta is the measured peak of commits 7 to 9 rounded up to the next 10)",
+  "added": "2026-10-27"
+}

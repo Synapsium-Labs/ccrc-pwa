@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
 import { inboxTarget } from '../src/fleet/inboxTarget';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 
 const ev = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({
   seq: 1, at: 1_000, kind: 'mail', sessionId: 'ws-a', title: 't', body: 'b', runId: null, ...over,
@@ -21,7 +21,7 @@ const runs = (...ids: number[]): ReadonlyMap<number, Pick<RunSummary, 'id'>> =>
   new Map(ids.map((id) => [id, { id }] as const));
 
 const LISTED = fleetSession({ id: 'ws-a', project: 'project-a' });
-const ARCHIVED = fleetSession({ id: 'ws-b', project: 'project-a', status: 'dead', bucket: 'archived', archivedAt: 1_700_000_000 });
+const ARCHIVED = fleetSession({ id: 'ws-b', project: 'project-a', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1_700_000_000 });
 
 describe('inboxTarget', () => {
   it('a record naming a listed session opens it', () => {

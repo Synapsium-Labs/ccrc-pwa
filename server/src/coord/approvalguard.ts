@@ -122,7 +122,7 @@ export interface ApprovalCtx extends ApprovalRoots {
  *  operator's `claude …` switch verbs join it, so a session never rolls, installs or selects a Claude Code build.
  *  No account verb is here: account switching and the auto-swap are never blocked (operator ruling 2026-10-19). */
 export const FORBIDDEN_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|roll|claude'.split('|');
 
 // ── roots ──────────────────────────────────────────────────────────────────
 
@@ -223,7 +223,7 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
     })),
     { why: 'ccd account-pane', re: new RegExp(`${CCD_HEAD}account-pane(?![\\w-])`) },
     { why: 'the ccd-account-auth helper', re: /(?:(?:^|[\s;&|()\x60'"=])|\/\.local\/bin\/)ccd-account-auth(?![\w.-])/ },
-    { why: 'the approval surface', re: /(?:ccrc-api|\$\{?API\}?)['"]?\s+(?:-\S+\s+)*approvals(?![\w-])|\/api\/approvals(?![\w-])|approval-signing|approval-verify\.mjs/ },
+    { why: 'the approval surface', re: /(?:ccrc-api|\$\{?API\}?)['"]?\s+(?:-\S+\s+)*approvals(?![\w-])|\/api\/approvals(?![\w-])|\/api\/questions\/approval-|approval-signing|approval-verify\.mjs/ },
     // D-5936: the workflow control verb is the operator's. Each segment tolerates one quote either side, as the row
     // above does, so a quote-split `".../workflows/$RUN"/control` still matches; no segment may hold a `/`, so the
     // match stays linear. Bash text and MCP string leaves only: any other tool naming it escalates (spec §4.5).

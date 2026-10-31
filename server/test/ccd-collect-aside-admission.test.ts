@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import {
   AGED, COL_ID, NO_WALK, collectAudit, collectForkOf, collectOf, holdLock, lockOf, makeOrphan, quarantineOf, regDir,
@@ -340,7 +340,7 @@ describe.skipIf(!LINUX)('an id a compare-and-drop aside is for: admitted before 
 });
 
 describe('the probe word `aside`: answered by the aside judge alone, listed per-leaf by the lane (R20)', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   /** Whole-line `#` comments dropped, so prose that names a call is never read as one. */
   const code = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   /** `name`'s body, from its head line to its first closing brace at column 0, or '' when it is not defined. */

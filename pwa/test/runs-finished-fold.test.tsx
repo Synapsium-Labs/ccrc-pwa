@@ -86,15 +86,19 @@ describe('the Finished group before the fold — characterization (D-6442)', () 
   });
 });
 
-// A per-case timeout for every case that mounts the board and clicks or ticks:
-// its DOM is slow on a loaded box, and the 5 s default timed out in a full run.
+// The per-case timeout is the fix for the loaded-box timeouts: a case that mounts
+// the board and clicks or ticks has a DOM that is slow on a loaded box, and the 5 s
+// default timed out in a full run. Every such case passes `BOARD_MS` (the 500-row
+// case passes 120_000). Only the characterization case above, one mount of 25 rows
+// with no click or tick, keeps the default.
 const BOARD_MS = 30_000;
 
 const door = (): HTMLElement | null => screen.queryByRole('button', { name: /more finished runs?/ });
 
 describe('the Finished group folds (D-6442)', () => {
   // The one case that needs 500: it asserts the cap the cold read can reach. The
-  // others use as many rows as they assert on, so none rides the 5 s default.
+  // others size their fixture to what they assert on, which keeps them cheaper; it
+  // is the per-case timeout, not the sizing, that keeps them from timing out.
   it('500 closed runs mount at most 20 RunRow', async () => {
     await mount(closedRuns(500));
     expect(FINISHED_FOLD).toBe(20);
@@ -251,7 +255,11 @@ describe('the fold’s words (D-6442)', () => {
 describe('measurement — Step 0 of C10 (D-6442)', () => {
   // On demand only, from `pwa/`: `CCRC_MEASURE=1 ./node_modules/.bin/vitest run
   // --silent=false --reporter=verbose test/runs-finished-fold.test.tsx -t measurement`.
-  // Both flags are needed: without them the run passes and prints no `[C10 step 0]` line.
+  // Name a reporter: with none, vitest 4.1.10 picks its `agent` reporter when `CLAUDECODE`, `CLAUDE_CODE` or
+  // `AI_AGENT` is set, and no `[C10 step 0]` line prints (with or without `--silent=false`), and its `default`
+  // reporter otherwise, which prints it. `--reporter=verbose` and `--reporter=default` print it in both: measured
+  // on 4.1.10 in an agent session and with those three unset (C6, 2026-10-27). Review 944 measured no flag and
+  // `--silent=false` in both, and `--reporter=verbose` in an agent session only.
   // No timing assertion: the numbers go to the console and the PR body. Real
   // `performance.now` is left alone (only timers and Date are faked), because a
   // faked clock would report every Profiler duration as zero.

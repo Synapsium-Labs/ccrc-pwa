@@ -53,6 +53,9 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
+  // D-7298: the `ccrc test` wrapper, which doctor's closing `test-slice` check asks for the slice and
+  // the queue (`$CCRC_HERE/ccrc-test --status`). A real tree has it: `_inst_tree` rsyncs `ccd/` whole.
+  'ccd/ccrc-test',
   // The GPT lane's five common executables, COPIED from the repository: the
   // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
   // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
@@ -134,6 +137,11 @@ export const TREE_FILES = [
   'shared/base-url.mjs',
   'shared/roster-json.mjs',
   'shared/wrapper.mjs',
+  // The docs redactor's two files (D-7077, OA-C11 (a)): their reader is ccd's pair installer
+  // (`ccd/ccd-entry-install.py`), which publishes both beside ccd's body and pins their digests, and refuses a tree
+  // without them, so every install fixture built on this list needs them.
+  'shared/redact.mjs',
+  'shared/redact-cli.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would
@@ -154,6 +162,11 @@ export const TREE_FILES = [
   // template through the real publisher.
   'ccd/ccd-entry.py',
   'ccd/ccd-entry-install.py',
+  // The library the body pins and loads (D-6913): the publisher reads it from the tree and refuses a tree
+  // without it, or with one the body does not pin, so it is COPIED beside the body it belongs to.
+  'ccd/lib/disk-retention.sh',
+  // Its second library (D-7463), the train proof: read, pinned and published exactly as the first.
+  'ccd/lib/train-proof.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -190,6 +203,10 @@ export const TREE_FILES = [
   // The pane-scope sweep (session-continuity wave 4), shipped by `_inst_bins` on
   // the same non-Darwin, every-ROLE arm as the reaper above.
   'ccd/ccd-scope-sweep',
+  // The read-only conflict radar (landing order wave 3b), placed by `_inst_bins` on the same non-Darwin, every-ROLE arm.
+  'ccd/ccd-land-probe',
+  // Test box TB11 (D-7413): the durations fetch, placed by `_inst_bins` on the radar's non-Darwin, every-ROLE arm.
+  'ccd/ccd-testbox-times',
   // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on
   // the same non-Darwin, every-ROLE arm as the sweep above.
   'ccd/ccd-tool-adj',
@@ -215,6 +232,11 @@ export const TREE_FILES = [
   'ccd/compact-card.mjs',
   // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
   'ccd/lib/transcript.jq',
+  // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
+  'ccd/lib/carry-dedupe.py',
+  // The settings reader the ccd-* sweeps source (wave 29): `_inst_bins` places it under ~/.local/libexec/ccrc on every
+  // OS and role, so a tree without it dies in `_inst_atomic` naming the missing source.
+  'ccd/lib/ccrc-settings.sh',
   // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
   // and before it, as the card's helper above, so a tree without it dies the same way.
   'ccd/approval-verify.mjs',

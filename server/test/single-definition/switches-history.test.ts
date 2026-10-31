@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { SWITCHES } from '../../../shared/switches.js';
+import { SWITCHES, TESTBOX_REMOTE_LIVE_MARKER } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, bashRoots, ccrcRoot, codeLines, here, holdersOf, isBashComment, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -43,9 +43,10 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
 describe('the nested rescue: its arming file has no writer in the tree', () => {
   // DR-21 (D-6633) gives it its one TS holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it
   // cannot write the marker); the server only shows what the arm would do.
-  it('nested-rescue-live: one shell holder, ccd/ccd, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
-    expect(holdersOf('nested-rescue-live'), 'a line of shell other than ccd/ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
-    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes('nested-rescue-live')))
+  it('nested-rescue-live: one shell holder, the ccd library, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
+    // The nested rescue moved with its helpers to ccd's loaded library (D-6913): ccd/lib/disk-retention.sh is the holder.
+    expect(holdersOf('nested-rescue-live'), 'a line of shell other than the ccd library names it — a writer in waiting').toEqual(['ccd/lib/disk-retention.sh']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/lib/disk-retention.sh') ?? '').filter((l) => l.includes('nested-rescue-live')))
       .toEqual(['_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }']);
     expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel), 'spelled on a code line outside shared/switches.ts')
       .toEqual(['shared/switches.ts']);
@@ -153,6 +154,68 @@ describe('fleet disk retention DR-27: the stale arm’s live switch has no write
     const holders = ALL.filter((f) => stallCode(f).includes('CHILD_STALE_RECLAIM_LIVE_MARKER')).map(rel).sort();
     expect(holders).toEqual(['server/src/coord/childReclaimStale.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// D-7278. The deps-shed arm SHIPS SHADOWED behind `$REG/deps-shed-live`, hand-touched on the fleet box like the stale
+// arm's: no shell line names it, its one TS definer is the L0 switch table, and the one file that reads a listing the
+// run-done body already took holds the constant.
+describe('the deps-shed arm’s live switch has no writer in the tree (D-7278)', () => {
+  const NAME = 'deps-shed-live';
+  const DEFINER = 'shared/switches.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+  });
+
+  it('the files that name its constant are the definer and the arm, and none reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    const holders = ALL.filter((f) => stallCode(f).includes('DEPS_SHED_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/depsShedPass.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// D-7404 (test box plan TB2). `$REG/testbox-remote-live` is the test box's remote switch: absent, every `ccrc test` run
+// is local. Its planned holders are ONE shell reader, the wrapper `ccd/ccrc-test` (TB8), and ONE shell writer, the
+// `ccd testbox-remote` verb in `ccd/ccd` (TB9, behind POST /api/testbox/switch); no TypeScript file writes it. TB2
+// ships the row alone, so until TB8 and TB9 land this pin expects ZERO shell holders: TB8 raises it to the wrapper's
+// one read line and TB9 to the verb's one write, each in its own PR.
+// TB8 (D-7410) raised the shell holders 0 -> 1, the wrapper's one read; TB9 (D-7411) adds the one shell WRITER, `ccd
+// testbox-remote` in ccd/ccd, and the one TypeScript reader beside the definer, the server's decider
+// (`server/src/testbox.ts`), which reads the switch through `readSwitches` and writes nothing.
+describe('the test box’s remote switch: its definer, the wrapper’s one read, the verb’s one write and the decider’s read (D-7404; TB8, D-7410; TB9, D-7411)', () => {
+  const NAME = TESTBOX_REMOTE_LIVE_MARKER;
+  const DEFINER = 'shared/switches.ts';
+
+  it('two shell files name it: the wrapper ccd/ccrc-test, whose one line is a read, and ccd/ccd, whose two lines are the verb\'s marker and its temp', () => {
+    expect(NAME).toBe('testbox-remote-live');
+    expect(holdersOf(NAME), 'a line of shell other than the wrapper and the verb names it — a writer TB8 and TB9 do not ship').toEqual(['ccd/ccd', 'ccd/ccrc-test']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccrc-test') ?? '').filter((l) => l.includes(NAME)))
+      .toEqual(['  [ -e "$REG/testbox-remote-live" ] && TB_LIVE=1']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes(NAME)))
+      .toEqual(['  marker="$REG/testbox-remote-live"', '    tmp="$REG/.testbox-remote-live.$$.tmp"']);
+  });
+
+  it('its one TS holder is its definer, and no file that names its constant reaches a write', () => {
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    const holders = ALL.filter((f) => stallCode(f).includes('TESTBOX_REMOTE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/testbox.ts'].sort());
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('no non-shell file under ccd/ or deploy/ names it on a code line', () => {
+    const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+      const p = path.join(dir, e);
+      return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+    });
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))).map(rel)).toEqual([]);
   });
 });
 

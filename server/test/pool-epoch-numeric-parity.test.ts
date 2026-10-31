@@ -16,10 +16,10 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { OBSERVED_EPOCH_NUM } from '../../agent/src/server.js';
 
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 const poolSyncSrc = readFileSync(path.join(path.dirname(CCD), 'ccd-pool-sync'), 'utf8');
 
 /** Asserts EXACTLY ONE occurrence of an assignment matched by `nameRe` (a

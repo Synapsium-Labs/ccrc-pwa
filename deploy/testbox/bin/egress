@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# The test box's egress allowlist resolver, ccrc-testbox-egress.service's fixed ExecStart: `egress <names file>`, as
+# root (D-7409, D-7568; spec §2.0). The installer writes the names file, one `<row><TAB><host>` line per name, a row
+# being one of spec §2.0's table (the firewall's sets `<row>_v4` and `<row>_v6`). Each name is resolved, and each row
+# whose names all resolved (a name resolves when it gives any address, one its row holds already included) has its
+# two sets replaced by those addresses; every replacement goes in ONE nft
+# transaction, so the firewall never holds half a refresh. A row with a name that did not resolve is left as it was
+# (its old addresses, or none on a fresh boot), and the script exits 1 after the transaction so the unit says so. It
+# touches no rule and no cgroup set, and reads no config file and no test box variable. Every system call goes
+# through one seam, TB_SYS (empty on a box), so the tests run it against a fixture resolver and firewall.
+set -uo pipefail
+
+ROWS=(github registry release nodejs chrome osmirror)
+_sys() { if [ -n "${TB_SYS:-}" ]; then "$TB_SYS" "$@"; else "$@"; fi; }
+die() { printf 'ccrc-testbox-egress: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -eq 1 ] || die "usage: egress <names file>"
+names=$1
+[ -f "$names" ] && [ ! -L "$names" ] || die "no names file: $names"
+
+declare -A v4=() v6=() bad=()
+while IFS=$'\t' read -r row host; do
+  [ -n "${row:-}" ] || continue
+  case " ${ROWS[*]} " in *" $row "*) ;; *) die "not a row of the egress table: $row" ;; esac
+  [[ $host =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "not a host name: $host"
+  got=0
+  while read -r a _; do
+    [[ $a =~ ^[0-9.]+$ ]] || continue
+    got=1
+    case " ${v4[$row]:-} " in *" $a "*) ;; *) v4[$row]+="$a " ;; esac
+  done < <(_sys getent ahostsv4 "$host" 2>/dev/null)
+  while read -r a _; do
+    [[ $a =~ ^[0-9A-Fa-f:]+$ && $a == *:* ]] || continue
+    got=1
+    case " ${v6[$row]:-} " in *" $a "*) ;; *) v6[$row]+="$a " ;; esac
+  done < <(_sys getent ahostsv6 "$host" 2>/dev/null)
+  if [ "$got" -eq 0 ]; then bad[$row]=1; printf 'ccrc-testbox-egress: %s (%s) did not resolve; its addresses are kept\n' "$host" "$row" >&2; fi
+done < "$names"
+
+elements() { local s="" a; for a in $1; do s+="${s:+, }$a"; done; printf '%s' "$s"; }
+script=""
+for row in "${ROWS[@]}"; do
+  [ -z "${bad[$row]:-}" ] || continue
+  script+="flush set inet ccrc_testbox ${row}_v4"$'\n'"flush set inet ccrc_testbox ${row}_v6"$'\n'
+  [ -z "${v4[$row]:-}" ] || script+="add element inet ccrc_testbox ${row}_v4 { $(elements "${v4[$row]}") }"$'\n'
+  [ -z "${v6[$row]:-}" ] || script+="add element inet ccrc_testbox ${row}_v6 { $(elements "${v6[$row]}") }"$'\n'
+done
+if [ -n "$script" ]; then
+  printf '%s' "$script" | _sys nft -f - || die "nft refused the refresh"
+fi
+[ "${#bad[@]}" -eq 0 ] || exit 1
+exit 0

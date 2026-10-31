@@ -84,8 +84,8 @@ export function equalitySites(root: string = REPO): EqualitySite[] {
 export interface NotBindingSite { readonly file: string; readonly text: string; readonly count?: number; readonly why: string }
 
 export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
-  { file: 'server/src/coord/routes.ts', text: 'r.id === sessionId',
-    why: 'a lookup of a REGISTRY record by its id (the approval route\'s child gate): no run is read' },
+  { file: 'server/src/coord/questions.ts', text: 'r.id === sessionId',
+    why: 'a lookup of a REGISTRY record by its id (the approval raise\'s child gate, moved from coord/routes.ts with raiseApproval, W3 Q3e): no run is read' },
   { file: 'server/src/coord/routes.ts', text: 's.sessionId === byId',
     why: 'a row of the intent checkpoint\'s own session list, matched to the id the intent was declared for: no run is read' },
   { file: 'server/src/coord/openRun.ts', text: 'c.target!.claimedBy !== c.b.claimedBy',
@@ -171,6 +171,10 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'an attribute read (ATTRIBUTE_READS): the project of the first run naming a session, no run is returned' },
   { file: 'server/src/coord/store.ts', text: "'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +'CAST(waveOf AS TEXT) AS waveOfText, CAS",
     why: 'the series fetch itself (bindingRunsOf, one of the four counted readers): it selects the rows bindingOf and childrenOf decide over' },
+  { file: 'server/src/coord/dispatch.ts', text: 'run.claimedBy !== b.claimedBy',
+    why: "bindReturnedChild's compare-and-set (D-7563): the claimant of ONE re-read run against the one the dead-dispatch pass measured, whichever session works it" },
+  { file: 'server/src/coord/abandonDeadDispatch.ts', text: 'v.sessionId !== gated',
+    why: "the returned-child bind's re-measure (D-7563): the REGISTRY row the re-measured verdict names against the row the child bind gate passed, two row ids compared, no run is asked which session is its" },
   { file: 'server/src/coord/store.ts', text: 'row.claimedBy !== input.expectClaimedBy',
     why: "closeRun's compare-and-set: the claimant of ONE re-read run against the one the caller measured, whichever session works it" },
   { file: 'server/src/coord/store.ts', text: 'predecessor !== sessionId',
@@ -193,7 +197,7 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "a path claim's holder against the declaring session: the claims table, no run is read" },
   { file: 'server/src/hookstate.ts', text: 'sessionId === currentUuid',
     why: "a hook record's Claude Code session uuid against the pane's current uuid: pane identity, no run is read" },
-  { file: 'server/src/stopDoneSweep.ts', text: 'l.sessionId === id',
+  { file: 'server/src/sleepLane.ts', text: 'l.sessionId === id',
     why: 'indexes the batched answer of lastRunBySession by the session it was asked about (the store did the last-closed decision): a keyed row, no series is decided' },
   { file: 'server/src/tmpSweepLane.ts', text: 'read.id !== sessionId',
     why: 'excludes a self-claimed run from the coordinators to mail: a claimant against the session whose coordinator is asked, the run having been chosen by survivorOf' },

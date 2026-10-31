@@ -19,6 +19,7 @@ import type { OpenSiblingsResult } from '../src/coord/store.js';
 import type { CollectToken } from '../../shared/api.js';
 import { FULL_CAPS, ID, INTERVAL, RIPE, T0, TOK, TOK2, auditDoc, rig } from './collectTempRootFixture.js';
 import { openRunsClaimedBy } from '../src/coord/bindingReads.js';
+import { withBindingsOf } from './bindingsFake.js';
 
 const job: CollectJob = { id: ID, epoch: 0 };   // the rig's cell starts at epoch 0 (`r.job()` builds the same); no case here moves it
 const AUDIT = ['ws-audit', '--session', ID, '--collect'];
@@ -220,7 +221,7 @@ describe('step 4 — the open-run hold, judged on observation 2’s document', (
   });
 
   it('an unreadable store holds it', async () => {
-    const r = rig({ coord: (real) => ({
+    const r = rig({ coord: (real) => withBindingsOf({
       run: (id: number) => real.run(id),
       openRunsClaimedBy: (id: string) => openRunsClaimedBy(real, id),
       openRunsForSession: (): OpenSiblingsResult => ({ ok: false, kind: 'run-unreadable', detail: 'the runs table could not be read' }),
@@ -325,6 +326,24 @@ describe('step 6 — synchronous from the last await to the argv', () => {
     expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'answered', step: 6, why: 'caps' });
     expect(r.attempts).toEqual([AUDIT]);
     expect(r.lane.clears).toEqual(['caps']);
+  });
+
+  // D-7200 (ARCH-44 C4k): the act asks `collect-v1` once more in its own scope. In the tree that read answers as the
+  // `lane` reader's did (one fleet state, one synchronous segment); a state that answers false only on the act's ask
+  // makes it answer what step 6's not-running arm answers, and clear the lane as that arm's outcome does.
+  it('collect-v1 withdrawn after the switch resolved: the act’s own ask answers caps at 6, clears the lane once and composes nothing', async () => {
+    const r = rig();
+    const deps = { ...r.deps, lane: { ...r.deps.lane, flipped: (x: Parameters<typeof r.deps.lane.flipped>[0]): boolean => {
+      const flipped = r.deps.lane.flipped(x);
+      r.state.ccdVerbs = without(COLLECT_CAP);
+      return flipped;
+    } } };
+    expect(await collectTempRoot(deps, job)).toEqual({ kind: 'answered', step: 6, why: 'caps',
+      detail: `the fleet host no longer advertises both ${COLLECT_CAP} and ${RECLAIM_PAUSE_CAP}`,
+      audit: expect.objectContaining({ value: expect.objectContaining({ kind: 'collectable', token: TOK }) }) });
+    expect(r.attempts).toEqual([AUDIT]);
+    expect(r.lane.clears).toEqual(['caps']);
+    expect(r.lane.flips).toEqual([]);
   });
 
   it('SHADOW: no marker, and the lane has seen none: every gate passes, it would collect, and the collector’s verb is never composed', async () => {

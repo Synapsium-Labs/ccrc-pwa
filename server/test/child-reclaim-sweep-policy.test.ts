@@ -16,9 +16,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_KEPT_MANY_OVER, CHILD_RECLAIM_PRE_LOCK_TOKEN,
-  CHILD_RECLAIM_PRESENCE_DEFERS, CHILD_RECLAIM_SKIP,
+  CHILD_RECLAIM_VIEWER_DEFERS, CHILD_RECLAIM_SKIP,
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept,
-  childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue,
+  childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue, childReclaimFailureWaitMs,
   childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine, childReclaimFeedQuiet,
   childReclaimFirstSighting,
   childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems, childReclaimKeptList,
@@ -535,8 +535,8 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN, { kind: 'absent' });
 
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
-    expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
-      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN, markerRunId: RUN, generation: { kind: 'absent' },
+    expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstViewerDeferredAt: null,
+      lastViewerDeferredAt: null, lastViewerWallAt: null, viewerHeldSince: null, bornAt: BORN, markerRunId: RUN, generation: { kind: 'absent' },
       lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null,
       tier: false, tierToken: null, tierJ: 0, tierRun: 0 });
   });
@@ -549,27 +549,39 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('a TERMINAL refusal keeps its entry — the lifecycle mirror holds the refusal, this memory only paces the re-ask', () => {
     const refused = childReclaimNextEntry(entry, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW, false), at(NOW), PASS);
     expect(refused).toEqual({ ...entry, consecutiveFailures: 0, lastFailedAt: null,
-      firstPresenceDeferredAt: null, refusedAt: NOW, lastAskedAt: NOW });
+      firstViewerDeferredAt: null, refusedAt: NOW, lastAskedAt: NOW });
+  });
+
+  it('an unreadable tree (a FAILED outcome) backs off and doubles, then a clean reclaim forgets the child', () => {
+    const fail = (e: ChildReclaimSweepEntry, t: number) =>
+      childReclaimNextEntry(e, { kind: 'failed', token: 'tree-unreadable', stuck: false }, ask(t, false), at(t), PASS)!;
+    const one = fail(entry, NOW);
+    expect(childReclaimDue(one, NOW, PASS)).toBe(false);
+    expect(childReclaimDue(one, NOW + childReclaimBackoffMs(1, PASS), PASS)).toBe(true);
+    const two = fail(one, NOW + 1);
+    expect(childReclaimFailureWaitMs(two, PASS)).toBeGreaterThan(childReclaimFailureWaitMs(one, PASS));
+    expect(two.refusedAt).toBeNull();
+    expect(childReclaimNextEntry(two, { kind: 'reclaimed' }, ask(NOW + 9, false), at(NOW + 9), PASS)).toBeNull();
   });
 
   it('a refusal ends a run of failures and the presence episode alike', () => {
     const failing: ChildReclaimSweepEntry = { ...entry, consecutiveFailures: 3, lastFailedAt: NOW - 1,
-      firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS, lastPresenceWallAt: NOW - PASS };
+      firstViewerDeferredAt: NOW - 10 * C, lastViewerDeferredAt: NOW - PASS, lastViewerWallAt: NOW - PASS };
     expect(childReclaimNextEntry(failing, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW, false), at(NOW), PASS))
-      .toMatchObject({ consecutiveFailures: 0, lastFailedAt: null, firstPresenceDeferredAt: null,
-        lastPresenceDeferredAt: null, refusedAt: NOW });
+      .toMatchObject({ consecutiveFailures: 0, lastFailedAt: null, firstViewerDeferredAt: null,
+        lastViewerDeferredAt: null, refusedAt: NOW });
   });
 
   it('counts a failed attempt and stamps when it was asked — the any-kind clock untouched, the presence episode ended', () => {
-    const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
-      lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
+    const withPresence: ChildReclaimSweepEntry = { ...entry, firstViewerDeferredAt: NOW - 1000,
+      lastViewerDeferredAt: NOW - 1000, lastViewerWallAt: NOW - 1000 };
     const once = childReclaimNextEntry(withPresence, { kind: 'failed', token: null, stuck: false }, ask(NOW, false), at(NOW), PASS);
     expect(once).toEqual({ ...withPresence, consecutiveFailures: 1, lastFailedAt: NOW,
-      firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
+      firstViewerDeferredAt: null, lastViewerDeferredAt: null, lastViewerWallAt: null, refusedAt: null,
       lastAskedAt: NOW });
     expect(childReclaimNextEntry(once!, { kind: 'failed', token: null, stuck: false }, ask(NOW + 120_000, false), at(NOW + 120_000), PASS))
       .toEqual({ ...withPresence, consecutiveFailures: 2, lastFailedAt: NOW + 120_000,
-        firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
+        firstViewerDeferredAt: null, lastViewerDeferredAt: null, lastViewerWallAt: null, refusedAt: null,
         lastAskedAt: NOW + 120_000 });
   });
 
@@ -580,30 +592,30 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   });
 
   it('an UNLICENSED PRESENCE defer starts BOTH clocks, once; the next one a pass later restarts neither, and only moves the latest answer', () => {
-    for (const why of CHILD_RECLAIM_PRESENCE_DEFERS) {
+    for (const why of CHILD_RECLAIM_VIEWER_DEFERS) {
       const first = childReclaimNextEntry(entry, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS);
-      expect(first, why).toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW,
-        lastPresenceDeferredAt: NOW, lastPresenceWallAt: NOW, presenceHeldSince: NOW, lastDeferWhy: why, lastAskedAt: NOW });
+      expect(first, why).toEqual({ ...entry, firstDeferredAt: NOW, firstViewerDeferredAt: NOW,
+        lastViewerDeferredAt: NOW, lastViewerWallAt: NOW, viewerHeldSince: NOW, lastDeferWhy: why, lastAskedAt: NOW });
       expect(childReclaimNextEntry(first!, { kind: 'deferred', why }, ask(NOW + 60_000, false), at(NOW + 60_000), PASS), why)
         .toEqual({
-          ...first!, lastPresenceDeferredAt: NOW + 60_000, lastPresenceWallAt: NOW + 60_000, lastAskedAt: NOW + 60_000,
+          ...first!, lastViewerDeferredAt: NOW + 60_000, lastViewerWallAt: NOW + 60_000, lastAskedAt: NOW + 60_000,
         });
     }
   });
 
   it('a LICENSED presence defer RESTARTS the episode even while one is already running', () => {
-    const running: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW - 10 * C,
-      lastPresenceDeferredAt: NOW - PASS, lastPresenceWallAt: NOW - PASS };
+    const running: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstViewerDeferredAt: NOW - 10 * C,
+      lastViewerDeferredAt: NOW - PASS, lastViewerWallAt: NOW - PASS };
     const restarted = childReclaimNextEntry(running, { kind: 'deferred', why: 'presence' }, ask(NOW, true), at(NOW), PASS);
-    expect(restarted).toEqual({ ...running, firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW,
-      lastPresenceWallAt: NOW, presenceHeldSince: null, lastDeferWhy: 'presence', lastAskedAt: NOW });
+    expect(restarted).toEqual({ ...running, firstViewerDeferredAt: NOW, lastViewerDeferredAt: NOW,
+      lastViewerWallAt: NOW, viewerHeldSince: null, lastDeferWhy: 'presence', lastAskedAt: NOW });
     expect(childReclaimDeferExpired(running, at(NOW), PASS)).toBe(true);
     expect(childReclaimDeferExpired(restarted!, at(NOW), PASS)).toBe(false);
   });
 
   it('`licensed` is read only on a presence-class defer — it changes nothing for failed, refused, or any other why', () => {
-    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS,
-      lastPresenceWallAt: NOW - PASS };
+    const stale: ChildReclaimSweepEntry = { ...entry, firstViewerDeferredAt: NOW - 10 * C, lastViewerDeferredAt: NOW - PASS,
+      lastViewerWallAt: NOW - PASS };
     for (const outcome of [{ kind: 'failed' as const, token: null, stuck: false }, { kind: 'refused' as const, token: 'tree-unreadable' },
       { kind: 'deferred' as const, why: 'held' }]) {
       expect(childReclaimNextEntry(stale, outcome, ask(NOW, true), at(NOW), PASS), outcome.kind)
@@ -613,30 +625,30 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
   it('a defer that is not presence starts the ANY-kind clock, and clears the presence clock', () => {
     // Every defer word the executor declares, minus the presence defers: derived, never a hand-kept list.
-    const whys = CHILD_RECLAIM_DEFER_WHYS.filter((w) => !(CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(w));
+    const whys = CHILD_RECLAIM_DEFER_WHYS.filter((w) => !(CHILD_RECLAIM_VIEWER_DEFERS as readonly string[]).includes(w));
     // A FLOOR, so the loop below can never pass on an emptied or narrowed list (spec §5.7): the server's own word is
     // in it, and every box and server defer word that is not presence, twelve when this was written.
     expect(whys, 'the derived list lost the server’s own word').toContain('generation-changed');
     expect(whys.length, 'the derived list was narrowed').toBeGreaterThanOrEqual(12);
     for (const why of whys) {
-      const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
-        lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
+      const withPresence: ChildReclaimSweepEntry = { ...entry, firstViewerDeferredAt: NOW - 1000,
+        lastViewerDeferredAt: NOW - 1000, lastViewerWallAt: NOW - 1000 };
       expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS), why)
-        .toEqual({ ...withPresence, firstDeferredAt: NOW, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
-          lastPresenceWallAt: null, lastDeferWhy: why, refusedAt: null, lastAskedAt: NOW });
+        .toEqual({ ...withPresence, firstDeferredAt: NOW, firstViewerDeferredAt: null, lastViewerDeferredAt: null,
+          lastViewerWallAt: null, lastDeferWhy: why, refusedAt: null, lastAskedAt: NOW });
     }
   });
 
   it('a presence defer AFTER another kind keeps the earlier any-kind clock and starts its own', () => {
     const other = childReclaimNextEntry(entry, { kind: 'deferred', why: 'state-changed' }, ask(NOW, false), at(NOW), PASS)!;
     expect(childReclaimNextEntry(other, { kind: 'deferred', why: 'attached' }, ask(NOW + 60_000, false), at(NOW + 60_000), PASS))
-      .toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW + 60_000,
-        lastPresenceDeferredAt: NOW + 60_000, lastPresenceWallAt: NOW + 60_000, presenceHeldSince: NOW + 60_000,
+      .toEqual({ ...entry, firstDeferredAt: NOW, firstViewerDeferredAt: NOW + 60_000,
+        lastViewerDeferredAt: NOW + 60_000, lastViewerWallAt: NOW + 60_000, viewerHeldSince: NOW + 60_000,
         lastDeferWhy: 'attached', lastAskedAt: NOW + 60_000 });
   });
 
   it('names exactly the three presence defers — rungs 5 and 6 and the server\'s visibility claim', () => {
-    expect([...CHILD_RECLAIM_PRESENCE_DEFERS]).toEqual(['presence', 'attached', 'tree-busy']);
+    expect([...CHILD_RECLAIM_VIEWER_DEFERS]).toEqual(['presence', 'attached', 'tree-busy']);
   });
 
   it('the ceiling is fifteen minutes, reached at exactly fifteen — on the PRESENCE clock alone', () => {
@@ -644,8 +656,8 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     expect(CHILD_RECLAIM_DEFER_CEILING_MS).toBe(900_000);
     // Its latest presence answer one pass before the ceiling, so freshness
     // holds at both rows below and only the ceiling's own edge decides them.
-    const presence: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW,
-      lastPresenceDeferredAt: NOW + C - PASS, lastPresenceWallAt: NOW + C - PASS };
+    const presence: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstViewerDeferredAt: NOW,
+      lastViewerDeferredAt: NOW + C - PASS, lastViewerWallAt: NOW + C - PASS };
     expect(childReclaimDeferExpired(entry, at(NOW + 10 * C), PASS)).toBe(false);
     // An any-kind deferral ten ceilings old expires nothing: only presence is bounded.
     expect(childReclaimDeferExpired({ ...entry, firstDeferredAt: NOW - 10 * C }, at(NOW), PASS)).toBe(false);
@@ -673,8 +685,8 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   });
 
   it("starting past the ceiling, ENDING the episode makes childReclaimDeferExpired false — for failed, refused, and every non-presence why, asked of the function itself", () => {
-    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS,
-      lastPresenceWallAt: NOW - PASS };
+    const stale: ChildReclaimSweepEntry = { ...entry, firstViewerDeferredAt: NOW - 10 * C, lastViewerDeferredAt: NOW - PASS,
+      lastViewerWallAt: NOW - PASS };
     expect(childReclaimDeferExpired(stale, at(NOW), PASS), 'the control: past the ceiling, its latest answer recent').toBe(true);
     const outcomes: ChildReclaimSweepOutcome[] = [
       { kind: 'failed', token: null, stuck: false }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
@@ -692,44 +704,44 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
     it('a presence answer more than two and a half intervals after the last one starts a NEW episode — although the first answer is past the ceiling', () => {
       const first = childReclaimNextEntry(entry, presence, ask(NOW - C - 10 * PASS, false), at(NOW - C - 10 * PASS), PASS)!;
-      expect(first).toMatchObject({ firstPresenceDeferredAt: NOW - C - 10 * PASS, lastPresenceDeferredAt: NOW - C - 10 * PASS });
+      expect(first).toMatchObject({ firstViewerDeferredAt: NOW - C - 10 * PASS, lastViewerDeferredAt: NOW - C - 10 * PASS });
       const second = childReclaimNextEntry(first, presence, ask(NOW - PASS, false), at(NOW - PASS), PASS)!;
       expect(second, 'the episode restarts at the second answer').toMatchObject({
-        firstDeferredAt: NOW - C - 10 * PASS, firstPresenceDeferredAt: NOW - PASS, lastPresenceDeferredAt: NOW - PASS });
+        firstDeferredAt: NOW - C - 10 * PASS, firstViewerDeferredAt: NOW - PASS, lastViewerDeferredAt: NOW - PASS });
       expect(childReclaimDeferExpired(second, at(NOW), PASS), 'shortly after the second answer nothing is licensed').toBe(false);
     });
 
     it('…at EXACTLY two and a half intervals the episode continues, one ms more and it restarts — measured in the interval it is handed', () => {
       const first = childReclaimNextEntry(entry, presence, ask(NOW, false), at(NOW), PASS)!;
       expect(childReclaimNextEntry(first, presence, ask(NOW + GAP, false), at(NOW + GAP), PASS))
-        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + GAP });
+        .toMatchObject({ firstViewerDeferredAt: NOW, lastViewerDeferredAt: NOW + GAP });
       expect(childReclaimNextEntry(first, presence, ask(NOW + GAP + 1, false), at(NOW + GAP + 1), PASS))
-        .toMatchObject({ firstPresenceDeferredAt: NOW + GAP + 1, lastPresenceDeferredAt: NOW + GAP + 1 });
+        .toMatchObject({ firstViewerDeferredAt: NOW + GAP + 1, lastViewerDeferredAt: NOW + GAP + 1 });
       // The same gap under a longer interval is continuous: the bound is the
       // argument's, never a constant of its own.
       expect(childReclaimNextEntry(first, presence, ask(NOW + GAP + 1, false), at(NOW + GAP + 1), 10 * PASS))
-        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + GAP + 1 });
+        .toMatchObject({ firstViewerDeferredAt: NOW, lastViewerDeferredAt: NOW + GAP + 1 });
     });
 
     it('an episode past the ceiling licenses nothing once its latest presence answer is older than two and a half intervals — at exactly that it still does', () => {
-      const ep: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 2 * C, firstPresenceDeferredAt: NOW - 2 * C,
-        lastPresenceDeferredAt: NOW - GAP - 1, lastPresenceWallAt: NOW - GAP - 1 };
+      const ep: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 2 * C, firstViewerDeferredAt: NOW - 2 * C,
+        lastViewerDeferredAt: NOW - GAP - 1, lastViewerWallAt: NOW - GAP - 1 };
       expect(childReclaimDeferExpired(ep, at(NOW), PASS), 'one sample, then time nobody measured').toBe(false);
-      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: NOW - GAP, lastPresenceWallAt: NOW - GAP }, at(NOW), PASS),
+      expect(childReclaimDeferExpired({ ...ep, lastViewerDeferredAt: NOW - GAP, lastViewerWallAt: NOW - GAP }, at(NOW), PASS),
         'the inclusive boundary').toBe(true);
-      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: null }, at(NOW), PASS), 'no presence answer on record')
+      expect(childReclaimDeferExpired({ ...ep, lastViewerDeferredAt: null }, at(NOW), PASS), 'no presence answer on record')
         .toBe(false);
       expect(childReclaimDeferExpired(ep, at(NOW), 10 * PASS), 'measured in the interval it is handed').toBe(true);
     });
 
     it('an entry off the invariant — a recent latest answer but no episode running — STARTS an episode, never extends a null one', () => {
-      // `lastPresenceDeferredAt` is null exactly when `firstPresenceDeferredAt`
+      // `lastViewerDeferredAt` is null exactly when `firstViewerDeferredAt`
       // is, on every entry the lane can reach. This literal breaks that on
       // purpose: a recent latest answer alone must not count as an episode.
-      const offInvariant: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: null, lastPresenceDeferredAt: NOW - PASS,
-        lastPresenceWallAt: NOW - PASS };
+      const offInvariant: ChildReclaimSweepEntry = { ...entry, firstViewerDeferredAt: null, lastViewerDeferredAt: NOW - PASS,
+        lastViewerWallAt: NOW - PASS };
       expect(childReclaimNextEntry(offInvariant, presence, ask(NOW, false), at(NOW), PASS))
-        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW });
+        .toMatchObject({ firstViewerDeferredAt: NOW, lastViewerDeferredAt: NOW });
     });
   });
 
@@ -764,7 +776,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
 // SPEC §5.7 — the lane's two clocks, the bracketed answer and the presence
 // lease. Every instant an entry keeps is the lane's MONOTONIC clock, except
-// `firstDeferredAt` (wall-clock epoch ms, displayed), `lastPresenceWallAt`
+// `firstDeferredAt` (wall-clock epoch ms, displayed), `lastViewerWallAt`
 // (the gap's wall operand) and `bornAt` (ccd's clock, compared for equality).
 // The rows below read monotonic values from a small origin, as a process's
 // monotonic clock does.
@@ -786,7 +798,7 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
       const due = Array.from({ length: n }, (_, k) => item(`demo-${k}`, {
         firstEligibleAt: Math.floor(rnd() * 3) * 1_000,
         lastAskedAt: rnd() < 0.3 ? null : Math.floor(rnd() * 4) * 1_000,
-        presenceHeldSince: rnd() < 0.4 ? Math.floor(rnd() * 3) * 1_000 : null,
+        viewerHeldSince: rnd() < 0.4 ? Math.floor(rnd() * 3) * 1_000 : null,
       }));
       const { order, holderId } = childReclaimAskOrder(due);
       expect(order, `seed ${seed}: the same length`).toHaveLength(due.length);
@@ -796,31 +808,31 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   });
 
   it('P1: one presence-held child among never-asked children goes FIRST, although it was asked most recently — and holderId names it', () => {
-    const held = item('demo-z', { lastAskedAt: 500_000, presenceHeldSince: 400_000 });
+    const held = item('demo-z', { lastAskedAt: 500_000, viewerHeldSince: 400_000 });
     const { order, holderId } = childReclaimAskOrder([item('demo-a'), item('demo-b'), held, item('demo-c')]);
     expect(ids(order)).toEqual(['demo-z', 'demo-a', 'demo-b', 'demo-c']);
     expect(holderId).toBe('demo-z');
   });
 
-  it('P2: seniority is presenceHeldSince, never the episode start', () => {
-    const S = item('demo-s', { presenceHeldSince: 0, firstPresenceDeferredAt: 500_000, lastAskedAt: 600_000 });
-    const J = item('demo-j', { presenceHeldSince: 100_000, firstPresenceDeferredAt: 100_000, lastAskedAt: 600_000 });
+  it('P2: seniority is viewerHeldSince, never the episode start', () => {
+    const S = item('demo-s', { viewerHeldSince: 0, firstViewerDeferredAt: 500_000, lastAskedAt: 600_000 });
+    const J = item('demo-j', { viewerHeldSince: 100_000, firstViewerDeferredAt: 100_000, lastAskedAt: 600_000 });
     const { order, holderId } = childReclaimAskOrder([J, S]);
     expect(holderId).toBe('demo-s');
     expect(ids(order)).toEqual(['demo-s', 'demo-j']);
   });
 
   it('P3: seniority is not the any-kind clock either', () => {
-    const J = item('demo-j', { firstDeferredAt: T0, presenceHeldSince: 100_000, lastAskedAt: 600_000 });
-    const S = item('demo-s', { firstDeferredAt: T0 + 500_000, presenceHeldSince: 0, lastAskedAt: 600_000 });
+    const J = item('demo-j', { firstDeferredAt: T0, viewerHeldSince: 100_000, lastAskedAt: 600_000 });
+    const S = item('demo-s', { firstDeferredAt: T0 + 500_000, viewerHeldSince: 0, lastAskedAt: 600_000 });
     expect(childReclaimAskOrder([J, S]).holderId).toBe('demo-s');
   });
 
-  it('P4: a presenceHeldSince tie falls to firstEligibleAt, then id; with no holder, the order is the fairness order alone', () => {
+  it('P4: a viewerHeldSince tie falls to firstEligibleAt, then id; with no holder, the order is the fairness order alone', () => {
     // The holder arm: B was sighted before A although A sorts first by id.
-    const A = item('demo-a', { presenceHeldSince: 100, firstEligibleAt: 2_000, lastAskedAt: 50 });
-    const B = item('demo-b', { presenceHeldSince: 100, firstEligibleAt: 1_000, lastAskedAt: 60 });
-    const Cc = item('demo-c', { presenceHeldSince: 100, firstEligibleAt: 1_000, lastAskedAt: 70 });
+    const A = item('demo-a', { viewerHeldSince: 100, firstEligibleAt: 2_000, lastAskedAt: 50 });
+    const B = item('demo-b', { viewerHeldSince: 100, firstEligibleAt: 1_000, lastAskedAt: 60 });
+    const Cc = item('demo-c', { viewerHeldSince: 100, firstEligibleAt: 1_000, lastAskedAt: 70 });
     expect(childReclaimAskOrder([A, Cc, B]).holderId, 'firstEligibleAt, then id').toBe('demo-b');
     expect(ids(childReclaimAskOrder([A, Cc, B]).order)).toEqual(['demo-b', 'demo-a', 'demo-c']);
     // The fairness arm: never asked first; among those, sighted earlier first
@@ -840,25 +852,25 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
     expect(ids(fair.order)).toEqual(['demo-y', 'demo-x', 'demo-q', 'demo-r', 'demo-p', 'demo-v', 'demo-u']);
   });
 
-  it('P5: presenceHeldSince — joined at an unlicensed ARRIVAL, kept while the episode continues, forfeited by a holder that cannot continue it', () => {
+  it('P5: viewerHeldSince — joined at an unlicensed ARRIVAL, kept while the episode continues, forfeited by a holder that cannot continue it', () => {
     // A non-holder's first unlicensed presence answer: asked at 10 000, it ARRIVES at 14 000.
     const joined = childReclaimNextEntry(fresh, presence, ask(10_000, false), at(14_000), PASS)!;
-    expect(joined.presenceHeldSince, 'a non-holder joins the line at its arrival').toBe(14_000);
+    expect(joined.viewerHeldSince, 'a non-holder joins the line at its arrival').toBe(14_000);
     // The holder's unlicensed answer that continues keeps it.
     const kept = childReclaimNextEntry(joined, presence, ask(70_000, false, true), at(75_000), PASS)!;
-    expect(kept).toMatchObject({ firstPresenceDeferredAt: 14_000, presenceHeldSince: 14_000 });
+    expect(kept).toMatchObject({ firstViewerDeferredAt: 14_000, viewerHeldSince: 14_000 });
     // Arriving 160 001 after the previous request: a gap, so the episode restarts.
     const forfeit = childReclaimNextEntry(kept, presence, ask(200_000, false, true), at(230_001), PASS)!;
-    expect(forfeit.firstPresenceDeferredAt).toBe(230_001);
-    expect(forfeit.presenceHeldSince, 'the HOLDER forfeits the lease').toBeNull();
+    expect(forfeit.firstViewerDeferredAt).toBe(230_001);
+    expect(forfeit.viewerHeldSince, 'the HOLDER forfeits the lease').toBeNull();
     const waited = childReclaimNextEntry(kept, presence, ask(200_000, false, false), at(230_001), PASS)!;
-    expect(waited.firstPresenceDeferredAt).toBe(230_001);
-    expect(waited.presenceHeldSince, 'a waiting member, asked as a non-holder, keeps its place').toBe(14_000);
+    expect(waited.firstViewerDeferredAt).toBe(230_001);
+    expect(waited.viewerHeldSince, 'a waiting member, asked as a non-holder, keeps its place').toBe(14_000);
     // A licensed presence answer clears it; the next unlicensed non-holder answer joins afresh, at the back.
     const licensed = childReclaimNextEntry(kept, presence, ask(130_000, true, true), at(131_000), PASS)!;
-    expect(licensed.presenceHeldSince, 'a licensed presence answer leaves the line').toBeNull();
+    expect(licensed.viewerHeldSince, 'a licensed presence answer leaves the line').toBeNull();
     const rejoined = childReclaimNextEntry(licensed, presence, ask(500_000, false), at(502_000), PASS)!;
-    expect(rejoined.presenceHeldSince, 're-joins at its own arrival, at the back').toBe(502_000);
+    expect(rejoined.viewerHeldSince, 're-joins at its own arrival, at the back').toBe(502_000);
     // Every other outcome clears it — a holder's or not.
     const others: ChildReclaimSweepOutcome[] = [
       { kind: 'failed', token: null, stuck: false }, { kind: 'refused', token: 'tree-unreadable' },
@@ -866,25 +878,25 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
     ];
     for (const outcome of others) {
       for (const asHolder of [true, false]) {
-        expect(childReclaimNextEntry(kept, outcome, ask(130_000, false, asHolder), at(131_000), PASS)?.presenceHeldSince,
+        expect(childReclaimNextEntry(kept, outcome, ask(130_000, false, asHolder), at(131_000), PASS)?.viewerHeldSince,
           `${JSON.stringify(outcome)}, asHolder ${asHolder}`).toBeNull();
       }
     }
   });
 
-  it('P6: presenceHeldSince never reaches the licence — the lease decides who is asked, never what is licensed', () => {
+  it('P6: viewerHeldSince never reaches the licence — the lease decides who is asked, never what is licensed', () => {
     const now = 2_000_000;
-    const e: ChildReclaimSweepEntry = { ...fresh, presenceHeldSince: now - 2 * C, firstPresenceDeferredAt: now,
-      lastPresenceDeferredAt: now - 5_000, lastPresenceWallAt: now - 5_000 };
+    const e: ChildReclaimSweepEntry = { ...fresh, viewerHeldSince: now - 2 * C, firstViewerDeferredAt: now,
+      lastViewerDeferredAt: now - 5_000, lastViewerWallAt: now - 5_000 };
     expect(childReclaimDeferExpired(e, at(now), PASS)).toBe(false);
   });
 
   it('P7: continuity runs from the new answer\'s ARRIVAL back to the previous answer\'s REQUEST — inclusive at the gap', () => {
     const first = childReclaimNextEntry(fresh, presence, ask(0, false), at(10_000), PASS)!;   // its request at 0
     expect(childReclaimNextEntry(first, presence, ask(120_000, false), at(G), PASS), 'arriving at exactly the gap: continues')
-      .toMatchObject({ firstPresenceDeferredAt: 10_000, lastPresenceDeferredAt: 120_000 });
+      .toMatchObject({ firstViewerDeferredAt: 10_000, lastViewerDeferredAt: 120_000 });
     expect(childReclaimNextEntry(first, presence, ask(120_000, false), at(G + 1), PASS), 'one ms later: a NEW episode, at the arrival')
-      .toMatchObject({ firstPresenceDeferredAt: G + 1, lastPresenceDeferredAt: 120_000 });
+      .toMatchObject({ firstViewerDeferredAt: G + 1, lastViewerDeferredAt: 120_000 });
   });
 
   it('P8: the episode starts at its first answer\'s ARRIVAL, so the ceiling is never reached early by a slow first answer', () => {
@@ -893,15 +905,15 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
     expect(childReclaimDeferExpired(e, at(900_000), PASS), 'a ceiling after the REQUEST').toBe(false);
     expect(childReclaimDeferExpired(e, at(929_999), PASS)).toBe(false);
     expect(childReclaimDeferExpired(e, at(930_000), PASS), 'a ceiling after the ARRIVAL').toBe(true);
-    expect(e.firstPresenceDeferredAt).toBe(30_000);
+    expect(e.firstViewerDeferredAt).toBe(30_000);
   });
 
   it('P9: freshness at the ask reads the latest answer\'s REQUEST, never its arrival', () => {
     const X = 3 * C;
-    const before: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: X - 2 * C, lastPresenceDeferredAt: X - PASS,
-      lastPresenceWallAt: X - PASS, presenceHeldSince: X - 2 * C };
+    const before: ChildReclaimSweepEntry = { ...fresh, firstViewerDeferredAt: X - 2 * C, lastViewerDeferredAt: X - PASS,
+      lastViewerWallAt: X - PASS, viewerHeldSince: X - 2 * C };
     const e = childReclaimNextEntry(before, presence, ask(X, false, true), at(X + 40_000), PASS)!;
-    expect(e.firstPresenceDeferredAt, 'the episode continued: two ceilings old').toBe(X - 2 * C);
+    expect(e.firstViewerDeferredAt, 'the episode continued: two ceilings old').toBe(X - 2 * C);
     expect(childReclaimDeferExpired(e, at(X + G + 1), PASS)).toBe(false);
     expect(childReclaimDeferExpired(e, at(X + G), PASS)).toBe(true);
   });
@@ -909,31 +921,31 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   it('P10: a backward wall step cannot hide a hole — the gap is the LARGER of the two clocks\' differences', () => {
     const m0 = 5 * C;
     const w0 = T0 + 5 * C;
-    const running: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - 2 * C, lastPresenceDeferredAt: m0,
-      lastPresenceWallAt: w0, presenceHeldSince: m0 - 2 * C };
+    const running: ChildReclaimSweepEntry = { ...fresh, firstViewerDeferredAt: m0 - 2 * C, lastViewerDeferredAt: m0,
+      lastViewerWallAt: w0, viewerHeldSince: m0 - 2 * C };
     const reading = at(m0 + 200_000, w0 + 50_000);            // 200 s monotonic; the wall, stepped back, reads 50 s
     expect(childReclaimDeferExpired(running, reading, PASS), 'not fresh at the ask').toBe(false);
     const next = childReclaimNextEntry(running, presence, { at: reading, licensed: false, asHolder: true }, reading, PASS)!;
-    expect(next.firstPresenceDeferredAt, 'the hole restarts the episode').toBe(m0 + 200_000);
+    expect(next.firstViewerDeferredAt, 'the hole restarts the episode').toBe(m0 + 200_000);
     expect(childReclaimDeferExpired(next, reading, PASS)).toBe(false);
   });
 
   it('P11: a suspend cannot hide a hole — the monotonic clock stopped, the wall clock did not', () => {
     const m0 = 5 * C;
     const w0 = T0 + 5 * C;
-    const running: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - 2 * C, lastPresenceDeferredAt: m0,
-      lastPresenceWallAt: w0, presenceHeldSince: m0 - 2 * C };
+    const running: ChildReclaimSweepEntry = { ...fresh, firstViewerDeferredAt: m0 - 2 * C, lastViewerDeferredAt: m0,
+      lastViewerWallAt: w0, viewerHeldSince: m0 - 2 * C };
     const reading = at(m0 + 60_000, w0 + 400_000);             // 60 s monotonic; 400 s on the wall
     expect(childReclaimDeferExpired(running, reading, PASS), 'not fresh at the ask').toBe(false);
     const next = childReclaimNextEntry(running, presence, { at: reading, licensed: false, asHolder: true }, reading, PASS)!;
-    expect(next.firstPresenceDeferredAt, 'the hole restarts the episode').toBe(m0 + 60_000);
+    expect(next.firstViewerDeferredAt, 'the hole restarts the episode').toBe(m0 + 60_000);
   });
 
   it('P12: the ceiling\'s span is the MONOTONIC clock alone — never a mix of the two clocks', () => {
     const start = 100_000;
     const wallOf = (m: number): ChildReclaimLaneNow => at(m, m + T0);    // distinct origins
-    const e: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: start, lastPresenceDeferredAt: start + C - PASS,
-      lastPresenceWallAt: start + C - PASS + T0 };
+    const e: ChildReclaimSweepEntry = { ...fresh, firstViewerDeferredAt: start, lastViewerDeferredAt: start + C - PASS,
+      lastViewerWallAt: start + C - PASS + T0 };
     expect(childReclaimDeferExpired(e, wallOf(start + C - 1), PASS)).toBe(false);
     expect(childReclaimDeferExpired(e, wallOf(start + C), PASS)).toBe(true);
     expect(childReclaimDeferExpired(e, at(start + C, start + C + T0 - 600_000), PASS), 'the wall stepped back 600 s')
@@ -941,14 +953,14 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   });
 
   it('P13: firstDeferredAt is the WALL clock — the one entry field that is displayed — and every other stamp the monotonic one', () => {
-    for (const why of [...CHILD_RECLAIM_PRESENCE_DEFERS, 'state-changed', 'held']) {
+    for (const why of [...CHILD_RECLAIM_VIEWER_DEFERS, 'state-changed', 'held']) {
       const e = childReclaimNextEntry(fresh, { kind: 'deferred', why }, ask(5_000, false, false, T0 + 5_000),
         at(5_000, T0 + 5_000), PASS)!;
       expect(e, why).toMatchObject({ firstDeferredAt: T0 + 5_000, lastAskedAt: 5_000 });
     }
     expect(childReclaimNextEntry(fresh, presence, ask(5_000, false, false, T0 + 5_000), at(5_000, T0 + 5_000), PASS))
-      .toMatchObject({ firstPresenceDeferredAt: 5_000, lastPresenceDeferredAt: 5_000, lastPresenceWallAt: T0 + 5_000,
-        presenceHeldSince: 5_000 });
+      .toMatchObject({ firstViewerDeferredAt: 5_000, lastViewerDeferredAt: 5_000, lastViewerWallAt: T0 + 5_000,
+        viewerHeldSince: 5_000 });
   });
 
   it('P14: one entry describes one workspace generation — a null birth never matches', () => {
@@ -962,8 +974,8 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
 
   it('P15: a recycled slug re-marked by another run while its birth still reads the old one is a NEW generation — a licence-ripe episode never carries over', () => {
     const m0 = 5 * C;
-    const ripe: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - C, lastPresenceDeferredAt: m0 - PASS,
-      lastPresenceWallAt: m0 - PASS, presenceHeldSince: m0 - C };
+    const ripe: ChildReclaimSweepEntry = { ...fresh, firstViewerDeferredAt: m0 - C, lastViewerDeferredAt: m0 - PASS,
+      lastViewerWallAt: m0 - PASS, viewerHeldSince: m0 - C };
     expect(childReclaimDeferExpired(ripe, at(m0), PASS), 'the old workspace\'s episode is ripe').toBe(true);
     expect(childReclaimSameGeneration(ripe, BORN, RUN + 1, { kind: 'absent' }), 'the birth unchanged, the marker names another run').toBe(false);
     expect(childReclaimSameGeneration(ripe, BORN, RUN, { kind: 'absent' }), 'both keys unchanged: the same generation').toBe(true);
@@ -1032,7 +1044,7 @@ describe('S1: seeded interleavings of the lane model — every licence rests on 
           if (next === null) entries.delete(ev.id);
           else entries.set(ev.id, next);
         }
-        answers.push({ id: ev.id, q: ev.q, a: ev.a, kind: ev.kind, heldAfter: entries.get(ev.id)?.presenceHeldSince });
+        answers.push({ id: ev.id, q: ev.q, a: ev.a, kind: ev.kind, heldAfter: entries.get(ev.id)?.viewerHeldSince });
       }
     };
     const pass = (): void => {
@@ -1177,10 +1189,10 @@ describe('childReclaimJournalRow — one generation\'s latest reclaim event, as 
   });
 
   it('carries a refusal as it is, with no failure run', () => {
-    const gen = [ev('create', 'done'), ev('reclaim', 'refused', { refusal: 'tree-unreadable' })];
+    const gen = [ev('create', 'done'), ev('reclaim', 'refused', { refusal: 'branch-elsewhere' })];
     // `toEqual`, so the row's WHOLE shape is pinned: it carries no `ingestedAt`.
     expect(childReclaimJournalRow(gen, gen[1]!)).toEqual({ sessionId: 'demo-a', outcome: 'refused',
-      refusal: 'tree-unreadable', at: NOW, failingSince: null, detail: null });
+      refusal: 'branch-elsewhere', at: NOW, failingSince: null, detail: null });
   });
 
   it('carries an INTENT when the intent is the latest — the latest event decides, whatever its outcome', () => {
@@ -1808,7 +1820,7 @@ describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaim
   });
 
   it('every presence defer is excluded, whichever the table names', () => {
-    for (const why of CHILD_RECLAIM_PRESENCE_DEFERS) {
+    for (const why of CHILD_RECLAIM_VIEWER_DEFERS) {
       expect(childReclaimFeedQuiet(deferredWith(why), [], 'demo-a').deferWhy, why).toBeNull();
     }
   });

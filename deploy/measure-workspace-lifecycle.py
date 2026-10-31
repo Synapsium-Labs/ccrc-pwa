@@ -56,8 +56,10 @@ ENDS_THE_ARCHIVE = ('destroy', 'purge', 'reap', 'forget', 'create', 'expire', 'r
 # registry row stands for, so it never meets an archived workspace, and it removes no workspace to end one.
 # `hibernate` is here (D-5242): it acts only on a live idle pane, which an archived workspace does not have, and
 # what it stops is woken by `ensure` or `start`, which are returns already.
+# `shed-deps` is here (D-7278): it removes only a sleeping session's ignored dependency directories, never a
+# workspace, so it neither ends an archive nor returns anything from one.
 NEUTRAL_ACTS = ('attic-drop', 'claim', 'enable', 'gc', 'hibernate', 'hold', 'release', 'rename', 'rehome', 'route',
-                'stop', 'supervise', 'unsupervise', 'collect')
+                'shed-deps', 'stop', 'supervise', 'unsupervise', 'collect')
 WEEK_S = 7 * 86400
 # The dead-coordinator lane's feed titles (`server/src/deadCoordinator.ts`'s `deadCoordinatorFeedRows` and
 # `deadCoordinatorBreakerFeedRow`) — a second spelling, bound to the first by measure-workspace-lifecycle.test.ts.

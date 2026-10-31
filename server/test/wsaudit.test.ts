@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
 import { reviveWsAudit } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 
 /**
  * The refusal-token <-> copy linkage, required by Task 13. `ccd` answers
- * refusals as TOKENS (`_reap_refuse dirty-tree …`, `printf '{"refused":"…"}'`,
+ * refusals as TOKENS (`_ws_refuse dirty-tree …`, `printf '{"refused":"…"}'`,
  * `printf '"verdict":"…"'`, and the two `!token` lines the embedded python
  * writes for `_pr_py pick`) and `refusalSentence` turns each into copy a
  * person reads. NOTHING before this test linked the two, so renaming a token
@@ -19,7 +20,7 @@ import { CCD } from './ccdWsHelpers.js';
  * could itself drift from either side.
  *
  * Four emission shapes, each a literal-token grep over ccd's source text:
- *   - `_reap_refuse <token> "…"` — every guard in `_ws_reap_eval` (Phase A-D1),
+ *   - `_ws_refuse <token> "…"` — every guard in `_ws_reap_eval` (Phase A-D1),
  *     which backs BOTH `cmd_ws_audit`'s non-reapable verdict and
  *     `cmd_ws_reap`'s "evaluated" refusal (`$REAP_VERDICT`, dynamic on the wire
  *     but drawn from exactly this literal set).
@@ -39,7 +40,7 @@ import { CCD } from './ccdWsHelpers.js';
  *     non-`reapable` verdict through `refusalSentence`).
  *   - `'!<token>` — `_pr_py pick`'s two bare `sys.stdout.write` literals
  *     (`!pr-head-not-ours`, `!not-merged`); `_ws_reap_eval`'s
- *     `_reap_refuse "${row#!}"` re-emits whichever of the two python chose, so
+ *     `_ws_refuse "${row#!}"` re-emits whichever of the two python chose, so
  *     the token itself only exists as a python string literal, not as a bash
  *     one.
  *
@@ -51,10 +52,10 @@ import { CCD } from './ccdWsHelpers.js';
  * reason `wsaudit.ts` never sees them.
  */
 describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCES)', () => {
-  const ccdSrc = readFileSync(CCD, 'utf8');
+  const ccdSrc = ccdSource();
 
   const tokens = new Set<string>();
-  for (const m of ccdSrc.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+  for (const w of refuseWords('reap')) tokens.add(w);
   for (const m of ccdSrc.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
   // D-6633: rung 9's rescue words ride a `failed` document, not a refusal: the pin names them in `RECLAIM_PIN_WORD=<word>`.
@@ -183,6 +184,17 @@ describe('parseAudit', () => {
   it('gives the reapable verdict an EMPTY sentence — it is not a refusal', () => {
     const audit = parseAudit(JSON.stringify(FULL_AUDIT_INPUT));
     expect(audit?.sentence).toBe('');
+  });
+
+  it('revives the train proof — a PR closed as landed in a merge train — and no unknown word', () => {
+    // A train-landed member is proven by its train record (`train`); an audit
+    // that carried it and then failed to revive would leave the cleanup offer
+    // a dead end. The word the reap no longer produces revives as nothing.
+    const pr = { number: 42, url: 'https://github.com/o/r/pull/42', mergeCommit: 'a'.repeat(40), headRefOid: 'b'.repeat(40) };
+    const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, pr, merge: { proof: 'train', fetchedAt: 1 } }));
+    expect(audit?.merge.proof).toBe('train');
+    expect(parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, merge: { proof: 'merge-tree', fetchedAt: 1 } }))).toBeNull();
+    expect(parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, merge: { proof: 'landed', fetchedAt: 1 } }))).toBeNull();
   });
 
   it('gives every non-reapable verdict a sentence, reap-interrupted included', () => {

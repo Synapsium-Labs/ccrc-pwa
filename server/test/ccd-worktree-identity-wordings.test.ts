@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { CHILD_ID, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -141,7 +141,7 @@ describe('the `..` detail is true of a row that is the child (path-identity spec
 
 describe('the source: no remedy invites re-pointing, and the fail-shut order stands (path-identity spec §4.8)', () => {
   it('`_ws_reclaim_workdir_shared`’s code says "re-point" nowhere, and each new wording exactly once', () => {
-    const fn = shFunction(fs.readFileSync(CCD, 'utf8'), '_ws_reclaim_workdir_shared');
+    const fn = shFunction(ccdSource(), '_ws_reclaim_workdir_shared');
     expect(fn, 'the CONTROL: the rung is found').not.toBe('');
     const code = codeLines(fn).join('\n');
     expect(code).not.toContain('re-point');
@@ -153,7 +153,7 @@ describe('the source: no remedy invites re-pointing, and the fail-shut order sta
   });
 
   it('`_ws_reclaim_resolve` refuses a `..` in the unresolved rest BEFORE it re-walks one in the entered head', () => {
-    const code = codeLines(shFunction(fs.readFileSync(CCD, 'utf8'), '_ws_reclaim_resolve')).map((l) => l.trim());
+    const code = codeLines(shFunction(ccdSource(), '_ws_reclaim_resolve')).map((l) => l.trim());
     const rest = code.indexOf('case "/$rest/" in */../*) return 1 ;; esac');
     const head = code.findIndex((l) => l.startsWith('case "/$head/" in */../*) _ws_reclaim_resolve '));
     expect(rest, 'the rest’s refusal stands').toBeGreaterThanOrEqual(0);

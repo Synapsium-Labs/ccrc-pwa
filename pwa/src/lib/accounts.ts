@@ -14,10 +14,8 @@
 // hands it, so they stay synchronous and safe to call during render.
 //
 // The roster itself lives in the fleet store (`stores/fleet.ts`'s `roster`
-// field, polled from `GET /api/accounts` and connected app-wide) or, for the
-// three screens that already run their own `/api/accounts` poll
-// (AccountsStrip, AccountsScreen, useProjectedHome's siblings), the same
-// response's `roster` field read locally. Nothing here fetches anything.
+// field, polled from `GET /api/accounts` and connected app-wide), the one
+// reader of that route (C8, D-6440). Nothing here fetches anything.
 //
 // `PRODUCTION_ROSTER`, the hand-typed transitional copy of the five
 // production accounts Task 6 left behind for exactly this task to delete, is
@@ -28,6 +26,7 @@
 import type { RosterWire } from '../../../shared/api';
 import { POOL_NAME_RE, type Hue } from '../../../shared/roster';
 import type { AccountPoolWire } from '../../../shared/poolrule';
+import { isProviderId, type ProviderId } from '../../../shared/providers';
 
 /** This account's roster entry, or `undefined` for a wrapper the roster does
  *  not (yet) have — an unarrived poll, or a genuinely unrostered wrapper (a
@@ -38,14 +37,18 @@ function entryFor(roster: readonly RosterWire[], wrapper: string): RosterWire | 
   return roster.find((a) => a.id === wrapper);
 }
 
+/** The phrase every PWA surface prints for a lane whose sign-in lapsed (the state word `signed-out`'s plain form). */
+export const SIGN_IN_EXPIRED = 'sign-in expired';
+
 /** The one warning for a roster route that answered the wrong SHAPE.
  *
- *  THREE POLLERS, ONE SENTENCE. `AccountsStrip`, `AccountsScreen` and the
- *  fleet store each poll `GET /api/accounts`, and each spelled this warning
- *  for itself — the literal census is what found that, since a `console.warn`
- *  string is neither markup nor a rule. It is the ONLY signal a genuine
- *  protocol break has: every consumer silently reverts to raw wrapper ids,
- *  which reads as "nothing is wrong".
+ *  ONE SENTENCE. `AccountsStrip`, `AccountsScreen` and the fleet store each
+ *  polled `GET /api/accounts` once, and each spelled this warning for itself —
+ *  the literal census is what found that, since a `console.warn` string is
+ *  neither markup nor a rule. The store is now the one reader (C8, D-6440) and
+ *  this warning's one caller. It is the ONLY signal a genuine protocol break
+ *  has: every consumer silently reverts to raw wrapper ids, which reads as
+ *  "nothing is wrong".
  *
  *  A function rather than a constant so the offending body rides along at
  *  every site, as it already did. */
@@ -66,6 +69,15 @@ export function accountLabel(roster: readonly RosterWire[], wrapper: string): st
  *  hue, so it can't be misread as state). */
 export function accountHue(roster: readonly RosterWire[], wrapper: string): Hue | undefined {
   return entryFor(roster, wrapper)?.hue;
+}
+
+/** The provider this lane runs on — THE ONE READER of `RosterWire.provider` in this app. Absent (an older server, an
+ *  undeclared lane), a value this build does not know (`isProviderId` false: a newer server's provider), an unrostered
+ *  wrapper and a roster not yet arrived all answer `null`, which means NOT MEASURABLE — every caller treats those
+ *  alike, so one null is not an overloaded one. */
+export function accountProvider(roster: readonly RosterWire[], wrapper: string): ProviderId | null {
+  const p = entryFor(roster, wrapper)?.provider;
+  return isProviderId(p) ? p : null;
 }
 
 /** Ruling T9-R1 (2026-09-18, mid-Task-9): the PWA CANNOT fold the

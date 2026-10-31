@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { apiErrorText, kickoffErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { sessionPath } from '../lib/routes';
 import type { FleetStore } from '../stores/fleet';
 import {
   START_PROGRAM_WAIT_MS, liveIdsIn, startErrorText, startedSessionFor,
@@ -179,7 +180,7 @@ export function useProgramAttempt(
       .then(() => {
         if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
         setStarting(false);
-        navigate(`/s/${encodeURIComponent(session.id)}`);
+        navigate(sessionPath(session.id));
       })
       .catch((err: unknown) => {
         if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
@@ -204,10 +205,12 @@ export function useProgramAttempt(
     if (found !== null) finish(found, w);
   };
 
-  // D-291: the reactive half of the bounded wait. `sessions` is replaced
-  // wholesale on every `/ws/fleet` frame (`stores/fleet.ts`), so this fires on
-  // every fleet tick while a wait is outstanding — the moment the new session's
-  // row appears, `checkForMatch` finds it.
+  // D-291: the reactive half of the bounded wait. Since C6 (D-6438) the fleet
+  // store keeps the array of an identical frame and the object of an unchanged
+  // row (`stores/fleet.ts`), so `sessions` changes only on a frame that
+  // changes, adds, removes or reorders rows, and this fires on each of those while a
+  // wait is outstanding — which includes the moment the new session's row
+  // appears, when `checkForMatch` finds it.
   useEffect(() => {
     checkForMatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -328,7 +331,7 @@ export function useProgramAttempt(
       await queueKickoff(k.sessionId, { slug: k.slug, title: k.title });
       if (gen.current !== mine) return; // superseded — a later close/open owns the phase now
       setFailure(null);
-      navigate(`/s/${encodeURIComponent(k.sessionId)}`);
+      navigate(sessionPath(k.sessionId));
     } catch (err: unknown) {
       if (gen.current !== mine) return; // superseded — the block this would re-plant is retired
       setFailure({ ...k, why: kickoffErrorText(apiErrorText(err)) });

@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { childReclaimLeafFoundNothing } from '../src/childReclaimSweep.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
@@ -138,7 +139,7 @@ function conditionalCarries(): { open: string[]; closed: string[] } {
   const scans = /ccd's (?:destructive )?verbs read their decision flags from any[\s*/]+position/;
   (scans.test(read('shared/api.ts')) || scans.test(read('server/test/collect-l0.test.ts')) ? open : closed)
     .push('comments-say-ccd-scans-the-session-value');
-  (/tail's plain unlink/.test(read(CCD)) ? open : closed).push('cad-header-calls-the-tail-drop-a-plain-unlink');
+  (/tail's plain unlink/.test(ccdSource()) ? open : closed).push('cad-header-calls-the-tail-drop-a-plain-unlink');
   const noLearnGate = /\(`learnCollect`, which[\s/]+asks no predicate of its own\)|with the record half below, the learning audit's only id check/;
   (noLearnGate.test(read('server/test/collect-id-pins.test.ts')) || noLearnGate.test(read('server/test/id-argv-census.test.ts')) ? open : closed)
     .push('learning-audit-gate-prose-in-two-test-comments');
@@ -151,7 +152,7 @@ describe('the path-identity spec records W2 as built (path-identity spec §3.10,
   const spec = read(SPEC);
   const raw = asBuilt();
   const s = flat(raw);
-  const ccd = read(CCD);
+  const ccd = ccdSource();
 
   it('§3.10 stands after §3.9 and its closing note, and before §4', () => {
     const p39 = spec.indexOf('\n### 3.9 Proof\n');

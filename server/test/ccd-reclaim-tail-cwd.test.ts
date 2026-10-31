@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
@@ -482,7 +482,7 @@ describe('forced Darwin: the probe reads lsof’s listing, and the tail asks it 
 });
 
 describe('the asks, read from the source (path-identity spec §4.6)', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   /** Whole-line comments dropped, continuations joined (the six-calls census's own reading). */
   const codeOf = (body: string): string[] =>
     body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\s*\\\n\s*/g, ' ').split('\n');

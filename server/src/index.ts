@@ -14,6 +14,7 @@ import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
+import { recordCcdVerbs } from './fleetstate.js';
 import { FleetIdentityCell } from './fleetidentity.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
@@ -35,7 +36,7 @@ import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { accountOpsFor } from './accounts/ops.js';
-import { SecretMasker, fingerprintAnswerOf } from './accounts/mask.js';
+import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -50,6 +51,7 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
   ? new PushService(
       { publicKey: cfg.vapidPublic, privateKey: cfg.vapidPrivate, subject: cfg.vapidSubject },
       path.join(cfg.home, '.ccrc', 'push-subs.json'),
+      SHAPE_ONLY_MASKER,
     )
   : undefined;
 
@@ -165,7 +167,7 @@ if (cfg.fleetMode === 'remote') {
     updateRunner: localUpdateSpawnFor(cfg.home),
     sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
     fleetIdentity: fleet.identity,
-    refreshCaps: makeRefreshCaps(fleet.client, fleet.state, fleet.identity),
+    refreshCaps: makeRefreshCaps(fleet.client, fleet.state, fleet.identity, recordCcdVerbs),
   };
 } else {
   // Fix round 3 (task 14, Important #3): real evidence, not an absent
@@ -210,8 +212,10 @@ if (cfg.fleetMode === 'remote') {
     // says the same. `FleetState` declares the field OPTIONAL, so the
     // omitted key reads as `undefined` on access either way.
   };
+  // Local mode's epoch is 0 (the cell below is never invalidated), so the one read asks and lands under epoch 0:
+  // the measured rule then writes only a non-null list (D-7079).
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
-    if (verbs !== null) fleetState.ccdVerbs = verbs;
+    recordCcdVerbs(fleetState, { from: 'measured', verbs, askedEpoch: 0, epochNow: () => 0 });
   });
   // Path-identity spec 2026-10-12 §5.2, local mode. There is no agent connection, so nothing invalidates this cell
   // and its epoch stays 0. The inventory's own sweep publishes THIS box's directly read node-id into it

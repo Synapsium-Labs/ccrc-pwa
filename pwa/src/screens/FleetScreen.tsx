@@ -6,33 +6,36 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ATTENTION_DOT, BareRow, BuildLine, Button, Select, Skeleton,
+  ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton,
 } from '@ccrc/ui';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../fleet/HaltBanner';
 import { DiskBanner } from '../fleet/DiskBanner';
 import { diskBannerShows } from '../fleet/diskWords';
+import { PressureBanner } from '../fleet/PressureBanner';
+import { pressureBannerShows } from '../fleet/pressureWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
+import { ClassChooser } from '../fleet/ClassChooser';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
 import { BannerStack } from '../fleet/BannerStack';
 import { fleetSummary } from '../fleet/fleetSummary';
 import { poolLagText } from '../fleet/poolLag';
-import { unreadMailCount } from '../fleet/navBadges';
+import { runsLineLabel, waitingOnYou } from '../fleet/navBadges';
+import { ConflictChip } from '../fleet/ConflictChip';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
-import { isRunClosed } from '../fleet/runWords';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
+import { openSession } from '../fleet/openers';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import type { FleetStore } from '../stores/fleet';
-import { CLASSES, type ModelClass } from '../../../shared/models';
 import { FLEET_ID, useFrameSet } from '../skins/frame';
 import { useDesk } from '../lib/useMediaQuery';
 import '../fleet/fleet.css';
@@ -46,6 +49,7 @@ export function FleetScreen({
   banners = true,
   headChrome = true,
   headCount = true,
+  runsLine = true,
   epoch,
   observedEpoch,
 }: {
@@ -57,12 +61,17 @@ export function FleetScreen({
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
   /** False where the skin's frame places the banner stack under its bar (W2 Task S4b): one stack at any width. */
   banners?: boolean;
-  /** False where the skin's bar holds the head's wordmark and doors (Refined's `Sidebar` and Instrument's
-   *  `ListColumn` at a desk, W2 Task S4b, T2e); the readouts stay. */
+  /** False where the skin's frame holds the head's wordmark and doors: Refined's bar holds both, Instrument's top bar
+   *  holds the wordmark and its rail the doors (Refined's `Sidebar` and Instrument's `ListColumn` at a desk, W2 Task
+   *  S4b, T2e); the readouts stay. */
   headChrome?: boolean;
-  /** False where the skin's status bar prints the fleet's count (Instrument's `ListColumn` at a desk, T2g, D-6715):
+  /** False where the frame's status bar prints the fleet's count (Instrument's `ListColumn` at a desk, T2g, D-6715):
    *  the head draws no count line. The pool lag stays. */
   headCount?: boolean;
+  /** False where the skin's frame holds the Runs door (Instrument's `ListColumn` at a desk, T2f, D-6371): the column
+   *  draws no runs line; the rail's Runs door goes to /runs, and the frame's status bar prints the open runs in its
+   *  count when there are any (that count is a readout, not a door). */
+  runsLine?: boolean;
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
    *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
    *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
@@ -133,19 +142,16 @@ export function FleetScreen({
     prune(new Set(sessions.map((s) => s.id)));
   }, [sessions]);
 
-  const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
+  // One session opener for both skins' lists (`openers.ts`), the same function on every render (C9, D-6441).
+  const open = onOpen ?? openSession;
   const flows = useFleetFlows();
   const newSession = onNewSession ?? flows.openNewSession;
-  // The `/api/projects` plane — rows, class, placement readers, the `+`'s
-  // in-flight set and the pool sheet's selection — lives in its own hook
-  // (`useProjectRows`), which is where its generation discipline and its two
-  // deviations are argued; the chrome calls it once.
-  const projects = chrome.projects;
   // The skin's own fleet list, when it has one (Instrument's table, W2 Task S10); none outside a frame or in Refined.
   const set = useFrameSet();
   const FleetList = set?.FleetList ?? null;
-  // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lane gauges
-  // under it, so the strip below steps aside: one readout of the lanes at any width. And its own New session door.
+  // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lanes strip
+  // under it (a group of lane cards, each a door to its lane on the Accounts screen, All accounts at the end), so the
+  // strip below steps aside: one readout of the lanes at any width. And its own New session door.
   const Head = headChrome ? set?.Head ?? null : null;
   const desk = useDesk();
   const Fab = set?.Fab ?? null;
@@ -165,15 +171,11 @@ export function FleetScreen({
   // label included, while /runs one tap away could be showing three runs
   // this row had simply not heard about yet.
   const runsFrameSeen = useStore((s) => s.runsFrameSeen);
-  // ONE filtered list, two readers (Task 4): the footer's count and the
-  // programme tree the cards draw. The frame is active-only by construction
-  // anyway — `watch.ts`'s emitter calls `coord.runs()` with no options — so
-  // `isRunClosed` is the belt this row has always worn, and keeping one list
-  // means the number in the footer and the edges in the cards can never
-  // describe two different sets of runs.
-  const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
-  const runsLabel =
-    !runsFrameSeen ? '—' : activeRuns.length > 0 ? `${activeRuns.length} active` : 'none active';
+  // The line says what it counts (T2d, D-6330): `runsLineLabel` (navBadges.ts) reads "N active" off
+  // `ACTIVE_RUN_STATES` and "N open" when none is active but some are open, so the bar's Runs badge (what needs you)
+  // and this line never show one number twice.
+  const runs = useStore((s) => s.runs);
+  const runsLabel = runsLineLabel(runsFrameSeen ? runs : null);
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
   // (spec §6) — the chrome owns it (D-5468) so neither issues its own request.
   // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
@@ -195,10 +197,11 @@ export function FleetScreen({
   // too. `null` runs: this head has never carried the runs part (the runs line below is their door).
   const countLine = fleetSummary(sessions, null).readout;
 
-  // The feed's unread count: `unreadMailCount` (navBadges.ts), the one function every door that shows it reads (the
-  // tabs of W2 Task S4b too). An `interrupt` record never counts (`raisesUnread`, D-5431).
-  const feed = useStore((s) => s.feed);
-  const unreadMail = unreadMailCount(feed, acks);
+  // The mail door's count: `waitingOnYou` (navBadges.ts), what every Inbox door counts (T2d, D-6330). Before the first
+  // fleet frame the rows are the offline snapshot's, not a fact, so the door says nothing. The feed's unread marks are
+  // the Inbox's own rows' (`raisesUnread`, D-5431).
+  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
+  const waiting = waitingOnYou(fleetFrameSeen ? sessions : null);
 
   // The account-pool epoch/observed lag — a STALENESS signal, not a health
   // one (see the prop docs above). Rendered ONLY when both numbers are known
@@ -223,7 +226,7 @@ export function FleetScreen({
         <FleetHead
           countLine={headCount && sessions.length > 0 ? countLine : null}
           poolLag={poolLag}
-          unreadMail={unreadMail}
+          waiting={waiting}
           chrome={headChrome}
         />
       )}
@@ -234,7 +237,8 @@ export function FleetScreen({
           phone header holds its own, and at a desk both skins' bars hold it, so one instance is mounted at any width. */}
       {Head === null && !desk && <UpdateIndicator form="row" />}
 
-      {/* Its own poller, independent of `sessions` — it must render in EVERY
+      {/* It reads the fleet store's accounts answer (C8, D-6440), which does
+          not wait on `sessions` — it must render in EVERY
           branch below, not just the populated one. It used to sit only in
           the third (populated) arm, so a fresh fleet with zero sessions ever
           started (the first-run panel, mobile's only view of the strip)
@@ -245,7 +249,7 @@ export function FleetScreen({
           unchanged. */}
       {showAccounts && Head === null && <AccountsStrip />}
 
-      {/* The only door to /runs (fix, review finding 20) — moved OUT of the
+      {/* A door to /runs (fix, review finding 20) — moved OUT of the
           populated arm for the identical reason `AccountsStrip` was, three
           lines above, and the comment there already tells the story: it used
           to render only when `sessions.length > 0`, so the loading skeleton
@@ -253,7 +257,16 @@ export function FleetScreen({
           runs go honest-stale" case renders as the first-run panel, since a
           `readRegistry` failure still ships an honest `sessions: []` — had
           no door to the one surface that would show the operator their runs
-          going stale. D-2's rule: the only door must never render nothing. */}
+          going stale. D-2's rule: a door must never render nothing. On
+          Instrument's phone, and in a bare `FleetScreen` mounted with no
+          frame, this line IS the only door to /runs, so it renders in every
+          branch below. Refined keeps the line beside its own Runs doors (the
+          desk bar's tab and the phone header's `go-runs`), as it was before
+          the desk polish. At Instrument's desk (T2f, D-6371) the rail's Runs
+          door (`go-runs`), mounted at every desk width, is the door, so the
+          column draws no line there (`runsLine` false) and the rule still
+          holds; the status bar prints the open runs in its count when there
+          are any. */}
       {/* THE RUNS LINE — the runs door and the class chooser share one row.
           The chooser had a row to itself and looked orphaned on it; this row
           was already full-width, 44px tall and nearly empty, so pairing them
@@ -263,56 +276,28 @@ export function FleetScreen({
           comment, so a chooser paired with it would be side-by-side only
           while somebody held a hot file and alone again the moment the last
           claim expired. The runs door is the opposite — its comment cites
-          D-2's rule that the only door must never render nothing, so it is
-          the one sibling on this screen guaranteed to be there. */}
-      <div className="fleet-runs-line">
-        <BareRow
-          className="fleet-runs-row"
-          aria-label={`Runs · ${runsLabel}`}
-          onClick={() => navigate('/runs')}
-        >
-          Runs · {runsLabel}
-        </BareRow>
-        {/* The class chooser (routing spec, slice 5, Task 6): forecasts
-            EVERY card's placement for one class at a time, the same
-            `GET /api/projects?class=` this build has carried since slice 4
-            but with no caller until now. "Coordinator row" (unset) is the
-            class-blind fetch every build before this task has always sent;
-            "Default" asks explicitly for the record's own "no override"
-            word — the projects handler (`server.ts`) treats it identically
-            to the unset fetch (no per-class shares read, byte-identical
-            answer), so choosing it changes nothing about what renders, only
-            what the `+` posts. The four classes are `CLASSES` reversed —
-            the same capability order `NewSessionSheet`'s own routing row
-            uses — never a hand-typed list, so a class this build adds or
-            drops shows up here for free. */}
-        {/* `w-auto flex-none max-w-full`: a control sized to its own option
-            list, not to the row. These REPLACE `Select`'s own `w-full`
-            rather than outranking it — `cn` is tailwind-merge, so one width
-            utility reaches the DOM and it is this one. The rule that shipped
-            here instead (`.fleet-class-select { width: auto }`, one class
-            against `.route-select`'s one, 650 lines earlier in the same
-            sheet) lost the tie to source order and never applied once: the
-            control rendered 286px instead of the 167px its widest option
-            asks for, and the head overflowed the viewport by 225px at 390px.
-            `fleet-css.test.ts` pins the mechanism that replaced it. */}
-        <Select
-          className="w-auto flex-none max-w-full"
-          aria-label="Class"
-          value={projects.classFilter}
-          onChange={(e) => projects.chooseClass(e.target.value as '' | 'default' | ModelClass)}
-        >
-          <option value="">Coordinator row</option>
-          <option value="default">Default</option>
-          {[...CLASSES].reverse().map((c) => (
-            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-          ))}
-        </Select>
-      </div>
+          D-2's rule that a door must never render nothing, so it is the one
+          sibling on this screen guaranteed to be there wherever the line is
+          drawn (every width but Instrument's desk, `runsLine`). */}
+      {runsLine && (
+        <div className="fleet-runs-line">
+          <BareRow
+            className="fleet-runs-row"
+            aria-label={`Runs · ${runsLabel}`}
+            onClick={() => navigate('/runs')}
+          >
+            Runs · {runsLabel}
+          </BareRow>
+          <ClassChooser />
+        </div>
+      )}
 
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
           nothing, so it mounts unconditionally, the AccountsStrip rule. */}
       <HotFilesStrip />
+      {/* The landing radar's predicted-conflict chip (wave 4b, D-7480): read-only, renders nothing without a fresh
+          landing, and beside the strip rather than in the runs line for the strip's own reason. */}
+      <ConflictChip sessions={sessions} />
 
       {sessions.length === 0 && conn !== 'open' ? (
         <div className="fleet-list" data-loading="true">
@@ -338,7 +323,11 @@ export function FleetScreen({
         </section>
       ) : (
         <>
-          <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
+          {/* The counts once per screen (T3a, D-6331). A skin whose `FleetList` part draws its own groups carries the
+              counts itself (Instrument's status heads, and its own bar in project mode), so a second set of chips
+              above it would count every bucket twice. A part fact, never a skin name; the shared cards (Refined, or
+              no frame) have no counts of their own, so they keep this bar. */}
+          {FleetList === null && <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />}
 
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared
               project cards (`FleetCards`), which that table also places in its project mode. */}
@@ -408,6 +397,8 @@ export function FleetBanners(): ReactNode {
           shows: fleetHostBannerShows(fleetHealth),
           node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
         },
+        // The host's pressure (#1170), from the same health poll.
+        { id: 'pressure', shows: pressureBannerShows(fleetHealth), node: <PressureBanner health={fleetHealth} /> },
         // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
         { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
         // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The

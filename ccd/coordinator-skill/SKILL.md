@@ -81,10 +81,10 @@ with a shell on the fleet host". They are not advice.
 12. A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:'review'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.
 13. Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.
 14. The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.
-15. This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave's `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.
+15. This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave's `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. `--admin` and GitHub API merge or enqueue calls are governed by the external policy authority of the repository; until that authority answers, this session never uses them. It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train's own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.
 16. A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.
 17. Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.
-18. A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.
+18. A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.
 19. Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
@@ -164,7 +164,7 @@ Every write route answers JSON, on success and on refusal alike. A `4xx`
 `$code` is a normal **answer**, not a command failure — but the field the
 code rides on is NOT the same on every route, and `ok:false` is the only
 field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
-`refused` (`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`,
+`refused` (`paused`, `mail-disabled`, `cap-concurrency`,
 `ambiguous-dispatch`, `worker-busy`, `hookstate-unmeasurable`,
 `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
 `workspace-spent`, `spent-unmeasured`); those same
@@ -177,7 +177,7 @@ $body.reject?.code` (in that order costs nothing, since a body only ever
 populates one) rather than assuming a fixed field, and never branch on the
 client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
-`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
+`paused`, `mail-disabled`, `cap-concurrency`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `status-unmeasurable`,
 `worker-starting`, `claimed-by-another`,
 `project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `workspace-spent`,
@@ -348,7 +348,13 @@ not after.
    the code and detail verbatim, and once its re-measured wave-done arrives,
    open a NEW review run (step 5). `report-unreadable`
    means the path the reviewer named cannot be opened: close the review run
-   with `{"state":"failed"}` and open a new one. Once the close answers `ok`, read the
+   with `{"state":"failed"}` and open a new one. `lineage-unmeasured` on a review close is never a failed review run:
+   the server has already mailed the reviewer, who re-sends its unchanged `review-done` after the radar's next tick,
+   so close nothing, open nothing and send no `rejected:` mail until it does. In a project the brief names as opted in
+   to the radar's lineage, `stale-review` means a push the lineage could not prove clean; everywhere else it means
+   what it means today. A report whose first line is `TIP MOVED` is never ruled on, even when its close was accepted.
+   Open a fresh review run against the live tip instead, and the review run that was closed counts as a round.
+   Once the close answers `ok`, read the
    report — findings are the reviewer's, rulings are yours (clause 10 for any
    deviation the report surfaces). Then ONE of two moves:
    - **Send back:** `"$API" runs advance <work run id> --json -` with
@@ -361,6 +367,48 @@ not after.
      `{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<worker session id>","runId":<work run id>,"kind":"status","subject":"fix-round","body":"<the report's absolute path on the first line, then your rulings — which findings to fix, which you overruled and why>","artifacts":["<report path>"]}`.
      The idle-gated delivery lane wakes the worker; its fix round ends in a new
      wave-done and a NEW review run (step 5); review runs are never reused.
+     **A fix round with no report behind it** comes from `merging`, and the
+     cause you measured decides which of two forms it takes. **An ejection** is
+     sent in two cases only: the new-head route for a red that is `main`'s own
+     (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a
+     conflict you measured: after one `git fetch origin`, `git merge-tree
+     --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1
+     with a tree id on its first line, then the conflicted paths. Its body holds
+     three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`
+     or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you
+     read after one `git fetch origin`, then `checks: <required names that are
+     red>` for the new-head route or `paths: <the conflicted paths>` for the
+     dequeue. Every ejection is clause 15's ejection, its base recorded on the
+     landing line by the advance that sends the run back: first read the line,
+     `GET /api/landing?project=<project>` (`ccrc-api landing show --project
+     <project>`), and send an ejection only where this PR's entry for this run
+     reads `pinned`; with no such entry the round is no ejection, and it stays
+     a stop for the operator. **A red the PR owns** is sent when the queue
+     dequeued the PR for a required check and no conflict was measured, or when
+     the verdict's `RED` line names a required check red on the head that is the
+     PR's own. Its body holds two entries, one to a line, and nothing else:
+     `red: #<pr>`, then `checks: <required names that are red>`. It has no
+     `base:` entry and licenses no absorb: the worker absorbs only on its own
+     clause 16's first two triggers. A dequeue with any other cause, a
+     requested change or a cause you could not read among them, is no
+     report-less round: it stays a stop for the operator. For either form, on
+     route Q disarm first (§5), then make the same advance to `working`, on the
+     `merging → working` edge, and send the same `fix-round` mail with no
+     `artifacts`. Every `ejected:` round's advance carries `ejection`, an
+     object of two fields: `base`, the sha on the mail's `base:` line, and
+     `kind`, `new-head` or `dequeued` as the mail's first line names it; a
+     `red:` round's advance, and any other retreat, carries none. Send the
+     `ejected:` mail once the advance's answer reads `landing.kind` `ejected`
+     with the base you sent. If it reads anything else, the line recorded no
+     base: send no mail, and report it to the operator with the run at
+     `working`. The second ejection of one entry is not refused: where
+     the entry you read counts one ejection already, the advance still answers
+     `ok` and the server raises one notice to the operator, so name the second
+     ejection in your turn's text and send the round as usual. The worker's
+     answering wave-done gets a NEW review run (step 5), whose brief names that
+     round's commits as the change under review, for the new-head round its
+     merge commit; the reviewer still reads the whole diff (reviewer clause 5),
+     and a merge of `main` is reviewed like any other change.
    - **Clean:** update the ledger — Waves row, Decisions, Carried constraints,
      and the **Next-wave brief** — commit it, then `POST /api/runs` **for wave N+1
      first**. Order matters: closing first, even briefly, leaves the program with
@@ -377,7 +425,9 @@ not after.
      Separately, a fresh child always branches from the project's default
      branch and carries none of the previous producer's unmerged commits,
      which is why, when wave N+1 builds on wave N's code, it dispatches only
-     once wave N's PR is proven merged, exactly as §5's "One PR per child"
+     once wave N's PR is proven merged — MERGED at its verified head, or
+     CLOSED there with `landedInTrain: true` on its row of
+     `ccd pr-state --session <id>` — exactly as §5's "One PR per child"
      requires. An UNMARKED producer — every workspace minted without a
      marker: by a box whose ccd did not yet mark children, or by a
      dispatch that journaled `child-omitted` — is never refused this way;
@@ -385,7 +435,10 @@ not after.
      one-PR rule. The same-project arm is for a producer whose workspace
      opened no PR. On a native-queue project the producer LANDS before it
      closes (clause 15; `references/wave-lifecycle.md` §5,
-     "Landing on a native-queue project").
+     "Landing on a native-queue project"). Every producer lands by the route
+     the landing verdict reads from the rules of its repository
+     (`references/wave-lifecycle.md` §5b), on every project, before each
+     landing.
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open
      successor on the same workspace, then run `"$API" runs list --closed 1`,
@@ -396,13 +449,16 @@ not after.
      by run id, and require its own `state` to be `done`. If the consumer depends
      on an interface from that producer, independently prove the producer
      interface PR merged at the exact `producerSha` carried in the conditional
-     producer contract. A missing or non-`done` row, failed release, or required
+     producer contract (it reads MERGED there, or CLOSED there with
+     `landedInTrain: true` on its row of `ccd pr-state --session <id>`). A missing or non-`done` row, failed release, or required
      exact-SHA merge proof that is absent means report and do not dispatch. The
      closed row proves the fingerprint and terminal run state; it does not prove
      a required interface merged. Only then dispatch wave N+1 (step 2).
 7. **Final merge:** on a native-queue project the last wave's producer LANDS
    before this close, as every producer does (clause 15;
    `references/wave-lifecycle.md` §5, "Landing on a native-queue project").
+   The last wave's producer lands by the route the landing verdict reads
+   (`references/wave-lifecycle.md` §5b).
    `POST /api/runs/:id/close` with `final:true` closes the run
    and, *if no other open run names this workspace*, releases the hold. What
    happens to the workspace next depends on whose it is. A **child** — one
@@ -481,10 +537,10 @@ fault.** The cap rule is exact: concurrency counts dispatched runs in an ACTIVE
 state, not held workspaces and not merely non-terminal ones. A terminal producer
 retained on a hold and a planned undispatched consumer consume no running-worker
 slot, and neither does a run parked IDLE at `awaiting-review`, `merging` or
-`closing` — it gives its slot back without closing (D-2803) — while each actual
-dispatch still consumes daily budget and a dispatched run consumes one
-concurrency slot for as long as it stays active. `cap-concurrency`
-or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
+`closing` — it gives its slot back without closing (D-2803) — while a
+dispatched run consumes one concurrency slot for as long as it stays active.
+There is no daily dispatch count: concurrency is the only cap.
+`cap-concurrency` remains authoritative — stop, say so, and wait to be woken,
 exactly as you would for any other run.
 
 **Every brief for a foreign-repo wave carries the three immutable-plan
@@ -535,8 +591,8 @@ is never read by this session.
 
 - **A dispatch is refused `paused`.** Stop. Report to the operator. Do not
   touch the file.
-- **A dispatch is refused `cap-concurrency` or `cap-daily`.** Stop, say which
-  cap, and wait to be woken.
+- **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
+  woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
   the held workspace — that is the recovery the hold exists for.
 - **Your own run row disagrees with the ledger.** The run row is the machine's

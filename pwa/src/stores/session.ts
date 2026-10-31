@@ -5,8 +5,9 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
-  PRESENCE_REFRESH_MS,
+  VIEWER_REFRESH_MS,
   SECRET_MASK,
+  type AskPairing,
   type ChatEvent,
   type Dialog,
   type HookAsk,
@@ -18,6 +19,8 @@ import {
 import type { WorkflowView } from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
+import { isLocalDivider } from '../session/localDivider';
 
 /** A staged image handed to send(). The path is what the server/dispatch see;
  *  the preview URL is carried only so the optimistic bubble can render the
@@ -117,6 +120,31 @@ export interface SessionState {
    *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
    *  persisted. */
   askFrameSeen: boolean;
+  /** D-7184 (W7 Task C7f; ARCH-58's PWA half): which of the shown questions the pane is painting, as the server paired
+   *  it (`AskPairing`), read off the frames and never computed here. ONE rule, the server's own
+   *  (`server/src/sessionws.ts#paired`): every `ask`, `dialog` and `ask_cleared` frame replaces it with its own `pairing`,
+   *  a frame without the field clearing it (D-7211: an `ask_cleared` carries the transcript copy's); a `dialog_cleared`
+   *  frame and the socket leaving `open` clear it. So it is only ever the pairing the last frame carried, for the dialog
+   *  the store holds, never an older frame's beside a newer dialog. The one writer that is not a frame is
+   *  `applyAnswered` (D-7220), which clears it with every new dialog it writes (D-7367: not the one it holds). Null: no
+   *  pairing (the sheet's unpaired view with a dialog, its constant unplaced view without one, D-7213). */
+  pairing: AskPairing | null;
+  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that the reducer raises one frame at a
+   *  time (so a clear inside a batch of frames is counted whatever React batches) in exactly two cases:
+   *  - an `ask_cleared` frame while the store HOLDS an envelope (`ask` not null): the hook ended its ask. With none held it
+   *    clears nothing: it is a connection's first statement, which the server sends whenever there is no envelope;
+   *  - a `dialog_cleared` frame while NO envelope is held: without the hook's envelope the pane's menu is all there is of
+   *    the ask, so its vanishing ends it. For a hooked ask the hook is the lifecycle authority, and a poll that sees no
+   *    menu for one tick does not end it.
+   *  Nothing else moves it: not `ask`, `dialog` or `rotated`, and not the socket leaving `open` (`onState` lowers `dialog`
+   *  with no frame). So a reconnect keeps the count, except when the store held an envelope that the new connection's
+   *  first `ask_cleared` then clears. That frame, with an envelope held, means the server stated no envelope at that
+   *  moment: the ask ended during the drop, OR the server flapped (a failed hook-state read, or an aged-envelope keep
+   *  decision restarting). Either releases the keys, the safe direction. It is a lifecycle count, not a content
+   *  identity and not an ask id: the keyboard's engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's
+   *  content, so a clear plus a byte-identical ask is a new ask. Nothing persists it: no stored or offline state carries it,
+   *  though the in-memory `SessionSnapshot` the reducer works on does, and a new store starts at 0. */
+  askEpoch: number;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
   /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
    *  absent when the frame carried none. Replaced with every tasks frame. */
@@ -170,7 +198,11 @@ export interface SessionState {
    *  `next`), applied by the sheet that sent the answer. It replaces `dialog` only while the store still holds the
    *  screen that was answered (`answeredId`), or no screen at all: a frame the stream delivered since is newer, and
    *  wins. A no-menu poll that cleared `dialog` before the answer came back is exactly what it overrides (the
-   *  2026-10-16 report). `next: null` clears it, as `dialog_cleared` would. */
+   *  2026-10-16 report). `next: null` clears it, as `dialog_cleared` would.
+   *  D-7220: whenever it writes a dialog it clears `pairing` in the same `set`, since the reply carries none and the
+   *  `dialog` frame that pairs `next` travels on the socket, unordered with the reply; when it writes nothing (a frame
+   *  delivered a newer dialog first) the pairing stays, the frame's. D-7367: a `next` with the id of the dialog the
+   *  store holds is the same screen, which the stream sends no frame for, so its pairing stays too. */
   applyAnswered(answeredId: string, next: Dialog | null): void;
   connect(): void;
   disconnect(): void;
@@ -189,6 +221,11 @@ export type SessionSnapshot = Pick<
   /** D-6325. Optional HERE only, like `workflows`: `snapshotOf` always carries it, and a snapshot built without it (the
    *  reducer's own suites) reads as false. */
   askFrameSeen?: boolean;
+  /** R69. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it reads 0. */
+  askEpoch?: number;
+  /** D-7184. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it
+   *  reads as none. */
+  pairing?: AskPairing | null;
   /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
    *  snapshot built without them (the reducer's own suites) reads as no rows. */
   workflows?: WorkflowView[];
@@ -207,11 +244,6 @@ const localDivider = (text: string): ChatEvent => {
   localSeq += 1;
   return { kind: 'system', uuid: `local-${localSeq}`, ts: new Date().toISOString(), text };
 };
-/** A divider this store minted, stamped with the PHONE's clock — never a
- *  transcript time. Exported so every reader of event time skips it the same
- *  way (`newestTranscriptTs` here, the quiet-gap divider in `ChatList`). */
-export const isLocalDivider = (e: ChatEvent): boolean =>
-  e.kind === 'system' && e.uuid.startsWith('local-');
 
 /** Append `incoming` to `existing`, skipping events already present. */
 function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[] {
@@ -286,10 +318,12 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       };
     case 'status':
       return { ...s, status: msg.status, statusUpdatedAt: msg.statusUpdatedAt };
+    // D-7184: `pairing` follows the server's attach rule (`sessionws.ts#paired`): each of `dialog`, `ask` and
+    // `ask_cleared` replaces it with its own, absent clearing it; `dialog_cleared` carries none.
     case 'dialog':
-      return { ...s, dialog: msg.dialog };
+      return { ...s, dialog: msg.dialog, pairing: msg.pairing ?? null };
     case 'dialog_cleared':
-      return { ...s, dialog: null };
+      return { ...s, dialog: null, pairing: null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 1 : 0) };
     case 'tasks':
       return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
     case 'workflows':
@@ -299,16 +333,21 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     // just above.
     case 'mail':
       return { ...s, mail: msg.mail };
-    // The hook-sourced envelope (Task 8, PR C). It resets the exact same way
-    // `dialog` does above: only its own `_cleared` message (and the store's
-    // initial state) null it out — `rotated` below touches events/uuid/offset
-    // only, because a transcript switch does not itself mean a live menu (or
-    // the hook's envelope for one) went away.
+    // The hook-sourced envelope (Task 8, PR C). Its own `_cleared` message
+    // (and the store's initial state) null it out, as `dialog_cleared` does
+    // `dialog` above — `rotated` below touches events/uuid/offset only,
+    // because a transcript switch does not itself mean a live menu (or the
+    // hook's envelope for one) went away. One difference since D-6325: the
+    // socket leaving `open` also lowers `dialog` (`onState`), and never `ask`,
+    // which stays for the held surface while `askFrameSeen` says this
+    // connection has not spoken about it.
     // Either frame is this connection's statement about the envelope, so either sets `askFrameSeen` (D-6325).
     case 'ask':
-      return { ...s, ask: msg.ask, askFrameSeen: true };
+      return { ...s, ask: msg.ask, askFrameSeen: true, pairing: msg.pairing ?? null };
     case 'ask_cleared':
-      return { ...s, ask: null, askFrameSeen: true };
+      return {
+        ...s, ask: null, askFrameSeen: true, pairing: msg.pairing ?? null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 0 : 1),
+      };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
@@ -360,6 +399,8 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   dialog: s.dialog,
   ask: s.ask,
   askFrameSeen: s.askFrameSeen,
+  askEpoch: s.askEpoch,
+  pairing: s.pairing,
   tasks: s.tasks,
   tasksTouchedAt: s.tasksTouchedAt,
   workflows: s.workflows,
@@ -663,6 +704,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   let socket: ReconnectingSocket | null = null;
   /** The presence heartbeat's timer — see `beat` below. */
   let heartbeat: ReturnType<typeof setInterval> | null = null;
+  // The page clock's stops for this connection's subscriptions (D-7191): visible, hidden and online.
+  let stopPageClock: (() => void)[] = [];
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -731,7 +774,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
     /**
      * Tell the server whether this session is on the operator's screen, so it
-     * can suppress notifications for it (`server/src/presence.ts`, read by the
+     * can suppress notifications for it (`server/src/viewer.ts`, read by the
      * watcher's `pushOne`). A notification for the pane you are looking at
      * teaches you to dismiss notifications.
      *
@@ -754,8 +797,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
      * whenever no close frame arrives — a phone in a lift or a tunnel sends no
      * FIN — and every notification for this session would then be suppressed
      * for a viewer who is long gone, indefinitely. So the server expires a
-     * claim it has not heard for `PRESENCE_TTL_MS` and this re-states it every
-     * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
+     * claim it has not heard for `VIEWER_TTL_MS` and this re-states it every
+     * `VIEWER_REFRESH_MS` (three refreshes of slack, both defined together
      * in `shared/api.ts`).
      *
      * WHATEVER the visibility (D-5242's presence contract): the server also
@@ -778,6 +821,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       dialog: null,
       ask: null,
       askFrameSeen: false,
+      askEpoch: 0,
+      pairing: null,
       tasks: [],
       workflows: [],
       workflowsUnreadable: false,
@@ -791,7 +836,12 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       conn: 'connecting',
 
       applyAnswered(answeredId, next) {
-        set((s) => (s.dialog === null || s.dialog.id === answeredId ? { dialog: next } : {}));
+        // D-7220: a dialog written here clears the pairing (the reply carries none; `next`'s `dialog` frame pairs it).
+        // D-7367: except `next` the store already holds (the same dialog id): the stream sends no frame for an unchanged
+        // screen (`sessionws.ts#nextDialogFrame`), so the pairing the last frame carried is still the one for it.
+        set((s) => (s.dialog === null || s.dialog.id === answeredId
+          ? { dialog: next, pairing: next !== null && s.dialog !== null && next.id === s.dialog.id ? s.pairing : null }
+          : {}));
       },
 
       apply(msg) {
@@ -854,7 +904,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           // but never the absence of one, so a menu kept from before the drop would be read as current once that frame
           // arrived, and offered live. The sheet's hold keeps its own copy. A connect whose first pane read fails shows no
           // menu until the next tick frames one.
-          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null }),
+          // D-7184: the pairing falls with the dialog it was for; the new stream's first frames send their own.
+          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null, pairing: null }),
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
@@ -863,14 +914,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           makeSocket: deps.makeSocket,
         });
         socket.start();
-        document.addEventListener('visibilitychange', onVisible);
-        window.addEventListener('online', nudge);
-        heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
+        stopPageClock = [onPageVisible(onVisible), onPageHidden(onVisible), onOnline(nudge)];
+        heartbeat ??= setInterval(beat, VIEWER_REFRESH_MS);
       },
 
       disconnect() {
-        document.removeEventListener('visibilitychange', onVisible);
-        window.removeEventListener('online', nudge);
+        for (const stop of stopPageClock) stop();
+        stopPageClock = [];
         if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
         // Say so before the socket goes: leaving the session screen means the
         // operator is no longer looking at it, and a close alone would let the
@@ -931,7 +981,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         //
         // `askFrameSeen` (D-6325) goes with the `ask` it qualifies: the next connection has not spoken yet.
         set({
-          ask: null, askFrameSeen: false, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
+          ask: null, askFrameSeen: false, pairing: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
         });
       },
 

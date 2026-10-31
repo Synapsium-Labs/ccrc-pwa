@@ -24,7 +24,7 @@
 //      controls go red whatever `ccd/ccd` happens to contain.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 /** A `#` comment starts only where a `#` sits at the start of a word and
  *  outside quotes — `"$REG/$id.hold"` and `'#'` are not comments. `ccd/ccd`
@@ -308,7 +308,7 @@ PY
 // Only now, the real file.
 // ---------------------------------------------------------------------------
 describe('ccd/ccd', () => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   it('kept its place — the substitution nesting balances at end of file', () => {
     // `_pr_py` alone is ~390 lines of embedded Python; read as shell it
@@ -360,6 +360,9 @@ describe('ccd/ccd', () => {
     // refusal (a title that breaks a text rule `die`s naming the rule, before any write), and `_ws_title` is
     // the one door to it (its `check` op). Both are called plainly, by `cmd_ws_add` and `cmd_ws_title`,
     // never inside `$( )`, so the `die` ends the verb and "nothing was touched" is true.
+    // `_ws_reap_lock_run` joined them with the one reap-lock runner (D-7076): it `die`s only through `_lc_refuse`
+    // (flock unavailable, the lock unopenable), and the four destructive verbs call it plainly, never inside `$( )`,
+    // so its `die` ends the verb.
     // `_place_for_class` is deliberately NOT here: it is called inside a command
     // substitution on both of its call sites, so it must answer on stdout and a
     // `die` in it would be demoted to rc 1 — the D-297 shape.
@@ -376,12 +379,15 @@ describe('ccd/ccd', () => {
     // here for the same reason, and `_sync_uuid` by calling it before a live uuid rotation: neither CAN die
     // (the `cmd_route` call sits in the same plain `( … )` subshell, and `ccd-operator-choice.test.ts`'s
     // live-rotation cases pin that an unreadable or refused choice never stops the synchronisation).
+    // `_pr_state_by_pr` joined them with the PR-keyed `pr-state --project <p> --pr <n>` (landing order wave 5c): it
+    // `die`s on a bad project or pr number, before any read or gh call, and `cmd_pr_state`'s early dispatch calls it
+    // plainly, never inside `$( )`, so its `die` ends the verb.
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
       .toEqual(['_account_still_rostered', '_lc_refuse', '_operator_choice_keep', '_operator_choice_promote',
-        '_route_argv_check', '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
+        '_pr_state_by_pr', '_route_argv_check', '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
         '_supervised_start', '_swap_refuse', '_sync_uuid', '_ws_collect_audit_contained', '_ws_expire_audit_contained',
         '_ws_expire_refuse_return', '_ws_loose_audit_contained', '_ws_loose_census', '_ws_loose_collect', '_ws_loose_route',
-        '_ws_orphan_audit', '_ws_orphan_census', '_ws_title', '_ws_title_check']);
+        '_ws_orphan_audit', '_ws_orphan_census', '_ws_reap_lock_run', '_ws_title', '_ws_title_check']);
     expect(fatal.has('_place_for_class'),
       'placement started dying instead of answering on stdout — both its call sites are `$( )`').toBe(false);
     expect(fatal.has('_wrapper_rostered_now'),

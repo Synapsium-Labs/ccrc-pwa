@@ -31,7 +31,7 @@ import { endDeadCoordinator, stillCrashed, type EndDeadCoordinatorDeps } from '.
 import { expireArchived, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { MAIL_DISABLED_MARKER, RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
-import { stopDonePass, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { stopDonePass, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { STOP_DONE_GRACE_MS } from '../src/stopDone.js';
 import { EXPIRE_LANE_LIVE_MARKER } from '../src/archivedExpiry.js';
 import { DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER } from '../src/deadCoordinator.js';
@@ -43,7 +43,7 @@ import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import type { SessionRecord } from '../src/registry.js';
 import { ACTOR_FLAGS_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
-import { PRESENCE_OPEN_TTL_MS, holdReason, type CoordStatus, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, holdReason, type CoordStatus, type FleetSession } from '../../shared/api.js';
 import { reclaimPauseParseSites } from './consolidationCensus.js';
 import { ID as COLLECT_ID, rig as collectRig } from './collectTempRootFixture.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -125,7 +125,7 @@ const PINNED_SITES: Readonly<Record<string, number>> = {
   'server/src/coord/collectTempRoot.ts': 0,     // folded onto readSwitches (D-5856)
   'server/src/coord/endDeadCoordinator.ts': 0,  // folded onto readSwitches (D-5856)
   'server/src/coord/expireArchived.ts': 0,      // folded onto readSwitches (D-5856)
-  'server/src/stopDoneSweep.ts': 1,             // stopDonePass's switches
+  'server/src/stopDoneSweep.ts': 0,             // folded onto readSwitches (D-7041)
   'server/src/watch.ts': 0,                     // folded onto readSwitches (D-5856)
 };
 
@@ -160,15 +160,25 @@ describe('childReclaim.ts — childReclaimPauseRead, the server\'s read of the r
 
 /** A marked child of a finished run with nothing open on it: every re-read before the pause passes, so step 2b is
  *  the one thing that can stop it before the audit. Registry listing 1 is step 1's marker re-read; listing 2 is 2b. */
-const childRig = async () => {
+const childRig = async (o: { readonly reclaimable?: boolean } = {}) => {
   const home = mkTmp('ccrc-pause-pin-child-');
   const calls: string[][] = [];
-  const base = testDeps(home, async (_cmd, args) => { calls.push(args); return { ran: true as const, code: 1, stdout: '', stderr: '' }; });
+  // `reclaimable`: ws-audit mints a token (so the act's step 6 is reached); every other call fails, as before.
+  let childOf = 0;
+  const base = testDeps(home, async (_cmd, args) => {
+    calls.push(args);
+    if (o.reclaimable === true && args[0] === 'ws-audit') {
+      return { ran: true as const, code: 0, stderr: '',
+        stdout: JSON.stringify({ id: 'demo-a', mode: 'reclaim', childOf, verdict: 'reclaimable', token: 'a'.repeat(64) }) };
+    }
+    return { ran: true as const, code: 1, stdout: '', stderr: '' };
+  });
   const reg = base.cfg.registryDir;
   mkdirSync(reg, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const opened = coord.openRun({ program: 'pin-paused', title: 'pin-paused', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
   if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+  childOf = opened.id;
   const closed = coord.closeRun({ runId: opened.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'pin-paused', viaClosing: false });
   if (!closed.ok) throw new Error(`close refused: ${JSON.stringify(closed)}`);
   const fields: Record<string, string> = {
@@ -224,6 +234,17 @@ describe('childReclaim.ts — reclaimChild step 2b: the pause, read before prese
     const s = scripted(f.base.io, f.reg, (n) => (n === 1 ? 'real' : 'reject'));
     const out = await reclaimChild(f.deps(s.io), f.req);
     expect(out.kind === 'deferred' ? out.detail : '').toBe(UNREAD_RECLAIM);
+  });
+
+  it('a pause raised during the act holds: child reclaim — clean at 2b, raised before step 6, no ws-reclaim', async () => {
+    // Listings 1 to 3 are step 1, 2b and 2b'; listing 4 is step 6's, nearest the argv (C4o, D-7401).
+    const f = await childRig({ reclaimable: true });
+    const s = scripted(f.base.io, f.reg, (n) => (n < 4 ? 'real' : 'present'));
+    const out = await reclaimChild(f.deps(s.io), f.req);
+    expect(s.listings(), 'step 6 re-reads the pause off the listing it already takes: no fifth listing').toBe(4);
+    expect(out).toEqual({ kind: 'deferred', sessionId: 'demo-a', runId: f.req.runId, why: 'paused-at-server',
+      detail: `${RAISED_RECLAIM} at the act` });
+    expect(f.calls.map((c) => c[0]), 'the audit only: no destructive argv').toEqual(['ws-audit']);
   });
 });
 
@@ -580,7 +601,8 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       rowAtAct: async (r) => ({ ok: true, row: { ...row, id: r.id } }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
-      startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
+      listing: async () => [],
+      startedAt: NOW - VIEWER_OPEN_TTL_MS - 60_000,
       now: () => NOW,
     };
     return { deps, argv };
@@ -671,8 +693,8 @@ describe('watch.ts — emitCoord: the coord frame\'s switch bytes (the wire\'s M
 });
 
 describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejecting one reaches none of them', () => {
-  // `sweepStopDone` runs only once the watcher is primed, so each row primes it first.
-  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepStopDone'] as const;
+  // `sweepSleep` runs only once the watcher is primed, so each row primes it first.
+  const lanes = ['sweepChildReclaim', 'sweepArchivedExpiry', 'sweepDeadCoordinators', 'sweepSleep'] as const;
   const prime = (w: FleetWatcher): void => { (w as unknown as { primed: boolean }).primed = true; };
   it.each<Listing>(['null', 'reject'])('%s → no lane is called', async (l) => {
     const f = watchRig({ io: (b, reg) => scripted(b, reg, () => l).io });
@@ -687,7 +709,7 @@ describe('watch.ts — the tick hands the lanes ITS listing, and a null or rejec
     prime(f.watcher);
     const spies = lanes.map((m) => vi.spyOn(f.watcher, m));
     await f.watcher.tick();
-    // The listing is each lane's last argument (`sweepStopDone` takes the rows first).
+    // The listing is each lane's last argument (`sweepSleep` takes the rows first).
     expect(spies.map((s) => (s.mock.calls[0]?.at(-1) as string[] | undefined)?.includes(RECLAIM_PAUSE_MARKER)))
       .toEqual(lanes.map(() => l === 'present'));
   });

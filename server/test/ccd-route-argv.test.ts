@@ -25,9 +25,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import {
-  CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD_REAL_SPAWN, type CcdHarness,
-} from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD_REAL_SPAWN, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { decOf, eventsOf } from './lifecycleHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -434,7 +432,7 @@ describe('--route on start and enable (routing spec §5.3)', () => {
 // to either side reds here, and it names the single divergence that is meant:
 // the two refusals at the mint end `; nothing was touched`, which is a promise
 // only a refusal made before any side effect can make.
-const CCD_SRC = fs.readFileSync(CCD, 'utf8').split('\n');
+const CCD_SRC = ccdSource().split('\n');
 
 /** The statement lines of a top-level shell function — from its `name() {`
  *  header to the `}` in column 0 that closes it — comments and blank lines

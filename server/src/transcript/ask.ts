@@ -4,6 +4,7 @@
 // read the JSONL directly, untruncated.
 import type { AskQuestion, DialogAsk } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
+import { pairMatches } from '../pane/askPairing.js';
 
 /** Enough tail to hold the current turn comfortably. */
 const TAIL_BYTES = 256 * 1024;
@@ -100,20 +101,10 @@ export async function readPendingAsk(io: FleetIO, file: string): Promise<AskQues
   return found.questions;
 }
 
-const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
-/** Either side may be the truncated one: `leftCol` cuts a scraped label at a run
- *  of two spaces or at the two-column gutter, so compare as prefixes.
- *
- *  THE rule for "this scraped row and this structured option are the same
- *  option", exported because `inject/ask.ts`'s menu-identity gate must decide
- *  the same question a keystroke earlier, and `DialogSheet.tsx` mirrors it
- *  client-side (it cannot import server code; see its `prefixMatches`). Three
- *  layers, one rule — a second definition here would let them disagree about
- *  which menu is on screen while each stayed internally consistent. */
-export const pairMatches = (a: string, b: string): boolean => {
-  const [x, y] = [norm(a), norm(b)];
-  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
-};
+/** THE rule for "this scraped row and this structured option are the same option" (normalize, then compare as
+ *  prefixes). It lives in `pane/askPairing.ts` (D-7031), beside the envelope pairing that reads it, and is re-exported
+ *  here so `inject/ask.ts`'s menu-identity gate and `askkey.ts` keep their imports: one server definition. */
+export { pairMatches };
 
 /**
  * Which of the pending questions the on-screen menu is showing, or null.

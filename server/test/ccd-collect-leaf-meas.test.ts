@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import { COLLECT_LEAF_END_WORDS, LIFECYCLE_MEAS_KEYS, isCollectLeafEndWord } from '../../shared/api.js';
 import { parseJournalLine, reviveMeas } from '../src/coord/journalparse.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { NO_TMUX, eventsOf, readJournal } from './lifecycleHelpers.js';
 import {
   COL_ID, LINUX, NO_COPY, collectVerb, crashAt, crashedAt, docOf, leafOf, orphanLeaf, recordsOf, tokenOf,
@@ -75,6 +75,9 @@ describe('the encoder keeps leaf through its truncation ladder (path-identity sp
   afterEach(() => { h.cleanup(); });
   const R = 'r'.repeat(2100);
   const D = 'd'.repeat(4000);
+  /** An over-long dec value the ladder never drops: with it the line is over the cap even once the detail is cut
+   *  (the detail cut), so the last resort is what writes it. */
+  const A = 'a'.repeat(3000);
   /** The one line `snippet` journaled. */
   const only = (snippet: string): Record<string, unknown> => {
     h.sh(`${NO_TMUX} ${snippet}`);
@@ -95,7 +98,7 @@ describe('the encoder keeps leaf through its truncation ladder (path-identity sp
   });
 
   it('case 5: the last-resort line keeps leaf, and nothing else of meas', () => {
-    const e = only(`_lc_emit collect done demo-quiet-basin "" verb ws-collect meas.resumed '${R}' meas.leaf absent detail '${D}'`);
+    const e = only(`_lc_emit collect done demo-quiet-basin "" verb ws-collect meas.resumed '${R}' meas.leaf absent dec.actor '${A}' detail '${D}'`);
     expect(e['truncated']).toBe(true);
     expect(e['detail'], 'the last resort fired: it keeps no detail').toBeUndefined();
     expect(e['meas'], 'the last resort keeps leaf').toEqual({ leaf: 'absent' });
@@ -104,10 +107,19 @@ describe('the encoder keeps leaf through its truncation ladder (path-identity sp
   });
 
   it('case 5b: a last-resort line that passed no leaf writes no meas key, as before', () => {
-    const e = only(`_lc_emit collect done demo-quiet-basin "" verb ws-collect detail '${D}'`);
+    const e = only(`_lc_emit collect done demo-quiet-basin "" verb ws-collect dec.actor '${A}' detail '${D}'`);
     expect(e['truncated']).toBe(true);
     expect(e['detail']).toBeUndefined();
     expect(Object.keys(e), 'the last resort of a leafless line is the joinable minimum it always was').not.toContain('meas');
+  });
+
+  it('case 5c: an over-long detail alone is cut to fit, and the line keeps leaf', () => {
+    const e = only(`_lc_emit collect done demo-quiet-basin "" verb ws-collect meas.resumed '${R}' meas.leaf absent detail '${D}'`);
+    expect(e['truncated']).toBe(true);
+    expect(String(e['detail']), 'the detail was cut, never dropped').toMatch(/^d+ \[\d+ bytes cut\]$/);
+    expect(e['meas'], 'the meas rung kept leaf').toEqual({ leaf: 'absent' });
+    expect(Buffer.byteLength(JSON.stringify(e), 'utf8')).toBeLessThanOrEqual(2048);
+    expect(parseJournalLine(JSON.stringify(e)).meas?.leaf).toBe('absent');
   });
 
   it('case 6: a cut line that passed no leaf writes meas null at the meas rung, never {}', () => {
@@ -121,7 +133,7 @@ describe('the encoder keeps leaf through its truncation ladder (path-identity sp
 
 describe('the leaf words ccd writes are L0s, both directions (path-identity spec §3.4)', () => {
   it('case 7: every meas.leaf word in ccd is in COLLECT_LEAF_END_WORDS, and every one of them is written', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const written = [...src.matchAll(/\bmeas\.leaf\s+([a-z-]+)/g)].map((m) => m[1]!);
     expect(written, 'the two `_lc_done collect` lines of the witnessed arm and the loose arm\'s done line').toHaveLength(3);
     expect(COLLECT_LEAF_END_WORDS, 'the CONTROL: L0 declares two words').toHaveLength(2);

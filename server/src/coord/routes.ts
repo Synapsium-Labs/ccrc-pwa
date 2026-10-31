@@ -6,8 +6,7 @@ import { decideShadowJournalQuery } from './shadowJournal.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
-  UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
-  readSessionRecord,
+  fieldMeasured, measuredIdentity, readRegistryMeasured, readSessionRecord,
 } from '../registry.js';
 import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
@@ -23,21 +22,25 @@ import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
+import { landingOrder } from './landingLine.js';
+import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
-import { claimantsOfSession, coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
+import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
 import { readSessionSpendMeasured } from '../shares.js';
 import { boundSessionsOf, joinRunSpend } from './runSpend.js';
 import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { childReclaimUnlessDisabled } from './childReclaimDisabled.js';
+import { retireExecutor } from '../retireExecutor.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
-import { verifyDone, type DoneClaim } from './fingerprint.js';
+import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
@@ -54,6 +57,8 @@ import {
   stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts, stallSettingsAfter, stallSettingsChange,
   stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
 } from './stallsettings.js';
+import { dispatchAbandonViewOf } from './deadDispatch.js';
+import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { childBindGate } from './childBind.js';
 import {
   openRunPreconditions, type AttributionRead, type HomeProjectVerdict, type OpenRunRefusal, type SessionMarkRead,
@@ -67,7 +72,7 @@ import { NO_FLEET_IDENTITY } from '../fleetidentity.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
-  parseCanonicalPositiveSafeInteger,
+  parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
@@ -78,30 +83,35 @@ import {
   type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
-import { CHECKS_MAIL_TOKEN, mergingAtDetail, type ChecksMode } from '../../../shared/landing.js';
+import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
+import { landingAdvanceOf } from './landingEntry.js';
+import { landingEjectionAsk } from './landingLine.js';
+import type { LandingEjectionKind } from '../../../shared/landingLine.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { checksModeAt } from './landing.js';
 import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
+import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
+import { notRanSentence } from '../unmeasured.js';
 import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
-import { readLiveStateMeasured } from '../livestate.js';
-import { approvalWindowMs } from '../askwindow.js';
-import { approvalClass, rootsForChild } from './approvalguard.js';
-import { redactedStored } from './redact.js';
-import { renderApprovalBrief } from './approvalbrief.js';
-import { approvalNudgeSubject } from './rundefs.js';
+import { liveStateReaderOver, readLiveStateMeasured } from '../livestate.js';
 import { heldFor } from './heldFor.js';
+import {
+  approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
+  type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
+} from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
 import {
-  APPROVAL_CHILD_SHELL, APPROVAL_CWD_TRUSTED, APPROVAL_HOOK_VERSIONS, APPROVAL_REASON_MAX_CHARS, APPROVAL_REFUSALS_LOG,
-  APPROVAL_REQUEST_MAX_BYTES, CHILD_DENY_SETTINGS_FILE, approvalDigestBytes, canonicalJson,
-  type ApprovalKeyAnswer, type ApprovalMintReleaseReason, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
-  type ApprovalRulingRecord, type ApprovalView,
+  APPROVAL_CHILD_SHELL, APPROVAL_REASON_MAX_CHARS, APPROVAL_REFUSALS_LOG, APPROVAL_REQUEST_MAX_BYTES,
+  CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
+  type ApprovalView,
 } from '../../../shared/api.js';
+import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import { rollTargetsOf } from './rollTarget.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -258,7 +268,6 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       const extra: Record<string, number> = {};
       if (r.limit !== undefined) extra.limit = r.limit;
       if (r.running !== undefined) extra.running = r.running;
-      if (r.used !== undefined) extra.used = r.used;
       if (r.candidates !== undefined) extra.candidates = r.candidates;
       // The `by` spread, not `by: r.by` — the same discipline the
       // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
@@ -359,7 +368,7 @@ async function composeReviewCapAsk(coord: CoordStore, io: Deps['io'], work: numb
  */
 function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
   return (req) => {
-    void deps.queue.run(req.sessionId, () => childReclaimUnlessDisabled(
+    void retireExecutor(deps.queue, req.sessionId, () => childReclaimUnlessDisabled(
       { io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
       () => reclaimChild({
         coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
@@ -461,6 +470,17 @@ export { homeProjectVerdict, shapeHomeProject, type HomeProjectShape, type HomeP
  * (`dispatch-mutex-gate.test.ts`, D-46), so the abandon is handed to `fn` from INSIDE the hold rather than exported
  * beside it — a caller can only reach it serialised.
  */
+/**
+ * What `buildServer` hands these routes for the operator's door of the question family (W3 Q3f, D-7030):
+ * `POST /api/questions/session-<id>/answer` gates its session id exactly as `server.ts`'s session routes do, with
+ * `buildServer`'s own `knownId`, and answers through the operator's core with the SAME deps the old operator doors read (the press
+ * functions over `askDeps` and `sendDeps`, the `answeredFrame` emit, the watcher's hookstate read), built once there.
+ */
+export interface OperatorDoorWiring {
+  readonly knownId: (id: string) => Promise<boolean>;
+  readonly answerDeps: OperatorDoorDeps;
+}
+
 export interface CoordRoutesHandle {
   /** Run `fn` as one coordination write — queued behind whichever write route's body is running, ahead of the next —
    *  handed `closeRun`'s abandon arm exactly as the abandon route runs it, and `abandonRefusal` (close.ts): what that
@@ -478,7 +498,7 @@ export interface CoordRoutesHandle {
   withSweepAbandon<T>(coord: CoordStore, fn: (
     abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
   ) => Promise<T>): Promise<T>;
-  /** The SAME hold with nothing handed in — for the stop-done lane (D-5370, `stopDoneSweep.ts`), whose act is a
+  /** The SAME hold with nothing handed in — for the stop-done lane (D-5370, `sleepLane.ts`), whose act is a
    *  `ccd stop` and never a run transition: it re-reads the store and stops inside this hold, so a dispatch opening a
    *  run onto the worker (which runs inside it too) is either finished first or starts after the stop, never between
    *  the read and the act. No `closeRun` is reachable through it. */
@@ -507,6 +527,9 @@ export interface CoordRoutesHandle {
  *  limiter reads no `req.ip`, like `auth/ratelimit.ts`); it runs on `preHandler`, after the
  *  route's own auth `onRequest` hook, so an unauthenticated call never spends it. */
 export const RUN_SPEND_RATE_LIMIT = { max: 600, timeWindow: '1 minute' } as const;
+
+/** The refusal the test box's read and sync answer a caller with neither a session nor the box token (D-7554). */
+const TESTBOX_UNAUTHENTICATED = { ok: false, error: 'unauthenticated', detail: `takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})` } as const;
 
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
@@ -541,10 +564,10 @@ export function registerCoordRoutes(
   askDeps: AskDeps,
   /**
    * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
-   * watcher's in-memory hold and fires the deferred push immediately —
-   * `FleetWatcher.releaseHeldAsk` is the ONLY way in, because `heldAsks` is
-   * watcher-private state (that method's own docstring) and this file has no
-   * business reaching into its shape. Threaded in as its own parameter,
+   * in-memory hold and fires the deferred push immediately — since W3 Q3f
+   * (D-7030) through the watcher's `Questions` instance (`questions` below,
+   * the watcher's own) and the doors sink the watcher gave it, so this file
+   * never reaches into the hold's shape. Threaded in as its own parameter,
    * the same move `askDeps` just above made for `answerAsk`'s queue: `Deps`
    * deliberately does not carry the watcher (`buildServer`'s own third
    * argument, not a `Deps` field — see that function's signature), so a
@@ -563,6 +586,21 @@ export function registerCoordRoutes(
    * test that registers these routes on a bare Fastify raises its rows exactly as the server does.
    */
   notice: NoticeSink = noticeSink(deps),
+  /**
+   * D-7026: this server's owner of question state (`coord/questions.ts#createQuestions`), the one `buildServer` passes
+   * (the watcher's own when it has one). Defaulted the way `buildServer` chooses it (W3 Q3f: the door cores push through
+   * the instance's own doors sink, so a watcher's routes must reach that watcher's instance): the watcher's own, else a
+   * new instance over these same `deps`, so a test that registers these routes on a bare Fastify gets its own. Q3e: the raise ladder and the approval inputs live in it; Q3d moves the
+   * hold carrier.
+   */
+  questions: Questions = watcher?.questions ?? createQuestions(deps),
+  /**
+   * W3 Q3f (D-7030): the operator's door's wiring (`OperatorDoorWiring`), which `buildServer` passes, read at a request
+   * (a thunk, because `buildServer` declares `knownId` beside its session routes, after this call). Absent for a test
+   * that registers these routes on a bare Fastify: that server answers the operator's door `not-configured`, having no
+   * session routes and no press wiring of its own.
+   */
+  operatorDoors?: () => OperatorDoorWiring,
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -1477,7 +1515,7 @@ export function registerCoordRoutes(
       // two conditions the verdict handles differently (design §3 F2).
       programKnown: (slug) => coord.programs().some((p) => p.slug === slug),
       programHome: (slug) => coord.programHome(slug),
-      openClaimantsOf: (s) => claimantsOfSession(coord, s),
+      openClaimantsOf: (s) => coord.bindingsOf(s).claimants(),
       // D-5298 (coordinator-first Task 11b, spec §6.4): the three registry
       // facts, each read only by the gate that needs it. The switch-over reads
       // this box's role (as `config.ts`'s `deriveRole` decided it), its own
@@ -1822,6 +1860,7 @@ export function registerCoordRoutes(
    */
   const advanceAct = async (
     coord: CoordStore, reply: FastifyReply, run: RunRow & { sessionId: string }, id: number, to: RunState, claim: DoneClaim,
+    ejection: { base: string; kind: LandingEjectionKind } | null,
   ): Promise<FastifyReply> => {
     // Forward motion toward a review claim re-measures; retreating to `working` does not — see the route's docstring.
     let verdict: Extract<Awaited<ReturnType<typeof verifyDone>>, { ok: true }> | null = null;
@@ -1834,33 +1873,47 @@ export function registerCoordRoutes(
       if (!measured.ok) {
         coord.recordRejection({ code: measured.code, runId: id, toId: run.sessionId, detail: measured.detail });
         queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-          kind: 'status', subject: 'wave-advance-rejected', body: `${measured.code}: ${measured.detail}` });
+          kind: 'status', ...doneRejectionMail('advance', measured) });
         return reply.code(409).send({ ok: false, reject: { code: measured.code, detail: measured.detail } });
       }
       verdict = measured;
     }
 
-    // PR landing in ccrc (stage 1, spec §3.1 and §3.7): the transition row into `merging` IS the episode, so its detail
-    // is decided here, once, from the verified head and the measured PR, in the one `advance` call. Every other target
-    // keeps its exact call.
+    // PR landing in ccrc (stage 1, spec §3.1 and §3.7): the transition row into `merging` IS the episode. Its mode is
+    // decided here from the verified head's measurement; `CoordStore.advanceLanding` builds the `merging-at:` detail
+    // from that same head and writes the landing line's entry with it, in the one transaction (D-7614). The head is
+    // the one the server VERIFIED (D-7102): the claim's own on an ordinary advance, the live tip on one accepted
+    // through the radar's lineage. The landing compares a PR head to this, and a brief prints it.
     let episodeMode: ChecksMode | null = null;
-    let detail: string | undefined;
     if (to === 'merging' && verdict !== null) {
       const listing = await deps.io.readdir(deps.cfg.registryDir);
       episodeMode = checksModeAt(readSwitches(listing), ccdCan(deps.fleetState, 'prLanding'), verdict.measured);
-      detail = mergingAtDetail(claim.handoffCommit, verdict.measured.prNumber ?? null, episodeMode);
     }
-    const adv = detail === undefined ? coord.advance(id, to, 'coordinator') : coord.advance(id, to, 'coordinator', detail);
-    if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
+    const landing = landingAdvanceOf({ to, measured: verdict?.measured ?? null, mode: episodeMode, handoffCommit: claim.handoffCommit, ejection });
+    const adv = coord.advanceLanding({ runId: id, to, causedBy: 'coordinator', landing });
+    if (!adv.ok) return adv.error === 'ejection-not-merging'
+      ? refuseAdvance(reply, { reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
+    // D-7624: the second ejection of an entry is one operator notice, never a refusal. The written row's count reaching 2 is
+    // the once-only raise (the writer is the count's only writer); it names the worker's session, not the review cap's.
+    // @anchor landing-ejection-ask
+    const entry = adv.landing.kind === 'pinned' || adv.landing.kind === 'ejected' ? adv.landing.entry : null;
+    const ask = entry === null ? { due: false as const } : landingEjectionAsk(entry);
+    if (ask.due) notice({ kind: 'run', sessionId: run.sessionId, title: ask.title, body: ask.body, runId: id }, 'record-always',
+      { tag: ask.tag, degraded: 'ejection recorded, feed archive degraded' });
     // Re-read after the advance for the fresh row. `!` is gone with the type (D-2545): an advance that succeeded and
     // then read back absent or unreadable is a real condition, and answering it honestly is cheaper than a
     // non-null assertion that would throw a bare 500 here.
     const after = coord.run(id);
     if (!after.ok) return refuseRoute(reply, 'run-unreadable', { detail: after.detail });
     if (after.run === null) return refuseAdvance(reply, { reject: { code: 'unknown-run' } });
-    return reply.code(200).send(episodeMode === 'live'
-      ? { ok: true, run: toRunSummary(after.run), checksMail: CHECKS_MAIL_TOKEN } satisfies AdvanceOk
-      : { ok: true, run: toRunSummary(after.run) } satisfies AdvanceOk);
+    return reply.code(200).send({
+      ok: true, run: toRunSummary(after.run),
+      ...(episodeMode === 'live' ? { checksMail: CHECKS_MAIL_TOKEN } : {}),
+      // Only an advance accepted through the lineage names its head: absent means the claim was the head.
+      ...(verdict?.measured.via === BASE_ONLY_MERGE ? { verifiedHead: verdict.measured.branchTip } : {}),
+      // D-7627: what the line recorded, so a coordinator can tell an ejection it recorded from an advance it could not place.
+      landing: adv.landing,
+    } satisfies AdvanceOk);
   };
 
   /**
@@ -1903,7 +1956,7 @@ export function registerCoordRoutes(
     // D-6733); this handler gathers their facts and acts.
     const parsed = advanceRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), (req.body ?? {}) as AdvanceBody);
     if (!parsed.ok) return refuseAdvance(reply, parsed.refusal);
-    const { id, to, fingerprint: fp } = parsed.req;
+    const { id, to, fingerprint: fp, ejection } = parsed.req;
     const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber,
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
@@ -1911,7 +1964,7 @@ export function registerCoordRoutes(
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
         overConcurrency: () => capsMeasured(coord).overConcurrency });
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
-      return advanceAct(coord, reply, gate.run, id, to, claim);
+      return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });
   });
 
@@ -2125,10 +2178,59 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.state });
   });
 
-  /** `GET`/`POST /api/coord/caps` — the two coordination caps become an
+  /** Test box plan TB9 (D-7411; spec 2026-10-28 §2.7): the test box's three doors.
+   *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass.
+   *  - `POST /api/testbox/switch` takes `{on: boolean}` and nothing else, and runs `ccd testbox-remote --state on|off`
+   *    through the agent's whitelist, the marker's one writer. SESSION-ONLY (`coord-pause-route.test.ts`'s
+   *    `SESSION_ONLY`): the operator's switch, never the box token's, so no coordinator can arm remote runs.
+   *  - `POST /api/testbox/tools-sync` takes no body: the release and the versions it sends are the fleet host's own.
+   *  D-7554: the read and the sync ALSO take the box token (EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, the `GET
+   *  /api/runs` pattern), because `ccrc-api testbox status|tools-sync` is a cookieless fleet-host caller (the update
+   *  lane's signal). No `coordMutex` and no `notConfigured` arm: none of them touches the coordination database. */
+  app.get('/api/testbox', async (req, reply) => {
+    if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
+      && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
+    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null });
+  });
+  app.post('/api/testbox/switch', async (req, reply) => {
+    const body = req.body as { on?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      return refuseRoute(reply, 'bad-request');
+    }
+    if (!ccdCan(deps.fleetState, 'testboxRemote')) return refuseRoute(reply, 'unsupported');
+    const res = await deps.runCcd(CCD_ARGV.testboxRemote(body.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST. A verb that never ran, or may not have, said nothing, so its forged code is not
+    // read as the verb's refusal: the answer is the one not-ran sentence (`notRanSentence`), since whether the switch
+    // moved is unmeasured, and the pass forced here re-reads the block's `switch`, the authoritative answer either way.
+    if (res.ran === false) {
+      void watcher?.testboxLane.sweep(true);
+      return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd testbox-remote', res) });
+    }
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    // `requested`, never the switch: the authoritative answer is the block's `switch`, re-read by a pass now.
+    void watcher?.testboxLane.sweep(true);
+    return reply.code(200).send({ ok: true, requested: body.on });
+  });
+  app.post('/api/testbox/tools-sync', async (req, reply) => {
+    if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
+      && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/testbox/tools-sync') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
+    const body = req.body as unknown;
+    if (body !== undefined && body !== null && !(typeof body === 'object' && Object.keys(body).length === 0)) {
+      return refuseRoute(reply, 'bad-request');
+    }
+    const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync();
+    if (!r.ok) {
+      const refusal = TESTBOX_SYNC_REFUSAL[r.reason];
+      return refuseRoute(reply, refusal.error, { detail: refusal.detail });
+    }
+    return reply.code(200).send({ ok: r.reply.outcome === 'sent', ...r.reply });
+  });
+
+  /** `GET`/`POST /api/coord/caps` — the coordination cap becomes an
    *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
-   *  `server/src`: the only way to change `maxConcurrentWorkers` or
-   *  `maxSessionsPerDay` was to hand-edit `coord.db` (D-1164).
+   *  `server/src`: the only way to change a cap was to hand-edit `coord.db`
+   *  (D-1164). There were two caps then; the daily dispatch brake is retired
+   *  (D-7068), and `maxConcurrentWorkers` is the one left.
    *
    *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — two different facts, and this is
    *  the first route in the tree that needs them apart (D-1240). The box token
@@ -2159,9 +2261,7 @@ export function registerCoordRoutes(
    *  own, but only for a child that currently needs the operator's attention,
    *  a cached list rather than a value re-derived on every tick. Caps are
    *  deliberately NOT added to that frame: `emitCoord` states it needs no
-   *  try/catch precisely because it touches no `node:sqlite`, and
-   *  `dispatchedIn24h` moves with the clock, so the frame's byte-equality guard
-   *  would let it re-emit on nearly every two-second tick.
+   *  try/catch precisely because it touches no `node:sqlite`.
    *
    *  THE REPLY IS THE CONFIRMATION, unlike the pause toggle one door up. That
    *  toggle refuses to be optimistic because a `{type:'coord'}` frame exists to
@@ -2227,6 +2327,9 @@ export function registerCoordRoutes(
     // This is a shape probe only — the merge that is actually written is
     // recomputed under the lock below, so the caps it reads here do not matter.
     const shape = decideCaps(coord.caps(), req.body ?? {});
+    // AN OLDER PWA'S SAVE OF A RETIRED DIAL (D-7068): accepted, written nowhere and recorded
+    // nowhere — no cap that still exists moved. The answer is the current view, so that PWA settles on it.
+    if (shape.ok === 'retired') return reply.code(200).send({ ok: true, ...capsView(coord) });
     if (!shape.ok) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: shape.detail });
     }
@@ -2256,7 +2359,9 @@ export function registerCoordRoutes(
       // `decideCaps`'s verdict depends on the BODY alone — `current` only
       // supplies the untouched fields. Thrown rather than swallowed, so if that
       // ever stops being true it is a 500 that says so and not a silent 200.
-      if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
+      if (merged.ok !== true) {
+        throw new Error(`caps decision changed under the lock: ${merged.ok === false ? merged.detail : merged.ok}`);
+      }
       // D-1169: the moment is L4's to supply — read INSIDE the mutex, so the
       // timestamp belongs to the write that actually won the lock.
       coord.setCaps(merged.next, Date.now());
@@ -2274,8 +2379,7 @@ export function registerCoordRoutes(
     notice({
       kind: 'coord', sessionId: '',
       title: 'caps changed',
-      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
-            `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}`,
       runId: null,
     }, 'record-only', { degraded: 'caps written, feed archive degraded' });
     return reply.code(200).send({ ok: true, ...view });
@@ -2645,6 +2749,68 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, ...collectLaneView({
       row: proofRow, journal: proofJournal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
     }) });
+  });
+
+  /** `GET`/`POST /api/coord/dispatch-abandon` (D-7319): the Settings switch of the act that abandons a dispatch that
+   *  never came back (`abandonDeadDispatch.ts`). One path for both verbs, the stall-watch door's shape, so one gate entry
+   *  covers it: session-gated when `CCRC_AUTH` is armed, open dark, no box token (no machine lane calls it). The view is
+   *  `dispatchAbandonViewOf`'s (L1): only an exact `on` reads armed. The POST takes `{choice:'on'|'off'}` and nothing
+   *  else, writes the one row, and records the change in the feed (`record-only`), as the stall watch's door does. */
+  app.get('/api/coord/dispatch-abandon', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...dispatchAbandonViewOf(deps.coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs) });
+  });
+
+  app.post('/api/coord/dispatch-abandon', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const body = req.body;
+    const keys = body !== null && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : null;
+    const choice = keys !== null && keys.length === 1 && keys[0] === 'choice' ? (body as { choice: unknown }).choice : undefined;
+    if (!isDispatchAbandonChoice(choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: "the body is {choice:'on'|'off'} and nothing else" });
+    }
+    const before = dispatchAbandonViewOf(coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs);
+    if (before.stored === 'unreadable') {
+      return refuseRoute(reply, 'state-unreadable', { detail: before.detail ?? 'the switch could not be read' });
+    }
+    const after = dispatchAbandonViewOf(coord.setDispatchAbandon(choice, Date.now()), deps.cfg.dispatchAbandonMs);
+    if (before.stored !== after.stored && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'dispatch abandon changed', runId: null,
+        body: `abandoning dispatches that never came back: ${before.stored} -> ${after.stored}; by ${actor}` },
+      'record-only', { degraded: 'dispatch abandon switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/roll-idle` — Settings › Automation › "Roll idle sessions" (D-7453, the operator's rulings of
+   *  2026-10-29): `coordinators` (the default, ON) or `off`. Session-gated when sign-in is armed, open dark, as the
+   *  stall-watch door is: no machine lane calls it, and turning it on releases nothing a signed-in operator has not
+   *  already ruled. The one writer is `CoordStore.setRollTargets`; a change is a record-only feed row naming the actor. */
+  const rollIdleView = (coord: NonNullable<typeof deps.coord>): { targets: ClaudeRollTargets | null; default: ClaudeRollTargets; choices: readonly ClaudeRollTargets[] } =>
+    ({ targets: rollTargetsOf(coord.rollSettings()), default: CLAUDE_ROLL_TARGETS_DEFAULT, choices: CLAUDE_ROLL_TARGETS });
+
+  app.get('/api/coord/roll-idle', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
+  });
+
+  app.post('/api/coord/roll-idle', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { targets?: unknown } | null | undefined;
+    const targets = body !== null && typeof body === 'object' ? body.targets : undefined;
+    if (!isClaudeRollTargets(targets)) {
+      return refuseRoute(reply, 'bad-request', { detail: `targets must be one of ${CLAUDE_ROLL_TARGETS.join(', ')}` });
+    }
+    const w = deps.coord.setRollTargets(targets, Date.now());
+    const before = rollTargetsOf(w.before);
+    if (before !== targets && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'roll idle sessions changed', body: `roll idle sessions: ${before ?? 'unreadable'} -> ${targets}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'roll idle sessions written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
   });
 
   /**
@@ -3112,7 +3278,7 @@ export function registerCoordRoutes(
     }
     const names = reg.names;
     const recById = new Map(reg.records.map((r) => [r.id, r]));
-    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
       undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
 
     let project: string;
@@ -3311,7 +3477,7 @@ export function registerCoordRoutes(
         // [registry-refused:reports]
         const reg = await readRegistryMeasured(deps.io, deps.cfg);
         const names = reg.listed ? reg.names : null;
-        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
           undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
@@ -3634,16 +3800,35 @@ export function registerCoordRoutes(
     });
   });
 
+  /**
+   * `GET /api/landing?project=`: the landing line, read cookieless from the fleet host before the coordinator
+   * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
+   * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
+   * no `landing_projects` row answers both flags `false`: inert until their writers (5i, 5j). The read is advisory
+   * in 5e (D-7626). The handler decides nothing: decide in L1, act here.
+   */
+  app.get('/api/landing', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/landing')) return;
+    const q = req.query as { project?: unknown };
+    if (typeof q.project !== 'string' || q.project.trim() === '') {
+      return refuseRoute(reply, 'bad-request', { detail: 'the landing line is per-project — ?project= is required' });
+    }
+    const project = q.project.trim();
+    const entries = deps.coord.landingEntries(project);
+    const flags = deps.coord.landingProject(project);
+    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags) };
+    return reply.code(200).send({ ok: true, ...view });
+  });
+
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
 
   // `freshAskAt` (the D-2170 fail-shut re-measurement `takeAskForAnswer`'s
   // CAS is checked against) is `registry.ts`'s export now, fix round 1
-  // finding 2 — this route and `server.ts`'s `POST /api/sessions/:id/ask`
-  // both close over the SAME `Deps` object (this file's own `deps` param IS
-  // `buildServer`'s, passed straight through by `registerCoordRoutes`), so a
-  // security-relevant fail-shut guard had no business existing as two
-  // copies that could silently drift. See `registry.ts`'s own doc comment
-  // on it for the full reasoning.
+  // finding 2, so a security-relevant fail-shut guard has no second copy
+  // that could silently drift. Since W3 Q3f (D-7030) its one reader on the
+  // answer paths is `coord/questions.ts`, the claimant's and the operator's
+  // cores. See `registry.ts`'s own doc comment on it for the full reasoning.
 
   /**
    * `POST /api/asks/:id/answer` — the parent presses the digit into its
@@ -3677,10 +3862,12 @@ export function registerCoordRoutes(
    * is `'held'`, and this row sits in `'answering'`, so it cannot even
    * reach it (it would silently strand the row forever, `changes: 0` and
    * all). `untakeAsk` is the exact CAS built for this rollback.
+   *
+   * Since W3 Q3f (D-7030) this door keeps its front ladder (the box token, the body, attribution, the id parse) and
+   * delegates the rest, the ladder above in this order, to `coord/questions.ts#createQuestions`'s `rule`.
    */
   app.post('/api/asks/:id/answer', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -3698,7 +3885,6 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request',
         detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
     }
-    const optionIndexes = answerBody.optionIndexes;
 
     // The box token proves "a process on this box", one shared secret
     // identical for every session on the fleet host — it cannot prove "this
@@ -3710,126 +3896,12 @@ export function registerCoordRoutes(
     // sqlite read can collapse a different textual name onto this ask.
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const askRead = coord.askById(id);
-    // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
-    // for a row that is gone; this row is not gone, it is unreadable, and the
-    // two need different sentences for the same reason `child-unmeasurable`
-    // was split out of `ask-moved` below. 503, a fact about this box.
-    if (!askRead.ok) {
-      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
-    }
-    const ask = askRead.ask;
-    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
-    if (ask.parentId !== fromId) {
-      return reply.code(403).send({ ok: false, error: 'not-parent',
-        detail: 'only this child\'s derived parent may pre-empt its question' });
-    }
-    // D-5290, D-5363: a row MINTED released (`releaseReason` set — D-5530's
-    // fail-closed reasons, or an older build's `parent-project-mismatch`) was
-    // never held and never mailed: the operator owned it from the first tick,
-    // so late answer wins (D-5289), which reaches a row the LAPSE released,
-    // does not reach this one. No new word: `not-held` is "the row is no
-    // longer pre-emptible". With the `parentId` check above, this route admits
-    // exactly the claimant the row was HELD for, wherever it sits (D-5530: no
-    // project is compared; a cross-project coordinator answers its children).
-    if (ask.releaseReason !== null) {
-      return reply.code(409).send({ ok: false, error: 'not-held' });
-    }
-    // D-5293, D-5368: the operator's body names the question it answers (`askKey`).
-    // A parent that sends it is answering the question it was shown, or
-    // nothing is pressed and the row is untouched.
-    if (answerBody.askKey !== undefined && answerBody.askKey !== ask.askKey) {
-      return reply.code(409).send({ ok: false, error: 'ask-mismatch' });
-    }
-
-    // D-2170: re-read the child's hookstate and prove the menu on screen is
-    // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
-    const fresh = await freshAskAt(deps.io, deps.cfg, ask.childId);
-    // …and say WHICH refusal this is (whole-branch review M2). `freshAskAt`
-    // answers `UNMEASURED_ASK_AT` for three READS THAT FAILED, and that
-    // value can never equal a stored `askAt` — so handing it to the CAS
-    // below would answer `ask-moved`, a true statement about the CAS and a
-    // false one about the world. The two are not interchangeable to the
-    // caller: `wave-lifecycle.md` tells a coordinator that `ask-moved` means
-    // "the child repainted — re-read the ask and answer the current one",
-    // and a coordinator told that when the truth is "this box could not read
-    // the child" re-reads, finds the row still `held`, and loops. Same
-    // fail-shut direction, before any keystroke; only the sentence changes.
-    if (fresh === UNMEASURED_ASK_AT) {
-      return reply.code(409).send({ ok: false, error: 'child-unmeasurable',
-        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
-    }
-    const taken = coord.takeAskForAnswer(id, fresh);
-    if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
-
-    const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);
-    if (!res.ok) {
-      // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
-      // route's own docstring. `answerAsk` never pressed a digit on this
-      // path, so the row goes back to where the take found it (`'held'`, or
-      // `'released'` after a lapse — D-5289) rather than being abandoned in
-      // `'answering'` with no exit.
-      if (!coord.untakeAsk(id, taken.from)) {
-        // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
-        // `'answering'`, and THIS request is the one that put the row there
-        // (`takeAskForAnswer` above, this same request). Nothing else should
-        // have moved it in between — `console.warn` on the surprise, the
-        // same idiom `watch.ts`'s `sweepAsks` already uses on its own CAS
-        // calls (e.g. its "unexpectedly still 'held' after a failed
-        // release" warning), rather than a silent discard.
-        console.warn(`ccrc-server: untakeAsk(${id}) returned false after a refused press — ` +
-          "the ask row was not 'answering' when the rollback ran; it may be stranded");
-      }
-      return reply.code(409).send(res);
-    }
-    // D-2172's SECOND record — written BEFORE `settleAsk` (fix round 1, item
-    // 3), deliberately: the mint-time record (`watch.ts`'s `hold()`) is the
-    // question; this one is the answer, naming the parent and what it chose
-    // — the operator's only durable trace of a decision made in their name
-    // over a question that never reached their phone. Ordered first so that
-    // if `settleAsk` below then throws, at least ONE durable trace of the
-    // answer survives — the feed record names who chose what even when the
-    // `asks` row's own `answeredBy`/`answer` never gets written. Through the
-    // notice sink (D-5858), `'record-only'`, as `POST /api/coord/caps` above:
-    // the archive's synchronous throw is caught inside `notify` rather than
-    // allowed to turn a successful press into a 500, and the seq `record()`
-    // minted is flushed whatever the archive does.
-    notice({
-      kind: 'ask', sessionId: ask.childId, runId: null,
-      title: 'question answered',
-      body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
-            `${ask.options[optionIndexes[0]!] ?? '?'}`,
-    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
-
-    // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
-    // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
-    // must never turn a successful press into a 500. The row is held
-    // EXCLUSIVELY by this request (CAS'd to `'answering'` above; `settleAsk`'s
-    // own docstring is why no caller needs to distinguish "settled" from
-    // "lost the row between take and settle" — that race cannot happen
-    // here), so an unguarded throw would be a genuine infra fault (disk,
-    // `node:sqlite`), not a lost race — but left unguarded it would strand
-    // the row `'answering'` with no exit (`settleAsk` never ran to move it),
-    // 500 a press that actually succeeded, and the parent's natural retry
-    // would get `not-held` — a LIE about who holds it, since the retrying
-    // caller IS the one who holds it. The digit is pressed either way, so
-    // this always returns `{ok:true}`.
-    try {
-      coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
-    } catch (err) {
-      console.warn('ccrc-server: settleAsk failed after the digit was already pressed ' +
-        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded ` +
-        "'answering'; the feed record above (if it landed) is the surviving audit trace");
-    }
-
-    // D-5289, late answer wins: the lapse already notified the operator, so
-    // that notification is replaced, under the same tag, with who answered.
-    // Only after a take from `'released'` — inside the window nothing was
-    // pushed and there is nothing to replace. The watcher decides whether its
-    // snapshot of the lapse is still this row's (`answeredLate`).
-    if (taken.from === 'released') watcher?.answeredLate(ask.childId, id, fromId);
-
-    return { ok: true };
+    // W3 Q3f (D-7030): an ALIAS from here on. Everything after the id parse (the row, the stored parent, the CAS, the
+    // press, the rollback, the record, the settle and the late answer) is the claimant's core, `questions.rule`, which
+    // `POST /api/questions/ask-<n>/rule` calls too.
+    return sendAnswer(reply, await questions.rule({
+      kind: 'ask', id, fromId, optionIndexes: answerBody.optionIndexes, askKey: answerBody.askKey,
+    }, claimantDeps!));
   });
 
   /**
@@ -3859,10 +3931,11 @@ export function registerCoordRoutes(
    * (D-5289): a parent that handed the question over may not answer it later
    * (`/answer` refuses `409 declined`), where a lapsed row stays answerable.
    *
-   * `watcher.releaseHeldAsk` is the ONLY way this route touches the
-   * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
-   * `heldAsks`): the map is watcher-private state, so this route names the
-   * child id and nothing about the map's shape. It runs AFTER the CAS
+   * The `Questions` instance's `released` door-in is the ONLY way this route
+   * touches the in-memory hold (F12's own argument; since W3 Q3f, D-7030, the
+   * claimant's core calls it and pushes through the watcher's doors sink): the
+   * hold is the instance's state, so this route names the child id and nothing
+   * about its shape. It runs AFTER the CAS
    * succeeds, never before — the store row is the fact, the in-memory hold
    * is only ever a cache of the push `sweepAsks` would otherwise send later.
    * A `watcher === undefined` server (every non-test `buildServer` caller
@@ -3871,10 +3944,13 @@ export function registerCoordRoutes(
    * but has no hold to drop and no snapshotted push to fire, so it warns
    * instead of silently dropping the operator's notification on the floor
    * (fix round 1, item 1).
+   *
+   * Since W3 Q3f (D-7030) this door keeps its front ladder (the box token, the body, attribution, the id parse) and
+   * delegates the rest, in this order, to `coord/questions.ts#createQuestions`'s `release`; the watcher's in-memory
+   * hold is reached through that instance's `released` door-in and the watcher's doors sink.
    */
   app.post('/api/asks/:id/release', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     // Literally inline, not through a wrapper: the census derives lanes by
     // regex-slicing this file between route registrations, so a gate call it
     // cannot see is a lane it will not count.
@@ -3897,42 +3973,10 @@ export function registerCoordRoutes(
     // sqlite read can collapse a different textual name onto this ask.
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const askRead = coord.askById(id);
-    // D-2545, `/answer`'s arm exactly — see its comment.
-    if (!askRead.ok) {
-      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
-    }
-    const ask = askRead.ask;
-    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
-    if (ask.parentId !== fromId) {
-      return reply.code(403).send({ ok: false, error: 'not-parent',
-        detail: 'only this child\'s derived parent may decline its question' });
-    }
-
-    // A decline is not a failure — it is the parent saying "the operator
-    // should see this now", and it is what makes the grace window a CEILING
-    // rather than a tax on every ask the parent cannot rule on.
-    if (!coord.declineAsk(id, Date.now())) {
-      return reply.code(409).send({ ok: false, error: 'not-held' });
-    }
-    // Fix round 1, item 1: `watcher` is undefined for every non-test caller
-    // of `buildServer` today (`src/index.ts` always builds one) — but the
-    // row above has ALREADY moved `'held' -> 'declined'` (D-5289) by the time
-    // this line runs, and the response below is unconditionally `{ok:true}`.
-    // With no watcher there is no `heldAsks` entry to drop and no snapshotted
-    // push to fire, so the decline is real (the row genuinely released) but
-    // the operator's buzz — the entire reason this lane exists — silently
-    // never happens. Warning, not refusing: refusing here would tell the
-    // parent its decline failed when the store row says otherwise, which is
-    // a worse lie than a log line nobody reads until they go looking.
-    if (watcher === undefined) {
-      console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
-        `${ask.childId}) with no watcher configured — the row is declined but the operator's ` +
-        'push was never fired');
-    } else {
-      watcher.releaseHeldAsk(ask.childId);
-    }
-    return { ok: true };
+    // W3 Q3f (D-7030): an ALIAS from here on. The row, the stored parent, the decline CAS and the push now (or, with
+    // no watcher, the warning) are the claimant's core, `questions.release`, which `POST /api/questions/ask-<n>/release`
+    // calls too.
+    return sendAnswer(reply, await questions.release({ kind: 'ask', id, fromId }, claimantDeps!));
   });
 
   /**
@@ -4039,7 +4083,7 @@ export function registerCoordRoutes(
       if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
     }
 
-    const read = coord.asksForParent(parent, state);
+    const read = openFor(coord, parent, state);
     // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
     // list, so a partial one is worse than none — it looks complete.
     if (!read.ok) {
@@ -4070,15 +4114,6 @@ export function registerCoordRoutes(
     return approvalSigner;
   };
   if (deps.coord) signerFor();
-
-  /** The unredacted input a held row was classified from, kept ONLY in memory and only for the row's window (spec
-   *  §6.7: the server holds the unredacted input only for the request), so the rule route can run the guard again
-   *  (spec §6.3 server step 5). A server restarted mid-window has none, and then an allow is refused `guard-escalate`
-   *  (the guard cannot be re-run, and unknown means escalate); a deny still lands (D-5491). */
-  const approvalInputs = new Map<number, { tool: string; input: Record<string, unknown>; cwd: string | null; until: number }>();
-  const forgetExpiredInputs = (now: number): void => {
-    for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);
-  };
 
   /** Either kill switch (spec §6.8): the fleet box's `$REG/approvals-disabled`, read off the registry listing as the
    *  hold reads `asks-disabled` (an unlistable registry reads as ON, fail shut), and the server box's own
@@ -4120,6 +4155,25 @@ export function registerCoordRoutes(
     }
   };
 
+  /** What `questions.raiseApproval` reads (D-7029), built once: this server's closures above, unchanged, and the
+   *  server's own store, I/O, config and tmux. Named here, so the raise ladder reaches nothing on its own. Absent with
+   *  no coordination store, where the raise answers `notConfigured` before it would be read. */
+  const raiseDeps: ApprovalRaiseDeps | undefined = deps.coord === undefined ? undefined : {
+    coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, masker: deps.masker ?? SHAPE_ONLY_MASKER,
+    signerFor, rulingsAllowedHere, heldFor, denyEngaged, liveVersionOf, journalDigestMismatch,
+  };
+
+  /** What the claimant's cores read (W3 Q3f, D-7030; `questions.rule`, `questions.release`), built once: the raise's
+   *  store, I/O, config, tmux, signer, claimant rule and single-box gate, the notice sink, the kill switches' read above,
+   *  and the press of a digit into the child's pane over the server's one queue (`askDeps`). Absent with no coordination
+   *  store, where every claimant door answers `notConfigured` before it would be read. */
+  const claimantDeps: ClaimantDoorDeps | undefined = deps.coord === undefined ? undefined : {
+    coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, signerFor, rulingsAllowedHere, heldFor, notice,
+    approvalsKilled, pressAsk: (childId, key, optionIndexes) => answerAsk(askDeps, childId, key, optionIndexes),
+  };
+  /** A core's answer, sent: the status and the body it answered, never decided here. */
+  const sendAnswer = (reply: FastifyReply, a: QuestionDoorAnswer): FastifyReply => reply.code(a.status).send(a.body);
+
   /**
    * `POST /api/approvals` — a child's hook asks for a ruling (spec §6.3 server steps 1 to 3). The ladder, cheapest
    * refusal first, nothing minted on any refusal above the mint: box token (401), body shape (400), a kill switch
@@ -4129,10 +4183,11 @@ export function registerCoordRoutes(
    * (`digest-mismatch`, journaled), and the claimant rule (`heldFor`, D-5530): `not-a-child` with nothing minted, or a
    * row minted `released` with its reason (`approval-released`), or held. A held request whose class is `forbidden` is
    * minted `released` too, never mailed. Then the mint, the mail, and `201 {id, waitS}`, the window in seconds (D-5441).
+   * The route keeps the first five inline, in this order, so the kill switch is read before attribution; from the
+   * single-box opt-in on, the ladder is `questions.raiseApproval` (D-7029), whose verdict maps here byte for byte.
    */
   app.post('/api/approvals', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/approvals')) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -4147,89 +4202,26 @@ export function registerCoordRoutes(
     }
     if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
     if (!(await requireAttribution(reply, sessionId, sessionUuid, 'sessionUuid'))) return;
-    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.fleetMode, deps.cfg.ccrcDir)) {
-      return refuseRoute(reply, 'single-box', { detail: 'this server shares one box with the sessions; place ~/.ccrc/approvals-single-box to opt in' });
-    }
-    const signer = signerFor();
-    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
-
-    // [registry-refused:refuses] a refused row is in no `recs`: the request answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, which leaves the prompt the operator's.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const rec = recs.find((r) => r.id === sessionId) ?? null;
-    if (rec === null || rec.child.kind !== 'child') return refuseRoute(reply, 'not-a-child');
-    if (!(await denyEngaged(rec))) return refuseRoute(reply, 'deny-not-engaged');
-    const version = await liveVersionOf(rec);
-    if (version === null || !APPROVAL_HOOK_VERSIONS.includes(version)) {
-      return refuseRoute(reply, 'version-unverified', { detail: `this child's live Claude Code version (${version ?? 'unread'}) is not one the rig verified` });
-    }
-
-    const now = Date.now();
-    // The digest, then the re-canonicalisation: the server's own sha256 over the string sent, and that string parsed and
-    // canonicalised again by `approvalDigestBytes`, the one home of the form (spec §6.3 "The canonical form, exactly").
-    let request: { sessionId: unknown; agentId: unknown; tool: unknown; cwd: unknown; input: unknown } | null = null;
-    if (typeof canonical === 'string') {
-      let parsed: unknown = undefined;
-      try { parsed = JSON.parse(canonical); } catch { parsed = undefined; }
-      const arr = Array.isArray(parsed) && parsed.length === 5 ? parsed : null;
-      const again = arr === null ? null : approvalDigestBytes({
-        session_id: arr[0], agent_id: arr[1], tool_name: arr[2], cwd: arr[3], tool_input: arr[4],
-      });
-      if (createHash('sha256').update(canonical, 'utf8').digest('hex') !== digest || again !== canonical || arr === null) {
-        journalDigestMismatch(sessionId, now);
-        return refuseRoute(reply, 'digest-mismatch');
-      }
-      request = { sessionId: arr[0], agentId: arr[1], tool: arr[2], cwd: arr[3], input: arr[4] };
-    }
-
-    let verdict: Awaited<ReturnType<typeof heldFor>>;
-    try {
-      verdict = await heldFor({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, rec.id, rec.child, recs, now);
-    } catch (err) {
-      return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
-    }
-    if (verdict.kind === 'not-a-child') return refuseRoute(reply, 'not-a-child');
-
-    // The request's own shape: a truncated request has no input to judge, and a canonical array whose fields are not a
-    // request's is unparseable. Both are minted `released` (the operator has them), never held.
-    const shaped = request !== null && typeof request.agentId === 'string' && typeof request.tool === 'string'
-      && (request.cwd === null || typeof request.cwd === 'string')
-      && request.input !== null && typeof request.input === 'object' && !Array.isArray(request.input);
-    const agentId = shaped ? request!.agentId as string : '';
-    const tool = shaped ? request!.tool as string : '';
-    const input = shaped ? request!.input as Record<string, unknown> : {};
-    const cwd = shaped ? request!.cwd as string | null : null;
-    const cwdTrusted = APPROVAL_CWD_TRUSTED.includes(version);
-    const roots = rootsForChild(rec, deps.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: deps.cfg.home };
-    const cls = shaped ? approvalClass(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null }) : 'escalate';
-    const shown = shaped ? (typeof input['command'] === 'string' ? input['command'] : (canonicalJson(input) ?? '')) : '';
-    const releaseReason: ApprovalMintReleaseReason | null = truncated === true ? 'truncated'
-      : !shaped ? 'unparseable'
-      : verdict.kind === 'released' ? verdict.reason
-      : cls === 'forbidden' ? 'forbidden'
-      : null;
-    const parent = verdict.parent;
-    const notifyAt = now + approvalWindowMs(agentId);
-    // The stored input is what the signed ruling carries unmasked (`GET /api/approvals/:id/ruling`), so the
-    // exact-bytes pass runs HERE, on the raw input before the redactor and the cap: a fingerprinted lane key that has
-    // no shape is masked in the row, the brief and the ruling alike (D-5995 (10), D-6057 (3)). The digest
-    // the ruling is signed over is of the unredacted input, so this changes no signature.
-    const stored = redactedStored((deps.masker ?? SHAPE_ONLY_MASKER).maskText(shown));
-    const id = coord.insertApproval({
-      childId: rec.id, parentId: parent, runId: verdict.runId, digest, nonce, agentId, tool,
-      inputRedacted: stored, truncated: truncated === true, class: cls, askAt: now, notifyAt,
-      ...(releaseReason === null ? {} : { releaseReason }),
-    });
-    if (releaseReason !== null) {
+    const v = await questions.raiseApproval({
+      sessionId, digest, nonce,
+      ...(canonical === undefined ? {} : { canonical: canonical as string }), ...(truncated === true ? { truncated } : {}),
+    }, raiseDeps!, Date.now());
+    switch (v.kind) {
+      case 'single-box': return refuseRoute(reply, 'single-box', { detail: v.detail });
+      case 'internal': return refuseRoute(reply, 'internal', { detail: v.detail });
+      case 'not-a-child': return refuseRoute(reply, 'not-a-child');
+      case 'deny-not-engaged': return refuseRoute(reply, 'deny-not-engaged');
+      case 'version-unverified': return refuseRoute(reply, 'version-unverified', { detail: v.detail });
+      case 'digest-mismatch': return refuseRoute(reply, 'digest-mismatch');
+      case 'run-unreadable': return refuseRoute(reply, 'run-unreadable', { detail: v.detail });
       // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.
-      return refuseRoute(reply, 'approval-released', { id, releaseReason });
+      case 'approval-released': return refuseRoute(reply, 'approval-released', { id: v.id, releaseReason: v.releaseReason });
+      case 'minted': {
+        const accepted: ApprovalRequestAccepted = { id: v.id, waitS: v.waitS };
+        return reply.code(201).send(accepted);
+      }
+      default: return v satisfies never;
     }
-    approvalInputs.set(id, { tool, input, cwd: cwdTrusted ? cwd : null, until: notifyAt });
-    queueSystemMail(coord, null, {
-      fromId: 'operator', toId: parent, runId: null, kind: 'question', subject: approvalNudgeSubject(id),
-      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt }),
-    });
-    const accepted: ApprovalRequestAccepted = { id, waitS: Math.floor((notifyAt - now) / 1000) };
-    return reply.code(201).send(accepted);
   });
 
   /**
@@ -4277,11 +4269,12 @@ export function registerCoordRoutes(
    * state (`declined`, `already-ruled`, `hook-gone`); the window (`hook-gone` at or after `notifyAt`, D-5441); the
    * child's mark still names the row's run (`not-a-child`) and the claimant rule still holds the row for the caller
    * (`parent-changed`); the guard again for an allow (`guard-forbidden`, `guard-escalate`); then the signature, and
-   * the CAS that stores it.
+   * the CAS that stores it. Since W3 Q3f (D-7030) the door keeps its front ladder (the box token, the widening fields,
+   * the body, attribution, the id parse) and the rest, from the row on and in this order, is
+   * `coord/questions.ts#createQuestions`'s `rule`, with `signerFor` passed in as the raise's is.
    */
   app.post('/api/approvals/:id/rule', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/approvals/:id/rule')) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     for (const k of ['permanent', 'updatedPermissions', 'mode']) {
@@ -4297,76 +4290,16 @@ export function registerCoordRoutes(
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return refuseRoute(reply, 'bad-request');
-    const read = coord.approvalById(id);
-    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
-    const row = read.row;
-    if (row === null) return refuseRoute(reply, 'unknown-approval');
-    if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
-    if (!rulingsAllowedHere(deps.cfg.role, deps.cfg.fleetMode, deps.cfg.ccrcDir)) return refuseRoute(reply, 'single-box');
-    if (row.parentId !== fromId) {
-      return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may rule on it' });
-    }
-    if (row.releaseReason !== null) return refuseRoute(reply, 'approval-released', { releaseReason: row.releaseReason });
-    if (row.state === 'declined') return refuseRoute(reply, 'declined');
-    if (row.state === 'allowed' || row.state === 'denied' || row.state === 'operator') return refuseRoute(reply, 'already-ruled');
-    const now = Date.now();
-    if (row.state !== 'held' && row.state !== 'released') return refuseRoute(reply, 'hook-gone');
-    if (now >= row.notifyAt) {
-      return refuseRoute(reply, 'hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
-    }
-    // [registry-refused:refuses] a refused row is in no `recs`: the ruling answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, so no ruling is stored.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const rec = recs.find((r) => r.id === row.childId) ?? null;
-    if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refuseRoute(reply, 'not-a-child');
-    let binding: Awaited<ReturnType<typeof heldFor>>;
-    try {
-      binding = await heldFor({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, rec.id, rec.child, recs, now);
-    } catch (err) {
-      return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) });
-    }
-    if (binding.kind === 'not-a-child') return refuseRoute(reply, 'not-a-child');
-    if (binding.kind !== 'held' || binding.parent !== fromId) return refuseRoute(reply, 'parent-changed');
-    if (verdict === 'allow') {
-      // The guard again (spec §6.3 server step 5): the class stored at mint, and the classifier run once more over the
-      // input held in memory for the window. Unknown — no input held — is escalate.
-      if (row.class === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
-      forgetExpiredInputs(now);
-      const held = approvalInputs.get(id);
-      const again = held === undefined ? 'escalate'
-        : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, deps.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: deps.cfg.home }), cwd: held.cwd });
-      if (again === 'forbidden') return refuseRoute(reply, 'guard-forbidden');
-      if (row.class !== 'ordinary' || again !== 'ordinary') return refuseRoute(reply, 'guard-escalate');
-    }
-    const signer = signerFor();
-    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
-    const record: ApprovalRulingRecord = {
-      v: 1, rowId: row.id, sessionId: row.childId, agentId: row.agentId, digest: row.digest, nonce: row.nonce,
-      class: row.class, verdict, reason, expiresAt: row.notifyAt,
-    };
-    const sig = signer.signRuling(record);
-    if (sig === null) return refuseRoute(reply, 'internal', { detail: 'the ruling has no canonical form' });
-    const taken = coord.takeApprovalForRule(id, { by: fromId, verdict, reason, ruling: JSON.stringify({ record, sig }), now });
-    if (!taken.ok) {
-      return refuseRoute(reply, taken.why === 'already-ruled' ? 'already-ruled' : taken.why === 'declined' ? 'declined'
-        : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
-    }
-    approvalInputs.delete(id);
-    // The journal's second record, beside the row: who ruled, and what, in the operator's name. Through the notice sink
-    // (D-5858), `'record-only'`: never pushed, whatever the presence, and AFTER the ruling is stored, so a failed archive
-    // costs the feed row only (the funnel catches it and says so), never the ruling or this 200.
-    notice({
-      kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
-      body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
-    }, 'record-only', { degraded: 'ruling stored, feed archive degraded' });
-    watcher?.approvalRuled(row.childId, row.agentId, fromId, verdict);
-    return { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' };
+    // W3 Q3f (D-7030): an ALIAS from here on. The row and everything after it, the signing unchanged, are the
+    // claimant's core, `questions.rule`, which `POST /api/questions/approval-<n>/rule` calls too.
+    return sendAnswer(reply, await questions.rule({ kind: 'approval', id, fromId, verdict, reason }, claimantDeps!));
   });
 
   /** `POST /api/approvals/:id/release` — the held-for claimant hands the prompt over (`held -> declined`, D-5440): the
-   *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent. */
+   *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent.
+   *  Since W3 Q3f (D-7030) the door keeps its front ladder and delegates from the row on to `questions.release`. */
   app.post('/api/approvals/:id/release', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
     if (!requireMailToken(req, reply, 'POST /api/approvals/:id/release')) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const { fromId, fromUuid } = body;
@@ -4376,17 +4309,9 @@ export function registerCoordRoutes(
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return refuseRoute(reply, 'bad-request');
-    const read = coord.approvalById(id);
-    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
-    const row = read.row;
-    if (row === null) return refuseRoute(reply, 'unknown-approval');
-    if (row.parentId !== fromId) {
-      return refuseRoute(reply, 'not-parent', { detail: 'only the claimant this prompt was held for may hand it over' });
-    }
-    if (!coord.declineApproval(id, fromId, Date.now())) return refuseRoute(reply, 'not-held');
-    approvalInputs.delete(id);
-    watcher?.releaseHeldApproval(row.childId);
-    return { ok: true };
+    // W3 Q3f (D-7030): an ALIAS from here on. The row, the stored parent, the decline, the input forgotten and the push
+    // now are the claimant's core, `questions.release`, which `POST /api/questions/approval-<n>/release` calls too.
+    return sendAnswer(reply, await questions.release({ kind: 'approval', id, fromId }, claimantDeps!));
   });
 
   /** `GET /api/approvals/:id?fromId=&fromUuid=` — one row, redacted, for the claimant it was held for (spec §6.7:
@@ -4403,7 +4328,7 @@ export function registerCoordRoutes(
     if (!(await requireAttribution(reply, q.fromId, q.fromUuid, 'fromUuid'))) return;
     const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     if (id === null) return refuseRoute(reply, 'bad-request');
-    const read = coord.approvalById(id);
+    const read = approvalFor(coord, id);
     if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
     const row = read.row;
     if (row === null) return refuseRoute(reply, 'unknown-approval');
@@ -4417,6 +4342,117 @@ export function registerCoordRoutes(
       verdict: row.verdict, reason: row.reason, answeredBy: row.answeredBy, toolUseId: row.toolUseId,
     };
     return reply.code(200).send({ ok: true, approval: view });
+  });
+
+  // ── the question door family (W3 Q3f, D-7030; ARCH-57's server half; OA-C7 ruled (a), 2026-10-26) ─────────────────
+  //
+  // `/api/questions/:id/*`, here behind this file's one gate (spec §2.5): the PATH picks the principal, never a body
+  // field or a header. `:id` is `parseQuestionId`'s (`ask-<n>`, `approval-<n>`, `session-<id>`), and an id or a body of
+  // the other principal's kind is `400 kind-mismatch`. Each door runs its own front ladder, then the shared core the old
+  // door it replaces now calls too (`coord/questions.ts`), so a new path answers what its old door answers, byte for
+  // byte. `/api/sessions/:id/dialog/tab` answers nothing and stays a session door.
+
+  /**
+   * `POST /api/questions/session-<id>/answer` — THE OPERATOR'S. Session-gated and origin-checked like every PWA write:
+   * it is in no EXEMPT table and consults no box token. Its ladder: the id (`bad-request`), its kind (a claimant's
+   * question is `kind-mismatch`), the session gated by `buildServer`'s `knownId` exactly as the session routes gate it
+   * (`unknown-session`), the body by its `kind` (`readAskAnswer` for an ask, which must name its `askKey`;
+   * `readDialogAnswer` for a dialog's row, free-text row or multiSelect set; anything else `bad-request`), then the
+   * operator's core. It replaces `/api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi`; the skew reason
+   * that split the last two off `/dialog` (an older server ignoring a field and pressing Enter) does not apply to a new
+   * path, which an older server answers 404.
+   */
+  app.post('/api/questions/:id/answer', async (req, reply) => {
+    const wiring = operatorDoors?.();
+    if (wiring === undefined) return notConfigured(reply);
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind !== 'session') return refuseRoute(reply, 'kind-mismatch');
+    if (!(await wiring.knownId(qid.sessionId))) return refuseRoute(reply, 'unknown-session');
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    let answer: OperatorAnswer;
+    if (body.kind === 'ask') {
+      const read = readAskAnswer(body);
+      if (read === null || read.askKey === undefined) return refuseRoute(reply, 'bad-request');
+      answer = { kind: 'ask', sessionId: qid.sessionId, askKey: read.askKey, optionIndexes: read.optionIndexes };
+    } else if (body.kind === 'dialog') {
+      const read = readDialogAnswer(body);
+      if (read === null) return refuseRoute(reply, 'bad-request');
+      answer = 'multi' in read
+        ? { kind: 'dialog', form: 'multi', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndexes: read.optionIndexes }
+        : read.text === undefined
+          ? { kind: 'dialog', form: 'row', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndex: read.optionIndex }
+          : { kind: 'dialog', form: 'text', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndex: read.optionIndex, text: read.text };
+    } else {
+      return refuseRoute(reply, 'bad-request');
+    }
+    return sendAnswer(reply, await questions.answer(answer, wiring.answerDeps));
+  });
+
+  /**
+   * `POST /api/questions/<ask|approval>-<n>/rule` — THE CLAIMANT'S. The box token, then the body by its `kind` (an ask:
+   * `fromId`/`fromUuid` and `readAskAnswer`'s answer; an approval: the widening-field refusal, then `fromId`/`fromUuid`,
+   * `verdict` and `reason`, exactly as `/api/approvals/:id/rule` reads them), attribution against the registry, the id
+   * (`parseQuestionId`, `bad-request`), and a body kind that disagrees with the id's is `kind-mismatch`. Then the
+   * claimant's core: the stored parent and everything after it, the signing unchanged. EXEMPT from the session gate,
+   * like the two doors it replaces (`/api/asks/:id/answer`, `/api/approvals/:id/rule`).
+   */
+  app.post('/api/questions/:id/rule', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/questions/:id/rule')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { kind, fromId, fromUuid } = body;
+    let ruleOf: (id: number) => ClaimantRule;
+    if (kind === 'ask') {
+      // D-5293: the answer half is the operator route's, read by the one reader both read (`readAskAnswer`).
+      const answerBody = readAskAnswer(body);
+      if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || answerBody === null) {
+        return refuseRoute(reply, 'bad-request',
+          { detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
+      }
+      ruleOf = (id) => ({ kind: 'ask', id, fromId, optionIndexes: answerBody.optionIndexes, askKey: answerBody.askKey });
+    } else if (kind === 'approval') {
+      for (const k of ['permanent', 'updatedPermissions', 'mode']) {
+        if (Object.prototype.hasOwnProperty.call(body, k)) {
+          return refuseRoute(reply, 'bad-request', { detail: `a ruling allows once only; ${k} is never accepted` });
+        }
+      }
+      const { verdict, reason } = body;
+      if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || (verdict !== 'allow' && verdict !== 'deny')
+          || typeof reason !== 'string' || reason.trim() === '' || reason.length > APPROVAL_REASON_MAX_CHARS) {
+        return refuseRoute(reply, 'bad-request', { detail: `fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to ${APPROVAL_REASON_MAX_CHARS} characters` });
+      }
+      ruleOf = (id) => ({ kind: 'approval', id, fromId, verdict, reason });
+    } else {
+      return refuseRoute(reply, 'bad-request', { detail: 'kind ask or approval' });
+    }
+    if (!(await requireAttribution(reply, fromId as string, fromUuid as string, 'fromUuid'))) return;
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
+    return sendAnswer(reply, await questions.rule(ruleOf(qid.id), claimantDeps!));
+  });
+
+  /**
+   * `POST /api/questions/<ask|approval>-<n>/release` — THE CLAIMANT'S hand-over. The box token, the body
+   * (`{kind, fromId, fromUuid}`), attribution, the id, the kind check, then the claimant's core: the stored parent, the
+   * decline, and the operator's push now. EXEMPT from the session gate, like the two doors it replaces
+   * (`/api/asks/:id/release`, `/api/approvals/:id/release`).
+   */
+  app.post('/api/questions/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/questions/:id/release')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { kind, fromId, fromUuid } = body;
+    if (kind !== 'ask' && kind !== 'approval') return refuseRoute(reply, 'bad-request', { detail: 'kind ask or approval' });
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId/fromUuid strings' });
+    }
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
+    return sendAnswer(reply, await questions.release({ kind, id: qid.id, fromId }, claimantDeps!));
   });
 
   /**

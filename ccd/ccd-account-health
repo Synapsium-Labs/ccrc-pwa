@@ -88,6 +88,23 @@ AH_ID_RE='^[a-z][a-z0-9-]{0,31}$'
 # no trailing slash, and no shell-active bytes.
 AH_SECRET_PATH_RE='^[A-Za-z0-9._/-]+$'
 
+# THE AUTH-DEAD MARKER'S WRITERS (D-7049; ARCH-72, spec K16), generated: byte
+# copies of ccd's `_authdead_mark`, `_authdead_clear` and `_authdead_sweep_staged`,
+# because this file is installed alone and sources nothing. Edit them in ccd/ccd,
+# then `ccrc restamp ccd/ccd-account-health`; `hook-helpers-generated.test.ts`
+# reds when this copy drifts or is edited by hand.
+# ── BEGIN GENERATED AUTH-DEAD WRITERS (shared/hook-helpers.mjs; edit them in ccd/ccd, then regenerate) ──
+# ccrc:generated 1 sha256=485bcc0092883e6f8042d6549e35aaf397093ea2b9b2990bce892d8c840227c4
+_authdead_mark() {   # lane reason [epoch] -> rc 0 written, 1 no temp made, 2 the write or rename failed (temp removed)
+  local t
+  t=$(mktemp "$REG/$1-authdead.tmp.XXXXXX") || return 1
+  printf '%s %s' "${3:-$(date +%s)}" "$2" > "$t" && mv -f "$t" "$REG/$1-authdead" && return 0
+  rm -f -- "$t"; return 2
+}
+_authdead_clear() { rm -f -- "$REG/$1-authdead"; }   # lane
+_authdead_sweep_staged() { rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null; }   # the staged temps a crashed pass left
+# ── END GENERATED AUTH-DEAD WRITERS ──
+
 _ah_say() { printf 'account-health: %s\n' "$1" >&2; }
 
 # The endpoint recognizes only an Anthropic setup token. Selection is therefore
@@ -166,16 +183,18 @@ _ah_token() {   # <token-file> -> the bearer, or nothing
 # mktemp ignores a template-less call's TMPDIR) and the temp lands in $REG, so
 # the rename never crosses a filesystem. `.tmp.` in the name is DOTTED on
 # purpose: a crashed pass leaves something the registry's own one-dot rule will
-# not confuse with a field, and the next pass's `rm -f` sweeps it.
+# not confuse with a field, and the next pass's `rm -f` sweeps it. The write
+# itself is the generated `_authdead_mark` above; this keeps the words.
 _ah_mark() {   # <id> <reason>
-  local tmp
-  tmp="$(mktemp "$REG/$1-authdead.tmp.XXXXXX")" || { _ah_say "$1: cannot stage a marker"; return 1; }
-  printf '%s %s' "$(date +%s)" "$2" > "$tmp" \
-    && mv -f "$tmp" "$REG/$1-authdead" \
-    || { rm -f "$tmp"; _ah_say "$1: cannot write the marker"; return 1; }
+  _authdead_mark "$1" "$2"
+  case $? in
+    0) return 0 ;;
+    1) _ah_say "$1: cannot stage a marker"; return 1 ;;
+    *) _ah_say "$1: cannot write the marker"; return 1 ;;
+  esac
 }
 
-_ah_clear() { rm -f "$REG/$1-authdead"; }
+_ah_clear() { _authdead_clear "$1"; }
 
 # THE LANE STATE (accounts plan Task A11; spec §3.4, G16; D-5517). A 401 is a
 # check verdict the Accounts screen shows, so it is also written to the lane's
@@ -251,7 +270,7 @@ if [ "$rc" -ne 0 ]; then
   _ah_say "the roster at \$HOME/.ccrc/accounts.json is invalid — $ROSTER_WHY nothing was measured"
   exit 1
 fi
-rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
+_authdead_sweep_staged
 
 SUBJECTS="$(_ah_subjects 2>/dev/null)" \
   || { _ah_say 'the validated roster snapshot does not parse — nothing was measured'; exit 1; }

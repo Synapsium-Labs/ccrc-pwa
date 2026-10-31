@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
-import { CCD, makeCcdHarness, ghContainedEnv, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, ghContainedEnv, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { eventsOf, measOf, lcDir, readJournal, compactLockPath, holdCompactLock,
   expectContentionClauses } from './lifecycleHelpers.js';
@@ -165,7 +165,7 @@ describe('_reg_purge always journals, and journals BEFORE it unlinks', () => {
     // The emit must sit at the top of the function body with nothing between it
     // and the opening brace but the header comment. A future `if` around it is
     // exactly how a silent destruction gets back in.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('_reg_purge() {');
     // HARD guard: everything below slices/indexes off `from`, so a miss here
     // must stop the test rather than silently operating on -1.
@@ -391,7 +391,7 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
   });
 
   it('GENERATION LAST is a MECHANISM: the purge loop SKIPS it and one explicit unlink takes it after the tail', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('_reg_purge() {');
     const body = src.slice(from, src.indexOf('_substrate_mark() {'));
     // `.generation` is a dot-free suffix like any other field, so WITHOUT the
@@ -423,7 +423,7 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
   // shorter name first would harvest every longer call as a short one and then
   // "prove" the arity it had just mis-parsed.
   const lcCalls = (name: string): Array<{ line: number; args: string[] }> => {
-    const src = readFileSync(CCD, 'utf8').split('\n');
+    const src = ccdSource().split('\n');
     const out: Array<{ line: number; args: string[] }> = [];
     for (let i = 0; i < src.length; i++) {
       const raw = src[i]!;
@@ -502,7 +502,7 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
   });
 
   it('the purge takes the row mutex, and the acquisition is the ONE statement before the unconditional emit', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('_reg_purge() {');
     const body = src.slice(from, src.indexOf('_substrate_mark() {'));
     const emitAt = body.indexOf('_lc_done purge');
@@ -880,7 +880,7 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
         // the whole of `cmd_ws_rm` needs a real worktree; what is under test is
         // the BRANCH, which measured did not exist before this task — all four
         // callers fell straight through to an unconditional success echo.
-        const src = readFileSync(CCD, 'utf8');
+        const src = ccdSource();
         const body = src.slice(src.indexOf(`${verb}() {`));
         const end = body.indexOf('\n}\n');
         const fn = body.slice(0, end);
@@ -902,7 +902,7 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
   }, 30_000);
 
   it('row creation acquires BEFORE any row field, and a miss leaves NOTHING', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     for (const verb of ['cmd_ws_add', 'cmd_start'] as const) {
       const whole = src.slice(src.indexOf(`${verb}() {`));
       // BOUNDED to the function, and CODE ONLY. Unbounded, `_reg_set "$id" `
@@ -1094,7 +1094,7 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
     expect(acq, 'a leaked hold is visible to both children').toEqual(['blocked1', 'blocked2']);
   }, 30_000);
   it('_spawn_start CLOSES the lock before either tmux command, and a contended miss spawns without the generation', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const body = src.slice(src.indexOf('_spawn_start() {'));
     const fn = body.slice(0, body.indexOf('\n}\n'));
     const acquire = fn.indexOf('_compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"');
@@ -2127,7 +2127,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       // definition ccd already installed. Nothing in the worktree is touched:
       // the excision happens in a string and lands in the FIXTURE HOME, and
       // the next leg re-reads `ccd` from disk.
-      const helperSrc = fs.readFileSync(CCD, 'utf8');
+      const helperSrc = ccdSource();
       const hFrom = helperSrc.indexOf('_compact_lock_why_remedy() {');
       expect(hFrom, `${leg.verb}: the helper is in ccd`).toBeGreaterThan(-1);
       const helperText = helperSrc.slice(hFrom, helperSrc.indexOf('\n}\n', hFrom) + 3);
@@ -2269,7 +2269,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     // would otherwise fall through to the contention sentence in silence,
     // which is the defect r5 R4-M3 found in the `[[ -z … ]] ||` form this
     // replaced — one sentence answering for every token there will ever be.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('_compact_lock_acquire() {');
     expect(from, 'the acquire is in ccd').toBeGreaterThan(-1);
     const body = src.slice(from, src.indexOf('\n}\n', from));

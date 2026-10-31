@@ -595,6 +595,8 @@ export const GROUNDS = {
 export const SELF_GROUNDED_EXEMPT = {
   '.chat-head .keycap:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   '.send-btn:disabled': 'WCAG 1.4.3 exempts inactive controls',
+  // R89 S1: a failed bubble's Retry while the desk's inline ask card is held; --ink-disabled on the message column's page ground.
+  '.pending-actions .pending-retry:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   // Measured, not assumed: --ink-disabled on the ghost button's sheet ground is
   // 2.85 dark / 2.63 light. It is the same --ink-disabled the three entries
   // above are exempt for; this one only became visible when variants that
@@ -733,6 +735,101 @@ export const INHERITED_GROUNDS = {
   '.code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (CodeBlock, lib/markdown.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
+  },
+  // ── the code palette on the well (T4a, D-6387) ──────────────────────────
+  // Thirteen combined `.msg-assist .hljs-*, .well .hljs-*` rules and seven
+  // `.well .ansi-*` rules. Every arm paints a --syn-* / --diff-* hue on
+  // --bg-well, and the colour is read from the stylesheet, so retinting a rule
+  // re-measures it. The ground is the DOM's: a fenced block's <pre> and the
+  // .code-block wrapper both paint --bg-well (prose.css), and a tool box is a
+  // <pre class="well"> (primitives/well.tsx). The same chat code block is
+  // drawn by the Docs reader (its `.doc-body` carries the prose hook class, and
+  // renders the same CodeBlock), so one registration covers both pages.
+  '.msg-assist .hljs-comment, .msg-assist .hljs-quote, .well .hljs-comment, .well .hljs-quote': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal, .well .hljs-keyword, .well .hljs-selector-tag, .well .hljs-section, .well .hljs-literal': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-string, .msg-assist .hljs-regexp, .well .hljs-string, .well .hljs-regexp': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet, .well .hljs-number, .well .hljs-symbol, .well .hljs-bullet': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title, .well .hljs-title, .well .hljs-title.function_, .well .hljs-function .hljs-title': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title, .well .hljs-type, .well .hljs-built_in, .well .hljs-title.class_, .well .hljs-class .hljs-title': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id, .well .hljs-attr, .well .hljs-attribute, .well .hljs-property, .well .hljs-variable, .well .hljs-template-variable, .well .hljs-selector-class, .well .hljs-selector-id': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-tag, .well .hljs-tag': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name, .well .hljs-tag .hljs-name, .well .hljs-name': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-meta, .well .hljs-meta': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-deletion, .well .hljs-deletion': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-addition, .well .hljs-addition': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-link, .well .hljs-link': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.well .ansi-red': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-green': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-yellow': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-blue': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-magenta': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-cyan': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-muted': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  // The word `failed` on an errored tool call's row (T4a, D-6387). The row sits in .toolcard, which paints
+  // --bg-surface, the same card ground .exit-badge is registered against; the selector names no painted ancestor.
+  '.tool-fail': {
+    under: ['var(--bg-surface)'],
+    why: "the failed word on a tool card's header row takes --status-dead-text; the card (.toolcard, tool-card.css) paints background: var(--bg-surface) and .tool-fail's selector names no painted ancestor, so no route could ground it. The same ground and the same ink as the gate's `dead-text / surface` pair, and as .exit-badge's entry",
   },
   '.term-histbar-word': {
     under: ['color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well))'],
@@ -896,8 +993,8 @@ export const INHERITED_GROUNDS = {
     why: "the account-pool epoch/observed staleness indicator (Task 9, account-pool-membership wave 1) sits in .fleet-head-right on the fleet screen's header. .fleet, .fleet-head and .fleet-head-right all paint no background of their own, so the real ground is body's --bg-page (styles/base.css:111) — same reasoning and same ground as .mail-chip/.mail-group-head above, which sit on the sibling .mail-screen's unpainted body. Its selector names no ancestor, so no route could ground it. Review round 1, C2: this was first added to GRANDFATHERED_UNCOVERED on the mistaken claim that nothing at this header level paints a background — INHERITED_GROUNDS already grounds three OTHER rules in this exact file against --bg-page for exactly this reason, and --ink-tertiary over --bg-page measures 6.23 dark / 5.25 light, clearing the 4.5 floor in both themes.",
   },
   '.dlg-later:disabled': {
-    under: ['var(--bg-sheet)'],
-    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) (primitives.css:141); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component.",
+    under: ['var(--bg-sheet)', 'var(--bg-surface)'],
+    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose panel paints background: var(--bg-sheet) (its bg-sheet utility, ui/src/primitives/sheet.tsx#Sheet); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component. D-6326: at the desk the same row sits in the inline ask card, `.ask-inline` (chat.css), which paints background: var(--bg-surface), so both grounds are measured.",
   },
   '.opt-inert': {
     under: ['var(--bg-sheet)'],
@@ -1108,7 +1205,7 @@ export const OPACITY_REGISTRY = {
   },
   '.bell:disabled 0.35': { noText: 'WCAG 1.4.3 exempts inactive controls' },
   '.pending-actions .pending-send-it:disabled 0.6': {
-    noText: 'WCAG 1.4.3 exempts inactive controls; the button is only disabled for the moment its own Enter is in flight',
+    noText: 'WCAG 1.4.3 exempts inactive controls; the button is disabled while its own Enter is in flight, and while the desk\'s inline ask card holds sends (D-6326, R96)',
   },
   ".attach-chip[data-state='uploading'] .attach-thumb 0.55": {
     noText: 'an <img> upload preview; the uploading state is also carried by the ::before ring',

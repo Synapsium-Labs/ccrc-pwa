@@ -8,7 +8,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { CensusSite } from '../consolidationCensus.js';
+import { REPO, type CensusSite } from '../consolidationCensus.js';
+import { parsedFile } from '../scan/symbols.js';
 import {
   coordStoreQuestionShapedMethods, envelopePairingRules, envelopePairingTitleRules, NOT_QUESTION_STORE_METHODS, QUESTION_STORE_EXCLUDED,
   QUESTION_STORE_METHODS, QUESTION_STORE_OWNERS, questionDoorIns, questionDoors, questionHoldCarriers, questionPaneEdges,
@@ -64,7 +65,9 @@ describe('W3 question census (slug question-census)', () => {
     'export function buildServer(): void {',
     "  app.post('/api/sessions/:id/dialog/tab', async () => {});",
     "  app.post('/api/sessions/:id/release', async () => {});",
-    "  app.post('/api/sessions/:id/ask', async () => { coord.heldAskFor('x'); });",
+    // W7 C7p (D-7194): the fixture's operator door was `/api/sessions/:id/ask`, retired, so its tag row is gone; the
+    // family's operator door stands in for it, with the same store call.
+    "  app.post('/api/questions/:id/answer', async () => { coord.heldAskFor('x'); });",
     '}',
   ].join('\n');
 
@@ -83,6 +86,33 @@ describe('W3 question census (slug question-census)', () => {
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
+  it('FIXTURE (Q3d): the two flags are carriers when they are FleetWatcher fields, and the one carrier is found inside createQuestions', () => {
+    const t = tree({
+      'server/src/watch.ts': [
+        'export class FleetWatcher {',
+        '  private reseedLoaded = false;',
+        '  private asksDisabled = false;',
+        '  private otherFlag = false;',
+        '}',
+      ].join('\n'),
+      'server/src/coord/questions.ts': [
+        'export function createQuestions() {',
+        '  const questionHolds = new Map<string, number>();',
+        '  let reseedLoaded = false;',
+        '  let asksDisabled = false;',
+        '  const otherLocal = new Map();',
+        '  return {};',
+        '}',
+      ].join('\n'),
+    });
+    try {
+      expect(questionHoldCarriers(t).map((s) => [s.name, s.owner, s.line])).toEqual([
+        ['reseedLoaded', 'FleetWatcher', 2], ['asksDisabled', 'FleetWatcher', 3],
+        ['questionHolds', 'createQuestions', 2], ['reseedLoaded', 'createQuestions', 3], ['asksDisabled', 'createQuestions', 4],
+      ]);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+
   it('FIXTURE: a sweep entry is a method tick calls that reaches a lapse, release or prune; a public half tick does not call is not one', () => {
     const t = tree({ 'server/src/watch.ts': watch });
     try {
@@ -91,12 +121,41 @@ describe('W3 question census (slug question-census)', () => {
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
+  it('FIXTURE (Q3d): a sweep act reached only through this.questions.<member>( counts, through the factory\'s own member calls too; a member that only reads does not', () => {
+    const t = tree({
+      'server/src/watch.ts': [
+        'export class FleetWatcher {',
+        '  async tick(): Promise<void> {',
+        '    this.sweepA();',
+        '    this.sweepB();',
+        '    this.sweepC();',
+        '  }',
+        '  sweepA(): void { this.questions.lapseAsks(1, () => {}); }',
+        '  sweepB(): void { this.questions.lapseApprovals(1); }',
+        '  sweepC(): void { this.questions.currentAskOf("x"); }',
+        '}',
+      ].join('\n'),
+      'server/src/coord/questions.ts': [
+        'export function createQuestions(deps: Deps) {',
+        '  const lapseAsks = (now: number, push: () => void): void => { deps.coord.releaseAsk(1, now); push(); };',
+        '  const prune = (now: number): void => { deps.coord.pruneAskQuestions(now); };',
+        '  const lapseApprovals = (now: number): void => { prune(now); };',
+        '  const currentAskOf = (id: string) => deps.coord.currentAskFor(id);',
+        '  return { lapseAsks, lapseApprovals, currentAskOf };',
+        '}',
+      ].join('\n'),
+    });
+    try {
+      expect(questionSweepEntries(t).map((s) => [s.method, s.line])).toEqual([['sweepA', 3], ['sweepB', 4]]);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+
   it('FIXTURE: doors by shape and tag; a door-shaped path with no tag is `untagged`; the raise and a session release are not doors', () => {
     const t = tree({ 'server/src/coord/routes.ts': routes, 'server/src/server.ts': server });
     try {
       expect(questionDoors(t).map((s) => [s.route, s.tag])).toEqual([
         ['POST /api/asks/:id/answer', 'claimant'], ['POST /api/asks/:id/shout', 'untagged'],
-        ['POST /api/sessions/:id/dialog/tab', 'navigation'], ['POST /api/sessions/:id/ask', 'operator'],
+        ['POST /api/sessions/:id/dialog/tab', 'navigation'], ['POST /api/questions/:id/answer', 'operator'],
       ]);
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
@@ -121,7 +180,7 @@ describe('W3 question census (slug question-census)', () => {
         ['server/src/coord/routes.ts', 'POST /api/asks/:id/answer', 'askById', false],
         ['server/src/coord/routes.ts', 'POST /api/approvals', 'insertApproval', false],
         ['server/src/coord/routes.ts', 'GET /api/approvals/:id/ruling', 'approvalById', true],
-        ['server/src/server.ts', 'POST /api/sessions/:id/ask', 'heldAskFor', false],
+        ['server/src/server.ts', 'POST /api/questions/:id/answer', 'heldAskFor', false],
         ['server/src/watch.ts', 'FleetWatcher.askPass', 'releaseAsk', false],
         ['server/src/watch.ts', 'FleetWatcher.sweepApprovals', 'lapseApproval', false],
         ['server/src/watch.ts', 'FleetWatcher.sweepOther', 'askById', false],
@@ -163,7 +222,21 @@ describe('W3 question census (slug question-census)', () => {
     expect(carriers.map((s) => s.name), 'the closure carrier is found').toContain('approvalInputs');
     expect(doors.filter((s) => s.tag === 'untagged').map((s) => s.route), 'a door-shaped POST with no principal').toEqual([]);
     expect(doors.map((s) => s.route), 'the cited door is found').toContain('POST /api/approvals/:id/rule');
+    // 9 at the base (4 claimant, 4 operator, 1 navigation); 12 since Q3f (D-7030): 9 + the 3 routes of the family.
+    // W7 C7p (D-7194) retires the operator aliases one per commit: 11 (4 operator) with `/api/sessions/:id/ask` gone,
+    // 10 (3 operator) with `/dialog/multi`, 9 (2 operator) with `/dialog/text`, 8 (1 operator, the family's `/answer`
+    // alone) with `/dialog`.
+    const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
+    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([8, 6, 1, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
+    // W3 Q3f (D-7030; slug q3f-door-in-repoint), at the target, may only shrink: no route calls the watcher for a question, and the four
+    // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the
+    // cores call the watcher's `Questions` instance and push through its doors sink.
+    expect(doorIns.map((d) => d.method), 'a watcher door-in a route calls').toEqual([]);
+    const watcherSymbols = parsedFile(path.join(REPO, 'server/src/watch.ts')).symbols.map((x) => x.name);
+    expect(watcherSymbols, 'the watcher was read').toContain('FleetWatcher.tick');
+    expect(watcherSymbols.filter((n) => /^FleetWatcher\.(?:releaseHeldAsk|answeredLate|releaseHeldApproval|approvalRuled)$/.test(n)),
+      'a door-in forward on the watcher').toEqual([]);
   });
 
   it('REAL: every counted question-store call has an owning task; the excluded one is named; printed for the PR body', () => {
@@ -176,11 +249,14 @@ describe('W3 question census (slug question-census)', () => {
       .toEqual(QUESTION_STORE_EXCLUDED.map((x) => `${x.file} | ${x.symbol} | ${x.method}`));
   });
 
-  it('REAL: the pairing rule\'s definitions, one server and one PWA at most, printed for the PR body', () => {
+  // W7 C7f (D-7184): the PWA's pairing is deleted, so its side reads 0 on both rows (1 -> 0 and 2 -> 0).
+  it('REAL: the pairing rule\'s definitions, one server and no PWA (C7f), printed for the PR body', () => {
     const rules = envelopePairingRules();
+    const titles = envelopePairingTitleRules();
     show('envelopePairingRules', rules);
-    show('envelopePairingTitleRules', envelopePairingTitleRules());
+    show('envelopePairingTitleRules', titles);
     expect(rules.filter((s) => s.side === 'server').length, 'the server keeps one normalize-and-prefix definition').toBe(1);
-    expect(rules.filter((s) => s.side === 'pwa').length).toBeLessThanOrEqual(1);
+    expect(rules.filter((s) => s.side === 'pwa').length, 'C7f: the PWA defines no normalize-and-prefix rule').toBe(0);
+    expect(titles.filter((s) => s.side === 'pwa').length, 'C7f: the PWA defines no title rule').toBe(0);
   });
 });

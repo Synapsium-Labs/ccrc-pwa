@@ -41,7 +41,7 @@ const session = (id: string, ws: string, extra: object = {}): object => ({
   ultracode: false, branch: `ws/${ws}`, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null,
   archivedBytes: null, held: null, hookState: null, askSummary: null, subagents: null, background: null,
   withCoordinator: null, lastEnd: null, hibernatedAt: null, bucket: 'idle', unmeasured: [], started: true,
-  child: { kind: 'none' }, lifecycle: 'running', ...extra,
+  child: { kind: 'none' }, lifecycle: 'running', presence: 'alive', ...extra,
 });
 
 const MERGED_PR = {
@@ -63,7 +63,7 @@ const RUN = {
 
 const SESSIONS = [
   session(WORKER, 'one', { pr: MERGED_PR }),
-  session(COORD, 'coord', { status: 'dead', lifecycle: 'orphan', bucket: 'idle' }),
+  session(COORD, 'coord', { status: 'dead', lifecycle: 'orphan', presence: 'dead', bucket: 'idle' }),
 ];
 
 const FIXTURE: AppFixture = {
@@ -72,7 +72,7 @@ const FIXTURE: AppFixture = {
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
     '/api/runs': { runs: [RUN] },
     '/api/claims': [],
-    '/api/coord/caps': { caps: { maxConcurrentWorkers: 4, maxSessionsPerDay: 20 }, usage: { running: 1, dispatchedIn24h: 1 } },
+    '/api/coord/caps': { caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 } },
     [`/api/sessions/${WORKER}/pr`]: { pr: MERGED_PR, draft: null, facts: null },
   },
   fleetFrames: [

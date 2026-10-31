@@ -3,12 +3,14 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
-import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
+import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { LinearConnectionView } from '../../../shared/linear';
+import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, answered, linearViewOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import {
@@ -18,6 +20,15 @@ import {
 import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
+import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+
+/** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
+export interface RollIdleView {
+  readonly ok: true;
+  readonly targets: ClaudeRollTargets | null;
+  readonly default: ClaudeRollTargets;
+  readonly choices: readonly ClaudeRollTargets[];
+}
 
 
 // `ApiError` lives in `./apiError` (D-5897, ARCH-05), a leaf that imports nothing, so a pure word module can name
@@ -347,9 +358,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  — an ordinary fetch (the fleet screen, this sheet's own project list)
      *  asks nothing and gets the byte-identical class-blind answer; only a
      *  caller that means to forecast one class's placement sends it. */
-    projects: (cls?: string) => getJson<{ roots: string[]; projects: ProjectRow[] }>(
-      cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
-    ),
+    projects: async (cls?: string) => {
+      const read = await getJson<{ roots: string[]; projects: ProjectRow[] }>(
+        cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
+      );
+      if (!Array.isArray(read?.projects)) throw new Error("The server's project list could not be read.");
+      return read;
+    },
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
      *  start keeps the parsed request shape it sent before pools existed —
      *  no key an older server does not know, and a flag that only ever means
@@ -416,8 +431,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  (`{ ok, epoch, raced?, warning? }`) — because the authority for an
      *  account's pool is `~/.ccrc/coord.db`'s `pool_edges`, re-read by
      *  `GET /api/pools/epoch`, not this route's own body. A caller that wants
-     *  the resulting tag re-polls `GET /api/accounts`, the same route
-     *  `AccountsScreen` already polls every 20s.
+     *  the resulting tag re-polls `GET /api/accounts`, the route the fleet
+     *  store already polls every 20s (C8, D-6440).
      *
      *  `warning: 'unknown-account'` is a WARNING and not a refusal, on
      *  `setProjectPool`'s exact terms: this box's roster copy can lag the
@@ -550,33 +565,30 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
-    answerDialog: async (id: string, dialogId: string, optionIndex: number): Promise<DialogAnswered> =>
-      answered(await postRead<unknown>(`${sid(id)}/dialog`, ANSWERED, { dialogId, optionIndex })),
-    /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
-     *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
-     *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
-     *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
-     *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
-    answerDialogText: async (id: string, dialogId: string, optionIndex: number, text: string): Promise<DialogAnswered> =>
-      answered(await postRead<unknown>(`${sid(id)}/dialog/text`, ANSWERED, { dialogId, optionIndex, text })),
-    /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
-     *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
-     *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
-     *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
-     *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
-    answerDialogMulti: async (id: string, dialogId: string, optionIndexes: readonly number[]): Promise<DialogAnswered> =>
-      answered(await postRead<unknown>(`${sid(id)}/dialog/multi`, ANSWERED, { dialogId, optionIndexes })),
     /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
      *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
      *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
     answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
       answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
-    /** Answer a hook-reported question by option index. `askKey` is minted
-     *  server-side and carried verbatim: the server re-reads the CURRENT
-     *  envelope and refuses unless the key still matches, so this can only ever
-     *  answer the question the client was actually shown. */
-    answerAsk: (id: string, askKey: string, optionIndexes: number[]) =>
-      post(`${sid(id)}/ask`, { askKey, optionIndexes }),
+    /** Answer session `id`'s question (W7 C7g, D-7185, D-7485): an option row, the own words, a multiSelect set or a
+     *  hooked ask by option index, as `body` (`shared/api.ts#QuestionAnswerBody`), to W3 Q3f's
+     *  `POST /api/questions/session-<id>/answer` (`answerLifecycle.ts#questionAnswerRequest`), the only door since C7p
+     *  (D-7194, D-7540), which retired the old ones and the `GET /health` read that chose between them. Its refusals
+     *  come by code (`DialogRefuseCode` and the rest, plus the family's `kind-mismatch`), and a 200's `next` is read as
+     *  a tapped row's is.
+     *
+     *  What each answer carries, as the four writers it replaced said (they went in C7g): an option row is answered by
+     *  INDEX, with the dialog it was shown. The own words (D-5047) are typed only once a capture proves the cursor on
+     *  the empty free-text row, and Enter is pressed only once a capture proves the row holds exactly `text`; a text the
+     *  server will not type is 400 `bad-text` (`isDialogText`), and typing changes the dialog's id. A multiSelect set
+     *  (D-5048) is the WHOLE set to leave ticked, never a toggle; a set it will not send is 400 `bad-indexes`
+     *  (`isDialogMultiIndexes`: empty, repeated, or outside 1..9). An ask's `askKey` is minted server-side and carried
+     *  verbatim: the server re-reads the CURRENT envelope and refuses unless the key still matches, so this can only
+     *  ever answer the question the client was shown. */
+    answerQuestion: async (id: string, body: QuestionAnswerBody): Promise<DialogAnswered> => {
+      const req = questionAnswerRequest(id, body);
+      return answered(await postRead<unknown>(req.path, ANSWERED, req.payload));
+    },
     /** One verified Enter on a box that already holds text — the rescue for a
      *  send whose Enter the pane swallowed twice.
      *
@@ -584,7 +596,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `draft`, carried back verbatim). The server re-reads the box and refuses
      *  `box-mismatch` unless it still reads exactly that, so this can only ever
      *  submit the message the bubble is showing — the same correspondence rule
-     *  `answerAsk` applies with `askKey`. */
+     *  an ask's answer (`answerQuestion`) applies with `askKey`. */
     submit: (id: string, expect: string) => post(`${sid(id)}/submit`, { expect }),
     catchUp: (epoch: string | null, seq: number) =>
       getJson<CatchUp>(`/api/notifications/catchup?epoch=${encodeURIComponent(epoch ?? '')}&seq=${seq}`),
@@ -761,6 +773,33 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  happened". */
     setCollectLane: (body: CollectLaneRequest) =>
       postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
+    /** `GET /api/coord/dispatch-abandon` (D-7319): the switch of the act that abandons a dispatch that never came back.
+     *  Settings' Automation card reads it through `useDispatchAbandonView`, whose `asDispatchAbandonView` is the wire
+     *  guard. 501 `not-configured` and an older server's 404 read as not available. Session-gated when armed. */
+    dispatchAbandon: () => getJson<DispatchAbandonView>('/api/coord/dispatch-abandon'),
+    /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
+     *  could not be read may still have stored the choice. */
+    setDispatchAbandon: (body: DispatchAbandonRequest) =>
+      postJsonOr<DispatchAbandonView | 'unreadable'>('/api/coord/dispatch-abandon', 'unreadable', body),
+    /** `GET /api/coord/roll-idle` (D-7453): Settings › Automation › Roll idle sessions, `coordinators` or `off`
+     *  (`targets` null when the server could not read its row). Session-gated when armed, open dark; no box token. */
+    rollIdle: () => getJson<RollIdleView>('/api/coord/roll-idle'),
+    /** `POST /api/coord/roll-idle`: `{targets}`. `postJsonOr`, for `setCoordCaps`' reason: after a write, "the answer
+     *  could not be read" may well have stored the choice. */
+    setRollIdle: (targets: ClaudeRollTargets) =>
+      postJsonOr<RollIdleView | 'unreadable'>('/api/coord/roll-idle', 'unreadable', { targets }),
+    /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
+     *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
+     *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
+    testbox: () => getJson<{ readonly ok: true; readonly testbox: unknown }>('/api/testbox'),
+    /** `POST /api/testbox/switch`: `{on}` and nothing else (the route refuses any other field). The answer is
+     *  `requested`, never the switch: the block's `switch` field, re-read, is the authoritative answer. */
+    setTestboxSwitch: (on: boolean) =>
+      postJsonOr<{ readonly ok: true; readonly requested: boolean } | 'unreadable'>('/api/testbox/switch', 'unreadable', { on }),
+    /** `POST /api/testbox/tools-sync`: no body; the release and the versions sent are the fleet host's own. */
+    testboxToolsSync: () =>
+      postJsonOr<{ readonly ok: boolean; readonly outcome?: unknown; readonly detail?: unknown } | 'unreadable'>(
+        '/api/testbox/tools-sync', 'unreadable'),
     /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
      *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
      *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */

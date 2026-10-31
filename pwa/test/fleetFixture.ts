@@ -19,9 +19,21 @@
 // project, workspace and status its own cases are about: those ARE the test's
 // subject, and collapsing them into a shared default would be the mistake this
 // file is not making.
+//
+// PRESENCE IS DERIVED, never defaulted (D-7181; plan Task C7c Step 1; ARCH-49). When the caller passes no `presence`
+// key, the row's own `status`, `lifecycle`, `hibernatedAt` and `substrate` are read back through the inverse rule
+// `presenceTable.ts` states once (`tablePresence`), so a fixture carries the word the server's assembly would send for
+// the same row (`server/test/w7-presence-parity.test.ts` holds that rule to `assembleFleet`). A dead row with no
+// lifecycle is the old-server skew row: the rule leaves `presence` absent on it, as such a server does, so it reads
+// `unknown`. A case that means an unknown pane passes `presence: 'unknown'` itself; a case that means an old server
+// passes `presence: undefined` (the key, so nothing is derived).
+//
+// THE ARCHIVED RUNG IS DERIVED too (C7j, D-7188, D-7468): a caller that passes `archivedAt` and no `bucket` gets the bucket
+// (and, naming no `status`, the gone pane) the server assembles for that archived row (`archivedRung`, below).
 import type { FleetSession } from '../../shared/api';
+import { tablePresence } from './presenceTable';
 
-export const fleetSession = (over: Partial<FleetSession> = {}): FleetSession => ({
+export const fleetSession = (over: Partial<FleetSession> = {}): FleetSession => withPresence(over, archivedRung(over, ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo',
   workdir: '/w', workspace: null, name: null, title: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
@@ -35,12 +47,45 @@ export const fleetSession = (over: Partial<FleetSession> = {}): FleetSession => 
   substrate: null, started: true, spawnState: null, ask: null, usage: null,
   boardProject: null, route: null, child: { kind: 'none' }, role: null, releasedFrom: null,
   ...over,
-});
+})));
+
+/** The row as the server files an archived workspace (C7j, D-7188, D-7468): when the caller passes an `archivedAt` and no
+ *  `bucket`, the bucket is `sessionBucket`'s first rung, `archived` (or `cleanup` with a merged PR), and a caller that
+ *  names no `status` gets the pane `ws-archive` leaves, gone (`status` dead under `DEAD_LIFECYCLE` unless it names its
+ *  own lifecycle). A caller that names a live `status` keeps it and keeps its bucket: that is the archived row with a
+ *  live pane, which no bucket files archived. The PWA reads "archived" from the bucket (`isArchivedRow`), so a fixture
+ *  that set only `archivedAt` would otherwise describe a row no server sends. */
+function archivedRung(over: Partial<FleetSession>, row: FleetSession): FleetSession {
+  if (row.archivedAt === null || 'bucket' in over) return row;
+  const pane = 'status' in over ? row : { ...row, status: 'dead' as const, lifecycle: 'lifecycle' in over ? row.lifecycle : DEAD_LIFECYCLE };
+  if (pane.status !== 'dead') return pane;
+  return { ...pane, bucket: pane.pr?.phase === 'merged' ? 'cleanup' : 'archived' };
+}
+
+/** The row with the presence the inverse rule gives it, unless the caller named the key itself. */
+function withPresence(over: Partial<FleetSession>, row: FleetSession): FleetSession {
+  if ('presence' in over) return row;
+  const presence = tablePresence(row);
+  return presence === undefined ? row : { ...row, presence };
+}
 
 /** A row `ccd hibernate` put to sleep (D-5242), in the shape the server assembles it: `.stopped` (lifecycle `stopped`,
  *  the sweep's declared `agent` stamp) plus `.hibernated` (`hibernatedAt`), and the pane gone, so status and bucket
  *  `dead`. `at` is the marker's epoch MS; the caller names its own id, project and anything else its case is about. */
 export const hibernatedSession = (at: number, over: Partial<FleetSession> = {}): FleetSession => fleetSession({
   status: 'dead', bucket: 'dead', lifecycle: 'stopped', stoppedBy: { at, surface: 'agent' }, hibernatedAt: at,
+  ...over,
+});
+
+/** The lifecycle a dead fixture names when its case is not about which death it was: `orphan` (nothing is bringing the
+ *  pane back), one `sessionLifecycle` returns for a pane that is not live and `lifecycleIsDead` calls dead, so the
+ *  derivation reads the row `dead` as the server does. Measured (C7c Step 1b): it keeps every listed suite green on the
+ *  code that reads `status`. A case whose words depend on the cause names its own lifecycle. */
+export const DEAD_LIFECYCLE = 'orphan' as const;
+
+/** A row whose pane is gone and that the server reads `dead`: status and bucket `dead` under a dead lifecycle, not the
+ *  lifecycle-null skew row an old server sends (D-7181, plan Task C7c Step 1; ARCH-49). */
+export const deadSession = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
+  status: 'dead', bucket: 'dead', lifecycle: DEAD_LIFECYCLE,
   ...over,
 });

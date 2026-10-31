@@ -15,11 +15,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import { CCD, ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, seedAccountsSh, ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { REAP_ACTS, REAP_PHASE_NAMES, REAP_PHASES } from '../../shared/reapcrumb.js';
 
-const src = fs.readFileSync(CCD, 'utf8');
+const src = ccdSource();
 
 let home: string;
 beforeEach(() => { home = mkTmp('ccrc-ccd-home-'); seedAccountsSh(home); });

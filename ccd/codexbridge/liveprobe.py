@@ -26,8 +26,9 @@ The lane's requests are counted in COUNT_FILE, raised BEFORE each request is sen
 sent. `--dry-run` prints the body it would send, and reads no credential, counts nothing and sends nothing.
 
 WHAT IT PRINTS (stdout, one `liveprobe: ` line each): the status, the upstream request id (bounded), every response
-header NAME, every event type, every finished item's type, the terminal's `end_turn` and its numeric usage fields;
-never a header value, a text, an id or an encrypted content. The answer is recorded raw, head and body, in the lane's
+header NAME, every event type, every finished item's type, the terminal's `end_turn` and its numeric usage fields (a
+key that is an item id, as `attribution.items` keys are, printed as its kind: `<msg>`, `<fc>`, `<rs>`); never a header
+value, a text, an id or an encrypted content. The answer is recorded raw, head and body, in the lane's
 recordings directory as `liveprobe-<step>-<utc>-<n>.sse` (0600, directory 0700; `n` the request's count, so a bridge
 recording's cap never counts it), for the operator to scrub into the corpus (`record.py scrub`) in a reviewed change.
 A refusal is one stderr line, `liveprobe: refused <word>: <sentence>`; any other failure before the send is
@@ -292,12 +293,30 @@ def credential(files: LaneFiles) -> object:
 
 
 # ── the answer ───────────────────────────────────────────────────────────────────────────────────────────────────
+# The backend's usage carries `attribution.items`, an object KEYED BY ITEM ID: one key per input and output item, each
+# holding that item's token counts (runbook step 2, 2026-10-27; D-7085). Each key there prints as a placeholder, so
+# the counts print and the id never does (the module docstring: never an id).
+_ATTRIBUTION_ITEMS = "attribution.items."
+_ITEM_KIND_RE = re.compile(r"[a-z]{1,8}")
+_ID_RE = dict(record.SCRUB_PATTERNS)["id"]  # the scrubber's id shape, spelled once
+
+
+def _usage_key(key: object, path: str) -> str:
+    """A usage key as the probe prints it: under `attribution.items`, `<kind>` (the id's prefix, `msg`, `fc` or `rs`;
+    `item` when it has none in that shape), never the id. A key in the scrubber's id shape (record.SCRUB_PATTERNS'
+    `id`) prints the same way wherever it sits; any other key the way `_name` prints a name."""
+    if path == _ATTRIBUTION_ITEMS or (isinstance(key, str) and _ID_RE.search(key)):
+        kind = key.split("_", 1)[0] if isinstance(key, str) and "_" in key else ""
+        return "<%s>" % (kind if _ITEM_KIND_RE.fullmatch(kind) else "item")
+    return _name(key)
+
+
 def _usage_lines(usage: object, path: str = "") -> List[str]:
     out = []  # type: List[str]
     if not isinstance(usage, dict):
         return out
     for key, value in usage.items():
-        name = path + _name(key)
+        name = path + _usage_key(key, path)
         if isinstance(value, dict):
             out.extend(_usage_lines(value, name + "."))
         elif isinstance(value, int) and not isinstance(value, bool):

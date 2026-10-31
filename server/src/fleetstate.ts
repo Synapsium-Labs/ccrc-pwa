@@ -147,6 +147,23 @@ export interface FleetState {
   agentOps?: readonly string[];
 }
 
+/** One answer about `ccd caps`, as its source gives it. `'ready'` is the agent's ready frame: what it carries is the
+ *  list for this connection, `null` (no usable `ccdVerbs`) included, so a reconnect to an older agent resets. A
+ *  `'measured'` answer is a refresh (remote mode's `caps` request, or local mode's one read of this box's `ccd`): a
+ *  `null` from it is no evidence and keeps what stands, and an answer asked under one connection epoch is dropped
+ *  once the epoch has moved (path-identity spec 2026-10-12 §5.2). */
+export type CcdVerbsAnswer =
+  | { from: 'ready'; verbs: string[] | null }
+  | { from: 'measured'; verbs: string[] | null; askedEpoch: number; epochNow: () => number };
+
+/** The one writer of `FleetState.ccdVerbs` (D-7079; ARCH-72). It writes by the answer's own rule and returns whether
+ *  it wrote; which answer to ask for, and when, stays with its callers. */
+export function recordCcdVerbs(state: Pick<FleetState, 'ccdVerbs'>, answer: CcdVerbsAnswer): boolean {
+  if (answer.from === 'measured' && (answer.verbs === null || answer.epochNow() !== answer.askedEpoch)) return false;
+  state.ccdVerbs = answer.verbs;
+  return true;
+}
+
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
 
 /**

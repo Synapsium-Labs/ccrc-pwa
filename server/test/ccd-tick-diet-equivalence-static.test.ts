@@ -62,7 +62,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import {
   REPO,
   FIXTURE,
@@ -482,7 +482,7 @@ describe('E1 the out-var census: no call passes a name its form would catch in a
   });
 
   it('E1f the census parses every function ccd/ccd defines, each once, and none swallows the next', () => {
-    const code = stripShellComments(fs.readFileSync(CCD, 'utf8'));
+    const code = stripShellComments(ccdSource());
     const lines = code.split('\n');
     const defs = lines.flatMap((l) => { const m = DEF_LINE.exec(l); return m ? [m[1]!] : []; });
     expect(defs.length, 'no definition line found — the pattern no longer matches ccd/ccd').toBeGreaterThan(500);
@@ -494,7 +494,7 @@ describe('E1 the out-var census: no call passes a name its form would catch in a
   });
 
   it('E1c ccd/ccd: its forms are exactly the planned ones that have landed, and no call collides', () => {
-    const { forms, findings } = outVarCensus(fs.readFileSync(CCD, 'utf8'));
+    const { forms, findings } = outVarCensus(ccdSource());
     const render = (f: CensusFinding): string => `${f.kind}: ${f.caller} calls ${f.form} ${f.word}${f.via.length ? ` (a local of ${f.via.join(' -> ')})` : ''}`;
     expect(findings.map(render).join('\n'), 'an out-var name a form would catch in a local, or one the census cannot read').toBe('');
     expect(forms, 'the out-var forms ccd/ccd defines are not the planned ones minus PENDING — a landed form leaves '
@@ -595,7 +595,7 @@ describe('E2 the runner can red, isolates every side, and bounds a hang (plan Ta
 
 describe('E8d no call site reads `_reg_get`\'s raw stdout: every call is the head of a `$( )` (D-4963)', () => {
   it('E8d ccd/ccd calls `_reg_get` only as `$(_reg_get …)`, and the census names a raw call when one is planted', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const code = stripShellComments(src);
     const calls = (code.match(/(^|[^A-Za-z0-9_])_reg_get(?![A-Za-z0-9_(])/gm) ?? []).length;
     expect(calls, 'the census found no call — its pattern no longer matches ccd/ccd').toBeGreaterThan(100);
@@ -612,7 +612,7 @@ describe('E8d no call site reads `_reg_get`\'s raw stdout: every call is the hea
 
 describe('E8g the out-var census forbids the legacy locals `_reg_read_to` kept in place (plan §Interfaces, D-4963)', () => {
   it('E8g a caller passing `v` or `f` to `_reg_read_to` is a named collision, and ccd/ccd has none', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(outVarCensus(src).forms, 'the census does not see `_reg_read_to` as a form').toContain('_reg_read_to');
     const planted = `${src}\n_diet_v() { local w; _reg_read_to v "$1" wrapper; _reg_read_to f "$1" wrapper; _reg_read_to w "$1" wrapper; }\n`;
     expect(outVarCensus(planted).findings.filter((f) => f.caller === '_diet_v')).toEqual([
@@ -624,7 +624,7 @@ describe('E8g the out-var census forbids the legacy locals `_reg_read_to` kept i
 
 describe('E10d no call site reads `_home_measured`\'s raw stdout: every call is the head of a `$( )` (D-4963)', () => {
   it('E10d ccd/ccd calls the printing `_home_measured` only as `$(_home_measured …)`, and the census names a planted raw call', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(/^_home_measured\(\)/m.test(stripShellComments(src)), 'the census\'s name no longer defines a function in ccd/ccd')
       .toBe(true);
     expect(rawHomeMeasuredCalls(src), 'a `_home_measured` call outside a `$( )` reads the printing form\'s raw stdout, '

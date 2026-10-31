@@ -1,14 +1,22 @@
+/**
+ * L4 delivery executor (declared, landing order wave 4): the close ACTS. It re-measures a done claim through
+ * `fingerprint.ts` (a declared L3 reader, which since this wave reads the radar's files too), runs the fleet verbs and
+ * commits the transition. Its imports alone read as L1, which was true while it reached nothing declared outward; a
+ * runtime import of an L3 adapter makes it the executor `CLAUDE.md` names L4, so the declaration says so rather than
+ * widening the outward-edge exemptions. Every DECISION it acts on is `closeDecide.ts`'s (L1).
+ */
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd } from './ports.js';
 import {
-  abandonMove, decideClose, type CloseHalt, type CloseStop, type FleetAct, type RequestPlan,
+  abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
+  type RequestPlan,
 } from './closeDecide.js';
 import { CCD_ARGV, ccdCan, sweepDec, type CcdArgv } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
-import { verifyDone, verifyReviewDone } from './fingerprint.js';
+import { verifyDone, verifyReviewDone, type DoneVerdict } from './fingerprint.js';
 import {
   type AdvanceResult, type CoordStore, type OpenSiblingsResult, type RunRow,
 } from './store.js';
@@ -38,8 +46,8 @@ import {
  * `closeRun`'s executor (architecture doc increment 4; ARCH-35, GitHub #556). Same model as `dispatch.ts`'s
  * `dispatchRun`: narrowed deps, no `reply`, a typed result union out, and the precondition -> irreversible fleet act ->
  * commit ORDER owned in one place. Every precondition is DATA in `closeDecide.ts` (L1, pure): `decideClose` answers
- * what each read means, this file reads, acts and writes. "L1" never meant "pure" for the executor: every side effect
- * here is reached through a declared port, so a close is nameable, testable and callable without a Fastify instance.
+ * what each read means, this file reads, acts and writes. Every side effect here is reached through a declared port,
+ * so a close is nameable, testable and callable without a Fastify instance.
  */
 export interface CloseRunDeps {
   coord: CoordStore;
@@ -232,7 +240,7 @@ function stopped(deps: CloseRunDeps, d: CloseStop, run?: RunRow): CloseHalt {
       if (d.rejection !== undefined && run !== undefined && run.sessionId !== null) {
         deps.coord.recordRejection({ ...d.rejection, runId: run.id, toId: run.sessionId });
         queueSystemMail(deps.coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: run.id,
-          kind: 'status', subject: 'wave-done-rejected', body: `${d.rejection.code}: ${d.rejection.detail}` });
+          kind: 'status', ...doneRejectionMail('work', d.rejection) });
       }
       return d.outcome;
     case 'stale':
@@ -328,7 +336,7 @@ async function abandonRun(
     const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false);
     return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
   }
-  const sibRead = deps.coord.openRunsForSession(sessionId, id);
+  const sibRead = deps.coord.bindingsOf(sessionId).worker({ excludeRunId: id });
   // An abandon never runs `verifyDone`, so there is no measured line to reuse: `null` is what "it did not run" IS.
   const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, false, 'failed', null) });
@@ -359,6 +367,8 @@ async function closeWorkRun(
   // Spec §5.7: `verifyDone`'s own measured `pr-state` row is carried past this block so the child-spent redate reuses
   // it instead of asking a second time inside the same mutex section.
   let line: CcdPrLine | null = null;
+  // The verdict `verifyDone` gave, kept past this block: the head the close RECORDS is the one it measured (D-7102).
+  let verified: DoneVerdict | null = null;
   if (plan.verify) {
     const measured = await verifyDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
@@ -366,9 +376,10 @@ async function closeWorkRun(
     const verdict = decideClose({ step: 'verified', verdict: measured });
     if (verdict.kind !== 'go') return stopped(deps, verdict, run);
     line = verdict.plan.line;
+    verified = measured;
   }
   // Decide and validate the hold before any close-path write: `foldPrLineage` persists measured history.
-  const sibRead = coord.openRunsForSession(sessionId, id);
+  const sibRead = coord.bindingsOf(sessionId).worker({ excludeRunId: id });
   const act = await decideClose({ step: 'close', run, siblings: sibRead, final, state, archive: plan.archive,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, final, state, line) });
   if (act.kind !== 'go') return stopped(deps, act);
@@ -379,7 +390,7 @@ async function closeWorkRun(
   if (halt !== null) return halt;
   // The transition, the handoff commit, the delivery cancellation and the program-retirement check, as ONE
   // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281).
-  const closed = coord.closeRun({ runId: id, finalState: state, causedBy, handoffCommit: plan.handoffCommit,
+  const closed = coord.closeRun({ runId: id, finalState: state, causedBy, handoffCommit: recordedHandoff(plan, verified),
     program: run.program, viaClosing: true });
   const committed = decideClose({ step: 'commit', closed, acted: true });
   if (committed.kind !== 'go') return stopped(deps, committed);
@@ -401,7 +412,7 @@ async function closeReviewRun(
   const coord = deps.coord;
   /** The OTHER open runs on this workspace, read fresh at the decision point and never cached; the closing run
    *  excludes itself. Returns the RESULT, not the list (D-2545): "unreadable" must never arrive as `[]`. */
-  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, run.id);
+  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.bindingsOf(sessionId).worker({ excludeRunId: run.id });
   if (b.final !== undefined || b.archive !== undefined ||
       (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
     return { ok: false, kind: 'bad-request' };
@@ -459,7 +470,7 @@ async function closeReviewRun(
     if (!verdict.ok) {
       coord.recordRejection({ code: verdict.code, runId: run.id, toId: sessionId, detail: verdict.detail });
       queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: run.id,
-        kind: 'status', subject: 'review-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
+        kind: 'status', ...doneRejectionMail('review', verdict) });
       return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
     }
   }

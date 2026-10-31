@@ -7,7 +7,7 @@ import type { ReactNode } from 'react';
 import { BareRow, EmptyState, PageScaffold, Section } from '@ccrc/ui';
 import { backToFleet } from '../command/door';
 import { humanBytes } from '../lib/format';
-import type { FleetSession } from '../../../shared/api';
+import { isArchivedRow, type FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 /** What the fleet has archived: how many rows, how many bytes of them were
@@ -19,7 +19,9 @@ export interface ArchivedSummary {
 }
 
 export function archivedSummary(sessions: readonly FleetSession[]): ArchivedSummary {
-  const rows = sessions.filter((s) => s.archivedAt !== null);
+  // Archived is the server's bucket, archived or cleanup (`isArchivedRow`, OA-C15 (a), D-7188): an archived and merged
+  // row is listed and counted; a row whose pane is live again is not an archived row.
+  const rows = sessions.filter(isArchivedRow);
   // The sizes THEMSELVES, narrowed — not the rows: `?? 0` inside the sum is
   // the exact keystroke this finding is about, and it must not survive here
   // even as a type-narrowing artifact over an already-filtered list.
@@ -57,7 +59,7 @@ export function archivedSizeText(sum: ArchivedSummary): string {
 export function ArchiveScreen({
   sessions, onOpen,
 }: { sessions: readonly FleetSession[]; onOpen: (id: string) => void }): ReactNode {
-  const rows = sessions.filter((s) => s.archivedAt !== null)
+  const rows = sessions.filter(isArchivedRow)
     .slice().sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
   const summary = archivedSummary(sessions);
   const { count } = summary;

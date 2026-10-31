@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 48 id-taking calls across 14 files.
+// THE CLAIM: 46 id-taking calls across 14 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -49,7 +49,7 @@ const ID_BUILDERS = {
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
   wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id',
-  prStateSession: 'id', prStateProject: 'no-id',
+  prStateSession: 'id', prStateProject: 'no-id', prStatePr: 'no-id', prTrainProve: 'no-id',
   // D-6784: `prLanding`'s ids ride inside `<id>:<pr>` pairs the builder validates itself, never as a bare argv word.
   // The lane's ids come from the registry listing (the project's own sessions), never from a request body; the
   // call site PL-4 adds must keep it so, since this row is not checked for a gate over where its ids come from.
@@ -58,9 +58,10 @@ const ID_BUILDERS = {
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
   wsOrphanCensus: 'no-id', wsOrphanAudit: 'no-id', wsOrphan: 'no-id',   // an orphaned tree travels as hex, never as an id (D-6630)
+  wsShedDeps: 'id',
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
-  coordPause: 'no-id', reclaimPause: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
+  coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;
@@ -101,6 +102,7 @@ const ID_PROBE = {
   wsExpire: ['probe-token', PROBE_ID, null],
   wsCollectAudit: [PROBE_ID],
   wsCollect: ['probe-token' as CollectToken, PROBE_ID, null],
+  wsShedDeps: [PROBE_ID, 'child', false, null],
   wsAttic: [PROBE_ID],
   wsHold: [PROBE_ID, 'a reason', null],
   wsRelease: [PROBE_ID, null],
@@ -262,6 +264,8 @@ interface GateHome { readonly file: string; readonly scope: string; readonly re:
 /** The id check, then the capability in either form (D-5866, Task C1k): `capSupported(deps.fleetState, EXPIRE_CAP)`
  *  or `ccdCan(deps.fleetState, 'wsExpire')`. */
 const EXPIRY_STEP_0 = /!isRegistryId\(sessionId\)[^;]*EXPIRE_ID_REFUSED[\s\S]*?(?:capSupported\(deps\.fleetState, EXPIRE_CAP\)|ccdCan\(deps\.fleetState, 'wsExpire'\))/;
+// D-7204: the executor's id check alone, in its judge `expiryIdJudge`; the capability stays in the port's `capability` reader.
+const EXPIRY_ID_JUDGE = /!isRegistryId\(sessionId\)[^;]*EXPIRE_ID_REFUSED/;
 
 /** Where each check is written, and its text (spec §2.3). */
 const GATES = {
@@ -298,12 +302,6 @@ const GATES = {
     file: 'coord/openRun.ts', scope: 'GATES',
     re: /\['shape', [\s\S]*?\['claimedById', \(c\) => isRegistryId\(c\.b\.claimedBy\)[\s\S]*?\['sessionIdId', \(c\) => \(c\.b\.sessionId === undefined \|\| isRegistryId\(c\.b\.sessionId\)\)[\s\S]*?\['attribution', /,
   },
-  /** A capability probe: `'x'` is a constant `isRegistryId` accepts, and the argv only feeds `verbSupported`, which
-   *  reads its verb. It is never run. */
-  'verb-probe': {
-    file: 'hibernateSweep.ts', scope: 'armedPort',
-    re: /if \(!verbSupported\(a\.fleetState, CCD_ARGV\.hibernate\('x', null\)\)\) return null;/,
-  },
   /** The routing door asks the predicate of the stored id it is about to write. */
   'routing-door': { file: 'coord/route.ts', scope: 'decideRoute', re: /if \(!isRegistryId\(sid\)\) return refused\('bad-session'\);/ },
   /** Advance re-checks the stored id before `verifyDone`, and only there: the last gate of its decider's table
@@ -336,7 +334,7 @@ const GATES = {
   },
   /** The child-reclaim executor defers a bad id before either of its builders. */
   'child-reclaim-outcome': {
-    file: 'coord/childReclaim.ts', scope: 'childReclaimOutcome',
+    file: 'coord/childReclaim.ts', scope: 'childSpentRecordJudge',
     re: /deferred\('marker-unreadable', 'the session id is not a registry id'\)/,
   },
   /** The stale-archive act asks the capability once more, nearest the argv, after `rowNow` re-read the row. */
@@ -351,12 +349,12 @@ const GATES = {
     re: /ask === undefined \|\| !isRegistryId\(req\.sessionId\)\) return;/,
   },
   /** Expiry's step 0, before its capability read. */
-  'expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'expireArchived', re: EXPIRY_STEP_0 },
+  'expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'expiryIdJudge', re: EXPIRY_ID_JUDGE },
   /** The learning audit's own step 0, before its capability read. */
   'learn-expiry-step-0': { file: 'coord/expireArchived.ts', scope: 'learnExpiry', re: EXPIRY_STEP_0 },
   /** The collector executor's step 1. */
   'collector-step-1': {
-    file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot',
+    file: 'coord/collectTempRoot.ts', scope: 'collectIdJudge',
     re: /if \(looseHex === null && !isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
   },
   /** The learning audit's own id gate (path-identity W2), first in `learnCollect`: the twin of the step-1 check. */
@@ -405,10 +403,7 @@ const KNOWN_ID = /\bknownId\(\s*id\s*\)/;
 /** `sweepNames` walks the listing's own rows (the tick's model, D-5864), which never carry a refused row. */
 const SWEEP_NAMES_LISTING = /\bconst records = read\.listed \? read\.records : \[\];\s*for \(const r of records\) \{/;
 
-/** The stop-done pass's population: fleet rows whose record the listing built (`byId`), so never a refused name. */
-const STOP_DONE_POPULATION = /\bconst byId = new Map\(records\.map\(\(r\) => \[r\.id, r\] as const\)\);[\s\S]*?byId\.has\(s\.id\)/;
-
-/** The 48 calls. Rows of one key (file, scope, builder, id) are in source order. */
+/** The 45 calls. Rows of one key (file, scope, builder, id) are in source order. */
 const CENSUS: readonly CensusRow[] = [
   // coord/childReclaim.ts: the close path's child gate (masked by close's gates) and the sweep both reach the one executor.
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAudit', builder: 'wsReclaimAudit', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
@@ -429,7 +424,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   // coord/collectTempRoot.ts: the learning audit is reached from the population and from the executor's step 1.
   { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-learn-gate', 'collector-population', 'collector-record-name'] },
-  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
+  { file: 'coord/collectTempRoot.ts', scope: 'collectTempRootAct', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
   // coord/dispatch.ts: refuseSpentChild's only caller is dispatchRun, below its gate; the fresh winner is a listed, valid row.
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsRelease', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
@@ -472,12 +467,13 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/title', builder: 'wsTitle', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'GET /api/sessions/:id/workspace/audit', builder: 'wsAudit', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/workspace/reap', builder: 'wsReap', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
-  // hibernateSweep.ts and stopDoneSweep.ts (D-5242, D-5370): each acts on a fleet row whose record the listing built,
-  // and re-reads it at the act through the watcher's `rowAtAct` (`readSessionRecord`, whose `bad-id` acts on nothing).
-  { file: 'hibernateSweep.ts', scope: 'armedPort', builder: 'hibernate', id: "' '", origin: ['literal'], gate: ['verb-probe'] },
-  { file: 'hibernateSweep.ts', scope: 'actOn', builder: 'hibernate', id: 'id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst id = row\.id;[\s\S]*?const fresh = await port\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
-  { file: 'stopDoneSweep.ts', scope: 'stopDonePass', builder: 'hibernate', id: 'pop[0]!.id', origin: ['registry'], gate: ['registry-refused'], entry: STOP_DONE_POPULATION },
-  { file: 'stopDoneSweep.ts', scope: 'stopDonePass', builder: 'hibernate', id: 'row.id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst fresh = await deps\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
+  // sleepLane.ts (D-5242, D-5370; one executor since D-7042): both sleep lanes act through `sleepAct` on a fleet row
+  // whose record the listing built, and re-read it at the act through the watcher's `rowAtAct` (`readSessionRecord`,
+  // whose `bad-id` acts on nothing). The verb question is `ccdCan(fleetState, 'hibernate')`, which composes no argv.
+  { file: 'sleepLane.ts', scope: 'sleepAct', builder: 'hibernate', id: 'id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst id = row\.id;[\s\S]*?const fresh = await port\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
+  // depsShedPass.ts (D-7278): the deps-shed arm acts on a fleet row whose record the listing built, and re-reads it at the
+  // act through the watcher's `rowAtAct` (`readSessionRecord`, whose `bad-id` acts on nothing), as `sleepAct` does.
+  { file: 'depsShedPass.ts', scope: 'depsShedAct', builder: 'wsShedDeps', id: 'id', origin: ['registry'], gate: ['registry-refused', 'readSessionRecord'], entry: /\bconst id = row\.id;[\s\S]*?const fresh = await deps\.rowAtAct\(rec\);\s*if \(!fresh\.ok\) return/ },
   // watch.ts: the mail lane wakes a hibernated recipient only through a record the listing built (D-5242).
   { file: 'watch.ts', scope: 'mailPass', builder: 'ensure', id: 'd.toId', origin: ['stored', 'registry'], gate: ['registry-refused'], entry: /\bconst rec = records\.find\(\(r\) => r\.id === d\.toId\);[\s\S]*?if \(rec === undefined \|\| identity === null\) \{/ },
   // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
@@ -494,6 +490,8 @@ const GATE_FILES = [
   'orphanTreeLane.ts',
   // coord/siblingRead.ts (D-6923): a sibling run's `claimedBy` is vetted by the predicate before the registry read.
   'coord/siblingRead.ts',
+  // coord/radar.ts (D-7479): a probe head's `id` is vetted by the predicate before it can match a registry row.
+  'coord/radar.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;
@@ -515,7 +513,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(30);
+    expect(ID_KEYS).toHaveLength(31);
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];
@@ -534,7 +532,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "48 id-taking calls across 14 files", matches the scan', () => {
+  it('the header claim, "46 id-taking calls across 14 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();
@@ -619,11 +617,11 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       fleetArgv: ['coord/close.ts | actOnFleet'],
       refuseSpentChild: ['coord/dispatch.ts | resumeBound'],
       resumeBound: ['coord/dispatch.ts | dispatchRun'],
-      expireAudit: ['coord/expireArchived.ts | expireArchived', 'coord/expireArchived.ts | learnExpiry'],
-      expireAct: ['coord/expireArchived.ts | expireArchived'],
-      childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
-      childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
-      collectAudit: ['coord/collectTempRoot.ts | collectTempRoot', 'coord/collectTempRoot.ts | learnCollect'],
+      expireAudit: ['coord/expireArchived.ts | expireRetirePort', 'coord/expireArchived.ts | learnExpiry'],
+      expireAct: ['coord/expireArchived.ts | expireRetirePort'],
+      childReclaimAudit: ['coord/childReclaim.ts | childReclaimRetirePort'],
+      childReclaimAct: ['coord/childReclaim.ts | childReclaimRetirePort'],
+      collectAudit: ['coord/collectTempRoot.ts | collectRetirePort', 'coord/collectTempRoot.ts | learnCollect'],
       childSpent: ['coord/childBind.ts | childBindGate', 'coord/close.ts | childGateAtClose'],
       childSpentLive: ['coord/childSpent.ts | childSpent', 'coord/close.ts | childGateAtClose'],
       holdAndBindSession: ['coord/routes.ts | POST /api/runs'],

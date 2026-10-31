@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 122 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 129 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,12 +72,12 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The thirty-three box-token machine lanes plus `/api/notify`, `/api/pools/epoch`
+ *  2. The thirty-eight box-token machine lanes plus `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084) and, from update-management W4,
  *     `ccd-update-sync.timer`; none of them has a cookie jar and never
- *     will. All thirty-six CHECK the box token (`checkMailToken`), and the mail pair
+ *     will. All forty-one CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -347,6 +347,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /api/ledger',
     "the allocation record and a project's floor, read cookieless from the fleet host — " +
     'box-token gated (requireMailToken), the GET /api/mail convention: no attribution to check'],
+  ['GET /api/landing',
+    "a project's landing line — its entries, its flags and the decider's order — read cookieless from the fleet host " +
+    'before the coordinator enqueues (landing order wave 5e) — box-token gated (requireMailToken), the GET /api/ledger ' +
+    'convention: no attribution to check'],
   ['POST /api/coordinators/:session/intent',
     'a session declares, or withdraws, that it is about to delegate (delegation broker wave 3, Task 15) — ' +
     'box-token gated, attribution checked against the registry exactly as the claim lanes check it, plus its ' +
@@ -377,11 +381,36 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /api/approvals/:id',
     "the claimant reads one row it holds, redacted — box-token gated, attributed by `?fromId=`/`?fromUuid=`, " +
     'and refused for a row held for anyone else'],
+  // The question door family's claimant pair (W3 Q3f, D-7030; OA-C7 (a)). Each shares its core with the old doors above
+  // it replaces, and keeps their posture: its caller is a fleet-host session through `ccrc-api` with no cookie jar, so
+  // the route is dead the moment the flag arms unless exempted. The family's third door, the operator's
+  // `POST /api/questions/:id/answer`, is DELIBERATELY NOT here: it is a cookie-bearing PWA write, session-gated and
+  // origin-checked, and consults no box token.
+  ['POST /api/questions/:id/rule',
+    "a child's claimant rules on its question, an ask or a permission prompt (the core of `/api/asks/:id/answer` and " +
+    '`/api/approvals/:id/rule`) — box-token gated, attribution checked against the registry, and only the claimant the ' +
+    "row was held for (`ask.parentId === fromId`, 403 for anyone else); an ask's digit is pressed after the CAS, an " +
+    "approval's guard runs again before signing"],
+  ['POST /api/questions/:id/release',
+    "a child's claimant hands its question over to the operator (the core of `/api/asks/:id/release` and " +
+    '`/api/approvals/:id/release`) — box-token gated, the same attribution and the same held-for check as the rule ' +
+    'door directly above'],
 
   ['POST /api/token/claim',
     'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +
     'sent over the agent link for the next box-token value, with no cookie jar and deliberately ' +
     'without the box token (token/door.ts: sha256 only, single use, TTL, node-bound, compare before budget)'],
+
+  ['GET /api/testbox',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern; test box plan TB9, D-7554): the PWA's Test box card reads the " +
+    'block with a session, and `ccrc-api testbox status` reads the same block COOKIELESS from the fleet host. The ' +
+    'handler requires a live session OR a valid box token (coord/routes.ts) before it answers anything, and nothing ' +
+    "here is written. The switch route beside it is NOT exempt: arming remote runs is the operator's act alone"],
+  ['POST /api/testbox/tools-sync',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern; test box plan TB9, D-7554): the card's Bring tools up to date with a " +
+    'session, and the update lane on the fleet host COOKIELESS through `ccrc-api testbox tools-sync` once a roll ' +
+    'ends (spec §2.10). It takes no body and sends the box only the fleet host\'s own release and measured versions, ' +
+    'so the box token buys nothing a session could not; the handler requires one of the two before it acts'],
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],
@@ -794,8 +823,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the thirty-three box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — thirty-six in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the thirty-eight box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — forty-one in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

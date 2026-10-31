@@ -55,6 +55,7 @@ import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { parsedFile } from './scan/symbols.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -1401,7 +1402,7 @@ describe('8. the closed scope census', () => {
     expect(cuts, 'every truncating call in a file that can reach a file (a new string helper there needs listing here)').toEqual([
       'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
       'server/src/coord/delegation-checkpoint.ts: this.port.truncate(',
-      'server/src/coord/delegation-journal.ts: fsp.truncate(',
+      'server/src/coord/delegation-file-port.ts: fsp.truncate(',
       'server/src/coord/delegation-journal.ts: truncate(',
     ]);
 
@@ -1466,16 +1467,19 @@ describe('8. the closed scope census', () => {
     expect(jr.match(/^.*(?:DELEGATION_JOURNAL_FILE|delegation-events\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names its file once').toEqual(
       ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';"]);
     // every `fsp.` call of the module is inside the node port's own literal (the adapter), never a free function
-    const portAt = jr.indexOf('export const nodeDelegationFilePort');
-    const portEnd = jr.indexOf('\n};\n', portAt);
+    const portFile = parsedFile('server/src/coord/delegation-file-port.ts');
+    const portBinding = portFile.bindings.find((b) => b.name === 'nodeDelegationFilePort');
+    const portAt = portBinding?.initStart ?? -1;
+    const portEnd = portAt + (portBinding?.init.length ?? 0);
     expect(portAt, 'the node port literal').toBeGreaterThan(-1);
-    expect((jr.slice(0, portAt) + jr.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
-    // and the node port is reached, across the server, only by its declaration and the applier's default
+    expect(code(portFile.text.slice(0, portAt) + portFile.text.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
+    expect(code(parsedFile('server/src/coord/delegation-journal.ts').text).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call in the journal module').toEqual([]);
+    // and the node port is reached, across the server, only by its declaration and the composition root (`watch.ts`'s import and its applier's `port:` argument)
     const portUses = SRC.flatMap((f) => (code(read(f)).match(/^.*\bnodeDelegationFilePort\b.*$/gm) ?? []).map((l) => `${f}: ${l.trim()}`));
     expect(portUses, 'every use of the node file port in the server').toEqual([
-      'server/src/coord/delegation-checkpoint.ts: nodeDelegationFilePort,',
-      'server/src/coord/delegation-checkpoint.ts: this.port = deps.port ?? nodeDelegationFilePort;',
-      'server/src/coord/delegation-journal.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
+      'server/src/coord/delegation-file-port.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
+      "server/src/watch.ts: import { nodeDelegationFilePort } from './coord/delegation-file-port.js';",
+      'server/src/watch.ts: port: nodeDelegationFilePort,',
     ]);
 
     // 4. Outside the server: the deploy helper reads the live journal (capture) and replaces it whole from a validated snapshot (restore),
@@ -1507,14 +1511,15 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: main's sixteen (the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
+    // the request ops are a small closed set: main's nineteen (the eighteenth and nineteenth, `testbox` and `testbox-tools-sync`, are the test box plan's TB9, D-7411; the seventeenth, `pressure`, is the host-pressure read of #1170; the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
     // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
-    // interface-shaped parse cannot see), and exactly main's sixteen members of the union
+    // interface-shaped parse cannot see), and exactly main's nineteen members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
-      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk']);
+      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
-      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq']);
+      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq', 'PressureReq',
+      'TestboxReq', 'TestboxToolsSyncReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's

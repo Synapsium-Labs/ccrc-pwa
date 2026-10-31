@@ -2,7 +2,7 @@
 // Pure (L1): no fetch, no store, no component. `lib/api.ts` re-exports all of it, so each existing import and every
 // screen keeps its line (ARCH-13b, #557).
 import type {
-  AskRefuseCode, InterruptRefusal, MoveSkipWhy, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateRouteError,
+  AskRefuseCode, InterruptRefusal, MoveSkipWhy, QuestionDoorRefusal, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateRouteError,
 } from '../../../shared/api';
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
@@ -581,6 +581,43 @@ export const ASK_REFUSE_TEXT: Readonly<Record<AskRefuseCode, string>> = {
   'child-unmeasurable': 'This box could not read the child, so nothing can say whether the question changed.',
   declined: 'That question was released by the coordinator, so it cannot be answered later.',
   'already-answered': 'That question was already answered.',
+};
+
+/**
+ * The notification's words for the refusals `POST /api/sessions/:id/ask` can return (W7 C7e, D-7183; OA-C17 (a), D-7265),
+ * moved from `public/push-sw.js`'s `REFUSAL` table byte for byte. The operator reads them with no app open and no way to
+ * ask a follow-up question. `push-sw.js` is a classic script that cannot import this module, so its copy is a generated
+ * region rendered from this table (`pwa/test/answerRegion.ts`) and held byte-equal by `push-sw.test.ts`.
+ *
+ * The set is the route's own union (`server/src/inject/ask.ts`), not a subset: `multiselect` and `duplicate-index`
+ * cannot be produced by a one-index tap today, but they stay because the route owns that union and a future action shape
+ * could send more than one index. An unlisted token falls back to the worker's generic sentence rather than showing the
+ * operator a bare error code. It words some tokens differently from `ASK_REFUSE_TEXT` on purpose (`stale-ask` is "That
+ * question is gone." here), and W7 changes neither.
+ */
+export const NOTIFICATION_REFUSAL_TEXT: Readonly<Record<string, string>> = {
+  'stale-ask': 'That question is gone.',
+  'not-waiting': 'The session has moved on.',
+  'ask-mismatch': 'The question changed — open the session and read it.',
+  'multi-question': 'This one asks more than one thing — open the session.',
+  'multiselect': 'This one takes more than one answer — open the session.',
+  'duplicate-index': 'That option was sent twice — open the session.',
+  'range': 'That option is no longer there.',
+  'no-menu': 'The question is no longer on screen.',
+  'menu-mismatch': 'The terminal is showing something else now.',
+  'not-alive': 'That session is no longer running.',
+  'unknown-session': 'That session is gone.',
+};
+
+/**
+ * The notification's words for W3 Q3f's door family's own refusal (W7 C7g, D-7185, D-7485), beside
+ * `NOTIFICATION_REFUSAL_TEXT`, which stays as it was: on a `questions-v1` server the notification answers through
+ * `POST /api/questions/session-<id>/answer`, which can also refuse `kind-mismatch` (an id or body of the other
+ * principal's kind; the worker builds neither). `push-sw.js`'s generated region renders both tables into its one
+ * `REFUSAL` lookup. Total over `shared/api.ts#QUESTION_DOOR_REFUSALS`.
+ */
+export const NOTIFICATION_QUESTION_DOOR_TEXT: Readonly<Record<QuestionDoorRefusal, string>> = {
+  'kind-mismatch': "That answer didn't fit this session's question — open the session.",
 };
 
 /** An account-pool write's refusals (`SetAccountPoolsRefuseCode`) in words. No screen renders it yet. */

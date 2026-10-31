@@ -13,6 +13,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeOnly } from './sourceScan.js';
+import { callsIn, sourceOfSymbol, symbolOf } from './scan/symbols.js';
+import { retirePortReaders, retireRowSteps } from './census-w4/retire.js';
 
 const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const code = (rel: string): string => codeOnly(readFileSync(path.join(srcDir, rel), 'utf8'));
@@ -47,12 +49,46 @@ const anchorsOf = (body: string): Job | null => {
   const argv = Math.max(body.lastIndexOf(';', site), body.lastIndexOf('{', site), body.lastIndexOf('}', site));
   return { body, audit: audits[0]!, lastListing: listings.at(-1)!, argv };
 };
-const executor = (): Job => {
-  const fn = topFunction(code('coord/collectTempRoot.ts'), 'collectTempRoot');
-  expect(fn, 'collectTempRoot is gone').not.toBeNull();
-  const j = anchorsOf(fn!);
-  expect(j, 'an anchor of collectTempRoot is gone').not.toBeNull();
-  return j!;
+// D-7168, D-7200 (ARCH-44 C4k): the job's order now lives in its row, `TEMP_ORPHAN_RETIRE`, which `retireAct` walks, and
+// its reads in `collectRetirePort`'s readers. Each order check below reads the tree twice: (a) the ROW'S DECLARATION, its
+// steps and their `sync` flags (`retireRowSteps`), and (b) the READERS of the port's literal and the act
+// (`retirePortReaders`, `callsIn`, `sourceOfSymbol`), all through scan/symbols.ts and retireFacts. What the old order
+// scans stood for at run time is held by C4h's call-order and synchronous-tail rows (`retire-executors-pin.test.ts`).
+const EXECUTOR = 'server/src/coord/collectTempRoot.ts';
+/** (a) The row's declared order: capability < id < switches < presence < audit, then audit < switches-last < latch <
+ *  lane < flip < safety < licence-stands < presence-last < hold-last < live < loose-marker, and every step after
+ *  switches-last declared sync. Null when it holds, else why not. */
+const ROW_ORDER = ['capability', 'id', 'switches', 'presence', 'audit', 'switches-last', 'latch', 'lane', 'flip', 'safety',
+  'licence-stands', 'presence-last', 'hold-last', 'live', 'loose-marker'];
+const rowDeclaration = (): string | null => {
+  const row = retireRowSteps(EXECUTOR, 'TEMP_ORPHAN_RETIRE');
+  const steps = row.map((x) => x.step);
+  const at = ROW_ORDER.map((x) => steps.indexOf(x));
+  const missing = ROW_ORDER.filter((_x, i) => at[i]! < 0);
+  if (missing.length > 0) return `the row declares no ${missing.join(', ')}`;
+  if (!at.every((x, i) => i === 0 || at[i - 1]! < x)) return `the row's order is ${steps.join(' < ')}`;
+  const late = row.slice(steps.indexOf('switches-last') + 1).filter((x) => !x.sync).map((x) => x.step);
+  return late.length > 0 ? `declared async after the last listing: ${late.join(', ')}` : null;
+};
+/** (b) The step of each port reader holding a call `match` accepts, in source order (null for a call in no reader). */
+const readersCalling = (match: (c: { name: string | null; callee: string }) => boolean): (string | null)[] => {
+  const readers = retirePortReaders(EXECUTOR, 'collectRetirePort');
+  return callsIn(symbolOf(EXECUTOR, 'collectRetirePort')).filter(match)
+    .map((c) => readers.find((r) => r.start <= c.start && c.end <= r.end)?.step ?? null);
+};
+const calledAs = (name: string) => (c: { name: string | null }): boolean => c.name === name;
+/** (b) Every reader of a step declared sync is a plain arrow (not async, no await), and the act holds no await before
+ *  its runCcd(. Null when it holds. */
+const syncReaders = (): string | null => {
+  const sync = new Set(retireRowSteps(EXECUTOR, 'TEMP_ORPHAN_RETIRE').filter((x) => x.sync).map((x) => x.step));
+  const bad = retirePortReaders(EXECUTOR, 'collectRetirePort')
+    .filter((r) => sync.has(r.step) && (r.kind !== 'arrow' || r.async || /\bawait\b/.test(codeOnly(r.text))))
+    .map((r) => r.step);
+  if (bad.length > 0) return `a sync step's reader is async or awaits: ${bad.join(', ')}`;
+  const act = codeOnly(sourceOfSymbol(EXECUTOR, 'collectTempRootAct'));
+  const run = act.search(/\bawait\s+deps\.runCcd\s*\(/);
+  if (run < 0) return 'collectTempRootAct awaits no runCcd(';
+  return /\bawait\b/.test(act.slice(0, run)) ? 'collectTempRootAct awaits before its runCcd(' : null;
 };
 
 // Each predicate answers null when the order holds, or the reason it does not.
@@ -94,8 +130,8 @@ const latchBeforeResolution = (j: Job): string | null => {
   return j.body.indexOf('collectLaneEffective(', latch[0]) > latch[0]! ? null : 'no resolution follows the latch';
 };
 const epochOutsideCallback = (method: string): string | null => {
-  const run = method.indexOf('this.deps.queue.run(');
-  if (run < 0) return 'no queue.run( in collectAct';
+  const run = method.indexOf('retireExecutor(this.deps.queue, ');   // C4n (D-7171): the queue call is retireExecutor's
+  if (run < 0) return 'no retireExecutor( in collectAct';
   const bind = /\bconst\s+epoch\s*=/.exec(method);
   if (bind === null || bind.index > run) return 'the job’s epoch is not bound before the queue callback';
   const tail = method.slice(run);
@@ -130,7 +166,9 @@ describe('nothing awaits between the final reads and the argv (§5.5, §5.9)', (
     expect(awaitAfterResolution(planted(GOOD)), 'CONTROL: the planted job passes').toBeNull();
     expect(awaitAfterResolution(planted(GOOD.replace('  const now = deps.lane.clock();',
       '  await Promise.resolve();\n  const now = deps.lane.clock();'))), 'CONTROL: an inserted await is seen').not.toBeNull();
-    expect(awaitAfterResolution(executor())).toBeNull();
+    expect(rowDeclaration()).toBeNull();
+    expect(readersCalling(calledAs('collectLaneEffective')), 'the switch is resolved in the lane reader alone').toEqual(['lane']);
+    expect(syncReaders()).toBeNull();
   });
 
   it('no await stands between the final listing’s answer and CCD_ARGV.wsCollect(: the latch, the reads and the resolution included', () => {
@@ -138,28 +176,46 @@ describe('nothing awaits between the final reads and the argv (§5.5, §5.9)', (
     expect(awaitAfterListing(planted(GOOD)), 'CONTROL: the planted job passes').toBeNull();
     expect(awaitAfterListing(planted(early)), 'CONTROL: an await before the latch is seen').not.toBeNull();
     expect(awaitAfterResolution(planted(early)), 'CONTROL: the resolution-to-argv scan alone cannot see it').toBeNull();
-    expect(awaitAfterListing(executor())).toBeNull();
+    expect(rowDeclaration()).toBeNull();
+    expect(syncReaders()).toBeNull();
   });
 
   it('every collectControlNow( and .link.current( in collectTempRoot follows the last await collectSwitches(', () => {
     expect(readsBeforeListing(planted(GOOD)), 'CONTROL: the planted job passes').toBeNull();
     expect(readsBeforeListing(planted(GOOD.replace('  const listedUnder',
       '  const early = collectControlNow(deps.control);\n  const listedUnder'))), 'CONTROL: a hoisted read is seen').not.toBeNull();
-    expect(readsBeforeListing(executor())).toBeNull();
+    expect(rowDeclaration()).toBeNull();
+    expect(readersCalling(calledAs('collectControlNow')), 'the control state is read in the lane reader alone').toEqual(['lane']);
+    expect(readersCalling((c) => c.callee === 'deps.link.current'), 'the node is read in the lane reader alone').toEqual(['lane']);
+    expect(callsIn(symbolOf(EXECUTOR, 'collectTempRootAct')).filter((c) => c.name === 'collectControlNow' || c.callee.endsWith('.link.current')),
+      'the act reads the control state or the node').toEqual([]);
   });
 
   it('the pair’s before is bound from job.epoch before await collectAudit(', () => {
     expect(pairFromJob(planted(GOOD)), 'CONTROL: the planted job passes').toBeNull();
     expect(pairFromJob(planted(GOOD.replace('before: queuedUnder', 'before: listedUnder'))),
       'CONTROL: a pair taken from the listing’s epoch is seen').not.toBeNull();
-    expect(pairFromJob(executor())).toBeNull();
+    expect(rowDeclaration()).toBeNull();
+    const pair = (): RegExp => /\{\s*before:\s*job\.epoch\s*,\s*after:\s*deps\.link\.epochNow\(\)\s*\}/g;
+    const readers = retirePortReaders(EXECUTOR, 'collectRetirePort');
+    expect(readers.filter((r) => pair().test(codeOnly(r.text))).map((r) => r.step), 'the pair is spelled from job.epoch in the latch reader alone')
+      .toEqual(['latch']);
+    expect([...codeOnly(sourceOfSymbol(EXECUTOR, 'collectRetirePort')).matchAll(pair())].length, 'the pair is spelled more than once').toBe(1);
   });
 
   it('.link.epochNow( stands before the final listing’s await and again after it', () => {
     expect(epochBracket(planted(GOOD)), 'CONTROL: the planted job passes').toBeNull();
     expect(epochBracket(planted(GOOD.replace('  const listedUnder = deps.link.epochNow();\n', ''))),
       'CONTROL: a missing read before the listing is seen').not.toBeNull();
-    expect(epochBracket(executor())).toBeNull();
+    expect(rowDeclaration()).toBeNull();
+    expect(readersCalling((c) => c.callee === 'deps.link.epochNow'), 'the epoch is read before the last listing and in the latch')
+      .toEqual(['switches-last', 'latch']);
+    const last = retirePortReaders(EXECUTOR, 'collectRetirePort').find((r) => r.step === 'switches-last')!;
+    const inLast = callsIn(symbolOf(EXECUTOR, 'collectRetirePort')).filter((c) => last.start <= c.start && c.end <= last.end);
+    const epochAt = inLast.findIndex((c) => c.callee === 'deps.link.epochNow');
+    const listAt = inLast.findIndex((c) => c.name === 'collectSwitches');
+    expect(epochAt > -1 && listAt > -1 && inLast[epochAt]!.start < inLast[listAt]!.start,
+      'the switches-last reader reads the epoch before its collectSwitches(').toBe(true);
   });
 
   it('collectRetireLatch( follows the last await and precedes collectLaneEffective(', () => {
@@ -167,7 +223,9 @@ describe('nothing awaits between the final reads and the argv (§5.5, §5.9)', (
     const late = GOOD.replace('  collectRetireLatch(deps.control, last, epoch);\n', '')
       .replace('  if (!collectLaneLive', '  collectRetireLatch(deps.control, last, epoch);\n  if (!collectLaneLive');
     expect(latchBeforeResolution(planted(late)), 'CONTROL: a latch after the resolution is seen').not.toBeNull();
-    expect(latchBeforeResolution(executor())).toBeNull();
+    expect(rowDeclaration()).toBeNull();
+    expect(readersCalling(calledAs('collectRetireLatch')), 'the latch is written in the latch reader alone').toEqual(['latch']);
+    expect(readersCalling(calledAs('collectLaneEffective')), 'the switch is resolved in the lane reader alone').toEqual(['lane']);
   });
 });
 
@@ -175,7 +233,7 @@ describe('the watcher queues the job with the epoch it stands under (path-identi
   const ACT_GOOD = [
     '  private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {',
     '    const epoch = (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow();',
-    '    void this.deps.queue.run(id, () => collectTempRoot({ coord }, { id, epoch }))',
+    '    void retireExecutor(this.deps.queue, id, () => collectTempRoot({ coord }, { id, epoch }))',
     '      .finally(() => { this.collectSettled(id, pass); });',
     '  }',
     '',

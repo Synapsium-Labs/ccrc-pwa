@@ -302,16 +302,6 @@ const duplicated = (m: Map<string, string[]>): string[] =>
  *  census rots. */
 const REGISTERED_BLOCKS: Record<string, string> = {
   // No NEXT. Every block below is argued, not deferred.
-  'div.acct-rows(AccountMeterRow,AccountMeterRow)':
-    'DIFFERENT THINGS, and the census found the difference rather than the '
-    + 'sameness. Both render the 5h and 7d meters, but `AccountsStrip` guards '
-    + 'each on null — its own comment says "only render a window that exists — '
-    + 'gpt (Codex Pro) is weekly-only" — while `AccountsScreen` renders both '
-    + 'unconditionally and passes `?? null` through. A missing window is '
-    + 'therefore ABSENT on the board and EMPTY on the accounts screen. That is '
-    + 'a design question for the operator, not something to fold silently: a '
-    + 'shared component would have to carry a flag for it, which is the same '
-    + 'two behaviours with one more name.',
   'div.acct-list(AccountRow,p.acct-none)':
     'DIFFERENT THINGS. Both sheets list accounts and both say something when '
     + 'the list is empty, but they are answering different questions — '

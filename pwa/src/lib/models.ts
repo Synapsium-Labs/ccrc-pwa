@@ -19,6 +19,7 @@
 // Plan 4), and SETTINGS WON: Claude Code Object.assigns settings env over the
 // process environment at runtime. This list only has to agree with the block.
 import type { RouteField } from '../../../shared/api';
+import type { ProviderId } from '../../../shared/providers';
 import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
 
 /**
@@ -94,6 +95,13 @@ export interface PickOption {
   degradedTo?: string;
 }
 
+/** Whose model list `modelOptions` picks for a lane. The dedicated list belongs to ONE lane, named by its wrapper
+ *  id and kept as it is (the lane's tiers map onto Codex models through its own settings env, the header above);
+ *  every other lane gets the Anthropic list, whatever it runs (departure `model-list-names-its-provider`). */
+export function modelListProvider(wrapper: string): 'anthropic' | 'openai' {
+  return wrapper === 'gpt' ? 'openai' : 'anthropic';
+}
+
 /** Model chooser rows. `current` is the pane statusline display name
  *  ("Opus 5.5 (1M context)", "GPT-5.6 Sol") — matched loosely so the 1M suffix
  *  doesn't defeat the highlight. `routing` (S6 Task 4) overrides `active` with
@@ -136,7 +144,7 @@ export function modelOptions(wrapper: string, current: string | null, routing?: 
     const label = opts.find((o) => o.route.value === degraded)?.label ?? degraded;
     return opts.map((o) => (o.active && o.route.value !== degraded ? { ...o, degradedTo: label } : o));
   };
-  if (wrapper === 'gpt') {
+  if (modelListProvider(wrapper) === 'openai') {
     return withDegraded([
       row('GPT-6 Astra', 'fable', 'astra', 'Fable class'),
       row('GPT-5.6 Sol', 'opus', 'sol', 'Opus class'),
@@ -160,6 +168,13 @@ export function modelOptions(wrapper: string, current: string | null, routing?: 
  *  re-deriving the alias→key table a second time. */
 export function modelReadbackFor(wrapper: string, alias: string): string | null {
   return modelOptions(wrapper, null).find((o) => o.route.value === alias)?.readback ?? null;
+}
+
+/** Whether a class's readback can be measured on this lane (D-6334): the lane's provider is known and the list
+ *  `modelOptions` picks for it is that provider's own. Anywhere else the readback words are not the lane's model
+ *  ids, so "asked" or "queued" would be a claim nothing here can check. `null` (not measurable) is never true. */
+export function classReadbackMeasurable(wrapper: string, provider: ProviderId | null): boolean {
+  return provider !== null && provider === modelListProvider(wrapper);
 }
 
 /** The five level rows' labels are the ladder rung capitalised, nothing more
@@ -198,7 +213,7 @@ export function effortOptions(
     ...EFFORT_LADDER.map((rung) => level(capitalise(rung), rung, activeFor(rung))),
     level('Auto', 'auto', unreadable ? false : intended !== null ? intended === 'auto' : e === 'auto'),
   ];
-  if (wrapper !== 'gpt') {
+  if (modelListProvider(wrapper) !== 'openai') {
     opts.splice(4, 0, level(
       'Ultracode', 'ultracode', unreadable ? false : intended !== null ? intended === 'ultracode' : ultracode,
       'xhigh + workflow orchestration',

@@ -4,8 +4,8 @@
 // `assembleFleet`'s production read off the registry's seven routing files
 // (`server/src/registry.ts`'s `buildRecord`, whose census this task raised
 // from twenty-three reads to thirty; later waves raised it again, and today it
-// is 31 [registry-read-census:fields] — see registry.test.ts's own census
-// suite for that half).
+// is 4 [registry-read-census:fields] unconditional reads plus one per other listed
+// field — see registry.test.ts's own census suite for that half).
 //
 // Fix round 2, finding 1 (controller ruling S6-R5): the seven reads are now
 // MEASURED (`fieldMeasured`, not the collapsing `field()`), so `route` is
@@ -19,6 +19,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { reviveFleetSession, ROUTE_READ_FIELDS, ROUTE_WRITABLE_FIELDS, type FleetSession } from '../../shared/api.js';
@@ -118,7 +119,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     seedRoster(home);
     seedSession(home, 'claude-quiet-basin', 'claude');
     const now = 1784600000;
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(localIO), now);
     expect(fleet.find((s) => s.id === 'claude-quiet-basin')?.route).toBeNull();
   });
 
@@ -129,7 +130,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
       class: 'opus', effort: 'high', degraded: 'ceiling', inert: 'effort,workflow',
     });
     const now = 1784600000;
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(localIO), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).toEqual({
       fields: { class: 'opus', effort: 'high' },
@@ -144,7 +145,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     seedRoster(home);
     seedSession(home, 'claude-quiet-basin', 'claude', { inert: 'effort,not-a-field' });
     const now = 1784600000;
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(localIO), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).toEqual({ fields: {}, degraded: null, inert: ['effort'], unreadable: [] });
   });
@@ -154,7 +155,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     seedRoster(home);
     seedSession(home, 'claude-quiet-basin', 'claude', { degraded: 'floor' });
     const now = 1784600000;
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(localIO), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).toEqual({ fields: {}, degraded: 'floor', inert: [], unreadable: [] });
   });
@@ -177,7 +178,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     const now = 1784600000;
     const cfg = loadConfig({ CCRC_HOME: home });
     const io = degradedReadIO((p) => /\.(class|effort|subagent|workflow|compact|degraded|inert)$/.test(p));
-    const fleet = await assembleFleet(io, cfg, new Tmux(noopRun), now);
+    const fleet = await assembleFleet(io, cfg, new Tmux(noopRun), liveStateReaderOver(io), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).not.toBeNull();
     expect(s?.route).toEqual({
@@ -194,7 +195,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     seedSession(home, 'claude-quiet-basin', 'claude', { class: 'opus', effort: 'high' });
     const now = 1784600000;
     const io = unreadableField('claude-quiet-basin', 'effort');
-    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(io), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).toEqual({ fields: { class: 'opus' }, degraded: null, inert: [], unreadable: ['effort'] });
   });
@@ -205,7 +206,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     seedSession(home, 'claude-quiet-basin', 'claude', { effort: 'high' });
     const now = 1784600000;
     const io = unreadableField('claude-quiet-basin', 'effort');
-    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(io), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).not.toBeNull();
     expect(s?.route).toEqual({ fields: {}, degraded: null, inert: [], unreadable: ['effort'] });
@@ -226,7 +227,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
       seedSession(home, 'claude-quiet-basin', 'claude');
       const now = 1784600000;
       const io = unreadableField('claude-quiet-basin', f);
-      const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+      const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(io), now);
       const s = fleet.find((r) => r.id === 'claude-quiet-basin');
       expect(s?.route).toBeNull();
     });
@@ -245,7 +246,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     seedSession(home, 'claude-quiet-basin', 'claude');
     const now = 1784600000;
     const io = degradedReadIO(() => true);
-    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(io), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).toBeNull();
   });
@@ -256,7 +257,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     seedSession(home, 'claude-quiet-basin', 'claude', { class: 'opus' }); // .effort never written
     const now = 1784600000;
     const io = degradedReadIO((p) => /\.(class|effort)$/.test(p));
-    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), liveStateReaderOver(io), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).toEqual({ fields: {}, degraded: null, inert: [], unreadable: ['class'] });
   });

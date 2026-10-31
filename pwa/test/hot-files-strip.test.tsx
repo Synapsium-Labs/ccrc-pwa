@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ClaimSummary } from '../../shared/api';
-import { HotFilesStrip } from '../src/fleet/HotFilesStrip';
+import { CLAIMS_POLL_MS, HotFilesStrip } from '../src/fleet/HotFilesStrip';
 import { api } from '../src/lib/api';
 import { ICONS } from '../../ui/src/icons/lucide';
 
@@ -31,7 +31,7 @@ describe('HotFilesStrip', () => {
   it('collapses to a count and expands to holder, intent and paths', async () => {
     stub([claim(), claim({ id: 2, paths: ['ccd/ccd'], intent: '', heldBy: 'ccrc-pwa-still-water' })]);
     render(<HotFilesStrip />);
-    await waitFor(() => expect(screen.getByText('2 hot-file claims')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('2 files claimed')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { expanded: false }));
     expect(screen.getByText('ccrc-pwa-clear-cove')).toBeInTheDocument();
     // Intent is free text off the wire — rendered VERBATIM, parsed nowhere.
@@ -42,10 +42,30 @@ describe('HotFilesStrip', () => {
     expect(screen.getAllByText(/expires in/).length).toBeGreaterThan(0);
   });
 
+  it('names the strip "Claimed files" and counts files, not claims (T3a, D-6331)', async () => {
+    // One claim holding two paths is two files claimed; the same path held under another project is a different file.
+    stub([claim({ paths: ['shared/api.ts', 'ccd/ccd'] })]);
+    render(<HotFilesStrip />);
+    await waitFor(() => expect(screen.getByText('2 files claimed')).toBeInTheDocument());
+    // The strip's name is its region's accessible name (`CollapsibleStrip`'s `label`), not visible text.
+    expect(screen.getByRole('region', { name: 'Claimed files' })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/hot/i)).not.toBeInTheDocument();
+  });
+
+  it('counts a file claimed twice once, and the same path of another project separately', async () => {
+    stub([
+      claim({ id: 1, paths: ['shared/api.ts'] }),
+      claim({ id: 2, paths: ['shared/api.ts', 'ccd/ccd'] }),
+      claim({ id: 3, project: 'project-b', paths: ['shared/api.ts'] }),
+    ]);
+    render(<HotFilesStrip />);
+    await waitFor(() => expect(screen.getByText('3 files claimed')).toBeInTheDocument());
+  });
+
   it('marks the strip with Icon hand, never the ✋ emoji (D-5100)', async () => {
     stub([claim()]);
     const { container } = render(<HotFilesStrip />);
-    await waitFor(() => expect(screen.getByText('1 hot-file claim')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('1 file claimed')).toBeInTheDocument());
     const mark = container.querySelector('.hotfiles-mark')!;
     expect(mark.textContent).toBe('');
     expect([...mark.querySelectorAll('svg path')].map((p) => p.getAttribute('d'))).toEqual(ICONS.hand.map(([, a]) => a.d));
@@ -60,16 +80,81 @@ describe('HotFilesStrip', () => {
       claim({ id: 3, state: 'quarantined' as ClaimSummary['state'] }),
     ]);
     render(<HotFilesStrip />);
-    await waitFor(() => expect(screen.getByText('1 hot-file claim')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('1 file claimed')).toBeInTheDocument());
   });
 
   it('offers no way to release or break a claim — claims are advisory and this strip is read-only (D12)', async () => {
     stub([claim()]);
     render(<HotFilesStrip />);
-    await waitFor(() => expect(screen.getByText('1 hot-file claim')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('1 file claimed')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { expanded: false }));
     for (const b of screen.getAllByRole('button')) {
       expect(b.getAttribute('aria-label') ?? b.textContent ?? '').not.toMatch(/release|break/i);
     }
   });
+
+  // W7 C7m (D-7191): the request schedule, held across the move onto usePoll with refetchOnVisible: false. Today's
+  // strip never re-polls when the page becomes visible.
+  it('the request schedule: one on mount, one per CLAIMS_POLL_MS, none on a return to the page', async () => {
+    vi.useFakeTimers();
+    try {
+      const spy = stub([]);
+      render(<HotFilesStrip />);
+      expect(spy).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2 * CLAIMS_POLL_MS); });
+      expect(spy).toHaveBeenCalledTimes(3);
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+      Reflect.deleteProperty(document, 'visibilityState');
+      expect(spy).toHaveBeenCalledTimes(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(CLAIMS_POLL_MS); });
+      expect(spy).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // W7 C7m (D-7191), the named behaviour row: the strip gains usePoll's newest-issued guard.
+  it('never shows an older claims answer over a newer one: two overlapping requests answered out of order show the newer', async () => {
+    vi.useFakeTimers();
+    try {
+      const answers: ((r: { claims: ClaimSummary[] }) => void)[] = [];
+      vi.spyOn(api, 'claims').mockImplementation(() => new Promise((res) => { answers.push(res); }));
+      render(<HotFilesStrip />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(CLAIMS_POLL_MS); });
+      expect(answers).toHaveLength(2);
+      const one = claim({ project: 'project-a', heldBy: 'session-a', paths: ['a.ts'] });
+      const two = claim({ id: 2, project: 'project-a', heldBy: 'session-b', paths: ['b.ts'] });
+      await act(async () => { answers[1]!({ claims: [one, two] }); await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('2 files claimed')).toBeInTheDocument();
+      await act(async () => { answers[0]!({ claims: [one] }); await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('2 files claimed')).toBeInTheDocument();
+      expect(screen.queryByText('1 file claimed')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a malformed or failed answer keeps the last good list', async () => {
+    vi.useFakeTimers();
+    try {
+      let n = 0;
+      vi.spyOn(api, 'claims').mockImplementation(async () => {
+        n += 1;
+        if (n === 1) return { claims: [claim({ project: 'project-a', heldBy: 'session-a', paths: ['a.ts'] })] };
+        if (n === 2) return { claims: null } as unknown as { claims: ClaimSummary[] };
+        if (n === 3) return null as unknown as { claims: ClaimSummary[] };
+        throw new Error('down');
+      });
+      render(<HotFilesStrip />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('1 file claimed')).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(3 * CLAIMS_POLL_MS); });
+      expect(n).toBe(4);
+      expect(screen.getByText('1 file claimed')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+

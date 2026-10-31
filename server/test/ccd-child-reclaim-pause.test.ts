@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: CcdHarness;
@@ -192,7 +192,7 @@ describe('ccd reclaim-pause', () => {
     // (`$REG/`, `${REG}/`, `"$REG"/` or `"${REG}"/` — one path, four bash
     // spellings), exactly one of them is inside the writer, and at least one is
     // outside it. Task 1 Step 2 ran this exact filter over wave 3's lines first.
-    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    const src = ccdSource().split('\n');
     const start = src.findIndex((l) => l.startsWith('cmd_reclaim_pause() {'));
     expect(start, 'cmd_reclaim_pause is not defined at column 0').toBeGreaterThan(-1);
     const end = src.findIndex((l, i) => i > start && l === '}');
@@ -210,7 +210,7 @@ describe('ccd reclaim-pause', () => {
     expect(outside.length, "ws-reclaim's reader (wave 3) — a switch no deleting verb reads is wired to nothing")
       .toBeGreaterThanOrEqual(1);
     // The scan above is satisfied by a REFUSAL MESSAGE
-    // (`_reap_refuse paused "… ($REG/reclaim-paused)"`), not by a reader — a
+    // (`_ws_refuse paused "… ($REG/reclaim-paused)"`), not by a reader — a
     // mistyped TEST expression with its message left alone still names the
     // path once outside the writer, so `outside` stays >= 1. Pin the reader
     // side separately: the exact expression both readers use,

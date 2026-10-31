@@ -16,8 +16,10 @@ export function isSpecifier(n: ts.Node): boolean {
   return false;
 }
 
-/** Parse one source file the way every walker here reads it (TSX, parent pointers set). `text` overrides the file's
- *  contents (a probe snippet). */
+/** Parse one source file the way every walker here reads it (parent pointers set): TSX for a `.tsx` file, TS for any
+ *  other. The TSX grammar takes a generic arrow `async <T>(…)` in a `.ts` file for a JSX tag and reads the rest of the
+ *  file only in part, as it did `lib/api.ts`. `text` overrides the file's contents (a probe snippet). */
 export function parseTs(file: string, text: string = readFileSync(file, 'utf8')): ts.SourceFile {
-  return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
 }

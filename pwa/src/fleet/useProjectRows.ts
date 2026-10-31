@@ -18,7 +18,7 @@
 // markup of its own: the screen still renders every card, chip and sheet.
 // Nothing here reaches the DOM, so this file is `.ts` and the contrast gate
 // has nothing to re-key.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ProjectPoolsWire, ProjectPoolWire, ProjectRepoWire, ProjectRow,
 } from '../../../shared/api';
@@ -26,6 +26,11 @@ import type { ModelClass } from '../../../shared/models';
 import { api, type WorkspaceAddAnswer } from '../lib/api';
 import { useWhenVisible } from '../lib/usePoll';
 import { placementOfRow, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
+
+/** THE ONE reader of `GET /api/projects` in the app (C7n, D-7192): the fleet screen's plane below calls it with the
+ *  class its chooser holds, and the New session and Start programme sheets call it with none, so their request is the
+ *  class-blind `GET /api/projects` it always was (`api.projects` appends `?class=` only when given). */
+export const loadProjects = (cls?: string): Promise<{ roots: string[]; projects: ProjectRow[] }> => api.projects(cls);
 
 /** The pools frame reduced to one comparable string. Key ORDER is not
  *  significance: the wire is rebuilt per frame, so an object that re-serialises
@@ -190,7 +195,7 @@ export function useProjectRows(
     setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'pending' });
     try {
       const cls = classFilterRef.current;
-      const response = await api.projects(cls === '' ? undefined : cls);
+      const response = await loadProjects(cls === '' ? undefined : cls);
       if (request === projectRequest.current) {
         setProjectRows({ kind: 'ready', rows: response.projects });
         publishRef.current(response.projects);
@@ -286,7 +291,9 @@ export function useProjectRows(
     });
   }, [poolOpen, placementFor]);
 
-  const addWorkspace = async (project: string, opts: { name?: string } = {}): Promise<AddOutcome> => {
+  // A callback over the two values it reads (`adding`, `classFilter`) and the stable refresh: its identity moves
+  // when one of them does, never on a render that changed neither (C6, D-6438).
+  const addWorkspace = useCallback(async (project: string, opts: { name?: string } = {}): Promise<AddOutcome> => {
     if (adding.has(project)) return { kind: 'busy' };
     setAdding((s) => new Set(s).add(project));
     try {
@@ -310,20 +317,36 @@ export function useProjectRows(
         return next;
       });
     }
-  };
+  }, [adding, classFilter, refreshProjects]);
 
-  return {
+  const chooseClass = useCallback((next: '' | 'default' | ModelClass): void => {
+    setClassFilter(next);
+    // Synchronously, beside the state: `refreshProjects` reads the ref and
+    // its identity is deliberately stable, so a class set only in state
+    // would be fetched with the PREVIOUS one.
+    classFilterRef.current = next;
+    void refreshProjects();
+  }, [refreshProjects]);
+  const openPool = useCallback((project: string): void => {
+    setPoolSelection(poolSelectionFor(project, placementFor(project), poolWrite.current));
+    setPoolOpen(true);
+  }, [placementFor]);
+  const closePool = useCallback((): void => setPoolOpen(false), []);
+  const notePoolWrite = useCallback((project: string, pool: NonNullable<ProjectRow['pool']>): void => {
+    const write = { project, pool };
+    poolWrite.current = write;
+    setPoolSelection((selected) => selected?.project === project ? { project, pool } : selected);
+    void refreshProjects(undefined, write);
+  }, [refreshProjects]);
+
+  // The plane is memoised (C6, D-6438): the chrome's value is built from it, so a plane rebuilt on every render
+  // (a fleet frame re-renders the provider) would hand every reader of the chrome a new value. `knownProjects` is
+  // derived INSIDE the memo for the same reason: out here it would be a new array on each render.
+  return useMemo(() => ({
     rows: projectRows,
     knownProjects: projectRows.kind === 'ready' ? projectRows.rows.map((r) => r.name) : [],
     classFilter,
-    chooseClass: (next) => {
-      setClassFilter(next);
-      // Synchronously, beside the state: `refreshProjects` reads the ref and
-      // its identity is deliberately stable, so a class set only in state
-      // would be fetched with the PREVIOUS one.
-      classFilterRef.current = next;
-      void refreshProjects();
-    },
+    chooseClass,
     placementFor,
     poolFor,
     repoFor,
@@ -331,16 +354,11 @@ export function useProjectRows(
     addWorkspace,
     poolSelection,
     poolOpen,
-    openPool: (project) => {
-      setPoolSelection(poolSelectionFor(project, placementFor(project), poolWrite.current));
-      setPoolOpen(true);
-    },
-    closePool: () => setPoolOpen(false),
-    notePoolWrite: (project, pool) => {
-      const write = { project, pool };
-      poolWrite.current = write;
-      setPoolSelection((selected) => selected?.project === project ? { project, pool } : selected);
-      void refreshProjects(undefined, write);
-    },
-  };
+    openPool,
+    closePool,
+    notePoolWrite,
+  }), [
+    projectRows, classFilter, chooseClass, placementFor, poolFor, repoFor, adding, addWorkspace,
+    poolSelection, poolOpen, openPool, closePool, notePoolWrite,
+  ]);
 }

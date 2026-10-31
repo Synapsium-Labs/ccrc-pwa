@@ -238,9 +238,9 @@ export const EXPORT_CHECK_SLICE_BYTES = 128 * 1024 * 1024;
 /** CP-39 (D-6935, D-6939): the derivation's shares of the ONE run budget, per mille of its limits, in tick order (chosen).
  *  One set of numbers serves the ladder of ceilings (budgetRungs) and the floors (budgetFloors). Measured on the fleet box:
  *  every budget-gated derivation starved while ingest owned the whole budget, and under load the sweep unit (shipped at
- *  Nice=19 with idle I/O) got 0.1-0.17 of a core, so 90 s of wall clock was about 9-15 s of CPU. The FTS backfill takes
- *  the largest share, being the largest backlog by count (at most about 486,000 blobs owed) and the one every grep
- *  waits on; the leaves and the census 10% each (the census builds one
+ *  Nice=19 with idle I/O) got 0.1-0.17 of a core (measured with a local, unshipped CPU-weight drop-in present), so 90 s of
+ *  wall clock was about 9-15 s of CPU. The FTS backfill takes the largest share, being the largest backlog by count (at most
+ *  about 486,000 blobs owed) and the one every grep waits on; the leaves and the census 10% each (the census builds one
  *  file clock, a stat per recorded file, before its first chunk, over about 1.14 million blobs); the card step 5% (a few
  *  cards a tick in steady state). Ingest keeps 60%, which still drains a backlog over ticks (§9.2 step 7). */
 export const DERIVE_SHARES = Object.freeze({ fts: 150, nodes: 100, card: 50, census: 100 });
@@ -267,6 +267,12 @@ export const FLOOR_GIB = 15;
 export const FLOOR_PCT = 10;
 export const EPOCH_CONFIRM_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const SCAN_INTERVAL_MS = 30 * 60 * 1000;
+/** CP-39d (D-7096). The most files a tick that runs no transcript scan lstats for a registered session's mid-turn growth
+ *  (sweep.mjs activeFiles): *chosen*, about three times the registered sessions that hold a live main file (79 on
+ *  2026-10-27, across 257 files), so every uuid's newest recorded copy is stat'ed before any older copy. It bounds lstats,
+ *  not reads: a file the pass takes is read by the tick's own budget, as a behind file is. A file past it waits for its
+ *  Stop hint or the scan, whose bound is unchanged. */
+export const ACTIVE_STAT_MAX = 256;
 export const SIDECAR_FTS_BYTES = 512 * 1024;
 /** How far past SIDECAR_FTS_BYTES a sidecar is decoded and redacted before it is cut (D-4312). */
 export const SIDECAR_REDACT_MARGIN = 65536;
@@ -3583,6 +3589,27 @@ export function lagOfTick({ tickStartMs, newEntries, minNewTsMs }) {
   return Math.max(0, tickStartMs - minNewTsMs);
 }
 
+/** CP-39d (D-7096). Whether a tick that runs no scan should offer a registered session's live main-thread file to
+ *  ingest, from the row the sweep last recorded for it and one lstat of the path. 'skip', 'read' or 'same', in this order:
+ *  - 'skip': no stat (the path vanished or could not be measured) or not a regular file; lstat never follows a link, and
+ *    the hint and the scan own both cases, so nothing is counted for them;
+ *  - 'read': dev or ino differ from the row, so another file stands at the path (bindFile decides the retire);
+ *  - 'read': the size is below the cursor, so the file shrank (bindFile rescans and counts source_shrank);
+ *  - 'read': the mtime differs from the one recorded (a null recorded mtime differs);
+ *  - 'read': the size is above the recorded size (null reads 0) while the file is fresher than `tornStaleMs`: growth inside
+ *    one coarse mtime tick. A stale torn tail (examinedSize records it as read) is not re-read every tick;
+ *  - else 'same'.
+ *  `row` is `{ dev, ino, offset, size, mtimeNs }` as ingest_files holds them (dev, ino and mtimeNs as bigint); `stat` is
+ *  `{ isFile, dev, ino, size, mtimeNs }` from a bigint lstat, or null. Pure. */
+export function decideActiveRead({ row, stat, nowMs, tornStaleMs }) {
+  if (stat === null || stat.isFile !== true) return 'skip';
+  if (stat.dev !== row.dev || stat.ino !== row.ino) return 'read';
+  if (stat.size < row.offset) return 'read';
+  if (stat.mtimeNs !== row.mtimeNs) return 'read';
+  if (stat.size > (row.size ?? 0) && nowMs - Number(stat.mtimeNs / 1_000_000n) < tornStaleMs) return 'read';
+  return 'same';
+}
+
 /** The largest sidecar measured (§9.2 step 4). Of 103,068 sidecars on the reference box the
  *  largest was exactly 67,108,864 bytes (M, review). It no longer decides the ingest arm (SIDECAR_READ_WHOLE_MAX
  *  does, D-6971). It remains expand's one-call decode bound, the oversize decode refusal's sidecar arm and the base
@@ -3689,7 +3716,11 @@ export const SIDECAR_WALK_META = 'sidecar_walk:';
 /** CP-39 (D-6931). The most UTF-16 units of names one walk state holds, done and in progress together (chosen): twice the
  *  largest backlog measured on the fleet box (about 6,270 unlinked names, most near 40 units). It bounds the automaton's
  *  states (about 517,000 at the cap, 49 MiB of heap, measured in scratch) and the persisted state, so a walk's memory stays
- *  inside O20's RSS bound (pinned by the RSS case, P22). */
+ *  inside O20's RSS bound (pinned by the RSS case, P22). It is a soft bound (review 964, review 1065): walkNames admits `first`,
+ *  the name that asked, on every call whatever the room, and startSidecarWalk measures that room against `done` as the call
+ *  began, so a call takes at most the larger of the room and `first` itself. Once `done` holds the cap, each later call admits
+ *  `first` alone, and the overshoot grows by one name per call, until the unseen names run out (measured in scratch: 14,000
+ *  unseen names of 39 units, the overshoot grew by 39 units a call once the cap was held). */
 export const SIDECAR_WALK_CHARS_MAX = 524_288;
 
 /** The most characters a persisted walk state may hold and still be parsed (D-6931): beyond it the state is read as absent. */
@@ -10054,8 +10085,8 @@ export function nextSegmentSeq({ onDisk, recorded }) {
  *  (D-4756 (history-export-cadence-clock-backwards)). No clock at all waits: the tick that asks has recorded its own
  *  ticks row, so the next tick has one. `intervalMs` is exportPassIntervalMs' answer: an hour, or longer after
  *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)).
- *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that the run's budget held before it wrote
- *  a segment (budgetHeldPass; D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
+ *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that its slice of the run's budget held before it wrote
+ *  a segment (budgetHeldPass; D-6974; D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
  *  retries hourly, never every tick, while `lastPassMs` (doctor's last-pass clock) does not move. A completed pass deletes it. Which of the two clocks governs
  *  is this function's decision (RD2): the later one, a null being absent, so an attempt after the last pass keeps the wait
  *  running from the attempt, and a pass after the last attempt from the pass. Omitted, it is null, and the answers are exactly
@@ -10408,12 +10439,12 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
   return { take, carry, stubs, bytes, leftDue, oldestLeftDueSinceMs };
 }
 
-/** Whether a pass the run's budget cut short is recorded as an attempt and reported (D-5394
+/** Whether a pass its slice of the run's budget cut short is recorded as an attempt and reported (D-5394
  *  (history-export-select-due-transcripts)): the sweep writes the attempt clock and one stderr line, and the next step
  *  waits its interval, not the next tick. Two shapes, both a pass that wrote no segment and so moved nothing:
  *  - nothing taken and the selection did not run to its end (`taken` 0, `selectionComplete` false). The bound cannot end a
- *    selection before its first row, since planSegment takes a pass's first row whatever its size, so the budget is all
- *    that is left. A selection that never began, the budget already spent as the pass started (the export is the tick's
+ *    selection before its first row, since planSegment takes a pass's first row whatever its size, so its slice of the run's
+ *    budget is all that is left. A selection that never began, its slice of the run's budget already spent as the pass started (the export is the tick's
  *    last step), is the same fact: it did not run to its end;
  *  - rows taken and none written, the writer finding the budget spent before its first row (`written` 0, `writeStopped`
  *    'budget'). The writer checks the budget before history-off, so a budget spent beside the operator's switch reads as
@@ -10600,7 +10631,7 @@ export const EXPORT_BIND_BATCH = 50_000;
 /** How long a check's escalating stop (MARK_CHECK_STALL_WORDS) may stand before doctor fails it (export-marks-stalled;
  *  read by deriveHealth). */
 export const EXPORT_MARKS_STALL_MS = 24 * 60 * 60 * 1000;
-/** Why a check after a bind stopped short. `budget`: the run's budget was spent before a batch (it resumes each tick);
+/** Why a check after a bind stopped short. `budget`: its slice of the run's budget was spent before a batch (D-6975; it resumes each tick);
  *  `off`: history-off was planted; `wal-held`: a checkpoint answered busy and the WAL stands past EXPORT_BIND_WAL_CEILING;
  *  `unlistable`: export/<store_id>/ could not be listed; `failed`: another caught error. */
 export const MARK_CHECK_WORDS = Object.freeze(['budget', 'off', 'wal-held', 'unlistable', 'failed']);

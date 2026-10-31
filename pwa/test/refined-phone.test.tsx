@@ -11,8 +11,10 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
-import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
+import type { AccountUsage, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { seventeenLanes } from './seventeenLanes';
+import { lanesByFree } from '../src/fleet/laneOrder';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
@@ -28,11 +30,9 @@ const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
-const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { api } = await import('../src/lib/api');
 const { DocsHead } = await import('../src/docs/DocsHead');
-const { ACCOUNTS_DOOR_LABEL } = await import('../src/fleet/CompactGauges');
 
 /** A Docs visit whose actions are inert: the up door reads only the page. */
 const docsVisit = (): DocsVisit => ({
@@ -73,7 +73,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   act(() => { navigate('/'); });
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false }));
   setSkin(REFINED);
 });
 
@@ -110,22 +110,23 @@ describe("Refined's phone header (W2 Task S5)", () => {
   });
 
   it("a badged door's name carries its count", () => {
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    const feed: NotifyEvent[] = [
-      { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
-      { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
-      { seq: 3, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
+    // Only what waits on the operator is counted (T2d, D-6330): two sessions ask, and one run's worker is one of them.
+    const sessions = [
+      fleetSession({ id: 'ask-a', bucket: 'attention' }),
+      fleetSession({ id: 'ask-b', bucket: 'attention' }),
+      fleetSession({ id: 'calm', bucket: 'idle' }),
     ];
-    const open = { id: 1, program: 'p', state: 'working', closedAt: null } as unknown as RunSummary;
+    const run = (id: number, sessionId: string): RunSummary =>
+      ({ id, program: 'p', state: 'working', closedAt: null, sessionId, claimedBy: 'calm' }) as unknown as RunSummary;
     atWidth(390);
     render(<App />);
-    act(() => useFleetStore.setState({ conn: 'open', feed, runs: [open], runsFrameSeen: true }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true, runs: [run(1, 'ask-a'), run(2, 'calm')], runsFrameSeen: true }));
     const h = head();
-    expect(within(h).getByRole('button', { name: 'Inbox, 2 unread' })).toHaveAttribute('data-command', 'go-inbox');
-    expect(within(h).getByRole('button', { name: 'Runs, 1 active' })).toHaveAttribute('data-command', 'go-runs');
-    act(() => useFleetStore.setState({ feed: [] }));
+    expect(within(h).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
+    expect(within(h).getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'calm', bucket: 'idle' })] }));
     expect(within(h).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
+    expect(within(h).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
   });
 
   it("the subtitle is `fleetSummary`'s readout", () => {
@@ -184,36 +185,136 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(published()).toBe('');
   });
 
-  it("the phone header shows the full strip: each lane's 5h and 7d rows, the strip one door to /accounts carrying go-accounts", async () => {
+  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, All accounts the go-accounts door", async () => {
     const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
     atWidth(390);
     render(<App />);
-    const strip = await within(head()).findByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-a 80%/ });
     await within(strip).findByText('lane-a');
     expect(strip).toHaveClass('accounts-strip');
-    expect(strip).toHaveAttribute('data-command', 'go-accounts');
+    // The strip is no door itself: its cards are, and the end cell's All accounts is the `go-accounts` door.
+    expect(strip).not.toHaveAttribute('data-command');
     const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
     expect(cards).toHaveLength(lanes.length);
+    // Most free first: lane-d (2), lane-e (4), lane-c (5), lane-b (12), lane-a (80).
+    const name = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
+    expect(cards.map(name)).toEqual(['lane-d', 'lane-e', 'lane-c', 'lane-b', 'lane-a']);
     const windows = (card: HTMLElement): string[] => [...card.querySelectorAll('.acct-win')].map((w) => w.textContent ?? '');
-    expect(windows(cards[0]!)).toEqual(['5h', '7d']);
-    expect(windows(cards[1]!)).toEqual(['5h']);
-    expect(windows(cards[2]!)).toEqual(['7d']);
-    // One readout of the lanes on the page: the full strip is the phone's, and no compact grid sits beside it.
-    expect(document.querySelectorAll('.accounts-strip, .accounts-compact')).toHaveLength(1);
-    // The strip is a command door: the layer navigates.
-    fireEvent.click(strip);
+    expect(windows(cards.find((c) => name(c) === 'lane-a')!)).toEqual(['5h', '7d']);
+    expect(windows(cards.find((c) => name(c) === 'lane-b')!)).toEqual(['5h']);
+    expect(windows(cards.find((c) => name(c) === 'lane-c')!)).toEqual(['7d']);
+    // One readout of the lanes on the page: the full strip is the phone's.
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+    // A card opens its lane; All accounts is a command door, which the layer navigates.
+    fireEvent.click(cards.find((c) => name(c) === 'lane-b')!);
     expect(location.pathname).toBe('/accounts');
+    expect(location.search).toBe('?lane=lane-b');
+    act(() => { navigate('/'); });
+    const all = await within(head()).findByRole('button', { name: 'All accounts' });
+    expect(all).toHaveAttribute('data-command', 'go-accounts');
+    fireEvent.click(all);
+    expect(location.pathname).toBe('/accounts');
+    expect(location.search).toBe('');
   });
 
-  it('the phone header mounts no compact grid', async () => {
-    const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null)];
-    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+  // The strip folds at every width (S5b, D-6530): four cards on a phone, whatever its width, and the control's words say
+  // what the fold hides that needs the operator.
+  const stubSeventeen = (): void => {
+    const f = seventeenLanes(nowSec);
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+  };
+  const cardNames = (strip: HTMLElement): string[] =>
+    [...strip.querySelectorAll<HTMLElement>('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it("at 390 with 17 lanes the phone header shows four cards and '+13 more · 1 sign-in expired · 1 rate-limited'", async () => {
+    stubSeventeen();
     atWidth(390);
     render(<App />);
-    await within(head()).findByText('lane-a');
-    expect(document.querySelector('.accounts-compact')).toBeNull();
-    expect(head().querySelector('[data-compact]')).toBeNull();
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(cardNames(strip)).toEqual(['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e']);
+    const more = within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    // The end cell holds the control, then All accounts: still one strip on the page.
+    expect(more.closest('.accounts-end')!.lastElementChild).toBe(within(strip).getByRole('button', { name: 'All accounts' }));
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+  });
+
+  // The phone's rule (S5c, phone-strip-tap-panel): the control opens a panel of the lanes the line folds away (Task C13:
+  // every lane drawn once across the line and the panel) instead of expanding the strip, and the stored choice is the
+  // desk's alone, so nothing is remembered and a remount finds the strip as it began.
+  const lineNames = (strip: HTMLElement): string[] =>
+    [...strip.children].filter((c) => c.classList.contains('account-gauge')).map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it('a tap on the control opens a panel of the 13 folded lanes, in order, under a line that stays four, stores nothing, and a remount finds it closed', async () => {
+    stubSeventeen();
+    atWidth(390);
+    const first = render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    fireEvent.click(within(strip).getByRole('button', { name: /^\+13 more/ }));
+    const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
+    expect(panel).not.toBeNull();
+    const f = seventeenLanes(nowSec);
+    const order = lanesByFree(f.accounts).map((a) => f.roster.find((r) => r.id === a.wrapper)!.label);
+    const inPanel = [...panel!.querySelectorAll('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+    expect(lineNames(strip)).toEqual(order.slice(0, 4));
+    expect(inPanel).toEqual(order.slice(4));
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-controls', panel!.id);
+    expect(window.localStorage.getItem('ccrc-accounts-strip')).toBeNull();
+    first.unmount();
+    render(<App />);
+    const again = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(again).findByText('lane-a');
+    expect(again.querySelector('.accounts-flyout')).toBeNull();
+    expect(lineNames(again)).toHaveLength(4);
+    expect(within(again).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a stored choice of expanded is not read below 900: the phone header still folds to its line', async () => {
+    stubSeventeen();
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    expect(lineNames(strip)).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a phone whose grid draws four tracks shows two lines of them: eight cards', async () => {
+    stubSeventeen();
+    atWidth(700);
+    // jsdom lays nothing out: the observer answers the group's width, and the computed style names the tracks it draws.
+    // The strip's computed style is the real one with two properties answered (the accessible-name walk of a group query
+    // asks it for `getPropertyValue` too).
+    const real = window.getComputedStyle.bind(window);
+    const drawn: Record<string, string> = { columnGap: '6px', gridTemplateColumns: '145.5px 145.5px 145.5px 145.5px' };
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      if (!el.classList.contains('accounts-strip')) return style;
+      return new Proxy(style, {
+        get: (target, key: string) => {
+          if (key in drawn) return drawn[key];
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    });
+    vi.stubGlobal('ResizeObserver', class {
+      private readonly cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe(target: Element): void {
+        if (target.classList.contains('accounts-strip')) this.cb([{ target, contentRect: { width: 600 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByRole('button', { name: /^\+9 more/ });
+    expect(lineNames(strip)).toHaveLength(8);
   });
 
   it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {

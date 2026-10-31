@@ -316,8 +316,8 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     // The component tests always inject, so without a fetch-level block here a
     // new client method has NO coverage at all — measured for `coordPause`,
     // which is why this describe exists.
-    const view = { caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 3 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
@@ -358,8 +358,8 @@ describe('coordPause (Task 11, spec §4.2)', () => {
   });
 
   it('POSTs only the given fields as JSON to /api/coord/caps', async () => {
-    const view = { caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 5 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
@@ -1048,6 +1048,16 @@ describe('account pools', () => {
     expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe('/api/projects?class=fable');
   });
 
+  it('a 200 /api/projects answer without a projects array rejects with a plain error', async () => {
+    for (const body of [{}, { roots: [] }, { projects: null }, { projects: {} }, null, []]) {
+      const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, body)) as unknown as typeof fetch);
+      const failure = await api.projects().then(() => null, (err: unknown) => err);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(ApiError);
+      expect((failure as Error).message).toBe("The server's project list could not be read.");
+    }
+  });
+
   it('createSession omits route entirely unless at least one field is set (routing slice 4, Task 6)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
@@ -1681,21 +1691,39 @@ describe('api client — each door sends exactly its own request', () => {
     });
   });
 
-  it('POSTs a dialog answer by INDEX, with the dialog it was shown', async () => {
-    await api.answerDialog(ID, 'd7', 2);
+  // W7 C7g (D-7185, D-7485): one answer writer, `answerQuestion`. This describe's fetch answers `GET /health` with no
+  // `caps`, a server without `questions-v1`. Until C7p these two rows were the old doors' requests there (`/dialog`
+  // and `/ask`, the skew row); since C7p (D-7194, D-7540) the family's door is the only one, whatever `/health` says.
+  it('POSTs a dialog answer by INDEX, with the dialog it was shown (a server without questions-v1: still the family)', async () => {
+    await api.answerQuestion(ID, { kind: 'dialog', dialogId: 'd7', optionIndex: 2 });
     expect(sent()).toEqual({
-      url: `/api/sessions/${ENC}/dialog`, method: 'POST', body: { dialogId: 'd7', optionIndex: 2 },
+      url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'dialog', dialogId: 'd7', optionIndex: 2 },
     });
   });
 
-  it('POSTs an ask answer with the askKey verbatim', async () => {
+  it('POSTs an ask answer with the askKey verbatim (a server without questions-v1: still the family)', async () => {
     // The key is minted server-side and carried back unchanged: the server
     // re-reads the CURRENT envelope and refuses unless it still matches, so a
     // client that reshaped it could answer a question nobody was shown.
-    await api.answerAsk(ID, 'k-abc', [0, 2]);
+    await api.answerQuestion(ID, { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] });
     expect(sent()).toEqual({
-      url: `/api/sessions/${ENC}/ask`, method: 'POST', body: { askKey: 'k-abc', optionIndexes: [0, 2] },
+      url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] },
     });
+  });
+
+  it('on a questions-v1 server, both go to POST /api/questions/session-<id>/answer with the family\'s body', async () => {
+    const asked: { url: string; init?: RequestInit }[] = [];
+    const nu = createApi(((url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === '/health') return Promise.resolve(jsonResponse(200, { ok: true, caps: ['questions-v1'] }));
+      asked.push({ url: String(url), init });
+      return Promise.resolve(jsonResponse(200, { ok: true }));
+    }) as unknown as typeof fetch);
+    await nu.answerQuestion(ID, { kind: 'dialog', dialogId: 'd7', optionIndex: 2 });
+    await nu.answerQuestion(ID, { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] });
+    expect(asked.map((r) => ({ url: r.url, method: r.init?.method, body: JSON.parse(String(r.init?.body)) }))).toEqual([
+      { url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'dialog', dialogId: 'd7', optionIndex: 2 } },
+      { url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] } },
+    ]);
   });
 
   it('POSTs the verified Enter with the box row it expects to find', async () => {

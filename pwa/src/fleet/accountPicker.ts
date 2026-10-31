@@ -213,10 +213,11 @@ export function factsFor(rows: readonly AccountUsage[] | null, wrapper: string):
  *  be left to telemetry staleness.
  *
  *  Not scoring is not a refusal to help: an account with no score is simply
- *  not ranked, its gauges still say `—` (or `reset`, which is the rolled-over
- *  window saying so out loud), and it remains tappable. What is gone is ccrc
- *  telling the reader it is the emptiest pool. That is the WHOLE cost a
- *  measurement is allowed to charge — preference, never eligibility. */
+ *  not ranked, its gauges still read as `windowReading` says (`—` never
+ *  measured, `0%` spoken as inferred for a rolled-over window), and it remains
+ *  tappable. What is gone is ccrc telling the reader it is the emptiest pool.
+ *  That is the WHOLE cost a measurement is allowed to charge — preference,
+ *  never eligibility. */
 const load = (l: AccountFacts): number | null => {
   if (condemned(l) || l === null) return null;
   // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. `measured()`

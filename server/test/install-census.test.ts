@@ -719,6 +719,17 @@ function pairDecl(): { bodySource: string; templateSource: string; entryDest: st
   return { bodySource: one('BODY_SOURCE'), templateSource: one('TEMPLATE_SOURCE'), entryDest: one('ENTRY_DEST'), bodyDest: one('BODY_DEST') };
 }
 
+/** The library the body pins and the publisher places FIRST (D-6913): its source and destination, read from the same helper.
+ *  `prefix` `TRAIN_` reads the second library's pair instead (D-7463), placed right after the first. */
+function libDecl(prefix: '' | 'TRAIN_' = ''): { libSource: string; libDest: string } {
+  const one = (name: string): string => {
+    const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+    if (all.length !== 1) throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, found ${all.length}`);
+    return all[0]![1]!;
+  };
+  return { libSource: one(`${prefix}LIB_SOURCE`), libDest: one(`${prefix}LIB_DEST`) };
+}
+
 /** The `.local/bin` name the pair publisher places, when `body` calls `publisher`
  *  — exactly once, or a THROW: a second call is a second publication nobody ordered. */
 function pairBin(body: string, publisher: string, where: string): Set<string> {
@@ -1793,6 +1804,115 @@ describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, remov
   });
 });
 
+// Both libraries the body pins (D-6913, D-7463), each held to the same four facts.
+for (const prefix of ['', 'TRAIN_'] as const) {
+describe(`ccd's ${prefix === '' ? 'library (D-6913)' : 'second library (D-7463)'}: the file the body pins is placed by the pair publisher, removed by name and backed up before the body`, () => {
+  it('the publisher declares it once, under a lib/ directory beside the body, and it is a tracked file', () => {
+    const { libSource, libDest } = libDecl(prefix);
+    const { bodyDest } = pairDecl();
+    expect(libDest, 'the library lives in lib/ beside the body').toBe(`${path.posix.dirname(bodyDest)}/lib/${path.posix.basename(libSource)}`);
+    expect(trackedFiles().has(libSource), `${libSource} is not tracked`).toBe(true);
+  });
+
+  it('the uninstall removes the library by name and its directory only with rmdir, before the directory that holds it', () => {
+    const { libDest } = libDecl(prefix);
+    const { bodyDest } = pairDecl();
+    const body = fnBody('_uninst_tree_bins');
+    expect(rmFOperands(body), `_uninst_tree_bins does not rm -f the library at $HOME/${libDest}`).toContain(`$HOME/${libDest}`);
+    const libDir = `$HOME/${path.posix.dirname(libDest)}`;
+    const dirs = calls(body, 'rmdir').map(operands);
+    expect(dirs, `_uninst_tree_bins does not rmdir ${libDir} (only-if-empty)`).toContainEqual([libDir]);
+    expect(dirs.findIndex((o) => o[0] === libDir), 'the library directory is removed before its parent')
+      .toBeLessThan(dirs.findIndex((o) => o[0] === `$HOME/${path.posix.dirname(bodyDest)}`));
+  });
+
+  it('the update backup takes the library BEFORE the body that pins it — arm 3 restores in that order', () => {
+    const { libDest } = libDecl(prefix);
+    const { bodyDest } = pairDecl();
+    const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+    expect(sources.indexOf(`$HOME/${libDest}`), `_upd_backup_set does not back up the library at $HOME/${libDest}`).toBeGreaterThan(-1);
+    expect(sources.indexOf(`$HOME/${libDest}`)).toBeLessThan(sources.indexOf(`$HOME/${bodyDest}`));
+  });
+
+  it('deploy.sh backs the library up before the body, in the same remote command', () => {
+    const { libDest } = libDecl(prefix);
+    const { bodyDest } = pairDecl();
+    const text = deployText();
+    const l = text.indexOf(`~/${libDest}`);
+    const b = text.indexOf(`~/${bodyDest} ~/ccrc-backups`);
+    expect(l, `deploy.sh does not back up the library at ~/${libDest}`).toBeGreaterThan(-1);
+    expect(l).toBeLessThan(b);
+  });
+
+  if (prefix === 'TRAIN_') {
+    it('the second library is backed up right after the first, by the update and by deploy.sh', () => {
+      const first = libDecl().libDest; const second = libDecl(prefix).libDest;
+      const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+      expect(sources.indexOf(`$HOME/${second}`)).toBe(sources.indexOf(`$HOME/${first}`) + 1);
+      const text = deployText();
+      expect(text.indexOf(`[ ! -f ~/${first} ] || cp -a`)).toBeLessThan(text.indexOf(`[ ! -f ~/${second} ] || cp -a`));
+    });
+  }
+});
+}
+
+/** The docs redactor's two files the pair publisher places beside the body (D-7077): sources and destinations, read from the
+ *  same helper, in the order it renames them. */
+function redactDecl(): Array<{ source: string; dest: string }> {
+  const one = (name: string): string => {
+    const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+    if (all.length !== 1) throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, found ${all.length}`);
+    return all[0]![1]!;
+  };
+  return [{ source: one('REDACT_SOURCE'), dest: one('REDACT_DEST') }, { source: one('REDACT_CLI_SOURCE'), dest: one('REDACT_CLI_DEST') }];
+}
+
+describe('ccd\'s docs redactor (D-7077, OA-C11 (a)): the two shared/ files the body pins are placed by the pair publisher, removed by name and backed up before the library', () => {
+  it('the publisher declares both under a shared/ directory beside the body, and both are tracked files', () => {
+    const { bodyDest } = pairDecl();
+    for (const { source, dest } of redactDecl()) {
+      expect(dest, `${source} lives in shared/ beside the body`).toBe(`${path.posix.dirname(bodyDest)}/shared/${path.posix.basename(source)}`);
+      expect(trackedFiles().has(source), `${source} is not tracked`).toBe(true);
+    }
+  });
+
+  it('the uninstall removes both by name, and shared/ only with rmdir, before the directory that holds it', () => {
+    const { bodyDest } = pairDecl();
+    const body = fnBody('_uninst_tree_bins');
+    const dirs = calls(body, 'rmdir').map(operands);
+    for (const { dest } of redactDecl()) {
+      expect(rmFOperands(body), `_uninst_tree_bins does not rm -f $HOME/${dest}`).toContain(`$HOME/${dest}`);
+    }
+    const sharedDir = `$HOME/${path.posix.dirname(redactDecl()[0]!.dest)}`;
+    expect(dirs, `_uninst_tree_bins does not rmdir ${sharedDir} (only-if-empty)`).toContainEqual([sharedDir]);
+    expect(dirs.findIndex((o) => o[0] === sharedDir), 'shared/ is removed before its parent')
+      .toBeLessThan(dirs.findIndex((o) => o[0] === `$HOME/${path.posix.dirname(bodyDest)}`));
+  });
+
+  it('the update backup takes both BEFORE the library, and the library before the body — arm 3 restores in that order', () => {
+    const { libDest } = libDecl();
+    const { bodyDest } = pairDecl();
+    const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+    const at = redactDecl().map(({ dest }) => sources.indexOf(`$HOME/${dest}`));
+    for (const [i, { dest }] of redactDecl().entries()) expect(at[i], `_upd_backup_set does not back up $HOME/${dest}`).toBeGreaterThan(-1);
+    expect(at[0]!).toBeLessThan(at[1]!);
+    expect(at[1]!).toBeLessThan(sources.indexOf(`$HOME/${libDest}`));
+    expect(sources.indexOf(`$HOME/${libDest}`)).toBeLessThan(sources.indexOf(`$HOME/${bodyDest}`));
+  });
+
+  it('deploy.sh backs both up, in the guarded form, before the library, in the same remote command', () => {
+    const { libDest } = libDecl();
+    const text = deployText();
+    const lib = text.indexOf(`[ ! -f ~/${libDest} ] || cp -a`);
+    for (const { dest } of redactDecl()) {
+      const name = `ccd-shared-${path.posix.basename(dest)}`;
+      const guarded = `{ [ ! -f ~/${dest} ] || cp -a ~/${dest} ~/ccrc-backups/$TS/${name}; }`;
+      expect(text.indexOf(guarded), `deploy.sh does not back up ~/${dest} as ${name}, guarded`).toBeGreaterThan(-1);
+      expect(text.indexOf(guarded), `~/${dest} is backed up after the library`).toBeLessThan(lib);
+    }
+  });
+});
+
 describe('every file either installer copies out of the tree is tracked in this repository', () => {
   // Header: AND THE SOURCES. A placement whose source no commit carries dies
   // on every real tree; a fixture that stubs the file hides that (D-3165).
@@ -2102,10 +2222,12 @@ const FILE_FNS = ['_inst_files', '_inst_skills', '_inst_graphify_skill', '_inst_
 const MV_FNS = ['_inst_accounts_sh'];
 /** Every other function in `ccd/ccrc` that calls `_inst_atomic`, and why it is not an install lane's placement. */
 const OTHER_INST_ATOMIC_FNS: Readonly<Record<string, string>> = {
-  _inst_bins: 'its `.local/bin` names are the bins describe\'s',
+  _inst_bins: 'its `.local/bin` names are the bins describe\'s; its other placements (the settings reader under '
+    + '`.local/libexec/ccrc`, wave 29) are read by `spineFilePaths` beside FILE_FNS',
   _inst_units: 'its unit files are the units describe\'s',
   _inst_units_darwin: 'launchd plists, macOS only; deploy.sh deploys only to the Linux fleet box',
   _exp_ddns_units: 'the opt-in public endpoint\'s DNS units, placed by its own verb, never by install',
+  _inst_slice_limits: 'the session slice\'s rendered limits drop-in, inside the user unit directory the units describe\'s',
 };
 
 /** `for NAME in a b c; do` loops in a body, as more values of NAME. */
@@ -2145,6 +2267,16 @@ function homeRelative(fn: string, word: string, local: Local): string[] {
 /** What the install spine places outside `.local/bin` and the unit directory, home-relative. */
 function spineFilePaths(): Set<string> {
   const out = new Set<string>();
+  // `_inst_bins` places on PATH, which the bins describe holds equal, and beside ccd's body: the settings reader the
+  // ccd-* sweeps source (wave 29, D-6980). Its destinations outside `.local/bin` are this describe's.
+  {
+    const fn = '_inst_bins';
+    const body = fnBody(fn);
+    const local = assignments(body);
+    for (const w of argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1)) {
+      for (const p of homeRelative(fn, w, local)) if (!p.startsWith('.local/bin/')) out.add(p);
+    }
+  }
   for (const fn of FILE_FNS) {
     const body = fnBody(fn);
     const local = loopBindings(body, assignments(body));
@@ -2201,5 +2333,29 @@ describe('deploy/deploy.sh and `ccrc install` place the same files outside PATH 
     expect(spine, 'the loop-bound skill installers are read').toContain('.cc-sessions/install-worker-skill.sh');
     expect(spine, 'the file-scope stamp path is read').toContain('.ccrc/build.json');
     expect(spine, 'the generated roster is read').toContain('.ccrc/accounts.sh');
+  });
+});
+
+// ── wave 29 (D-6980): ~/.local/libexec/ccrc ───────────────────────────────
+// ccd's body has lived there since D-3696, placed by the entry installer and held by the pair describe above. Wave 29
+// adds the settings reader the ccd-* sweeps source, which `_inst_bins` and deploy.sh each place with one atomic copy
+// and `_uninst_tree_bins` removes by name. The three sets are read from the source, as every census in this file is.
+const LIBEXEC_DIR = '$HOME/.local/libexec/ccrc';
+const DEPLOY_LIBEXEC_DIRS = ['.local/libexec/ccrc', '~/.local/libexec/ccrc'];
+
+describe('the libexec census: what _inst_bins places under ~/.local/libexec/ccrc, _uninst_tree_bins removes and deploy.sh places', () => {
+  it('W29-I4: the three sets are equal, ccd\'s body apart', () => {
+    const ib = fnBody('_inst_bins');
+    const placed = census('_inst_bins', 'placement', argAt('_inst_bins', '_inst_atomic', calls(ib, '_inst_atomic'), 1),
+      [LIBEXEC_DIR], assignments(ib));
+    const ub = fnBody('_uninst_tree_bins');
+    const removed = census('_uninst_tree_bins', 'removal', rmFOperands(ub), [LIBEXEC_DIR], assignments(ub));
+    const deployed = deployPlaced('install_atomic', DEPLOY_LIBEXEC_DIRS);
+    for (const set of [placed, removed, deployed]) set.delete('ccd');   // the body: the pair describe's (D-3696)
+    expect(placed.size, 'the _inst_bins reader found nothing under ~/.local/libexec/ccrc: it has gone stale').toBeGreaterThan(0);
+    expect([...placed].filter((n) => !removed.has(n)).sort(), '_inst_bins places these and _uninst_tree_bins never removes them').toEqual([]);
+    expect([...removed].filter((n) => !placed.has(n)).sort(), '_uninst_tree_bins removes these and _inst_bins never places them').toEqual([]);
+    expect([...placed].filter((n) => !deployed.has(n)).sort(), '_inst_bins places these and deploy.sh does not').toEqual([]);
+    expect([...deployed].filter((n) => !placed.has(n)).sort(), 'deploy.sh places these and _inst_bins does not').toEqual([]);
   });
 });

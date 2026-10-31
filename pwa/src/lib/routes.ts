@@ -52,6 +52,29 @@ export const ROUTES: readonly Route[] = [
   { id: 'digest', pattern: /^\/digest\/?$/, title: 'Digest', top: false, path: null },
 ];
 
+/** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
+ *  id; over `isSessionIdShape`'s charset, every id the wire carries, `encodeURIComponent` is the identity, so the
+ *  path is the id itself (`w7-session-path.test.ts`). */
+export function sessionPath(id: string): string {
+  return `/s/${encodeURIComponent(id)}`;
+}
+
+/** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
+ *  existing `accounts` route, as the digest's `?day=` does, with no new route and no registry command. */
+export const ACCOUNTS_LANE_QUERY = 'lane';
+
+/** The one builder of `/accounts?lane=<id>`. `URLSearchParams` encodes the id; `laneParam` is its one reader. */
+export function accountsLaneHref(wrapper: string): string {
+  return `/accounts?${new URLSearchParams({ [ACCOUNTS_LANE_QUERY]: wrapper }).toString()}`;
+}
+
+/** The one reader of the lane query: the lane id in a `location.search`-shaped string (`useLocation().search` carries
+ *  its leading `?`, and the parser accepts it with or without), or null when it is absent or empty. */
+export function laneParam(search: string): string | null {
+  const id = new URLSearchParams(search).get(ACCOUNTS_LANE_QUERY);
+  return id === null || id === '' ? null : id;
+}
+
 export interface RouteMatch {
   readonly route: Route;
   /** The pattern's first capture, decoded: the session id on `/s/:id`; null where the pattern captures nothing. */

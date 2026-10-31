@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { maxJournalEpoch } from '../journalKernel.js';
 
 /**
  * The flat-file ground truth under `pool_edges` (D8, the `ledger_alloc` shape):
@@ -109,21 +110,7 @@ export class PoolEdgeLog {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
-    let max: number | null = null;
-    for (const line of text.split('\n')) {
-      if (line === '') continue;
-      const m = /"epoch":(\d+)/.exec(line);
-      if (m === null) continue;
-      const n = Number(m[1]);
-      if (max === null || n > max) max = n;
-    }
-    if (max === null) {
-      throw new Error(
-        `pool-edges journal exists at ${this.logPath} but yields no epoch — ` +
-        'zero-length or unparseable is not the same as absent; answering ' +
-        'null here would be the reissue this file exists to prevent',
-      );
-    }
-    return max;
+    // D-7058: the regex walk and its throw are `journalKernel.ts#maxJournalEpoch`'s; the read and `ENOENT` stay here.
+    return maxJournalEpoch(text, 'pool-edges journal', this.logPath);
   }
 }

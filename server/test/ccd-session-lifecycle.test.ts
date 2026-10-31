@@ -30,7 +30,7 @@ import { SESSION_LIFECYCLES } from '../../shared/api.js';
 import {
   FIXTURE_NOW_SEC, LIFECYCLE_FIXTURE, type LifecycleFixtureRow,
 } from './sessionLifecycleFixture.js';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-lifecycle-'); });
@@ -199,7 +199,7 @@ describe('the unclaimed rung in bash, and its POSITION', () => {
     // of `single-definition.test.ts`'s pins, and a `new URL(…)` relative to
     // this file turned it red (measured). Which is also why this comment does
     // not write that relative path out — the guard scans comments too.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain(
       '_session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started');
   });
@@ -211,7 +211,7 @@ describe('the stop stamp rides _reg_set (registry-durability wave 2)', () => {
     // ws-reap / forget / cmd_stop, and `stopped` is what tells `stopped` from
     // `orphan` in §4.3's ladder. A torn read there reclassifies a session that
     // somebody deliberately stopped.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const body = /_ws_unsupervise\(\)\s*\{([\s\S]*?)\n\}/.exec(src)?.[1] ?? '';
     expect(body).not.toMatch(/>\s*"\$REG\/\$id\.stopped"/);
     expect(body).toMatch(/_reg_set "\$id" stopped "\$\(date \+%s\) \$surface"/);

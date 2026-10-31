@@ -36,6 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -198,10 +199,17 @@ function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[
   return bin;
 }
 
-/** What the pair installer publishes for the tree's ccd: its line-2 placeholder swapped, in place, for the
- *  marker `markGenerated` writes (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
+/** What the pair installer publishes for the tree's ccd: its four pin placeholders rendered to the digests of the
+ *  tree's two libraries (D-6913, D-7463) and of the docs redactor's two `shared/` files (D-7077), then its line-2 placeholder swapped, in
+ *  place, for the marker `markGenerated` writes (install-time stamping; server/test/ccd-install-stamp.test.ts owns the rule). */
 const stampedCcd = (dir: string): Buffer => {
-  const lines = readFileSync(path.join(dir, 'ccd'), 'utf8').split('\n');
+  const digestOf = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
+  const libDigest = digestOf(path.join(dir, 'lib', 'disk-retention.sh'));
+  const lines = readFileSync(path.join(dir, 'ccd'), 'utf8')
+    .replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact.mjs'))}`)
+    .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact-cli.mjs'))}`)
+    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`)
+    .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${digestOf(path.join(dir, 'lib', 'train-proof.sh'))}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return Buffer.from(markGenerated(lines.join('\n')));
 };
@@ -675,6 +683,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair (session-continuity wave 4), shipped the same way.
       'systemd/ccd-scope-sweep.service',
       'systemd/ccd-scope-sweep.timer',
+      // The read-only conflict radar's pair (landing order wave 3b), shipped the same way.
+      'systemd/ccd-land-probe.service',
+      'systemd/ccd-land-probe.timer',
+      // The test box durations timer's pair (test box TB11, D-7413), shipped the same way.
+      'systemd/ccd-testbox-times.service',
+      'systemd/ccd-testbox-times.timer',
       // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins.
       'systemd/tmux-spawn-.scope.d/50-oom-continue.conf',
       'systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf',
@@ -697,6 +711,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the history sweep shim is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-scope-sweep')),
       'the pane-scope sweep is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-land-probe')),
+      'the conflict radar is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-testbox-times')),
+      'the test box durations fetch is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-tool-adj')),
       'the tool-child priority prefix is not in the repo').toBe(true);
     expect(deploySh.split('\n').filter((l) => l.trim() === 'install_atomic ccd/ccd-tool-adj .local/bin/ccd-tool-adj 755'),
@@ -766,6 +784,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The pane-scope sweep's pair, installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer',
+      // The conflict radar's pair (landing order wave 3b), installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.service ~/.config/systemd/user/ccd-land-probe.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.timer ~/.config/systemd/user/ccd-land-probe.timer',
+      // The test box durations timer's pair (test box TB11, D-7413), installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.service ~/.config/systemd/user/ccd-testbox-times.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.timer ~/.config/systemd/user/ccd-testbox-times.timer',
       // D-5241: the two scope drop-ins, the pane one in systemd's PREFIX form (trailing hyphen).
       'mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d',
       '_unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf',
@@ -824,6 +848,16 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // The pane-scope sweep's timer, on the same daemon-reload.
     const scopeSweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-scope-sweep.timer'));
     expect(scopeSweepTimerAt, 'the scope-sweep timer is never enabled').toBeGreaterThan(reloadAt);
+    // The conflict radar's timer (landing order wave 3b), on the same daemon-reload and before the agent restart.
+    const landProbeTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-land-probe.timer'));
+    expect(landProbeTimerAt, 'the land-probe timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(landProbeTimerAt, 'the land-probe timer is enabled after the agent restart')
+      .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
+    // The test box durations timer (test box TB11, D-7413), on the same daemon-reload and before the agent restart.
+    const testboxTimesAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-testbox-times.timer'));
+    expect(testboxTimesAt, 'the testbox-times timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(testboxTimesAt, 'the testbox-times timer is enabled after the agent restart')
+      .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -854,6 +888,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-history-sweep .local/bin/ccd-history-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-land-probe .local/bin/ccd-land-probe 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-testbox-times .local/bin/ccd-testbox-times 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });
@@ -1020,6 +1056,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
     cpSync(join(deployDir, 'systemd'), join(src, 'deploy', 'systemd'), { recursive: true });
     cpSync(join(deployDir, 'ccrc-agent.service'), join(src, 'deploy', 'ccrc-agent.service'));
     cpSync(join(deployDir, '..', 'ccd', 'claude-session@.service'), join(src, 'ccd', 'claude-session@.service'));
+    // The slice drop-in is RENDERED on the box by the shipped ccd/ccrc's `_inst_slice_limits`
+    // (D-7296), which `_slice_limits_unit` sources out of ~/ccrc, so the fixture tree carries it.
+    cpSync(join(deployDir, '..', 'ccd', 'ccrc'), join(src, 'ccd', 'ccrc'));
     const scriptPath = join(home, 'units.sh');
     writeFileSync(scriptPath, `${script}\n`);
 
@@ -1040,7 +1079,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // install-census.test.ts already holds every `_inst_units` unit to one of
     // deploy.sh's lanes, and this lane places units `_inst_units` does not.
     const unitRoot = /^(?:~|\$HOME)\/\.config\/systemd\/user\//;
-    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*_unit_atomic\s+(\S+)\s+(\S+)/gm)]
+    // `_slice_limits_unit` places the slice drop-in the same way, rendered (D-7296); the fixture HOME
+    // has no ~/.ccrc/ccrc.env, so it must land as the template's own bytes, like every copy.
+    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*(?:_unit_atomic|_slice_limits_unit)\s+(\S+)\s+(\S+)/gm)]
       .map((m) => {
         const from = m[1]!.replace(/^"|"$/g, '');
         const to = m[2]!.replace(/^"|"$/g, '');
@@ -1735,7 +1776,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(body, 'no scp: neither active inode is overwritten in place').not.toContain('SCP');
     // BOTH halves are backed up before the rsync --delete and the publication.
     const rsyncAt = deploySh.indexOf('agent shared deploy ccd "$BOX":ccrc/');
-    for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;']) {
+    for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;',
+      'cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh;',
+      'cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh;',
+      // The docs redactor's two files (D-7077), in the library's guarded form.
+      'cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs;',
+      'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;']) {
       expect(deploySh.indexOf(backup), `not backed up: ${backup}`).toBeGreaterThan(-1);
       expect(deploySh.indexOf(backup), `backed up only after the rsync: ${backup}`).toBeLessThan(rsyncAt);
     }
@@ -1753,6 +1799,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       const home = mkTmp('ccrc-agent-ccdpair-');
       mkdirSync(path.join(home, 'ccrc', 'ccd'), { recursive: true });
       for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
+      // The libraries the body pins and the publisher places first (D-6913, D-7463).
+      mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
+      for (const f of ['disk-retention.sh', 'train-proof.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
+      // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
+      mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
+      for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
       return home;
     };
 
@@ -1762,7 +1814,13 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(r.status, String(r.stderr)).toBe(0);
       const out = String(r.stdout);
       expect(out.indexOf('body published'), 'the body is published').toBeGreaterThan(-1);
-      expect(out.indexOf('body published'), 'body FIRST, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
+      expect(out.indexOf('library published'), 'the body\'s library is published before the body that pins it').toBeGreaterThan(-1);
+      expect(out.indexOf('library published')).toBeLessThan(out.indexOf('body published'));
+      expect(out.indexOf('body published'), 'body before the launcher, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
+      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'disk-retention.sh'))),
+        'the library is the tree\'s').toBe(true);
+      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'train-proof.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'train-proof.sh'))),
+        'the second library is the tree\'s').toBe(true);
       const entry = path.join(home, '.local', 'bin', 'ccd');
       const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;

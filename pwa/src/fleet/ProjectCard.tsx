@@ -12,11 +12,18 @@
 // Fold state is passed IN, never owned here: FleetScreen holds it (foldState.ts)
 // so it survives navigation, and a pure card is what lets a test assert folding
 // without touching localStorage.
-import { Fragment } from 'react';
+//
+// MEMOISED (C9, D-6441): `ProjectCard` is `memo(…, sameCardProps)`, so a list that hands it the same props draws
+// nothing; `placement` compares by value (`lineProps.ts`). It reads no clock of its own: a spawning dispatch's readout
+// (`PendingSpawn`) and the folded header's "active … ago" (`ProjectCardHead`'s `LastActive`) each tick themselves.
+//
+// PROGRAMME BOXES (Task G2): a coordinator's open work is one box (`ProgrammeBox`), drawn first, most urgent first;
+// the workers of programmes elsewhere and the rows in no programme follow under their sub-headings. The decision is
+// `programmeBoxes.ts`'s; this maps over it with the one row renderer below. A box's movement readout ticks itself.
+import { Fragment, memo } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Button } from '@ccrc/ui';
+import { BareRow, Button, useNow } from '@ccrc/ui';
 import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
-import { navigate } from '../lib/router';
 import { orphanNote, type OrphanNote } from './orphanWords';
 import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 import { formatElapsed } from './formatReset';
@@ -26,8 +33,14 @@ import { nestFleet, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import type { CardRollup, RolledRow } from './rollup';
-import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
+import {
+  cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView,
+} from './programmeBoxes';
+import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine } from './SessionLine';
+import { sameCardProps } from './lineProps';
+import { OPEN_RUNS } from './openers';
 import { actionDoor } from '../command/door';
 import './fleet.css';
 
@@ -59,8 +72,11 @@ export const NEST_BRACKET = '└─';
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
 
-function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
-  const spawn = dispatchWindow(run, nowMs);
+function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number | undefined }): ReactNode {
+  // The readout's own clock (C9, D-6441), to the second, while it is drawn; a test passes its clock instead. Only this
+  // leaf re-renders each second, never its card or the card's rows.
+  const tick = useNow(1_000, nowMs === undefined);
+  const spawn = dispatchWindow(run, nowMs ?? tick);
   // Unreachable by construction — `nestFleet` emits this row only for a run
   // `dispatchWindow` has already answered non-`none` for, and THAT half of its
   // answer never reads the clock (`isDispatchPending`'s docstring). Handled
@@ -82,7 +98,7 @@ function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): React
 }
 
 
-export function ProjectCard({
+function ProjectCardView({
   group,
   onOpen,
   selectedId = null,
@@ -103,7 +119,10 @@ export function ProjectCard({
   runs = [],
   abroad = [],
   poolFor = () => null,
-  nowMs = Date.now(),
+  nowMs,
+  boxNow,
+  stallQuietMs = null,
+  coordPaused = false,
   coordOf = () => null,
   frameSeen = false,
   rollup,
@@ -195,24 +214,28 @@ export function ProjectCard({
    *  passes this, or a test that predates the fix, keeps every row on the
    *  card's own project (the common case) rendering exactly as before. */
   poolFor?: (project: string) => ProjectPoolWire | null;
-  /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
-   *  This card is pure and controlled (fold state, roster and projection all
-   *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
-   *  it only while a spawn is actually in flight. The default reads the clock
-   *  at render: honest, and it simply stops advancing until the next render —
-   *  which is the correct degrade for a card nobody is ticking. */
+  /** A test's clock, in MILLISECONDS, for the pending child's elapsed readout and the folded header's "active … ago".
+   *  Absent in the app (C9, D-6441): each of those leaves then ticks its own clock (`PendingSpawn` each second while a
+   *  spawn is drawn, `LastActive` each half minute), so the card itself never re-renders for the time. */
   nowMs?: number;
+  /** Task G1b (D-7380): the time the programme boxes' states are read at, `FleetCards`' rollup clock as its `next` last
+   *  moved (`nextStallBoundary` wakes it when a box crosses its threshold). Absent, no box reads stalled. */
+  boxNow?: number;
+  /** The stall watch's quiet time, off the runs frame (`stores/fleet.ts`'s one read, D-7376); null, no box stalls. */
+  stallQuietMs?: number | null;
+  /** The operator's pause, off the coord frame (D-7373): a box reads paused, never stalled. */
+  coordPaused?: boolean;
   /** The coordinator session by id, looked up FLEET-WIDE — it may sit on
    *  another card, in an archive fold, or nowhere this pass. Feeds
-   *  `coordPresence`, the same three-answer read the runs board uses (D-1129);
+   *  `coordinatorPresence`, the same read the runs board uses (D-1129, D-7181);
    *  `null` there reads as `unknown`, never as dead. Default: nothing known. */
   coordOf?: (id: string) => FleetSession | null;
   /** `stores/fleet.ts`'s `fleetFrameSeen`: without it a coordinator absent from
    *  a STALE array would read as gone (D-1138). Default false = unknown. */
   frameSeen?: boolean;
   /** D-6088: this card's rollup (`rollup.ts`), the one answer both skins' lists draw. When given, it decides the
-   *  fold and the body's rows (a coordinator's folded workers as one summary line); without it the card draws its
-   *  tree's rows and the `collapsed` it was handed, as before. */
+   *  fold and the body's rows (a coordinator's folded workers, drawn as its programme box's tray and footer, Task G2);
+   *  without it the card draws its tree's rows and the `collapsed` it was handed, as before. */
   rollup?: CardRollup;
   /** Open or close a coordinator's worker line, by the coordinator's id. */
   onToggleChildren?: (parentId: string) => void;
@@ -261,23 +284,36 @@ export function ProjectCard({
   // D-5527: the fleet tree's rows when the caller built them (`fleetTree`, the
   // one model both skins read); a caller that hands a bare group still gets
   // `nestFleet` over the same two inputs, which is the identical answer.
-  const rows: readonly RolledRow[] = rollup?.rows
-    ?? ('rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs));
-  const rowKey = (row: RolledRow): string =>
-    row.kind === 'session' ? row.session.id : row.kind === 'pending' ? `spawn:${row.run.id}` : `workers:${row.parentId}`;
+  const tree: readonly FleetRow[] = 'rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs);
+  const rows: readonly RolledRow[] = rollup?.rows ?? tree;
+  // Task G2: the boxes, over the tree's rows and every open run this card can know of — those whose worker renders
+  // here, and those a session here claims (`fleetTree`'s `claimed`). The fold of each box's tray is the rollup's.
+  const claimed = 'claimed' in group ? (group as FleetTreeGroup).claimed : [];
+  const boxRuns = claimed.length === 0 ? runs : [...runs, ...claimed];
+  // The fleet's hue map, this card's entries (`fleetTree`). A group drawn without the tree has no fleet to read, so its
+  // own runs are the whole of what it knows.
+  const hues = 'hues' in group ? (group as FleetTreeGroup).hues : fleetHues(boxRuns);
+  // Task G1b: the moves (`runLastMove`, the one reader), the stall watch's threshold, the pause and the list's clock, in
+  // the one composition the list's view hold counts too (`cardBoxes`).
+  const { prog, ranked } = cardBoxes(tree, runs, claimed, hues, boxNow ?? null, stallQuietMs, coordPaused);
+  const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
+  const shownAbroad = cardAbroad(abroad, prog.boxes);
+  const rowKey = (row: FleetRow): string => (row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`);
   // Task 5: the hold reason's door, decided HERE because this is the level that
-  // holds the runs. `runForSession` answers off the run rows — never by reading
-  // the id out of the hold string, which stays display-only (its docstring
-  // carries the measurement). `null` when the board has no row for this
-  // session, and `SessionLine` renders exactly the inert cell it always did for
+  // holds the runs. `boundOpenRun` answers off the wire's binding and the run
+  // rows — never by reading the id out of the hold string, which stays
+  // display-only (its docstring carries the measurement). `null` when the board
+  // has no row for this session's open bound run, and `SessionLine` renders
+  // exactly the inert cell it always did for
   // that, so a hand hold and a hold outliving its run both read as text.
   //
   // `/runs` unfocused, because there is no per-run route to focus
   // (`ArchiveConflictSheet`'s own note names that as the first of the three
   // things such a link would need). The board groups by programme and the cell
   // names the programme, so the operator lands looking at the right group.
+  // `OPEN_RUNS`, one module constant (C9), so a memo'd line is handed the same door on every render.
   const openRunFor = (session: FleetSession): (() => void) | null =>
-    runForSession(runs, session) === null ? null : () => navigate('/runs');
+    boundOpenRun(runs, session) === null ? null : OPEN_RUNS;
 
   // The orphaned worker's marker and every ruling about when it stays silent:
   // `orphanWords.ts`. Bound here to this card's own runs, project and LIVE
@@ -319,30 +355,47 @@ export function ProjectCard({
     />
   );
 
-  const rowBody = (row: RolledRow): ReactNode =>
-    row.kind === 'session' ? line(row.session, noteFor(row))
-    : row.kind === 'pending' ? <PendingSpawn run={row.run} nowMs={nowMs} />
-    : (
-      // D-6088 rule 6: the coordinator's workers as one line, the Released fold's disclosure in the row's place.
-      <BareRow
-        className="proj-children-toggle"
-        aria-expanded={row.expanded}
-        onClick={() => onToggleChildren?.(row.parentId)}
-      >
-        <span className="proj-card-chevron" aria-hidden="true">{row.expanded ? '▾' : '▸'}</span>
-        {/* D-6088: each count unbreakable, so a narrow column wraps only between counts; `needs you` in its ink. */}
-        <span className="proj-children-parts">
-          {row.parts.map((p, i) => (
-            <Fragment key={p.word}>
-              {i > 0 && ' · '}
-              <span className={`proj-children-part${p.word === 'needs you' ? ' proj-children-part--needs-you' : ''}`}>
-                {`${p.n} ${p.word}`}
-              </span>
-            </Fragment>
-          ))}
-        </span>
-      </BareRow>
-    );
+  // Task G2: a coordinator's folded workers are its programme box's footer now (`ProgrammeBox`), so a body row is a
+  // session or a spawn; the rollup's summary row is read only as that footer's state (`trayOf`).
+  const rowBody = (row: FleetRow): ReactNode =>
+    row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />;
+
+  // ONE spelling of a body row: a depth-0 row exactly as it shipped before the tree existed (a Fragment, no wrapper),
+  // a depth-1 row under its bracket, in its programme's hue when it sits in a box's tray.
+  const nested = (row: FleetRow, hue?: ProgHue): ReactNode => (
+    row.depth === 0 ? (
+      // A Fragment, never a wrapper element: the top-level row's DOM stays byte-identical to the one that
+      // shipped before the tree existed, and `.proj-card-body`'s column flex lays out its children directly.
+      <Fragment key={rowKey(row)}>{rowBody(row)}</Fragment>
+    ) : (
+      <div key={rowKey(row)} className="proj-nest" data-depth={row.depth} data-hue={hue}>
+        <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
+        {rowBody(row)}
+      </div>
+    )
+  );
+  const abroadLine = (r: RunSummary): ReactNode => (
+    <span key={r.id} className="proj-abroad-line">
+      <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
+      {`${r.program} ${waveLabel(r)} in ${r.project}`}
+    </span>
+  );
+  const hueOf = (row: FleetRow): ProgHue | undefined => prog.hues.get(rowRun(row, boxRuns)?.program ?? '');
+  const box = ({ view, state }: { view: ProgrammeBoxView; state: BoxState }): ReactNode => (
+    <ProgrammeBox
+      key={`box:${view.coordinatorId}`}
+      view={view}
+      state={state}
+      tray={trayOf(rows, view.coordinatorId)}
+      drawRow={nested}
+      drawAbroad={abroadLine}
+      hueOf={hueOf}
+      onToggleChildren={onToggleChildren}
+      nowMs={nowMs}
+    />
+  );
+  // The sub-headings say something only beside a programme: a card with none draws its rows exactly as before.
+  const headed = prog.boxes.length > 0 || prog.elsewhere.length > 0;
 
   return (
     <section
@@ -377,28 +430,20 @@ export function ProjectCard({
           {/* D-5545: an orphaned worker's marker rides ITS ROW now — "coordinator gone" as the row's one
               attention marker (`orphanNote`'s presence, `SessionLine`'s `coordinator`) — instead of a second
               line under it that repeated the row's programme and wave. */}
-          {rows.map((row) => (
-            row.depth === 0 ? (
-              // A Fragment, never a wrapper element: the top-level row's DOM stays byte-identical to the one that
-              // shipped before the tree existed, and `.proj-card-body`'s column flex lays out its children directly.
-              <Fragment key={rowKey(row)}>{rowBody(row)}</Fragment>
-            ) : (
-              <div key={rowKey(row)} className="proj-nest" data-depth={row.depth}>
-                <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
-                {rowBody(row)}
+          {ranked.map(box)}
+          {prog.elsewhere.length > 0 && (
+            <>
+              <div className="pg-sub">Workers of programmes elsewhere</div>
+              <div className="pg-elsewhere">
+                {prog.elsewhere.map((row) => (
+                  <div key={rowKey(row)} className="pg-far" data-hue={hueOf(row)}>{nested(row)}</div>
+                ))}
               </div>
-            )
-          ))}
-          {abroad.length > 0 && (
-            <div className="proj-abroad">
-              {abroad.map((r) => (
-                <span key={r.id} className="proj-abroad-line">
-                  <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
-                  {`${r.program} ${waveLabel(r)} in ${r.project}`}
-                </span>
-              ))}
-            </div>
+            </>
           )}
+          {headed && prog.lone.length > 0 && <div className="pg-sub">Not in a programme</div>}
+          {prog.lone.map((row) => nested(row))}
+          {shownAbroad.length > 0 && <div className="proj-abroad">{shownAbroad.map(abroadLine)}</div>}
           {group.elsewhere.length > 0 && (
             /* Spec §6: an emptied card says where its work went, as PLAIN TEXT —
                never a link. A tappable route here would be the second access
@@ -412,6 +457,14 @@ export function ProjectCard({
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {folded !== null && folded.keep.length > 0 && (
+        /* Spec §2.3: a folded card keeps a box that needs the operator or has stalled, and counts the rest. */
+        <div className="proj-card-body">
+          {folded.keep.map(box)}
+          {folded.more > 0 && <div className="pg-more">{`${folded.more} more in this project`}</div>}
         </div>
       )}
 
@@ -486,3 +539,6 @@ export function ProjectCard({
     </section>
   );
 }
+
+/** The card, memo'd (C9, D-6441): every prop by identity but `placement`, by value (`sameCardProps`). */
+export const ProjectCard = memo(ProjectCardView, sameCardProps);

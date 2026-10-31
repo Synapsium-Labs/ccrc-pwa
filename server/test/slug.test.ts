@@ -17,9 +17,9 @@ import { LC_REASON_MAX_BYTES } from '../../shared/api.js';
 // The path to the script is spelled in ONE test file and imported everywhere
 // else — `single-definition.test.ts`'s one-path scan (the seven-files case) fails the build on a second spelling,
 // and it caught this file writing its own. Measured: red before this import.
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource as wholeCcdSource } from './ccdWsHelpers.js';
 
-const ccdSource = readFileSync(CCD, 'utf8');
+const ccdSource = wholeCcdSource();
 
 // THE PUBLIC-TREE SCANNER (`topology-clean.test.ts`, D-5878) bans the tracker's
 // link shape in every tracked file and every blob a branch adds, so no literal

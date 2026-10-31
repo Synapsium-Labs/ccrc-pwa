@@ -22,7 +22,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { DARWIN_IDENT_SHIMS, DARWIN_LSOF_STUB, FAKE_PROC_SELF } from './worktreeIdentityFixture.js';
@@ -477,7 +477,7 @@ describe('forced Darwin: the owned check measures through `_plat_devino` and `_p
 });
 
 describe('the source: identity only refuses, and the owned check measures last (path-identity spec §4.8)', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   /** `name`'s body, from its head line to its first closing brace at column 0, or '' when it is not defined. */
   const bodyOf = (name: string): string => {
     const a = src.indexOf(`\n${name}() {`);
@@ -510,7 +510,7 @@ describe('the source: identity only refuses, and the owned check measures last (
     expect(str).toBeGreaterThan(-1);
     expect(code[str + 2]).toBe('  [[ ! "$workdir" -ef "$main" ]] \\');
     expect(code[str + 3]).toContain(
-      '_reap_refuse not-a-workspace "$workdir is the project directory $main itself, under another spelling, not a workspace of $id"');
+      '_ws_refuse not-a-workspace "$workdir is the project directory $main itself, under another spelling, not a workspace of $id"');
   });
 
   it('SRC-3 the owned check measures the two identities after its moved-tree check, directly before its last return 0 (P21)', () => {

@@ -15,12 +15,13 @@ import { parseBuildInfo } from '../../../shared/buildinfo.js';
 import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
 import { FleetIdentityCell } from '../fleetidentity.js';
-import type { FleetState } from '../fleetstate.js';
+import { recordCcdVerbs, type FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { SpawnPty } from '../pty.js';
 import { createRunner } from './runner.js';
 import { createIo } from './io.js';
 import { createSpawnPty } from './pty.js';
+import { AgentOpError, LinkNotSentError } from './errors.js';
 
 /**
  * Single authenticated WS connection to a `ccrc-agent` on a REMOTE fleet
@@ -139,53 +140,6 @@ function refusalReason(reason: Buffer, token: string): string {
 export function readReadyOps(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return validCapWords(raw) ?? [];
-}
-
-/**
- * A `ResErr` the AGENT SENT (design 2026-09-20 §10, D-3373), as
- * opposed to a request the LINK failed. A link failure AFTER the send stays a
- * plain `Error` whose message is `disconnected`, `timeout` or `aborted`; one
- * before the send is a `LinkNotSentError` (below, D-3555) carrying
- * `disconnected` or `aborted`, or — for a synchronous `JSON.stringify`/`ws.send`
- * throw — the thrown message; `timeout` is never pre-send. The dispatcher must
- * tell "the node answered busy" from "the node could not be asked", and a
- * message string cannot do that, because nothing stops an agent word from being
- * spelled `timeout`. `instanceof` can.
- *
- * `message` is `err`, exactly what `new Error(err)` carried before this class
- * existed, so the one existing `.message` reader (`createRunner`'s catch arm,
- * which reports it as stderr) is unchanged; `caps()` and the io adapter catch
- * without reading the error at all. `detail` is `ResErr`'s ADDITIVE field. Absence
- * permits: an agent that sends none reads `null`. `onMessage` below is its ONE
- * reader, and it cuts the text to `UPDATE_OP_DETAIL_MAX`
- * (D-3391), because a peer that ignores the agent's
- * own bound must not write an unbounded string into an inventory row.
- */
-export class AgentOpError extends Error {
-  readonly code: string;
-  readonly detail: string | null;
-  constructor(code: string, detail: string | null) {
-    super(code);
-    this.name = 'AgentOpError';
-    this.code = code;
-    this.detail = detail;
-  }
-}
-
-/** D-3555: a request this client never handed to `ws`'s sender — no ready link at the call
- *  (`disconnected`), a signal already aborted (`aborted`), or a synchronous throw from `JSON.stringify` or `ws.send`
- *  (the thrown message). `ws.send`'s measured throw sites are before it queues the frame (its `CONNECTING` check, which
- *  the OPEN test above excludes in the same tick); nothing below it was found to throw synchronously. Every other
- *  rejection of `request()` — `timeout`, an abort after the send, `disconnected` when the socket closes or `close()`
- *  runs with the request pending — comes AFTER `ws.send` returned, when the frame may already be with the agent, and
- *  stays a plain `Error`. `message` is the word a plain `Error` carried before this class existed, so every `.message`
- *  reader is unchanged; only `instanceof` tells the two apart (the dispatcher's `linkAnswer`). A `send` that returns
- *  proves the frame reached `ws`'s sender, not the agent: that is all "handed to the link" means. */
-export class LinkNotSentError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'LinkNotSentError';
-  }
 }
 
 /**
@@ -477,12 +431,16 @@ export class FleetClient {
     this.identity.invalidate('awaiting-inventory');
     this.ready = true;
     this.clearConnectDeadline();
-    // Mutated directly rather than pushed through setState, whose change
-    // detection compares only connected/downSince — a reconnect to an upgraded
-    // agent must still refresh this.
-    this.state.ccdVerbs = Array.isArray(frame.ccdVerbs)
-      && frame.ccdVerbs.every((v) => typeof v === 'string')
-      ? (frame.ccdVerbs as string[]) : null;
+    // Written through `recordCcdVerbs` (its ready rule: as given, null
+    // included) rather than pushed through setState, whose change detection
+    // compares only connected/downSince — a reconnect to an upgraded agent
+    // must still refresh this.
+    recordCcdVerbs(this.state, {
+      from: 'ready',
+      verbs: Array.isArray(frame.ccdVerbs)
+        && frame.ccdVerbs.every((v) => typeof v === 'string')
+        ? (frame.ccdVerbs as string[]) : null,
+    });
     // Same stance, same reason: a frame without a usable `rosterFp` — an older
     // agent, or a fleet host with no readable projection — leaves us with NO
     // evidence, which must not read as disagreement. Reset on every ready so a

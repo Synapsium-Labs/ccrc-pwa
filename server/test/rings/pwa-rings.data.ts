@@ -15,19 +15,7 @@
 import type { EntrySet } from './exemptions.js';
 
 export const PWA_L1_EXEMPTIONS: EntrySet = {
-  'pwa/src/docs/docsLinks.ts -> pwa/src/lib/markdown.tsx': { reason: "the link resolver reads the markdown renderer's page budgets and code-language reader", since: '2026-10-20' },
   'pwa/src/fleet/sessionFacts.ts -> pwa/src/fleet/chips.tsx': { reason: "the session facts take the chip component file's unmeasuredTitle word", since: '2026-10-20' },
-  'pwa/src/fleet/startProgramPolicy.ts -> pwa/src/lib/api.ts': { reason: "the start policy matches the fetch adapter's ApiError class and its error words", since: '2026-10-20' },
-  'pwa/src/lib/notAvailable.ts -> pwa/src/lib/api.ts': { reason: "the not-available reader matches the fetch adapter's ApiError class", since: '2026-10-20' },
-  'pwa/src/screens/settings/sectionStatus.ts -> pwa/src/lib/api.ts': { reason: "the section status reads the box-token view through the fetch adapter's readBoxTokenView", since: '2026-10-20' },
-  'pwa/src/screens/settings/sectionStatus.ts -> pwa/src/screens/settings/SecuritySection.tsx': { reason: "the section status reads the security section's token summary and exposure words", since: '2026-10-20' },
-  'pwa/src/screens/settings/sectionStatus.ts -> pwa/src/screens/settings/UpdatesSection.tsx': { reason: "the section status reads the updates section's label and sentence tables", since: '2026-10-20' },
-  'pwa/src/session/askWords.ts -> pwa/src/lib/api.ts': { reason: "the ask words match the fetch adapter's ApiError class and its failure sentences", since: '2026-10-20' },
-  'pwa/src/session/chatItems.ts -> pwa/src/stores/session.ts': { reason: "the chat items read the session store's isLocalDivider predicate", since: '2026-10-20' },
-  'pwa/src/session/sessionHeaderView.ts -> pwa/src/session/PrKeycap.tsx': { reason: "the header view reads the PR keycap's hasPrCap predicate", since: '2026-10-20' },
-  'pwa/src/session/sessionHeaderView.ts -> pwa/src/session/SessionFlows.tsx': { reason: "the header view reads the session flows' sessionMenu, the menu's one reader", since: '2026-10-20' },
-  'pwa/src/skins/index.ts -> pwa/src/skins/instrument/parts.tsx': { reason: "the skin registry names the instrument skin's part set", since: '2026-10-20' },
-  'pwa/src/skins/index.ts -> pwa/src/skins/refined/parts.tsx': { reason: "the skin registry names the refined skin's part set", since: '2026-10-20' },
 };
 
 export const UI_PWA_EXEMPTIONS: EntrySet = {};

@@ -7,7 +7,9 @@
  *      server's runner budget (`CCD_VERB_TIMEOUT_MS`, module-private in `server/src/remote/runner.ts`) must outlast
  *      it: helper deadline + 2 s grace + 5 s < runner budget, strictly. A budget at or under that sum lets the agent
  *      kill ccd while the helper is still waiting on git, and the agent's kill reaches only its direct child, so git's
- *      process group would be orphaned instead of reaped by the helper's own `killpg`.
+ *      process group would be orphaned instead of reaped by the helper's own `killpg`. The helper's docs redactor (one
+ *      node per verb, D-7077) has its own per-verb budget, `REDACT_BUDGET_MS`, outside the deadline (a spent deadline
+ *      must still redact before it answers), so the sum includes it: deadline + grace + REDACT_BUDGET_MS + 5 s < budget.
  *   2. `ccrc doctor`'s `docs` check waits `CCRC_DOCTOR_DOCS_TIMEOUT` seconds (`ccd/ccrc-doctor-checks`), and that
  *      default equals the runner's docs-index budget, so doctor waits exactly as long as a Docs page would (M7.4).
  *   3. Every answer ccd will send fits both 8 MiB exec buffers (`EXEC_MAX_BUFFER` in `agent/src/server.ts`, the
@@ -138,6 +140,21 @@ describe('docs runner budgets outlast the helper (row 47, spec section 2 (a) Bud
     const margin = runnerMs('docs-show') / 1000
       - (helperDeadlinesIn(helperSrc())['docs-show'] + pyIntIn(helperSrc(), 'KILL_GRACE_S') + HEADROOM_S);
     expect(margin).toBe(1);
+  });
+});
+
+describe('the docs redactor\'s per-verb budget fits inside every runner margin (D-7077; C5h)', () => {
+  it.each(DOCS_BUDGET_VERBS)('%s: helper deadline + KILL_GRACE_S + REDACT_BUDGET_MS + 5 s < the runner budget, strictly', (verb) => {
+    const sumS = helperDeadlinesIn(helperSrc())[verb] + pyIntIn(helperSrc(), 'KILL_GRACE_S')
+      + pyIntIn(helperSrc(), 'REDACT_BUDGET_MS') / 1000 + HEADROOM_S;
+    expect(sumS, `${verb}: the agent may kill ccd while its redactor still runs`).toBeLessThan(runnerMs(verb) / 1000);
+  });
+
+  it('REDACT_BUDGET_MS is an integer below the thinnest margin (1 s)', () => {
+    const ms = pyIntIn(helperSrc(), 'REDACT_BUDGET_MS');
+    expect(Number.isInteger(ms)).toBe(true);
+    expect(ms).toBeGreaterThan(0);
+    expect(ms).toBeLessThan(1000);
   });
 });
 

@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
 import { CHILD_ENV } from './childReclaimFixture.js';
 import { EXP_ID, EXP_STUBS, makeArchived, type Archived } from './wsExpireFixture.js';
@@ -114,7 +114,7 @@ describe('3893: an expiry forced into the gap between a return\'s gate and its j
 });
 
 describe('the seam and the call sites', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const bodyOf = (name: string): string => {
     const from = src.indexOf(`\n${name}() {`);
     return src.slice(from, src.indexOf('\n}\n', from));

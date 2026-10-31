@@ -18,6 +18,7 @@
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 import type { MouseEvent, ReactNode, Ref } from 'react';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
+import { inspectorHidden, setInspectorHidden, useInspectorShown } from '../inspector/inspectorShown';
 import type { SkinSet } from './types';
 
 const SkinSetContext = createContext<SkinSet | null>(null);
@@ -49,6 +50,10 @@ export const CONTENT_ID = 'content';
  *  phone's fleet view shows, where the main landmark is hidden. */
 export const FLEET_ID = 'fleet';
 
+/** The inspector's landmark (`<aside aria-label="Inspector">`): the id the header's toggle names in `aria-controls`
+ *  (desktop polish T3e, D-6385), and where a hide looks for focus it must not drop. */
+export const INSPECTOR_ID = 'inspector';
+
 /** Move focus to a landmark that is on screen, for a control that leaves the page and must not drop focus to the body.
  *  The phone swap hides the main landmark on the fleet view (`display: none`), and `focus()` on an element that is not
  *  rendered does nothing, so the main landmark is tried first and, when it did not take the focus, the fleet column's
@@ -60,6 +65,19 @@ export function focusShownLandmark(): void {
   main?.focus({ preventScroll: true });
   if (main !== null && document.activeElement === main) return;
   document.getElementById(FLEET_ID)?.focus({ preventScroll: true });
+}
+
+/** Show or hide the inspector (the rail's published `toggle`, desktop polish T3e, D-6385). A hide with focus inside the
+ *  aside first puts focus on the header's toggle: the rail is about to unmount, and the browser would leave focus on
+ *  the body. When the toggle took none (no header places one), the landmark that is on screen is the fallback. */
+export function flipInspector(): void {
+  const hiding = !inspectorHidden();
+  if (hiding && document.getElementById(INSPECTOR_ID)?.contains(document.activeElement) === true) {
+    const door = document.querySelector<HTMLElement>("[data-command='toggle-inspector']");
+    door?.focus({ preventScroll: true });
+    if (door === null || document.activeElement !== door) focusShownLandmark();
+  }
+  setInspectorHidden(hiding);
 }
 
 /** Move focus to the main landmark. Not left to the fragment: a hash on the URL would reach the router's
@@ -85,6 +103,8 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
   // the status bar are desk parts too (W2 Task S9, D-5472): a phone's navigation is `PhoneNav`'s.
   const desk = useMediaQuery(DESK_QUERY);
   const { Bar, Banners, Rail, Nav, Inspector, StatusBar, PhoneNav } = set;
+  // The inspector is placed when the set has the part AND it is shown (width and the device's choice, T3e, D-6385).
+  const inspectorShown = useInspectorShown();
   // A SWITCH NEVER DROPS FOCUS TO <body> (spec §5.4, D-5679). What had focus in the
   // ladder or above the frame keeps it, because none of it remounts; a control
   // inside a part the switch replaced is gone, and the browser leaves focus on
@@ -100,9 +120,14 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
   return (
     <SkinSetProvider set={set}>
       {/* `data-inspector` is a PART FACT, never a skin-id comparison (W2 desk polish T2e, D-6335): `placed` when the set
-          has an Inspector part, `none` when it does not. A skin's sheet keys its inspector track on it, so a set that
-          places no inspector draws no empty column for one (Instrument's 320px fourth track at >=1600, which S12 fills). */}
-      <div className={`app-shell ${set.frameClass}`} data-view={view} data-inspector={Inspector !== null ? 'placed' : 'none'}>
+          has an Inspector part and it is shown, `none` when it does not or a person hid it (desktop polish T3e, D-6385).
+          A skin's sheet keys its inspector track on it, so a set that places no inspector, or a hidden one, draws no
+          empty column for one (Instrument's 320px fourth track at >=1600, which S12 fills). */}
+      <div
+        className={`app-shell ${set.frameClass}`}
+        data-view={view}
+        data-inspector={Inspector !== null && inspectorShown ? 'placed' : 'none'}
+      >
         <a key="skip" className="skip-link" href={`#${CONTENT_ID}`} onClick={skipToContent}>
           Skip to content
         </a>
@@ -133,7 +158,7 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
           {children}
         </main>
         {Inspector !== null && (
-          <aside key="inspector" className="shell-inspector" aria-label="Inspector">
+          <aside key="inspector" id={INSPECTOR_ID} className="shell-inspector" aria-label="Inspector">
             <Inspector />
           </aside>
         )}

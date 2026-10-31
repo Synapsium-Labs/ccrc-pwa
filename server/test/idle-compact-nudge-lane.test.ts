@@ -117,7 +117,7 @@ const fleetRow = (over: Partial<FleetSession> = {}): FleetSession => ({
 const regRow = (): SessionRecord => ({
   hibernatedAt: null,
   namedByOperator: false, title: null,
-  id: ID, wrapper: 'claude', project: 'demo', workdir: WORKDIR, uuid: UUID,
+  id: ID, wrapper: 'claude', project: 'demo', projectEvidence: 'measured', workdir: WORKDIR, uuid: UUID,
   started: true, home: null, pool: null, lastswap: null,
   workspace: `${ID}-ws`, branch: null, branchEvidence: 'absent', base: null,
   prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,

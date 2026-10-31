@@ -11,9 +11,9 @@
 // line anywhere in the file, and it must go red.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-claim-'); });

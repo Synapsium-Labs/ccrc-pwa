@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin, ccdSource } from './ccdWsHelpers.js';
 import { asManagerCalls } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, atticReach, childReclaimVerb, evalOf, gcNow, hasCommit,
@@ -624,7 +624,7 @@ describe('the keep reads G as git reads it (spec §5.5)', () => {
   }, 120_000);
 
   it('the standing arm proves G through `_ws_reclaim_gitdir_own`, and reads no `gitdir` file itself', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const body = src.slice(src.indexOf('_ws_reclaim_log_of() {'), src.indexOf('_ws_reclaim_reflog_ids() {'));
     const standing = body.slice(body.indexOf('if [[ -d "$arg" && ! -L "$arg" ]]; then'), body.indexOf('_ws_reclaim_absent "$arg"; rc=$?'));
     const code = standing.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');

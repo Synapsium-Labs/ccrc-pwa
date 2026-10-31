@@ -978,6 +978,21 @@ describe.skipIf(!PY)('the stats file\'s request id is bounded as the status file
       expect(up.requests).toHaveLength(4);
     });
   });
+
+  // The backend sends its request id as x-oai-request-id only (runbook step 2, 2026-10-27; D-7084), and
+  // errors.request_id_of reads that name third, so a failure on the direct lane can still be cited by its id.
+  it('an upstream 500 carrying only x-oai-request-id keeps that id in the status file and in the stats file\'s lastUpstreamRequestId', async () => {
+    const fail: ResponsesAnswer = { status: 500, body: { error: { code: 'server_error', message: 'no' } }, headers: { 'x-oai-request-id': 'oai-req-fx-500' } };
+    await withBridge([fail], async ({ bridge, lane, up }) => {
+      const a = await call(bridge, '/v1/messages', { body: messages() });
+      expect(a.status).toBeGreaterThanOrEqual(500);
+      const stats = await statsWhen(lane, (d) => d.outcomes['5xx'] === 1);
+      expect(stats.outcomes['5xx']).toBe(1);
+      expect(stats.lastUpstreamRequestId).toBe('oai-req-fx-500');
+      expect((JSON.parse(readFileSync(lane.status, 'utf8')) as Json).lastRequestId).toBe('oai-req-fx-500');
+      expect(up.requests).toHaveLength(1);
+    });
+  });
 });
 
 describe.skipIf(!PY)('the request body, through the shim\'s hooks', () => {

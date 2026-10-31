@@ -1464,6 +1464,8 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
     readonly b?: Hits | null;
     /** Files that exist in the tree but whose `stat` answers null. */
     readonly failing?: readonly string[];
+    /** Paths whose `stat` REJECTS (a transport fault, not a null answer). */
+    readonly rejecting?: readonly string[];
     /** The own configDir's witness stat answers null. */
     readonly ownRootDark?: boolean;
     /** Listing order of every `projects/` directory. */
@@ -1475,8 +1477,8 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
   /** A `FleetIO` over a virtual tree: every readdir and stat takes 10 ms (plus a rank-dependent skew for a
    *  per-directory stat, so completion order differs from issue order) of FAKE time, and the fake counts the
    *  calls in flight. Methods the search has no business calling throw. */
-  const fakeIO = (spec: Spec): { io: FleetIO; stats: { inFlight: number; max: number; calls: number } } => {
-    const stats = { inFlight: 0, max: 0, calls: 0 };
+  const fakeIO = (spec: Spec): { io: FleetIO; stats: { inFlight: number; max: number; calls: number; rejected: boolean; maxAfterReject: number } } => {
+    const stats = { inFlight: 0, max: 0, calls: 0, rejected: false, maxAfterReject: 0 };
     const homes: [string, Hits | null | undefined][] = [[OWN, spec.own ?? {}], [LANE_A, spec.a === undefined ? {} : spec.a],
       [LANE_B, spec.b === undefined ? {} : spec.b]];
     const names = Array.from({ length: spec.n }, (_, i) => dirName(i));
@@ -1499,6 +1501,7 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
     };
     const call = async <T>(p: string, answer: () => T): Promise<T> => {
       stats.inFlight += 1; stats.calls += 1; stats.max = Math.max(stats.max, stats.inFlight);
+      if (stats.rejected) stats.maxAfterReject = Math.max(stats.maxAfterReject, stats.inFlight);
       try { await new Promise<void>((r) => setTimeout(r, delayOf(p))); return answer(); }
       finally { stats.inFlight -= 1; }
     };
@@ -1507,7 +1510,10 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
     const impl = {
       realpath: async (): Promise<string | null> => null,
       readdir: (p: string) => call(p, () => dirs.get(p) ?? null),
-      stat: (p: string) => call(p, () => fileStat(p)),
+      stat: (p: string) => call(p, () => {
+        if ((spec.rejecting ?? []).includes(p)) { stats.rejected = true; throw new Error('transport fault'); }
+        return fileStat(p);
+      }),
       statMeasured: (p: string) => call(p, () => {
         const st = files.get(p);
         return st === undefined ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, ...st };
@@ -1522,7 +1528,8 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
   };
 
   const search = async (spec: Spec): Promise<{
-    r: Awaited<ReturnType<typeof resolveTranscript>>; elapsed: number; stats: { inFlight: number; max: number; calls: number };
+    r: Awaited<ReturnType<typeof resolveTranscript>>; elapsed: number;
+    stats: { inFlight: number; max: number; calls: number; rejected: boolean; maxAfterReject: number };
   }> => {
     const { io, stats } = fakeIO(spec);
     vi.useFakeTimers();
@@ -1554,6 +1561,29 @@ describe('the uuid search runs its stats with bounded concurrency (D-6369)', () 
     // 100 foreign directories fill the bound ACROSS the two homes, which share one limiter: bounding each home
     // alone would put 64 in flight, and an unbounded Promise.all 100.
     expect(stats.max).toBe(GLOB_STAT_CONCURRENCY);
+    expect(stats.max).toBeLessThanOrEqual(GLOB_STAT_CONCURRENCY);
+  });
+
+  it('a stat that rejects under the limiter rejects the search, drains the queue, and never puts more than the bound in flight', async () => {
+    // 100 own directories: the first batch is the bound, 100 − GLOB_STAT_CONCURRENCY wait. The first directory's stat
+    // rejects at 10 ms, as every call of the first batch settles. The slot it held must go to a waiter like any other
+    // (released in `finally`): were it kept, the search would run the rest of its queue one slot short.
+    const { io, stats } = fakeIO({ n: 100, rejecting: [fileIn(OWN, 0)] });
+    vi.useFakeTimers();
+    const settled = resolveTranscript(io, {
+      configDir: OWN, dir: '/fake/work/demo', registryWorkdir: '/fake/work/reg', uuid: UUID, foreign: FOREIGN,
+    }).then(() => ({ ok: true as const }), (e: unknown) => ({ ok: false as const, e }));
+    await vi.runAllTimersAsync();   // bounded: runs every timer the search and its queue schedule, then returns
+    const out = await settled;
+    expect(out.ok, 'the search rejects').toBe(false);
+    expect(out.ok ? null : (out.e as Error).message).toBe('transport fault');
+    expect(stats.rejected).toBe(true);
+    // The queue drained: every own directory was stat'd (2 rung-1..4 calls + 1 readdir + 100 stats), and nothing
+    // is left in flight or waiting.
+    expect(stats.calls, 'every queued stat still ran').toBe(2 + 1 + 100);
+    expect(stats.inFlight).toBe(0);
+    // The rejected call's slot was handed on: calls issued after the rejection still ran a full bound wide.
+    expect(stats.maxAfterReject, 'the rejecting call released its slot').toBe(GLOB_STAT_CONCURRENCY);
     expect(stats.max).toBeLessThanOrEqual(GLOB_STAT_CONCURRENCY);
   });
 

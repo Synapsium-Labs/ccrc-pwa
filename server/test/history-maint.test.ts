@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type DatabaseSyncOptions } from 'node:sqlite';
 import * as pty from 'node-pty';
 import {
   SCHEMA_VERSION, beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES, firstSentence,
@@ -30,6 +30,13 @@ import {
 } from './historyHelpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { f2Cases } from './fixtures/history/f2Cases.js';
+
+/** `defensive` is a node:sqlite option from Node 25.1; the @types/node 22 this
+ *  package compiles against (its runtime floor's major) does not declare it, and
+ *  the 22.16 floor's runtime does not honour it. The two tests that pass it
+ *  feature-detect: if the shadow table cannot be dropped they skip. */
+type DefensiveOptions = DatabaseSyncOptions & { defensive?: boolean };
+const UNDEFENDED: DefensiveOptions = { defensive: false };
 
 removeTmpFixturesEachTest();   // each case's boxes (stores, transcripts, backup copies) go when the case ends
 
@@ -2445,7 +2452,7 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     const dbFile = historyPaths(box.home).dbFile;
     let raw: DatabaseSync | null = null;
     try {
-      raw = new DatabaseSync(dbFile, { defensive: false });
+      raw = new DatabaseSync(dbFile, UNDEFENDED);
       raw.exec('DROP TABLE blobs_fts_idx');
     } catch {
       try { raw?.close(); } catch { /* nothing to close */ }
@@ -2503,7 +2510,7 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
     let raw: DatabaseSync | null = null;
     try {
-      raw = new DatabaseSync(historyPaths(box.home).dbFile, { defensive: false });
+      raw = new DatabaseSync(historyPaths(box.home).dbFile, UNDEFENDED);
       raw.exec('DROP TABLE nodes_fts_content');
     } catch {
       try { raw?.close(); } catch { /* nothing to close */ }

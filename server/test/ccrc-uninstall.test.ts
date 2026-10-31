@@ -146,7 +146,8 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
   plant('journalctl',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/journalctl-argv"\nexit 0\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_RELEASE_BASE_URL',
-    'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_ROLE', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+    'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_SESSION_SLICE_MEMORY_MAX', 'CCRC_SESSION_SLICE_SWAP_MAX', 'CCRC_ROLE', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
+    'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT', 'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS']) delete env[k];
   // Task 11 review fix round 1 (spec-1/mut-1 CRITICAL): the harness's own
   // final check, after every plant() above — THROWS before this env can be
   // handed to any runVerb/spawn if systemd-run is not the contained front.
@@ -205,6 +206,10 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
   // The pane-scope sweep, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-scope-sweep'), '#!/bin/sh\n# scope sweep\n', { mode: 0o755 });
+  // The read-only conflict radar (landing order wave 3b), placed by `_inst_bins` on the same non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-land-probe'), '#!/bin/sh\n# land probe\n', { mode: 0o755 });
+  // Test box TB11 (D-7413): the durations fetch, placed by `_inst_bins` on the same non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-testbox-times'), '#!/bin/sh\n# testbox times\n', { mode: 0o755 });
   // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on the same non-Darwin arm.
   writeFileSync(join(bin, 'ccd-tool-adj'), '#!/bin/sh\n# tool adj\n', { mode: 0o755 });
   // history spec §9.5: the history sweep's shim, placed by `_inst_bins` off
@@ -280,6 +285,10 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     // The temp-dir reaper's pair, on the same role-gated terms.
     'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
     'ccd-scope-sweep.service', 'ccd-scope-sweep.timer',
+    // landing order wave 3b: the conflict radar's pair, on the same role-gated terms.
+    'ccd-land-probe.service', 'ccd-land-probe.timer',
+    // test box TB11 (D-7413): the durations timer's pair, on the same role-gated terms.
+    'ccd-testbox-times.service', 'ccd-testbox-times.timer',
     // history spec §9.5: the history sweep's pair, on the same role-gated terms.
     'ccd-history-sweep.service', 'ccd-history-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
@@ -289,7 +298,9 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     // W4a Task 9: the server-role watchdog's pair.
     'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer',
     // Plan 3a Task 6: ccrc's own usage pair, placed on fleet/both.
-    'ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+    'ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer',
+    // D-7298: the test slice, placed on every Linux role.
+    'ccrctests.slice']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -595,11 +606,18 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-scope-sweep.timer');
+    // landing order wave 3b: the radar's timer AND service are disabled, and both unit files go (the unit-file census above).
+    expect(calls).toContain('--user disable --now ccd-land-probe.timer');
+    expect(calls).toContain('--user disable --now ccd-land-probe.service');
+    expect(calls).toContain('--user disable --now ccd-testbox-times.timer');
+    expect(calls).toContain('--user disable --now ccd-testbox-times.service');
     expect(calls).toContain('--user disable --now ccd-history-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
     expect(calls).toContain('--user disable --now ccrc-update-watchdog.timer');
+    // D-7298: stopping the slice ends any test run still in it before its file goes.
+    expect(calls).toContain('--user disable --now ccrctests.slice');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).
@@ -751,6 +769,53 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
   });
 
+  it('~/.cc-sessions: the conflict radar\'s opt-in mirrors go, and ONLY regular files named enabled one level under a real landing directory (landing order wave 3b)', () => {
+    const home = mkTmp('ccrc-uninst-landing-');
+    plantInstalledBox(home);
+    const land = join(home, '.cc-sessions', 'landing');
+    const keep = (rel: string): string => join(land, rel);
+    for (const d of ['proj-a', 'proj-b', 'proj-d']) mkdirSync(keep(d), { recursive: true });
+    // proj-a: the mirror (goes), the measurements and a lineage file (stay: the operator may still read them).
+    writeFileSync(keep('proj-a/enabled'), '{"v":1,"project":"proj-a","at":"2026-10-27T09:00:00Z"}\n');
+    for (const f of ['probe', 'main-health', 'lane-a-proj-a-alpha.lineage']) writeFileSync(keep(`proj-a/${f}`), '{"v":1}\n');
+    // two levels down is not one level under landing.
+    mkdirSync(keep('proj-a/sub'), { recursive: true });
+    writeFileSync(keep('proj-a/sub/enabled'), 'deeper\n');
+    // proj-b: a SYMLINK named enabled, whose target lives outside the tree: neither is removed.
+    mkdirSync(join(home, 'elsewhere'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'target'), 'not ours\n');
+    symlinkSync(join(home, 'elsewhere', 'target'), keep('proj-b/enabled'));
+    writeFileSync(keep('proj-b/probe'), '{"v":1}\n');
+    // proj-c: a project DIRECTORY that is a symlink out of the tree holds a regular enabled file: not ours to follow.
+    mkdirSync(join(home, 'elsewhere', 'proj-c'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'proj-c', 'enabled'), 'not ours either\n');
+    symlinkSync(join(home, 'elsewhere', 'proj-c'), keep('proj-c'));
+    // proj-d: a DIRECTORY named enabled is not a regular file.
+    mkdirSync(keep('proj-d/enabled'), { recursive: true });
+    // a regular file named enabled directly under landing is not under a project directory.
+    writeFileSync(keep('enabled'), 'stray\n');
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(keep('proj-a/enabled')), 'the opt-in mirror survived').toBe(false);
+    for (const rel of ['proj-a/probe', 'proj-a/main-health', 'proj-a/lane-a-proj-a-alpha.lineage', 'proj-a/sub/enabled', 'proj-b/probe', 'proj-d/enabled', 'enabled']) {
+      expect(existsSync(keep(rel)), `${rel} was removed`).toBe(true);
+    }
+    expect(lstatSync(keep('proj-b/enabled')).isSymbolicLink(), 'the symlink named enabled was removed').toBe(true);
+    expect(readFileSync(join(home, 'elsewhere', 'target'), 'utf8'), 'the symlink was followed').toBe('not ours\n');
+    expect(existsSync(join(home, 'elsewhere', 'proj-c', 'enabled')), 'a symlinked project directory was followed').toBe(true);
+  });
+
+  it('~/.cc-sessions: a landing directory that is itself a symlink is not followed (landing order wave 3b)', () => {
+    const home = mkTmp('ccrc-uninst-landing-link-');
+    plantInstalledBox(home);
+    mkdirSync(join(home, 'elsewhere', 'proj-a'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'proj-a', 'enabled'), 'not ours\n');
+    symlinkSync(join(home, 'elsewhere'), join(home, '.cc-sessions', 'landing'));
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'elsewhere', 'proj-a', 'enabled')), 'a symlinked landing directory was followed').toBe(true);
+  });
+
   it('~/.cc-sessions: the children\'s deny file goes even with no roster projection, where the hooks sweep is skipped (D-5392)', () => {
     const home = mkTmp('ccrc-uninst-deny-noroster-');
     plantInstalledBox(home);
@@ -812,7 +877,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // `_inst_bins` places them, so an uninstall that left them strands them on
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-tool-adj', 'ccd-history-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-land-probe', 'ccd-testbox-times', 'ccd-tool-adj', 'ccd-history-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'ccrc-api',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
@@ -887,6 +952,46 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(runVerb(kept, 'uninstall').code).toBe(0);
     expect(existsSync(body(kept)), 'the body survived').toBe(false);
     expect(readFileSync(join(kept, '.local', 'libexec', 'ccrc', 'notes.txt'), 'utf8'), 'an operator file beside the body was removed').toBe('mine\n');
+  });
+
+  it('ccd\'s libraries and docs redactor go with the body: after an uninstall no ~/.local/libexec/ccrc stands, and the line names both shared files (D-7077, D-7463)', () => {
+    const home = mkTmp('ccrc-uninst-redactor-');
+    plantInstalledBox(home);
+    const libexec = join(home, '.local', 'libexec', 'ccrc');
+    for (const rel of ['ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs']) {
+      mkdirSync(path.dirname(join(libexec, rel)), { recursive: true });
+      writeFileSync(join(libexec, rel), `# fixture ${rel}\n`, { mode: 0o644 });
+    }
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(libexec), 'a ccrc libexec directory survived the uninstall').toBe(false);
+    expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; ');
+  });
+
+  it('W29-I3: uninstall removes the reader, and ~/.local/libexec/ccrc with it only when that leaves it empty', () => {
+    // wave 29 (D-6980): the settings reader the ccd-* sweeps source sits beside ccd's body, and goes by name in a
+    // statement of its own, before the directory's only-if-empty rmdir.
+    const lib = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'ccrc-settings.sh');
+    const plantLib = (home: string): void => {
+      mkdirSync(join(home, '.local', 'libexec', 'ccrc'), { recursive: true });
+      writeFileSync(lib(home), '# fixture settings reader\n', { mode: 0o644 });
+    };
+    const line = 'uninstall: tree: ccrc-settings.sh removed from $HOME/.local/libexec/ccrc';
+    const kept = mkTmp('ccrc-uninst-settings-lib-kept-');
+    plantInstalledBox(kept);
+    plantLib(kept);
+    writeFileSync(join(kept, '.local', 'libexec', 'ccrc', 'mine'), 'mine\n');
+    const r = runVerb(kept, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(lib(kept)), 'the settings reader survived').toBe(false);
+    expect(readFileSync(join(kept, '.local', 'libexec', 'ccrc', 'mine'), 'utf8'), 'an operator file beside it was removed').toBe('mine\n');
+    expect(r.stdout.split('\n').filter((l) => l === line)).toHaveLength(1);
+    const empty = mkTmp('ccrc-uninst-settings-lib-');
+    plantInstalledBox(empty);
+    plantLib(empty);
+    expect(runVerb(empty, 'uninstall').code).toBe(0);
+    expect(existsSync(lib(empty)), 'the settings reader survived').toBe(false);
+    expect(existsSync(join(empty, '.local', 'libexec', 'ccrc')), 'an emptied ccrc libexec directory survived').toBe(false);
   });
 
   it('a STAMPED ccd-account-auth is still the bin arm\'s subject, never counted as a wrapper', () => {

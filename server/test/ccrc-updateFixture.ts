@@ -659,7 +659,8 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
     // prints the canned ready answer. Canned rather than forwarded to the real
     // python3, so the install stays hermetic and reads no projects root.
     `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
-    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
+    // The helper's first two words are the docs redactor's CLI path and its pins (D-7077), so the verb is the fourth.
+    `[ "$1" = /dev/fd/3 ] && [ "$4" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's
@@ -701,7 +702,8 @@ export function updateEnv(home: string): NodeJS.ProcessEnv {
   ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
-    'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S']) delete env[k];
+    'CCRC_UPDATE_DEADLINE_MS', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_SESSION_SLICE_MEMORY_MAX', 'CCRC_SESSION_SLICE_SWAP_MAX',
+    'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT', 'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // The health gate (design §11) probes once and decides at a 0 s deadline;

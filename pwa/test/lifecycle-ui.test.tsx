@@ -11,10 +11,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
+import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
 import { SwapSheet } from '../src/fleet/SwapSheet';
@@ -28,6 +28,9 @@ import { TEST_ROSTER } from './rosterFixture';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.history.replaceState(null, '', '/'); // a case navigates; the location must not leak into the next
+  // The pickers read the APP-WIDE fleet store's accounts answer (C8, D-6440), whatever `fleet` store a case hands them.
+  useFleetStore.setState({ usage: null, projected: undefined, roster: [] });
 });
 
 // — fixtures —
@@ -99,14 +102,16 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
-/** Stubs GET /api/accounts — the endpoint `useAccountUsage` polls, and the
- *  ONLY source either picker reads an account's numbers or eligibility from. */
+/** Puts what GET /api/accounts answered into the app-wide fleet store — the one reader of the route (C8, D-6440),
+ *  and the ONLY source either picker reads an account's numbers or eligibility from (`useAccountUsage`). */
 const stubAccounts = (accounts: AccountUsage[]): void => {
-  vi.spyOn(api, 'accounts').mockResolvedValue({
-    accounts,
-    projected: { wrapper: 'claude', score: 0 },
-    // Carried on the wire since Stage 2a; unread here until Task 7.
-    roster: [],
+  act(() => {
+    useFleetStore.setState({
+      usage: accounts,
+      projected: { wrapper: 'claude', score: 0 },
+      // Carried on the wire since Stage 2a; unread here until Task 7.
+      roster: [],
+    });
   });
 };
 
@@ -124,7 +129,7 @@ const PROJECTS = {
 describe('NewSessionSheet', () => {
   // WAS "…and the fleet-store limits". The gauges no longer come off the live
   // fleet frame: `FleetSession.limits` is `{five, seven}` with no provenance,
-  // and this sheet was already polling `GET /api/accounts`, which carries the
+  // and this sheet was already reading `GET /api/accounts`, which carries the
   // same numbers PLUS the rollover flags that say whether a `0` was measured or
   // merely inferred. One source per fact — see `useAccountUsage`.
   it('renders all five account rows with labels and the polled account limits', async () => {
@@ -154,9 +159,10 @@ describe('NewSessionSheet', () => {
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
     const onClose = vi.fn();
+    const fleet = makeFleet();
     render(
       <>
-        <NewSessionSheet open onClose={onClose} fleet={makeFleet()} />
+        <NewSessionSheet open onClose={onClose} fleet={fleet} />
         <ToastHost />
       </>,
     );
@@ -177,6 +183,14 @@ describe('NewSessionSheet', () => {
       wrapper: 'claude9',
       project: 'ProjectC',
       workdir: '/root/projects/ProjectC',
+    });
+    // The create answers no id: the sheet closes once the fleet frame lists the new main checkout.
+    act(() => {
+      fleet.setState({
+        sessions: [...fleet.getState().sessions, fleetSession({
+          id: 'claude9:ProjectC', wrapper: 'claude9', project: 'ProjectC', workdir: '/root/projects/ProjectC',
+        })],
+      });
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
@@ -328,7 +342,7 @@ describe('NewSessionSheet — a five-minute wait says so', () => {
     clickStart: () => Promise<void>;
     rerender: (open: boolean) => void;
   } => {
-    stubAccounts([]);                       // the 20 s /api/accounts poll, contained
+    stubAccounts([]);                       // the store's /api/accounts answer, empty
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     vi.spyOn(api, 'createSession').mockImplementation(createSession);
     const fleet = makeFleet();
@@ -684,9 +698,11 @@ describe('SwapSheet', () => {
 
   it('does not poll /api/accounts while the sheet is closed', () => {
     // SwapSheet mounts unconditionally from both its callers (open only
-    // toggles the inner vaul Sheet), so without gating useAccountUsage on
-    // `open` this would poll forever in the background, visible or not.
-    const accounts = vi.spyOn(api, 'accounts');
+    // toggles the inner vaul Sheet). Since C8 (D-6440) it never polls at all —
+    // the fleet store is the one reader of the route — so a closed sheet asks
+    // for nothing, even with an answer sitting in the store.
+    stubAccounts([acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', disabled: true })]);
+    const accounts = vi.spyOn(api, 'accounts').mockRejectedValue(new Error('the sheet must not call the route'));
     render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' }}
                       open={false} onClose={() => {}} fleet={storeWith([])} />);
     expect(accounts).not.toHaveBeenCalled();
@@ -784,9 +800,9 @@ describe('SessionScreen overflow menu', () => {
 
   it.each([
     ['a stopped main checkout is ENSURED — the stop stamp clears and its own registry fields respawn it', 'ensure',
-      { status: 'dead', bucket: 'dead', stoppedBy: { at: Date.now() - MIN, surface: 'pwa' } }],
+      { status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stoppedBy: { at: Date.now() - MIN, surface: 'pwa' } }],
     ['an archived workspace is RESTORED', 'restore',
-      { workspace: 'quiet-basin', status: 'dead', archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000 }],
+      { workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000 }],
   ] as const)('Restore in the menu of a session already put away: %s', async (_label, verb, patch) => {
     const ensure = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
     const restore = vi.spyOn(api, 'restore').mockResolvedValue(undefined);

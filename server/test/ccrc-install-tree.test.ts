@@ -6,9 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { markGenerated } from '../../shared/mark.mjs';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { renderCcdEntry } from './ccdWsHelpers.js';
+import { installedCcdBody, renderCcdEntry } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { TREE_STUBS, installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
@@ -1054,9 +1053,8 @@ describe('ccrc install: the executables and files it installs', () => {
     // spelling arriving here later.
     // Install-time stamping: the body is the placed tree's ccd with its line-2 placeholder swapped, in place, for the
     // marker (ccd-entry-install.py; ccd-install-stamp.test.ts owns the rule) - so the bytes are the stamped copy.
-    const placedLines = readFileSync(placed(home, 'ccd/ccd'), 'utf8').split('\n');
-    if ((placedLines[1] ?? '').startsWith('# ccrc:stamp-at-install')) placedLines.splice(1, 1);
-    expect(readFileSync(bin, 'utf8')).toBe(markGenerated(placedLines.join('\n')));
+    // The library pin is rendered from the placed library first (D-6913), under that stamp.
+    expect(readFileSync(bin, 'utf8')).toBe(installedCcdBody(readFileSync(placed(home, 'ccd/ccd'), 'utf8'), readFileSync(placed(home, 'ccd/lib/disk-retention.sh'))));
     expect(mode(bin)).toBe(0o644);
     // The launcher: the placed template rendered for the canonical python3 its
     // own shebang names and the body's digest — nothing else, byte for byte.
@@ -1085,6 +1083,41 @@ describe('ccrc install: the executables and files it installs', () => {
     const bin = join(home, '.local', 'bin', 'ccd-account-auth');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-account-auth')));
     expect(mode(bin)).toBe(0o755);
+  });
+
+  // wave 29 (D-6980): the settings reader the ccd-* sweeps source, generated from ccd/ccrc, lands beside ccd's body on
+  // every OS and role — above `_inst_bins`' Darwin test, so before any sweep it serves — with a line of its own.
+  const settingsLib = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'ccrc-settings.sh');
+  const LIB_LINE = 'install: lib: ccrc-settings.sh (the settings reader the ccd-* sweeps source) in $HOME/.local/libexec/ccrc';
+  const libLines = (stdout: string): string[] => stdout.split('\n').filter((l) => l.startsWith('install: lib:'));
+  it.each(['linux', 'darwin'] as const)('W29-I1: %s places the settings reader beside ccd\'s body, 0644, with its own line', (os) => {
+    let home = installed.home;
+    let stdout = installed.r.stdout;
+    if (os === 'darwin') {
+      // The Darwin arm forced on Linux, as the GPT-lane row below does: the exit code is not asserted, because a later
+      // step speaks BSD userland; what `_inst_bins` did is.
+      home = freshBox('ccrc-install-settings-lib-darwin-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'agent.env'),
+        'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+      const r = runInstall(home, ['install', '--role', 'both'], { OSTYPE: 'darwin23' }, { umask: '077' });
+      expect(r.stdout, `the Darwin arm was not taken\n${r.stderr}`).toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
+      stdout = r.stdout;
+    }
+    expect(existsSync(settingsLib(home)), `the settings reader never reached ~/.local/libexec/ccrc on ${os}`).toBe(true);
+    expect(readFileSync(settingsLib(home))).toEqual(readFileSync(join(REPO, 'ccd', 'lib', 'ccrc-settings.sh')));
+    expect(mode(settingsLib(home))).toBe(0o644);
+    expect(libLines(stdout)).toEqual([LIB_LINE]);
+  });
+
+  it('W29-I2: a server-role box places it too', () => {
+    const home = freshBox('ccrc-install-settings-lib-server-');
+    gitInit(treeRoot(home));
+    const r = runInstall(home, ['install', '--role', 'server'], {}, { umask: '077' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(settingsLib(home))).toEqual(readFileSync(join(REPO, 'ccd', 'lib', 'ccrc-settings.sh')));
+    expect(mode(settingsLib(home))).toBe(0o644);
+    expect(libLines(r.stdout)).toEqual([LIB_LINE]);
   });
 
   itLinux('ccd-graph-sweep lands beside it too (graphify Task 10, O3/O6b) — every role, but not Darwin', () => {
@@ -1203,6 +1236,15 @@ describe('ccrc install: the executables and files it installs', () => {
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-scope-sweep');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-scope-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-land-probe lands beside them too (the read-only conflict radar, landing order wave 3b) — every role, but not Darwin', () => {
+    // Mirrors the reaper's case above: its only runner is a systemd timer and it takes flock(1). Its UNITS and ENABLE are
+    // role-gated (server skips both) — see the `--role server` describe.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-land-probe');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-land-probe')));
     expect(mode(bin)).toBe(0o755);
   });
 

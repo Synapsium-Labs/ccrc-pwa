@@ -164,3 +164,36 @@
   .settings-palette-note { display: block; overflow-wrap: anywhere; }
   .settings-palette-current { display: none; }
 }
+
+/* Automation's Test box card (test box plan TB10, D-7412; spec 2026-10-28 §2.7's width table; D-7566). Layout only:
+   every word wears `.settings-note`, `.settings-catalogue--amber` or inherits the card's ink, so no colour is set here.
+   The band is the card's `data-band` (`TestBoxSection`'s one read of the desk and wide queries), so each band's layout
+   is one selector here. Phone: one column, the state on top and the button full-width. Laptop: the switch and the
+   state on one line, the button at the state line's end, a three-cell row. Wide: the versions and pristine-installs
+   tables side by side. Long values (a release tag, a short key) wrap rather than push the card sideways. */
+.testbox-head { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-switch { display: grid; gap: calc(var(--pad-card) / 4); min-width: 0; }
+.testbox-state-line { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.testbox-state { margin: 0; overflow-wrap: anywhere; font-weight: var(--weight-medium); }
+.testbox-cells { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; }
+.testbox-cells > div { display: grid; min-width: 0; }
+.testbox-cell-value { margin: 0; overflow-wrap: anywhere; font-family: var(--family-mono); font-size: var(--fs-meta); }
+.testbox-tables { display: grid; gap: var(--pad-card); min-width: 0; }
+.testbox-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-meta); }
+.testbox-table caption { text-align: start; padding-bottom: calc(var(--pad-card) / 4); }
+.testbox-table th { text-align: start; font-weight: var(--weight-semibold); }
+.testbox-table th, .testbox-table td {
+  padding: calc(var(--pad-card) / 4) calc(var(--pad-card) / 4) calc(var(--pad-card) / 4) 0;
+  border-top: 1px solid var(--edge-subtle);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+.testbox-table td { font-family: var(--family-mono); }
+.testbox-card:not([data-band='phone']) .testbox-head {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--pad-card);
+}
+.testbox-card:not([data-band='phone']) .testbox-state-line { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.testbox-card:not([data-band='phone']) .testbox-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.testbox-tables--side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }

@@ -7,7 +7,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { leafKeptWord } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { functionSpan, lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { EXP_ID, expireVerb, makeArchived } from './wsExpireFixture.js';
 import {
@@ -24,11 +25,12 @@ const ID = 'demo-quiet-dune';
 const TOK = 'a'.repeat(64);
 const PASS = 60_000;
 const NOW = 1_790_000_000_000;
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 const nonComment = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-const words = (t: string): Set<string> => new Set([
-  ...[...t.matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
-  ...[...t.matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
+// D-7072: the reap family's words within `[from, to)` of ccd's text (comment lines dropped), and its `{"refused":` printfs.
+const words = (from: number, to: number): Set<string> => new Set([
+  ...refuseWords('reap', { from, to, codeOnly: true }),
+  ...[...nonComment(ccd.slice(from, to)).matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
 ]);
 const bodyOf = (name: string): string => {
   const from = ccd.indexOf(`\n${name}() {`);
@@ -48,7 +50,12 @@ describe('the nineteen words', () => {
     const pinWords = [...new Set([...nonComment(ccd).matchAll(/RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/g)].map((m) => m[1]!))].sort();
     expect(pinWords, 'guards the guard: the pin names both rescue words, which ride the act failed document (D-6633)')
       .toEqual(NESTED_RESCUE_WORDS);
-    const harvested = new Set([...words(nonComment(ccd.slice(begin, end))), ...words(nonComment(bodyOf('_ws_reclaim_ladder'))), ...pinWords]);
+    // The region's lock decline is its call of the reap-lock runner (D-7076), whose in-progress document stands in the
+    // runner: when a call for `expire` lies in the region, the runner's document word is the region's too.
+    const lock = lockDeclineSites(ccd);
+    const declines = lock.runner && lock.calls.some((c) => c.act === 'expire' && c.offset >= begin && c.offset < end)
+      ? lock.runner.printfs.map((p) => String(p.token)) : [];
+    const harvested = new Set([...words(begin, end), ...words(...functionSpan(ccd, '_ws_reclaim_ladder')), ...declines, ...pinWords]);
     expect(harvested.size, 'guards the guard: an empty harvest would equal an empty map').toBeGreaterThan(10);
     expect([...harvested].sort()).toEqual(Object.keys(EXPIRE_TOKEN_KIND).sort());
   });
@@ -124,10 +131,14 @@ describe('the audit document — `expiresAt` through ONE reader', () => {
 
 describe('the verb’s answer — box words told apart from composition errors (wave 3’s hand-over)', () => {
   const region = bodyOf('cmd_ws_expire');
-  /** The message a ccd `die "…"` or `_lc_refuse expire "$id" <word> "…"` prints, anchored to the call. */
+  /** The message a ccd `die "…"` or `_lc_refuse expire "$id" <word> "…"` prints, anchored to the call; and, when
+   *  `cmd_ws_expire` calls the reap-lock runner (D-7076), the runner's two `_lc_refuse` calls, read off it by name. */
   const calls = (): { word: string | null; text: string }[] => {
     const re = /\bdie "((?:[^"\\]|\\.)*)"|_lc_refuse\s+expire\s+"\$id"\s+(\S+)[\s\\]*"((?:[^"\\]|\\.)*)"/g;
-    return [...region.matchAll(re)].map((m) => (m[1] !== undefined ? { word: null, text: m[1] } : { word: m[2]!, text: m[3]! }));
+    const lock = lockDeclineSites(ccd);
+    const lockDies = lock.runner && lock.calls.some((c) => c.fn === 'cmd_ws_expire' && c.act === 'expire')
+      ? lock.runner.refuses.map((r) => ({ word: String(r.token), text: r.sentence ?? '' })) : [];
+    return [...[...region.matchAll(re)].map((m) => (m[1] !== undefined ? { word: null, text: m[1] } : { word: m[2]!, text: m[3]! })), ...lockDies];
   };
 
   it('every `die` before the lock is a COMPOSITION error — the server’s — save python3 missing, which is the BOX’s', () => {
@@ -223,8 +234,9 @@ describe('the verb’s answer — box words told apart from composition errors (
   it('THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry’s failed state-changed is on its FRESH arm, before the tombstone (wave 5; bounded at the tombstone since wave 6)', () => {
     // A STOPPING LINE, not a spelling. EVERY non-comment occurrence of either word anywhere in ccd/ccd is placed: by the
     // function that holds it, and by what the line does with it — `failed` (`_ws_reclaim_fail "<id>" "<lctx>" <word>`
-    // or `_ws_reclaim_failed_json <word>`), `refused` (`_reap_refuse <word>`, or a `{"refused":"<word>"` printf) or
-    // `journal` (ws-audit's `_lc_fail reclaim … <word>` row). The whole list is held exactly, so a producer spelled any
+    // or `_ws_reclaim_failed_json <word>`), `refused` (`_ws_refuse <word>` outside the COLLECT and LOOSE regions, whose
+    // calls are the collector's (D-7072), or a `{"refused":"<word>"` printf) or `journal` (ws-audit's
+    // `_lc_fail reclaim … <word>` row). The whole list is held exactly, so a producer spelled any
     // other way — a quoted word, the word on a continuation line, a raw printf, a variable that carries it — still
     // carries the bare token, reads `unplaced`, and reds; so does a new site of a placed shape anywhere else (the
     // shared tail, a pin, a helper an expiry calls). The one shape no text scan sees is a word assembled at run time
@@ -265,7 +277,7 @@ describe('the verb’s answer — box words told apart from composition errors (
     const inLoose = (at: number): boolean => at > looseBegin && at < looseEnd;
     const shape = (w: string, pre: string, collect: boolean): string =>
       new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_orphan_failed "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
-        : new RegExp(`(?:_reap_refuse |_ws_orphan_refused "[^"\\n]*" "[^"\\n]*" |\\{"refused":")${w}$`).test(pre) ? 'refused'
+        : new RegExp(`(?:${collect ? '' : '_ws_refuse |'}_ws_orphan_refused "[^"\\n]*" "[^"\\n]*" |\\{"refused":")${w}$`).test(pre) ? 'refused'
           : new RegExp(`_lc_fail reclaim "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'journal'
             : collect && new RegExp(`_ws_collect_refused "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'refused'
               : collect && new RegExp(`^\\s*REAP_VERDICT=${w}$`).test(pre) ? 'verdict' : 'unplaced';

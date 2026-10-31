@@ -107,9 +107,9 @@ const mergedPushes = (
   notify.mock.calls.map(([p]) => p).filter((p) => p.tag?.startsWith(`merged-${id}#`) === true);
 
 /** `localIO` with every `<id>.hold` read failing and everything else real —
- *  the shape `remote/io.ts` produces when one of the 31
- *  [registry-read-census:fields] reads a session's `readRegistry` fires in
- *  parallel times out: null, indistinguishable at `field()` from a file that
+ *  the shape `remote/io.ts` produces when one of the 4
+ *  [registry-read-census:fields] unconditional reads (or another listed field's) a
+ *  session's `readRegistry` fires in parallel times out: null, indistinguishable at `field()` from a file that
  *  is not there. */
 const holdUnreadableIO: FleetIO = {
   ...localIO,
@@ -248,7 +248,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const degraded: SessionRecord = {
       hibernatedAt: null,
       namedByOperator: false, title: null,
-      id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
+      id: 'demo-quiet-basin', wrapper: '', project: 'demo', projectEvidence: 'measured', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
@@ -368,8 +368,9 @@ describe('SessionRecord.held', () => {
   });
 
   it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
-    // `readRegistry` lists the directory, then fires 31
-    // [registry-read-census:fields] reads per session. A `ccd ws-release`
+    // `readRegistry` lists the directory, then fires 4
+    // [registry-read-census:fields] unconditional reads (and one per other listed
+    // field) per session. A `ccd ws-release`
     // anywhere in that window leaves the name in
     // the listing with no bytes behind it — indistinguishable at `field()`
     // from a read that failed, so a perfectly ordinary release was reported as

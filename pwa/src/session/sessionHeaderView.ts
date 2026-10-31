@@ -6,7 +6,7 @@
 // (`sessionMenu`, the menu's own reader, each with its command id) and Stop's state. The hooks stay in the part: it
 // passes the clock (`now`, ticking at `headerTickMs`) and the pointer query (`finePointer`) in.
 import {
-  backgroundWork, backgroundWords, sessionWithCoordinator, withCoordinatorWords,
+  backgroundWork, backgroundWords, isArchivedRow, sessionWithCoordinator, withCoordinatorWords,
   type FleetSession, type PrState, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import { restartWords, type RestartWords } from '../lib/restart';
@@ -16,16 +16,22 @@ import { hibernatedSince } from '../fleet/hibernated';
 import { headerStatusWord } from '../fleet/sessionFacts';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
-import { hasPrCap } from './PrKeycap';
+import { hasPrCap } from './prCap';
 import { liveStatus } from './liveStatus';
-import { sessionMenu, type SessionMenuEntry } from './SessionFlows';
+import { sessionMenu, type SessionMenuEntry } from './sessionMenu';
+
+/** The effort chip's word before the pane reports an effort. The inspector's routing line says the same word on its
+ *  effort door (`routingLine.ts`), so it is spelled here once. The header draws the chip only while it has meta to show
+ *  (`hasMeta`: a live pane with a model, an effort, a branch or ultracode read), so with none of them read the rail
+ *  says this word and the header shows no effort chip. */
+export const UNREAD_EFFORT = 'set effort';
 
 export interface SessionHeaderViewInput {
   session: FleetSession | null;
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
   queuedField?: RouteField | null;
-  fallback?: { title: string; wrapper: string };
+  fallback?: { title: string; crumb?: string | null; wrapper: string };
   roster?: readonly RosterWire[];
   repo?: string | null;
   coordination?: Coordination | null;
@@ -68,6 +74,10 @@ export type HeaderChipKind = HeaderChip['kind'];
 export interface SessionHeaderView {
   title: string;
   crumb: string | null;
+  /** The title and crumb are a present workspace row's, so a change to them is a rename, which types in. False before
+   *  the first fleet frame (the fallback) and for a main checkout, so a swap between the fallback and the row draws
+   *  plainly rather than typing in as a rename that never happened (desktop polish T3c, D-6333). */
+  renames: boolean;
   chips: HeaderChip[];
   /** The ⋯ menu's items, each with its command id: `sessionMenu`, the one reader the menu sheet renders. */
   menu: SessionMenuEntry[];
@@ -93,7 +103,7 @@ export interface SessionHeaderView {
 // saying "not running" there would bury `cleanup`'s merge facts under a liveness fact nobody is waiting on.
 function headerBucket(st: SessionStatus | null, session: FleetSession | null): SessionBucket | null {
   const snapshotBucket = session?.bucket ?? null;
-  return st === 'dead' && session != null && session.archivedAt == null
+  return st === 'dead' && session != null && !isArchivedRow(session)
     ? 'dead'
     : snapshotBucket ?? (st === null ? null : st === 'busy' ? 'working' : st);
 }
@@ -115,6 +125,30 @@ export function heldCoordinatorWords(
   const bucket = headerBucket(liveStatus(status, session), session);
   const wc = bucket === 'working' && session != null ? sessionWithCoordinator(session) : null;
   return wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
+}
+
+/** What a deep link's header shows before the first fleet frame names the session (desktop polish T3c, D-6333): the
+ *  words the row will most likely give, so the title does not jump when the frame lands. Ids carry no colon: a
+ *  workspace is `<project>-<slug>` (ccd's `$project-$slug`) and a main checkout `<lane>-<project>`, so the id is split
+ *  at the longest name the fleet knows that prefixes it. That is a longest-prefix rule, not a proof: an id the rule
+ *  reads wrongly (a project whose name begins with a lane id, say) shows the wrong split until the first frame
+ *  corrects it, and that correction draws plainly (`renames`).
+ *   1. The longest roster id that prefixes the id is the lane of a main checkout: titled by its project, no crumb.
+ *   2. Else the longest known project that prefixes it makes the id a workspace: `ws/<slug>` (the label a born
+ *      workspace's branch gives, `sessionLabel`) under that project.
+ *   3. Else `today`: what the screen showed before this, unchanged. */
+export function deepLinkFallback(
+  id: string, roster: readonly Pick<RosterWire, 'id'>[], projects: readonly { name: string }[] | null,
+  today: { title: string; wrapper: string },
+): { title: string; crumb: string | null; wrapper: string } {
+  const longest = (names: readonly string[]): string | null => names
+    .filter((n) => n !== '' && id.startsWith(`${n}-`) && id.length > n.length + 1)
+    .reduce<string | null>((best, n) => (best === null || n.length > best.length ? n : best), null);
+  const lane = longest(roster.map((a) => a.id));
+  if (lane !== null) return { title: id.slice(lane.length + 1), crumb: null, wrapper: lane };
+  const project = longest((projects ?? []).map((p) => p.name));
+  if (project !== null) return { title: `ws/${id.slice(project.length + 1)}`, crumb: project, wrapper: today.wrapper };
+  return { title: today.title, crumb: null, wrapper: today.wrapper };
 }
 
 export function sessionHeaderView({
@@ -154,10 +188,12 @@ export function sessionHeaderView({
   const variant: StatusVariant =
     bucket === 'attention' ? 'attention' : wcWords !== null || asleepAt !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
-  // The project is the ground; the second crumb is this particular workspace. Without it, two workspaces of one
-  // project produce two identical headers.
-  const title = session ? session.project : (fallback?.title ?? '…');
-  const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
+  // The session is the title (desktop polish T3c, D-6333): a workspace is named by its row's label, `sessionLabel`, the
+  // same words its fleet row shows, and the project is the crumb before it, so two workspaces of one project read
+  // apart. A main checkout IS the project's checkout: its title stays the project and there is no crumb.
+  const workspace = session !== null && session.workspace !== null;
+  const title = session === null ? (fallback?.title ?? '…') : workspace ? sessionLabel(session) : session.project;
+  const crumb = session === null ? (fallback?.crumb ?? null) : workspace ? session.project : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
 
   // Model / effort / ultracode / branch — read from the pane statusline the server already parses.
@@ -166,10 +202,11 @@ export function sessionHeaderView({
   const ultracode = session?.ultracode ?? false;
   const branch = session?.branch ?? null;
   const hasMeta = st !== 'dead' && (model !== null || branch !== null || effort !== null || ultracode);
-  // With no chosen `name`, sessionLabel()'s fallback chain lands on `branch` — so the crumb above and this chip would
-  // print the identical string a few pixels apart. Compare the actual rendered text (crumb vs branch), not the fields
-  // that produced them, so the two can never disagree about what "duplicate" means.
-  const branchDuplicatesCrumb = crumb !== null && branch === crumb;
+  // With no chosen `name`, sessionLabel()'s fallback chain lands on `branch` — so the title above and this chip would
+  // print the identical string a few pixels apart. Compare the actual rendered text (title vs branch), not the fields
+  // that produced them, so the two can never disagree about what "duplicate" means. A workspace's only: a main
+  // checkout's title is its project, which says nothing about its branch.
+  const branchDuplicatesTitle = workspace && branch === title;
 
   const chips: HeaderChip[] = [];
   if (facts !== null) chips.push({ kind: 'coordination', facts, coordination });
@@ -182,9 +219,10 @@ export function sessionHeaderView({
   if (wrapper !== '') chips.push({ kind: 'lane', text: accountLabel(roster, wrapper), title: facts?.lane.label });
   if (restart !== null) chips.push({ kind: 'restart', text: restart.text, title: restart.title, cause: restart.cause });
   if (repo !== null) chips.push({ kind: 'repo', text: repo });
-  // Derived from archivedAt, never from pr.phase — merging archives nothing, so a merged PR sits on a live workspace
-  // until a human archives it, and must not claim the chip meanwhile.
-  if (session?.archivedAt != null) {
+  // Derived from the archived bucket (`isArchivedRow`: archived or cleanup, OA-C15 (a), D-7188), never from pr.phase —
+  // merging archives nothing, so a merged PR sits on a live workspace until a human archives it, and must not claim
+  // the chip meanwhile.
+  if (session != null && isArchivedRow(session)) {
     const parts = session.pr?.number != null ? ['archived', ` · merged #${session.pr.number}`] : ['archived'];
     chips.push({ kind: 'archived', text: parts.join(''), parts });
   }
@@ -192,11 +230,11 @@ export function sessionHeaderView({
     // The model chip is gated on a model string; a queued `class` write on a freshly spawned session (no model on the
     // pane yet) still shows its `queued` badge, alone, in the chip's place.
     if (model !== null || queuedField === 'class') chips.push({ kind: 'model', text: model, queued: queuedField === 'class' });
-    chips.push({ kind: 'effort', text: ultracode ? 'ultracode' : (effort ?? 'set effort'), ultra: ultracode, queued: queuedField === 'effort' });
-    if (branch !== null && !branchDuplicatesCrumb) chips.push({ kind: 'branch', text: branch });
+    chips.push({ kind: 'effort', text: ultracode ? 'ultracode' : (effort ?? UNREAD_EFFORT), ultra: ultracode, queued: queuedField === 'effort' });
+    if (branch !== null && !branchDuplicatesTitle) chips.push({ kind: 'branch', text: branch });
   }
   if (facts !== null) chips.push({ kind: 'details', facts, coordination });
   if (hasPrCap(session)) chips.push({ kind: 'pr', pr: session.pr });
 
-  return { title, crumb, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy } };
+  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy } };
 }

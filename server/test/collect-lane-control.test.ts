@@ -55,6 +55,37 @@ const SEED_ROW: CollectLaneRow = { choice: 'off', fleetNodeId: null, markerRetir
 const SEED_DEVIATIONS: readonly Partial<CollectLaneRowRaw>[] =
   [{ updatedAt: 1n }, { generation: 1n }, { fleetNodeId: 'n' }, { markerRetiredAt: 5n }, { choice: 'live' }];
 
+// D-7059 (W8 Task C8g; ARCH-73 #808): the rows `parseCollectLaneJournal` must keep, byte for byte, while its framing
+// moves onto `journalKernel.ts#splitJournalRecords`. The parser's strictness is its own and stays so.
+describe('parseCollectLaneJournal: the framing it keeps through the move to the kernel (D-7059)', () => {
+  it('empty text is malformed empty at record 1', () => {
+    expect(parseCollectLaneJournal('')).toEqual({ kind: 'malformed', fault: 'empty', record: 1 });
+  });
+
+  it('a blank record is malformed blank at its own record number', () => {
+    expect(parseCollectLaneJournal('{"generation":1}\n{"generation":2}\n\n{"generation":3}\n'))
+      .toEqual({ kind: 'malformed', fault: 'blank', record: 3 });
+    expect(parseCollectLaneJournal('\n{"generation":1}\n')).toEqual({ kind: 'malformed', fault: 'blank', record: 1 });
+  });
+
+  it('a file with no final newline: its last record read', () => {
+    expect(parseCollectLaneJournal('{"generation":1}\n{"generation":2}\n{"generation":5}'))
+      .toEqual({ kind: 'ok', max: 5, records: 3 });
+    expect(parseCollectLaneJournal('{"generation":1}\n{"generation":1}'))
+      .toEqual({ kind: 'malformed', fault: 'order', record: 2 });
+  });
+
+  it('a torn last record is malformed json at its record number', () => {
+    expect(parseCollectLaneJournal('{"generation":1}\n{"generation":2}\n{"generat'))
+      .toEqual({ kind: 'malformed', fault: 'json', record: 3 });
+  });
+
+  it('a non-increasing generation is malformed order at its record number', () => {
+    expect(parseCollectLaneJournal('{"generation":2}\n{"generation":3}\n{"generation":4}\n{"generation":4}\n'))
+      .toEqual({ kind: 'malformed', fault: 'order', record: 4 });
+  });
+});
+
 describe('the journal grammar is strict (path-identity spec §5.2, §5.9)', () => {
   it('a final newline is allowed, and its absence too', () => {
     expect(parseCollectLaneJournal('{"generation":1}\n')).toEqual({ kind: 'ok', max: 1, records: 1 });

@@ -10,6 +10,7 @@ import { FAILURE_KINDS } from '../../shared/api.js';
 import { CLASSES } from '../../shared/models.js';
 import { EFFORT_LADDER, escalate, demote, classRungEffortReset } from '../../shared/routing-ladder.js';
 import { ROUTING_LADDER_CASES } from './fixtures/routing-ladder.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -43,7 +44,7 @@ describe("classRungEffortReset — §3's \"a class rung resets effort to the new
     // read out of the REAL binary's guard line, so returning 'high' for haiku
     // (the value every other class gets) reds this — and that value is the
     // one the door would then put in an argv `cmd_route` dies on.
-    const src = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    const src = ccdSource();
     // The GUARD line, not the paragraph above it that explains the guard —
     // anchored on the `die` so a comment can never satisfy this pin.
     const guard = src.split('\n').find((l) => l.includes('die "class haiku takes no effort level'));
@@ -58,7 +59,7 @@ describe('EFFORT_LADDER — ccd/ccd\'s ROUTE_EFFORT_STOPS is its bash mirror', (
   });
 
   it('ccd/ccd names ROUTE_EFFORT_STOPS exactly once, and its words equal EFFORT_LADDER in order', () => {
-    const src = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    const src = ccdSource();
     const matches = [...src.matchAll(/^ROUTE_EFFORT_STOPS="([^"]*)"/gm)];
     expect(matches, 'ccd/ccd must declare ROUTE_EFFORT_STOPS="..." exactly once').toHaveLength(1);
     const words = matches[0]![1]!.split(/\s+/).filter((w) => w !== '');

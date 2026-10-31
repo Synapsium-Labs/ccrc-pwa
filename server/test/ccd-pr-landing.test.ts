@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -19,13 +19,15 @@ beforeEach(() => { h = makePrHarness('ccrc-ccd-prlanding-'); });
 afterEach(() => { h.cleanup(); });
 
 const ccdSeconds = (name: string): number => {
-  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(readFileSync(CCD, 'utf8'));
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(ccdSource());
   if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
   return Number(m[1]);
 };
 
 /** A `gh` recording every call's argv NUL-separated (a record ends in 0x1e), answering the GraphQL read from
- *  `gql.json`, the rules read from `rules.json` and the branch view from `branch.json`, each with its own rc file. */
+ *  `gql.json`, the rules read from `rules.json` and the branch view from `branch.json`, each with its own rc file.
+ *  With `rules-page1.json` present, the rules endpoint pages: a read with `--paginate` gets page 1 and then page 2, run
+ *  together as gh prints them; a read without it gets page 1 alone, as GitHub's thirty-rule page would. */
 const GH = `
 gh() {
   { printf '%s\\0' "$@"; printf '\\x1e'; } >> "$HOME/gh-landing.log"
@@ -35,9 +37,13 @@ gh() {
   esac
   case "$1 $2" in
     'api repos/o/r/rules/branches/'*) [[ -f "$HOME/rules-rc" ]] && rc=$(cat "$HOME/rules-rc")
+      if [[ -f "$HOME/rules-page1.json" ]]; then cat "$HOME/rules-page1.json"; [[ " $* " == *' --paginate '* ]] && cat "$HOME/rules-page2.json"; return "$rc"; fi
       if [[ -f "$HOME/rules-\${2##*/}.json" ]]; then cat "$HOME/rules-\${2##*/}.json"; elif [[ -f "$HOME/rules.json" ]]; then cat "$HOME/rules.json"; fi; return "$rc" ;;
     'api repos/o/r/branches/'*) if [[ -f "$HOME/branch-\${2##*/}.json" ]]; then cat "$HOME/branch-\${2##*/}.json"; elif [[ -f "$HOME/branch.json" ]]; then cat "$HOME/branch.json"; fi; return 0 ;;
     'pr list') echo '[]'; return 0 ;;
+    'pr view') [[ -f "$HOME/view-$3.err" ]] && cat "$HOME/view-$3.err" >&2
+      [[ -f "$HOME/view-$3.rc" ]] && return "$(cat "$HOME/view-$3.rc")"
+      [[ -f "$HOME/view-$3.json" ]] && { cat "$HOME/view-$3.json"; return 0; }; return 1 ;;
   esac
   return 1
 };
@@ -408,6 +414,138 @@ describe('the required contexts', () => {
   it('a draft carries isDraft: true', () => {
     expect(one([], { isDraft: true })).toMatchObject({ bound: true, state: 'OPEN', isDraft: true });
   });
+
+  it.each([
+    ['CLOSED', 'wontfix', false, []], ['CLOSED', 'landed-in-train', false, ['train']],
+    ['MERGED', 'landed-in-train', false, []], ['OPEN', 'landed-in-train', false, []],
+  ])("GitHub's state word passes through raw: %s carrying %s, with no train record, landedInTrain %s", (state, label, landed, unm) => {
+    // A label with no train record behind it is never a landing (D-7362):
+    // this fixture's gh answers no `pr view` for the member at all, so the
+    // record was not READ, and a labelled CLOSED member is unmeasured
+    // (`train`, D-7378), never closed: the merged notice cannot fire and the
+    // closed end cannot either.
+    expect(one([], { state, labels: { nodes: [{ name: label }] } }))
+      .toMatchObject({ bound: true, state, landedInTrain: landed, unmeasured: unm });
+  });
+
+  // RED-FIRST ROWS (D-7362): `landedInTrain` is ccd's proof from the train
+  // record, the same one `pr-state` and the reap read, so the merged notice
+  // (`landingLineAct`) fires only for a proven landing.
+  const TRAIN_MERGE = 'e'.repeat(40);
+  const labelled = (train: (t0: string) => Ctx): Record<string, any> => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [], { state: 'CLOSED', labels: { nodes: [{ name: 'landed-in-train' }] } })]));
+    emptyRules();
+    put('view-41.json', { comments: [{ body: 'Landed in train #50.' }] });
+    put('view-50.json', train(t0));
+    return landing('demo', 'demo-quiet-basin:41').lines[0]!;
+  };
+  const trainPr = (members: Array<[number, string]>, over: Ctx = {}): Ctx => ({
+    number: 50, state: 'MERGED', mergedAt: '2026-07-21T08:59:00Z', mergeCommit: { oid: TRAIN_MERGE },
+    baseRefName: 'main', isCrossRepository: false,
+    body: `<!-- ccrc-train v1\n${members.map(([n, sha]) => `member #${n} ${sha}`).join('\n')}\n-->\n`, ...over,
+  });
+
+  it('a labelled PR the train record proves is landedInTrain', () => {
+    expect(labelled((t0) => trainPr([[41, t0]]))).toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: true });
+  });
+
+  it('a labelled PR whose train PR is CLOSED unmerged is not landedInTrain', () => {
+    expect(labelled((t0) => trainPr([[41, t0]], { state: 'CLOSED', mergedAt: null, mergeCommit: null })))
+      .toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false });
+  });
+
+  it('a labelled PR the train lists at a different sha is not landedInTrain', () => {
+    expect(labelled(() => trainPr([[41, 'c'.repeat(40)]])))
+      .toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false });
+  });
+
+  // D-7378: a proof that could not be READ is unmeasured, so `landingLineAct`
+  // answers unmeasured and `checksEnd` sends no closed end; a proof that was
+  // read and failed is `closed`.
+  it('a train read the call\'s budget kills (124) is unmeasured, never closed', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    put('view-50.rc', '124');
+    const l = labelled((t0) => trainPr([[41, t0]]));
+    expect(l).toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false, unmeasured: ['train'] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'unmeasured' });
+  });
+
+  it('the member\'s comments timing out is unmeasured too', () => {
+    put('view-41.rc', '124');
+    expect(labelled((t0) => trainPr([[41, t0]]))).toMatchObject({ landedInTrain: false, unmeasured: ['train'] });
+  });
+
+  it('a proof read and failed is closed, measured: the closed end may follow', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    const l = labelled((t0) => trainPr([[41, t0]], { state: 'CLOSED', mergedAt: null, mergeCommit: null }));
+    expect(l).toMatchObject({ landedInTrain: false, unmeasured: [] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'left', phase: 'closed' });
+  });
+
+  it('a proof the prover kept answers the landing read with no train call', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-proofs'), `o/r main 41 ${t0} 50 ${TRAIN_MERGE}\n`);
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [], { state: 'CLOSED', labels: { nodes: [{ name: 'landed-in-train' }] } })]));
+    emptyRules();
+    expect(landing('demo', 'demo-quiet-basin:41').lines[0]).toMatchObject({ landedInTrain: true, unmeasured: [] });
+    expect(calls().some((c) => c[0] === 'pr' && c[1] === 'view')).toBe(false);
+  });
+
+  it('keeps no proof: the landing read writes nothing under $REG', () => {
+    labelled((t0) => trainPr([[41, t0]]));
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.train-proofs'))).toBe(false);
+  });
+
+  // #1797 round 7 (D-7381): keep=0 reads GitHub, so a fresh `failed` tried
+  // line never answers it; an OPEN train is unread; and a proof it finds clears
+  // a stale line though it keeps no proof.
+  const tried = (): string => {
+    const f = path.join(h.home, '.cc-sessions', '.train-tried');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  const freshFailed = (t0: string): void => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-tried'),
+      `o/r main 41 ${t0} failed ${Math.floor(Date.now() / 1000) - 60}\n`);
+  };
+
+  it('a fresh failed line, a 502 on the train and an empty search is unmeasured, never closed', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    put('view-50.rc', '1');
+    put('view-50.err', 'HTTP 502: Bad Gateway (https://api.github.com/graphql)\n');
+    const l = labelled((t0) => { freshFailed(t0); return trainPr([[41, t0]]); });
+    expect(l).toMatchObject({ bound: true, state: 'CLOSED', landedInTrain: false, unmeasured: ['train'] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'unmeasured' });
+    // keep=0 writes no tried line of its own: the stale one is left as it was.
+    expect(tried()).toMatch(/ failed [0-9]+\n$/);
+  });
+
+  it('an OPEN train is unmeasured, never closed', async () => {
+    const { landingLineAct } = await import('../src/coord/landing.js');
+    const { readPrLandingLine } = await import('../src/prstate.js');
+    const l = labelled((t0) => trainPr([[41, t0]], { state: 'OPEN', mergedAt: null, mergeCommit: null }));
+    expect(l).toMatchObject({ landedInTrain: false, unmeasured: ['train'] });
+    expect(landingLineAct({ pr: 41 } as never, readPrLandingLine(l))).toEqual({ act: 'unmeasured' });
+  });
+
+  it('a proof the landing read finds clears a stale failed line, and still keeps no proof', () => {
+    const l = labelled((t0) => { freshFailed(t0); return trainPr([[41, t0]]); });
+    expect(l).toMatchObject({ landedInTrain: true, unmeasured: [] });
+    expect(tried()).toBe('');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.train-proofs'))).toBe(false);
+  });
+
+  it('asks GitHub for the labels it reads', () => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0)]));
+    emptyRules();
+    landing('demo', 'demo-quiet-basin:41');
+    const q = calls().find((c) => c[1] === 'graphql')!.find((a) => a.startsWith('query='))!;
+    expect(q.replace(/\s+/g, ' ')).toContain('labels(first: 100) { nodes { name } }');
+  });
 });
 
 describe('the rules cache', () => {
@@ -497,6 +635,50 @@ describe('the rules cache', () => {
     put('gql.json', answer([null]));
     landing('demo', 'demo-quiet-basin:41');
     expect(restCalls()).toEqual([]);
+  });
+});
+
+describe('the rules read, every page (review 1109)', () => {
+  const REQ = (context: string): Ctx => ({ type: 'required_status_checks', parameters: { required_status_checks: [{ context }] } });
+  const rulesCalls = (): string[][] => calls().filter((c) => c[0] === 'api' && (c[1] ?? '').startsWith('repos/o/r/rules/'));
+  const cacheFile = (): string => path.join(h.home, '.cc-sessions', 'pr-landing', 'demo.rules.main.json');
+  const setup = (): void => {
+    const t0 = workspace('demo', 'quiet-basin');
+    put('gql.json', answer([pr(41, 'quiet-basin', t0, [run('lint', 'SUCCESS')])]));
+    put('branch.json', { protected: false });
+  };
+
+  it('a required_status_checks rule only on the second page is named: a full first page never reads as the whole set', () => {
+    setup();
+    // The stub's page holds two rules, as GitHub's holds thirty: the required rule is the third, so on page 2.
+    put('rules-page1.json', [{ type: 'pull_request', parameters: {} }, { type: 'deletion' }]);
+    put('rules-page2.json', [REQ('e2e')]);
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.rulesNamed).toEqual(['e2e']);
+    expect(l.unmeasured).toEqual([]);
+    expect(rulesCalls()).toEqual([['api', 'repos/o/r/rules/branches/main', '--paginate']]);
+    expect(JSON.parse(fs.readFileSync(cacheFile(), 'utf8')).rules.names).toEqual(['e2e']);
+  });
+
+  it('several pages are one set: a required rule on each page counts', () => {
+    setup();
+    put('rules-page1.json', [REQ('lint'), { type: 'creation' }]);
+    put('rules-page2.json', [REQ('e2e')]);
+    expect(landing('demo', 'demo-quiet-basin:41').lines[0]!.rulesNamed).toEqual(['lint', 'e2e']);
+  });
+
+  it.each([
+    ['an object', '{"message":"Bad credentials"}'],
+    ['not JSON', 'HTTP 502 <html>'],
+  ])('a page that is %s makes the rules unmeasured and is never cached', (_what, page2) => {
+    setup();
+    put('rules-page1.json', [REQ('lint')]);
+    put('rules-page2.json', page2);
+    const l = landing('demo', 'demo-quiet-basin:41').lines[0]!;
+    expect(l.unmeasured).toEqual(['rules']);
+    expect(l.rulesNamed).toEqual([]);
+    expect(l.bound).toBe(true);
+    expect(fs.existsSync(cacheFile())).toBe(false);
   });
 });
 
@@ -611,7 +793,7 @@ describe('read-only censuses', () => {
   it('is dispatched, advertised in caps and named in the usage line', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('pr-landing');
     expect(h.sh('cmd_caps').split('\n')).toContain('pr-landing-v1');
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('pr-landing) shift; cmd_pr_landing "$@" ;;');
   });
 });

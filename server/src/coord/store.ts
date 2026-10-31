@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
-import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
+import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
+import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
+import type { LandingAdvance, LandingWrite } from './landingEntry.js';
+import type { LandingEntry, LandingEntryState } from '../../../shared/landingLine.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
@@ -16,6 +19,7 @@ import type { DelegationProjectionRun } from './delegation-projection.js';
 import type { LastRun } from './released.js';
 import type { BindingRun, Incarnation } from './runBinding.js';
 import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
+import { bindingsOver, type SessionBindings } from './bindingReads.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
@@ -29,6 +33,8 @@ import { parseStallDetail } from './stall.js';
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
 import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
 import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
+import type { DispatchAbandonRead } from './deadDispatch.js';
+import type { DispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
@@ -41,6 +47,7 @@ import {
 import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
+import { appendThenApply, journalFloor, type JournalPhase } from '../journalKernel.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
@@ -65,6 +72,8 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
 import { newestTag } from '../../../shared/semver.js';
+import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import type { RollSettingsRead } from './rollTarget.js';
 import {
   SHADOW_JOURNAL_MAX_AGE_MS, SHADOW_JOURNAL_MAX_ROWS, isShadowLane, shadowVerdictKey,
   type ShadowLane, type ShadowVerdictInput, type ShadowVerdictRow,
@@ -73,9 +82,12 @@ import {
 import { isHaltingUpdate } from '../../../shared/update-move.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
+  MAIL_ROLE_IDS,
   holdReasonVerdict,
   type HoldReasonVerdict,
 } from './rundefs.js';
+// `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
+import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
@@ -84,7 +96,7 @@ import {
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES, REVIEW_DONE_SUBJECT,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_REFUSAL_CODES, REVIEW_DONE_SUBJECT,
   isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
@@ -122,7 +134,7 @@ import {
   APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
   type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
-  type CoordCaps, type DeviationAllocation, type DeviationAllocState,
+  type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
@@ -135,7 +147,7 @@ import {
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
-  type WorkItemState, type LastReviewReport,
+  type WorkItemState, type LastReviewReport, type RunRefuseCode,
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
@@ -246,6 +258,13 @@ export type AdvanceResult =
   /** `closeRun`'s compare-and-set (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's `claimedBy`
    *  is no longer the id the caller expected — a successor took the programme — so nothing was written. */
   | { ok: false; error: 'claimant-changed'; claimedBy: string | null };
+
+/** `advanceLanding`'s answer: an `AdvanceResult` that carries what the landing line recorded when it succeeded, and
+ *  the one refusal of its own (D-7619), which the route sends on `reject.code`. */
+export type LandingAdvanceResult =
+  | (Extract<AdvanceResult, { ok: true }> & { landing: LandingWrite })
+  | Exclude<AdvanceResult, { ok: true }>
+  | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -1964,6 +1983,15 @@ export class CoordStore {
   }
 
   /**
+   * "Is this session bound by coordination, and by whom?" (ARCH-42, #777): the ONE query every unit outside the binding
+   * asks it through. A view of five lazy answers over this store's own binding readers (`bindingsOver`,
+   * `coord/bindingReads.ts`), so the rule stays in `coord/runBinding.ts` and each answer reads only when it is asked.
+   */
+  bindingsOf(sessionId: string): SessionBindings {
+    return bindingsOver(this, sessionId);
+  }
+
+  /**
    * The ONE SQL reader of the run↔session link (ARCH-62, #797): the runs `id` works on (`'sessionId'`), claims
    * (`'claimedBy'`) or either (`'either'`), ANY state, by id, with every column a binding decision or a reader's row
    * needs, raw. Every session-keyed reader below projects this through `coord/bindingRows.ts`, so the rule for which run
@@ -2926,6 +2954,77 @@ export class CoordStore {
       }
       return finalAdv;
     });
+  }
+
+  /**
+   * The landing line's one composite write (landing order wave 5e, D-7614): the run's advance and its line entry in ONE
+   * `tx()`, the way `dispatchRun` and `closeRun` compose theirs. It is the ONE writer of `landing_entries.pinnedSha`
+   * and `.ejections`. It decides the edge first, so a refused advance writes no entry and no event; it builds the
+   * `merging-at:` detail itself from the same head it writes as `pinnedSha`, so the two cannot disagree. The choice of
+   * what to write is `decideLandingWrite`'s (L1). The advance is never refused on the line's account (D-7618), and an
+   * ejection body on a run not at `merging` is the one refusal of its own (D-7619). A `LandingAdvance` that pairs
+   * wrongly with `to` is a programming error and throws, rolling everything back.
+   */
+  advanceLanding(input: { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }): LandingAdvanceResult {
+    const { runId, to, causedBy, landing } = input;
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
+        { state: string; kind: string; project: string } | undefined;
+      if (!row) return { ok: false as const, error: 'unknown-run' as const };
+      const from = isRunState(row.state) ? row.state : 'unknown';
+      const kind = isRunKind(row.kind) ? row.kind : 'unknown';
+      if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
+        return { ok: false as const, error: 'bad-transition' as const, from, to };
+      }
+      if ((landing.kind === 'pin') !== (to === 'merging') || (landing.kind === 'retreat' && to !== 'working')) {
+        throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
+      }
+      if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
+        return { ok: false as const, error: 'ejection-not-merging' as const, from };
+      }
+      const episode = landing.kind === 'retreat' ? this.currentEpisode(runId) : null;
+      const pr = landing.kind === 'pin' ? landing.pr : episode?.pr ?? null;
+      const current = pr === null ? null : this.landingEntryOf(row.project, pr);
+      const decision = decideLandingWrite({ landing, from, runId, current, episode });
+      const adv = this.advanceInner(runId, to, causedBy,
+        landing.kind === 'pin' ? mergingAtDetail(landing.head, landing.pr, landing.mode) : undefined);
+      if (!adv.ok) return adv;
+      if (decision.act === 'none') return { ...adv, landing: decision.write };
+      const pinned: LandingEntryState = 'pinned';
+      const ejected: LandingEntryState = 'ejected';
+      if (landing.kind === 'pin' && decision.act === 'insert') {
+        this.db.prepare('INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
+      } else if (landing.kind === 'pin' && decision.act === 'repin') {
+        this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
+          'ejectionKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+      } else if (decision.act === 'eject') {
+        this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ejections + 1 WHERE id = ?')
+          .run(ejected, decision.base, decision.kind, decision.id);
+      }
+      const entry = pr === null ? null : this.landingEntryOf(row.project, pr);
+      if (entry === null) throw new Error('advanceLanding: the entry it just wrote reads back absent');
+      return { ...adv, landing: decision.act === 'eject' ? { kind: 'ejected' as const, entry }
+        : { kind: 'pinned' as const, entry, created: decision.act === 'insert' } };
+    });
+  }
+
+  /** One entry by (project, pr), read through `landingEntryOfRow`; null when there is none. */
+  private landingEntryOf(project: string, pr: number): LandingEntry | null {
+    const row = this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
+      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? AND pr = ?').get(project, pr);
+    return row === undefined ? null : landingEntryOfRow(row);
+  }
+
+  /** A project's landing line, oldest pin first (`pinnedAt`, then `id`). An unreadable row reads `unknown`, never absent. */
+  landingEntries(project: string): LandingEntry[] {
+    return this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
+      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id').all(project).map(landingEntryOfRow);
+  }
+
+  /** A project's two line flags. An absent row, which nothing seeds, reads both clear. */
+  landingProject(project: string): { operatorPaused: boolean; mainRedHold: boolean } {
+    return landingFlagsOfRow(this.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(project));
   }
 
   /** Review findings 8/14: every `queued` or `delivered`-but-unacked delivery
@@ -4129,7 +4228,8 @@ export class CoordStore {
    *  pair `hold done` with the next `release done`; a swap is ONE `done` row
    *  in ccd's journal (no intent, no landing pair — `ccd/ccd:17166`), so it is
    *  COUNTED and flagged, never timed. Refused wave-dones are the
-   *  `mail_rejections` rows `closeRun` records with a DONE_AUTHORITY code,
+   *  `mail_rejections` rows `closeRun` records with a `DONE_REFUSAL_CODES` code
+   *  (the authority codes less `lineage-unmeasured`),
    *  counted through `doneRejectCount` — the SAME private statement
    *  `runHealth`'s `doneRejects` rides, so `GET /api/runs` and
    *  `GET /api/runs/:id/signals` cannot drift apart (R7-3).
@@ -4558,8 +4658,10 @@ export class CoordStore {
 
   /**
    * THE ONE COUNT of a run's refused wave-dones — the `mail_rejections` rows
-   * `closeRun` writes through `recordRejection` with a `DONE_AUTHORITY_CODES`
-   * code — and, riding the same statement, the newest one's code.
+   * `closeRun` writes through `recordRejection` with a `DONE_REFUSAL_CODES`
+   * code (the done-authority codes less `lineage-unmeasured`, which is the
+   * radar's timing and no refusal, D-7107) — and, riding the same statement,
+   * the newest one's code.
    *
    * Private because it is a measurement two PUBLIC surfaces must agree on, not
    * a surface of its own: `runHealth`'s `doneRejects`/`lastRejectCode` (what
@@ -4590,13 +4692,13 @@ export class CoordStore {
     // syntax error.
     if (runIds.length === 0) return out;
     const ph = placeholders(runIds.length);
-    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    const codes = placeholders(DONE_REFUSAL_CODES.length);
     for (const row of this.db.prepare(
       'SELECT r.runId AS runId, count(*) AS c, ' +
       '(SELECT x.code FROM mail_rejections x WHERE x.runId = r.runId ' +
       `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
       `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
-    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES) as unknown as
+    ).all(...DONE_REFUSAL_CODES, ...runIds, ...DONE_REFUSAL_CODES) as unknown as
       { runId: number; c: number; lastCode: string | null }[]) {
       out.set(row.runId, { count: row.c, lastCode: row.lastCode });
     }
@@ -4780,16 +4882,20 @@ export class CoordStore {
 
   // ── caps ───────────────────────────────────────────────────────────────────
 
+  /** THE RETIRED COLUMN (D-7068, operator ruling 2026-10-26). `coordinator_state` still carries
+   *  `maxSessionsPerDay`, the daily dispatch brake's limit: migration 1 created it `NOT NULL` and seeded it, and it
+   *  STAYS — no destructive migration drops a column a rollback to an older build would read. Nothing here reads or
+   *  writes it any more: `caps()` selects the concurrency cap alone, and `setCaps` updates that column and
+   *  `updatedAt`, so the stored daily value keeps whatever it last held and governs nothing. */
   caps(): CoordCaps {
     const row = this.db.prepare(
-      'SELECT maxConcurrentWorkers, maxSessionsPerDay FROM coordinator_state WHERE id = 1',
-    ).get() as { maxConcurrentWorkers: number; maxSessionsPerDay: number };
-    return { maxConcurrentWorkers: row.maxConcurrentWorkers, maxSessionsPerDay: row.maxSessionsPerDay };
+      'SELECT maxConcurrentWorkers FROM coordinator_state WHERE id = 1',
+    ).get() as { maxConcurrentWorkers: number };
+    return { maxConcurrentWorkers: row.maxConcurrentWorkers };
   }
 
   /** D-1169. `at` IS THE CALLER'S NOW, the rule `recordRunEvent` states in full
-   *  and `markDispatched`/`capsUsage` — the method directly below this one —
-   *  already follow: the caller owns the moment being recorded. `setCaps` was the
+   *  and `markDispatched` already follows: the caller owns the moment being recorded. `setCaps` was the
    *  lone exception in its own neighbourhood, and the cost was concrete rather
    *  than aesthetic: a fixture that needed to pin a caps timestamp could not.
    *
@@ -4800,8 +4906,8 @@ export class CoordStore {
    *  parameter inside `decideCaps`, which this is not. */
   setCaps(next: CoordCaps, at: number = Date.now()): void {
     this.db.prepare(
-      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, maxSessionsPerDay = ?, updatedAt = ? WHERE id = 1',
-    ).run(next.maxConcurrentWorkers, next.maxSessionsPerDay, at);
+      'UPDATE coordinator_state SET maxConcurrentWorkers = ?, updatedAt = ? WHERE id = 1',
+    ).run(next.maxConcurrentWorkers, at);
   }
 
   /** D-1169's read half. `coordinator_state.updatedAt` has been written since
@@ -4820,15 +4926,19 @@ export class CoordStore {
   }
 
   /**
-   * The two COUNTS, derived. `spec:201` says "rows in `coordinator_state`",
+   * The COUNT, derived. `spec:201` says "rows in `coordinator_state`",
    * and the limits ARE rows there — but a stored counter beside them would be a
    * second copy of what `runs` already knows, and the copy is always the one
    * that drifts (`server/src/limits.ts:34-40` states the same lesson about
    * mirroring `_ws_least_loaded`: "put the authority in one place and let the
    * other predict"). Here there is no second box to predict for, so there is no
    * excuse for a second copy at all.
+   *
+   * ONE count since D-7068: the rolling 24 h dispatch count, `dispatchedIn24h`, existed only for
+   * the daily brake, and nothing else read it, so it is no longer computed. With it went the clock parameter, which
+   * only that count's window used: `running` is a property of the runs' states, not of the time of asking.
    */
-  capsUsage(now: number = Date.now()): { running: number; dispatchedIn24h: number } {
+  capsUsage(): CoordCapsUsage {
     // `dispatchedAt IS NOT NULL` (deviation D-13, found in Task 3 review):
     // a bare "state is not terminal" predicate alone also matched `planned` —
     // the state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
@@ -4853,10 +4963,36 @@ export class CoordStore {
     const running = (this.db.prepare(
       `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
     ).get() as { c: number }).c;
-    const dispatchedIn24h = (this.db.prepare(
-      'SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND dispatchedAt > ?',
-    ).get(now - 24 * 3600_000) as { c: number }).c;
-    return { running, dispatchedIn24h };
+    return { running };
+  }
+
+  // ── the automatic roll's setting (D-7453) ─────────────────────────────────
+
+  /** The "Roll idle sessions" row as read: a row, no row, or a read that failed, never one `null`. Nothing is decided
+   *  here: `rollTargetsOf` (L1, `coord/rollTarget.ts`) decides what the stored word means. */
+  rollSettings(): RollSettingsRead {
+    try {
+      const r = this.db.prepare('SELECT targets FROM roll_settings WHERE id = 1').get() as { targets: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', targets: r.targets };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The one writer of `roll_settings`, in one `tx()`: the row before, then the write (an insert for a lost row), then
+   *  the row after. It validates nothing: the route has narrowed `targets`. A write that changes nothing runs no
+   *  `UPDATE`, so `updatedAt` stays. */
+  setRollTargets(targets: ClaudeRollTargets, at: number): { before: RollSettingsRead; after: RollSettingsRead } {
+    return tx(this.db, () => {
+      const before = this.rollSettings();
+      if (before.kind === 'unreadable') throw new Error(`roll settings unreadable inside the write: ${before.detail}`);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO roll_settings (id, targets, updatedAt) VALUES (1, ?, ?)').run(targets, at);
+      } else if (before.targets !== targets) {
+        this.db.prepare('UPDATE roll_settings SET targets = ?, updatedAt = ? WHERE id = 1').run(targets, at);
+      }
+      return { before, after: this.rollSettings() };
+    });
   }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
@@ -4919,6 +5055,42 @@ export class CoordStore {
     });
   }
 
+  // ── the dead-dispatch act's switch and candidates (D-7319) ─────────────────────────────────────────────────
+  /** `dispatch_abandon_settings` (migration 33), read: the row's raw choice and write time, `absent` for a lost row, or
+   *  `unreadable` with the driver's detail. `stallSettings()`'s shape: prepared and run inside the `try`, never a throw.
+   *  Nothing is decided here: only an exact `on` arms the act, and `isDispatchAbandonChoice` says so at the reader. */
+  dispatchAbandonSetting(): DispatchAbandonRead {
+    try {
+      const r = this.db.prepare('SELECT choice, CAST(updatedAt AS TEXT) AS updatedText FROM dispatch_abandon_settings WHERE id = 1')
+        .get() as { choice: unknown; updatedText: unknown } | undefined;
+      if (r === undefined) return { kind: 'absent' };
+      const at = typeof r.updatedText === 'string' ? Number(r.updatedText) : NaN;
+      return { kind: 'row', choice: r.choice, updatedAt: Number.isSafeInteger(at) ? at : null };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The switch's one writer, called only by `POST /api/coord/dispatch-abandon`: an upsert of the one row, in one
+   *  statement, then the read back. The route has validated `choice`. */
+  setDispatchAbandon(choice: DispatchAbandonChoice, at: number): DispatchAbandonRead {
+    this.db.prepare(
+      'INSERT INTO dispatch_abandon_settings (id, choice, updatedAt) VALUES (1, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET choice = excluded.choice, updatedAt = excluded.updatedAt',
+    ).run(choice, at);
+    return this.dispatchAbandonSetting();
+  }
+
+  /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
+   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
+   *  so this query is economy, never a permission. */
+  stalledDispatchRunIds(startedAtOrBefore: number): number[] {
+    return (this.db.prepare(
+      "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
+      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
+    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
+  }
+
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
   // Each is `{ ok: true, rows } | { ok: false, detail }`: a thrown statement or a value this process cannot prove is a
   // failure with its detail, never a throw and never an overloaded null. They read; the decider (`drift.ts`) judges.
@@ -4931,22 +5103,62 @@ export class CoordStore {
       const runs = this.db.prepare(
         `SELECT id, program, state, claimedBy, openedAt FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
       ).all() as { id: unknown; program: string; state: string; claimedBy: string | null; openedAt: unknown }[];
-      const events = this.db.prepare(
-        "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
-        'ORDER BY at DESC, id DESC',
-      );
+      const lastActAt = this.lastActReader();
       const out: DriftRunRow[] = [];
       for (const r of runs) {
-        let lastActAt: number | null = null;
-        for (const e of events.all(r.id as number) as { at: unknown; causedBy: string; detail: string | null }[]) {
-          if (parseStallDetail(e.detail) !== null) continue;
-          lastActAt = driftInt(e.at, 'run_events at');
-          break;
-        }
         out.push({ id: driftInt(r.id, 'runs id'), program: r.program, state: r.state, claimedBy: r.claimedBy,
-          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt });
+          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt: lastActAt(r.id as number) });
       }
       return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The ACT rule, written once: `driftOpenRuns` and `runLastMoves` (D-7334) both read a run's newest act through it.
+   *  The answer for one run is the `at` of its newest `run_events` row that is neither caused by `'operator'` nor a stall
+   *  observation (`parseStallDetail` reads it), or null when there is none. Prepared once per read; it throws as the
+   *  statement does, and its callers turn that into their failure arm. The rows are walked newest first and the walk
+   *  stops at the first act (`iterate`, fix round 1, F5): the runs frame asks this for every open run on every tick, so
+   *  its cost follows the stall rows above the newest act, not the run's whole history. */
+  private lastActReader(): (runId: number) => number | null {
+    const events = this.db.prepare(
+      "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
+      'ORDER BY at DESC, id DESC',
+    );
+    return (runId) => {
+      for (const e of events.iterate(runId) as Iterable<{ at: unknown; causedBy: string; detail: string | null }>) {
+        if (parseStallDetail(e.detail) !== null) continue;
+        return driftInt(e.at, 'run_events at');
+      }
+      return null;
+    };
+  }
+
+  /** `RunSummary.lastMoveAt` for each of `runIds` (D-7334; programme-boxes spec §2.5): the newer of the run's newest act
+   *  (`lastActReader`, the drift reader's rule) and its newest mail naming it from the run's worker, its reviewer or its
+   *  coordinator session — the run's `sessionId`, the `sessionId` of a review run whose `reviews` is this run, or its
+   *  `claimedBy` — never a role sender (`MAIL_ROLE_IDS`: the brief, rejections, close notices and stall checks move
+   *  nothing), and never another session's (fix round 1, F3), or null when it has neither. Every asked id is in the
+   *  answer. Two indexed statements a run (`run_events_by_run`; `mail_by_run`, its senders by the runs key and
+   *  `runs_by_reviews`), so its caller reads it once per frame, for the open runs only. A thrown statement or an
+   *  unprovable value is the failure arm. */
+  runLastMoves(runIds: readonly number[]): RunLastMovesRead {
+    try {
+      const lastActAt = this.lastActReader();
+      const roles = [...MAIL_ROLE_IDS];
+      const mail = this.db.prepare(
+        `SELECT MAX(at) AS at FROM mail WHERE runId = ? AND fromId NOT IN (${roles.map(() => '?').join(', ')}) ` +
+        'AND fromId IN (SELECT sessionId FROM runs WHERE id = ? UNION ALL SELECT claimedBy FROM runs WHERE id = ? ' +
+        'UNION ALL SELECT sessionId FROM runs WHERE reviews = ?)',
+      );
+      const moves = new Map<number, number | null>();
+      for (const id of runIds) {
+        const act = lastActAt(id);
+        const sent = driftIntOrNull((mail.get(id, ...roles, id, id, id) as { at: unknown }).at, 'mail at');
+        moves.set(id, act === null ? sent : sent === null ? act : Math.max(act, sent));
+      }
+      return { ok: true, moves };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }
@@ -6598,7 +6810,7 @@ export class CoordStore {
    * `dispatchedAt` for `working`. A `done` or `failed` wave stays
    * `dispatchedAt = null`: it holds no live session for the cap to count,
    * and stamping the reconstruction time on a wave that in reality
-   * dispatched long ago would falsify `dispatchedIn24h` for it too.
+   * dispatched long ago would falsify its dispatch time.
    *
    * A FIFTH thing this does NOT carry (D-2352): `programs.homeProject`. None of the
    * three artefacts this rebuilds from names a
@@ -7551,37 +7763,39 @@ export class CoordStore {
     runId: number | null; now?: number;
   }, log: LedgerLog): AllocateResult {
     const now = input.now ?? Date.now();
-    return tx(this.db, () => {
-      const floorRow = this.ledgerFloor(input.project);
-      const dbMax = (this.db.prepare(
-        'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
-      ).get(input.project) as { m: number | null }).m;
-      const fileMax = log.maxAllocated(input.project);
-      // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
-      // and the file's half is what makes recovery MAX(file, db).
-      const maxIssued = dbMax === null ? fileMax
-        : fileMax === null ? dbMax : Math.max(dbMax, fileMax);
-      const d = decideAllocation(floorRow, maxIssued, input.count);
-      if (!('ok' in d)) return { ok: false as const, why: d.refused };
-      log.append(d.numbers.map((n) => ({
+    // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; a journal error propagates.
+    return tx(this.db, () => appendThenApply<{ readonly numbers: readonly number[]; readonly floor: number }, AllocateResult, AllocateResult>({
+      decide: () => {
+        const floorRow = this.ledgerFloor(input.project);
+        const dbMax = (this.db.prepare(
+          'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
+        ).get(input.project) as { m: number | null }).m;
+        // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
+        // and the file's half is what makes recovery MAX(file, db).
+        const d = decideAllocation(floorRow, journalFloor(dbMax, log.maxAllocated(input.project)), input.count);
+        return 'ok' in d ? { go: d } : { stop: { ok: false as const, why: d.refused } };
+      },
+      append: (d) => log.append(d.numbers.map((n) => ({
         project: input.project, n, title: input.title,
         allocatedTo: input.allocatedTo, at: now,
-      })));
-      for (const n of d.numbers) {
-        this.db.prepare(
-          'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
-          "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
-        ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
-      }
-      return {
-        ok: true as const,
-        allocation: {
-          project: input.project, numbers: d.numbers, floor: d.floor,
-          title: input.title, allocatedTo: input.allocatedTo,
-          runId: input.runId, allocatedAt: now,
-        },
-      };
-    });
+      }))),
+      apply: (d) => {
+        for (const n of d.numbers) {
+          this.db.prepare(
+            'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
+            "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
+          ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
+        }
+        return {
+          ok: true as const,
+          allocation: {
+            project: input.project, numbers: d.numbers, floor: d.floor,
+            title: input.title, allocatedTo: input.allocatedTo,
+            runId: input.runId, allocatedAt: now,
+          },
+        };
+      },
+    }));
   }
 
   private static readonly LEDGER_COLS =
@@ -7910,8 +8124,9 @@ export class CoordStore {
       // (D-2545). Answering `'unknown-ask'` here would be the overloaded value
       // this whole change removes — a coordinator told "no such ask" for a row
       // that is sitting there. It THROWS instead, and it is unreachable by
-      // construction from both call sites: `/answer` reads `askById` and
-      // `POST /api/sessions/:id/ask` reads `heldAskFor` immediately before,
+      // construction from both call sites: `/answer` reads `askById` and the
+      // operator's ask (`coord/questions.ts`, behind `POST /api/questions/
+      // session-<id>/answer` since W7 C7p) reads `heldAskFor` immediately before,
       // each refusing the unreadable row in its own words first. Widening
       // `AskTakeResult` would put a never-wire word into the ask refusal
       // vocabulary the two routes send verbatim.
@@ -8431,26 +8646,30 @@ export class CoordStore {
       return { ok: false, error: 'multi-pool-not-supported', pools: input.pools };
     }
     const now = input.now ?? Date.now();
-    return tx(this.db, () => {
-      const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
-        .get() as { e: number }).e;
-      const fileMax = log.maxEpoch();
-      const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
-      log.append([{ epoch, accountId: input.accountId, pools: input.pools,
-                    addedBy: input.addedBy, at: now }]);
-      this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
-        .run(input.accountId);
-      for (const p of input.pools) {
-        this.db.prepare(
-          'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
-          "VALUES ('account', ?, ?, ?, ?)",
-        ).run(input.accountId, p, now, input.addedBy);
-      }
-      const digest = this.poolEdgeDigest();
-      this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
-        .run(epoch, now, digest);
-      return { ok: true as const, epoch };
-    });
+    // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; a journal error propagates.
+    return tx(this.db, () => appendThenApply<number, SetAccountPoolsResult, never>({
+      decide: () => {
+        const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
+          .get() as { e: number }).e;
+        return { go: journalFloor(dbMax, log.maxEpoch()) + 1 };
+      },
+      append: (epoch) => log.append([{ epoch, accountId: input.accountId, pools: input.pools,
+                                       addedBy: input.addedBy, at: now }]),
+      apply: (epoch) => {
+        this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
+          .run(input.accountId);
+        for (const p of input.pools) {
+          this.db.prepare(
+            'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
+            "VALUES ('account', ?, ?, ?, ?)",
+          ).run(input.accountId, p, now, input.addedBy);
+        }
+        const digest = this.poolEdgeDigest();
+        this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
+          .run(epoch, now, digest);
+        return { ok: true as const, epoch };
+      },
+    }));
   }
 
   accountPoolEdges(): Map<string, string[]> {
@@ -9209,25 +9428,33 @@ export class CoordStore {
       setBy: INTENT_SET_BY,
     };
     try {
-      return tx(this.db, () => {
-        const dbMax = (this.db.prepare('SELECT epoch AS e FROM update_epoch WHERE id = 1')
-          .get() as { e: number }).e;
-        let fileMax: number | null;
-        try { fileMax = log.maxEpoch(); } catch (err) { throw new IntentJournalFault('journal-unreadable', err); }
-        const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
-        try {
-          log.append({ epoch, scope, channel, pinnedTag: row.pinnedTag, auto: row.auto,
-                       notify: row.notify, setBy: row.setBy, at: now });
-        } catch (err) { throw new IntentJournalFault('journal-unwritable', err); }
-        this.db.prepare(
-          'INSERT INTO update_intent (scope, channel, pinnedTag, auto, notify, setAt, setBy) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET channel = excluded.channel, ' +
-          'pinnedTag = excluded.pinnedTag, auto = excluded.auto, notify = excluded.notify, ' +
-          'setAt = excluded.setAt, setBy = excluded.setBy',
-        ).run(scope, channel, row.pinnedTag, row.auto, row.notify, now, row.setBy);
-        this.db.prepare('UPDATE update_epoch SET epoch = ?, issuedAt = ? WHERE id = 1').run(epoch, now);
-        return { ok: true as const, row, epoch };
-      });
+      // D-7058: the floor is `journalFloor`, the journal-first order `appendThenApply`; the journal faults keep this
+      // method's own mapping (`IntentJournalFault`, answered below), and any other error propagates as itself.
+      return tx(this.db, () => appendThenApply<number, SetIntentResult, never>({
+        decide: () => {
+          const dbMax = (this.db.prepare('SELECT epoch AS e FROM update_epoch WHERE id = 1')
+            .get() as { e: number }).e;
+          let fileMax: number | null;
+          try { fileMax = log.maxEpoch(); } catch (err) { throw new IntentJournalFault('journal-unreadable', err); }
+          return { go: journalFloor(dbMax, fileMax) + 1 };
+        },
+        append: (epoch) => {
+          try {
+            log.append({ epoch, scope, channel, pinnedTag: row.pinnedTag, auto: row.auto,
+                         notify: row.notify, setBy: row.setBy, at: now });
+          } catch (err) { throw new IntentJournalFault('journal-unwritable', err); }
+        },
+        apply: (epoch) => {
+          this.db.prepare(
+            'INSERT INTO update_intent (scope, channel, pinnedTag, auto, notify, setAt, setBy) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET channel = excluded.channel, ' +
+            'pinnedTag = excluded.pinnedTag, auto = excluded.auto, notify = excluded.notify, ' +
+            'setAt = excluded.setAt, setBy = excluded.setBy',
+          ).run(scope, channel, row.pinnedTag, row.auto, row.notify, now, row.setBy);
+          this.db.prepare('UPDATE update_epoch SET epoch = ?, issuedAt = ? WHERE id = 1').run(epoch, now);
+          return { ok: true as const, row, epoch };
+        },
+      }));
     } catch (err) {
       if (!(err instanceof IntentJournalFault)) throw err;
       return err.why === 'journal-unreadable'
@@ -9532,28 +9759,32 @@ export class CoordStore {
    *    decision, or `BEGIN` itself) is a defect or a busy database, and propagates as itself.
    *  - Synchronous, and never called from inside another `tx()`: `BEGIN IMMEDIATE` is not re-entrant. */
   setCollectLane(req: CollectLaneWriteRequest, at: number, journal: CollectLaneJournal): CollectLaneWrite {
-    let phase = 'decide' as 'decide' | 'append' | 'update' | 'commit';
+    // D-7058: the journal-first order is `appendThenApply`, and `phase` is the kernel's, named in this answer's words by
+    // `COLLECT_LANE_FAILED_PHASE`.
+    const phase: { at: JournalPhase } = { at: 'decide' };
     let done: CollectLaneTxOutcome;
     try {
-      done = tx(this.db, (): CollectLaneTxOutcome => {
-        const before = this.collectLaneRow();
-        const journalBefore = journal.read();
-        const d = decideCollectLaneWrite(req, before, journalBefore, at);
-        if (d.kind === 'refuse') return { kind: 'refused', code: d.code, detail: d.detail };
-        if (d.kind === 'unchanged') return { kind: 'unchanged', before };
-        phase = 'append';
-        journal.appendGeneration(d.generation);
-        phase = 'update';
-        const r = this.db.prepare(
-          'UPDATE collect_lane_settings SET choice = ?, fleetNodeId = ?, markerRetiredAt = ?, generation = ?, updatedAt = ? WHERE id = 1',
-        ).run(d.next.choice, d.next.fleetNodeId, d.next.markerRetiredAt, d.generation, at);
-        if (Number(r.changes) !== 1) throw new Error('the switch row update changed no row');
-        phase = 'commit';
-        return { kind: 'appended', generation: d.generation, before, journalBefore };
-      });
+      done = tx(this.db, (): CollectLaneTxOutcome => appendThenApply<CollectLaneWriteGo, CollectLaneTxOutcome, CollectLaneTxOutcome>({
+        decide: () => {
+          const before = this.collectLaneRow();
+          const journalBefore = journal.read();
+          const d = decideCollectLaneWrite(req, before, journalBefore, at);
+          if (d.kind === 'refuse') return { stop: { kind: 'refused', code: d.code, detail: d.detail } };
+          if (d.kind === 'unchanged') return { stop: { kind: 'unchanged', before } };
+          return { go: { d, before, journalBefore } };
+        },
+        append: ({ d }) => journal.appendGeneration(d.generation),
+        apply: ({ d, before, journalBefore }) => {
+          const r = this.db.prepare(
+            'UPDATE collect_lane_settings SET choice = ?, fleetNodeId = ?, markerRetiredAt = ?, generation = ?, updatedAt = ? WHERE id = 1',
+          ).run(d.next.choice, d.next.fleetNodeId, d.next.markerRetiredAt, d.generation, at);
+          if (Number(r.changes) !== 1) throw new Error('the switch row update changed no row');
+          return { kind: 'appended', generation: d.generation, before, journalBefore };
+        },
+      }, phase));
     } catch (err) {
-      if (phase === 'decide') throw err;
-      return { kind: 'failed', phase, code: collectLaneFailCode(err) };
+      if (phase.at === 'decide') throw err;
+      return { kind: 'failed', phase: COLLECT_LANE_FAILED_PHASE[phase.at], code: collectLaneFailCode(err) };
     }
     if (done.kind !== 'appended') return done;
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
@@ -9632,6 +9863,20 @@ type CollectLaneTxOutcome =
   | Extract<CollectLaneWrite, { kind: 'refused' | 'unchanged' }>
   | { readonly kind: 'appended'; readonly generation: number; readonly before: CollectLaneRowRead;
       readonly journalBefore: CollectLaneJournalRead };
+
+/** What `setCollectLane`'s decide step hands its append and its apply (D-7058): the write decision and the two reads it
+ *  was taken over. Module-private. */
+interface CollectLaneWriteGo {
+  readonly d: Extract<ReturnType<typeof decideCollectLaneWrite>, { kind: 'write' }>;
+  readonly before: CollectLaneRowRead;
+  readonly journalBefore: CollectLaneJournalRead;
+}
+
+/** `failed.phase` for each position `appendThenApply` can stop at past `decide` (D-7058): its `append` is `append`, its
+ *  `apply` (the `UPDATE`) is `update`, and its `done` (the callback returned, `COMMIT` not yet run) is `commit`. A
+ *  position the kernel gains is a compile error here, never a silent `commit`. */
+const COLLECT_LANE_FAILED_PHASE = { append: 'append', apply: 'update', done: 'commit' } as const satisfies
+  Record<Exclude<JournalPhase, 'decide'>, Extract<CollectLaneWrite, { kind: 'failed' }>['phase']>;
 
 /** `failed.code`: the thrown error's code word as Node or `node:sqlite` set it (`ENOSPC`, `EACCES`, `ERR_SQLITE_ERROR`),
  *  never its message, which for a filesystem error names the journal's path (spec §5.6). An error with no such word

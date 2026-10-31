@@ -389,7 +389,10 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // The third member is the program that renders and publishes the pair on
     // the box (`ccrc install`/`update` and `deploy.sh` both run it from the
     // tree), so a release without it installs nothing at all.
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py'] as const;
+    // The fourth is the library the body pins and loads (D-6913): a release without it installs a ccd that refuses every start.
+    // The fifth and sixth are the docs redactor the installer publishes beside the body and pins (D-7077, OA-C11 (a)).
+    // The seventh is the body's second library, the train proof (D-7463), pinned and loaded as the fourth is.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh'] as const;
     const home = mkTmp('build-release-ccd-pair-');
     const root = fixtureRepo(home, {
       tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])),
@@ -417,7 +420,9 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
   // into a fixture HOME, reads ccrc-unmodified and the launcher accepts it.
   it('the extracted tarball\'s ccd installs a body that verifies as ccrc-unmodified', () => {
     const real = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py'] as const;
+    // With the libraries the body pins (D-6913, D-7463) and the docs redactor's two files (D-7077): the installer renders their digests
+    // into the body, then stamps it.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh'] as const;
     const home = mkTmp('build-release-ccd-stamp-');
     const root = fixtureRepo(home, { tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])) });
     const out = join(home, 'out');
@@ -431,7 +436,18 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     expect(r.status, r.stderr).toBe(0);
     const installed = readFileSync(join(box, '.local', 'libexec', 'ccrc', path.basename(pair[0])), 'utf8');
     expect(verifyMarker(installed)).toBe('ccrc-unmodified');
+    expect(installed, 'the installed body pins the library it shipped with').toContain(
+      `\n__CCD_LIB_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[3]))).digest('hex')}\n`);
+    expect(installed, 'the installed body pins the train-proof library it shipped with').toContain(
+      `\n__CCD_LIB_TRAIN_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[6]))).digest('hex')}\n`);
+    expect(installed, 'the installed body pins the redact.mjs it shipped with').toContain(
+      `\n__CCD_REDACT_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[4]))).digest('hex')}\n`);
+    expect(installed, 'the installed body pins the redact-cli.mjs it shipped with').toContain(
+      `\n__CCD_REDACT_CLI_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[5]))).digest('hex')}\n`);
     expect(verifyMarker(readFileSync(join(dest, pair[0]), 'utf8')), 'the release tree itself carries no stamp').toBe('foreign');
+    expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a library digest').toContain('\n__CCD_LIB_SHA256=stamp-at-install\n');
+    expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a redactor digest').toContain(
+      '\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n');
   });
 
   // ── Stage 4, Task 6: the artifact carries its own identity ──────────────

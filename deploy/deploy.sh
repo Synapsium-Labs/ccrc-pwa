@@ -568,10 +568,11 @@ if [ "$TARGET" = "agent" ]; then
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS ~/.local/bin ~/.cc-sessions \
     && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
-    && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
+    && { [ ! -f ~/.local/libexec/ccrc/shared/redact.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs; } && { [ ! -f ~/.local/libexec/ccrc/shared/redact-cli.mjs ] || cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs; } \
+    && { [ ! -f ~/.local/libexec/ccrc/lib/disk-retention.sh ] || cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh; } && { [ ! -f ~/.local/libexec/ccrc/lib/train-proof.sh ] || cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh; } && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
-    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } && { [ ! -f ~/.cc-sessions/lib/carry-dedupe.py ] || cp -a ~/.cc-sessions/lib/carry-dedupe.py ~/ccrc-backups/$TS/carry-dedupe.py; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -634,7 +635,12 @@ if [ "$TARGET" = "agent" ]; then
   # new ccd without it (a missing file only makes a read answer NOT MEASURED).
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/lib'
   install_atomic ccd/lib/transcript.jq .cc-sessions/lib/transcript.jq 644
+  # `ccd carry-dedupe`'s program (#317), 644: a script python3 runs, never executed directly.
+  install_atomic ccd/lib/carry-dedupe.py .cc-sessions/lib/carry-dedupe.py 644
   install_ccd_pair
+  # The settings reader the ccd-* sweeps source (wave 29, D-6980), beside ccd's body: after the pair, whose
+  # installer creates ~/.local/libexec/ccrc, and before the sweeps below.
+  install_atomic ccd/lib/ccrc-settings.sh .local/libexec/ccrc/ccrc-settings.sh 644
   # The coordination client, beside ccd because the fleet host is where sessions
   # run and a session-side client on the server box is a copy nobody invokes. A
   # plain install_atomic and NOT a shim: it sources nothing, so one file is the
@@ -735,6 +741,11 @@ if [ "$TARGET" = "agent" ]; then
   # The pane-scope sweep (session-continuity wave 4), beside the reaper and on
   # its terms; its stop is shadowed until ~/.cc-sessions/scope-sweep-live exists.
   install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755
+  # The read-only conflict radar (landing-order spec stage 3), beside the sweeps and on their terms; it measures
+  # nothing until the operator opts a project in with a conf under ~/.ccrc/landing/.
+  install_atomic ccd/ccd-land-probe .local/bin/ccd-land-probe 755
+  # The test box's daily durations fetch (D-7413), on the radar's terms; with no test box configured it fetches nothing.
+  install_atomic ccd/ccd-testbox-times .local/bin/ccd-testbox-times 755
   # D-5241: the tool-child priority's shell prefix, which `ccd` names in
   # CLAUDE_CODE_SHELL_PREFIX on Linux. Unconditional here: this lane IS a
   # session host.
@@ -813,19 +824,31 @@ if [ "$TARGET" = "agent" ]; then
   # it reaches every pane scope) and `ccrc-tmux-server.scope.d`, the same pair
   # `ccrc install`'s `_inst_units` places. Nothing ever deletes them on a
   # redeploy of an older tree; rolling back is removing them by hand.
+  #
+  # THE SLICE DROP-IN IS RENDERED, NOT COPIED (D-7296). Its `MemoryMax=` and `MemorySwapMax=` are the
+  # BOX's: `_slice_limits_unit` sources the shipped `~/ccrc/ccd/ccrc` in a child bash (its dispatch is guarded, so
+  # sourcing runs no verb) and calls the function `ccrc install` calls, `_inst_slice_limits`, which reads
+  # CCRC_SESSION_SLICE_MEMORY_MAX and CCRC_SESSION_SLICE_SWAP_MAX from the box's environment, else the box's
+  # ~/.ccrc/ccrc.env, else the template's 24G and 6G — on the box, never from this machine's config. A value it cannot
+  # use keeps the one the installed drop-in carries, so a typo never shrinks a tuned box. Paths reach the
+  # child as arguments; the `-c` string is fixed. A box that sets neither key gets the template byte for byte.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
+_slice_limits_unit() { bash -c ". \"\$1\" || exit 1; _inst_slice_limits \"\$2\" \"\$3\"" slice-limits ~/ccrc/ccd/ccrc "$1" "$2"; }
 cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
     && _unit_atomic ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ccrc-agent.service \
     && _unit_atomic ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/claude-session@.service \
     && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
     && _unit_atomic ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/limits.conf \
-    && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/limits.conf" \
+    && _slice_limits_unit ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/limits.conf" \
     && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/zz-no-memoryhigh.conf" \
     && mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d \
     && _unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf ~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
+    && mkdir -p ~/.config/systemd/user/app.slice.d \
+    && _unit_atomic ~/ccrc/deploy/systemd/app.slice.d/50-ccrc-agent-protect.conf ~/.config/systemd/user/app.slice.d/50-ccrc-agent-protect.conf \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrctests.slice ~/.config/systemd/user/ccrctests.slice \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service \
@@ -846,6 +869,10 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.timer ~/.config/systemd/user/ccd-history-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.service ~/.config/systemd/user/ccd-land-probe.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.timer ~/.config/systemd/user/ccd-land-probe.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.service ~/.config/systemd/user/ccd-testbox-times.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.timer ~/.config/systemd/user/ccd-testbox-times.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.service ~/.config/systemd/user/ccrc-codex-usage@.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.timer ~/.config/systemd/user/ccrc-codex-usage@.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
@@ -987,6 +1014,12 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # check. Because it is the last link of an `&&` chain, its exit status is
   # the ssh exit status, and `set -e` at the top of this file aborts the
   # deploy on it.
+  # #1170: after the restart, assert-protect-chain.sh reads the enforced
+  # memory.min along the agent's cgroup chain. A short agent or app.slice
+  # (exit 1) fails the deploy: this lane installs both. Short root-owned
+  # ancestors (exit 2) print the exact root step and let the lane finish,
+  # so the user-manager half still lands; the gate keeps printing the step on
+  # every deploy until the operator has applied it. It never runs sudo.
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && bash ~/ccrc/deploy/assert-slice-policy.sh && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
@@ -999,7 +1032,10 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-tmp-sweep.timer \
     && systemctl --user enable --now ccd-history-sweep.timer \
     && systemctl --user enable --now ccd-scope-sweep.timer \
+    && systemctl --user enable --now ccd-land-probe.timer \
+    && systemctl --user enable --now ccd-testbox-times.timer \
     && systemctl --user restart ccrc-agent.service \
+    && { bash ~/ccrc/deploy/assert-protect-chain.sh || [ $? -eq 2 ]; } \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"
   # THE SUPERVISOR SWEEP. Every claude-session@ unit is a LONG-LIVED `ccd

@@ -16,14 +16,16 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  BoxTokenHolder, TOKEN_SLOTS, checkMailToken, extractToken, matchDigestSlots,
+  BoxTokenHolder, TOKEN_SLOTS, checkMailToken, extractToken,
   MailTokenFileUnusable, MailTokenPlaceholderUnedited, PLACEHOLDER_TOKEN, readMailToken,
 } from '../src/coord/token.js';
+import { matchDigestSlots } from '../src/token/digestSlots.js';
 import { PENDING_HARD_CAP } from '../src/token/policy.js';
 import { buildServer } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import { mkTmp } from './tmpHelpers.js';
 
 describe('checkMailToken', () => {
@@ -477,7 +479,8 @@ describe('matchDigestSlots: every slot compared, every time', () => {
   });
 
   it('the combine carries no short-circuit, ternary, early exit, some or find (source scan)', () => {
-    const src = readFileSync(path.join(repoRoot, 'server', 'src', 'coord', 'token.ts'), 'utf8');
+    // D-7506: the combine lives in `token/digestSlots.ts#matchDigestSlots`; the markers sit inside its body.
+    const src = sourceOfSymbol('server/src/token/digestSlots.ts', 'matchDigestSlots');
     const begin = src.split('// combine:' + 'begin').length - 1;
     const end = src.split('// combine:' + 'end').length - 1;
     expect([begin, end], 'exactly one combine region').toEqual([1, 1]);
@@ -490,10 +493,11 @@ describe('matchDigestSlots: every slot compared, every time', () => {
 });
 
 describe('every box-token lane names itself to the check', () => {
-  // The 15 call sites (server.ts 2, coord/routes.ts 12, update/routes.ts 1) each
+  // The 17 call sites (server.ts 2, coord/routes.ts 14, update/routes.ts 1) each
   // pass their route key, so a retired presentation is counted per lane. The
   // one call before the first registration is requireMailToken's own, which
-  // passes the `route` its 15 callers name.
+  // passes the `route` its callers name. Two are the test box's read and tools
+  // sync (test box plan TB9, D-7554), which take the session OR the box token.
   const CALL = /checkMailToken\(deps\.mailToken \?\? null, req\.headers\[MAIL_TOKEN_HEADER\](?:, ([^)]+))?\)/g;
   const sites = (rel: string): { lane: string | null; route: string | null }[] => {
     const src = readFileSync(path.join(repoRoot, 'server', 'src', rel), 'utf8');
@@ -505,9 +509,9 @@ describe('every box-token lane names itself to the check', () => {
     });
   };
 
-  it('all fifteen pass a lane, and a literal lane is its own route key', () => {
+  it('all seventeen pass a lane, and a literal lane is its own route key', () => {
     const all = ['server.ts', 'coord/routes.ts', 'update/routes.ts'].flatMap(sites);
-    expect(all).toHaveLength(15);
+    expect(all).toHaveLength(17);
     for (const s of all) {
       expect(s.lane, `a call inside ${s.route ?? 'the helper'} names no lane`).not.toBeNull();
       if (s.route === null) expect(s.lane).toBe('route');

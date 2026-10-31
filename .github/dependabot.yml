@@ -11,11 +11,21 @@
 # shared/*.ts is ESM (see the `//` key in shared/package.json). Listing it here
 # would be an entry that can never produce an update.
 #
-# Grouping, not one PR per bump: `main` now requires an approving review, so an
-# ungrouped week could put a dozen PRs in front of a human who has to click
-# approve on each. Minor and patch updates ride together per package; MAJORS
-# stay separate on purpose, because those are the ones that need a person to
-# read a changelog rather than a green tick.
+# One group per package, ALL update types: `main` requires an approving review,
+# so an ungrouped week could put a dozen PRs in front of a human. Each package's
+# group takes major, minor and patch together, so a week produces at most one
+# PR per package. Majors ride in the group too: dependencies stay on the latest
+# major continuously, because holding majors back as separate PRs is how a repo
+# falls behind. The group's CI run is the gate; a major that breaks it is fixed
+# in that PR (or ignored here with a reason), not left to age.
+#
+# Two exceptions, both as `ignore` entries:
+# - typescript-api (server) is the test scanners' parser, an exact pin
+#   (D-5853): a new version is a reviewed PR that edits it, never a grouped bump.
+# - @types/node never goes above the runtime major. Every package declares
+#   engines `node >=22.16.0`, so @types/node stays on 22.x; typing against a
+#   newer Node would let code use APIs the supported runtime lacks. Raise the
+#   `versions` bound below together with the engines field, never before it.
 version: 2
 
 updates:
@@ -24,44 +34,50 @@ updates:
     directory: /server
     schedule:
       interval: weekly
-    # The test scanners' parser (D-5853) is an exact pin: a new version is a reviewed PR
-    # that edits it, never a grouped bump.
     ignore:
       - dependency-name: typescript-api
+      - dependency-name: '@types/node'
+        versions: ['>=23']
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore(deps)
       prefix-development: chore(deps-dev)
     groups:
-      server-minor-patch:
+      server-all:
         patterns: ['*']
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
 
   - package-ecosystem: npm
     directory: /agent
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '@types/node'
+        versions: ['>=23']
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore(deps)
       prefix-development: chore(deps-dev)
     groups:
-      agent-minor-patch:
+      agent-all:
         patterns: ['*']
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
 
   - package-ecosystem: npm
     directory: /pwa
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '@types/node'
+        versions: ['>=23']
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore(deps)
       prefix-development: chore(deps-dev)
     groups:
-      pwa-minor-patch:
+      pwa-all:
         patterns: ['*']
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
 
   # ui/ (@ccrc/ui, the design system) is not runnable on its own, but it has
   # its own lockfile and pwa builds it from SOURCE — ui's dependencies resolve
@@ -70,14 +86,17 @@ updates:
     directory: /ui
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '@types/node'
+        versions: ['>=23']
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore(deps)
       prefix-development: chore(deps-dev)
     groups:
-      ui-minor-patch:
+      ui-all:
         patterns: ['*']
-        update-types: [minor, patch]
+        update-types: [major, minor, patch]
 
   # ── the actions the workflows pin ─────────────────────────────────────────
   #

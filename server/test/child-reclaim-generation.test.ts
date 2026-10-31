@@ -147,12 +147,17 @@ describe('one implementation each', () => {
       ['childReclaimCoordinated', 'server/src/childReclaimSweep.ts'],
       ['childReclaimBornAt', 'server/src/coord/childReclaim.ts'],
       ['childReclaimHasCoordinated', 'server/src/coord/childReclaim.ts'],
+      ['childReclaimClaimsByChair', 'server/src/coord/childReclaim.ts'],
     ] as const) {
       const re = new RegExp(`function ${name}\\b|\\b${name}\\s*=\\s*\\(`);
       expect(src.filter(([, t]) => re.test(t)).map(([f]) => f), `${name} is defined once`).toEqual([home]);
     }
     expect(holders('.childReclaimCoordinatorClaims()'), 'the store read is called only by the fence\'s two homes')
       .toEqual(['server/src/coord/childReclaim.ts', 'server/src/watch.ts']);
+    // The dated whole-map export serves the deps-shed arm alone (D-7278), which asks the fence above row by row; a
+    // second consumer is a second place that could fold the claims its own way, so it is argued here first.
+    expect(holders('childReclaimClaimsByChair('), 'the dated claims export: its home and the deps-shed arm')
+      .toEqual(['server/src/coord/childReclaim.ts', 'server/src/depsShedPass.ts']);
     const hasCoordinated = 'childReclaimHasCoordinated(';
     expect(src.map(([f, t]) => [f, count(t, hasCoordinated)] as const).filter(([, n]) => n > 0),
       'its definition, step 2a and step 5; the close; and the expiry lane\'s child arm').toEqual([

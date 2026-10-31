@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
@@ -105,7 +106,7 @@ function residualsAtTheTip(): string[] {
   if (dotOnly.test(read('shared/api.ts')) || dotOnly.test(read('server/src/childReclaimSweep.ts'))) {
     out.push('server-docstrings-call-ccds-predicate-dot-only');
   }
-  const ccd = read('ccd/ccd');
+  const ccd = ccdSource();
   const expireNote = ccd.indexOf('\n# EXPIRE-V1.');
   if (expireNote > -1 && ccd.slice(expireNote, expireNote + 700).includes('ships it inert')) {
     out.push('expire-v1-note-ships-it-inert');

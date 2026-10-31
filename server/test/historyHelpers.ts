@@ -490,15 +490,24 @@ function atEndOfFile(box: HistoryBox, uuid: string): boolean {
 /** Replace the box's placed shim with a stand-in: it appends its argv, one line per run, to
  *  `<home>/stub-shim-argv`, prints `stderr` (when given) verbatim on stderr, then `stdout` verbatim, and exits `exit`.
  *  The CLI's relay is then measured against an answer the case chose; a case that must spawn nothing reads the argv
- *  file as absent. A box keeps its stand-in; a case that needs the real shim builds its own box. */
+ *  file as absent. A box keeps its stand-in; a case that needs the real shim builds its own box.
+ *  D-7336: `stdout` goes out in ONE write(2), so the relay reads it as one chunk and the case is deterministic. bash's
+ *  printf does not: bash line-buffers its stdout, so `printf '%s'` writes once per line, and a loaded CI runner can read
+ *  those writes in two chunks; the relay then reads the later lines as a second batch with a look-behind, and a case that
+ *  pinned the one-batch reading failed on a chunking it never chose. `cat` of a file writes it once, and a pipe write of
+ *  at most PIPE_BUF (4096) bytes is atomic, so such a stdout is one chunk; a longer one (the closed-pipe cases' 2,000
+ *  lines) can still arrive in several reads, so a case that pins one chunk keeps its stdout within PIPE_BUF. A case that
+ *  needs the shim's lines on separate writes uses rawShim. */
 export function stubShim(box: HistoryBox, script: { stdout: string; exit: number; stderr?: string }): void {
   const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
   const p = path.join(box.home, '.local', 'bin', 'ccd-history-sweep');
+  const out = path.join(box.home, 'stub-shim-stdout');
+  fs.writeFileSync(out, script.stdout);
   fs.writeFileSync(p, [
     '#!/usr/bin/env bash',
     'printf \'%s\\n\' "$*" >> "$HOME/stub-shim-argv"',
     ...(script.stderr === undefined ? [] : [`printf '%s' ${quote(script.stderr)} >&2`]),
-    `printf '%s' ${quote(script.stdout)}`,
+    `cat ${quote(out)}`,
     `exit ${script.exit}`,
     '',
   ].join('\n'));

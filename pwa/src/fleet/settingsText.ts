@@ -20,6 +20,7 @@ import { STALL_SECTION_TEXT, type StallLevel } from '../../../shared/api';
 import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
+import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
 /** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
@@ -32,8 +33,8 @@ export const SETTINGS_INDEX_TEXT = {
     updates: 'Which ccrc release the fleet runs, and how new releases reach it.',
     appearance: 'How ccrc looks on this device. Other devices keep their own choice.',
     notifications: 'What this browser is told, and which releases the server announces to everyone.',
-    automation: 'What the server does to the fleet by itself: checking on quiet workers, and clearing what dead sessions '
-      + 'leave behind.',
+    automation: 'What the server does to the fleet by itself: checking on quiet workers, abandoning dispatches that never '
+      + 'came back, and clearing what dead sessions leave behind.',
     security: 'Who can open this console, and the key the fleet box uses to call this server.',
   } satisfies Record<SettingsSectionId, string>,
   notFound: 'That section does not exist.',
@@ -303,8 +304,22 @@ export const SETTINGS_CARDS = {
     collector: {
       scope: SETTINGS_SCOPE.fleet, title: COLLECT_SECTION_TEXT.title, purpose: COLLECT_SECTION_TEXT.purpose,
     },
+    dispatch: {
+      scope: SETTINGS_SCOPE.fleet, title: DISPATCH_ABANDON_TEXT.title, purpose: DISPATCH_ABANDON_TEXT.purpose,
+    },
     pause: {
       scope: SETTINGS_SCOPE.fleet, title: COLLECT_PAUSE_TEXT.title, purpose: COLLECT_PAUSE_TEXT.stops,
+    },
+    roll: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',
+      purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
+        + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
+    },
+    /** Test box plan TB10 (D-7412): the section's last card (D-7418). */
+    testbox: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Test box',
+      purpose: 'Whether ccrc test runs on the test box instead of the fleet host, and how that box is doing: its tools, '
+        + 'its runs and queue, and why runs fell back here in the last day.',
     },
   },
   security: {

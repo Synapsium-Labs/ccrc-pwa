@@ -59,6 +59,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -81,7 +82,7 @@ const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
 const AUTH_GATE_TEST = read('server/test/auth-gate.test.ts');
-const CCD_SRC = read('ccd/ccd');
+const CCD_SRC = ccdSource();
 
 /** The two mechanisms that count as "this handler consulted the box token" —
  *  the same pair `coord-pause-route.test.ts` and `auth-gate.test.ts` already
@@ -257,7 +258,13 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
   'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three', 'twenty-four',
   'twenty-five', 'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty', 'thirty-one', 'thirty-two',
-  'thirty-three', 'thirty-four', 'thirty-five', 'thirty-six'];
+  'thirty-three', 'thirty-four', 'thirty-five', 'thirty-six',
+  // W3 Q3f (D-7030): the surface grew to thirty-eight with the question family's claimant pair.
+  'thirty-seven', 'thirty-eight',
+  // Test box plan TB9 (D-7554): forty with the test box's read and its tools sync, which take a session or the token.
+  'thirty-nine', 'forty',
+  // Landing order wave 5e: forty-one with GET /api/landing, a plain requireMailToken lane.
+  'forty-one'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

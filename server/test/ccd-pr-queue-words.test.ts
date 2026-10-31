@@ -16,7 +16,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { PR_QUEUE_WORDS } from '../src/prstate.js';
 
 /** The embedded python program of `_pr_queue_py`: from its `python3 /dev/fd/3 3<<'PY'` line to the terminator. */
@@ -46,7 +46,7 @@ const emittedWords = (src: string): string[] => {
 };
 
 describe('ccd\'s merge-queue words are the server\'s (D-3882)', () => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   it('every word `_pr_queue_py` can emit is a PR_QUEUE_MAP word, and every PR_QUEUE_MAP word is emitted', () => {
     expect(emittedWords(src)).toEqual([...PR_QUEUE_WORDS].sort());

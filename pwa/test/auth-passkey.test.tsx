@@ -24,6 +24,7 @@ import { LoginScreen, UNREACHABLE_TEXT, VERDICT_TEXT } from '../src/components/L
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
+import { useFleetStore } from '../src/stores/fleet';
 import { renderSettings } from './settingsHost';
 import { declValue, ruleIn } from './cssRule';
 import { STORE_UNREADABLE_TEXT } from '../src/screens/settings/YourSignInCard';
@@ -76,6 +77,7 @@ afterEach(() => {
   clearAuthLost();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  useFleetStore.setState({ usage: null, projected: undefined, roster: [], lanes: null, accountsConnect: null });
 });
 
 /** Settings › Security, where sign-in lives since settings Task R2d (D-5508), with the frame's other reads quiet. */
@@ -693,7 +695,10 @@ describe('Revoke asks first, and sign-in has left Accounts (settings Task R2d; D
     const f = routes([KEY('AQEB', 'Device A')], []);
     vi.stubGlobal('fetch', f);
     render(<AccountsScreen />);
-    await waitFor(() => expect(f).toHaveBeenCalled());
+    // The screen reads the app-wide fleet store's accounts answer (C8, D-6440): that store's one read runs through this
+    // fetch, so the screen has drawn what an answer gives it before the absences below are asserted.
+    await act(() => useFleetStore.getState().refreshAccounts());
+    expect(f).toHaveBeenCalled();
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(screen.queryByText('Your sign-in')).toBeNull();
     expect(screen.queryByText('This session')).toBeNull();

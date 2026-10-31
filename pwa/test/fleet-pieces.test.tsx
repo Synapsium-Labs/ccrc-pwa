@@ -1,23 +1,19 @@
 // The fleet pieces both skins' shells place (W2 Task S2c; D-5471, D-5472): the banner stack and its order,
-// the fleet's one count readout, and the compact lane gauges. Each is built once here so Refined's app bar
+// the fleet's one count readout. Each is built once here so Refined's app bar
 // (S4b, S5) and Instrument's shell (S9, S11) only place them; a skin never re-implements one.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { AccountUsage, AuthStatus, FleetHealth, FleetSession, NodeWire, RunSummary, UpdatesView } from '../../shared/api';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import type { AuthStatus, FleetHealth, FleetSession, NodeWire, RunSummary, UpdatesView } from '../../shared/api';
 import { BANNER_ORDER, BannerStack, LOCAL_BANNERS, type BannerRank } from '../src/fleet/BannerStack';
 import { fleetSummary } from '../src/fleet/fleetSummary';
-import { AccountsStrip } from '../src/fleet/AccountsStrip';
-import { COMPACT_FIT, CompactGauges, compactDoorLabel, compactReading, hiddenGauges } from '../src/fleet/CompactGauges';
-import { DOOR_EVENT } from '../src/command/door';
 import { FleetHostBanner, fleetHostBannerShows } from '../src/fleet/FleetHostBanner';
 import { HaltBanner, haltBannerShows } from '../src/fleet/HaltBanner';
 import { SubstrateBanner, substrateBannerShows } from '../src/fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows } from '../src/fleet/PasskeyNotice';
 import { createFleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
-import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 
 // This browser can enrol, so the passkey notice's check turns on the posture alone.
@@ -217,121 +213,5 @@ describe('fleetSummary', () => {
     expect(fleetSummary([session('working', false)], null).readout).toBe('1 session');
     expect(fleetSummary([session('attention', true)], [run('working')]).readout).toBe('1 session · 1 waiting · 1 run');
     expect(fleetSummary([], []).readout).toBe('0 sessions');
-  });
-});
-
-describe('the compact gauges', () => {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const lane = (wrapper: string, five: number | null, seven: number | null, over: Partial<AccountUsage> = {}): AccountUsage => ({
-    wrapper, five, seven, ts: nowSec - 60, fiveResetAt: null, sevenResetAt: null,
-    fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
-  });
-  const stub = (accounts: AccountUsage[]): void => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected: { wrapper: accounts[0]?.wrapper ?? 'x', score: 0 }, roster: [] });
-  };
-  const seven = [
-    lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2),
-    lane('lane-e', 3, 4), lane('lane-f', 5, 6), lane('lane-g', 7, 8), lane('lane-off', 99, 99, { disabled: true }),
-  ];
-
-  it('the compact gauges: one meter per lane, +n where they do not fit, the group one door to /accounts', async () => {
-    stub(seven);
-    const { container } = render(<AccountsStrip compact="bar" />);
-    const door = await screen.findByRole('link', { name: /^account usage.* — open accounts$/ });
-    await within(door).findByText('lane-a');
-    expect(door).toHaveAttribute('data-compact', 'bar');
-    // The first that fit, one meter each, its name and its binding (the larger) percentage; then "+n" in the door.
-    expect(door.querySelectorAll('.meter')).toHaveLength(COMPACT_FIT.bar);
-    expect(within(door).getByText('80%')).toBeInTheDocument();
-    expect(within(door).getByText(`+${7 - COMPACT_FIT.bar}`)).toBeInTheDocument();
-    expect(within(door).queryByText('lane-off')).toBeNull();
-    // One door: nothing inside it is a control of its own.
-    expect(container.querySelectorAll('[role="link"], a, button')).toHaveLength(1);
-    // The group is the `go-accounts` door (W2 Task S4b): it asks the command layer, which navigates.
-    expect(door).toHaveAttribute('data-command', 'go-accounts');
-    const ran: string[] = [];
-    const hear = (e: Event): void => { ran.push((e as CustomEvent<string>).detail); };
-    window.addEventListener(DOOR_EVENT, hear);
-    fireEvent.click(door);
-    fireEvent.keyDown(door, { key: 'Enter' });
-    window.removeEventListener(DOOR_EVENT, hear);
-    expect(ran).toEqual(['go-accounts', 'go-accounts']);
-  });
-
-  it('led fits more than bar; grid places every lane, two to a row, with no +n', async () => {
-    stub(seven);
-    render(<AccountsStrip compact="led" />);
-    const led = await screen.findByRole('link', { name: /^account usage.* — open accounts$/ });
-    await within(led).findByText('lane-a');
-    expect(led.querySelectorAll('.meter')).toHaveLength(Math.min(7, COMPACT_FIT.led));
-    expect(COMPACT_FIT.led).toBeGreaterThan(COMPACT_FIT.bar);
-    cleanup();
-    stub(seven);
-    render(<AccountsStrip compact="grid" />);
-    const grid = await screen.findByRole('link', { name: /^account usage.* — open accounts$/ });
-    await within(grid).findByText('lane-a');
-    expect(grid.querySelectorAll('.meter')).toHaveLength(7);
-    expect(within(grid).queryByText(/^\+\d+$/)).toBeNull();
-  });
-
-  it('the compact arrangement keeps the strip\'s placeholder, so the door never renders nothing', async () => {
-    stub([]);
-    render(<AccountsStrip compact="bar" />);
-    const door = await screen.findByRole('link', { name: /^account usage.* — open accounts$/ });
-    expect(await within(door).findByText('no accounts reporting')).toBeInTheDocument();
-  });
-
-  it('the reading is kept three ways, like the full strip: reset when the binding window rolled over, — never measured', () => {
-    expect(compactReading(lane('x', 30, 80))).toBe('80%');
-    expect(compactReading(lane('x', null, null))).toBe('—');
-    // The 5h window rolled over (the server zeroed it) and nothing else was measured: the zero is inferred.
-    expect(compactReading(lane('x', 0, null, { fiveRolledOver: true }))).toBe('reset');
-    // The 5h window rolled over, but the 7d one binds and was measured.
-    expect(compactReading(lane('x', 0, 40, { fiveRolledOver: true }))).toBe('40%');
-    expect(compactReading(lane('x', 0, 0, { fiveRolledOver: true, sevenRolledOver: true }))).toBe('reset');
-    // A measured zero beside a rolled-over zero is still measured.
-    expect(compactReading(lane('x', 0, 0, { fiveRolledOver: true }))).toBe('0%');
-  });
-
-  it('the fit is measured: a gauge below the first line wrapped out of the box and counts into +n', () => {
-    const at = (...tops: number[]): { top: number; right: number }[] => tops.map((top) => ({ top, right: 100 }));
-    expect(hiddenGauges([], 200)).toEqual([]);
-    expect(hiddenGauges(at(10, 10, 10), 200)).toEqual([false, false, false]);
-    expect(hiddenGauges(at(10, 10, 28, 28), 200)).toEqual([false, false, true, true]);
-    expect(hiddenGauges(at(10, 10.5, 28), 200)).toEqual([false, false, true]);
-  });
-
-  // The first gauge cannot wrap (it opens the line), so in a row narrower than its floor it was squeezed and its
-  // reading cut, and the "+n" never said it (W2 Task S4b review: the bar at 900 drew a meter with no number). A gauge
-  // whose right edge passes the row's is hidden too, and counts into +n, the first one included.
-  it('the fit is measured: a gauge whose right edge passes the row\'s is hidden and counts into +n, the first one too', () => {
-    expect(hiddenGauges([{ top: 10, right: 629 }], 593)).toEqual([true]);
-    expect(hiddenGauges([{ top: 10, right: 593.5 }, { top: 28, right: 400 }], 593)).toEqual([false, true]);
-  });
-
-  it('a row too narrow for its first gauge hides that gauge and says every lane in +n, first', () => {
-    const six = [lane('lane-a', 100, 50), lane('lane-b', 88, 50), lane('lane-c', 76, 50), lane('lane-d', 40, 50), lane('lane-e', 30, 50), lane('lane-f', 20, 50)];
-    // jsdom lays nothing out: the row is 84 wide and the first gauge, which opens its line, ends 36 past it; the
-    // rest wrapped below. The bar places four lanes (COMPACT_FIT), so two more are capped.
-    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-      const box = (left: number, top: number, right: number): DOMRect =>
-        ({ left, top, right, bottom: top + 18, width: right - left, height: 18, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
-      if (this.classList.contains('accounts-compact-lanes')) return box(509, 10, 593);
-      if (this.classList.contains('accounts-compact-gauge')) {
-        return this === this.parentElement?.firstElementChild ? box(509, 10, 629) : box(509, 28, 629);
-      }
-      return box(0, 0, 0);
-    });
-    const { container } = render(<CompactGauges compact="bar" lanes={six} roster={[]} placeholder={null} />);
-    const gauges = [...container.querySelectorAll('.accounts-compact-gauge')];
-    expect(gauges).toHaveLength(4);
-    expect(gauges.map((g) => g.hasAttribute('data-clipped'))).toEqual([true, true, true, true]);
-    expect(container.querySelector('.accounts-compact-more')).toHaveTextContent('+6');
-    expect(container.querySelector('.accounts-compact')).toHaveAttribute('data-lanes-hidden');
-  });
-
-  it('the door\'s name carries the fullest lane\'s reading', () => {
-    expect(compactDoorLabel([], [])).toBe('account usage — open accounts');
-    expect(compactDoorLabel([lane('lane-a', 30, 80), lane('lane-b', 90, null)], [])).toBe('account usage, highest lane-b 90% — open accounts');
   });
 });

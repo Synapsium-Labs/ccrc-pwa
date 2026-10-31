@@ -14,7 +14,8 @@
 // (their effects stop), and that hands its view up. Its slot is the first child and `children` always the second,
 // so the shell below never moves.
 //
-// The cadences are today's (§4.4's table): the updates and stall watch polls, the collector read, the coord frame's
+// The cadences are today's (§4.4's table): the updates and stall watch polls, the collector read, the dispatch switch's
+// read (D-7319, the stall watch's 60 s), the test box block's read (TB10, D-7412: the server poll's 30 s), the coord frame's
 // cleanup pause (a WebSocket frame, not a request), the auth status once per mount (then the passkey list, only while
 // that status says the gate is armed; settings Task R2d, D-5508), and the push state when Settings
 // opens and again whenever the index mounts (`rereadPush`), so a toggle on the Notifications page shows on the index
@@ -24,8 +25,10 @@ import type { ReactNode } from 'react';
 import type { AuthStatus, MarkerState, PasskeyListResponse } from '../../../../shared/api';
 import { childReclaimMarker } from '../../fleet/childReclaimWords';
 import { useCollectLaneView, type CollectLanePoll } from '../../fleet/useCollectLaneView';
+import { useDispatchAbandonView, type DispatchAbandonPoll } from '../../fleet/useDispatchAbandonView';
 import { useLinearConnection, type LinearPoll } from '../../fleet/useLinearConnection';
 import { useStallWatchView, type StallWatchPoll } from '../../fleet/useStallWatchView';
+import { useTestboxView, type TestboxPoll } from '../../fleet/useTestboxView';
 import { useUpdatesView, type UpdatesPoll } from '../../fleet/useUpdatesView';
 import { api } from '../../lib/api';
 import { armedMode, readAuthStatus } from '../../lib/auth';
@@ -52,6 +55,10 @@ export interface SettingsView {
   readonly updates: UpdatesPoll;
   readonly stall: StallWatchPoll;
   readonly collect: CollectLanePoll;
+  /** The dead-dispatch switch (D-7319), polled with the stall watch's cadence. */
+  readonly dispatchAbandon: DispatchAbandonPoll;
+  /** The test box block (TB10, D-7412), polled at the server poll's cadence. */
+  readonly testbox: TestboxPoll;
   /** The Linear connection (named workspaces S4b), shown on the Security page; read when the page becomes visible, not polled. */
   readonly linear: LinearPoll;
   readonly pause: PauseRead;
@@ -99,6 +106,13 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const collect = useMemo<CollectLanePoll>(
     () => ({ view: c.view, failure: c.failure, reload: c.reload, settle: c.settle }),
     [c.view, c.failure, c.reload, c.settle]);
+  const d = useDispatchAbandonView();
+  const dispatchAbandon = useMemo<DispatchAbandonPoll>(
+    () => ({ view: d.view, failure: d.failure, reload: d.reload, settle: d.settle }),
+    [d.view, d.failure, d.reload, d.settle]);
+  const tb = useTestboxView();
+  const testbox = useMemo<TestboxPoll>(
+    () => ({ view: tb.view, failure: tb.failure, reload: tb.reload }), [tb.view, tb.failure, tb.reload]);
   const l = useLinearConnection();
   const linear = useMemo<LinearPoll>(
     () => ({ view: l.view, failure: l.failure, reload: l.reload, settle: l.settle }), [l.view, l.failure, l.reload, l.settle]);
@@ -146,8 +160,8 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const rereadPush = useCallback(() => setPushAsk((n) => n + 1), []);
 
   const view = useMemo<SettingsView>(
-    () => ({ updates, stall, collect, linear, pause, auth, push, rereadPush }),
-    [updates, stall, collect, linear, pause, auth, push, rereadPush],
+    () => ({ updates, stall, collect, dispatchAbandon, testbox, linear, pause, auth, push, rereadPush }),
+    [updates, stall, collect, dispatchAbandon, testbox, linear, pause, auth, push, rereadPush],
   );
   const pageView = useMemo<SettingsPageView>(() => ({ ...view, passkeys, refreshAuth }), [view, passkeys, refreshAuth]);
   // A layout effect, so the frame's first paint on Settings already has the view.

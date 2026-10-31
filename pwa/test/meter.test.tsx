@@ -20,7 +20,6 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { Meter } from '@ccrc/ui';
 import type { AccountUsage } from '../../shared/api';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
@@ -73,7 +72,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+  act(() => useFleetStore.setState({
+    sessions: [], conn: 'connecting', notices: [], blocked: false, usage: null, projected: undefined, roster: [],
+  }));
 });
 
 describe('the meter is on the palette', () => {
@@ -116,6 +117,14 @@ describe('the meter is on the palette', () => {
     expect(track).toHaveAttribute('data-band', 'crit');
   });
 
+  it('an empty meter stays visible at 3:1: the track carries a 1px inset ring in --ink-tertiary (D-6329)', () => {
+    // The track fill measures 1.07 to 1.56 on a card over the twelve palettes, and no edge token
+    // clears 3:1 everywhere, so a 0% meter can be a blank without the ring; the pair
+    // `meter track outline / raised|surface` in contrast-check.mjs gates the ring's colour.
+    const { container } = render(<Meter pct={0} band="ok" />);
+    expect(container.querySelector('.meter')).toHaveClass('ring-1', 'ring-inset', 'ring-ink-tertiary');
+  });
+
   it('one implementation: no element outside meter.tsx paints a limit track or fill', () => {
     const offenders: string[] = [];
     const files = [
@@ -150,8 +159,9 @@ describe('the meter is on the palette', () => {
   });
 
   it('a disabled lane\'s meter is off while data-band still reports crit', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [acct({ wrapper: 'claude', five: 92, disabled: true })], projected: null, roster: TEST_ROSTER,
+    // The screen reads the app-wide fleet store's accounts answer, which the store's one poll writes (C8, D-6440).
+    act(() => {
+      useFleetStore.setState({ usage: [acct({ wrapper: 'claude', five: 92, disabled: true })], projected: null, roster: TEST_ROSTER });
     });
     render(<AccountsScreen />);
     const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;

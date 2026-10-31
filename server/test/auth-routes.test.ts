@@ -21,6 +21,7 @@ import { AuthSecretUnusable, hashLine, readAuthSecret, type ScryptParams } from 
 import type { PtyLike } from '../src/pty.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { parsedFile, symbolOf } from './scan/symbols.js';
 
 /** See `auth-gate.test.ts`'s note: the shipped cost factor is the brute-force
  *  brake and belongs in production, not in a suite that logs in forty times. */
@@ -663,8 +664,12 @@ describe('loadConfig — the four auth keys', () => {
     // live-home call one keystroke away. The compiler is what closes it, so this
     // asserts against the SOURCE — a default reintroduced here would compile
     // clean and this is what would notice.
+    // D-7504: `defaultSessionsPath` lives in `auth/paths.ts` now, read through scan/symbols.ts, and that file holds
+    // the same property: no `node:os` import, so the path default cannot reach the live home.
+    const pathsFile = 'server/src/auth/paths.ts';
+    expect(symbolOf(pathsFile, 'defaultSessionsPath').text).toContain('defaultSessionsPath(home: string): string');
+    expect(parsedFile(pathsFile).imports.map((e) => e.specifier)).not.toContain('node:os');
     const src = readFileSync(path.resolve(__dirname, '../src/auth/sessions.ts'), 'utf8');
-    expect(src).toContain('export function defaultSessionsPath(home: string): string');
     expect(src).toContain('constructor(private readonly storePath: string) {}');
     // …and the module can no longer reach the real home at all: `node:os` is not
     // imported, so `os.homedir()` is a compile error rather than a temptation.

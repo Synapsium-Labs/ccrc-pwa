@@ -1,5 +1,9 @@
-import { DISK_OP, isReadFromRange, type TailData, type TailReset } from '../../../shared/agent-protocol.js';
+import {
+  DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, isReadFromRange, readTestboxOpReply,
+  readTestboxToolsSyncReply, type TailData, type TailReset,
+} from '../../../shared/agent-protocol.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
+import { readHostPsi } from '../../../shared/pressure.js';
 import type { FleetIO, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
 
@@ -237,6 +241,43 @@ export function createIo(client: FleetClient): FleetIO {
         return measured === null ? { ok: false, reason: 'unmeasured' } : { ok: true, measured };
       } catch {
         return { ok: false, reason: 'unmeasured' };
+      }
+    },
+
+    /** The agent's `pressure` op (#1170). An agent whose `ready.ops` does not name it is never sent it: `unsupported`,
+     *  never a stall. Anything the link or the agent failed, or a reply in no shape `readHostPsi` knows, is
+     *  `unanswered`: the evidence the decider classifies a stall by. */
+    async pressureMeasured() {
+      if (!(client.state.agentOps ?? []).includes(PRESSURE_OP)) return { ok: false, reason: 'unsupported' };
+      try {
+        const psi = readHostPsi(await client.request({ t: 'req', op: PRESSURE_OP }));
+        return psi === null ? { ok: false, reason: 'unanswered' } : { ok: true, psi };
+      } catch {
+        return { ok: false, reason: 'unanswered' };
+      }
+    },
+
+    /** The agent's `testbox` op (D-7411). An agent whose `ready.ops` does not name it is never sent it: `no-op`, which
+     *  the decider reads as `unreachable (agent has no testbox op)`, never `ok`. A fault on the wire or a reply off
+     *  `readTestboxOpReply`'s shape is `unanswered`. */
+    async testboxMeasured() {
+      if (!(client.state.agentOps ?? []).includes(TESTBOX_OP)) return { ok: false, reason: 'no-op' };
+      try {
+        const reply = readTestboxOpReply(await client.request({ t: 'req', op: TESTBOX_OP }, TESTBOX_OP_REQUEST_MS));
+        return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
+      } catch {
+        return { ok: false, reason: 'unanswered' };
+      }
+    },
+
+    /** The agent's `testbox-tools-sync` op (D-7411, D-7555): the same gate on `ready.ops`, the same two failures. */
+    async testboxToolsSync() {
+      if (!(client.state.agentOps ?? []).includes(TESTBOX_TOOLS_SYNC_OP)) return { ok: false, reason: 'no-op' };
+      try {
+        const reply = readTestboxToolsSyncReply(await client.request({ t: 'req', op: TESTBOX_TOOLS_SYNC_OP }, TESTBOX_OP_REQUEST_MS));
+        return reply === null ? { ok: false, reason: 'unanswered' } : { ok: true, reply };
+      } catch {
+        return { ok: false, reason: 'unanswered' };
       }
     },
   };

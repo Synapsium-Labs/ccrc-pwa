@@ -399,7 +399,7 @@ export interface AccountOpReq {
  *  A frame with any extra field is a malformed frame (`bad-request`), the same word an agent that predates the op
  *  answers. */
 export interface DiskReq { t: 'req'; id: number; op: 'disk' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -901,3 +901,150 @@ export const DISK_STATFS_DEADLINE_MS = 5_000;
 
 /** The `disk` op's reply: exactly what the decider takes (`DiskMeasured`), in this one type. */
 export type DiskOpReply = DiskMeasured;
+
+// ── the `pressure` op (#1170) ─────────────────────────────────────────────────────────────────────────────────────
+// The agent reads the host's pressure stall information (/proc/pressure/memory and /proc/pressure/io) and answers
+// what it read (`HostPsi`, shared/pressure.ts); the server's decider (`server/src/pressure.ts`) holds the last reading
+// and classifies a stalled link by it. Declared at the file's foot so no line cited above moves. The op takes NO
+// argument, so no path crosses the link. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it answers
+// `bad-request` and is never sent the op (the server reads `ready.ops` first).
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface PressureReq { t: 'req'; id: number; op: 'pressure' }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const PRESSURE_OP = 'pressure';
+
+/** The `pressure` op's reply: exactly what the decider takes, in this one type. */
+export type PressureOpReply = HostPsi;
+import type { HostPsi } from './pressure.js';
+
+// ── the `testbox` and `testbox-tools-sync` ops (test box plan TB9, D-7411; spec 2026-10-28 §2.7, §2.10) ─────────────
+// The fleet agent reads its host's test box settings through the wrapper's own printer, measures the six tools with
+// the user manager's PATH (D-7427) and calls the box's status with the status deadline; the server's decider
+// (`server/src/testbox.ts`) turns that into a state. Both ops take NO argument: every spawn is a fixed template
+// (D-7430) and the tools sync's release and versions are the fleet host's own, never the caller's. ADDITIVE: no
+// `FLEET_PROTO` bump; an agent that predates them answers `bad-request` and is never sent them (the server reads
+// `ready.ops` first). D-7555: the second op's word is `testbox-tools-sync`, never `testbox.tools-sync`, because
+// `ready.ops` words follow `CAP_WORD`, and a dotted word would make an older server drop the agent's whole list.
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface TestboxReq { t: 'req'; id: number; op: 'testbox' }
+/** ONE member of the `req` envelope, the `testbox` op's one write. A frame with any extra field is `bad-request`. */
+export interface TestboxToolsSyncReq { t: 'req'; id: number; op: 'testbox-tools-sync' }
+
+/** The ops' names, and the words an agent that answers them lists in `ready.ops`. */
+export const TESTBOX_OP = 'testbox';
+export const TESTBOX_TOOLS_SYNC_OP = 'testbox-tools-sync';
+
+/** The bound on ONE of the op's fixed spawns on the agent (the user manager's environment, the settings printer, each
+ *  version probe): a probe that does not answer in this time is unmeasured (`null`), never a version. */
+export const TESTBOX_PROBE_DEADLINE_MS = 5_000;
+/** The server's request deadline for either op (the client's default is 15 s): the settings read, then the probes
+ *  beside the box's call, which `CCRC_TESTBOX_STATUS_DEADLINE` bounds on the agent, stay well inside it. */
+export const TESTBOX_OP_REQUEST_MS = 60_000;
+
+/** The fleet host's measured tool versions, each normalised as `TestboxToolVersions` spells them, or `null` when its
+ *  probe did not answer a version. */
+export type TestboxHostTools = { readonly [K in TestboxTool]: string | null };
+
+/** Why the op has no status answer: no test box is configured (`CCRC_TESTBOX_URL` unset), the box did not answer
+ *  within the deadline, or it answered something that is not a status answer. */
+export type TestboxOpFailure = 'unconfigured' | 'unreachable' | 'bad-answer';
+export const TESTBOX_OP_FAILURE_MAP: Record<TestboxOpFailure, true> = { unconfigured: true, unreachable: true, 'bad-answer': true };
+
+/** What the fleet host measured of itself: the six tools, the release it runs (`~/.ccrc/build.json`, `null` when that
+ *  cannot be read) and when (UTC ISO 8601 to the second). */
+export interface TestboxHostMeasure {
+  readonly tools: TestboxHostTools;
+  readonly release: string | null;
+  readonly measuredAt: string;
+}
+
+export type TestboxBoxRead =
+  | { readonly ok: true; readonly status: StatusAnswer }
+  | { readonly ok: false; readonly failure: TestboxOpFailure; readonly detail: string | null };
+
+/** The `testbox` op's reply. `pollMs` is `CCRC_TESTBOX_POLL` as the printer validated it, `null` when the settings
+ *  could not be read. */
+export interface TestboxOpReply {
+  readonly host: TestboxHostMeasure;
+  readonly pollMs: number | null;
+  readonly box: TestboxBoxRead;
+}
+
+/** The `testbox-tools-sync` op's outcome: the frame was sent, or why it was not (`unmeasured`: a tool or the release
+ *  could not be measured, so there is nothing true to send). */
+export type TestboxSyncOutcome = 'sent' | 'unconfigured' | 'unreachable' | 'bad-answer' | 'unmeasured';
+export const TESTBOX_SYNC_OUTCOME_MAP: Record<TestboxSyncOutcome, true> = {
+  sent: true, unconfigured: true, unreachable: true, 'bad-answer': true, unmeasured: true,
+};
+
+/** The `testbox-tools-sync` op's reply: the frame it built (sent, or refused by the link), and why it was not sent. */
+export interface TestboxToolsSyncReply {
+  readonly outcome: TestboxSyncOutcome;
+  readonly detail: string | null;
+  readonly frame: ToolsSync | null;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const exactKeys = (o: Record<string, unknown>, keys: readonly string[]): boolean =>
+  Object.keys(o).length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(o, k));
+const shortTextOrNull = (v: unknown): v is string | null => v === null || (typeof v === 'string' && v.length <= 4096);
+const TESTBOX_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const TESTBOX_VERSION = /^\d+(?:\.\d+)*[a-z]?$/;
+
+/** A frame object through `shared/testbox.ts`'s one frame reader, so a status answer or a tools sync is never read
+ *  twice by two readers. */
+function viaFrameReader<T extends TestboxFrame['t']>(v: unknown, t: T): Extract<TestboxFrame, { t: T }> | null {
+  if (!isObj(v) || v.t !== t) return null;
+  const r = readTestboxFrame(JSON.stringify(v));
+  return r.ok && r.value.t === t ? (r.value as Extract<TestboxFrame, { t: T }>) : null;
+}
+
+/** THE ONE READER of a `testbox` op's reply (the `res` frame itself: its envelope fields are not read). `null` is "no
+ *  answer to trust", never a state. */
+export function readTestboxOpReply(raw: unknown): TestboxOpReply | null {
+  if (!isObj(raw)) return null;
+  const { host, pollMs, box } = raw;
+  if (!isObj(host) || !exactKeys(host, ['tools', 'release', 'measuredAt'])) return null;
+  const tools = host.tools;
+  if (!isObj(tools) || !exactKeys(tools, TESTBOX_TOOLS)) return null;
+  for (const t of TESTBOX_TOOLS) {
+    const v = tools[t];
+    if (v !== null && (typeof v !== 'string' || v.length > 64 || !TESTBOX_VERSION.test(v))) return null;
+  }
+  if (host.release !== null && !(isReleaseTag(host.release) && host.release.length <= 64)) return null;
+  if (typeof host.measuredAt !== 'string' || !TESTBOX_UTC.test(host.measuredAt)) return null;
+  if (pollMs !== null && (typeof pollMs !== 'number' || !Number.isSafeInteger(pollMs) || pollMs < 1)) return null;
+  if (!isObj(box)) return null;
+  let read: TestboxBoxRead;
+  if (box.ok === true && exactKeys(box, ['ok', 'status'])) {
+    const status = viaFrameReader(box.status, 'status');
+    if (status === null) return null;
+    read = { ok: true, status };
+  } else if (box.ok === false && exactKeys(box, ['ok', 'failure', 'detail'])) {
+    if (typeof box.failure !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_OP_FAILURE_MAP, box.failure)) return null;
+    if (!shortTextOrNull(box.detail)) return null;
+    read = { ok: false, failure: box.failure as TestboxOpFailure, detail: box.detail };
+  } else return null;
+  return {
+    host: { tools: tools as TestboxHostTools, release: host.release as string | null, measuredAt: host.measuredAt },
+    pollMs: pollMs as number | null, box: read,
+  };
+}
+
+/** THE ONE READER of a `testbox-tools-sync` op's reply (the `res` frame itself). `null` is "no answer to trust". */
+export function readTestboxToolsSyncReply(raw: unknown): TestboxToolsSyncReply | null {
+  if (!isObj(raw)) return null;
+  if (typeof raw.outcome !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_SYNC_OUTCOME_MAP, raw.outcome)) return null;
+  if (!shortTextOrNull(raw.detail)) return null;
+  const frame = raw.frame === null ? null : viaFrameReader(raw.frame, 'tools.sync');
+  if (raw.frame !== null && frame === null) return null;
+  // A frame exists once the release and every tool were measured: always when sent, never when unmeasured or
+  // unconfigured (nothing was built), and either way when the box could not take it.
+  if (raw.outcome === 'sent' && frame === null) return null;
+  if ((raw.outcome === 'unmeasured' || raw.outcome === 'unconfigured') && frame !== null) return null;
+  return { outcome: raw.outcome as TestboxSyncOutcome, detail: raw.detail, frame };
+}
+import { readTestboxFrame, TESTBOX_TOOLS, type StatusAnswer, type TestboxFrame, type TestboxTool, type ToolsSync } from './testbox.js';

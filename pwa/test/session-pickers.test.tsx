@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../shared/api';
+import type { FleetSession, RosterWire } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
 // W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
@@ -21,7 +21,11 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { TEST_ROSTER } from './rosterFixture';
+import { TEST_ROSTER as BASE_ROSTER } from './rosterFixture';
+
+// The routed cases below read a class back only on a lane whose provider the roster NAMES (D-6334): the shared
+// fixture carries none, so an Anthropic lane's `queued` would read not-measurable. These cases name theirs.
+const TEST_ROSTER: RosterWire[] = BASE_ROSTER.map((a) => ({ ...a, provider: a.id === 'gpt' ? 'openai' : 'anthropic' }));
 
 vi.mock('react-virtuoso', async () => {
   const React = await import('react');
@@ -619,5 +623,31 @@ describe('routing slice 6 whole-branch review fix wave', () => {
     expect(() => renderScreen({ model: 'Opus 5', route: rawRoute })).not.toThrow();
     openModelSheet();
     expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
+  });
+});
+
+// D-6334: the header's chip and the inspector's routing line decide "pending" through the one `routeView`, and a class
+// is pending only where the lane's provider is known and its readback can be measured.
+describe("the header's model chip asks only what the lane can read back (desktop polish T3d)", () => {
+  const withLaneProvider = (provider: RosterWire['provider'] | undefined): RosterWire[] =>
+    BASE_ROSTER.map((a) => (a.id === 'claude' ? { ...a, ...(provider === undefined ? {} : { provider }) } : a));
+  const askedOpus: Partial<FleetSession> = {
+    model: 'Sonnet 5',
+    route: { fields: { class: 'opus' }, degraded: null, inert: [], unreadable: [] },
+  };
+
+  it("the header's model chip shows no queued badge where the rail says nothing is asked", () => {
+    for (const provider of [undefined, 'openrouter'] as const) {
+      const { fleet } = renderScreen(askedOpus);
+      act(() => { fleet.setState({ roster: withLaneProvider(provider) }); });
+      expect(document.querySelector('.route-queued')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('control: the same session on an Anthropic lane shows its queued badge', () => {
+    const { fleet } = renderScreen(askedOpus);
+    act(() => { fleet.setState({ roster: withLaneProvider('anthropic') }); });
+    expect(screen.getByText('queued')).toBeInTheDocument();
   });
 });

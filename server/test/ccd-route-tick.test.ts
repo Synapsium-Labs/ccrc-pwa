@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-route-tick-'); });
@@ -80,7 +80,7 @@ const install = (w: string): void => {
  *  against a driver whose budget had been widened. Same source-slicing idiom this file
  *  already uses on `_auto_compact_check`'s body. */
 const constOf = (name: string): string => {
-  const m = new RegExp(`^${name}=([0-9]+)`, 'm').exec(fs.readFileSync(CCD, 'utf8'));
+  const m = new RegExp(`^${name}=([0-9]+)`, 'm').exec(ccdSource());
   if (!m) throw new Error(`ccd/ccd no longer defines ${name}= at column 0 — re-anchor this test`);
   return m[1]!;
 };
@@ -167,7 +167,7 @@ describe('the settle stamps what it COMPOSED, so a fresh spawn is never re-typed
 });
 
 describe('structural: the tick is wired in, and the predicate was EXTRACTED rather than copied', () => {
-  const src = (): string => fs.readFileSync(CCD, 'utf8');
+  const src = (): string => ccdSource();
 
   it("the supervise loop's live) arm runs the applier on the same line as the compactor", () => {
     expect(src()).toContain('_auto_compact_check "$id"; _route_apply_check "$id"');

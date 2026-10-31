@@ -67,7 +67,7 @@ clause, where they would have to be escaped on the other side, except the
 6. Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.
 7. Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.
-9. A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.
+9. A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement. The one exception is a project your brief names as opted in to the radar's lineage: there, only when clause 16 licenses the absorption, you may push exactly one merge commit after `wave-done`, made by `git merge` of the brief's radar base with no conflict and no edit, amend or restamp, with nothing after it; your claim stands, and a `lineage-unmeasured` rejection is re-sent unchanged, at most twice, after the radar's next tick.
 10. Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.
 11. Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.
 12. When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.
@@ -76,7 +76,7 @@ clause, where they would have to be escaped on the other side, except the
 15. Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.
 16. Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as the one in the session hook's generated region, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`; `ccd/ccd` carries no committed stamp (its marker is written when it is installed), so it never conflicts on one and `restamp` refuses it. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once. The operator's keeper is the operator's own tool and may rebase or force-push a PR branch on its own authority; this clause binds your own absorbs only, so a fixer the keeper spawns is not caught between the two. If the keeper rewrote your branch, take its tip (`git fetch origin`, then `git reset --hard origin/<branch>`) before you commit; never rebase or force-push it yourself. You never merge your own PR.
 17. End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.
-18. A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree.
+18. A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.
 19. Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
@@ -278,7 +278,9 @@ you sent this — the signal is what the first run said, and the fix round is co
 
 Then stop pushing (clause 9). A lint fix, a review nit or a merge commit landed
 after the mail moves the tip away from the sha you claimed, and the coordinator
-gets `stale-tip` for a wave that was genuinely finished. If a rejection comes
+gets `stale-tip` for a wave that was genuinely finished. In a project your brief
+names as opted in to the radar's lineage, the one clean merge clause 9 allows is
+not a stale-making commit; anything else still is. If a rejection comes
 back, fix the cause, make new commits, and measure again from scratch — never
 re-send the old numbers.
 
@@ -311,6 +313,14 @@ goes with the tree.
   own (clause 2). Check `git -C <this worktree> branch --show-current` against
   the `ws/<slug>` this workspace was created on before you conclude the server
   is wrong.
+- **`wave-done-unmeasured` or `wave-advance-unmeasured` arrives** (a server mail
+  whose body opens `lineage-unmeasured: <detail>`). The server could not read the
+  radar's lineage for your claim, so it neither accepted nor rejected it; your
+  commits are not at fault. Do not re-measure and do not commit: re-send the same
+  `wave-done`, unchanged, after the radar's next tick (usually within 5 minutes),
+  at most twice, then report it to your coordinator. These two subjects are the
+  only trigger, because the coordinator sends no `rejected: lineage-unmeasured`
+  mail of its own.
 - **`rejected: pr-unmeasurable`, with a detail that mentions `prPhase`.** That
   is your submission, not the fleet: you sent a word outside the eight. Fix the
   field and re-send; retrying the same claim repeats the same refusal forever.
@@ -327,8 +337,20 @@ goes with the tree.
   the disagreement in your `wave-done` mail so the ledger gets it — that is how
   the next wave finds out.
 - **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming
-  this run): a review run read your wave and the coordinator ruled. The report
-  at the path in the mail's `artifacts` — plus the rulings in its body — is
-  your brief for the fix round. Ack it (clause 3), fix on this workspace's own
-  branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never
-  re-send the old numbers.
+  this run): usually a review run read your wave and the coordinator ruled.
+  The report at the path in the mail's `artifacts` — plus the rulings in its
+  body — is your brief for the fix round. Ack it (clause 3), fix on this
+  workspace's own branch (clause 2), and report a FRESH wave-done fingerprint
+  (clause 9); never re-send the old numbers.
+  A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or
+  `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause
+  16's ejection, and its three body lines are your whole brief. Absorb the
+  `base:` sha with `git merge`, then fix only the `paths:` it names; on
+  `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in
+  it. If the new-head merge does not apply cleanly, run `git merge --abort`,
+  push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is
+  not that round's work. A `fix-round` mail whose first line reads
+  `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:`
+  line is your whole brief, so fix the named checks on this branch. It
+  licenses no absorb: clause 16's first two triggers still apply to it, and
+  its third does not. Report a FRESH wave-done as for any fix round.

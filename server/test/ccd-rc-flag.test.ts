@@ -32,7 +32,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { chmodSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, WIDE_PANE_IF_UP, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-rc-flag-'); });
@@ -267,7 +267,7 @@ describe('_accept_first_run_prompts: a session on an RC-OFF box still reads as u
 });
 
 describe('the ready-marker set keeps ALL FIVE alternatives, `/rc active` included', () => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   /** The marker line is the ONE `echo "$pane" | grep -Eq "…"` in ccd (the only
    *  other `grep -Eq` is `_pane_login_screen`'s, single-quoted and fed from a

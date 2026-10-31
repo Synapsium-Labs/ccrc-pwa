@@ -115,10 +115,14 @@ describe('keepAgedAsk (D-6324)', () => {
     expect(keepAgedAsk(raw(), parsedMenu(0, ['Red', 'Green']))).toBe(false);
   });
 
-  it("matches the parsed menu's question by sameQuestion: case and wrapped whitespace are folded", () => {
+  it("matches the parsed menu's question by sameQuestion: case and wrapped whitespace are folded, a prefix either way", () => {
     const m = parsedMenu(0);
     expect(keepAgedAsk(raw(), { ...m, ask: { ...m.ask!, question: 'WHICH colour?' } })).toBe(true);
     expect(keepAgedAsk(raw(), { ...m, ask: { ...m.ask!, question: 'Which\n   colour?' } })).toBe(true);
+    // The menu shows only a wrapped first line: a strict prefix of the envelope's question.
+    expect(keepAgedAsk(raw(), { ...m, ask: { ...m.ask!, question: 'Which' } })).toBe(true);
+    // The envelope's question a strict prefix of the menu's.
+    expect(keepAgedAsk(raw(), { ...m, ask: { ...m.ask!, question: 'Which colour? Pick one of three.' } })).toBe(true);
   });
 });
 

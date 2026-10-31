@@ -26,7 +26,8 @@ get wrong when editing `src/whitelist.ts`.
   binds the archive; the server composes it for an archived workspace with no human in the path), `ws-collect` requires
   `--expect` (the collection token, which binds the witnessed temp root; only the server composes it, for an orphaned
   temp root with no human in the path), `ws-title` requires `--session` (the workspace rename: it sets or clears one
-  workspace's operator title and nothing else, and the flag is its whole argument surface). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+  workspace's operator title and nothing else, and the flag is its whole argument surface), `ws-shed-deps` requires `--session` (the
+  deps-shed arm's act on one sleeping session's ignored dependency directories; only the server composes it, D-7278). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail
@@ -55,8 +56,8 @@ get wrong when editing `src/whitelist.ts`.
   `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
-- The **`update` op** (design 2026-09-20 §10) is one of the THREE wire-triggered spawns outside the exec whitelist (the
-  others are `token-sync` and `account`, below). It spawns
+- The **`update` op** (design 2026-09-20 §10) is one of the FOUR wire-triggered spawn classes outside the exec whitelist
+  (the others are `token-sync`, `account` and `testbox`, below). It spawns
   exactly one of two argv templates — `$HOME/.local/bin/ccrc update|rollback --to <tag> --detach --from pwa`, built by
   `updateLauncherPath` + `updateSpawnArgv` (`shared/agent-protocol.ts`), `tag` the only variable token — validated by
   `isReleaseTag` in `validateReq` BEFORE any case body runs (`bad-tag`/`bad-kind`, never `bad-request`, which from this
@@ -85,6 +86,17 @@ get wrong when editing `src/whitelist.ts`.
   later, never cancelled. Every answer, a refusal included, is `ok: true` with a `kind` and `fleetIdentity` (the
   node-id); `bad-request` from it means the agent predates it. `test/account-op.test.ts`'s source scan reds the day
   the op reaches an exec path.
+- The **`testbox` and `testbox-tools-sync` ops** (test box plan TB9, D-7411, D-7430) are the fourth class. Neither takes
+  a field (`validateReq` answers `bad-request` to a frame carrying one), and `src/testboxOp.ts` spawns only fixed
+  templates through the bounded spawner (`src/testbox/exec.ts#boundedExec`), each with an explicit `{HOME, PATH, LANG}`
+  and `TESTBOX_PROBE_DEADLINE_MS`: `systemctl --user show-environment` (found on the agent's own PATH; the user
+  manager's PATH is the one sessions get, D-7427), `$HOME/.local/bin/ccrc test --testbox-knobs host` (the fleet host's
+  test box settings, because this unit reads no `ccrc.env`), and the six version probes `node --version`,
+  `npm --version`, `"$CCRC_CHROME" --version`, `python3 --version`, `git --version` and `tmux -V` on the user
+  manager's PATH. It reads `~/.ccrc/build.json` and the token file `CCRC_TESTBOX_TOKEN_FILE` names, nothing else, and
+  calls the box over one WebSocket within `CCRC_TESTBOX_STATUS_DEADLINE`. The sync's `tools.sync` frame carries the
+  release in `build.json` and the versions just measured, never a field of the request. `server/test/whitelist-subset.test.ts`'s
+  layer 4c reds the day either case reaches an exec path.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

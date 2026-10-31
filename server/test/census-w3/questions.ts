@@ -14,23 +14,30 @@ import { codeOf, esc, REPO, siteAt, sitesOf, sourceFiles, watcherFacts, type Cen
 // KNOWN WIDTH, every query below: a member reached through a computed name, an alias or a destructured binding is not
 // seen, and a route is only an `app.<verb>('<literal path>', …)` registration.
 
-/** The `FleetWatcher` fields that carry a held question, by name (a closed list, checked against the class's fields:
- *  a name that is no longer a field leaves the census). */
-export const QUESTION_HOLD_CARRIER_NAMES: readonly string[] = ['heldAsks', 'heldApprovals', 'lapsedAsks', 'pendingReseed'];
+/** The `FleetWatcher` fields that carry question state, by name (a closed list, checked against the class's fields:
+ *  a name that is no longer a field leaves the census). The four hold maps, and (W3 Q3d, D-7028) the two flags the hold
+ *  reads beside them: `reseedLoaded` (the boot's re-seed snapshot read) and `asksDisabled` (the ask hold's kill switch as
+ *  the last ask pass read it). 6 at Q3d's base. */
+export const QUESTION_HOLD_CARRIER_NAMES: readonly string[] = ['heldAsks', 'heldApprovals', 'lapsedAsks', 'pendingReseed', 'reseedLoaded', 'asksDisabled'];
 
 /** The question state `registerCoordRoutes` holds in a closure local, made once per server (never module scope). */
 export const ROUTE_QUESTION_STATE_NAMES: readonly string[] = ['approvalInputs'];
 
+/** The one hold carrier `coord/questions.ts#createQuestions` holds as a closure local (W3 Q3d, D-7028): the four
+ *  watcher maps folded into one, keyed by question. Looked for, with every name above, inside `createQuestions`. */
+export const MODULE_QUESTION_STATE_NAMES: readonly string[] = ['questionHolds'];
+
 /** One carrier of question state: where it is declared, and its owner (the class, or the function whose local it is). */
 export interface QuestionCarrierSite extends CensusSite { readonly name: string; readonly owner: string }
 
-/** W3's question hold carriers: `FleetWatcher`'s fields in `QUESTION_HOLD_CARRIER_NAMES` (4 at the base), then each
- *  `ROUTE_QUESTION_STATE_NAMES` binding declared inside `registerCoordRoutes` (`approvalInputs`, 1). 5 at the base. After
- *  Q3d and Q3e the same names are looked for in `coord/questions.ts`'s `createQuestions`, so the owner column says where
+/** W3's question hold carriers: `FleetWatcher`'s fields in `QUESTION_HOLD_CARRIER_NAMES` (4 at Q3a's base, 6 once Q3d
+ *  named the two flags), then each `QUESTION_HOLD_CARRIER_NAMES`, `ROUTE_QUESTION_STATE_NAMES` or
+ *  `MODULE_QUESTION_STATE_NAMES` binding declared inside `registerCoordRoutes` or `coord/questions.ts`'s `createQuestions`
+ *  (`approvalInputs`, 1, since Q3e inside `createQuestions`). 5 at Q3a's base, 7 at Q3d's. The owner column says where
  *  each carrier lives, and a module-scope binding of one of them reports the owner `module scope`. */
 export function questionHoldCarriers(root: string = REPO): QuestionCarrierSite[] {
   const out: QuestionCarrierSite[] = [];
-  const names = [...QUESTION_HOLD_CARRIER_NAMES, ...ROUTE_QUESTION_STATE_NAMES];
+  const names = [...QUESTION_HOLD_CARRIER_NAMES, ...ROUTE_QUESTION_STATE_NAMES, ...MODULE_QUESTION_STATE_NAMES];
   const w = watcherFacts(root);
   if (w !== null) {
     for (const f of w.facts.fields) {
@@ -73,7 +80,10 @@ export interface SweepEntrySite extends CensusSite { readonly method: string }
 /** W3's question sweep entry points: the `FleetWatcher` methods `tick`'s own body calls (`this.<m>(`) that reach a
  *  `QUESTION_SWEEP_ACTS` store call, directly or through the `this.` methods they call (arrows inside them included).
  *  At the base, `sweepAsks` (through `askPass`) and `sweepApprovals` (2). A public half that `tick` does not call itself is
- *  not an entry point. */
+ *  not an entry point. Since W3 Q3d (D-7028) the walk also follows a `this.questions.<member>(` call into that member's
+ *  body inside `coord/questions.ts#createQuestions` (a `const <member> = …` arrow there), and from it the bare
+ *  `<other>(` calls of the factory's other members, so an act behind the watcher's `Questions` instance still counts.
+ *  KNOWN WIDTH: a member written as an object-literal method, or reached through an alias, is not followed. */
 export function questionSweepEntries(root: string = REPO): SweepEntrySite[] {
   const abs = path.join(root, 'server/src/watch.ts');
   if (!existsSync(abs)) return [];
@@ -82,6 +92,19 @@ export function questionSweepEntries(root: string = REPO): SweepEntrySite[] {
   const method = (name: string) => parsed.symbols.find((s) => s.name === `FleetWatcher.${name}`);
   const callsOf = (s: { start: number; end: number }) => parsed.calls.filter((c) => c.start >= s.start && c.end <= s.end);
   const own = (callee: string): string | null => /^this\.(\w+)$/.exec(callee)?.[1] ?? null;
+  const viaQuestions = (callee: string): string | null => /^this\.questions\.(\w+)$/.exec(callee)?.[1] ?? null;
+  const qAbs = path.join(root, 'server/src/coord/questions.ts');
+  const q = existsSync(qAbs) ? parsedFile(qAbs) : null;
+  const member = (name: string) => q?.symbols.find((s) => s.name === `createQuestions.${name}`);
+  const memberReaches = (name: string, seen: Set<string>): boolean => {
+    if (q === null || seen.has(`q:${name}`)) return false;
+    seen.add(`q:${name}`);
+    const s = member(name);
+    if (s === undefined) return false;
+    const cs = q.calls.filter((c) => c.start >= s.start && c.end <= s.end);
+    if (cs.some((c) => c.name !== null && QUESTION_SWEEP_ACTS.includes(c.name) && c.callee !== c.name)) return true;
+    return cs.some((c) => c.name !== null && c.callee === c.name && memberReaches(c.name, seen));
+  };
   const reaches = (name: string, seen: Set<string>): boolean => {
     if (seen.has(name)) return false;
     seen.add(name);
@@ -89,6 +112,7 @@ export function questionSweepEntries(root: string = REPO): SweepEntrySite[] {
     if (s === undefined) return false;
     const cs = callsOf(s);
     if (cs.some((c) => c.name !== null && QUESTION_SWEEP_ACTS.includes(c.name) && own(c.callee) === null)) return true;
+    if (cs.some((c) => { const m = viaQuestions(c.callee); return m !== null && memberReaches(m, seen); })) return true;
     return cs.some((c) => { const m = own(c.callee); return m !== null && reaches(m, seen); });
   };
   const tick = method('tick');
@@ -115,11 +139,13 @@ export const QUESTION_DOOR_TAGS: Readonly<Record<string, QuestionDoorTag>> = {
   '/api/asks/:id/release': 'claimant',
   '/api/approvals/:id/rule': 'claimant',
   '/api/approvals/:id/release': 'claimant',
-  '/api/sessions/:id/ask': 'operator',
-  '/api/sessions/:id/dialog': 'operator',
-  '/api/sessions/:id/dialog/text': 'operator',
-  '/api/sessions/:id/dialog/multi': 'operator',
+  // W7 C7p (D-7194): `/api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi` retired; the family's
+  // `/answer` below answers them.
   '/api/sessions/:id/dialog/tab': 'navigation',
+  // W3 Q3f (D-7030; OA-C7 (a)): the family, in `coord/routes.ts`; the path picks the principal.
+  '/api/questions/:id/answer': 'operator',
+  '/api/questions/:id/rule': 'claimant',
+  '/api/questions/:id/release': 'claimant',
 };
 
 /** A question door's shape: a verb under an ask's or an approval's id, an operator's answer or dialog door under a
@@ -147,7 +173,8 @@ function routeRegistrations(parsed: ReturnType<typeof parsedFile>): RouteRegistr
 export interface QuestionDoorSite extends CensusSite { readonly route: string; readonly tag: QuestionDoorTag | 'untagged' }
 
 /** W3's question doors: the POST registrations in `coord/routes.ts` and `server.ts` whose path has a question door's
- *  shape, tagged from `QUESTION_DOOR_TAGS`. 9 at the base: 4 claimant, 4 operator, 1 navigation. */
+ *  shape, tagged from `QUESTION_DOOR_TAGS`. 9 at the base: 4 claimant, 4 operator, 1 navigation. 12 since Q3f
+ *  (D-7030): 9 + the family's 3, so 6 claimant, 5 operator, 1 navigation. */
 export function questionDoors(root: string = REPO): QuestionDoorSite[] {
   const out: QuestionDoorSite[] = [];
   for (const rel of QUESTION_DOOR_FILES) {
@@ -248,7 +275,8 @@ export interface QuestionStoreCallSite extends CensusSite { readonly symbol: str
 /** W3's question-store calls outside the store: every call of a `QUESTION_STORE_METHODS` name (`<x>.<method>(`, never
  *  `this.<method>(`) in `server/src` and `shared/`, outside `coord/store.ts` and `coord/questions.ts`. 48 at the base in 6
  *  files (`watch.ts` 22, `coord/routes.ts` 14, `server.ts` 5, `coord/digest.ts` 4, `fleet.ts` 2, `coord/driftLane.ts` 1),
- *  1 of them excluded by name: 47 counted. Q3f's may-only-shrink pin holds the whole list at the excluded row. */
+ *  1 of them excluded by name: 47 counted. 16 at Q3f's base (`coord/routes.ts` 11, `server.ts` 5); 1 at its tip, the
+ *  excluded row. Q3f's may-only-shrink pin holds the whole list at the excluded row. */
 export function questionStoreCallsOutside(root: string = REPO): QuestionStoreCallSite[] {
   const out: QuestionStoreCallSite[] = [];
   for (const dir of ['server/src', 'shared']) {
@@ -288,45 +316,21 @@ const pairingDefinitions = (root: string, names: Readonly<Record<'server' | 'pwa
 
 /** The normalize-and-prefix rule's definitions (a `function`, `const` or `let` of the name): server `pairMatches`,
  *  PWA `prefixMatches`. 2 at the base, one per side; Q3g keeps the server at 1 (moved into `pane/askPairing.ts`, with
- *  `transcript/ask.ts` re-exporting it), and W7 takes the PWA's to 0. */
+ *  `transcript/ask.ts` re-exporting it), and W7 takes the PWA's to 0 (Task C7f, D-7184: 1 -> 0). */
 export function envelopePairingRules(root: string = REPO): PairingRuleSite[] {
   return pairingDefinitions(root, { server: ['pairMatches', 'prefixMatches'], pwa: ['prefixMatches', 'pairMatches'] });
 }
 
 /** The pairing's title-matching definitions (`titleMatches`, `WRAP_BAR_RE`), either side. At the base only the PWA's
- *  (`askLive.ts`, 2 names); server-side envelope pairing 0, until Q3g's port. */
+ *  (`askLive.ts`, 2 names); server-side envelope pairing 0, until Q3g's port. W7 Task C7f (D-7184) takes the PWA's to 0
+ *  (2 -> 0): the server's port is the one. */
 export function envelopePairingTitleRules(root: string = REPO): PairingRuleSite[] {
   return pairingDefinitions(root, { server: ['titleMatches', 'WRAP_BAR_RE'], pwa: ['titleMatches', 'WRAP_BAR_RE'] });
 }
 
 /** The W3 task that moves each question-store call, by `file | enclosing symbol` (the plan's Q3a table). A counted call
- *  whose key is not here has no owner, and the census test reds. Rows only leave this table. */
-export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e' | 'Q3f'>> = {
-  'server/src/watch.ts | FleetWatcher.stallWorkerFor': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.detectDialogs': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.loadReseed': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.staleReseedRow': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.reseedFromRows': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.restampHeldAsk': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.askPass': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.tryHoldApproval': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.sweepApprovals': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.releaseHeldApproval': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.settleClearedApproval': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.tryHold': 'Q3d',
-  'server/src/watch.ts | FleetWatcher.hold': 'Q3d',
-  'server/src/coord/routes.ts | GET /api/asks': 'Q3b',
-  'server/src/coord/routes.ts | GET /api/approvals/:id': 'Q3b',
-  'server/src/coord/routes.ts | POST /api/approvals': 'Q3e',
-  'server/src/coord/routes.ts | POST /api/asks/:id/answer': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/asks/:id/release': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/approvals/:id/rule': 'Q3f',
-  'server/src/coord/routes.ts | POST /api/approvals/:id/release': 'Q3f',
-  'server/src/server.ts | POST /api/sessions/:id/dialog': 'Q3f',
-  'server/src/server.ts | POST /api/sessions/:id/ask': 'Q3f',
-  'server/src/coord/digest.ts | buildDigest': 'Q3b',
-  'server/src/coord/digest.ts | correctDigestRow': 'Q3b',
-  'server/src/fleet.ts | readHeldApprovals': 'Q3b',
-  'server/src/fleet.ts | readCurrentAsks': 'Q3b',
-  'server/src/coord/driftLane.ts | pass': 'Q3b',
-};
+ *  whose key is not here has no owner, and the census test reds. Rows only leave this table: Q3b's left with its reads,
+ *  Q3e's with the raise, Q3d's thirteen `watch.ts` rows with the hold (D-7028; `watch.ts` makes no question-store call
+ *  since), and Q3f's six with the answer doors' cores (D-7030; the eight old doors are aliases). EMPTY since Q3f: every
+ *  counted call has moved, and the one left outside `coord/questions.ts` is the excluded ruling poll. */
+export const QUESTION_STORE_OWNERS: Readonly<Record<string, 'Q3b' | 'Q3d' | 'Q3e' | 'Q3f'>> = {};

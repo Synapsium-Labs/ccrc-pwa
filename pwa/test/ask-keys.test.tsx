@@ -4,13 +4,14 @@
 // (`cc296-ask-2q-long-*`, neutral text) and its envelope (`CC296_LONG`).
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Dialog } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
-import { api, ApiError } from '../src/lib/api';
+import { ApiError } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerSeam, type AnswerSeamMocks } from './answerSeam';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { TABS_HELD } from '../src/session/AskParts';
 import {
@@ -18,11 +19,18 @@ import {
 } from '../src/session/askKeys';
 import { DIALOG_TAB_REFUSE_TEXT } from '../src/session/askWords';
 import { createSessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import { CC296_LONG, TOOLS_SIZES, pane } from './askPanes';
 import { declValue, ruleIn } from './cssRule';
 import { askFixture } from './askFixtures';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
+
+// D-7183: the sheet's answers go through its injected seam; each test gets fresh writers (`answerSeam.ts`).
+let answers: AnswerSeamMocks = answerSeam();
+beforeEach(() => {
+  answers = answerSeam();
+});
 
 afterEach(() => {
   cleanup();
@@ -125,9 +133,9 @@ const review = (): Dialog => pane('cc296-ask-2q-long-review');
 const frame = async (): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, 40)); });
 
 function renderAsk(first: Dialog, envelope: typeof CC296_LONG | null = CC296_LONG, extra?: React.ReactNode) {
-  const store = createSessionStore(SESSION_ID, {
+  const store = served(createSessionStore(SESSION_ID, {
     makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) },
-  });
+  }));
   act(() => {
     store.getState().apply({ type: 'ask_cleared' });
     store.getState().apply({ type: 'dialog', dialog: first });
@@ -136,7 +144,7 @@ function renderAsk(first: Dialog, envelope: typeof CC296_LONG | null = CC296_LON
   render(
     <>
       {extra}
-      <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+      <DialogSheet answers={answers} id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
       <ToastHost />
     </>,
   );
@@ -169,7 +177,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
   // is text, never an answer.
   it('under a coarse pointer the panel takes the focus, never a row (no keyboard rises); a key in the composer is text', async () => {
     pointer('coarse');
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const composer = document.createElement('textarea');
     document.body.appendChild(composer);
     composer.focus();
@@ -186,7 +194,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('a key aimed at a control outside the sheet (a header button) is that control\'s, never an answer', async () => {
     pointer('coarse');
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const outside = document.createElement('button');
     document.body.appendChild(outside);
     renderAsk(q1());
@@ -208,7 +216,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('a digit answers that option; Enter on the focused row answers it (the row\'s own button)', async () => {
     pointer('fine');
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
     const user = userEvent.setup();
@@ -219,7 +227,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('Chat\'s digit only highlights Chat (it declines the whole ask); the free-text row\'s digit chooses Other and puts the cursor in the field', async () => {
     pointer('fine');
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
     // Other is a row of the list while its field is closed: a button, no field yet.
@@ -234,7 +242,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('↓ from the last option reaches the Other row, and Enter on it opens the field with the cursor in it', async () => {
     pointer('fine');
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
     const user = userEvent.setup();
@@ -251,7 +259,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('the own-answer field keeps ←/→ and digits; ↑ leaves it for the last option', async () => {
     pointer('fine');
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const tab = answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
     fireEvent.click(row(/^Other/));
@@ -266,7 +274,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('→ on the last question moves the pane, and the review it lands on opens with no stream frame', async () => {
     pointer('fine');
-    const tab = vi.spyOn(api, 'answerDialogTab').mockResolvedValue({ ok: true, next: review() });
+    const tab = answers.answerDialogTab.mockReset().mockResolvedValue({ ok: true, next: review() });
     renderAsk(q2());
     await frame();
     await act(async () => {
@@ -278,7 +286,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('← on question 1 and → on the review send nothing; ← on the review moves back', async () => {
     pointer('fine');
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const tab = answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     await frame();
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
@@ -300,7 +308,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
     ['A header no tab carries', true, 'a place it cannot tell: the server decides'],
   ])('a transcript copy with the header %s: ← sends %s (%s)', async (header, sends) => {
     pointer('fine');
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const tab = answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
     const fx = askFixture(2).dialog!;
     renderAsk({ ...fx, ask: { ...fx.ask!, header } }, null);
     await frame();
@@ -323,8 +331,8 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('a move in flight is a send: a digit pressed meanwhile answers nothing', async () => {
     pointer('fine');
-    vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
-    const answer = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
+    const answer = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q2());
     await frame();
     await act(async () => {
@@ -336,7 +344,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('a refused move says why and leaves the sheet where it is', async () => {
     pointer('fine');
-    vi.spyOn(api, 'answerDialogTab').mockRejectedValue(new ApiError(409, { ok: false, error: 'no-move' }));
+    answers.answerDialogTab.mockReset().mockRejectedValue(new ApiError(409, { ok: false, error: 'no-move' }));
     renderAsk(q2());
     await frame();
     await act(async () => {
@@ -348,7 +356,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 
   it('every key the sheet handles stops there: a window listener never sees it, and one it does not handle passes', async () => {
     pointer('fine');
-    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     const seen: string[] = [];
     const onWindow = (e: KeyboardEvent): void => void seen.push(e.key);
     window.addEventListener('keydown', onWindow);
@@ -407,7 +415,7 @@ describe('Escape hides the sheet and never interrupts (decision ask-sheet-escape
 
   it('a sheet Escape hid takes no keys: 2 on the page after hiding the review cancels nothing', async () => {
     pointer('fine');
-    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const spy = answers.answerDialog.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(review());
     await frame();
     const submit = row(/^Submit answers/);
@@ -436,14 +444,14 @@ describe('the tab strip (decision ask-tab-strip)', () => {
   });
 
   it('a chip moves the pane: question 1 with the tab showing as from, and Submit to the review', async () => {
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const tab = answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q2());
     fireEvent.click(screen.getByRole('button', { name: /^Go to Water rota/ }));
     expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: q2().id, to: 1, from: 2 });
   });
 
   it('Submit from question 1, and every chip waits while the move runs', async () => {
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const tab = answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(q1());
     fireEvent.click(screen.getByRole('button', { name: /Submit$/ }));
     expect(tab).toHaveBeenCalledWith(SESSION_ID, { dialogId: q1().id, to: 'submit', from: 1 });
@@ -452,7 +460,7 @@ describe('the tab strip (decision ask-tab-strip)', () => {
   });
 
   it('on the review Submit is current, and question chips need no from', async () => {
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const tab = answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
     renderAsk(review());
     expect(screen.getByRole('button', { name: /Submit$/ })).toHaveAttribute('aria-current', 'step');
     fireEvent.click(screen.getByRole('button', { name: /Table supply/ }));
@@ -504,7 +512,7 @@ describe('the tab strip (decision ask-tab-strip)', () => {
       return at === undefined || strip === null ? rect(0, 0) : rect(at - strip.scrollLeft, 80);
     });
     try {
-      vi.spyOn(api, 'answerDialogTab').mockResolvedValue({ ok: true, next: review() });
+      answers.answerDialogTab.mockReset().mockResolvedValue({ ok: true, next: review() });
       renderAsk(q2());
       const strip = screen.getByRole('group', { name: 'Questions in this ask' });
       // Chip 1 spans 150-230 against a 0-100 strip: its right edge is brought to the strip's (230 - 100).
@@ -550,7 +558,7 @@ describe('the tab strip (decision ask-tab-strip)', () => {
 
   it('multiSelect boxes changed and not committed: the strip and ←/→ wait, and say why', async () => {
     pointer('fine');
-    const tab = vi.spyOn(api, 'answerDialogTab').mockReturnValue(new Promise(() => {}));
+    const tab = answers.answerDialogTab.mockReset().mockReturnValue(new Promise(() => {}));
     const tools = pane('cc300-ask-multiselect-tools-open');
     renderAsk(tools, TOOLS_SIZES);
     await frame();

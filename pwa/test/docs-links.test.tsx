@@ -10,13 +10,18 @@ import { cleanup, fireEvent, render } from '@testing-library/react';
 import type { Element as HastElement, ElementContent, Root as HastRoot, RootContent } from 'hast';
 import { urlAttributes } from 'html-url-attributes';
 import { docsPageUrl, docsRefText, githubBlobUrl, parseDocsRef, type DocsTreeOk } from '../../shared/docs';
-import { SHARED_COMPONENTS } from '../src/lib/markdown';
+import { SHARED_COMPONENTS, codeLanguage, inMarkdownPageBudget, inScanPageBudget } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/DocLink';
-import { detachUrls, docLinkTarget, docsLocation, type Detached } from '../src/docs/docsLinks';
+import {
+  detachUrls, docLinkTarget, docsLocation, type Detached, type DocsHighlightLanguages,
+} from '../src/docs/docsLinks';
 import { DOCS_HEAD_TEXT, DOC_LINK_INERT_SENTENCE, DOC_LINK_OUTSIDE_PAGE, type DocLinkInertReason } from '../src/docs/docsText';
 import { pageAt, treeOk } from './docsFixtures';
+
+/** The renderer's three grammar facts, as the Docs page hands them to `detachUrls` (D-7574). */
+const LANGS: DocsHighlightLanguages = { codeLanguage, inScanPageBudget, inMarkdownPageBudget };
 
 afterEach(() => {
   cleanup();
@@ -40,7 +45,7 @@ function ctxFor(d: Detached, over: Partial<DocLinkContextValue> = {}): DocLinkCo
 
 /** `src` parsed in the docs profile, detached, and rendered with `DocLink` inside an `<article>`, as a Docs page. */
 function renderDoc(src: string, over: Partial<DocLinkContextValue> = {}) {
-  const detached = detachUrls(treeOf(src));
+  const detached = detachUrls(treeOf(src), LANGS);
   const ctx = ctxFor(detached, over);
   const r = render(
     <article>
@@ -90,7 +95,7 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
   it('returns a copy and never writes its input: a deep-frozen tree detaches, and its JSON is unchanged', () => {
     const tree = deepFreeze(treeOf('[x](../plans/p.md) ![i](i.png)\n\n```ts\nconst a = 1;\n```\n'));
     const before = JSON.stringify(tree);
-    const d = detachUrls(tree);
+    const d = detachUrls(tree, LANGS);
     expect(JSON.stringify(tree)).toBe(before);
     expect(d.tree).not.toBe(tree);
     const [p] = tree.children;
@@ -111,7 +116,7 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
     // Values hast's types do not expect on these keys, as a hand-built or future tree could carry them.
     children.push(el('a', { ping: ['p1', 'p2'], href: 7, cite: null, src: false } as unknown as HastElement['properties']));
     const tree: HastRoot = { type: 'root', children };
-    const d = detachUrls(tree);
+    const d = detachUrls(tree, LANGS);
     const copies = d.tree.children as HastElement[];
     keys.forEach((k, i) => {
       const c = copies[i]!;
@@ -133,7 +138,7 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
     const img = el('img', { alt: 'x', srcSet: 'a.png 1x, /api/example/b.png 2x' });
     const use = el('use', { xLinkHref: '/api/example/sprite.svg#a', id: 'u' });
     const others = extra.map((k) => el('div', { [k]: `u-${k}`, title: 't' }));
-    const d = detachUrls({ type: 'root', children: [img, use, ...others] });
+    const d = detachUrls({ type: 'root', children: [img, use, ...others] }, LANGS);
     const [imgCopy, useCopy, ...otherCopies] = d.tree.children as HastElement[];
     expect(imgCopy!.properties).toEqual({ alt: 'x' });
     expect(Object.hasOwn(imgCopy!.properties, 'srcSet')).toBe(false);
@@ -147,7 +152,7 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
   });
 
   it('numbers img elements 0..n-1 in document order, counts them, and records nothing for an element with nothing', () => {
-    const d = detachUrls(treeOf('![a](a.png)\n\n- ![b](b.png)\n\n[![c](c.png)](d.md) text'));
+    const d = detachUrls(treeOf('![a](a.png)\n\n- ![b](b.png)\n\n[![c](c.png)](d.md) text'), LANGS);
     expect(d.images).toBe(3);
     const imgs = elements(d.tree).filter((e) => e.tagName === 'img');
     expect(imgs.map((e) => [e.properties['alt'], d.urls.get(e)?.imageIndex, d.urls.get(e)?.attrs['src']]))
@@ -159,8 +164,8 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
   });
 
   it('a second detach of the copy finds no URL (part 2 reuses the first copy and its map)', () => {
-    const d = detachUrls(treeOf('[x](https://a.example/x)'));
-    const again = detachUrls(d.tree);
+    const d = detachUrls(treeOf('[x](https://a.example/x)'), LANGS);
+    const again = detachUrls(d.tree, LANGS);
     const a = elements(again.tree).find((e) => e.tagName === 'a')!;
     expect(again.urls.has(a)).toBe(false);
   });
@@ -241,7 +246,7 @@ describe('DocLink: doc links in-app (M4.U3; refinement (o))', () => {
   it('a link to THIS page spelled with its file name and a fragment is a fragment link: a click scrolls and pushes nothing', () => {
     const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
     const push = vi.spyOn(history, 'pushState');
-    const d = detachUrls(treeOf('x'));
+    const d = detachUrls(treeOf('x'), LANGS);
     for (const raw of ['a.md#sec', './a.md#sec', '../specs/a.md#sec']) {
       expect(docLinkTarget(ctxFor(d), raw)).toEqual({ kind: 'fragment', fragment: 'sec' });
     }
@@ -269,7 +274,7 @@ describe('DocLink: doc links in-app (M4.U3; refinement (o))', () => {
     const push = vi.spyOn(history, 'pushState');
     const replace = vi.spyOn(history, 'replaceState');
     const before = history.length;
-    const d = detachUrls(treeOf('x'));
+    const d = detachUrls(treeOf('x'), LANGS);
     for (const raw of ['a.md#sec', '../specs/a.md#sec']) {
       expect(docLinkTarget(ctxFor(d, { pageRef, view }), raw)).toEqual({ kind: 'fragment', fragment: 'sec' });
     }
@@ -291,7 +296,7 @@ describe('DocLink: doc links in-app (M4.U3; refinement (o))', () => {
   });
 
   it('a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too', () => {
-    const d = detachUrls(treeOf('x'));
+    const d = detachUrls(treeOf('x'), LANGS);
     expect(docLinkTarget(ctxFor(d), 'a.md')).toMatchObject({ kind: 'in-app', fragment: null });
     expect(docLinkTarget(ctxFor(d), '../plans/a.md#sec')).toMatchObject({ kind: 'in-app', fragment: 'sec' });
     expect(docLinkTarget(ctxFor(d), 'b.md#sec')).toMatchObject({ kind: 'in-app', fragment: 'sec' });
@@ -346,7 +351,7 @@ describe('DocLink: external links on tap only (M4.U4)', () => {
     expect(title.startsWith('This link is not a well-formed URL')).toBe(true);
     expect(title).toBe(`${DOC_LINK_INERT_SENTENCE.malformed}: https://`);
     expect(DOC_LINK_INERT_SENTENCE.malformed).toMatch(/space.*control character.*backslash/);
-    const d = detachUrls(treeOf('x'));
+    const d = detachUrls(treeOf('x'), LANGS);
     expect(docLinkTarget(ctxFor(d), 'http://a:99999'))
       .toEqual({ kind: 'inert', title: `${DOC_LINK_INERT_SENTENCE.malformed}: http://a:99999` });
     expect(docLinkTarget(ctxFor(d), 'a b.md'))
@@ -354,7 +359,7 @@ describe('DocLink: external links on tap only (M4.U4)', () => {
   });
 
   it('docLinkTarget answers the same words without rendering', () => {
-    const d = detachUrls(treeOf('x'));
+    const d = detachUrls(treeOf('x'), LANGS);
     expect(docLinkTarget(ctxFor(d), 'javascript:alert(1)'))
       .toEqual({ kind: 'inert', title: `${DOC_LINK_INERT_SENTENCE.scheme}: javascript:alert(1)` });
     expect(docLinkTarget(ctxFor(d), '#a')).toEqual({ kind: 'fragment', fragment: 'a' });
@@ -510,7 +515,7 @@ describe('no URL reaches the DOM except through DocLink (spec 4.11)', () => {
 
 describe('DocLink outside a Docs page', () => {
   it('renders inert, with no href, when no DocLinkContext is provided', () => {
-    const d = detachUrls(treeOf('[x](https://a.example/x)'));
+    const d = detachUrls(treeOf('[x](https://a.example/x)'), LANGS);
     const { container } = render(renderHast(d.tree, { components: { ...SHARED_COMPONENTS, a: DocLink } }));
     expect(container.querySelectorAll('[href]')).toHaveLength(0);
     expect(container.querySelector('span.doc-link-inert')?.getAttribute('title')).toBe(DOC_LINK_OUTSIDE_PAGE);
@@ -527,7 +532,7 @@ describe('T13 review 4-2: an in-document GitHub link carries the caution View on
   it.each(['local-ahead', 'local-behind', 'diverged', 'unmeasured'] as const)(
     'a local page that is %s has the target note and the same may-differ caution on its mark', (relation) => {
       const tree = withRelation('local', relation);
-      const d = detachUrls(treeOf('[r](../../../README.md)'));
+      const d = detachUrls(treeOf('[r](../../../README.md)'), LANGS);
       expect(docLinkTarget(ctxFor(d, { tree }), '../../../README.md')).toEqual({
         kind: 'github', href: 'https://github.com/example-org/example-repo/blob/main/README.md', note: 'may-differ',
       });
@@ -538,7 +543,7 @@ describe('T13 review 4-2: an in-document GitHub link carries the caution View on
   it.each([['local', 'equal'], ['origin', 'local-behind']] as const)(
     'a %s page whose relation is %s carries no caution', (side, relation) => {
       const tree = withRelation(side, relation);
-      const d = detachUrls(treeOf('[r](../../../README.md)'));
+      const d = detachUrls(treeOf('[r](../../../README.md)'), LANGS);
       expect(docLinkTarget(ctxFor(d, { tree }), '../../../README.md')).toMatchObject({ kind: 'github', note: null });
       const { container } = renderDoc('[r](../../../README.md)', { tree });
       expect(container.querySelector('.doc-link-gh')?.hasAttribute('title')).toBe(false);

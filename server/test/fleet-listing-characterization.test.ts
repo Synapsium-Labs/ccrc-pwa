@@ -6,6 +6,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER } from '../../shared/switches.js';
+import { questionsTestView } from '../src/coord/questions.js';
 import { LATER, MONO0, MONO_LATER, NOW, callerOf, countBy, primed, rig, type Rig } from './fleetListingFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -59,7 +60,8 @@ describe('a registry that changes between two ticks: each lane reads the newest 
     const r = rig();
     r.row('demo-a', 'demo');
     await primed(r);
-    const disabled = (): boolean => (r.w as unknown as { asksDisabled: boolean }).asksDisabled;
+    // W3 Q3d (D-7028, named exception 1): the switch the ask pass read is the watcher's `Questions` instance's.
+    const disabled = (): boolean => questionsTestView(r.w.questions).asksDisabled();
     expect(disabled()).toBe(false);
     r.marker(ASKS_DISABLED_MARKER);
     r.at(LATER, MONO_LATER);

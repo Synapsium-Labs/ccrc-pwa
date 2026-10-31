@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-usage-purge-'); });
@@ -118,7 +118,7 @@ describe('the usage sidecar removals are TRACKED unlinks of the purge that runs 
     // bash's dynamic scope — so a second call site outside that extent would be
     // recording into whatever `_pg_urc` happened to be in scope, or into
     // nothing. This is what makes "two sites, one dynamic extent" checkable.
-    const lines = fs.readFileSync(CCD, 'utf8').split('\n');
+    const lines = ccdSource().split('\n');
     const calls = lines
       .map((l, i) => ({ n: i + 1, l }))
       .filter(({ l }) => l.includes('_usage_purge'))

@@ -190,11 +190,12 @@ export const rig = (o: RigOpts = {}) => {
   const state: FleetState = { connected: true, downSince: null, rosterFp: null, build: null,
     ccdVerbs: o.caps === undefined ? [...FULL_CAPS] : o.caps === null ? null : [...o.caps] };
   /** Moments inside the executor's awaits where a case changes the world: inside the audit, inside the act, and inside
-   *  the Nth registry listing (1 is step 2's, 2 is step 5's), which may also answer `null` or reject. `retire` runs
+   *  the Nth registry listing (1 is step 2's, 2 is step 5's), which may also answer `null` (unreadable), `absent`
+   *  or reject. `retire` runs
    *  inside the store writer's call, before its transaction: another writer, landing between the latch's read and its
    *  write. */
   const hooks: {
-    audit?: () => void; act?: () => void; listing?: (n: number) => 'null' | 'reject' | void; retire?: () => void;
+    audit?: () => void; act?: () => void; listing?: (n: number) => 'null' | 'absent' | 'reject' | void; retire?: () => void;
   } = {};
   let auditAnswer = (): ExecResult => ({ ran: true, code: 0, stdout: auditDoc({ witness, resume: o.resume }), stderr: '' });
   let actAnswer = (): ExecResult => ({ ran: true, code: 0, stdout: collectedDoc(), stderr: '' });
@@ -218,6 +219,7 @@ export const rig = (o: RigOpts = {}) => {
       try {
         if (what === 'reject') throw new Error('EIO: the registry listing failed');
         if (what === 'null') return { ok: false, reason: 'unreadable' };
+        if (what === 'absent') return { ok: false, reason: 'absent' };
         return await base.io.readdirMeasured(p, timeoutMs, signal);
       } finally {
         returned += 1;

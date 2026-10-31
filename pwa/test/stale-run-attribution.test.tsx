@@ -10,15 +10,35 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { childRunContext, coordinationLine, coordinationOf, fleetTree, parentIdOf } from '../src/fleet/fleetTree';
-import { orphanNote } from '../src/fleet/orphanWords';
-import { runBelongsTo, runForSession } from '../src/fleet/runWords';
-import { coordPresence } from '../src/fleet/coordWords';
+import * as tree from '../src/fleet/fleetTree';
+import { coordinationLine } from '../src/fleet/fleetTree';
+import * as orphan from '../src/fleet/orphanWords';
+import { withRunBinding } from './runBindingFixture';
+import { boundOpenRun, workerOf } from '../src/fleet/runWords';
+import { serverBinding } from './runBindingFixture';
+import { coordinatorPresence } from '../src/fleet/presence';
 import { cardFacts, headerFacts, sessionFacts } from '../src/fleet/sessionFacts';
 import { ProjectCard } from '../src/fleet/ProjectCard';
 import type { FleetRow } from '../src/fleet/nestFleet';
 
 afterEach(cleanup);
+
+// The readers as a current server feeds them (D-7182, C7d): every session a case hands them carries the run binding the
+// server sends over that case's runs (`runBindingFixture.ts`, held to `bindingOf` by the server's parity test), so the
+// stale run 83, opened before the worker's minting run 504, binds no incarnation of it, as on the wire.
+type Runs = readonly RunSummary[];
+const bind = (s: FleetSession, runs: Runs): FleetSession => withRunBinding([s], runs)[0]!;
+const parentIdOf = (s: FleetSession, runs: Runs): string | null => tree.parentIdOf(bind(s, runs), runs);
+const childRunContext = (s: FleetSession, runs: Runs, find: (id: string) => FleetSession | null): ReturnType<typeof tree.childRunContext> =>
+  tree.childRunContext(bind(s, runs), runs, find);
+const coordinationOf = (s: FleetSession, sessions: readonly FleetSession[], runs: Runs): ReturnType<typeof tree.coordinationOf> =>
+  tree.coordinationOf(bind(s, runs), withRunBinding(sessions, runs), runs);
+const fleetTree = (sessions: FleetSession[], projects: readonly string[], runs: Runs): ReturnType<typeof tree.fleetTree> =>
+  tree.fleetTree(withRunBinding(sessions, runs), projects, runs);
+const orphanNote = (row: FleetRow, runs: Runs, project: string, live: readonly FleetSession[],
+  coordOf: (id: string) => FleetSession | null, frameSeen: boolean): ReturnType<typeof orphan.orphanNote> =>
+  orphan.orphanNote(row.kind === 'session' ? { ...row, session: bind(row.session, runs) } : row, runs, project,
+    withRunBinding(live, runs), coordOf, frameSeen);
 
 const NOW = 1_800_000_000_000;
 const WORKER = 'lane-a-project-a-quiet-basin';
@@ -61,13 +81,22 @@ const depth0 = (s: FleetSession): FleetRow => ({ kind: 'session', depth: 0, sess
 /** The session header's facts, wired exactly as `SessionScreen` wires them. */
 const headerInput = (s: FleetSession, runs: readonly RunSummary[]) => {
   const pid = parentIdOf(s, runs);
-  const presence = pid === null ? null : coordPresence(pid, lookup(pid), true);
+  const presence = pid === null ? null : coordinatorPresence(pid, lookup(pid), true);
   return sessionFacts({
     session: s, now: NOW, childRun: childRunContext(s, runs, lookup), coordinator: presence,
   });
 };
 
-describe('runBelongsTo / runForSession — the one rule that attributes a run to a row (D-5828)', () => {
+// The rule that attributes a run to a row is the wire's binding now (D-7182): the server binds a run to the session's
+// incarnation (`bindingOf`, which `runBindingFixture.ts#serverBinding` is held equal to), and the PWA reads it through
+// `workerOf` (is this run the row's) and `boundOpenRun` (the row's open run). Re-pointed from the deleted
+// `runBelongsTo` / `runForSession` in the commit that deletes them; every assertion is the one they carried.
+const runBelongsTo = (r: RunSummary, s: { id: string; child?: FleetSession['child'] }): boolean =>
+  workerOf(r, new Map([[s.id, { id: s.id, ...serverBinding(s, [r]) }]])) !== null;
+const runForSession = (runs: readonly RunSummary[], s: { id: string; child?: FleetSession['child'] }): RunSummary | null =>
+  boundOpenRun(runs, { id: s.id, ...serverBinding(s, runs) });
+
+describe('the wire binding attributes a run to a row (D-5828, D-7182)', () => {
   it('ignores a run whose id is LOWER than the row\'s child-marker run', () => {
     expect(runBelongsTo(stale, worker())).toBe(false);
     expect(runForSession([stale], worker())).toBeNull();
@@ -102,6 +131,14 @@ describe('orphanNote — no false "coordinator gone" from a stale run (D-5828)',
   it('…while the same stale run DOES mark a row with no child marker (today\'s behaviour, the known limit)', () => {
     const plain = worker({ child: { kind: 'none' }, role: null });
     expect(orphanNote(depth0(plain), [stale], 'project-a', [liveCoord, plain], lookup, true)?.presence).toBe('dead');
+  });
+
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the marker follows the wire's binding. A row the server binds to no
+  // open run (an older server's frame has no binding at all) carries no marker, whatever run names its id ('dead'
+  // before C7d, read off the id).
+  it('a row the wire binds to no open run carries no marker, though a run claimed by a dead coordinator names its id', () => {
+    const unbound = worker({ child: { kind: 'none' }, role: null, run: null, openRun: null });
+    expect(orphanNote(depth0(unbound), [stale], 'project-a', [liveCoord, unbound], lookup, true)).toBeNull();
   });
 
   it('a successor run claimed by a dead coordinator still marks the row — the guard hides only older runs', () => {

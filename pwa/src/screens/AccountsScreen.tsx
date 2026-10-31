@@ -1,30 +1,31 @@
 // Accounts screen (route `/accounts`, Task 6 of Build 3 PR G) — every account
-// ccd knows about, not just the ones with headroom to spare. The compact
-// strip (AccountsStrip) hides a switched-off lane and only shows a window
+// ccd knows about, not just the ones with headroom to spare. The lanes row
+// (AccountsStrip) hides a switched-off lane and only shows a window
 // that "exists" for the account type; this screen's brief is the opposite —
 // "show me my accounts" — so a disabled lane still gets a row (greyed, with
-// its reason) and both windows always render, the %/reset/— three-way saying
-// "unknown" rather than the row disappearing.
+// its reason) and both windows always render, each through `windowReading`
+// (laneWords.ts): `n%` measured, `0%` for a window that rolled over (spoken as
+// inferred), and `—` never measured, rather than the row disappearing.
 //
-// Same /api/accounts pipeline the strip and useProjectedHome already poll —
-// a third reader, not a new route. Its own 20s poller rather than sharing
-// theirs: useProjectedHome.ts:9-12 makes the same call for ProjectCard and
-// defends the duplication — one more GET against two small local JSON files
-// beats coupling component trees that must not depend on each other mounting.
-import { useEffect, useState } from 'react';
+// It reads the fleet store's accounts answer (`usage`, `projected`, `roster`), which the store's one
+// `/api/accounts` poll writes (C8, D-6440): the store is connected app-wide whichever route is mounted, so the
+// screen needs no poll of its own.
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
+import { isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { PageScaffold, Skeleton, toast, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
+import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, warnNonArrayRoster } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, SIGN_IN_EXPIRED } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
-import { navigate } from '../lib/router';
+import { navigate, useLocation } from '../lib/router';
+import { laneParam, sessionPath } from '../lib/routes';
 import { backToFleet } from '../command/door';
-import { useFleetStore } from '../stores/fleet';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 import { poolCleared, poolWriteFailed } from '../fleet/poolWords';
 
@@ -105,8 +106,8 @@ function acctPoolChip(state: AccountPoolWire): {
   }
 }
 
-// `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). This
-// screen's own `GET /api/accounts` poll (`useAccountsPoll` below) carries the
+// `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). The
+// fleet store's `GET /api/accounts` read (`useAccountsPoll` below) carries the
 // roster, and `RosterWire.resolvedPool` (Task 7's T7-R2 fix round) rides the
 // same response when the server has one to offer — see `lib/accounts.ts`'s
 // own docstring. Every row below renders whatever `accountPoolState` returns
@@ -114,51 +115,20 @@ function acctPoolChip(state: AccountPoolWire): {
 // central tag or the declared fallback.
 
 interface AccountsPoll {
-  accounts: AccountUsage[] | null;               // null: no poll has landed yet
-  projected: ProjectedHome | null | undefined;    // undefined: no poll has landed yet; null: landed, nothing placeable
-  roster: RosterWire[];                           // []: no poll has landed yet, same as accounts/projected
+  accounts: readonly AccountUsage[] | null;      // null: no good answer has landed yet
+  projected: ProjectedHome | null | undefined;    // undefined: no answer yet; null: landed, nothing placeable
+  roster: readonly RosterWire[];                  // []: no good answer has landed yet, same as accounts/projected
 }
 
-function useAccountsPoll(): AccountsPoll {
-  const [state, setState] = useState<AccountsPoll>({ accounts: null, projected: undefined, roster: [] });
-  useEffect(() => {
-    let live = true;
-    const load = (): void => {
-      void api.accounts()
-        .then((r) => {
-          if (!live) return;
-          // `Array.isArray`, not a bare trust: a fetch stub answering an
-          // unmatched route with bare `{}` (several fixtures across this
-          // suite predate Task 7 and do exactly that) hands back `r.roster
-          // === undefined`, and `rowOrder` below does `roster.map(...)`
-          // unguarded — same reasoning as `stores/fleet.ts`'s own roster
-          // poll. `accounts`/`projected` need no equivalent guard: both
-          // already degrade a bare `undefined` to their own "no poll landed"
-          // branch (the falsy `!accounts` check, the three-state `projected`
-          // read) rather than indexing into it.
-          //
-          // Functional update, not a flat object literal (fix round 1,
-          // finding 5): the flat form clobbered an already-good roster with
-          // `[]` the instant one later poll came back malformed, while
-          // `stores/fleet.ts` and `AccountsStrip.tsx` both already preserved
-          // it by simply skipping the write. `prev.roster` is the same
-          // preservation here, where `accounts`/`projected` still need to
-          // update on every read regardless. Warn once on the malformed
-          // branch — a genuine protocol break has no other signal anywhere
-          // (finding 6).
-          setState((prev) => {
-            if (Array.isArray(r.roster)) return { accounts: r.accounts, projected: r.projected, roster: r.roster };
-            warnNonArrayRoster(r);
-            return { accounts: r.accounts, projected: r.projected, roster: prev.roster };
-          });
-        })
-        .catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 20_000);
-    return () => { live = false; clearInterval(t); };
-  }, []);
-  return state;
+/** The screen's view of the fleet store's accounts answer. The store is the one reader (C8, D-6440) and keeps the
+ *  last good value of each field across a failed or malformed read, so a bad poll never empties a row the screen
+ *  already drew (the rule this hook used to apply to `roster` alone, fix round 1, finding 5). `store` defaults to the
+ *  app-wide fleet store (`RunsScreen`'s idiom). */
+function useAccountsPoll(store: FleetStore = useFleetStore): AccountsPoll {
+  const accounts = store((s) => s.usage);
+  const projected = store((s) => s.projected);
+  const roster = store((s) => s.roster);
+  return { accounts, projected, roster };
 }
 
 /** The roster's declaration order first, then any wrapper the server has
@@ -185,6 +155,10 @@ function rowOrder(roster: readonly RosterWire[], accounts: readonly AccountUsage
 
 export function AccountsScreen(): ReactNode {
   const { accounts, projected, roster } = useAccountsPoll();
+  // Opening Accounts asks once (D-7180; coordinator call 3): the screen shows the store's answer at once, then a fresh
+  // one, as it did before the store became the one reader. The store's 20 s poll stays the only cadence.
+  const refreshAccounts = useFleetStore((s) => s.refreshAccounts);
+  useEffect(() => { void refreshAccounts(); }, [refreshAccounts]);
   const sessions = useFleetStore((s) => s.sessions);
   // Item 3 (I1, wave-1 fix round A): the fleet-level `pools` frame's
   // `accountPools` capability — produced (T9-R2/F2, `server/src/pools.ts`'s
@@ -198,6 +172,32 @@ export function AccountsScreen(): ReactNode {
 
   const order = rowOrder(roster, accounts ?? []);
 
+  // The arrival at a lane (T2c, D-6329, Q14): a lane card opens `/accounts?lane=<id>`, and the screen scrolls that
+  // lane's row into view, focuses it and marks it with one accent edge. A PASSIVE effect, never a layout one: the
+  // shell's pane reset to the top (app.tsx) is a layout effect that runs on every path or search change, and layout
+  // effects run child before parent, so an arrival made in a layout effect would be undone by it. It is keyed on the
+  // lane AND on whether the lane's row exists, because the rows are drawn only once the poll lands (`order` is empty
+  // until then): an arrival at mount finds no row, and the same effect finishes the job when the poll brings it.
+  // `arrivedAt` holds the last lane arrived at, so each value scrolls once and a re-render never moves focus again;
+  // a second `?lane=` on the same mount is a new value and arrives once. An unknown lane arrives nowhere.
+  const lane = laneParam(useLocation().search);
+  const laneRowExists = lane !== null && accounts != null && order.includes(lane);
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const arrivedAt = useRef<string | null>(null);
+  const [arrived, setArrived] = useState<string | null>(null);
+  useEffect(() => {
+    // The record follows the param: no lane, or a lane with no row, clears the edge and the ref, so a later return to
+    // the lane that was arrived at arrives again (the shell's reset will have put the pane back at the top).
+    if (!laneRowExists || lane === null) { arrivedAt.current = null; setArrived(null); return; }
+    if (arrivedAt.current === lane) return;
+    const row = rowRefs.current.get(lane);
+    if (row === undefined) return;
+    arrivedAt.current = lane;
+    row.scrollIntoView({ block: 'start' });
+    row.focus({ preventScroll: true });
+    setArrived(lane);
+  }, [lane, laneRowExists]);
+
   // The account-pool editor — one sheet, retargeted per tap, on the exact
   // terms `PoolSheet`/`FleetScreen`'s own pool sheet already use: the route-
   // owned subject lives here, not inside the sheet.
@@ -206,8 +206,8 @@ export function AccountsScreen(): ReactNode {
 
   // `POST /api/pools/accounts/:id` (Task 7) does not echo the account's
   // resulting tag — only the epoch the write produced — so this toasts off
-  // the REQUEST, not a remeasurement, and leans on `useAccountsPoll`'s own
-  // 20s interval to bring the row's next `accountPoolState` read in line
+  // the REQUEST, not a remeasurement, and leans on the fleet store's 20s
+  // accounts poll (`useAccountsPoll`) to bring the row's next `accountPoolState` read in line
   // with what the fleet host actually converges to (ccd-pool-sync's pull,
   // `OnUnitActiveSec=60s` — the same lag the fleet head's epoch/observed
   // indicator exists to make visible elsewhere).
@@ -244,9 +244,9 @@ export function AccountsScreen(): ReactNode {
   // `homeAbleNames === ''` (fix round 1, finding 7): `projected` and `roster`
   // arrive on the same poll response in the steady state, but a first
   // response that lands with a valid `projected: null` and a malformed
-  // `roster` leaves `roster` at its `[]` default (`useAccountsPoll`
-  // preserves rather than clobbers on a malformed read — see its own
-  // comment) — same degenerate case ProjectCard's `addLabel` guards.
+  // `roster` leaves `roster` at its `[]` default (the store preserves rather
+  // than clobbers on a malformed read — see `useAccountsPoll`'s comment) —
+  // same degenerate case ProjectCard's `addLabel` guards.
   const homeAbleNames = homeAbleLabelList(roster);
   const projectionLine = projected === undefined
     ? null
@@ -308,21 +308,22 @@ export function AccountsScreen(): ReactNode {
           // and a measurement does not explain away a switch. The two are
           // cleared by different acts.
           const offNote = disabled && authDead
-            ? 'disabled on the fleet host; sign-in expired'
+            ? `disabled on the fleet host; ${SIGN_IN_EXPIRED}`
             : disabled
               ? 'disabled on the fleet host'
-              : 'sign-in expired on the fleet host';
+              : `${SIGN_IN_EXPIRED} on the fleet host`;
           const ts = a?.ts ?? null;
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
-          // workspace that is archived, mid-cleanup, or whose tmux session is
-          // gone (`status: 'dead'`) is not load on this account, even though
-          // it still carries the account's `wrapper` and stays in the fleet
-          // store until reaped. `archivedAt !== null` is `sessionBucket`'s own
-          // first check (shared/api.ts) — it alone covers both 'archived' and
-          // 'cleanup', so this predicate is exactly "neither of those, nor
-          // dead" without re-deriving the bucket ladder here.
+          // workspace that is archived, mid-cleanup, or that the server does
+          // not read alive is not load on this account, even though it still
+          // carries the account's `wrapper` and stays in the fleet store until
+          // reaped. Archived is the server's bucket, `isArchivedRow` (shared/api.ts,
+          // OA-C15 (a), D-7188): it covers both 'archived' and 'cleanup'.
+          // Live is the server's word (`presenceOf`, OA-C15 (a), D-7181): a
+          // doubted, sleeping or old-server row is not counted, as today, and
+          // a pane gone under `restarting` is the session itself, alive.
           const onAccount = sessions.filter(
-            (s) => s.wrapper === wrapper && s.archivedAt === null && s.status !== 'dead',
+            (s) => s.wrapper === wrapper && !isArchivedRow(s) && presenceOf(s) === 'alive',
           );
           // `accountPoolState`, not `accountPool` — this chip is the one
           // surface in the app whose whole job is to say WHICH carrier
@@ -350,7 +351,15 @@ export function AccountsScreen(): ReactNode {
           // on a guess.
           const acctPoolDim = accountPools === 'unavailable';
           return (
-            <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
+            <section
+              key={wrapper}
+              className="accounts-row"
+              data-disabled={off ? 'true' : 'false'}
+              data-lane={wrapper}
+              data-arrived={arrived === wrapper ? 'true' : undefined}
+              tabIndex={-1}
+              ref={(el) => { if (el === null) rowRefs.current.delete(wrapper); else rowRefs.current.set(wrapper, el); }}
+            >
               <div className="accounts-row-head">
                 <span
                   className="account-gauge-label"
@@ -400,7 +409,7 @@ export function AccountsScreen(): ReactNode {
                 <ul className="accounts-sessions">
                   {onAccount.map((s) => (
                     <li key={s.id}>
-                      <button type="button" className="accounts-session" onClick={() => navigate(`/s/${s.id}`)}>
+                      <button type="button" className="accounts-session" onClick={() => navigate(sessionPath(s.id))}>
                         {sessionLabel(s)}
                       </button>
                     </li>

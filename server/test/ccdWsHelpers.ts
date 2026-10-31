@@ -14,6 +14,7 @@ import { asManagerCalls } from './platformFixtures.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { CONTAINED_TOOLS, busUnder, plantPoison } from './containedTools.js';
 import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
+import { markGenerated } from '../../shared/mark.mjs';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -24,6 +25,71 @@ const HOME_ABLE_WRAPPERS: readonly string[] =
   DEFAULT_TEST_ROSTER.accounts.filter((a) => a.homeAble).map((a) => a.id);
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
+
+/** The library `CCD` loads at its foot (D-6913): the fleet disk-retention code, a separate file in
+ *  `ccd/lib/` that the body finds beside itself, in the repository and in the installed layout alike. */
+export const CCD_LIB = path.resolve(__dirname, '../../ccd/lib/disk-retention.sh');
+
+/** The committed placeholder for the library pin (D-6913): like line 2's stamp, the digest is written at install time. */
+export const CCD_LIB_PIN_PLACEHOLDER = '__CCD_LIB_SHA256=stamp-at-install';
+
+/** The second library `CCD` loads at its foot (D-7463): the train proof, beside the first in `ccd/lib/`, pinned the same way. */
+export const CCD_TRAIN_LIB = path.resolve(__dirname, '../../ccd/lib/train-proof.sh');
+
+/** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
+export const CCD_TRAIN_LIB_PIN_PLACEHOLDER = '__CCD_LIB_TRAIN_SHA256=stamp-at-install';
+
+/** Every library `CCD` loads, in load order: the file and the name it is installed under in `lib/` beside the body. */
+export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB];
+
+/** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
+ *  tree's `shared/`, and pinned by digest in the body like the library. */
+export const CCD_REDACT = path.resolve(__dirname, '../../shared/redact.mjs');
+export const CCD_REDACT_CLI = path.resolve(__dirname, '../../shared/redact-cli.mjs');
+
+/** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`, the redactor's two files
+ *  (`shared`, the repository's by default) and the train-proof library's bytes (`train`, the repository's by default): the
+ *  four pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
+ *  marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures; `ccd-entry-install.test.ts` holds it
+ *  equal to the installer's real output. */
+export function installedCcdBody(
+  source: string, lib: string | Buffer,
+  shared: { redact: string | Buffer; cli: string | Buffer } = { redact: fs.readFileSync(CCD_REDACT), cli: fs.readFileSync(CCD_REDACT_CLI) },
+  train: string | Buffer = fs.readFileSync(CCD_TRAIN_LIB),
+): string {
+  const digest = createHash('sha256').update(lib).digest('hex');
+  const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
+  const lines = source.replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${sha(shared.redact)}`)
+    .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${sha(shared.cli)}`)
+    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`)
+    .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${sha(train)}`).split('\n');
+  if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
+  return markGenerated(lines.join('\n'));
+}
+
+let ccdSourceMemo: string | undefined;
+/** ccd's whole shell source as ONE text (D-6913): `ccd/ccd` with each `# @ccd-lib:<id>` pointer line replaced
+ *  by that region of its library (any of `CCD_LIBS`; an id names one region across them all), back where the code sat
+ *  before it moved. Every test that SCANS ccd's text reads it through
+ *  here, so a moved region stays under the same scanner, the same marker pair and the same ordering; a bare
+ *  `readFileSync(CCD, 'utf8')` would read ccd without the moved code, and a scan would pass over less than it did.
+ *  `ccd-lib-load.test.ts` holds that no test reads it bare. Tests about the FILES (the stamp, the digest, the install)
+ *  read the real bytes of `CCD` and `CCD_LIB` themselves. Only the pointer lines differ from the pre-move text. */
+export function ccdSource(): string {
+  if (ccdSourceMemo !== undefined) return ccdSourceMemo;
+  const main = fs.readFileSync(CCD, 'utf8');
+  const regions = new Map<string, string>();
+  for (const lib of CCD_LIBS) {
+    if (!fs.existsSync(lib)) continue;
+    const parts = fs.readFileSync(lib, 'utf8').split(/^# @ccd-lib:(\w+)\n/m);
+    for (let i = 1; i + 1 < parts.length; i += 2) {
+      if (regions.has(parts[i]!)) throw new Error(`ccdSource: the region id ${parts[i]} is named twice across ccd's libraries`);
+      regions.set(parts[i]!, parts[i + 1]!.replace(/\n+$/, ''));
+    }
+  }
+  if (regions.size === 0) return (ccdSourceMemo = main);
+  return (ccdSourceMemo = main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line));
+}
 
 /** The coordination client, beside `ccd` and installed the same way. Spelled
  *  here rather than joined at each call site for the reason
@@ -92,12 +158,25 @@ export function installDirectEntry(home: string, opts: { body?: string | Buffer 
   const libexec = path.join(home, '.local', 'libexec', 'ccrc');
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(libexec, { recursive: true });
-  const bodyBytes = opts.body === undefined ? fs.readFileSync(CCD) : Buffer.from(opts.body);
+  // The shipped body goes in as the installer publishes it (its library pin rendered, then stamped); a fixture body as given.
+  const bodyBytes = opts.body === undefined
+    ? Buffer.from(installedCcdBody(fs.readFileSync(CCD, 'utf8'), fs.readFileSync(CCD_LIB)))
+    : Buffer.from(opts.body);
   const body = path.join(libexec, 'ccd');
   const entry = path.join(bin, 'ccd');
   fs.rmSync(body, { force: true });
   fs.writeFileSync(body, bodyBytes, { mode: 0o644 });
   fs.chmodSync(body, 0o644);
+  // The libraries the body loads (D-6913, D-7463), where the installer puts them: `lib/` beside the body.
+  for (const lib of CCD_LIBS) {
+    if (!fs.existsSync(lib)) continue;
+    fs.mkdirSync(path.join(libexec, 'lib'), { recursive: true });
+    fs.copyFileSync(lib, path.join(libexec, 'lib', path.basename(lib)));
+  }
+  // The docs redactor (D-7077), where the installer puts it: `shared/` beside the body.
+  fs.mkdirSync(path.join(libexec, 'shared'), { recursive: true });
+  fs.copyFileSync(CCD_REDACT, path.join(libexec, 'shared', 'redact.mjs'));
+  fs.copyFileSync(CCD_REDACT_CLI, path.join(libexec, 'shared', 'redact-cli.mjs'));
   fs.rmSync(entry, { force: true });
   if (!fs.existsSync(CCD_ENTRY)) {
     fs.writeFileSync(entry, bodyBytes, { mode: 0o755 });
@@ -637,10 +716,19 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // CONTAINED_TOOLS name is planted here, at creation.
   ghContainedEnv(home, {}, { systemd: true, tmux: true, net: true });
 
+  // Fixture git runs with auto-maintenance and auto-gc OFF. Each commit would
+  // otherwise start `git maintenance run --auto --detach`, which outlives the
+  // commit; on git 2.55 its default task is a geometric `repack -d`, which can
+  // merge and delete the temporary pack of a fixture's own explicit `gc` before
+  // gc's cruft pass reads it ("could not find pack '.tmp-…'"). An explicit
+  // `git gc` is not affected. `inheritedEnv()` drops any inherited
+  // GIT_CONFIG_COUNT/KEY/VALUE, so these are the only pairs.
   const gitEnv = (): NodeJS.ProcessEnv => ({
     ...inheritedEnv(), HOME: home,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
     GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0',
   });
 
   const git = (cwd: string, ...args: string[]): string =>

@@ -2,6 +2,7 @@ import type { PrChecks, PrReason, PrState, PrView, ProjectRepoWire, TaskItem } f
 import { isPrReason, UNCHECKED_PR } from '../../shared/api.js';
 import type { CcdResult } from './coord/ports.js';
 import { ccdEnding } from './lifecycle.js';
+import { isHead40 } from '../../shared/landing.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -16,6 +17,24 @@ export interface CcdPrRow {
    *  one reader, `childSpent`'s incarnation placement, reads as UNDATED —
    *  never as old and never as new (child-reclamation spec §5.3). */
   createdAt?: string;
+  /** gh's own labels and close time, passed through unchanged. Neither is read
+   *  here: the label is read on the box, into `landedInTrain` below. */
+  labels?: unknown; closedAt?: string | null;
+  /** ccd's annotation, beside `ours`: a merge train PROVABLY landed this PR's
+   *  work and closed it — GitHub says CLOSED, the PR carries the deployment's
+   *  train label (ccd's `CCD_LANDED_LABEL`, default `landed-in-train`), AND the
+   *  train record proves it: the train PR is MERGED and its `ccrc-train v1`
+   *  block lists this PR at exactly its head sha (D-7362). The label alone is
+   *  never enough. The fleet box is the one reader of the label and the record,
+   *  so this side never names either. Absent on a row from an older ccd, which
+   *  reads as not landed. */
+  landedInTrain?: boolean;
+  /** ccd's other half of the same judgement: CLOSED with the train label and NOT proven by the train record, so
+   *  `closed` with reason `train-unproven`, never merged. Absent on a row from an older ccd. */
+  trainUnproven?: boolean;
+  /** The third answer (D-7378): CLOSED with the train label and the train record NOT READ (no budget, a timeout,
+   *  GitHub unreachable), so `unknown` with reason `train-unread` — unmeasured, never closed. */
+  trainUnread?: boolean;
 }
 
 export interface CcdPrLine {
@@ -135,8 +154,12 @@ const OID_RE = /^[0-9a-f]{7,40}$/;
  * as an identity — two PRs can share one.
  */
 export function isMergedRow(row: CcdPrRow, baseShort: string, registryBranch: string): boolean {
-  return row.state === 'MERGED' && typeof row.mergedAt === 'string'
-    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid)
+  const merged = row.state === 'MERGED' && typeof row.mergedAt === 'string'
+    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid);
+  // A PR closed as landed in a merge train is merged for every phase reader,
+  // with no merge commit behind it; ccd's `is_landed` is the same predicate.
+  const landed = row.state === 'CLOSED' && row.landedInTrain === true;
+  return (merged || landed)
     && row.isCrossRepository === false
     && row.baseRefName === baseShort
     && row.headRefName === registryBranch
@@ -218,7 +241,11 @@ export function phaseFor(line: CcdPrLine): PrState {
     checks, checkNames,
   };
   if (isMergedRow(row, line.baseShort, line.branch)) {
-    return { ...common, phase: 'merged', mergedAt: Date.parse(String(row.mergedAt)) };
+    // A train-landed PR is dated by its close, the moment the train closed it;
+    // a close time gh did not name is no date, never `NaN`.
+    const at = row.state === 'MERGED' ? row.mergedAt : row.closedAt;
+    const ms = typeof at === 'string' ? Date.parse(at) : Number.NaN;
+    return { ...common, phase: 'merged', mergedAt: Number.isNaN(ms) ? null : ms };
   }
   // gh says MERGED but a conjunct failed: never claim merged on a partial
   // match — both the archive trigger and the cleanup offer hang off it.
@@ -230,16 +257,22 @@ export function phaseFor(line: CcdPrLine): PrState {
   // for the same row (Task 3), and Step 6's agreement test pins the two equal on
   // `reason` as well as `phase`.
   if (row.state === 'MERGED') return { ...common, phase: 'unknown', reason: 'merge-unproven' };
-  if (row.state === 'CLOSED') return { ...common, phase: 'closed' };
+  // A train label whose record ccd did not READ (D-7378): unmeasured, never closed — ccd's `train-unread`.
+  if (row.state === 'CLOSED' && row.trainUnread === true) return { ...common, phase: 'unknown', reason: 'train-unread' };
+  // A train label ccd could not prove from the train record: closed, and why (`train-unproven`, D-7362).
+  if (row.state === 'CLOSED') {
+    return { ...common, phase: 'closed', reason: row.trainUnproven === true ? 'train-unproven' : null };
+  }
   return { ...common, phase: row.isDraft === true ? 'draft' : 'open' };
 }
 
 /** The merge-queue vocabulary `ccd pr-state --project` answers in (spec §5.2),
  *  ENUMERATED ONCE — the word list below is derived from it, never re-typed.
  *  Since landing-order wave 3d a removal's GitHub `reason` chooses between
- *  `dequeued` and `landed` inside ccd, and never reaches the line: `landed`
- *  can name a line whose phase still reads open, for the second before GitHub
- *  reads the PR merged, so no reader may take `landed` to mean phase merged. */
+ *  `dequeued` and `landed` inside ccd, and never reaches the line. GitHub
+ *  records that removal within a second of the merge, either side (D-6216):
+ *  `landed` can name a line whose phase still reads open, for up to that
+ *  second, so no reader may take `landed` to mean phase merged. */
 const PR_QUEUE_MAP = {
   queued: 'the PR is open and in the merge queue now',
   dequeued: 'the PR is open, out of the queue, and its last queue act was a removal for any reason but a merge',
@@ -417,6 +450,9 @@ export interface PrLandingLine {
   protectionNamed: string[];
   /** Required names the rules pin to an App. Absent from an older line, which reads as none. */
   pinnedNames: string[];
+  /** ccd's `landedInTrain` (see `CcdPrRow`): CLOSED, labelled, and proven by the train record. False when the line
+   *  does not say exactly `true`, including every line from an older ccd. */
+  landedInTrain: boolean;
   unmeasured: string[];
 }
 
@@ -466,6 +502,70 @@ export function readPrLandingLine(x: unknown): PrLandingLine | null {
     required, requiredCut: x['requiredCut'] === true,
     rulesNamed: strings(x['rulesNamed']), protectionNamed: strings(x['protectionNamed']),
     pinnedNames: strings(x['pinnedNames']),
+    landedInTrain: x['landedInTrain'] === true,
     unmeasured: shape ? [...unmeasured, 'shape'] : unmeasured,
   };
+}
+
+// ── `ccd pr-state --project <p> --pr <n>` (landing order wave 5c; spec §5.5 "Landed state is PR-keyed") ──
+// One PR's state by number, with no workspace binding. The five words are defined once in the map and the list is derived
+// from it. The form is behind `PR_STATE_PR_CAP` (`CCD_CAN.prStatePr`); nothing in the server calls it yet.
+
+const PR_STATE_PR_MAP = {
+  open: 'GitHub reads the PR OPEN (a draft included)',
+  merged: 'GitHub reads it MERGED, or it reads CLOSED with the train claim and the train record proves it landed (landedInTrain)',
+  closed: 'GitHub reads it CLOSED, and it carries no train claim',
+  unmeasured: 'ccd asked and got no definite answer: a timeout, a non-zero exit, an unparsable body, a missing field, or a train claim the proof refused or could not read',
+  absent: 'GitHub answered definitely that the number names no pull request in the repository',
+} as const;
+export type PrStatePrWord = keyof typeof PR_STATE_PR_MAP;
+export const PR_STATE_PR_WORDS: readonly PrStatePrWord[] = Object.keys(PR_STATE_PR_MAP) as PrStatePrWord[];
+
+export interface PrStatePrFacts {
+  headRefOid: string; baseRefName: string; isCrossRepository: boolean; mergedAt: string | null; mergeCommit: string | null;
+}
+/** What the PR-keyed form's one line says, every distinction kept. `unmeasured` says who could not follow: `by: 'ccd'` is
+ *  ccd's own answer (a fleet retry, with ccd's `reason`), `by: 'reader'` is a line this reader could not follow (build
+ *  skew, a different remedy). `absent` is GitHub's definite answer and is never folded into `unmeasured`. */
+export type PrStatePrRead =
+  | { state: 'open' | 'closed'; pr: number; facts: PrStatePrFacts; train: null }
+  | { state: 'merged'; pr: number; facts: PrStatePrFacts; train: 'proved' | null }
+  | { state: 'unmeasured'; pr: number; by: 'ccd' | 'reader'; reason: string; train: 'unproven' | 'unread' | null }
+  | { state: 'absent'; pr: number };
+
+/** The ONE reader of the PR-keyed form's stdout, for the PR `pr` the caller asked about; the line's `number` must equal it.
+ *  Pure. It stops at the first rule that fails, and every refusal is the reader's own `unmeasured`. */
+export function readPrStatePrLine(stdout: string, pr: number): PrStatePrRead {
+  const refuse = (reason: string): PrStatePrRead => ({ state: 'unmeasured', pr, by: 'reader', reason, train: null });
+  const lines = stdout.split('\n').filter((l) => l.trim() !== '');
+  if (lines.length !== 1) return refuse('line-count');
+  let x: unknown;
+  try { x = JSON.parse(lines[0]!); } catch { return refuse('not-json'); }
+  if (!isPlainObject(x)) return refuse('not-json');
+  if (!positiveSafe(x['number']) || x['number'] !== pr) return refuse('pr-mismatch');
+  const state = x['state'];
+  if (typeof state !== 'string' || !(PR_STATE_PR_WORDS as readonly string[]).includes(state)) return refuse('word');
+  const word = state as PrStatePrWord;
+  const landed = x['landedInTrain'] === true, unproven = x['trainUnproven'] === true, unread = x['trainUnread'] === true;
+  if (word === 'absent') return landed || unproven || unread ? refuse('train-flags') : { state: 'absent', pr };
+  if (word === 'unmeasured') {
+    if (unproven && unread) return refuse('train-flags');
+    const reason = typeof x['reason'] === 'string' && x['reason'] !== '' ? x['reason'] : 'unstated';
+    return { state: 'unmeasured', pr, by: 'ccd', reason, train: unread ? 'unread' : unproven ? 'unproven' : null };
+  }
+  if (unproven || unread || (landed && word !== 'merged')) return refuse('train-flags');
+  const { headRefOid, baseRefName, isCrossRepository, mergedAt, mergeCommit } = x;
+  if (typeof headRefOid !== 'string' || !isHead40(headRefOid)) return refuse('fields');
+  if (typeof baseRefName !== 'string' || baseRefName === '') return refuse('fields');
+  if (typeof isCrossRepository !== 'boolean') return refuse('fields');
+  if (mergedAt !== null && !(typeof mergedAt === 'string' && QUEUE_AT_RE.test(mergedAt))) return refuse('fields');
+  if (mergeCommit !== null && !(typeof mergeCommit === 'string' && isHead40(mergeCommit))) return refuse('fields');
+  const facts: PrStatePrFacts = { headRefOid, baseRefName, isCrossRepository, mergedAt, mergeCommit };
+  if (word === 'merged') {
+    if (landed) return { state: 'merged', pr, facts, train: 'proved' };
+    if (mergedAt === null || mergeCommit === null) return refuse('fields');
+    return { state: 'merged', pr, facts, train: null };
+  }
+  if (mergedAt !== null || mergeCommit !== null) return refuse('fields');
+  return { state: word, pr, facts, train: null };
 }
