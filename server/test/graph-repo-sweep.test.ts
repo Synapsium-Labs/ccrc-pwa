@@ -119,7 +119,7 @@ const rowOf = (repo: string, pass: Pass = lastPass()): Row => {
 const why = (r: Row): string => r.reason.replace(/(^|; )peak unmeasured$/, '');
 const treeCount = (r: Row): unknown => (r as unknown as Record<string, unknown>)['trees'];
 const keyDir = (repo: string): string => path.join(STORE(), rowOf(repo).repo_key);
-/** The store's checkout of a repository: <repo-key>/checkout/<name> (spec §2.1, D-TBD-gr4-checkout-dir). */
+/** The store's checkout of a repository: <repo-key>/checkout/<name> (spec §2.1, D-7664). */
 const checkoutOf = (repo: string, name = 'project-a'): string => path.join(keyDir(repo), 'checkout', name);
 const current = (repo: string): string => fs.realpathSync(path.join(keyDir(repo), 'current'));
 interface Meta { schema: number; build_id: string; commit: string; engine: string; kind: string; nodes: number; files: number; store: string; source: string; ref: string; last_full_at: string; noise_digest: string; changed_files: number }
@@ -944,11 +944,11 @@ describe('the outcome table: every line', () => {
   }
 });
 
-// ── a main checkout named like a store entry (spec §2.1; D-TBD-gr4-checkout-dir) ──
+// ── a main checkout named like a store entry (spec §2.1; D-7664) ──
 // The checkout sits at <repo-key>/checkout/<name>, never beside memory/, staging/, source, builds/ and current: a
 // repository's own name is free text, and a checkout named after one of those entries was deleted, refused or
 // overwritten by the pass that owns that entry.
-describe('a repository named like a store entry keeps its checkout apart (spec §2.1; D-TBD-gr4-checkout-dir)', () => {
+describe('a repository named like a store entry keeps its checkout apart (spec §2.1; D-7664)', () => {
   for (const name of ['memory', 'staging', 'source', 'builds', 'current', 'checkout']) {
     it(`a repository named ${name} builds, rebuilds on a new commit and is fresh after it`, { timeout: T }, () => {
       const repo = published(name);

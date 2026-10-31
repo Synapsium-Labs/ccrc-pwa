@@ -8,7 +8,7 @@ plan's own §Deviations found is not edited here (the ledger guard, D-6926); the
 - **D-7649 (2026-10-31)** — GR4's writes under a tree are the link and the ownership-gated stray `.graphifyignore` removal (2 sites, not 1)
 - **D-7650 (2026-10-31)** — the repository sweep sources ccd/ccrc's body, not ccd/lib/ccrc-settings.sh
 - **D-7651 (2026-10-31)** — a committed `.graphifyignore` takes the operator's noise list appended; rule 2's refusal arm is retired
-- **D-TBD-gr4-checkout-dir (2026-10-31)** — the store's checkout is `<repo-key>/checkout/<repo-name>/`, not `<repo-key>/<repo-name>/`
+- **D-7664 (2026-10-31)** — GR4 graph sweep: per-repository checkout directory under the store
 
 **D-7648.** Spec §3.4 spells the build's call `"$GRAPH_LIB/ccrc-test" --heavy -- …`. Since the test box landed (D-7410),
 `ccrc test` sends a run to the test box when the registry's switch marker is present and `CCRC_TESTBOX_URL` is set,
@@ -47,7 +47,7 @@ is what an operator's list for that repository asks for. Rule 1 (a `!` line in e
 default pattern that would hide tracked files is withheld and said) stand. `graph-repo-sweep.test.ts` pins the
 generated file's lines for the committed case.
 
-**D-TBD-gr4-checkout-dir.** Spec §2.1 puts the checkout of main at `<repo-key>/<repo-name>/`, beside the fixed
+**D-7664.** Spec §2.1 puts the checkout of main at `<repo-key>/<repo-name>/`, beside the fixed
 entries `source`, `builds/`, `current`, `memory/` and `staging/`. The repository's name is free text (`_gr_repo_key`
 only maps characters outside its shape to `_`), so a repository whose main checkout is named after one of those
 entries put its checkout on top of it. Measured on the GR4 head with a fixture box: `memory` had its saved results
