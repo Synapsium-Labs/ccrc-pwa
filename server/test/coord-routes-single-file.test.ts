@@ -18,7 +18,7 @@ const COORD_ROUTES = path.join('coord', 'routes.ts');
  *  server.ts's own read and always was; `/api/feed` and `/api/lifecycle` are
  *  coord.db reads and are. */
 const COORD_PREFIXES = ['/api/mail', '/api/runs', '/api/coord', '/api/feed',
-  '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger'];
+  '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing'];
 
 /** Every Fastify shorthand, all five verbs — a DELETE added tomorrow must be
  *  swept, not silently skipped (auth-gate.test.ts:72's own rule). */

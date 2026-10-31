@@ -262,7 +262,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // W3 Q3f (D-7030): the surface grew to thirty-eight with the question family's claimant pair.
   'thirty-seven', 'thirty-eight',
   // Test box plan TB9 (D-7554): forty with the test box's read and its tools sync, which take a session or the token.
-  'thirty-nine', 'forty'];
+  'thirty-nine', 'forty',
+  // Landing order wave 5e: forty-one with GET /api/landing, a plain requireMailToken lane.
+  'forty-one'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

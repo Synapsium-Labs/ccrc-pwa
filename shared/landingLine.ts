@@ -64,3 +64,6 @@ export const LANDING_PAUSE_BYS = Object.keys(LANDING_PAUSE_BY) as LandingPauseBy
 export type LandingOrder =
   | { paused: false; order: LandingEntry[]; head: LandingEntry | null }
   | { paused: true; by: LandingPauseBy[]; order: LandingEntry[] };
+
+/** GET /api/landing's answer, flat beside ok. */
+export interface LandingLineView { project: string; operatorPaused: boolean; mainRedHold: boolean; entries: LandingEntry[]; order: LandingOrder }

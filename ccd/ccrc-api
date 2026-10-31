@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, thirty-three rows, and nothing else; four
+#   * The route comes from ROUTES below, thirty-four rows, and nothing else; four
 #     of them name a second template, the question door family's, sent only
 #     while the server advertises `questions-v1` (D-7326).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
@@ -85,7 +85,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # The four claimant rows carry a fifth field, the question door family's
 # template (D-7325), sent in place of the path only while the server advertises
 # `questions-v1`; every other row has four.
-# Thirty-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Thirty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -135,6 +135,8 @@ declare -A ROUTES=(
   [claims.release]='POST|/api/claims/{id}/release|yes|-'
   [ledger.list]='GET|/api/ledger|no|project'
   [ledger.allocate]='POST|/api/ledger/deviations|no|-'
+  # The landing line's read (landing order wave 5e, D-7625): one project's entries, flags and order.
+  [landing.show]='GET|/api/landing|no|project'
   # A token-authenticated session may list only its own children's asks. The
   # client derives both identity fields below; `--parent` is accepted only as a
   # compatibility assertion and may never select somebody else.

@@ -22,6 +22,8 @@ import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
+import { landingOrder } from './landingLine.js';
+import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
@@ -3796,6 +3798,28 @@ export function registerCoordRoutes(
       allocations: rows.map((a) => ({ ...a,
         stale: a.state === 'allocated' && a.allocatedAt <= now - LEDGER_STALE_MS })),
     });
+  });
+
+  /**
+   * `GET /api/landing?project=`: the landing line, read cookieless from the fleet host before the coordinator
+   * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
+   * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
+   * no `landing_projects` row answers both flags `false`: inert until their writers (5i, 5j). The read is advisory
+   * in 5e (D-7626). The handler decides nothing: decide in L1, act here.
+   */
+  app.get('/api/landing', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/landing')) return;
+    const q = req.query as { project?: unknown };
+    if (typeof q.project !== 'string' || q.project.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'the landing line is per-project — ?project= is required' });
+    }
+    const project = q.project.trim();
+    const entries = deps.coord.landingEntries(project);
+    const flags = deps.coord.landingProject(project);
+    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags) };
+    return reply.code(200).send({ ok: true, ...view });
   });
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
