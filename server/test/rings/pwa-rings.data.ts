@@ -16,8 +16,6 @@ import type { EntrySet } from './exemptions.js';
 
 export const PWA_L1_EXEMPTIONS: EntrySet = {
   'pwa/src/fleet/sessionFacts.ts -> pwa/src/fleet/chips.tsx': { reason: "the session facts take the chip component file's unmeasuredTitle word", since: '2026-10-20' },
-  'pwa/src/skins/index.ts -> pwa/src/skins/instrument/parts.tsx': { reason: "the skin registry names the instrument skin's part set", since: '2026-10-20' },
-  'pwa/src/skins/index.ts -> pwa/src/skins/refined/parts.tsx': { reason: "the skin registry names the refined skin's part set", since: '2026-10-20' },
 };
 
 export const UI_PWA_EXEMPTIONS: EntrySet = {};
