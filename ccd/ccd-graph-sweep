@@ -754,7 +754,7 @@ _gs_outcome() {   # <rc> <started 1|0> <elapsed ms> <stderr file>
 # ── one build (spec §3.4, §3.5, §4) ───────────────────────────────────────
 _gs_build() {   # <key>
   local key="$1" kd="${K_DIR[$1]}" ck="${K_CK[$1]}" tip="${K_TIP[$1]}" kind="${K_KIND[$1]}" built="${K_BUILT[$1]}"
-  local stg="${K_DIR[$1]}/staging" st_line st_rc launched t0 rc ms started=0 bout berr peak cpu
+  local stg="${K_DIR[$1]}/staging" st_line st_rc launched t0 rc ms bms st_s started=0 bout berr peak cpu
   local slot="${GK[CCRC_GRAPH_SLOT_WAIT_SECS]}" bt="${GK[CCRC_GRAPH_BUILD_TIMEOUT]}" ts id
   local -a changed=()
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -788,7 +788,14 @@ _gs_build() {   # <key>
   rc=$?
   ms=$(( $(_plat_epoch_ms) - t0 ))
   K_DUR["$key"]="$ms"
-  [ -e "$stg/.started" ] && started=1
+  # The outcome table's "elapsed" is the BUILD's: from the wrapper's `.started` stamp (its first field, epoch
+  # seconds), so a long wait for a heavy slot never makes an external kill read as the timeout's.
+  bms="$ms"
+  if [ -e "$stg/.started" ]; then
+    started=1
+    read -r st_s _ < "$stg/.started" 2>/dev/null || st_s=""
+    [[ "$st_s" =~ ^[0-9]+$ ]] && bms=$(( ($(date +%s) - st_s) * 1000 ))
+  fi
   cat -- "$bout" "$berr" >> "$LOG" 2>/dev/null
   # -E, so the alternation is the same on GNU and BSD sed (a BRE `\|` is a GNU extension)
   peak="$(sed -nE 's/^graph-build: peak_kb=([0-9]+|null) cpu_ms=.*$/\1/p' "$bout" | tail -n 1)"
@@ -796,7 +803,7 @@ _gs_build() {   # <key>
   [[ "$peak" =~ ^[0-9]+$ ]] || peak=null
   [[ "$cpu" =~ ^[0-9]+$ ]] || cpu=null
   K_PEAK["$key"]="$peak"; K_CPU["$key"]="$cpu"
-  _gs_outcome "$rc" "$started" "$ms" "$berr"
+  _gs_outcome "$rc" "$started" "$bms" "$berr"
   [ "$rc:$started" = 0:1 ] || return 0
   [ "$peak" != null ] || _gs_note "peak unmeasured"
   # ── stamp, publish checks, publish (spec §3.5 steps 3-5) ──

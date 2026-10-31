@@ -330,6 +330,9 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
     expect(m.noise_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(fs.statSync(path.join(kd, 'current', 'meta.json')).size).toBeLessThan(8192);   // the hook reads 8 KiB
     expect(calls()).toHaveLength(1);
+    // §Review focus 3: no silent queue — the engine was called with acquire_lock=False, and nothing it queues is published
+    expect(calls()[0]!['acquire_lock']).toBe(false);
+    for (const f of ['.rebuild.lock', '.pending_changes', '.graphify_root', '.started', 'changed.z']) expect(fs.existsSync(path.join(current(repo), f)), f).toBe(false);
     sweep();
     expect(rowOf(repo).outcome).toBe('fresh');
     expect(calls(), 'nothing built').toHaveLength(1);
@@ -880,6 +883,10 @@ describe('the outcome table: every line', () => {
   });
   it('137, .started, no OOM sentence, elapsed < BUILD_TIMEOUT (an external SIGKILL): failed (killed by signal 9), fail: unknown', { timeout: T }, () => {
     expect(after({ GRAPH_STUB_MODE: 'sigkill' })).toMatchObject({ outcome: 'failed', fail: 'unknown', reason: 'killed by signal 9' });
+  });
+  it('137 after a long slot wait: "elapsed" is the build\'s own, from .started, so the wait does not make it a timeout', { timeout: T }, () => {
+    const r = after({ CCRC_GRAPH_BUILD_TIMEOUT: '2', GRAPH_STUB_MODE: 'sigkill' }, { 'sleep-before': '3' });
+    expect(r).toMatchObject({ outcome: 'failed', fail: 'unknown', reason: 'killed by signal 9' });
   });
   it('any other exit, .started: failed (exit <n>), fail: unknown', { timeout: T }, () => {
     expect(after({}, { 'exit-after': '5' })).toMatchObject({ outcome: 'failed', fail: 'unknown', reason: 'exit 5' });
