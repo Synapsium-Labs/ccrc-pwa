@@ -6918,6 +6918,20 @@ is read before it: a read that asked GitHub and hit an unread candidate reads
 `train-unread` whatever the line says. A proof found by any read, `pr-landing`'s
 included (which keeps none), removes the member's tried line.
 
+**One PR by number (landing order wave 5c).** `ccd pr-state --project <p> --pr <n>` reads one
+pull request of the project's repository by number, with no workspace: one `gh pr view` under its
+own timeout (`PR_GH_VIEW_TIMEOUT`, 6 s) and one JSON line out. Its `state` is one of five words:
+`open`, `merged`, `closed`, `absent` (GitHub answered "Could not resolve to a PullRequest") or
+`unmeasured`, with a `reason`: `no-remote`, `timeout`, `unreadable`, `missing-field`,
+`train-unproven`, `train-unread`, or, for any other failed gh call, the word `pr-state --session` gives
+the same failure (`unauthenticated`, `rate-limit`, `offline`, `unavailable`, `truncated`, `error`). The line echoes `headRefOid`, `baseRefName`,
+`isCrossRepository`, `mergedAt` and `mergeCommit` (the oid), so a reader can bind the answer to
+the head, base and repository it expected. A PR CLOSED with the train label is never a bare
+`closed`: the form runs the same train proof, inside `PR_STATE_TRAIN_TIMEOUT`, and keeps a proof it
+makes. A proved one reads `merged` with `landedInTrain: true`, `train` and `trainMergeCommit`; one
+whose record was read and did not prove it, or could not be read, reads `unmeasured`
+(`train-unproven`, `train-unread`); a labelled PR from a fork is never proved and reads `unmeasured` (`train-unread`). The workspace form reads a claim whose record was read and did not prove it as `closed` (`train-unproven`); this form reads the same fact as `unmeasured`, so the two forms' words are not interchangeable. `ccd caps` lists `pr-state-pr-v1` for a ccd that has the form.
+
 **The train record (D-7335)** is the one machine-readable block in a train PR's
 body, and a train tool writes exactly one: an HTML comment on lines of its own,
 opened by `<!-- ccrc-train v1`, one `member #<n> <40-hex head sha>` line per
@@ -6966,7 +6980,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
-| `pr-open --session <id> …` · `pr-state --session <id>\|--project <p>` | open the workspace's PR — the one PR write; read PR state |
+| `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane, on the box (the agent grants no `account-pane`) |
 | `caps` · `version` | the verbs this copy implements; this box's build stamp |
 

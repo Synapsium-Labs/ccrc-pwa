@@ -137,6 +137,7 @@ _transcript_path	C3
 _ws_stash_count	C4
 _ws_ignored_digest	C4
 _gh_repo_slug	C4
+_gh_fail_reason	C4
 _gh_pr_list	C4
 _gh_pr_checks	C4
 _gh_rows_ok	C4
@@ -696,6 +697,7 @@ _authdead_clear_on_spawn	C1
 _gh_pr_queue	C4
 _pr_queue_stamp	C4
 _pr_queue_py	C4
+_pr_state_by_pr	C4
 _docs_max_bytes_ok	C9
 _docs_redact_cli	C9
 _docs_front	C9
