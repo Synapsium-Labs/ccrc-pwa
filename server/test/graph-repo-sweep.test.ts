@@ -952,6 +952,25 @@ describe('the corpus guard and the generated filter, in the store\'s checkout', 
     expect(fs.existsSync(path.join(repo, 'graphify-out')), 'N16: no link without a published build').toBe(false);
   });
 
+  it('D-1454 — a breach inside the five-path cap carries no count clause', { timeout: T }, () => {
+    const repo = makeRepo();
+    sweep({ GRAPH_STUB_DETECT_EXTRA: '["u0.py","u1.py"]' });
+    expect(why(rowOf(repo))).toBe('untracked paths entered the corpus: u0.py u1.py ');
+  });
+
+  it('D-1449 — a TRACKED path git C-quotes (non-ASCII, a backslash, a quote, a tab) is not read as untracked', { timeout: T }, () => {
+    const repo = makeRepo('project-a', { 'J\u00e0rn.py': 'x\n', 'back\\slash.py': 'b\n', 'quo"te.py': 'q\n', 'tab\tname.py': 't\n' });
+    sweep();
+    expect(rowOf(repo).outcome, why(rowOf(repo))).toBe('rebuilt');
+  });
+
+  it('D-1449 — an UNTRACKED non-ASCII path still refuses, and the reason carries the raw name', { timeout: T }, () => {
+    const repo = makeRepo();
+    sweep({ GRAPH_STUB_DETECT_EXTRA: JSON.stringify(['J\u00e0rn.bin']) });
+    expect(rowOf(repo).outcome).toBe('refused-by-guard');
+    expect(why(rowOf(repo))).toBe('untracked paths entered the corpus: J\u00e0rn.bin ');
+  });
+
   it('a "!" line in either noise list refuses (rule 1), with leading whitespace too', { timeout: T }, () => {
     const repo = makeRepo();
     fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
@@ -1100,6 +1119,136 @@ describe('links and excludes', () => {
     sweep(INCR);
     const added = [...list(repo), ...list(ws)].filter((p) => !before.includes(p));
     expect(added).toEqual([path.join(repo, 'n.py'), path.join(repo, 'graphify-out'), path.join(ws, 'graphify-out')].sort());
+  });
+});
+
+// ── tree discovery: `_gs_trees`, kept (D-1367, D-1370, D-1371, D-1510, D-1563) ───
+// A tree is still a git TOPLEVEL under the two roots, discovered once by realpath, and a `.claude/worktrees` candidate
+// only while a registered session lives in it. What discovery decides now is which trees get a link and how many the
+// repository's row counts; the per-tree rows these cases asserted on are gone with the per-tree sweep.
+describe('tree discovery (the per-tree rows of D-1367 to D-1563, retargeted to links and the row\'s tree count)', () => {
+  function makeWorktreeRoot(name: string): string {
+    const d = j('worktrees', name);
+    fs.mkdirSync(path.join(d, 'src'), { recursive: true });
+    execFileSync('git', ['init', '-q', '-b', 'main', d]);
+    commit(d, { 'a.py': 'x = 1\n', 'src/b.py': 'y = 2\n' }, 'init');
+    return d;
+  }
+  const linked = (t: string): boolean => fs.existsSync(path.join(t, 'graphify-out')) && fs.lstatSync(path.join(t, 'graphify-out')).isSymbolicLink();
+  const registerSession = (id: string, tree: string): void => {
+    fs.mkdirSync(j('.cc-sessions'), { recursive: true });
+    fs.writeFileSync(j('.cc-sessions', `${id}.workdir`), `${tree}\n`);
+  };
+
+  it('D-1367 — a depth-1 worktree is a tree ITSELF, and none of its subdirectories is', { timeout: T }, () => {
+    const solo = makeWorktreeRoot('solo');
+    expect(sweep().status).toBe(0);
+    expect(treeCount(rowOf(solo))).toBe(1);
+    expect(linked(solo)).toBe(true);
+    expect(fs.existsSync(path.join(solo, 'src', 'graphify-out')), 'a plain subdirectory got a link').toBe(false);
+    expect(fs.existsSync(path.join(solo, '.git', 'graphify-out')), 'the git dir got a link').toBe(false);
+  });
+
+  it('D-1367 — a depth-2 worktree and its main checkout are trees, the directory holding the worktree is not', { timeout: T }, () => {
+    const repo = makeRepo();
+    const ws = j('worktrees', 'project-a', 'lane-a');
+    fs.mkdirSync(path.dirname(ws), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'lane-a', ws);
+    sweep();
+    expect(treeCount(rowOf(repo))).toBe(2);
+    expect([linked(repo), linked(ws)]).toEqual([true, true]);
+    expect(fs.existsSync(j('worktrees', 'project-a', 'graphify-out'))).toBe(false);
+  });
+
+  it('D-1367 — a candidate whose canonical path is UNMEASURABLE is skipped, never "two empties are equal"', { timeout: T }, () => {
+    const solo = makeWorktreeRoot('solo');
+    const stub = j('pathstub'); fs.mkdirSync(stub, { recursive: true });
+    for (const name of ['realpath', 'readlink']) fs.writeFileSync(path.join(stub, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    sweep({ PATH: `${stub}:${j('bin')}:${process.env['PATH'] ?? ''}` });
+    expect(lastPass().status).toBe('probed-zero');
+    expect(fs.existsSync(path.join(solo, 'graphify-out'))).toBe(false);
+  });
+
+  it('D-1370 — two names of one tree are one tree (dedupe by realpath): counted once, linked once', { timeout: T }, () => {
+    const repo = makeRepo('project-a');
+    fs.symlinkSync(repo, j('projects', 'project-a-link'));
+    sweep();
+    expect(lastPass().repos).toHaveLength(1);
+    expect(treeCount(rowOf(repo))).toBe(1);
+    expect(linked(repo)).toBe(true);
+  });
+
+  it('D-1370 — an alias under the other root is the same tree, counted once', { timeout: T }, () => {
+    const real = makeWorktreeRoot('project-a');
+    fs.symlinkSync(real, j('projects', 'project-a'));
+    sweep();
+    expect(lastPass().repos).toHaveLength(1);
+    expect(treeCount(rowOf(real))).toBe(1);
+    expect(linked(real)).toBe(true);
+  });
+
+  it('D-1371 — under a symlinked projects root (the live fleet shape) an alias is still the same tree', { timeout: T }, () => {
+    fs.rmSync(j('projects'), { recursive: true });
+    fs.mkdirSync(j('real-projects'));
+    fs.symlinkSync(j('real-projects'), j('projects'));
+    const zeta = makeRepo('zeta');
+    fs.symlinkSync('zeta', j('projects', 'alpha'));
+    sweep();
+    expect(lastPass().repos).toHaveLength(1);
+    expect(treeCount(rowOf(zeta))).toBe(1);
+    expect(linked(zeta)).toBe(true);
+  });
+
+  for (const [shape, place] of [
+    ['under $PROJECTS_ROOT', (repo: string): string => repo],
+    ['under a depth-2 workspace', (repo: string): string => {
+      const ws = j('worktrees', 'project-a', 'lane-a');
+      fs.mkdirSync(path.dirname(ws), { recursive: true });
+      git(repo, 'worktree', 'add', '-q', '-b', 'lane-a', ws);
+      return ws;
+    }],
+  ] as const) {
+    it(`D-1510 — a Claude Code worktree ${shape} that a session lives in is a tree of its repository; a plain directory beside it is not`, { timeout: T }, () => {
+      const repo = makeRepo();
+      const holder = place(repo);
+      const wt = path.join(holder, '.claude', 'worktrees', 'x');
+      fs.mkdirSync(path.dirname(wt), { recursive: true });
+      git(holder, 'worktree', 'add', '-q', '-b', `x-${shape.length}`, wt);
+      // D-1562: the registry may spell the tree through a symlinked root; realpaths compare
+      fs.symlinkSync(j('projects'), j('data'));
+      registerSession('lane-a', wt.replace(j('projects'), j('data')));
+      const notatree = path.join(holder, '.claude', 'worktrees', 'notatree');
+      fs.mkdirSync(notatree, { recursive: true });
+      fs.writeFileSync(path.join(notatree, 'a.py'), 'x = 1\n');
+      sweep();
+      expect(linked(wt), 'the session\'s own worktree reads its repository\'s graph').toBe(true);
+      expect(fs.existsSync(path.join(notatree, 'graphify-out'))).toBe(false);
+      expect(treeCount(rowOf(repo))).toBe(holder === repo ? 2 : 3);
+    });
+  }
+
+  it('D-1510 — a Claude Code worktree under a DEPTH-1 workspace is a tree too', { timeout: T }, () => {
+    const solo = makeWorktreeRoot('solo');
+    const wt = path.join(solo, '.claude', 'worktrees', 'z');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(solo, 'worktree', 'add', '-q', '-b', 'z', wt);
+    registerSession('lane-a', wt);
+    sweep();
+    expect(linked(wt)).toBe(true);
+    expect(treeCount(rowOf(solo))).toBe(2);
+  });
+
+  it('D-1563 — a .claude/worktrees tree NO session lives in is not a tree: no link, not counted', { timeout: T }, () => {
+    const repo = makeRepo();
+    const x = path.join(repo, '.claude', 'worktrees', 'x');
+    const y = path.join(repo, '.claude', 'worktrees', 'y');
+    fs.mkdirSync(path.dirname(x), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'x', x);
+    git(repo, 'worktree', 'add', '-q', '-b', 'y', y);
+    registerSession('lane-a', x);
+    sweep();
+    expect([linked(repo), linked(x), linked(y)]).toEqual([true, true, false]);
+    expect(treeCount(rowOf(repo))).toBe(2);
   });
 });
 
