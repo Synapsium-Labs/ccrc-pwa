@@ -760,7 +760,13 @@ _gs_build() {   # <key>
   local stg="${K_DIR[$1]}/staging" st_line st_rc launched t0 rc ms bms st_s started=0 bout berr peak cpu
   local slot="${GK[CCRC_GRAPH_SLOT_WAIT_SECS]}" bt="${GK[CCRC_GRAPH_BUILD_TIMEOUT]}" ts id
   local -a changed=()
-  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  # The id carries the start's second (spec §2.1). Passes are serialized, but two builds at one commit can still start
+  # inside one second (a noise-digest rebuild right after a publish), and the second would refuse its publish as
+  # `build id exists`. So a start whose id is already a published build waits for the next second.
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"; id="${tip:0:12}-$PIN-$ts"
+  while [ -e "$kd/builds/$id" ] || [ -L "$kd/builds/$id" ]; do
+    sleep 0.2; ts="$(date -u +%Y%m%dT%H%M%SZ)"; id="${tip:0:12}-$PIN-$ts"
+  done
   if ! _gs_stage "$key"; then _gs_end failed setup "$GS_WHY"; return 0; fi
   if [ "$kind" = incremental ]; then
     _gs_git "$ck" diff -z --no-renames --name-only "$built" "$tip" > "$stg/changed.z" 2>/dev/null \
@@ -825,7 +831,6 @@ _gs_build() {   # <key>
     _gs_end refused-shrink - "$nodes nodes against the served build's $pred, a shrink past CCRC_GRAPH_MAX_SHRINK_PCT=${GK[CCRC_GRAPH_MAX_SHRINK_PCT]}"
     return 0
   fi
-  id="${tip:0:12}-$PIN-$ts"
   if [ "$kind" = full ]; then lfc="$tip"; lfa="$(date -u +%FT%TZ)"
   else
     lfc="$(jq -r '.last_full_commit // ""' "$kd/current/meta.json" 2>/dev/null)"

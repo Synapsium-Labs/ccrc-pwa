@@ -510,6 +510,22 @@ describe('the store and its build (spec §2, §3.4, §3.5; 08-27 rows 4, 5a, 10,
     for (const id of ids) expect(fs.readdirSync(path.join(keyDir(repo), 'builds', id)).filter((e) => ids.includes(e))).toEqual([]);
   });
 
+  it('N22 — a build at one commit that starts in a second already holding a build waits for a free one, never `build id exists`', { timeout: T }, () => {
+    const repo = published();
+    // occupy this second and the next with builds at the served commit: the start must move past both
+    const stem = `${meta(repo).commit.slice(0, 12)}-${meta(repo).engine}-`;
+    const sec = (d: Date): string => d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+    const now = Date.now();
+    const taken = [0, 1000].map((dt) => `${stem}${sec(new Date(now + dt))}`);
+    for (const id of taken) fs.mkdirSync(path.join(keyDir(repo), 'builds', id));
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n');
+    sweep(INCR);
+    expect(rowOf(repo)).toMatchObject({ kind: 'full', outcome: 'rebuilt' });
+    expect(taken).not.toContain(path.basename(current(repo)));
+    expect(path.basename(current(repo)).startsWith(stem)).toBe(true);
+  });
+
   it('spec §3.5 step 6 — superseded builds beyond KEEP_BUILDS go once older than BUILD_GRACE_SECS, never sooner', { timeout: T }, () => {
     const repo = published();
     for (let i = 0; i < 2; i++) { sleep(1100); sweep({ CCRC_GRAPH_FULL_REBUILD_SECS: '1', CCRC_GRAPH_BUILD_GRACE_SECS: '3600' }); }
