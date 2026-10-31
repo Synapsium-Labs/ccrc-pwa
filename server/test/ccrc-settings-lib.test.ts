@@ -1,10 +1,11 @@
 // ccd/lib/ccrc-settings.sh — ccrc's settings reader, GENERATED from ccd/ccrc for the ccd-* sweeps (wave 29).
 //
 // The sweeps never source ccd/ccrc, so to read ~/.ccrc/ccrc.env exactly as ccrc does they source a library file.
-// That file is never a second hand-kept copy of the reader: deploy/gen-settings-lib.mjs slices the BOX_ENV_FILE and
-// CCRC_SETTINGS lines and the eight functions of the reader's closure whole out of ccd/ccrc, and these rows hold the
-// committed file equal to what it writes (L1), the slice closed over what it calls (L2), the file inert when sourced
-// (L3), and the two readers' answers equal over the fixture files wave 24's reader is argued against (L4).
+// That file is never a second hand-kept copy of the reader: deploy/gen-settings-lib.mjs slices the CCD_OS detection
+// block, the BOX_ENV_FILE and CCRC_SETTINGS lines and the eight functions of the reader's closure whole out of
+// ccd/ccrc, and these rows hold the committed file equal to what it writes (L1), the slice closed over what it calls
+// (L2), the file inert when sourced (L3), the platform named as ccd/ccrc names it (L7), and the two readers' answers
+// equal over the fixture files wave 24's reader is argued against (L4).
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -87,6 +88,21 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     expect(last).toBe(`${home}/.ccrc/ccrc.env|${list}`);
   });
 
+  // The reader branches on CCD_OS (`_box_unit_env`'s Darwin dispatch, `_ccrc_knob`'s backup-data arm), and ccd/ccrc
+  // names it at source time. A library that left it unnamed read every file by the Linux rules on macOS, so the sweeps
+  // there decided a file the launchd job reads with bash as if systemd read it (the L4 rows red on every macOS run).
+  it('W29-L7: sourcing the library names CCD_OS as sourcing ccd/ccrc does, from the host', () => {
+    const home = freshHome();
+    const probe = 'set -u; . "$1"; printf "%s\\n" "$CCD_OS"';
+    const viaCcrc = bash(home, probe, [CCRC]);
+    const viaLib = bash(home, probe, [LIB]);
+    expect(viaCcrc.status, viaCcrc.stderr).toBe(0);
+    expect(viaLib.stderr).toBe('');
+    expect(viaLib.status).toBe(0);
+    expect(viaLib.stdout).toBe(viaCcrc.stdout);
+    expect(viaCcrc.stdout).toBe(process.platform === 'darwin' ? 'darwin\n' : 'linux\n');
+  });
+
   type Case = [string, (home: string) => void, Record<string, string>?, string?, RegExp?];
   const env = (home: string): string => join(home, '.ccrc', 'ccrc.env');
   const put = (text: string | Buffer) => (home: string) => writeFileSync(env(home), text, { mode: 0o600 });
@@ -104,7 +120,12 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     ['a directory', (h) => mkdirSync(env(h))],
     ['# CCRC_BACKUP_KEEP=5 alone', put('# CCRC_BACKUP_KEEP=5\n')],
     ['OTHER=1 alone', put('OTHER=1\n')],
-    ['a setting inside an unrelated multi-line quoted value', put('OTHER="a\nCCRC_BACKUP_KEEP=5\nb"\n'), {}, 'CCRC_BACKUP_KEEP', /^1\|\|\|CCRC_BACKUP_KEEP cannot be measured: .*a quote left open on an earlier line/],
+    // Each platform's own refusal: systemd's reader names the quote left open above the key; on macOS bash sources the
+    // file, so the shell reader refuses it at the first line that is not a plain NAME=value line (`_box_unit_env_shell`).
+    ['a setting inside an unrelated multi-line quoted value', put('OTHER="a\nCCRC_BACKUP_KEEP=5\nb"\n'), {}, 'CCRC_BACKUP_KEEP',
+      process.platform === 'darwin'
+        ? /^1\|\|\|CCRC_BACKUP_KEEP cannot be measured: ~\/\.ccrc\/ccrc\.env line 1 is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash/
+        : /^1\|\|\|CCRC_BACKUP_KEEP cannot be measured: .*a quote left open on an earlier line/],
     ['an environment value of 7 over a file value of 5', put('CCRC_BACKUP_KEEP=5\n'), { CCRC_BACKUP_KEEP: '7' }],
     ['the key CCRC_NOT_A_SETTING', put('CCRC_NOT_A_SETTING=5\n'), {}, 'CCRC_NOT_A_SETTING'],
   ];
