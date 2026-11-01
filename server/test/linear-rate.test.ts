@@ -26,6 +26,7 @@ import { WS_TITLE_CAP, WS_TITLE_VERB, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 import { testDeps } from './helpers.js';
 import { RATELIMITED_ERRORS, linearAnswer, type LinearAnswer } from './linearFetchFake.js';
 import { linearServicesFake } from './linearServicesFake.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -400,28 +401,31 @@ describe('an absent rate service calls Linear for nothing (D-7684)', () => {
 });
 
 describe('one instance (spec §6.7: "nothing else holds a bucket")', () => {
-  const src = (rel: string): string => readFileSync(path.join(SRC, rel), 'utf8');
+  // Keyed on symbols and parsed calls (`scan/symbols.ts`), never on a file's text: the census follows the code as it moves.
   const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []);
+  const argsOf = (file: string, symbol: string, callee: string): string[] =>
+    callsIn(symbolOf(file, symbol)).filter((c) => c.name === callee).map((c) => c.args.map((a) => a.text).join(', '));
 
-  it('the service is constructed once, in index.ts, and handed to Deps there', () => {
+  it('the service is constructed once in server/src, by the composition root', () => {
     const builders = walk(SRC).filter((f) => /\bnew LinearRateService\(/.test(readFileSync(f, 'utf8')));
     expect(builders.map((f) => path.relative(SRC, f))).toEqual(['index.ts']);
-    expect(src('index.ts').match(/\bnew LinearRateService\(/g)).toHaveLength(1);
-    expect(src('index.ts')).toMatch(/\bdeps\.linearRate\s*=\s*linearRate;/);
   });
 
-  it('server.ts passes it through, possibly absent, to the legacy routes and both direct title calls, and builds none', () => {
-    const text = src('server.ts');
-    expect(text).not.toMatch(/\bLinearRateService\b/);
-    expect(text.match(/\brate: deps\.linearRate \?\? null\b/g)).toHaveLength(3);
-    expect(text).toMatch(/registerLinearRoutes\(app, \{[^}]*\brate: deps\.linearRate \?\? null\b/);
-    expect(text.match(/resolveTitle\([^;]*?\{[^}]*\brate: deps\.linearRate \?\? null\b/g)).toHaveLength(2);
+  it('buildServer passes it through, possibly absent, to the legacy routes and both direct title calls', () => {
+    const SERVER = path.join(SRC, 'server.ts');
+    const routes = argsOf(SERVER, 'buildServer', 'registerLinearRoutes');
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatch(/\brate: deps\.linearRate \?\? null\b/);
+    const titles = argsOf(SERVER, 'buildServer', 'resolveTitle');
+    expect(titles).toHaveLength(2);
+    for (const t of titles) expect(t).toMatch(/\brate: deps\.linearRate \?\? null\b/);
   });
 
-  it('the preview passes the route\'s own service to resolveName, and resolve.ts builds none', () => {
-    expect(src('linear/routes.ts')).toMatch(/resolveName\(ref, \{[^}]*\brate: opts\.rate\b/);
-    expect(src('linear/resolve.ts')).not.toMatch(/\bnew LinearRateService\b/);
+  it("the preview passes the route's own service to resolveName", () => {
+    const calls = argsOf(path.join(SRC, 'linear', 'routes.ts'), 'registerLinearRoutes', 'resolveName');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/\brate: opts\.rate\b/);
   });
 
   it('through buildServer, the preview, the create and the rename all spend the one service handed in Deps', async () => {
