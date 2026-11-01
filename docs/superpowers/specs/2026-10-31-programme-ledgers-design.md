@@ -4,7 +4,7 @@
 
 ## In short
 
-Every programme gets two ledgers the operator can open at any time from the console. **Goals** pins the spec the operator approved: its "In short" as approved, a link that opens the spec in the Docs reader, and a dated list of amendments the coordinator records whenever the operator steers. **Waiting on you** is a guided to-do list the coordinator compiles of everything it needs from the operator: decisions, actions and values. Each item says what, how and why, and the list is raised early, not only when work is blocked. The operator does the thing wherever it is done and ticks the item. The console mails the owning coordinator, and the coordinator re-measures the result before closing the item, or sends it back with a note. One combined list covers all programmes, and the questions sessions ask the operator join it. Secrets never pass through a coordinator. Check §3 (the item model), §5 (secrets) and the coordinator's calls in §8.
+Every programme gets two ledgers the operator can open at any time from the console. **Goals** pins the spec the programme is working towards: its current "In short", a link that opens the spec in the Docs reader, and a dated list of modifications. Whenever the operator steers, the coordinator rewrites the spec and records the modification. **Waiting on you** is a guided to-do list the coordinator compiles of everything it needs from the operator: decisions, actions and values. Each item says what, how and why, and the list is raised early, not only when work is blocked. The operator does the thing wherever it is done and ticks the item. The console mails the owning coordinator, and the coordinator re-measures the result before closing the item, or sends it back with a note. One combined list covers all programmes, and the questions sessions ask the operator join it. Secrets never pass through a coordinator. Check §3 (the item model), §5 (secrets) and the coordinator's calls in §8.
 
 ## 1. Context
 
@@ -121,7 +121,7 @@ sequenceDiagram
 
 ### 3.4 Items, the pin and the programme's life
 
-- **Keyed on the programme, owned through its runs.** Items, amendments and the spec pin hang off the programme's slug. A coordinator may write them only when it is the `claimedBy` of one of that programme's runs, open or planned.
+- **Keyed on the programme, owned through its runs.** Items, modifications and the spec pin hang off the programme's slug. A coordinator may write them only when it is the `claimedBy` of one of that programme's runs, open or planned.
 - **Approval before the next run.** The pin is set, and the spec's open points seeded, when the operator approves a spec. That usually happens before the next work run starts. The coordinator therefore opens the next run as `planned` first (a planned run holds no dispatch slot), which is the same rule that keeps a programme from retiring between waves.
 - **No open run.** When a programme has no open or planned run, its items are shown as belonging to an ended programme, and only then may the operator dismiss them. Nothing is changed in the store. If a run opens again under the same slug, the items are live again exactly as they were.
 
@@ -129,10 +129,11 @@ sequenceDiagram
 
 This section covers what Goals shows and where each part comes from.
 
-- **The spec pin.** The programme record gains the approved spec's repo path, set by the coordinator when the operator approves the spec. The link opens it in the Docs reader by deep link in the programme's home project. The reader serves committed content, so the pin opens the spec as merged.
-- **"In short" as approved.** At approval the coordinator stores a copy of the spec's "In short" with the approval date. It is a snapshot on purpose: Goals shows what the operator agreed, and the amendments say what changed since. Nothing parses the spec to fill it.
-- **Amendments.** When the operator steers (a ruling, a decision item, an answer in chat), the coordinator records an amendment at once, with no second sign-off: the operator's ruling is the approval (operator, 2026-10-31). Each amendment carries its date, one or two sentences of what changed, and the ruling it came from: the programme ledger's entry id and, where it came from a Decide item, that item. Amendments are console data, listed newest first under "Amended since".
-- **The spec is not rewritten.** The approved spec stays as approved and amendments sit beneath it (operator, 2026-10-31). A later spec revision the operator approves becomes the new pin, and the amendments before it stay listed under the earlier approval.
+- **The pin is the spec the programme is working towards.** The programme record gains the spec's repo path, set by the coordinator when the operator approves the spec. The link opens it in the Docs reader by deep link in the programme's home project. What matters is the spec as it now stands, not the first approved version (operator, 2026-11-01).
+- **The spec is rewritten when the operator steers.** When the operator steers (a ruling, a decision item, an answer in chat), the coordinator rewrites the spec so it describes what the programme is now building, with no second sign-off: the operator's ruling is the approval (operator, 2026-10-31). The rewrite goes through the coordinator's ledger PR like the programme's other documents. Git history keeps every earlier version.
+- **"In short" as it now stands.** The coordinator stores a copy of the spec's "In short" each time it approves or rewrites the spec, so Goals shows the current summary at once. Nothing parses the spec to fill it.
+- **A dated list of modifications.** Each rewrite is recorded as a modification under "Changed since approval", newest first. A modification carries its date, one or two sentences of what changed, the ruling it came from (the programme ledger's entry id and, where it came from a Decide item, that item), and the PR that rewrote the spec. Modifications are console data.
+- **Pending until merged.** The Docs reader serves merged content only. A modification whose PR has not merged yet shows "spec update pending" with its PR number. Until it merges, the pin opens the spec without that change, and the list says so.
 - **Where it shows.** Goals is the programme view's first panel. After the Docs reader moves onto the shared renderer, nothing is drawn into the spec's frame; Goals is console chrome beside it.
 
 ## 5. Secrets
@@ -180,8 +181,8 @@ sequenceDiagram
 
 This section covers what coordinators do with the ledgers and how they do it.
 
-- **New `ccrc-api` verbs**, all box-token gated and attribution-checked like the other coordination writes: raise, confirm, send back and withdraw an item; set blocking on or off; set the spec pin and its approved "In short"; record an amendment; read the programme's items. A coordinator may act only on its own programme's items.
-- **A new coordinator-skill clause.** The ccrc-coordinator skill gains a twentieth clause: raise an item as soon as you can see the operator will be needed, with what, how and why; set blocking only when work has stopped on it; on a tick, re-measure before confirming and send it back with what you found if it does not hold; record an amendment whenever the operator steers; set the spec pin when the operator approves a spec. The clause is pinned verbatim by `server/test/coordinator-skill.test.ts`, like the other nineteen.
+- **New `ccrc-api` verbs**, all box-token gated and attribution-checked like the other coordination writes: raise, confirm, send back and withdraw an item; set blocking on or off; set the spec pin and its current "In short"; record a modification; read the programme's items. A coordinator may act only on its own programme's items.
+- **A new coordinator-skill clause.** The ccrc-coordinator skill gains a twentieth clause: raise an item as soon as you can see the operator will be needed, with what, how and why; set blocking only when work has stopped on it; on a tick, re-measure before confirming and send it back with what you found if it does not hold; whenever the operator steers, rewrite the spec on your ledger PR and record the modification; set the spec pin when the operator approves a spec. The clause is pinned verbatim by `server/test/coordinator-skill.test.ts`, like the other nineteen.
 - **Clause 19 is unchanged.** A coordinator still puts its questions to the operator in its closing turn text, never in a dialog. Clause 20 adds that each such question is also raised as an item, so the list is complete even when the operator was not watching that session.
 - **Seeding from a spec.** When the operator approves a spec, the coordinator raises an item for each open point in the spec's own "Where things stand: Waiting on you" box. After that the list is the only source of truth for what is waiting.
 - **The ledger file keeps its job.** The programme ledger in the repo still records rulings and receipts. Items are not written there, because this repository is public and an item may name something that must not be. A decision's outcome reaches the ledger as a ruling, in the coordinator's words, as today.
@@ -202,7 +203,7 @@ flowchart TB
     DST["secret destinations table"]
   end
   subgraph L3["L3 adapters"]
-    ST["CoordStore: items,<br/>amendments, spec pin"]
+    ST["CoordStore: items,<br/>modifications, spec pin"]
     SF["operator-secrets files"]
   end
   subgraph L4["L4 delivery"]
@@ -221,7 +222,7 @@ flowchart TB
 *Figure 4. Where each part lives. Decisions are made in L1 and acted on in L4; the store and the secret files are the only adapters.*
 
 - **Context.** Both ledgers belong to Coordination. The secret store sits beside the auth and box-token context's file helpers and reuses them; it is not a second credential mechanism, because its values are operator data a programme needs, not ccrc's own credentials.
-- **Store.** A new migration adds an items table, an amendments table, and spec-pin columns on `programs`. It is additive only, so an older build opening the file reads it as-is. Items and amendments live in `coord.db`, so `ccrc update` and `ccrc backup` snapshot them.
+- **Store.** A new migration adds an items table, an modifications table, and spec-pin columns on `programs`. It is additive only, so an older build opening the file reads it as-is. Items and modifications live in `coord.db`, so `ccrc update` and `ccrc backup` snapshot them.
 - **Routes.** The coordinator's writes take the box token and attribution, like `/api/runs*`. The operator's acts take the session gate only, like `/api/digest/correct`: they are tick, dismiss and save secret, with the account gate's step-up on save secret. Each new door is added to the box-token census so the tests that pin the doors keep counting them.
 - **Wire.** New fields and frames are additive, with no `FLEET_PROTO` bump. Items reach the PWA by a read route and a live frame alongside the runs frame; the builder decides which.
 - **"Waiting on" line.** One L1 decider reads the programme's runs (an active worker, a review in progress, a PR in the merge queue, nothing open) and names what the programme waits on when no item is open.
@@ -233,9 +234,9 @@ The operator's rulings are marked Agreed. The coordinator's own calls are marked
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
-| D1 | What the Goals pin is | Spec link only; spec link plus approved summary and amendments | Link plus "In short" as approved plus dated amendments, so Goals reads as agreed, then amended | Agreed |
+| D1 | What the Goals pin is | Spec link only; spec link plus summary and dated changes | Link plus current "In short" plus dated modifications | Agreed |
 | D2 | Who changes Goals | Operator approves new wording; coordinator records on steering | Coordinator records at once when the operator steers; the ruling is the approval | Agreed |
-| D3 | How amendments are kept | Rewrite the spec; keep a dated list beneath it | Spec stays as approved; amendments listed beneath, each linked to its ruling | Agreed |
+| D3 | How amendments are kept | Spec stays as approved with a list beneath; rewrite the spec plus a dated list | Rewrite the spec, so it is what the programme works towards, plus a dated list of modifications | Changed |
 | D4 | What the list is for | Stall report; lookahead | Lookahead: items raised as soon as the coordinator sees them coming | Agreed |
 | D5 | How an item closes | Operator acts in the console; item tells, coordinator verifies | Item says what, where and why; operator ticks; coordinator re-measures | Agreed |
 | D6 | Scope of the list | Per programme only; plus one combined list | Both: one list, seen per programme and across all | Agreed |
@@ -249,7 +250,7 @@ The operator's rulings are marked Agreed. The coordinator's own calls are marked
 | D14 | Push notifications | Every item; blocking only | Blocking items and session questions only; the rest change the count | Proposed |
 | D15 | Items of an ended programme | Delete; mark orphaned in the store; show as ended while no run is open | Shown as ended while no run is open, dismissable then, live again if a run reopens | Proposed |
 | D16 | Seeding from a spec | Parse specs continuously; seed once at approval | Seed once at approval; the list is the source of truth afterwards | Proposed |
-| D17 | "In short" source | Parse the spec; snapshot at approval | Snapshot at approval, so Goals shows what was agreed | Proposed |
+| D17 | "In short" source | Parse the spec; a copy stored at approval and at each rewrite | A copy stored at approval and at each rewrite, so Goals shows it at once | Proposed |
 | D21 | Ways to give a credential | Paste only; paste or sign in | Both: paste, or sign in on the service's page; Linear is the first sign-in service | Agreed |
 | D22 | Where Linear's OAuth app is set up | Hard-coded app; operator registers one | Operator registers one; its id and secret go in through the Linear section or list items | Proposed |
 | D18 | Which session questions join | Asks only; every question model; including held ones | Asks, permission prompts and dialogs, once they have reached the operator | Proposed |
@@ -262,7 +263,7 @@ This section names how each promise will be shown to hold.
 
 - **Transitions.** A table test over every state and actor: each allowed move succeeds, each other move is refused with its own reason, and a test reds when any row of the L1 table is deleted or changed.
 - **One transaction.** A tick that fails to queue its mail leaves the item open, with no half-state; measured by forcing the mail insert to fail.
-- **Secrets never leave the store.** A test pastes a marked value and then scans the mail table, the feed, the items table, the amendments table, the server's console output and every route's response for it; any hit reds. The slot route refuses a path-shaped slot, and a session's attempt to read the directory is refused by the deny rules.
+- **Secrets never leave the store.** A test pastes a marked value and then scans the mail table, the feed, the items table, the modifications table, the server's console output and every route's response for it; any hit reds. The slot route refuses a path-shaped slot, and a session's attempt to read the directory is refused by the deny rules.
 - **Ownership.** A coordinator's verb on another programme's item is refused.
 - **Sign-in.** The callback refuses an unknown, expired, reused and foreign state, each red when its check is deleted; a stubbed Linear proves the token lands in the connection and nowhere else (the same leak scan as the secret test); a connection made by sign-in is replaced by a pasted key and the other way round; and the Linear client sends each with its own header form.
 - **"Waiting on" decider.** Pure-function tests over each run-state mix, including "stopped with nothing on the list".
@@ -276,6 +277,7 @@ This section names how each promise will be shown to hold.
 - Both ledgers, the item kinds, the tick-and-verify loop, the combined list, session questions on the list, and secrets kept away from coordinators (operator, 2026-10-31, D1 to D10).
 - Pasting secrets into the console ships in the first release (operator, 2026-11-01, D12).
 - A second way to give a credential, signing in on the service's own page, with Linear first (operator, 2026-11-01, D21).
+- The spec is rewritten when the operator steers, so it is always what the programme is working towards, with a dated list of modifications beside it (operator, 2026-11-01, D3, replacing the 2026-10-31 choice to keep the spec as approved).
 - The prototype's three views as the shape of the screens ("pretty great overall", operator, 2026-10-31).
 - The Docs reader coordinator's guidance on linking, amendments and the spec's own box (2026-10-31).
 
