@@ -32,7 +32,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
 import { REFINED } from '@ccrc/ui';
 import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
-import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_RESPONSE_HEADERS, sniffRaster } from '../../shared/docs';
+import {
+  DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
+} from '../../shared/docs';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
 import { READER_IMAGE_BUDGET_BYTES, READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
@@ -42,7 +44,7 @@ import { onePixelPng, resolveChrome, startOrigins, type OriginAnswer, type Origi
 // ---- fixture documents (project `demo`, section `specs`) ------------------------------------------------------------
 
 const PROJECT = 'demo';
-const SECTION = 'specs';
+const SECTION = DOC_SECTION_SLUGS[0]!;
 /** Built, never typed: an ESC, a line separator, and a script close that would end the seed's element if it were raw. */
 const ESC = String.fromCharCode(27);
 const LS = String.fromCharCode(0x2028);
@@ -715,7 +717,7 @@ describe('W8a reader frame in Chrome', () => {
       const violations = [];
       document.addEventListener('securitypolicyviolation', (e) => { violations.push(e.blockedURI); });
       const out = { origin: self.origin };
-      fetch(base + 'fetch-marker', { credentials: 'include', headers: { 'x-ccrc-docs': '1' } }).catch(() => 0);
+      fetch(base + 'fetch-marker', { credentials: 'include', headers: { [${JSON.stringify(DOCS_REQUEST_HEADER)}]: ${JSON.stringify(DOCS_REQUEST_HEADER_VALUE)} } }).catch(() => 0);
       fetch(base + 'fetch-plain', { credentials: 'include' }).catch(() => 0);
       const x = new XMLHttpRequest(); x.open('GET', base + 'xhr'); x.withCredentials = true; x.send();
       navigator.sendBeacon(base + 'beacon', 'x');

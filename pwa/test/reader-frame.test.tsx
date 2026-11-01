@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import type { DocsShowOk } from '../../shared/docs';
+import { DOC_SECTION_SLUGS, type DocsShowOk } from '../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import {
@@ -57,7 +57,7 @@ function chooseTheme(value: string): void {
 vi.mock('../src/docs/share', () => ({ copyText: vi.fn(async () => {}) }));
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, view: 'effective', section: DOC_SECTION_SLUGS[0]!, path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => {},
 };
 

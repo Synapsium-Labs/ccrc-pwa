@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Element as HastElement, Nodes as HastNode } from 'hast';
 import { scanRefs } from '@synapsium-labs/docserver/render';
-import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocsEntry, type DocsTreeOk } from '../../shared/docs';
+import { DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocsEntry, type DocsTreeOk } from '../../shared/docs';
 import { planImageRef, type DocsAssetContextValue } from '../src/docs/DocImage';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { createFetchQueue } from '../src/docs/fetchQueue';
@@ -20,6 +20,8 @@ import { draftOf, entry, fileResponse, holder, pageAt, treeOk } from './docsFixt
 /** The library's image grammar, re-spelled from the spec's type list (the library's own pattern is internal). */
 const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,[A-Za-z0-9+/]+=*$/;
 const MIB = 1024 * 1024;
+/** The first docs section, from the L0 list (never a typed slug). */
+const SECTION = DOC_SECTION_SLUGS[0]!;
 
 /** A PNG's own magic from L0's table (never spelled here), then zeros of body up to `size`. */
 const pngOf = (size = 16): Uint8Array<ArrayBuffer> => {
@@ -50,7 +52,7 @@ function ctxOf(tree: DocsTreeOk): DocLinkContextValue {
 }
 
 const withImages = (names: readonly string[], over: Partial<DocsEntry> = {}): DocLinkContextValue =>
-  ctxOf(treeOk({ entries: [entry('specs', 'a.md'), ...names.map((n) => entry('specs', n, over))] }));
+  ctxOf(treeOk({ entries: [entry(SECTION, 'a.md'), ...names.map((n) => entry(SECTION, n, over))] }));
 
 interface Rig {
   readonly raster: ReturnType<typeof vi.fn<DocsLoaders['raster']>>;
@@ -159,10 +161,10 @@ describe('loadReaderImages: the reader frame\'s images as data: URLs (the W8a pl
     const node = img(d.tree);
     const recorded = node === undefined ? undefined : d.urls.get(node);
     expect(recorded?.attrs['src']).toBe('a%20b.png');
-    const ctx = ctxOf(treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'a b.png')] }));
+    const ctx = ctxOf(treeOk({ entries: [entry(SECTION, 'a.md'), entry(SECTION, 'a b.png')] }));
     const viaRef = planImageRef(ctx, 'a%20b.png', recorded?.imageIndex ?? null);
     expect(viaRef.kind).toBe('pinned');
-    if (viaRef.kind === 'pinned') expect(viaRef.pin).toMatchObject({ kind: 'committed', section: 'specs', path: 'a b.png' });
+    if (viaRef.kind === 'pinned') expect(viaRef.pin).toMatchObject({ kind: 'committed', section: SECTION, path: 'a b.png' });
     expect(scanRefs('![i](<a b.png>)').images).toEqual(['a%20b.png']);
     expect(planImageRef(ctx, 'a b.png', 0)).toMatchObject({ kind: 'refused', why: 'malformed' });
   });
@@ -201,10 +203,10 @@ describe('loadReaderImages: the reader frame\'s images as data: URLs (the W8a pl
 
   it('drafts counts the loaded draft images, and no onDraftAsset is called', async () => {
     const entries = [
-      entry('specs', 'a.md', { draft: draftOf('modified') }),
-      entry('specs', 'd1.png', { draft: draftOf('modified') }),
-      entry('specs', 'd2.png', { draft: draftOf('modified') }),
-      entry('specs', 'c.png'),
+      entry(SECTION, 'a.md', { draft: draftOf('modified') }),
+      entry(SECTION, 'd1.png', { draft: draftOf('modified') }),
+      entry(SECTION, 'd2.png', { draft: draftOf('modified') }),
+      entry(SECTION, 'c.png'),
     ];
     const refPage = leafAt('/docs/demo/specs/a.md?ref=main');
     const ctx: DocLinkContextValue = {
