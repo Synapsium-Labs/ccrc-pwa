@@ -74,8 +74,8 @@ name: ci
 # amended 2026-10-31) before it installs the library, and the library's repository
 # is public, so the lookup does not need the grant: an unauthenticated read of the
 # library's attestations answered, and `contents: read` already gives `gh` a token.
-# The grant is kept only until the pull request's own run measures the step
-# without it; it is not a minimum the step is known to need. No job reads check
+# The grant is kept because the W8a plan specifies it (FR-6 pins the block);
+# it is not a minimum the step is known to need. No job reads check
 # runs, and none asks for any write.
 permissions:
   contents: read
