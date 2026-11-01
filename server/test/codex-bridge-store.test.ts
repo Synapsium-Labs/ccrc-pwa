@@ -489,15 +489,21 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     expect(snap.doc.store.setAside).toEqual({ at: snap.doc.store.at, found: planted.probe.raised, file: copies[0] });
   });
 
-  it('DAMAGED INDEX OR PAGE: a store quick_check does not pass is set aside, its rows not answered', async () => {
-    for (const how of ['stale-index', 'garbage-page'] as const) {
+  it('DAMAGED INDEX OR PAGE: a store integrity_check does not pass is set aside, its rows not answered', async () => {
+    // Measured: the stale index raises nothing and each check answers it in rows; on the 0xff page quick_check answers
+    // in rows but integrity_check raises exactly DatabaseError, which the start reads as damage too.
+    for (const [how, found] of [['stale-index', 'integrity-check'], ['garbage-page', 'DatabaseError']] as const) {
       const { home, dir, db } = lane(`cb-store-start-${how}-`);
       const [planted] = await run(home, [{ op: 'store-damage', path: db, how }]);
-      // Measured: neither shape raises at user_version or at the check; quick_check answers the damage in rows.
-      expect(planted.probe.raised, how).toBeNull();
       expect(planted.probe.quickCheck, how).not.toEqual(['ok']);
+      expect(planted.probe.quickCheck, how).not.toBeNull();
       if (how === 'stale-index') {
+        expect(planted.probe.raised).toBeNull();
         expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
+        expect(planted.probe.integrityCheck).not.toEqual(['ok']);
+      } else {
+        expect(planted.probe.raised).toBe('DatabaseError');
+        expect(planted.probe.integrityCheck).toBeNull();
       }
       const [, open, old, put, got, snap] = await run(home, [
         { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
@@ -515,9 +521,39 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
       const copies = damaged(dir).filter((n) => COPY_RE.test(n));
       expect(copies, how).toHaveLength(1);
       for (const n of damaged(dir)) expect([copies[0], `${copies[0]}-wal`, `${copies[0]}-shm`], how).toContain(n);
-      expect(snap.doc.store.setAside, how).toEqual({ at: snap.doc.store.at, found: 'quick-check', file: copies[0] });
+      expect(snap.doc.store.setAside, how).toEqual({ at: snap.doc.store.at, found, file: copies[0] });
       expect(snap.doc.outcomes, how).toEqual({ 'store:set-aside': 1 });
     }
+  });
+
+  it('EQUAL COUNT: a torn index whose entry count still matches is set aside, though quick_check passes it', async () => {
+    const { home, dir, db } = lane('cb-store-start-equal-');
+    const [planted] = await run(home, [{ op: 'store-damage', path: db, how: 'equal-count' }]);
+    // Measured: quick_check only counts the index's entries, so a REPLACE between the index page's save and its
+    // restore (the store's own write: same count, a new rowid) passes it; integrity_check compares them with the table.
+    expect(planted.probe.raised).toBeNull();
+    expect(planted.probe.quickCheck).toEqual(['ok']);
+    expect(planted.probe.integrityCheck).not.toEqual(['ok']);
+    expect(planted.probe.integrityCheck.join('\n')).toMatch(/missing from index sqlite_autoindex_reasoning_1/);
+    const [, open, old, put, got, snap] = await run(home, [
+      { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
+      { op: 'store-open', path: db, stats: true },
+      { op: 'store-get', call: 'call_fx1' },
+      { op: 'store-put', call: 'call_fx9', turn },
+      { op: 'store-get', call: 'call_fx9' },
+      { op: 'stats-snapshot' },
+    ]);
+    // Unchecked, the first get of the REPLACEd key raises DatabaseError and disables the store for the process.
+    expect(open.disabled).toBeNull();
+    expect(old.turn).toBeNull();
+    expect(old.disabled).toBeNull();
+    expect(put.disabled).toBeNull();
+    expect(got.turn).toEqual(turn);
+    const copies = damaged(dir).filter((n) => COPY_RE.test(n));
+    expect(copies).toHaveLength(1);
+    expect(snap.doc.store).toMatchObject({ state: 'set-aside', reason: 'store:set-aside' });
+    expect(snap.doc.store.setAside).toEqual({ at: snap.doc.store.at, found: 'integrity-check', file: copies[0] });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
   });
 
   it('a damaged store\'s WAL goes with its copy: the fresh store never answers its row, and the copy still does', async () => {

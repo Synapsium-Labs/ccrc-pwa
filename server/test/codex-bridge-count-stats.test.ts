@@ -806,7 +806,7 @@ describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this pro
       outcomes: { 'store:DatabaseError': 3, 'store:set-aside': 1 },
       store: {
         state: 'disabled', reason: 'store:DatabaseError', at: '2026-01-01T00:00:01.000Z',
-        setAside: { at: '2026-01-01T00:00:00.500Z', found: 'quick-check', file: COPY },
+        setAside: { at: '2026-01-01T00:00:00.500Z', found: 'integrity-check', file: COPY },
       },
     }), { mode: 0o600 });
     const [o, , flushed] = await run(home, [open(file), call('flush', [], { force: true }), { op: 'stats-snapshot' }]);
@@ -820,12 +820,12 @@ describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this pro
     const { home, file } = lane('cb-stats-store-aside-');
     const [, , snap] = await run(home, [
       open(file),
-      call('store_event', ['store:set-aside', 'quick-check', COPY], { now: 1_700_000_000 }),
+      call('store_event', ['store:set-aside', 'integrity-check', COPY], { now: 1_700_000_000 }),
       { op: 'stats-snapshot' },
     ]);
     expect(snap.doc.store).toEqual({
       state: 'set-aside', reason: 'store:set-aside', at: '2023-11-14T22:13:20.000Z',
-      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'quick-check', file: COPY },
+      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'integrity-check', file: COPY },
     });
     expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
   });

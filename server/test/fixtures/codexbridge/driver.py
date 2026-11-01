@@ -61,7 +61,8 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
   store-* op, by store-remember (over the reducer the LAST reduce op built) and by from-anthropic with
   "lookup": "store" (its get in place of the stub). A store key is never passed in: each op names a `call` (keyed by
   inbound.call_key) or a `session` and a `text` (keyed by inbound.text_key). Every store-* op but store-plant,
-  store-swap, store-dump, store-damage, store-lock and store-unlock also prints "disabled": the store's reason, or None.
+  store-swap, store-dump, store-damage, store-caps, store-lock and store-unlock also prints "disabled": the store's
+  reason, or None.
   store-open       {path, max_bytes?, ttl_s?, umask?, stats?} -> {"disabled"}: os.umask(umask) first when given; with
                    `stats: true` the store's callback is the stats-open Stats' `store_event` (D-7677), else none
   store-put        {call | session + text, turn, now?} -> {"disabled"}
@@ -74,16 +75,22 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    without the store
   store-swap       {path, link_to} -> {}: the path replaced, after the start, by a symlink to `link_to` (made at a
                    side name, then os.replace), as a file swapped in under a running store
-  store-damage     {path, how, calls?, walCall?} -> {"probe": {"raised", "quickCheck"}}: a damaged store written without
-                   the store (D-7676). `how` "not-a-database" writes text that is not sqlite's (mode 0644);
-                   "stale-index" plants the store's table at USER_VERSION with a row per `calls` id (keyed by
-                   call_key; default call_fx1..call_fx5), then three more rows, then writes the primary-key index's
-                   page back as it was before them (a torn index: the table holds rows its index does not);
-                   "garbage-page" plants the same rows and fills that index page with 0xff. With `walCall`, the store
-                   is then put in WAL mode and one more row, keyed by call_key(walCall), is written by a connection
-                   that does not checkpoint on close, so it stays in `<path>-wal`. "probe" is what a raw connection
-                   then meets: the class name `PRAGMA user_version` or `PRAGMA quick_check` raised (None when
-                   neither did) and quick_check's rows
+  store-damage     {path, how, calls?, walCall?} -> {"probe": {"raised", "quickCheck", "integrityCheck"},
+                   "noCkptClose"}: a damaged store written without the store (D-7676). `how` "not-a-database" writes
+                   text that is not sqlite's (mode 0644); "stale-index" plants the store's table at USER_VERSION with
+                   a row per `calls` id (keyed by call_key; default call_fx1..call_fx5), then three more rows, then
+                   writes the primary-key index's page back as it was before them (a torn index: the table holds rows
+                   its index does not); "equal-count" plants the same rows, then REPLACEs the first `calls` row (the
+                   store's own write: the row deleted and inserted under a new rowid, the count unchanged), then writes
+                   the index page back as it was before that (a torn index whose entry count still matches, which
+                   quick_check passes); "garbage-page" plants the same rows and fills that index page with 0xff. With
+                   `walCall`, the store is then put in WAL mode and one more row, keyed by call_key(walCall), is
+                   written by a connection that does not checkpoint on close, so it stays in `<path>-wal` (only when
+                   "noCkptClose" is true; below Python 3.12 that close checkpoints it). "probe" is what a raw
+                   connection then meets: the class name `PRAGMA user_version`, `PRAGMA quick_check` or `PRAGMA
+                   integrity_check` raised (None when none did) and each check's rows (None when not reached)
+  store-caps       -> {"noCkptClose"}: whether this Python can close a connection without its checkpoint
+                   (`Connection.setconfig` and SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, Python 3.12 and later)
   store-lock       {path} -> {}: a raw connection of this process takes an exclusive lock on the file and holds it
   store-unlock     -> {}: that connection rolls back and closes
   store-dump       {path} -> {"rows": [{"key", "turn", "created", "size"}] by key, "userVersion", "journalMode",
@@ -372,6 +379,17 @@ def _plant_rows(conn, cb, calls):
                      (cb.inbound.call_key(c), turn, int(time.time()), len(turn)))
 
 
+def _no_ckpt_close():
+    """Whether this Python can close a connection without its checkpoint (3.12's `setconfig`; the store-caps op)."""
+    return hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE") and hasattr(sqlite3.Connection, "setconfig")
+
+
+def _no_ckpt(conn):
+    """Ask `conn` not to checkpoint at its close, where this Python can (else its close may checkpoint)."""
+    if _no_ckpt_close():
+        conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+
+
 def _store_damage(op, cb):
     """The store-damage op (the docstring above)."""
     path, how = op["path"], op["how"]
@@ -382,7 +400,7 @@ def _store_damage(op, cb):
             os.write(fd, b"this file is not an sqlite database, only text in its place\n" * 40)
         finally:
             os.close(fd)
-    elif how in ("stale-index", "garbage-page"):
+    elif how in ("stale-index", "equal-count", "garbage-page"):
         calls = op.get("calls") or ["call_fx%d" % n for n in range(1, 6)]
         conn = sqlite3.connect(path, isolation_level=None)
         conn.execute(_PLANT_SCHEMA)
@@ -395,30 +413,36 @@ def _store_damage(op, cb):
         with open(path, "rb") as f:
             before = f.read()[(root - 1) * size:root * size]
         conn = sqlite3.connect(path, isolation_level=None)
-        _plant_rows(conn, cb, ["call_fx_late%d" % n for n in range(3)])
+        if how == "equal-count":  # store._put's own statement: the row moves to a new rowid, the count stays
+            turn = json.dumps({"items": [], "phase": None})
+            conn.execute("INSERT OR REPLACE INTO reasoning(key, items, created, size) VALUES (?, ?, ?, ?)",
+                         (cb.inbound.call_key(calls[0]), turn, int(time.time()), len(turn)))
+        else:
+            _plant_rows(conn, cb, ["call_fx_late%d" % n for n in range(3)])
         conn.close()
         with open(path, "r+b") as f:
             f.seek((root - 1) * size)
-            f.write(before if how == "stale-index" else b"\xff" * size)
+            f.write(b"\xff" * size if how == "garbage-page" else before)
     else:
         _usage("unknown damage " + json.dumps(how))
     if op.get("walCall"):
         conn = sqlite3.connect(path, isolation_level=None)
         conn.execute("PRAGMA journal_mode = WAL")
-        conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+        _no_ckpt(conn)
         _plant_rows(conn, cb, [op["walCall"]])
         conn.close()
-    probe = {"raised": None, "quickCheck": None}
+    probe = {"raised": None, "quickCheck": None, "integrityCheck": None}
     conn = sqlite3.connect(path, isolation_level=None)
     try:
-        conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+        _no_ckpt(conn)
         conn.execute("PRAGMA user_version").fetchone()
         probe["quickCheck"] = [r[0] for r in conn.execute("PRAGMA quick_check").fetchall()]
+        probe["integrityCheck"] = [r[0] for r in conn.execute("PRAGMA integrity_check").fetchall()]
     except Exception as e:  # the class this op reports
         probe["raised"] = type(e).__name__
     finally:
         conn.close()
-    return {"probe": probe}
+    return {"probe": probe, "noCkptClose": _no_ckpt_close()}
 
 
 def _store_op(name, op, cb):
@@ -431,6 +455,8 @@ def _store_op(name, op, cb):
         return {}
     if name == "store-damage":
         return _store_damage(op, cb)
+    if name == "store-caps":
+        return {"noCkptClose": _no_ckpt_close()}
     if name == "store-lock":
         conn = sqlite3.connect(op["path"], isolation_level=None)
         conn.execute("PRAGMA locking_mode = EXCLUSIVE")

@@ -12,7 +12,8 @@ THE FILE, VERSION 1 (`bridge.stats.json` in the lane directory; the name is `lan
    "outcomes": {"<key>": n}, "names": {"<family>": {"<name>": n}}, "unexplained": {"<family>": ["<name>", ...]},
    "usageHeaders": {"at", "values": {...}} or null, "lastUpstreamRequestId": <id> or null,
    "store": {"state": "ok" | "set-aside" | "disabled", "reason": <outcome name> or null, "at": <time> or null,
-             "setAside": null or {"at", "found": "quick-check" | <exception class name>, "file": <copy's basename>}}}
+             "setAside": null or {"at", "found": "integrity-check" | <exception class name>,
+                                  "file": <copy's basename>}}}
 `since` is the file's first start, carried across restarts; `startedAt` is this process's. `promptTokensMax` is the
 largest upstream `input_tokens` of a reply the model accepted (the caller reports only those); a refusal's `tokens`
 is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with milliseconds.

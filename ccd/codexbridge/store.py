@@ -26,22 +26,24 @@ is told once, so the stats file can count it and say so (D-7677's `Stats.store_e
 THE START CHECK (D-7676). A store damaged before the start used to be disabled at its first write and stay so for the
 life of the process (both lanes' stores, carried to a new box with a torn primary-key index, ran six hours with nothing
 replayed). So the constructor, once the file is made and the schema ensured on its own thread, runs `PRAGMA
-quick_check` on that connection when the store is not disabled and its `user_version` is USER_VERSION; healthy is one
-row, `ok` (a 50 MB store checks in about 10 ms). DAMAGE is a check that answers anything else, or an
-`sqlite3.DatabaseError` whose class is EXACTLY that (a file that is not sqlite's, a malformed image) raised while
-opening, reading `user_version`, ensuring the schema or checking. Its subclasses are not damage: `OperationalError`
-(locked, busy, I/O, a read-only file), `IntegrityError` and the rest name a condition of the moment, not of the file,
-so they disable the store as above and leave the file untouched; a newer store is never checked, never touched. A
-damaged store is SET ASIDE: the constructing thread's connection is closed without a checkpoint (a damaged WAL is
-never folded into the copy), the file is renamed `<path>.damaged-<UTC YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`,
-each when present, `<that name>-wal` and `<that name>-shm`, so the copy opens as one database and no damaged WAL is
-left at `<path>-wal` for the fresh store. Only then is ONE copy kept: every other name of that shape in the directory
-(an older copy, a stray sibling) is removed, a failed removal ignored. The fresh store is made as a first start makes
-one (`_create`, then `_conn`), and the callback is told `store:set-aside` once, with what was found (`quick-check` or
-the exception's class name) and the copy's basename, never a path. A set-aside that cannot finish (a rename's
-`OSError`, the fresh store failing) disables the store as `store:set-aside-failed`. Nothing raises, and nothing else
-changes: a failure after the start still disables the store for the process, and the next start's check is what
-repairs a store damaged while it ran.
+integrity_check` on that connection when the store is not disabled and its `user_version` is USER_VERSION; healthy is
+one row, `ok` (a 50 MB store checks in about 10 ms). Not `quick_check`: it counts an index's entries but never compares
+them with the table, so a torn index whose count still matches (the table page from after an `INSERT OR REPLACE`, the
+store's own write, and the index page from before it) passes it, and the first `get` of that key raises `DatabaseError`
+at every start. DAMAGE is a check that answers anything else, or an `sqlite3.DatabaseError` whose class is EXACTLY that
+(a file that is not sqlite's, a malformed image) raised while opening, reading `user_version`, ensuring the schema or
+checking. Its subclasses are not damage: `OperationalError` (locked, busy, I/O, a read-only file), `IntegrityError` and
+the rest name a condition of the moment, not of the file, so they disable the store as above and leave the file
+untouched; a newer store is never checked, never touched. A damaged store is SET ASIDE: the constructing thread's
+connection is closed without a checkpoint (a damaged WAL is never folded into the copy), the file is renamed
+`<path>.damaged-<UTC YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`, each when present, `<that name>-wal` and
+`<that name>-shm`, so the copy opens as one database and no damaged WAL is left at `<path>-wal` for the fresh store.
+Only then is ONE copy kept: every other name of that shape in the directory (an older copy, a stray sibling) is removed,
+a failed removal ignored. The fresh store is made as a first start makes one (`_create`, then `_conn`), and the callback
+is told `store:set-aside` once, with what was found (`integrity-check` or the exception's class name) and the copy's
+basename, never a path. A set-aside that cannot finish (a rename's `OSError`, the fresh store failing) disables the
+store as `store:set-aside-failed`. Nothing raises, and nothing else changes: a failure after the start still disables
+the store for the process, and the next start's check is what repairs a store damaged while it ran.
 
 ONE CONNECTION PER THREAD. The server is a ThreadingHTTPServer and sqlite3's default `check_same_thread=True` makes a
 shared connection raise `ProgrammingError` on the first handler thread; each thread opens its own on first use, after
@@ -78,7 +80,7 @@ NOT_REGULAR = "store:not-a-regular-file"
 REPLACED = "store:replaced"
 SET_ASIDE = "store:set-aside"  # D-7676: a damaged store was set aside at the start and a fresh one made
 SET_ASIDE_FAILED = "store:set-aside-failed"  # D-7676: the set-aside could not finish; the store is disabled
-QUICK_CHECK = "quick-check"  # what a set-aside found when the check, not an exception, named the damage
+INTEGRITY_CHECK = "integrity-check"  # what a set-aside found when the check, not an exception, named the damage
 DAMAGED_STAMP = "%Y%m%dT%H%M%SZ"  # the UTC stamp of a set-aside copy's name
 
 # The fields a stored reasoning item keeps; every other field of the upstream item is dropped.
@@ -198,8 +200,8 @@ class ReasoningStore:
     def _start(self) -> None:
         try:
             conn = self._conn()
-            rows = conn.execute("PRAGMA quick_check").fetchall()
-            found = None if rows == [("ok",)] else QUICK_CHECK
+            rows = conn.execute("PRAGMA integrity_check").fetchall()
+            found = None if rows == [("ok",)] else INTEGRITY_CHECK
         except sqlite3.DatabaseError as e:
             if type(e) is not sqlite3.DatabaseError:  # a subclass names the moment, not the file: disabled as before
                 raise
