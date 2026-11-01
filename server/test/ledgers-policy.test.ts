@@ -1,4 +1,4 @@
-// D-7708 (programme ledgers, PL1): the item vocabulary, the transition table and the
+// Programme ledgers, PL1: the item vocabulary, the transition table and the
 // deciders in shared/ledgers.ts. Pure: no fs, no store. The table is DATA and
 // `nextItemState` reads only it, so the first group walks the whole
 // (state x act x actor) space against the five rows the spec names.

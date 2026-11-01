@@ -1,4 +1,4 @@
-// Programme ledgers (D-7708, plan PL1): the vocabulary of the operator's items, the transition table
+// Programme ledgers (plan PL1): the vocabulary of the operator's items, the transition table
 // that decides every move of one, and the small pure deciders around them.
 //
 // Ring: L0/L1, context Coordination. The server (store, routes) and the PWA (list, item view, programme
@@ -15,20 +15,32 @@ import { ACTIVE_RUN_STATES, type RunKind, type RunState } from './api.js';
 /** What the operator is asked to do. `value` and `secret` take something back; `secret` never
  *  through the item's answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
-export const ITEM_KINDS: readonly ItemKind[] = ['decide', 'do', 'value', 'secret'];
+const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
+export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
 
 /** `open` and `checking` are the live pair; the other three are closed. */
 export type ItemState = 'open' | 'checking' | 'done' | 'withdrawn' | 'dismissed';
-export const ITEM_STATES: readonly ItemState[] = ['open', 'checking', 'done', 'withdrawn', 'dismissed'];
+const ITEM_STATE_MAP: Record<ItemState, true> = {
+  open: true, checking: true, done: true, withdrawn: true, dismissed: true,
+};
+export const ITEM_STATES = Object.keys(ITEM_STATE_MAP) as readonly ItemState[];
 /** The states an item still waits in. Derived from nothing else: it is the pair the transition table
  *  leaves by `confirm`, `return`, `withdraw` and `dismiss`. */
 export const OPEN_ITEM_STATES: readonly ItemState[] = ['open', 'checking'];
 
 /** `blocking` = work has stopped on it; `soon` carries a short label; `later` is the rest. */
 export type NeededBy = 'blocking' | 'soon' | 'later';
+const NEEDED_BY_MAP: Record<NeededBy, true> = { blocking: true, soon: true, later: true };
+export const NEEDED_BY_LEVELS = Object.keys(NEEDED_BY_MAP) as readonly NeededBy[];
 
 export type ItemAct = 'tick' | 'confirm' | 'return' | 'withdraw' | 'dismiss';
 export type ItemActor = 'operator' | 'coordinator';
+const ITEM_ACT_MAP: Record<ItemAct, true> = {
+  tick: true, confirm: true, return: true, withdraw: true, dismiss: true,
+};
+export const ITEM_ACTS = Object.keys(ITEM_ACT_MAP) as readonly ItemAct[];
+const ITEM_ACTOR_MAP: Record<ItemActor, true> = { operator: true, coordinator: true };
+export const ITEM_ACTORS = Object.keys(ITEM_ACTOR_MAP) as readonly ItemActor[];
 
 /** Spec Figure 2. The operator moves an item only by ticking it, or by dismissing it while its
  *  programme has no open run; every other move is the coordinator's. */
@@ -128,6 +140,10 @@ export function waitingCount(items: readonly ItemView[]): number {
 
 /** What a programme with no open item is waiting on. */
 export type WaitsOn = 'work' | 'review' | 'merge-queue' | 'next-wave' | 'ended';
+const WAITS_ON_MAP: Record<WaitsOn, true> = {
+  work: true, review: true, 'merge-queue': true, 'next-wave': true, ended: true,
+};
+export const WAITS_ON_KINDS = Object.keys(WAITS_ON_MAP) as readonly WaitsOn[];
 
 /**
  * Priority: any active work run -> `work`; any work run awaiting review or any active review run ->
