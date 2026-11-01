@@ -2050,6 +2050,66 @@ describe('ccd-land-probe: the lander key and its mirror (landing order wave 5d)'
     expect(fx.exists('enabled')).toBe(false);
   });
 
+  it('K1b the pass takes one time for both mirrors of a project, whatever the clock resolution', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lineage=on\nlander=coordinator\n');
+    // The embedded program, imported (not run: __name__ is not __main__) in a python3 -I child whose HOME is the fixture's.
+    // now_iso is replaced by a fake that answers a DIFFERENT string on every call, so the one-second resolution of the real
+    // clock cannot hide a second call: a mirror that takes its own time reads a later string, and the count rises.
+    const src = fs.readFileSync(PROBE, 'utf8');
+    const program = src.slice(src.indexOf("<<'PY'\n") + "<<'PY'\n".length, src.lastIndexOf('\nPY'));
+    const progFile = path.join(h.home, 'program-k1b.py');
+    fs.writeFileSync(progFile, program);
+    const driver = 'import json, sys\nns = {"__name__": "probe"}\nexec(compile(open(sys.argv[1]).read(), "probe", "exec"), ns)\n'
+      + 'calls = []\n'
+      + 'def fake_now():\n    calls.append(1)\n    return "2000-01-01T00:00:%02dZ" % len(calls)\n'
+      + 'ns["now_iso"] = fake_now\n'
+      + 'ns["reconcile_enabled"]([sys.argv[2]])\n'
+      + 'print(json.dumps(len(calls)))\n';
+    const out = execFileSync('python3', ['-I', '-c', driver, progFile, fx.project], {
+      encoding: 'utf8', cwd: h.home, env: { PATH: process.env['PATH'] ?? '', HOME: h.home },
+    });
+    const first = '2000-01-01T00:00:01Z';
+    expect(fx.readJson('enabled').at).toBe(first);
+    expect(fx.readJson('lander').at).toBe(first);
+    expect(fx.readJson('enabled').at).toBe(fx.readJson('lander').at);
+    expect(JSON.parse(out), 'now_iso was called once for the one project').toBe(1);
+  });
+
+  it('A1 the key changes no measurement: probe and main-health are equal, lander=coordinator or lander=none', { timeout: 120_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addHead(2, { 'b.txt': 'b\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.stubChecks({ rules: [REQ_RULE([{ context: 'ci/test' }])], runs: [run(1, 'ci/test', 'completed', 'success')] });
+    // Wall-clock derived and so masked: `at` in both documents (now_iso), and `elapsedMs` in probe (the project's spent
+    // time). Everything else, the store counts and the scratch size included, is compared whole.
+    const measured = (): { probe: any; health: any } => {
+      const probe = fx.readJson('probe');
+      const health = fx.readJson('main-health');
+      expect(Object.keys(probe), 'probe has its keys').toEqual(
+        ['v', 'project', 'at', 'state', 'base', 'heads', 'headsCut', 'pairs', 'pairHeads', 'pairsCut', 'store', 'scratch', 'elapsedMs']);
+      expect(Object.keys(health), 'main-health has its keys').toEqual(['v', 'project', 'at', 'sha', 'state', 'required', 'failing', 'pending']);
+      expect(probe.state).toBe('measured');
+      expect(probe.heads).toHaveLength(2);
+      expect(health.state).toBe('green');
+      expect(typeof probe.at).toBe('string');
+      expect(typeof health.at).toBe('string');
+      expect(typeof probe.elapsedMs).toBe('number');
+      delete probe.at; delete probe.elapsedMs; delete health.at;
+      return { probe, health };
+    };
+    fx.conf(fx.project, 'lander=coordinator\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.exists('lander')).toBe(true);
+    const withKey = measured();
+    fx.conf(fx.project, 'lander=none\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.exists('lander')).toBe(false);
+    const without = measured();
+    expect(without.probe).toEqual(withKey.probe);
+    expect(without.health).toEqual(withKey.health);
+  });
+
   it('K2 lander=none, and no lander key at all, write no marker and remove a standing one', { timeout: 120_000 }, () => {
     fx.addHead(1, { 'a.txt': 'a\n' });
     for (const text of ['lander=none\n', '', 'lineage=on\n', 'lineage=on\nlander=none\n']) {
@@ -2125,20 +2185,44 @@ describe('ccd-land-probe: the lander key and its mirror (landing order wave 5d)'
     expect(off.readJson('lander')).toMatchObject({ v: 1, project: 'proj-off', lander: 'coordinator' });
   });
 
-  it('K7 a landing directory that is a symlink keeps the lander files in its target', () => {
+  /** A `$REG/landing` that is a symlink to a target outside the fixture-owned real directory, the target seeded with
+   *  `proj-a/lander`, `orphan/lander` and `proj-a/enabled` of known bytes; the probe runs once with `conf`. */
+  function symlinkedLanding(conf: string): { files: Record<string, string>; before: string[]; after: () => string[]; target: string } {
     fx.addHead(1, { 'a.txt': 'a\n' });
-    fx.conf(fx.project, 'lander=none\n');
+    fx.conf(fx.project, conf);
     const target = path.join(h.home, 'landing-target');
-    const files = ['proj-a', 'orphan'].map((n) => {
-      fs.mkdirSync(path.join(target, n), { recursive: true });
-      const f = path.join(target, n, 'lander');
-      fs.writeFileSync(f, '{}\n');
-      return f;
-    });
+    const files: Record<string, string> = {
+      'proj-a/lander': '{"seed":"proj-a lander"}\n', 'orphan/lander': '{"seed":"orphan lander"}\n', 'proj-a/enabled': '{"seed":"proj-a enabled"}\n',
+    };
+    for (const [rel, bytes] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(target, rel)), { recursive: true });
+      fs.writeFileSync(path.join(target, rel), bytes);
+    }
+    const tree = (): string[] => (fs.readdirSync(target, { recursive: true }) as string[]).map(String).sort();
     fs.mkdirSync(fx.reg, { recursive: true });
     fs.symlinkSync(target, path.join(fx.reg, 'landing'));
+    return { files, before: tree(), after: tree, target };
+  }
+  function expectTargetUntouched(s: ReturnType<typeof symlinkedLanding>, why: string): void {
+    // The exact recursive listing: nothing added (no mirror, no .lp.* temp file, no probe), nothing removed.
+    expect(s.after(), `${why}: the listing`).toEqual(s.before);
+    expect(s.before).toEqual(['orphan', 'orphan/lander', 'proj-a', 'proj-a/enabled', 'proj-a/lander']);
+    for (const [rel, bytes] of Object.entries(s.files)) expect(fs.readFileSync(path.join(s.target, rel), 'utf8'), `${why}: ${rel}`).toBe(bytes);
+  }
+
+  it('K7 a landing directory that is a symlink keeps the lander files in its target (the removal arm: lander=none)', () => {
+    const s = symlinkedLanding('lander=none\n');
     expect(fx.run().status).toBe(0);
-    for (const f of files) expect(fs.readFileSync(f, 'utf8'), f).toBe('{}\n');
+    expectTargetUntouched(s, 'lander=none');
+  });
+
+  it('K7b a landing directory that is a symlink is not written through (the write arm: lander=coordinator beside lineage=on)', () => {
+    const s = symlinkedLanding('lineage=on\nlander=coordinator\n');
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('skip landing: not a real directory owned by this user');
+    expectTargetUntouched(s, 'lander=coordinator');
+    expect(fs.lstatSync(path.join(fx.reg, 'landing')).isSymbolicLink()).toBe(true);
   });
 });
 

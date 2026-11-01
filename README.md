@@ -6133,7 +6133,7 @@ It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
-| `lander` | the mirror of the conf's `lander=coordinator`, with its own time; absent means the project is not a coordinator-lands project, and stage 5's landing line, which does not read it yet |
+| `lander` | the mirror of the conf's `lander=coordinator`, with its own time; absent means there is no usable mirror (a pause, an invalid conf, a project that is not a main checkout or a symlinked landing directory leave none), and nothing reads it yet: stage 5's landing line will read it in a later wave |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That covers a
 failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write. A child the
@@ -6183,11 +6183,12 @@ directories.
 **The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are
 three keys: `base`, a branch name that defaults to `main`; `lineage`, `on` or `off`, which defaults to `off`; and
 `lander`, `coordinator` or `none`, which defaults to `none` and says who lands the project's PRs. A probe older than
-this key reads a conf that names it as `unknown-key` and stops measuring that project, so write `lander=` only once
-the box runs this probe. An empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or
-a conf that is not a regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would
-refuse. That project is not measured, its `enabled` and `lander` are removed, and the journal names the reason (never
-the bytes).
+this key reads a conf that names it as `unknown-key` and stops measuring that project. That same conf-invalid answer
+also makes it remove `enabled`, so writing `lander=` early turns off the project's lineage acceptance too. Write
+`lander=` only once the box runs this probe. An empty conf turns the radar on with lineage off. A repeated or unknown
+key, a bad value, or a conf that is not a regular UTF-8 file makes the project `conf-invalid`, and so does a `base`
+the git door would refuse. That project is not measured, its `enabled` and `lander` are removed, and the journal names
+the reason (never the bytes).
 
 **The pauses.** The operator writes both by hand, and the tree has no writer for either:
 - `~/.cc-sessions/land-probe-paused` stops the whole tick before its lock.

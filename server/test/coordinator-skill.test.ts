@@ -3957,9 +3957,7 @@ describe('landing order wave 5d: the latest attempt decides (D-7546)', () => {
   const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
   const sec = at >= 0 ? wl.slice(at, wl.indexOf('\n## ', at)) : '';
   const fence = /```bash\n([\s\S]*?)```/;
-  const block = fence.exec(sec)?.[1] ?? '';
   const prose = flat(sec.replace(fence, ''));
-  void block;
 
   it('states the latest-attempt rule, and keeps the every-attempt read a report line in the turn text, never a stop (D-7546)', () => {
     expect(prose).toContain('**The latest attempt decides** (D-7546, which amends the strict reading of D-7495).');
