@@ -192,6 +192,9 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // Vitest otherwise turns a `.css?raw` import into an empty string, so the reader's stylesheet text (and the
+    // test that hashes it against the manifest) needs the real bytes. Only the `?raw` form is let through.
+    css: { include: [/\.css\?raw$/] },
     setupFiles: ['./test/setup.ts'],
     // The real-browser leg (browser/**, driven by vitest.browser.config.ts and CI's `browser (pwa)` job) needs a
     // Chrome; the hermetic run never does. vitest's default include would collect browser/*.browser.test.ts, so it
