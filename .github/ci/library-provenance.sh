@@ -19,9 +19,11 @@
 #
 # Run from the repository root. `gh` reads GH_TOKEN from its own environment.
 # Both network calls (the pack and the attestation lookup) run under bounded.sh,
-# a 90 s deadline per attempt and one retry, so a stalled registry or API ends
-# the step in at most about 3 minutes; a call that never answers is a failure, and
-# the script fails closed on it like on any other.
+# a 90 s deadline per attempt (plus the helper's 10 s kill grace) and one retry,
+# so one stalled call costs at most about 200 s, and both stalled about 400 s. A
+# call that never answers is a failure, and the script fails closed on it like on
+# any other. The helper's `::warning::` lines go to stdout, so the pack's stdout
+# is not discarded.
 # Exit 0: verified. Any other exit: the library is not what the lock says, or
 # the check could not be made; an outage reds the job and the remedy is a re-run.
 set -euo pipefail
@@ -39,7 +41,7 @@ read -r version integrity < <(node -e '
 
 # Under the runner's temp directory (or the system's), never inside the work tree. Left for the runner to reap.
 dest=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lib-prov.XXXXXX")
-"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent >/dev/null
+"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }
 tgz="$dest/synapsium-labs-docserver-$version.tgz"
 
 actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"

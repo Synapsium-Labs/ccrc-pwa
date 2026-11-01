@@ -1895,7 +1895,7 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
   it('the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines)', () => {
     const lines = read(SCRIPT).split('\n');
     const times = (l: string): number => lines.filter((x) => x === l).length;
-    expect(times('"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent >/dev/null'), 'the pack line').toBe(1);
+    expect(times('"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }'), 'the pack line').toBe(1);
     expect(times('tgz="$dest/synapsium-labs-docserver-$version.tgz"'), 'the tgz line').toBe(1);
     expect(times('actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"'), 'the actual line').toBe(1);
     // `actual` has one writer, and it never reads the lock's value.
@@ -1955,6 +1955,9 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       expect(r.status).not.toBe(0);
       expect(r.log.match(/^timeout -k 10 90$/gm), 'one retry, no third attempt').toHaveLength(2);
       expect(r.log, 'gh ran after the pack timed out').not.toContain('gh attestation verify');
+      // The helper's warnings stay visible (the pack's stdout is not discarded), and the script says what failed.
+      expect(r.stdout).toContain('::warning::bounded: attempt 1 of 2 failed or passed 90s: npm pack ');
+      expect(r.stderr).toContain('library-provenance: npm pack failed or passed its deadline twice');
       expect(r.stdout, 'the match message was printed after a timed-out pack').not.toContain('matches the lock');
     });
 
