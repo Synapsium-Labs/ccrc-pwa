@@ -26,8 +26,8 @@ export const READER_COPY_WRITE_MAX_BYTES = 65536;
 /** The most UTF-16 code units a per-doc key (`project:section:path`) may have (A15/G7); a longer one has no per-doc state. */
 export const READER_DOC_KEY_MAX_UNITS = 1024;
 
-/** The most hidden characters the copy sheet names in the text it shows (§4.4). A hidden character past it is still
- *  replaced in place, by a marker with no name, and the sheet says how many there are: the text is never shown with a
- *  raw hidden character in it, and the sheet's size does not grow with a hostile page's count (65 536 bytes can hold
- *  that many). */
+/** The most hidden characters the copy sheet NAMES in the text it shows (§4.4); that is all it bounds. A hidden
+ *  character past it is still replaced in place, by a short marker with no name, and the sheet says how many there are.
+ *  The sheet's size is bounded by the text's own, which the library caps at `READER_COPY_WRITE_MAX_BYTES`, so a hostile
+ *  page cannot make the named markers (about 30 characters each) outgrow it. */
 export const READER_COPY_SHEET_MARKERS_MAX = 64;
