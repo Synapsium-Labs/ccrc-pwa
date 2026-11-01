@@ -7,20 +7,30 @@
 // (laneWords.ts): `n%` measured, `0%` for a window that rolled over (spoken as
 // inferred), and `—` never measured, rather than the row disappearing.
 //
-// It reads the fleet store's accounts answer (`usage`, `projected`, `roster`), which the store's one
+// It reads the fleet store's accounts answer (`usage`, `projected`, `roster`, `lanes`), which the store's one
 // `/api/accounts` poll writes (C8, D-6440): the store is connected app-wide whichever route is mounted, so the
 // screen needs no poll of its own.
+//
+// ONE STATE WORD PER LANE (accounts plan Task A2, D-7718; spec 2026-10-18 accounts-connect §4). Each card's head is
+// two lines: the hue chip with the mono id, the label (ellipsised) and the lamp, right-aligned; then the kind chip,
+// the identity line and the pool chip. The word is the server's (`LaneWire.state`, `stateWordFor`); the screen
+// derives none of its own (`laneAnswerOf` falls back to the same function only when the answer carries no lane
+// state). Signed out, Rate-limited, Expiring and Inconclusive lift to the top as trouble cards, and the measured
+// roll-up opens the page. THE POOL CHIP AND `AccountPoolSheet` STAY through the redesign (D-7718's amendment): pool
+// membership is still set here (spec §8.4).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
+import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { PageScaffold, Skeleton, toast, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
-import { formatAge } from '../fleet/formatReset';
+import { cardLines, identityLine, isTrouble, kindChipWords, laneAnswerOf, offAlso, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, SIGN_IN_EXPIRED } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate, useLocation } from '../lib/router';
 import { laneParam, sessionPath } from '../lib/routes';
@@ -169,8 +179,24 @@ export function AccountsScreen(): ReactNode {
   const accountPools = useFleetStore((s) => s.pools?.accountPools);
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
+  // `GET /api/accounts`'s `lanes`: each lane's word and what the screen may show about its credential, sent only to a
+  // reader with the session verdict (D-5511). `null` before it lands, and on a dark gate's answer.
+  const lanes = useFleetStore((s) => s.lanes);
 
-  const order = rowOrder(roster, accounts ?? []);
+  // Each lane's one word, once per render: the order, the roll-up and the card all read the same answer.
+  const answers = new Map<string, AccountStateAnswer>();
+  const answerOf = (wrapper: string): AccountStateAnswer => {
+    let a = answers.get(wrapper);
+    if (a === undefined) {
+      a = laneAnswerOf(
+        lanes?.[wrapper], accounts?.find((x) => x.wrapper === wrapper) ?? null, roster.find((r) => r.id === wrapper), now,
+      );
+      answers.set(wrapper, a);
+    }
+    return a;
+  };
+  // Trouble cards first (spec §4.2), every other lane in roster order.
+  const order = troubleFirst(rowOrder(roster, accounts ?? []), (w) => answerOf(w).word);
 
   // The arrival at a lane (T2c, D-6329, Q14): a lane card opens `/accounts?lane=<id>`, and the screen scrolls that
   // lane's row into view, focuses it and marks it with one accent edge. A PASSIVE effect, never a layout one: the
@@ -260,6 +286,9 @@ export function AccountsScreen(): ReactNode {
     // The page scaffold (D-5102). The body's grid keeps the old screen's rhythm, --sp-3 between blocks.
     <PageScaffold title="Accounts" back={backToFleet('accounts-back')}>
 
+      {/* The measured roll-up (spec §4.3), zero clauses omitted, and today's projection line under it. The scaffold has
+          no subtitle slot, so it is the body's first line. */}
+      {accounts && <p className="accounts-rollup">{rollUp(order.map((w) => answerOf(w).word))}</p>}
       {projectionLine !== null && <p className="accounts-projection">{projectionLine}</p>}
 
       <div className="accounts-list">
@@ -290,29 +319,20 @@ export function AccountsScreen(): ReactNode {
           </section>
         ) : order.map((wrapper) => {
           const a = accounts.find((x) => x.wrapper === wrapper) ?? null;
-          // TWO facts, ONE affordance. `disabled` is the operator's kill-switch
-          // (`~/.cc-sessions/<w>-disabled`, touched by hand); `authDead` is the
-          // health probe's measurement (`<w>-authdead`). They are never folded
-          // into one boolean upstream — the server keeps them apart for exactly
-          // the reason the note below says both when both are true — but on this
-          // screen they answer the same question, "can this lane take work?", so
-          // they render through the attribute and the note that already exist
-          // rather than a second vocabulary beside them.
-          //
-          // `=== true` on both, never truthiness: a server built before
-          // `authDead` omits it, and absence must read as "not condemned".
+          // TWO facts, ONE affordance. `disabled` is the operator's kill-switch and `authDead` the health probe's
+          // measurement; the lamp below says which one applies (Off outranks Signed out, and both stay in the full
+          // record), and both grey the meters, because on this screen they answer the same question: can this lane
+          // take work? `=== true` on both: a server built before `authDead` omits it, and absence is not condemned.
           const disabled = a?.disabled === true;
           const authDead = a?.authDead === true;
           const off = disabled || authDead;
-          // Both, when both — an operator switch does not hide a measurement,
-          // and a measurement does not explain away a switch. The two are
-          // cleared by different acts.
-          const offNote = disabled && authDead
-            ? `disabled on the fleet host; ${SIGN_IN_EXPIRED}`
-            : disabled
-              ? 'disabled on the fleet host'
-              : `${SIGN_IN_EXPIRED} on the fleet host`;
-          const ts = a?.ts ?? null;
+          const entry = roster.find((r) => r.id === wrapper);
+          const answer = answerOf(wrapper);
+          const laneWire = lanes?.[wrapper];
+          const lines = cardLines(answer, a?.ts ?? null, nowSec);
+          const kindWords = kindChipWords(entry);
+          const identity = identityLine(laneWire, answer.word, nowSec);
+          const also = offAlso(answer, a);
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
           // workspace that is archived, mid-cleanup, or that the server does
           // not read alive is not load on this account, even though it still
@@ -350,29 +370,45 @@ export function AccountsScreen(): ReactNode {
           // `poolDim`, so a fleet nobody has measured yet never dims the chip
           // on a guess.
           const acctPoolDim = accountPools === 'unavailable';
+          const trouble = isTrouble(answer.word)
+            ? troubleCopy({ id: wrapper, answer, entry, lane: laneWire, usage: a, sessions: onAccount.length, now })
+            : null;
+          // A Codex lane has no 5-hour window: its absent 5h says so rather than "—" (spec §4.1).
+          const weeklyOnly = entry?.kind === 'codex' && (a?.five ?? null) === null;
           return (
             <section
               key={wrapper}
-              className="accounts-row"
+              className={answer.word === 'signed-out' ? 'accounts-row acct-rail' : 'accounts-row'}
               data-disabled={off ? 'true' : 'false'}
               data-lane={wrapper}
+              data-state={answer.word}
+              data-trouble={trouble !== null ? 'true' : undefined}
               data-arrived={arrived === wrapper ? 'true' : undefined}
               tabIndex={-1}
               ref={(el) => { if (el === null) rowRefs.current.delete(wrapper); else rowRefs.current.set(wrapper, el); }}
             >
+              {/* The head, on two lines so it never wraps unpredictably at 360 (spec §4.4). Line 1: the hue chip with
+                  the mono id, the label (ellipsised) and the lamp, right-aligned. */}
               <div className="accounts-row-head">
                 <span
-                  className="account-gauge-label"
+                  className="acct-card-id"
                   style={{ color: off ? 'var(--ink-tertiary)' : `var(${accountColorVar(roster, wrapper)})` }}
                 >
-                  {accountLabel(roster, wrapper)}
+                  {wrapper}
                 </span>
-                {/* Disabled lanes are shown switched off, never hidden — the
-                    strip's compact filter (AccountsStrip.tsx) is right for an
-                    always-on bar, wrong here. A lane whose credential the probe
-                    measured dead is shown for a sharper version of the same
-                    reason: it is the one lane an operator has to go and fix. */}
-                {off && <span className="accounts-disabled-note">{offNote}</span>}
+                {/* The label only when it says more than the id: a lane whose label is its id names itself once. */}
+                {accountLabel(roster, wrapper) !== wrapper && (
+                  <span className="account-gauge-label acct-card-label" title={accountLabel(roster, wrapper)}>
+                    {accountLabel(roster, wrapper)}
+                  </span>
+                )}
+                <StateLamp word={answer.word} />
+              </div>
+              {/* Line 2: the kind chip in words, the identity line (only what the lane state recorded), and the pool
+                  chip, which stays through the redesign (D-7718). */}
+              <div className="accounts-row-kind">
+                {kindWords !== null && <span className="acct-kind-chip">{kindWords}</span>}
+                {identity !== null && <span className="acct-identity" title={identity}>{identity}</span>}
                 {inRoster && (
                   <button
                     type="button"
@@ -389,13 +425,26 @@ export function AccountsScreen(): ReactNode {
                   </button>
                 )}
               </div>
+              {/* The state's source, with its own age: a different measurement from the usage reading's age below. */}
+              <p className="accounts-state-source" title={lines.stateAt === null ? undefined : new Date(lines.stateAt).toISOString()}>
+                {also === null ? lines.state : `${lines.state} · ${also}`}
+              </p>
+
+              {trouble !== null && <TroubleCard copy={trouble} />}
 
               {/* `off` greys the meters' fills while each keeps its frozen
                   classification on `data-band`: the colour and the reading
                   stay separate facts (D-5098). It replaced a row-level
                   fleet.css override. */}
               <div className="acct-rows">
-                <AccountMeterRow label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} off={off} />
+                {weeklyOnly ? (
+                  <div className="acct-row">
+                    <span className="acct-win">5h</span>
+                    <span className="acct-weekly-only">{WEEKLY_ONLY}</span>
+                  </div>
+                ) : (
+                  <AccountMeterRow label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} off={off} />
+                )}
                 <AccountMeterRow label="7d" pct={a?.seven ?? null} resetAt={a?.sevenResetAt ?? null} nowSec={nowSec} rolledOver={a?.sevenRolledOver ?? false} off={off} />
               </div>
 
@@ -403,7 +452,7 @@ export function AccountsScreen(): ReactNode {
                   statusline — an idle account simply stops reporting. This
                   reads as "last known", never as live: no refresh button,
                   because there is nothing to refresh until a session runs. */}
-              <p className="accounts-fresh">last reported {formatAge(ts === null ? null : nowSec - ts)}</p>
+              <p className="accounts-fresh">{lines.usage}</p>
 
               {onAccount.length > 0 && (
                 <ul className="accounts-sessions">
