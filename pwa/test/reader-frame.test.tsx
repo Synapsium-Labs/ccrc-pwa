@@ -106,7 +106,7 @@ function harness(over: Partial<{
   };
 }
 
-function frame(h: Harness, over: { text?: string; bodyKey?: string; pending?: string | null } = {}): ReactNode {
+function frame(h: Harness, over: { text?: string; bodyKey?: string; pending?: string | null; show?: DocsShowOk } = {}): ReactNode {
   const assets: DocsAssetContextValue = {
     loaders: fakeLoaders().loaders, queue: createFetchQueue(), onDraftAsset: h.onDraftAsset,
   };
@@ -114,7 +114,7 @@ function frame(h: Harness, over: { text?: string; bodyKey?: string; pending?: st
     <DocsAssetContext value={assets}>
       <ReaderFrame
         key={over.bodyKey ?? 'k1'}
-        show={showOf(over.text ?? '# A')} bodyKey={over.bodyKey ?? 'k1'} link={{ ...LINK, onFragment: h.onFragment }}
+        show={over.show ?? showOf(over.text ?? '# A')} bodyKey={over.bodyKey ?? 'k1'} link={{ ...LINK, onFragment: h.onFragment }}
         parser={h.parser} reader={h.reader} pendingFragment={over.pending ?? null} onFragmentConsumed={h.consumed}
       />
     </DocsAssetContext>
@@ -252,6 +252,18 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(input.document.result.html).toBe('<p>x</p>');
     expect(input.prefs).toEqual({ theme: 'light' });
     await waitFor(() => expect(h.consumed).toHaveBeenCalledTimes(1));
+  });
+
+  it('refinement (k): a committed doc reaches the mount with its commit and no draft flag, a draft with its head and the flag', async () => {
+    const commit = 'a'.repeat(40);
+    const head = 'b'.repeat(40);
+    const h1 = harness();
+    render(frame(h1, { show: { ...showOf('# A'), source: 'committed', commit } }));
+    expect((await ready(h1)).document.version).toEqual({ sha: commit, draft: false });
+    cleanup();
+    const h2 = harness();
+    render(frame(h2, { show: { ...showOf('# A'), source: 'draft', head } }));
+    expect((await ready(h2)).document.version).toEqual({ sha: head, draft: true });
   });
 
   it('a fallback before the mount lands keeps the fragment for the plain view', async () => {

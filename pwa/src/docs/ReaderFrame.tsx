@@ -241,6 +241,11 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           scan: { mermaid: outcome.mermaid },
           images: images.urls,
           initialHash: cur.props.pendingFragment,
+          // Refinement (k): the commit a committed doc was read at, or the head a draft was read over with its flag.
+          // The adapter keeps this only for a full hex sha (`withServedVersion`).
+          version: cur.props.show.source === 'draft'
+            ? { sha: cur.props.show.head ?? null, draft: true }
+            : { sha: cur.props.show.commit ?? null, draft: false },
         },
         bytes,
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
