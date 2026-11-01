@@ -797,16 +797,24 @@ describe('W8a reader frame in Chrome', () => {
     const topUrl = s.page.url();
     await sleep(800);
     expect(s.page.url(), 'a top.location write moved nothing').toBe(topUrl);
-    // _blank: the library emits no target=_blank link (raw HTML is off), so one is planted in the frame and clicked for
-    // real. Whether the click guard sends it to the console's sheet or it reaches the browser, no window opens.
+    // _blank: the library emits no target=_blank link (raw HTML is off), and the frame's click guard turns any click that
+    // reaches `window` on a link into the console's sheet, so a plain click never tests the sandbox. One is planted
+    // inside a shadow root and clicked with a non-composed event, which never reaches the guard: the browser's own
+    // `_blank` handling runs, and the sandbox without allow-popups is the only wall left.
     await frame.evaluate(`(() => {
+      const host = document.createElement('div');
       const a = document.createElement('a');
-      a.id = 'planted-blank'; a.target = '_blank'; a.href = ${JSON.stringify(origins.a + '/popup-blank')}; a.textContent = 'planted blank link';
-      document.body.prepend(a);
+      a.target = '_blank'; a.href = ${JSON.stringify(origins.a + '/popup-blank')}; a.textContent = 'planted blank link';
+      host.attachShadow({ mode: 'open' }).append(a);
+      document.body.prepend(host);
+      window.__plantedBlankClick = () => a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: false }));
     })()`);
-    await frame.locator('#planted-blank').click();
+    // Counted just before the click, and compared after it: a popup from an earlier clause (window.open under a mutated
+    // sandbox) is already in the count and is not this link's.
+    const pagesBefore = s.app.ctx.pages().length;
+    expect(await frame.evaluate('window.__plantedBlankClick()'), 'the planted click was not cancelled by the guard (it never saw it)').toBe(true);
     await sleep(1000);
-    expect(s.app.ctx.pages().length, 'the planted _blank link opened no window').toBe(1);
+    expect(s.app.ctx.pages().length - pagesBefore, 'the planted _blank link opened no window (pages opened by the click)').toBe(0);
     expect(origins.hits.slice(from).filter((h) => h.path.startsWith('/popup-blank')).map((h) => h.path), 'and nothing reached A').toEqual([]);
     if (await s.page.getByText('Open this link?').count() > 0) await s.page.getByRole('button', { name: 'Cancel' }).click();
     // And the author's own external link: a real click, which the guard routes to the console's sheet.
@@ -1091,6 +1099,8 @@ describe('W8a reader frame in Chrome', () => {
     await frame.locator('.fig-render-btn').click();
     await frame.waitForFunction(() => document.querySelector('figure.mermaid-figure')?.getAttribute('data-docreader-draw') === 'drawn', undefined, { timeout: 90_000 });
     const live = await frame.evaluate((names) => ({
+      // A name the bootstrap pinned reads as its own property; one it did not would read as the element with that id.
+      shadowed: names.filter((n) => (window as unknown as Record<string, unknown>)[n] instanceof Element),
       scripts: document.querySelectorAll('script').length,
       text: document.body.textContent ?? '',
       missing: names.filter((n) => document.getElementById(n) === null),
@@ -1102,6 +1112,9 @@ describe('W8a reader frame in Chrome', () => {
     expect(live.missing, `every one of the ${BOOTSTRAP_GLOBALS.length} bootstrap globals renders as an id`).toEqual([]);
     expect(live.duplicated, 'each exactly once').toEqual([]);
     expect(live.drawn, 'and the figure drew').toBe(1);
+    expect(live.shadowed, 'no global the bootstrap guards reads as the element with its id (the pin holds)').toEqual([]);
+    expect(s.app.errors, 'no uncaught error in the page or the frame').toEqual([]);
+    expect(s.logs.filter((l) => l.startsWith('error ')), 'and no console error').toEqual([]);
     expect(await frame.evaluate('typeof window.location + typeof window.document'), 'and the frame\'s own globals are its own').toBe('objectobject');
     // The frame still behaves.
     await frame.getByRole('link', { name: 'the other page' }).click();
