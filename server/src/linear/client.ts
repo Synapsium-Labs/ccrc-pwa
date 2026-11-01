@@ -30,6 +30,8 @@
  */
 import type { LinearFailure } from '../../../shared/linear.js';
 import { sanitizeTitle } from '../../../shared/slug.js';
+// The name cleaner lives in L0 beside the unprintable set (#1444), so a pure caller imports it without this L3 file.
+import { cleanName } from '../../../shared/unprintable.js';
 import { valueDigestHex } from '../token/files.js';
 import type { LinearKeyRead } from './connection.js';
 
@@ -206,18 +208,6 @@ export async function lookupLinearIssue(
 
 /** The key check's query: who the key is and which organisation it reads. Two names and nothing else. */
 const VIEWER_QUERY = 'query Viewer { viewer { name } organization { name } }';
-
-/** The longest an organisation or user name is kept (code points). A bound on what Linear's text can put
- *  in a file and on the screen. */
-export const LINEAR_NAME_MAX_CHARS = 80;
-
-/** A name from Linear, made safe to store and show: control runs collapse to one space, trimmed, bounded. Null
- *  when nothing is left (a name that is all control characters is no name). */
-function cleanName(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const s = [...raw.replace(/\p{Cc}+/gu, ' ').trim()].slice(0, LINEAR_NAME_MAX_CHARS).join('').trim();
-  return s === '' ? null : s;
-}
 
 /** The failures a key check can end in. `not-configured` makes no call and `not-found` has no meaning here. */
 export type LinearVerifyFailure = Exclude<LinearFailure, 'not-configured' | 'not-found'>;

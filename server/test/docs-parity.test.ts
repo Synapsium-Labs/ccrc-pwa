@@ -697,3 +697,35 @@ describe("M7.3 (doctor half): one CCRC_DOCS_PAGE_PREFIX in the doctor file, equa
     expect(got.body.includes(DOCS_PAGE_PREFIX), 'a spelled prefix in the check: interpolate the variable').toBe(false);
   });
 });
+
+// ---- The Linear central key (#1444), its redactor task: a Linear API key is masked by its `lin_api_` prefix in the
+// docs profile as in egress, and the helper follows with no python table of its own, because it runs the docs profile
+// through shared/redact-cli.mjs. A prefix added to the egress profile alone reds the first case; a python rule table
+// added for it reds "the helper has no python rule table" above. The key body is built at run time, so this public
+// file carries no contiguous token-shaped literal. ----
+describe('the docs profile masks a Linear API key by its prefix, and the helper follows through the CLI (#1444)', () => {
+  const h = harnessT6('ccd-docs-');
+  afterAllT6(() => h.cleanup());
+  const KEY = ['lin', 'api', 'fixtureK3y0001'].join('_');
+  const ROWS: readonly (readonly [input: string, output: string])[] = [
+    [`key ${KEY} rejected`, 'key lin_api_*** rejected'],
+    [`export LINEAR=${KEY}_two`, 'export LINEAR=lin_api_***'],
+    ['the lin_api_ prefix alone', 'the lin_api_ prefix alone'],
+  ];
+
+  it('redactDocsText masks the key and keeps a bare prefix', () => {
+    expect(ROWS.map(([input]) => redactTextT6(input))).toEqual(ROWS.map(([, output]) => output));
+  });
+
+  it('H.redact gives the same answer, with no python rule table', () => {
+    const file = path.join(h.home, 'redact-linear.json');
+    writeFileT6(file, JSON.stringify(ROWS.map(([input]) => input)));
+    const py = unitJsonT6<string[]>(h.home, [
+      'import json',
+      `C = json.load(open(${JSON.stringify(file)}, encoding='utf-8'))`,
+      'out([H.redact(s) for s in C])',
+    ].join('\n'));
+    expect(py).toEqual(ROWS.map(([, output]) => output));
+    expect(pythonRedactorTablesT6()).toEqual([]);
+  });
+});
