@@ -1,6 +1,6 @@
 // The reader frame's decisions (native Docs reader, W8a Task 5; the rich-docs spec's (amended 2026-10-31) M8.7, M8.11, M8.19,
 // A15/G7 and section 4.4's `navigate`, `copy` and `hash` rows; the W8a plan's refinements (h), (l) and (n)). Ring L1 policy: pure
-// deciders over plain values, no I/O, no timer, no DOM, and no import of a `.tsx`, a store, `lib/api.ts` or the
+// deciders over plain values, no I/O, no timer, no DOM, and no runtime import of a `.tsx` (the `import type` from `../DocLink` is erased), a store, `lib/api.ts` or the
 // shared Markdown library (`ReaderLink` mirrors the library's host-link shape instead of importing it). Delivery
 // (`ReaderFrame.tsx`) asks these and acts on the answer: it decides nothing.
 //
