@@ -5820,7 +5820,7 @@ export class FleetWatcher {
 
   /** D-7319: the dead-dispatch reason of the dead-coordinator lane's pass. Nothing before `buildServer` hands over the
    *  serialiser (the lane's only way to end a run); a throw is said and the pass goes on to the coordinator reason. */
-  private async deadDispatchStep(coord: CoordStore): Promise<void> {
+  private async deadDispatchStep(coord: WatcherCoordPort): Promise<void> {
     const serial = this.deadCoordinatorSerial;
     if (serial === null) return;
     try {
@@ -5835,7 +5835,7 @@ export class FleetWatcher {
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
   private async deadCoordinatorPass(
-    coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
+    coord: WatcherCoordPort, records: readonly SessionRecord[], names: readonly string[], now: number,
   ): Promise<void> {
     const forget = (): void => {
       for (const [id, e] of this.deadCoordinatorState) {
@@ -6153,7 +6153,7 @@ export class FleetWatcher {
    *  reason, never the row's content) — through `recordRows`, saying whether that pass's record LANDED. They are said
    *  once because the pass that seeds sets `Seeded`. No new attention kind, no wire word. */
   private noteDeadCoordinatorSeed(
-    coord: CoordStore, cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean, ids: readonly string[],
+    coord: WatcherCoordPort, cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean, ids: readonly string[],
     landed: boolean,
   ): void {
     const record = cause.kind === 'absent' ? 'the first state' : 'a fresh record';
@@ -6176,7 +6176,7 @@ export class FleetWatcher {
   /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it
    *  was not asked (no serialiser) or threw. */
   private async deadCoordinatorAct(
-    coord: CoordStore, pick: { id: string; since: number; cause: Exclude<ClaimantDeadCause, 'stopped'> }, now: number,
+    coord: WatcherCoordPort, pick: { id: string; since: number; cause: Exclude<ClaimantDeadCause, 'stopped'> }, now: number,
   ): Promise<DeadCoordinatorActOutcome | null> {
     const serial = this.deadCoordinatorSerial;
     if (serial === null) {
@@ -6252,7 +6252,7 @@ export class FleetWatcher {
    * this. One instance per process, same as before — `??=` still guards a
    * second store existing across two calls in the same tick.
    */
-  private mirrorFor(store: CoordStore): JournalMirror {
+  private mirrorFor(store: WatcherCoordPort): JournalMirror {
     this.mirror ??= new JournalMirror({
       io: this.deps.io,
       registryDir: this.deps.cfg.registryDir,
