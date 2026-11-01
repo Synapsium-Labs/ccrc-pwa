@@ -1894,7 +1894,7 @@ These were judged fills of a silence or choices of measurement, not departures f
 - `pwa/package-lock.json` re-syncs the stale `../ui` link entry's ranges (metadata only, equal to `ui/package.json`).
 - A failed image load, a 401 included, is left out of the reader (Task 6 Decision (2)); the plain view retries after sign-in, the reader on remount. W6 replaces the path.
 - A render chunk that fails to load in the worker ends as the timeout note (plan Task 4 Step 6); the chunk is precached.
-- The hidden-character list (the spec's and the library's) misses Unicode tag characters, LRM/RLM/ALM and the soft hyphen: a spec and library question for the operator.
+- The copy check flags exactly §4.4's "Hidden characters in a copy" set (U+202A-202E, U+2066-2069, U+200B-200D, U+2060, U+FEFF), the library's set and W8a's accepted floor. U+200E, U+200F, U+061C and the tag characters U+E0000-E007F are not flagged; extending the set is a spec and library change that has been put to the operator.
 - `.github/ci/bounded.sh`'s header still says it bounds an install command; it now also bounds the pack, the attestation lookup and the signature audit.
 - `build-pwa` keeps `attestations: read` as the plan specifies; whether the step needs it is measured on the pull request's run.
 - The frame's click net cannot see a non-composed click inside a shadow root; only library code can make one (raw HTML is off), and the sandbox is the wall (W8A-T10-M8).
