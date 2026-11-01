@@ -43,7 +43,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'updateEpoch', 'upsertNodeMeasurement',
 ];
 
-/** Each whole hand-off key (15) with its call-site count (16 in all), sorted by key. */
+/** Each whole hand-off key (14) with its call-site count (15 in all), sorted by key. */
 export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.constructor -> coord/questions.ts#createQuestions': 1,
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#endDeadCoordinator': 1,
@@ -58,6 +58,5 @@ export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.digestBeat -> coord/digest.ts#buildDigest': 1,
   'watch.ts#FleetWatcher.mirrorFor -> coord/mirror.ts#JournalMirror': 1,
   'watch.ts#FleetWatcher.noteDeadCoordinatorSeed -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreakerSeed': 1,
-  'watch.ts#FleetWatcher.staleArchive -> staleArchiveBeat.ts#StaleArchiveBeat': 1,
   'watch.ts#FleetWatcher.tick -> fleet.ts#assembleFleet': 1,
 };
