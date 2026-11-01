@@ -80,7 +80,7 @@ export function ReaderCopySheet(p: {
       <div className="docs-reader-sheet">
         <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyWarning}</p>
         {ask.failed && <p className="docs-reader-sheet-note" role="alert">{READER_SHEET_TEXT.copyFailed}</p>}
-        {ask.failed && <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyByHand}</p>}
+        {ask.failed && <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyByHandMarked}</p>}
         <pre className="docs-reader-sheet-text">{marked.text}</pre>
         {marked.unnamed > 0 && <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyUnnamed(marked.unnamed)}</p>}
       </div>

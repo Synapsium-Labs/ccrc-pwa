@@ -40,6 +40,9 @@ export const READER_SHEET_TEXT = {
   /** The sheet for clean text the clipboard refused: the text is shown so it can be copied by hand. */
   copyFailedTitle: 'The text was not copied',
   copyByHand: 'Select the text below and copy it yourself.',
+  /** The same, on the hidden-characters sheet: what is shown has the markers, so a hand copy holds them too. */
+  copyByHandMarked:
+    'Select the text below and copy it yourself. Hidden characters are shown as markers here, so what you copy holds the markers, not the characters.',
   copyTryAgain: 'Try again',
   copyFailedClose: 'Close',
 } as const;

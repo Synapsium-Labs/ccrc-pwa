@@ -378,7 +378,7 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(screen.getByText(READER_SHEET_TEXT.copyTitle)).toBeInTheDocument();
     // The refused state keeps the marked text on the sheet, to copy by hand, and says how.
     expect(sheetText()).toBe(`a${READER_SHEET_TEXT.copyMarker(hidden[0] as never)}b`);
-    expect(screen.getByText(READER_SHEET_TEXT.copyByHand)).toBeInTheDocument();
+    expect(screen.getByText(READER_SHEET_TEXT.copyByHandMarked), 'and says the text shown holds the markers').toBeInTheDocument();
   });
 
   it('a copy with more hidden characters than the cap names the first ones, marks the rest without a name, and says how many', async () => {
