@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 /** A NEW object on every call, as a JSON body is. */
-const health = (agentUp: boolean): FleetHealth => ({ agentUp, builds: {} } as unknown as FleetHealth);
+const health = (agentUp: boolean): FleetHealth => ({ agentUp } as unknown as FleetHealth);
 
 describe('useFleetHealth', () => {
   it('an equal health answer keeps the previous object (===)', async () => {

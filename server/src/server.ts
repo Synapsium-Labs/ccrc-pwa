@@ -300,11 +300,13 @@ function findPwaRoot(): string | null {
 }
 
 /**
- * `FleetHealth.builds`, derived from the inventory rows (design 2026-09-20
- * §14): each live row's role and its five `current*` columns as one
- * `BuildInfo` (`buildInfoOfRow`, update/inventory.ts), paired by
- * `derivedBuilds`. Composition only — which row is which side is decided
- * there.
+ * The `{own, fleet}` pair of stamps `buildAgreement` decides `FleetHealth.build`
+ * from, derived from the inventory rows (design 2026-09-20 §14): each live
+ * row's role and its five `current*` columns as one `BuildInfo`
+ * (`buildInfoOfRow`, update/inventory.ts), paired by `derivedBuilds`. The pair
+ * is only this input now — the `FleetHealth.builds` wire field that once
+ * carried it was retired in wave 33. Composition only — which row is which
+ * side is decided there.
  *
  * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
  * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
@@ -312,8 +314,8 @@ function findPwaRoot(): string | null {
  * route must not gain a new way to 500. It deliberately does NOT fall back to
  * `fleetState.build` — spec §8: the handshake sample is never read as the
  * current build where an inventory is wired. The fold of "unreadable" into
- * "no rows yet" is honest for this field's readers, which render both as a
- * dash; `GET /api/updates` is where the distinction is shown.
+ * "no rows yet" is honest for the one word decided from it (`unknown`);
+ * `GET /api/updates` is where the distinction is shown.
  */
 function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null } {
   let rows: NodeRow[];
@@ -1283,7 +1285,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // fleet host said on its last `ready` (`fleetState.build`). `?? null`
       // because `Deps.build` is optional for such callers — an absent stamp
       // and a null one are the same condition, exactly as `/health` treats
-      // them. `buildAgreement` decides from whichever pair this is.
+      // them. `buildAgreement` decides from whichever pair this is; the pair
+      // itself is not on the wire (`FleetHealth.builds` retired in wave 33).
       const builds = deps.coord
         ? inventoryBuilds(deps.coord)
         : { own: deps.build ?? null, fleet: deps.fleetState.build ?? null };
@@ -1293,7 +1296,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         downSince: deps.fleetState.downSince,
         roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp()),
         build: buildAgreement(builds.fleet, builds.own),
-        builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),

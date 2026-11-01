@@ -86,14 +86,14 @@ describe('GET /api/fleet/health', () => {
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
     await app.close();
   });
 
@@ -166,7 +166,7 @@ describe('GET /api/fleet/health — the inventory-derived `builds` degrades, nev
     os: 'linux', measuredAt: 1_758_000_000_000, report: null,
   });
 
-  it('an inventory that cannot be read answers builds null per side and build unknown — the route stays up', async () => {
+  it('an inventory that cannot be read answers build unknown and no `builds` key — the route stays up', async () => {
     // `nodes()` is a synchronous sqlite read; a corrupt or locked coord.db throws. Before W2 nothing in this arm
     // touched coord.db, so a throw here would be a NEW way for the banner route to 500. It degrades the way
     // `readPoolEpoch` degrades — and it does NOT fall back to the handshake stamp planted below (spec §8).
@@ -179,7 +179,27 @@ describe('GET /api/fleet/health — the inventory-derived `builds` degrades, nev
     try {
       const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ mode: 'remote', connected: true, build: 'unknown', builds: { own: null, fleet: null } });
+      expect(res.json()).toMatchObject({ mode: 'remote', connected: true, build: 'unknown' });
+      expect('builds' in res.json()).toBe(false);
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  it('two inventory rows on different commits answer build skewed and carry no `builds` key (wave 33)', async () => {
+    // The pair is retired from the wire; the word is still decided from the rows, so a disagreement between them
+    // still reads `skewed`.
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null });
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    expect(coord.upsertNodeMeasurement(serverRow('server'))).toMatchObject({ ok: true });
+    const fleetRow: NodeMeasurement = { ...serverRow('server'), nodeId: 'fleet', role: 'fleet', label: 'fleet', currentSha: 'f00ba12', agentOps: [] };
+    expect(coord.upsertNodeMeasurement(fleetRow)).toMatchObject({ ok: true });
+    const app = await buildServer({ ...deps, coord });
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+      expect(body['build']).toBe('skewed');
+      expect('builds' in body).toBe(false);
     } finally {
       await app.close();
       coord.db.close();

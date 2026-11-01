@@ -2902,9 +2902,9 @@ describe('the update indicator on the fleet screen', () => {
 // ── centralised-update W3 Task 12: both skew readers on the screen's one poll ─
 //
 // BuildLine and FleetHostBanner's skew arm moved together from the health
-// route's stamp pair onto NodeWire[] (spec §14). The pin is the SCREEN: both
-// read the one /api/updates answer Task 11 threads down, and the health
-// answer's decoy pair (v9.9.9) is never what either renders.
+// route's stamp pair onto NodeWire[] (spec §14), and wave 33 retired the pair from
+// the wire. The pin is the SCREEN: both read the one /api/updates answer Task 11
+// threads down, and the health answer carries only the agreement word.
 
 describe('BuildLine and the skew banner read the screen\'s one /api/updates poll', () => {
   const stampOf = (sha: string, version: string) => ({
@@ -2920,10 +2920,9 @@ describe('BuildLine and the skew banner read the screen\'s one /api/updates poll
     update: { state: 'idle', target: null, startedAt: null, detail: null },
   });
 
-  it('both readers name the inventory\'s versions, never the health route\'s pair', async () => {
+  it('both readers name the inventory\'s versions — the health answer carries only the word', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue({
       mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed',
-      builds: { fleet: stampOf('9'.repeat(40), 'v9.9.9'), own: stampOf('9'.repeat(40), 'v9.9.9') },
     });
     const view: UpdatesView = {
       catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
@@ -2939,7 +2938,6 @@ describe('BuildLine and the skew banner read the screen\'s one /api/updates poll
     await waitFor(() =>
       expect(document.querySelector('.build-line')?.textContent).toBe('fleet v0.0.7 → v0.0.9 · server v0.0.9'));
     expect(screen.getByText(/run different builds/i)).toHaveTextContent('fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1).');
-    expect(document.body.textContent).not.toContain('v9.9.9');
     expect(updates).toHaveBeenCalledTimes(1);
   });
 });
