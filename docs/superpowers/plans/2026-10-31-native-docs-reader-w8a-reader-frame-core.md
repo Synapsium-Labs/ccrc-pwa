@@ -745,6 +745,7 @@ W8a's departures, numbered as issued at the run's opening (D-7691 to D-7701 for 
 - **D-7703 (2026-11-01)** — `w8a-image-index-distinct` (found while executing, Task 6). The reader numbers images by distinct `src` (the library's `scanRefs` dedupes), where the plain view numbers every `img` element, so "exactly the images the plain view already shows" (A7 as amended, and refinement (d)) holds per distinct image, not per element: a doc that repeats one image counts it once against the 30-image and 5 MiB limits. W6's planner replaces the path wholesale. Task 6 (W8A-T6-M1-M5).
 - **D-7704 (2026-11-01)** — `w8a-supply-chain-deadlines` (found while executing, Task 11). The held-out review's fix bounds the rest of `build-pwa`'s supply-chain steps: `npm audit signatures` runs as `../.github/ci/bounded.sh 180 npm audit signatures`, and the provenance script runs `npm pack` and `gh attestation verify` under `bounded.sh 90` (one retry; a call that never answers still fails the script closed). Departs from Task 2 Step 1 case 1 (the run value is exactly `npm audit signatures`), Step 3's bare pack and verify lines, and M8.16's step list; a stalled registry or attestation call now costs minutes rather than the job's 15-minute limit. Task 11 (M8.16's deadline cases; W8A-T11-M9-M11, M15).
 - **D-7705 (2026-11-01)** — `w8a-reader-theme-follows-palette-mode` (found while executing, Task 8). `readerPrefsOf(themeChoice, palettes)` maps a named palette to that palette's own mode (`THEMES`), so the frame's theme matches the shell's. Departs from Task 5's Interfaces (`readerPrefsOf(themeChoice: string)`) and Decision (5), which sent every named palette to `auto`. The policy tests state the rule case by case: `system` gives auto, `light` and `dark` pass through, a named palette gives its own mode, an unknown id gives auto. Task 8's fix round (reader-policy.test.ts).
+- **D-7706 (2026-11-01)** — `w8a-mermaid-asset-deadline` (found by review). `mountReader` bounds its wait for the Mermaid asset by `readerWatchdogMs(bytes)`, the value the mount already passes as `watchdogMs`; past it, the mount takes exactly the rejected-import path (no `scan`, the figures show as source) and a late chunk is ignored. Departs from Task 7 Decision (4), which names only an import that rejects; it makes refinement (c)'s "ready does not wait for Mermaid" true of a stalled chunk as well. Fix round 1 (reader-bridge.test.ts; W8A-T7-M16).
 
 ### Review dispositions
 
@@ -777,7 +778,7 @@ The whole browser leg, run once at Task 10, passed 41 of 42 files locally; `sess
 
 ### The mutation table
 
-110 rows, the last occurrence of each id, run at the end state in the workspace, one at a time, each bounded by `timeout -k 10 600` and `ulimit -u 4096`, each restored from a saved copy with its sha256 checked, `git status --porcelain` empty after every row. All 110 are red. W8A-T9-M1 reds the whole file (its build refuses the Mermaid chunk), which is the guard's own clause. Rows planted in the installed library were also checked against the pinned 1.0.0 tarball after restore, and at the end all 394 installed files equal the tarball's. Seven rows were re-spelt at this step because later tasks changed their text or the earlier row described the edit in prose (W8A-T2-M1, T2-M3, T2-M4, T3-M2, T3-M3, T4-M2, T7-M4), and W8A-T6-M1's `new` reds on its assertion rather than a ReferenceError.
+111 rows, the last occurrence of each id, run at the end state in the workspace, one at a time, each bounded by `timeout -k 10 600` and `ulimit -u 4096`, each restored from a saved copy with its sha256 checked, `git status --porcelain` empty after every row. All 111 are red (W8A-T7-M16 added and measured in fix round 1). W8A-T9-M1 reds the whole file (its build refuses the Mermaid chunk), which is the guard's own clause. Rows planted in the installed library were also checked against the pinned 1.0.0 tarball after restore, and at the end all 394 installed files equal the tarball's. Seven rows were re-spelt at this step because later tasks changed their text or the earlier row described the edit in prose (W8A-T2-M1, T2-M3, T2-M4, T3-M2, T3-M3, T4-M2, T7-M4), and W8A-T6-M1's `new` reds on its assertion rather than a ReferenceError.
 
 Task 1:
 
@@ -1284,6 +1285,15 @@ Task 7:
   "new": "ubmit\", (e) => preventDefault.call(e), true);\n  })();\n})();\n\n",
   "tests": "test/reader-assets.test.ts",
   "red": "Tests  1 failed | 10 passed (11) | first failing: × each asset text's sha256 equals FRAME_MANIFEST's entry 66ms | AssertionError: expected 'b9d6de41dd84fb5345380c48d94c2685f4f9e…' to be 'ff3c25da5703bc06d40ca0412b2e760c619a7…' // Object.is equality"
+ },
+ {
+  "id": "W8A-T7-M16",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "await Promise.race([(deps.mermaid ?? loadMermaidAsset)(), deadline])",
+  "new": "await (deps.mermaid ?? loadMermaidAsset)()",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: a Mermaid import that never settles mounts without scan once the watchdog passes, and a late chunk changes nothing | AssertionError: expected \"vi.fn()\" to be called 1 times, but got 0 times (test/reader-bridge.test.ts, after advancing the fake clock past the watchdog); the unbounded wait also leaves the unused deadline's rejection unhandled (1 Unhandled Rejection)"
  }
 ]
 ```
