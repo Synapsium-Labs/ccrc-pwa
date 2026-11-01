@@ -78,6 +78,11 @@ export function knownFleetIdentity(cell: { current(): CurrentFleetIdentity } | u
   return now?.kind === 'known' ? now.nodeId : null;
 }
 
+/** True only for an actor {@link actorOf} minted. The one check another writer of a gated act's row makes (the Linear
+ *  journal's key acts, #1444): a look-alike object, whatever its text, is not an actor. */
+export const isMintedActor = (a: unknown): a is AccountActor =>
+  typeof a === 'object' && a !== null && MINTED_ACTORS.has(a as AccountActor);
+
 /** One row, as a caller states it. */
 export interface AccountEventInput {
   act: AccountAct;
