@@ -1179,6 +1179,35 @@ describe('the state word, the roster reload and the lanes wire each have one hom
 });
 
 
+// D-7718 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A2). APPENDED. The kind chip has one list,
+// `KIND_CODES`, beside the state word in `shared/accounts.ts`; the screen's words (the lamp, the trouble order, the
+// roll-up, the trouble sentences) have one home in `pwa/src/fleet/accountWords.ts`; the lamp and the trouble card one
+// in `pwa/src/fleet/TroubleCard.tsx`. The chip words themselves are spelled once.
+describe('the kind chip, the lamp and the trouble card each have one home (D-7718)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('KIND_CODES').test('export const KIND_CODES = {')).toBe(true);
+    expect(decl('KIND_CODES').test('for (const code of Object.values(KIND_CODES))')).toBe(false);
+  });
+  it('the kind codes are declared once, in shared/accounts.ts, and each chip word is spelled there alone', () => {
+    for (const c of ['KIND_CODES', 'KindCode', 'kindCodeOf']) expect(holders(decl(c)), c).toEqual(['shared/accounts.ts']);
+    for (const w of ["'claude · sign-in'", "'claude · token'", "'chatgpt · codex'", "'openrouter · key'", "'compatible · key'"]) {
+      expect(holders(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), w).toEqual(['shared/accounts.ts']);
+    }
+  });
+  it("the screen's words and the card's parts each live in one file", () => {
+    for (const c of ['STATE_LAMPS', 'TROUBLE_WORDS', 'TroubleWord', 'troubleFirst', 'rollUp', 'laneAnswerOf', 'cardLines',
+      'identityLine', 'troubleCopy', 'TroubleCopy', 'offAlso', 'fixCommands', 'NO_LANE_STATE_SOURCE', 'WEEKLY_ONLY']) {
+      expect(holders(decl(c)), c).toEqual(['pwa/src/fleet/accountWords.ts']);
+    }
+    for (const c of ['StateLamp', 'CopyCommand', 'TroubleCard', 'COPY_FAILED']) {
+      expect(holders(decl(c)), c).toEqual(['pwa/src/fleet/TroubleCard.tsx']);
+    }
+  });
+});
+
+
 // D-5513, D-5622 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A8). APPENDED. The agent's typed
 // `account` op: the argv builder and its bounds have one home in `shared/account-argv.ts`, which BOTH `AccountOps`
 // arms call; the op's wire vocabulary and the node-id grammar one home in `shared/agent-protocol.ts`; the agent's

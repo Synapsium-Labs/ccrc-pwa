@@ -228,6 +228,10 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.fleet-archived-row, .fleet-runs-row': META,
     '.archive-size': META,
     '.accounts-projection': META,
+    // The Accounts card's state words (accounts plan Task A2, D-7718): the roll-up, the lamp and the trouble sentences.
+    '.accounts-rollup': META,
+    '.acct-lamp': META,
+    '.accounts-row[data-state] .acct-trouble-effect, .accounts-row[data-state] .acct-trouble-lead, .accounts-row[data-state] .acct-fix-hold': META,
     '.mail-dropped': META,
     '.mail-row .mail-body': META,
     '.run-row .run-state': META,

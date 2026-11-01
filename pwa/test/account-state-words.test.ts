@@ -1,12 +1,19 @@
 // The Accounts screen's one state word per lane (D-5517; spec §4.1; accounts plan Task A12). `stateWordFor` is L0
 // policy in `shared/accounts.ts`: the server derives `LaneWire.state` from it, and the screens render what it
 // answers. These cases pin the precedence, each source, each threshold at its edge, and the two honest non-readings.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, MINTED_KEY_EXPIRING_MS, MINTED_TOKEN_EXPIRING_MS,
-  MINTED_TOKEN_LIFETIME_MS, SIGNED_IN_WITHIN_MS, LANE_IDENTITY_MAX, laneStateOf, stateWordFor, type LaneState,
-  type StateWordInput,
+  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, KIND_CODES, MINTED_KEY_EXPIRING_MS, MINTED_TOKEN_EXPIRING_MS,
+  MINTED_TOKEN_LIFETIME_MS, SIGNED_IN_WITHIN_MS, LANE_IDENTITY_MAX, kindCodeOf, laneStateOf, stateWordFor,
+  type AccountStateWord, type LaneState, type StateWordInput,
 } from '../../shared/accounts';
+import type { AccountUsage, RosterWire } from '../../shared/api';
+import {
+  NO_LANE_STATE_SOURCE, STATE_LAMPS, TROUBLE_WORDS, cardLines, kindChipWords, laneAnswerOf, offAlso, rollUp, troubleCopy,
+  troubleFirst,
+} from '../src/fleet/accountWords';
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 9, 20, 12, 0, 0);
@@ -188,5 +195,135 @@ describe('the lane-state file is read as untrusted (D-5755 (11), D-6058 (3))', (
     expect(JSON.stringify(full)).not.toContain(WHOLE_KEY);
     expect(laneStateOf([])).toBeNull();
     expect(laneStateOf('{}')).toBeNull();
+  });
+});
+
+// ── The words on the screen (accounts plan Task A2, D-7718; spec §4.1–§4.4) ─────────────────────────────────────────
+// `stateWordFor` decides the word; `accountWords.ts` only draws an answer it was given. These pin what the Refined
+// card says with it: the precedence as the card sees it, the honest absence, the two ages, the roll-up, the kind chip
+// and the trouble order.
+describe('the Accounts card says the one word it was given (D-7718)', () => {
+  const usage = (over: Partial<AccountUsage> = {}): AccountUsage => ({
+    wrapper: 'lane-a', five: 10, seven: 20, ts: Math.floor(NOW / 1000) - 300, fiveResetAt: null, sevenResetAt: null,
+    fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
+  });
+
+  it('precedence: a disabled, 401 and limited lane reads Off; a 401 and limited one reads Signed out', () => {
+    expect(stateWordFor(token(undefined, { disabled: true, authDead: true, five: 100 })).word).toBe('off');
+    expect(stateWordFor(token(undefined, { authDead: true, five: 100 })).word).toBe('signed-out');
+    expect(stateWordFor(token(undefined, { five: 100 })).word).toBe('rate-limited');
+    // The card's own fallback (an answer with no lane state) keeps the same precedence: it is the same function.
+    expect(laneAnswerOf(undefined, usage({ disabled: true, authDead: true, five: 100 }), undefined, NOW).word).toBe('off');
+    expect(laneAnswerOf(undefined, usage({ authDead: true, five: 100 }), undefined, NOW).word).toBe('signed-out');
+    // And Off still names the 401 it outranks.
+    const off = laneAnswerOf(undefined, usage({ disabled: true, authDead: true }), undefined, NOW);
+    expect(offAlso(off, usage({ disabled: true, authDead: true }))).toBe('also signed out (HTTP 401)');
+    expect(offAlso(off, usage({ disabled: true }))).toBeNull();
+  });
+
+  it('no lane state is Not checked, never Signed in, and says no check is recorded', () => {
+    const a = stateWordFor(token(undefined));
+    expect(a).toEqual({ word: 'not-checked', source: 'no check recorded yet' });
+    // An answer that carries no lane state at all (a dark gate, an older server) is Not checked too, and says only
+    // what it knows: the file was not sent, not that no check was ever recorded.
+    const b = laneAnswerOf(undefined, usage(), { provider: 'anthropic', kind: 'sign-in' }, NOW);
+    expect(b.word).toBe('not-checked');
+    expect(b.source).toBe(NO_LANE_STATE_SOURCE);
+    // The server's answer wins whenever the lane carries one.
+    const signedIn = stateWordFor(token(read(okAt(60_000))));
+    expect(laneAnswerOf({ state: signedIn, ready: false }, usage(), undefined, NOW)).toBe(signedIn);
+  });
+
+  it("every word names its source; the state's age and the usage age are two fields", () => {
+    const cases: StateWordInput[] = [
+      token(undefined, { disabled: true }),
+      token(undefined, { authDead: true }),
+      token(undefined, { five: 100 }),
+      token(read({ ...okAt(60_000), mintedAt: NOW - 340 * DAY })),
+      token(read(okAt(60_000))),
+      token({ kind: 'unreadable' }),
+      token(undefined),
+    ];
+    const seen = cases.map((c) => stateWordFor(c));
+    expect(seen.map((a) => a.word)).toEqual([...ACCOUNT_STATE_WORDS]);
+    for (const a of seen) expect(a.source.trim().length, a.word).toBeGreaterThan(0);
+    for (const w of ACCOUNT_STATE_WORDS) expect(STATE_LAMPS[w].word.length, w).toBeGreaterThan(0);
+
+    // A state measured 2 h ago, a usage reading 5 m old: two lines, two instants, neither read off the other.
+    const checkedAt = NOW - 2 * 3_600_000;
+    const answer = stateWordFor(token(read({ check: { verdict: 'ok', at: checkedAt } })));
+    const nowSec = Math.floor(NOW / 1000);
+    const lines = cardLines(answer, nowSec - 300, nowSec);
+    expect(lines.state).toBe('checked 2h ago');
+    expect(lines.stateAt).toBe(checkedAt);
+    expect(lines.usage).toBe('last reported 5m ago');
+    expect(lines.usageAt).toBe((nowSec - 300) * 1000);
+    expect(lines.stateAt).not.toBe(lines.usageAt);
+    // No state age (a word with no instant) stays absent, never borrowed from the usage reading.
+    expect(cardLines(stateWordFor(token(undefined)), nowSec - 300, nowSec).stateAt).toBeNull();
+  });
+
+  it('the roll-up omits zero clauses, and counts each word once', () => {
+    expect(rollUp(['signed-in', 'signed-out', 'signed-in', 'off', 'not-checked'])).toBe('5 accounts · 1 signed out · 1 off');
+    expect(rollUp(['rate-limited', 'rate-limited', 'expiring', 'inconclusive']))
+      .toBe('4 accounts · 2 rate-limited · 1 expiring · 1 inconclusive');
+    expect(rollUp(['signed-in'])).toBe('1 account');
+    expect(rollUp([])).toBe('0 accounts');
+    expect(rollUp(['signed-in', 'not-checked'])).not.toMatch(/\b0 /);
+  });
+
+  it('the kind codes are derived from `KIND_CODES`, never re-listed', () => {
+    for (const [key, code] of Object.entries(KIND_CODES)) {
+      const [provider, kind] = key.split('/') as [RosterWire['provider'], RosterWire['kind']];
+      expect(kindChipWords({ provider, kind }), key).toBe(code.words);
+    }
+    expect(kindChipWords({})).toBeNull();
+    expect(kindChipWords(undefined)).toBeNull();
+    expect(kindCodeOf('anthropic', 'codex')).toBeNull();
+    expect(kindCodeOf('__proto__', 'x')).toBeNull();
+    // A source scan: no chip word, no short code, is spelled in the screen's words file.
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'accountWords.ts'), 'utf8');
+    for (const code of Object.values(KIND_CODES)) {
+      expect(src, code.words).not.toContain(`'${code.words}'`);
+      expect(src, code.code).not.toContain(`'${code.code}'`);
+    }
+    expect(src).toMatch(/\bkindCodeOf\b/);
+  });
+
+  it('trouble cards lift in their order, and every other lane keeps roster order', () => {
+    const words: Record<string, AccountStateWord> = {
+      a: 'signed-in', b: 'inconclusive', c: 'off', d: 'rate-limited', e: 'signed-out', f: 'expiring', g: 'not-checked', h: 'signed-out',
+    };
+    expect(TROUBLE_WORDS).toEqual(['signed-out', 'rate-limited', 'expiring', 'inconclusive']);
+    expect(troubleFirst(Object.keys(words), (id) => words[id]!)).toEqual(['e', 'h', 'd', 'f', 'b', 'a', 'c', 'g']);
+  });
+
+  it('a trouble card says what is wrong, its effect and its fix, with the fleet-host command', () => {
+    const now = NOW;
+    const out = troubleCopy({
+      id: 'lane-b', answer: stateWordFor(token(read({ check: { verdict: 'auth-dead', at: now - 2 * 3_600_000 } }))),
+      entry: { provider: 'anthropic', kind: 'sign-in' }, lane: undefined, usage: usage({ wrapper: 'lane-b' }), sessions: 3, now,
+    });
+    expect(out?.wrong).toBe("lane-b's sign-in was refused (HTTP 401) 2h ago.");
+    expect(out?.effect).toBe('New sessions are not placed here. 3 sessions on it will fail their next turn.');
+    expect(out?.commands).toEqual(['ccrc account check --id lane-b']);
+    const tok = troubleCopy({
+      id: 'lane-b', answer: stateWordFor(token(undefined, { authDead: true })),
+      entry: { provider: 'anthropic', kind: 'token' }, lane: undefined, usage: null, sessions: 0, now,
+    });
+    expect(tok?.wrong).toBe("lane-b's token was refused (HTTP 401).");
+    expect(tok?.effect).toBe('New sessions are not placed here.');
+    expect(tok?.commands[0]).toMatch(/^ccrc account credential --id lane-b --credential - < /);
+    const limited = troubleCopy({
+      id: 'lane-c', answer: stateWordFor(token(undefined, { five: 100 })), entry: undefined, lane: undefined,
+      usage: usage({ wrapper: 'lane-c', five: 100, fiveResetAt: Math.floor(now / 1000) + 72 * 60 }), sessions: 4, now,
+    });
+    expect(limited?.wrong).toBe('lane-c reached its 5-hour limit.');
+    expect(limited?.effect).toBe('Resets in 1h 12m. 4 sessions on it are waiting.');
+    expect(limited?.commands).toEqual(['ccrc account disable --id lane-c']);
+    // Not trouble, no card body.
+    expect(troubleCopy({
+      id: 'lane-a', answer: stateWordFor(token(read(okAt(60_000)))), entry: undefined, lane: undefined, usage: null, sessions: 0, now,
+    })).toBeNull();
   });
 });

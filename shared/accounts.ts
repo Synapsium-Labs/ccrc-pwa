@@ -281,3 +281,25 @@ export function laneStateOf(json: unknown): LaneState | null {
   }
   return out;
 }
+
+// ── The kind chip (spec §4.1 "Type is visible"; accounts plan Task A2, D-7718) ──────────────────────────────────────
+
+/** Each lane kind's chip, keyed `<provider>/<kind>` (`RosterKindWire`'s two fields, spelled structurally so this file
+ *  imports nothing): `words` is Refined's mono chip, `code` Instrument's short column (A4). The one list: the screens
+ *  read it through `kindCodeOf` and never re-list a kind. */
+export const KIND_CODES = {
+  'anthropic/sign-in': { words: 'claude · sign-in', code: 'cl·in' },
+  'anthropic/token': { words: 'claude · token', code: 'cl·tok' },
+  'openai/codex': { words: 'chatgpt · codex', code: 'gpt' },
+  'openrouter/key': { words: 'openrouter · key', code: 'or' },
+  'compatible/key': { words: 'compatible · key', code: 'cmp' },
+} as const;
+export type KindCode = (typeof KIND_CODES)[keyof typeof KIND_CODES];
+
+/** The chip for a lane's provider and kind, or `null` when the roster does not say (an older server, an undeclared
+ *  lane) or names a pair this build has no chip for: no chip rather than a wrong one. */
+export function kindCodeOf(provider: string | undefined, kind: string | undefined): KindCode | null {
+  if (provider === undefined || kind === undefined) return null;
+  const key = `${provider}/${kind}`;
+  return Object.prototype.hasOwnProperty.call(KIND_CODES, key) ? KIND_CODES[key as keyof typeof KIND_CODES] : null;
+}
