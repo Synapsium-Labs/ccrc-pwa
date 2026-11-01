@@ -1886,7 +1886,7 @@ Task 11 (the held-out review's fixes):
 
 ### Named, without a number
 
-These were judged fills of a silence or choices of measurement, not departures from a spec sentence: the vitest `css` include line for `.css?raw` imports (Task 7); `w7-storage-keys`' red at Task 7 was a whole-file import failure, not the plan's predicted case (the rows carry the red); Task 10's pre-ready navigate clause is driven from the parent's end of the port (W8A-T10-M9), because a Playwright init script reaches the srcdoc frame early in some loads and late in others; and `pageStorage` is retyped to return the enumerable port, with `enumerablePageStorage` delegating to it (Task 11's one guard body): the same store, no behaviour change.
+These were judged fills of a silence or choices of measurement, not departures from a spec sentence: the vitest `css` include line for `.css?raw` imports (Task 7); `w7-storage-keys`' red at Task 7 was a whole-file import failure, not the plan's predicted case (the rows carry the red); Task 10's pre-ready navigate clause is driven from the parent's end of the port (W8A-T10-M9), because a Playwright init script reaches the srcdoc frame early in some loads and late in others; the reader seeds the pending fragment decoded (a guarded `decodeURIComponent`, as the plain view's `fragmentTarget` does, keeping the raw text when decoding throws), because Task 8 Decision (6) is silent on encoding and the library's fragment grammar refuses a percent-encoded id (W8A-T8-M14); and `pageStorage` is retyped to return the enumerable port, with `enumerablePageStorage` delegating to it (Task 11's one guard body): the same store, no behaviour change.
 
 ### Carried, not fixed
 
