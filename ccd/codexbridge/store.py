@@ -278,7 +278,9 @@ class ReasoningStore:
                     raise
             conn.execute("PRAGMA journal_mode = WAL")
         except BaseException:
-            _close_unchecked(conn)  # a store this open refused is never checkpointed into (D-7676)
+            # A store this open refused is never checkpointed into (D-7676), on Python 3.12 and later: an older
+            # Python's close may checkpoint (`_close_unchecked`).
+            _close_unchecked(conn)
             raise
         self._local.conn = conn
         return conn

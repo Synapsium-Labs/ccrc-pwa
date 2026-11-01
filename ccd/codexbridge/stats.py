@@ -58,7 +58,8 @@ another write is in flight writes nothing (its changes stay dirty for the next o
 method raises into a request: a malformed argument is ignored (a headers argument that is not a mapping of headers,
 or a header item that is not a (name, value) pair, counts nothing; a byte count that is not an int moves no ratio), and
 a `now` that is not a finite number in range reads as the wall clock. A store event makes the next flush call write
-at once too, whatever FLUSH_S says (D-7677: a store disabled by a request is in the file right after that request).
+at once too, whatever FLUSH_S says (D-7677: a store disabled by a request is written at the next flush, which is that
+request's own unless another write is in flight, then the next one's; nothing is lost).
 
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """
