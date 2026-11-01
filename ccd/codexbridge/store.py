@@ -35,9 +35,10 @@ at every start. DAMAGE is a check that answers anything else, or an `sqlite3.Dat
 checking. Its subclasses are not damage: `OperationalError` (locked, busy, I/O, a read-only file), `IntegrityError` and
 the rest name a condition of the moment, not of the file, so they disable the store as above and leave the file
 untouched; a newer store is never checked, never touched. A damaged store is SET ASIDE: the constructing thread's
-connection is closed without a checkpoint (a damaged WAL is never folded into the copy), the file is renamed
-`<path>.damaged-<UTC YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`, each when present, `<that name>-wal` and
-`<that name>-shm`, so the copy opens as one database and no damaged WAL is left at `<path>-wal` for the fresh store.
+connection is closed without a checkpoint (on Python 3.12 and later a damaged WAL is never folded into the copy; an
+older Python's close may checkpoint the damaged WAL into the copy, which stays openable but has no separate `-wal`), the
+file is renamed `<path>.damaged-<UTC YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`, each when present, `<that name>-wal`
+and `<that name>-shm`, so the copy opens as one database and no damaged WAL is left at `<path>-wal` for the fresh store.
 Only then is ONE copy kept: every other name of that shape in the directory (an older copy, a stray sibling) is removed,
 a failed removal ignored. The fresh store is made as a first start makes one (`_create`, then `_conn`), and the callback
 is told `store:set-aside` once, with what was found (`integrity-check` or the exception's class name) and the copy's
