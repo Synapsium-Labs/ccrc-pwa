@@ -11,7 +11,7 @@ import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
 } from './pools.js';
-import type { CcdResult } from './coord/ports.js';
+import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -3265,7 +3265,7 @@ export class FleetWatcher {
    * naming the wrong live one is worse — it tells a coordinator running an
    * unrelated program about a message it never sent and cannot act on.
    */
-  private mailSender(store: CoordStore, mailId: number):
+  private mailSender(store: WatcherCoordPort, mailId: number):
     { senderId: string; origin: { fromId: string; runId: number | null; subject: string } } | null {
     const origin = store.mailOrigin(mailId);
     if (!origin) return null;
@@ -3280,7 +3280,7 @@ export class FleetWatcher {
   /** `sweepMail`'s `tellSender` (Task 409 — see the docstring at its call site)
    *  and the park's operator escalation (D-5838): one durable feed row, and a
    *  presence-gated push, tagged with the sender's session. */
-  private pushSenderNotice(store: CoordStore, mailId: number, toId: string, why: string, tag: string,
+  private pushSenderNotice(store: WatcherCoordPort, mailId: number, toId: string, why: string, tag: string,
                            sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
     const s = this.mailSender(store, mailId);
     if (s === null) return;
@@ -3304,7 +3304,7 @@ export class FleetWatcher {
    *  it — the operator, a program kickoff, `coordinator` naming no run — is
    *  still pushed, tagged with the RECIPIENT's session instead, since that is
    *  the box the operator has to look at. */
-  private escalatePark(store: CoordStore, p: { id: number; mailId: number; toId: string; parkReason: string | null },
+  private escalatePark(store: WatcherCoordPort, p: { id: number; mailId: number; toId: string; parkReason: string | null },
                        sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
     const words = parkWords(p.parkReason);
     const why = `parked — ${words.why}; it will be delivered when ${words.when}`;
@@ -4780,7 +4780,7 @@ export class FleetWatcher {
   /** The stale arm's hold reads for this pass, concurrently, for the rows `staleHoldWanted` picks (D-6639). A read that
    *  throws answers nothing, which keeps the child. */
   private async childReclaimGatherStaleHolds(
-    coord: CoordStore, records: readonly SessionRecord[],
+    coord: WatcherCoordPort, records: readonly SessionRecord[],
   ): Promise<ReadonlyMap<string, StaleHoldRead>> {
     const nowMs = Date.now();
     const wanted = records.filter((r) => staleHoldWanted(coord, r, this.deps.fleetState, nowMs));
@@ -4837,9 +4837,9 @@ export class FleetWatcher {
    *  which PROTECTS — never a throw that discards the per-child reads
    *  around it. */
   private childReclaimHoldCandidatesRead(
-    coord: CoordStore, sessionId: string, mintingRunId: number, mintingRunFull: RunRow | null,
+    coord: WatcherCoordPort, sessionId: string, mintingRunId: number, mintingRunFull: RunRow | null,
   ): ChildReclaimHoldCandidatesRead {
-    let naming: ReturnType<CoordStore['runsNamingSession']>;
+    let naming: ReturnType<WatcherCoordPort['runsNamingSession']>;
     try {
       naming = coord.runsNamingSession(sessionId);
     } catch (err) {
@@ -4862,7 +4862,7 @@ export class FleetWatcher {
    *  own try — called LAZILY by `childReclaimHoldRead`, only once a hold's
    *  text has PROVEN to match one of this child's own runs, so a programme
    *  whose hold does not match spends nothing here. */
-  private childReclaimOpenOf(coord: CoordStore, program: string): ChildReclaimHoldOpenRead {
+  private childReclaimOpenOf(coord: WatcherCoordPort, program: string): ChildReclaimHoldOpenRead {
     try {
       return { ok: true, count: coord.programOpenRunCount(program) };
     } catch (err) {
@@ -4887,7 +4887,7 @@ export class FleetWatcher {
    *  nothing: a duplicate boundary answers the same boundary. The birth
    *  (above, in the per-child loop) does NOT use this: it reads
    *  `lifecycleBirthEventsFor` through `childReclaimBornAt`. */
-  private childReclaimAttentionGenerationRows(coord: CoordStore, sessionId: string): MirroredLifecycleEvent[] {
+  private childReclaimAttentionGenerationRows(coord: WatcherCoordPort, sessionId: string): MirroredLifecycleEvent[] {
     const window = coord.lifecycleFor({ sessionId });
     const creates = coord.lifecycleCreatesFor(sessionId);
     if (creates.length === 0) return window;
@@ -5045,7 +5045,7 @@ export class FleetWatcher {
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
    *  calls and never awaits them (`sweepTempRootCollect`). Its connection epoch is read at its head and again after the
    *  gather (path-identity spec 2026-10-12 §5.5), and its listing is handed to the switch's latch (§5.4) and nothing else. */
-  private async collectPass(coord: CoordStore, names: readonly string[]): Promise<void> {
+  private async collectPass(coord: WatcherCoordPort, names: readonly string[]): Promise<void> {
     // ZERO — THE CONNECTION EPOCH (path-identity spec 2026-10-12 §5.5): the epoch the lane's observation pairs stand under.
     // One that moved since the last pass clears every pair, so no pair straddles two connections. An act job is queued
     // under it (`collectAct`), and its executor composes nothing when the epoch it reads after its final listing differs.
@@ -5135,7 +5135,7 @@ export class FleetWatcher {
    *  generations as it composes, through the port. An answer folds through Task 4's `collectAfterAudit`, an observation
    *  only under its capture; a missing capability is a lane-wide clear; a rejection is a defect the reader could not
    *  name, folded as an audit with no document that observes nothing (`a-thrown-job-reads-as-no-document`). */
-  private collectLearn(coord: CoordStore, id: string, pass: number, mono: number): void {
+  private collectLearn(coord: WatcherCoordPort, id: string, pass: number, mono: number): void {
     this.collectEntryOf(id);
     this.collectInFlight.set(id, { kind: 'learn', sinceMono: mono, phase: 'queued' });
     void this.deps.queue.run(id, () => learnCollect({
@@ -5162,7 +5162,7 @@ export class FleetWatcher {
    *  nothing. The job reaches this lane's memory through `collectPortFor` alone, and the switch's control state through
    *  `collectControlDeps`. Its answer is folded for the LANE first (`collectJobEffects`: the slot, the flock latch),
    *  then for its id (`collectFoldJob`). */
-  private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {
+  private collectAct(coord: WatcherCoordPort, id: string, pass: number, mono: number): void {
     this.collectEntryOf(id);
     this.collectInFlight.set(id, { kind: 'act', sinceMono: mono, phase: 'queued' });
     this.collectSlot = { kind: 'job', id, sinceMono: mono };
@@ -5193,7 +5193,7 @@ export class FleetWatcher {
 
   /** A settled act job (spec §5.10): its LANE effects first (L1's `collectJobEffects`: the slot, the latch), then its
    *  fold for the id. A lane-wide clear the job saw was applied through the port the instant it saw it, never here. */
-  private collectSettleJob(coord: CoordStore, id: string, pass: number,
+  private collectSettleJob(coord: WatcherCoordPort, id: string, pass: number,
     s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }): void {
     const clock = this.collectClock();
     const fx = collectJobEffects(s, clock.mono, CHILD_RECLAIM_STALL_MS);
@@ -5215,7 +5215,7 @@ export class FleetWatcher {
    *  - an id forgotten while the job was out: every fold is dropped but an `acted` outcome's word about the box and a
    *    `collected` act's row (`collectForgottenActRow`), worded from the job's own observation-2 document.
    *  - `threw`: an audit with no document, which observes nothing. */
-  private collectFoldJob(coord: CoordStore, id: string, pass: number,
+  private collectFoldJob(coord: WatcherCoordPort, id: string, pass: number,
     s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }, clock: CollectClock): void {
     if (s.kind === 'threw') {
       this.collectFoldAudit(coord, id, null, { kind: 'no-document', stderr: s.detail }, clock, null);
@@ -5268,7 +5268,7 @@ export class FleetWatcher {
    *  `composed` is given and both generations it captured still stand (`collectFresh`); then the feed cue. An id
    *  forgotten while the call was out has no entry, and the answer is dropped for it
    *  (`an-answer-for-a-forgotten-id-is-dropped`): the entry written, or null. */
-  private collectFoldAudit(coord: CoordStore, id: string, pass: number | null, a: CollectAudit, arrived: CollectClock,
+  private collectFoldAudit(coord: WatcherCoordPort, id: string, pass: number | null, a: CollectAudit, arrived: CollectClock,
     composed: CollectGenerations | null): CollectEntry | null {
     this.collectBoxProbesAnswered(a, arrived.mono);
     if (pass !== null) this.collectPassTally.get(pass)?.audits.set(id, collectPassClass(a));
@@ -5292,7 +5292,7 @@ export class FleetWatcher {
 
   /** Writes `next` back after one step's feed cue (Task 4's `collectFeedStep`, over Task 5's cue), and writes the
    *  episode's ONE row only when the step opened one: a repeat is quiet. */
-  private collectFeedAfter(coord: CoordStore, id: string, next: CollectEntry, cue: CollectFeedCue,
+  private collectFeedAfter(coord: WatcherCoordPort, id: string, next: CollectEntry, cue: CollectFeedCue,
     row: () => { readonly title: string; readonly body: string }): CollectEntry {
     const stepped = collectFeedStep(next, cue);
     this.collectState.set(id, stepped.entry);
@@ -5336,7 +5336,7 @@ export class FleetWatcher {
   /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
    *  (`coord/collectTempRoot.ts`) — a `run` row, recorded and archived, never pushed (`notify`'s `'record-only'`, D-5857);
    *  a failed archive write is said in the collector's own sentence and never stops the lane. */
-  private collectRecordFeed(coord: CoordStore, row: {
+  private collectRecordFeed(coord: WatcherCoordPort, row: {
     readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
   }): void {
     notify({ notifyLog: this.deps.notifyLog, coord },
@@ -5348,7 +5348,7 @@ export class FleetWatcher {
    *  a change to the switch's control state with no run and no session: `kind:'coord'`, `sessionId:''` and
    *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed (`notify`'s
    *  `'record-only'`, D-5857). A failed archive write is said in the collector's own sentence and never stops the lane. */
-  private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void {
+  private collectRecordCoordFeed(coord: WatcherCoordPort, title: string, body: string): void {
     notify({ notifyLog: this.deps.notifyLog, coord }, { kind: 'coord', sessionId: '', runId: null, title, body },
       'record-only', { degraded: `temp-root collector ${title}, feed archive degraded` });
   }
@@ -5356,7 +5356,7 @@ export class FleetWatcher {
   /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
    *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and
    *  resolves the switch with none between its reads and the flip. `id` is the job's, which the flip's row names. */
-  private collectPortFor(coord: CoordStore, id: string): CollectLanePort {
+  private collectPortFor(coord: WatcherCoordPort, id: string): CollectLanePort {
     return {
       clock: () => this.collectClock(),
       generations: (of) => ({ lane: this.collectLaneGen, id: this.collectState.get(of)?.idGen ?? -1 }),
@@ -5387,7 +5387,7 @@ export class FleetWatcher {
    *  executor): the store, the process's ONE generation journal (`Deps.collectLane`, built in `index.ts`), the wall
    *  clock, and the latch's row writer. A server built with no journal hands null, which the executor reads as an
    *  unmeasurable control state, never as a missing journal. Wiring only: the deciding is the executor's and L1's. */
-  private collectControlDeps(coord: CoordStore): CollectControlDeps {
+  private collectControlDeps(coord: WatcherCoordPort): CollectControlDeps {
     return {
       coord,
       journal: this.deps.collectLane?.journal ?? null,
@@ -5796,7 +5796,7 @@ export class FleetWatcher {
   /** The sealed start's first act (D-4916, R1.5): write `clean` back over the same snapshot, generation-checked, BEFORE any
    *  step of the pass can change state or act. Retried each pass until it lands; a failure is said once. A write of this
    *  process has landed when it does. */
-  private unsealDeadCoordinatorBreaker(coord: CoordStore): void {
+  private unsealDeadCoordinatorBreaker(coord: WatcherCoordPort): void {
     const gen = this.deadCoordinatorBreakerGeneration;
     const w = gen === null ? null : coord.unsealDeadCoordinatorBreakerState(gen);
     if (w?.ok === true) {
@@ -6081,7 +6081,7 @@ export class FleetWatcher {
    *  the lowest open run a member coordinates; for an empty set, the run the last record sits on, else a run any claimant
    *  in the population (the members `before` the change first) coordinates; with none, the table alone carries it. */
   private commitDeadCoordinatorBreaker(
-    coord: CoordStore, next: readonly DeadCoordinatorBreakerMember[], upserts: readonly (readonly [string, DeadAnchor])[],
+    coord: WatcherCoordPort, next: readonly DeadCoordinatorBreakerMember[], upserts: readonly (readonly [string, DeadAnchor])[],
     deletes: readonly string[], ids: readonly string[], before: readonly DeadCoordinatorBreakerMember[],
   ): 'unchanged' | 'unseal-pending' | 'mark-failed' | 'commit-failed' | 'committed' {
     const key = deadCoordinatorBreakerHeldKey(next);
@@ -6496,7 +6496,7 @@ export class FleetWatcher {
    * throws, and its one warn is a bare `console.warn` in its own `try`, printed only when no fallback stood, and never
    * through the latch, which may be the fault. It records `lastFallback`; a resolution that succeeds clears it.
    */
-  private stallResolveNow(store: CoordStore, names: readonly string[], mailDisabled: boolean): StallResolution {
+  private stallResolveNow(store: WatcherCoordPort, names: readonly string[], mailDisabled: boolean): StallResolution {
     try {
       const box = stallBoxArmingOf(names, mailDisabled);
       const read = store.stallSettings();
@@ -6784,7 +6784,7 @@ export class FleetWatcher {
    *  reads are synchronous. A failed auto-continue read has no slot of its own: it is a failed store read, hold 1,
    *  so it raises `unmeasured`. The one constructor of `StallWorker`: an id this tick's listing refused is its own
    *  arm, built before the absent test and never folded into it (`tick-lanes-hold-a-refused-id`), with no store read. */
-  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
+  private stallWorkerFor(store: WatcherCoordPort, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
     if (refused) return { present: 'refused' };
     if (s === undefined || lr === null) return { present: false };
     const ask = this.questions.currentAskOf(s.id);
@@ -7015,7 +7015,7 @@ export class FleetWatcher {
   }
 
   /** One session past the row holds: the staged reads, the decision, and the send. */
-  private async idleNudgeOne(s: FleetSession, row: IdleNudgeRowFacts, coord: CoordStore, tick: StallTick): Promise<void> {
+  private async idleNudgeOne(s: FleetSession, row: IdleNudgeRowFacts, coord: WatcherCoordPort, tick: StallTick): Promise<void> {
     const rec = tick.records.find((r) => r.id === s.id);
     const ident = rec === undefined ? null : measuredIdentity(rec);
     const cfgDir = ident === null ? null : configDirFor(this.deps.cfg, ident.wrapper);
@@ -7456,7 +7456,7 @@ export class FleetWatcher {
   }
 
   /** The gate mode of this sweep and the busy clock it moves; the sweep's own kill-switch read stays at its call site. */
-  private applyMailMode(store: CoordStore, listing: string[], now: number): MailTurnMode {
+  private applyMailMode(store: WatcherCoordPort, listing: string[], now: number): MailTurnMode {
     // The gate's mode comes from this SAME listing (worker stall watch §4.1,
     // `turnidle.ts`), through the one settings resolution the stall sweep also
     // calls (stall watch settings §9): a chosen level can set it, and strict
@@ -7475,7 +7475,7 @@ export class FleetWatcher {
   }
 
   /** The bookkeeping maps keep only what is still outstanding (parked probes, the busy-shadow memory). */
-  private pruneMailMemory(store: CoordStore, parkedRows: readonly { id: number }[],
+  private pruneMailMemory(store: WatcherCoordPort, parkedRows: readonly { id: number }[],
                           outstanding: readonly { id: number }[]): void {
     const parkedIds = new Set(parkedRows.map((p) => p.id));
     for (const id of this.parkProbeAt.keys()) if (!parkedIds.has(id)) this.parkProbeAt.delete(id);
@@ -7493,7 +7493,7 @@ export class FleetWatcher {
   }
 
   /** The `UserPromptSubmit` edge sample over every delivered, unacked row (see `mailPass`'s docstring). */
-  private async sampleEdge(store: CoordStore, unacked: ReturnType<CoordStore['deliveredUnacked']>,
+  private async sampleEdge(store: WatcherCoordPort, unacked: ReturnType<WatcherCoordPort['deliveredUnacked']>,
                            hookStateFor: (toId: string) => Promise<HookState | null>): Promise<void> {
     for (const row of unacked) {
       if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
@@ -7538,7 +7538,7 @@ export class FleetWatcher {
   }
 
   /** One box capture per probed recipient; true when a parked row's box changed and it woke. */
-  private async probeParked(store: CoordStore, probeFor: ReadonlyMap<string, ReturnType<CoordStore['parkedDeliveries']>>,
+  private async probeParked(store: WatcherCoordPort, probeFor: ReadonlyMap<string, ReturnType<WatcherCoordPort['parkedDeliveries']>>,
                             now: number): Promise<boolean> {
     let woke = false;
     for (const [toId, rows] of probeFor) {
@@ -8796,7 +8796,7 @@ export class FleetWatcher {
   }
 
   /** One owed episode's rows as the fold reads them: the live or the shadow form, per the episode's mode. */
-  private checksRowsOf(coord: CoordStore, m: { run: { id: number }; ep: LaneEpisode; live: boolean }): ChecksRow[] {
+  private checksRowsOf(coord: WatcherCoordPort, m: { run: { id: number }; ep: LaneEpisode; live: boolean }): ChecksRow[] {
     const out: ChecksRow[] = [];
     for (const r of coord.checksRows(m.run.id, m.ep.e)) {
       if (r.row.shadow === m.live || r.row.gen === null) continue;
@@ -9234,7 +9234,7 @@ export class FleetWatcher {
     void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
   }
 
-  private async askPass(_store: CoordStore, fleet?: FleetReadModel): Promise<void> {
+  private async askPass(_store: WatcherCoordPort, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
     // Fail-shut, same discipline as `sweepMail`'s own `MAIL_DISABLED_MARKER`
