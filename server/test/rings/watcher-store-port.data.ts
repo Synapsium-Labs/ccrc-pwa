@@ -10,7 +10,7 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (118, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
+/** The members reached through the whole store (112, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
  *  before D-7580, WP3, whose lanes' units read 11 through the port; 155 before D-7581, WP4, whose mail helpers and mail,
  *  landing-checks and tmp-sweep units take the port; 132 before D-7582, WP5, whose stall lane takes the port; 129
  *  before D-7583, WP6, whose child-reclaim chain and lane take the port; 123 before D-7584, WP7, whose archive
@@ -22,7 +22,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'claimDigestDay', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode',
   'deadAnchors', 'deadCoordinatorBreakerHeldLatest', 'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows',
   'declineApproval', 'declineAsk', 'delegationEventStats', 'delegationRunStamps', 'digestApprovals', 'digestAsks',
-  'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
+  'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
   'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows',
   'firstMailIdWithPrefix', 'hasMailWithSubject', 'hasNotice', 'heldApprovalRowsByChild',
   'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'ingestJournal', 'insertApproval', 'insertAsk',
@@ -34,17 +34,17 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteLeaseDetail', 'openAllocations', 'openCoordinatorIds',
   'outstandingMailFor', 'poolEpoch', 'projectDelegationCheckpoint',
   'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions', 'raiseLedgerFloor',
-  'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap', 'recordRunEvent',
+  'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap',
   'refusalsFor', 'refuseRelease', 'rekeyNode', 'releaseAsk',
   'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk', 'retireGeneration',
   'rollSettings', 'run',
-  'runEvents', 'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
-  'setSession', 'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
-  'stallSettings', 'stalledDispatchRunIds', 'takeApprovalForRule', 'takeAskForAnswer', 'untakeAsk',
+  'runEventsSince', 'runLastMoves', 'runs', 'sealDeadCoordinatorBreakerState',
+  'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
+  'stallSettings', 'takeApprovalForRule', 'takeAskForAnswer', 'untakeAsk',
   'updateEpoch', 'upsertNodeMeasurement',
 ];
 
-/** Each whole hand-off key (13) with its call-site count (14 in all), sorted by key. */
+/** Each whole hand-off key (12) with its call-site count (13 in all), sorted by key. */
 export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.constructor -> coord/questions.ts#createQuestions': 1,
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#endDeadCoordinator': 1,
@@ -54,7 +54,6 @@ export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#rereadDeadCoordinatorJournalTrust': 1,
   'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#readDeadCoordinatorJournalTrust': 1,
   'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreaker': 1,
-  'watch.ts#FleetWatcher.deadDispatchStep -> coord/abandonDeadDispatch.ts#abandonDeadDispatches': 1,
   'watch.ts#FleetWatcher.digestBeat -> coord/digest.ts#buildDigest': 1,
   'watch.ts#FleetWatcher.mirrorFor -> coord/mirror.ts#JournalMirror': 1,
   'watch.ts#FleetWatcher.noteDeadCoordinatorSeed -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreakerSeed': 1,
