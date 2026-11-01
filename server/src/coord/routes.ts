@@ -27,6 +27,7 @@ import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
 import { readSessionSpendMeasured } from '../shares.js';
 import { boundSessionsOf, joinRunSpend } from './runSpend.js';
@@ -367,7 +368,7 @@ async function composeReviewCapAsk(coord: CoordStore, io: Deps['io'], work: numb
  * when it was queued, so `fleetState` is the box's current answer. A
  * rejection is a bug, logged; the sweep reaches the child either way.
  */
-function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
+function childReclaimPort(deps: Deps, coord: WatcherCoordPort): (req: ChildReclaimRequest) => void {
   return (req) => {
     void retireExecutor(deps.queue, req.sessionId, () => childReclaimUnlessDisabled(
       { io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
@@ -496,7 +497,7 @@ export interface CoordRoutesHandle {
    *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; #166 wave
    *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
    *  reclaim door — which runs inside this serialiser — can never interleave with it. */
-  withSweepAbandon<T>(coord: CoordStore, fn: (
+  withSweepAbandon<T>(coord: WatcherCoordPort, fn: (
     abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
   ) => Promise<T>): Promise<T>;
   /** The SAME hold with nothing handed in — for the stop-done lane (D-5370, `sleepLane.ts`), whose act is a

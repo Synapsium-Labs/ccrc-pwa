@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { RunCcd } from './ports.js';
+import type { RunCcd, WatcherCoordPort } from './ports.js';
 import {
   abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
   type RequestPlan,
@@ -208,13 +208,13 @@ export function abandonRefusal(coord: CoordStore, id: number): Extract<CloseOutc
  * this arm without its compare-and-set and its re-measure, and it only ever abandons.
  */
 export function closeRun(
-  deps: CloseRunDeps, id: number, body: unknown, causedBy: 'coordinator' | 'operator',
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown, causedBy: 'coordinator' | 'operator',
 ): Promise<CloseOutcome>;
 export function closeRun(
-  deps: CloseRunDeps, id: number, body: unknown, causedBy: 'sweep', sweep: SweepCloseGuard,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown, causedBy: 'sweep', sweep: SweepCloseGuard,
 ): Promise<CloseOutcome>;
 export async function closeRun(
-  deps: CloseRunDeps, id: number, body: unknown,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown,
   causedBy: CloseCause, sweep?: SweepCloseGuard,
 ): Promise<CloseOutcome> {
   // Everything the request says, ahead of any fleet act: `decideClose` names the arm and refuses what that arm cannot
@@ -234,7 +234,7 @@ export async function closeRun(
 /** The one place a decider's non-`go` answer becomes a `CloseOutcome`. The `switch` is exhaustive: a fourth arm in
  *  `closeDecide.ts` is a compile error here until it is answered. A refused done-claim is recorded against the run
  *  and mailed back to its worker first, as the inline code did; the run state is unchanged. */
-function stopped(deps: CloseRunDeps, d: CloseStop, run?: RunRow): CloseHalt {
+function stopped(deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, d: CloseStop, run?: RunRow): CloseHalt {
   switch (d.kind) {
     case 'refused':
       if (d.rejection !== undefined && run !== undefined && run.sessionId !== null) {
@@ -254,7 +254,7 @@ interface FleetVerb { readonly argv: CcdArgv; readonly can: boolean }
 /** The fleet verb a decision composed, as the argv ccd takes (every close names its actor by the run, `close`), and
  *  D-5866's verb question asked of the very row that argv was built from, beside it: the argv first, then `ccdCan`,
  *  as the inline code did. */
-function fleetArgv(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct): FleetVerb {
+function fleetArgv(deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sessionId: string, act: FleetAct): FleetVerb {
   const dec = sweepDec(deps.fleetState, `run:${id} close`);
   switch (act.verb) {
     case 'wsArchive':
@@ -269,7 +269,7 @@ function fleetArgv(deps: CloseRunDeps, id: number, sessionId: string, act: Fleet
 
 /** The check, (the caller's last look,) the act and ccd's answer for one composed fleet verb, in that order. */
 async function actOnFleet(
-  deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sessionId: string, act: FleetAct,
   /** Run between the check and the act: the sweep's gate, which must read the world right before ccd is asked. */
   before: () => Promise<CloseHalt | null> = async () => null,
 ): Promise<CloseHalt | null> {
@@ -284,7 +284,7 @@ async function actOnFleet(
 
 /** The sweep's gate (`decideClose`'s `sweep` step), or nothing for a door that has no guard. */
 async function sweepGateOf(
-  deps: CloseRunDeps, id: number, sweep: SweepCloseGuard | undefined,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sweep: SweepCloseGuard | undefined,
 ): Promise<CloseHalt | null> {
   if (sweep === undefined) return null;
   const d = decideClose({ step: 'sweep', stop: await sweep.stillCrashed(), fresh: () => deps.coord.run(id), claimedBy: sweep.claimedBy });
@@ -293,7 +293,7 @@ async function sweepGateOf(
 
 /** The abandon's commit: the store's close of the run `failed`, and what its answer means (`commit` step). */
 function commitAbandon(
-  deps: CloseRunDeps, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
   causedBy: CloseCause, sweep: SweepCloseGuard | undefined, acted: boolean,
 ): CloseHalt | null {
   const closed = deps.coord.closeRun({
@@ -319,7 +319,7 @@ function commitAbandon(
  * and one `fleet-act-omitted:bad-session` run event, so the trail tells this close from an ordinary `failed`.
  */
 async function abandonRun(
-  deps: CloseRunDeps, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
   causedBy: CloseCause, sweep: SweepCloseGuard | undefined,
 ): Promise<CloseOutcome> {
   const { run } = plan;
@@ -360,7 +360,7 @@ async function abandonRun(
  * why, is `decideClose`'s `close` step; this function reads, acts and writes.
  */
 async function closeWorkRun(
-  deps: CloseRunDeps, id: number, plan: Extract<RequestPlan, { arm: 'work' }>, causedBy: CloseCause,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'work' }>, causedBy: CloseCause,
 ): Promise<CloseOutcome> {
   const { coord } = deps;
   const { run, sessionId, final, state } = plan;
@@ -407,7 +407,7 @@ async function closeWorkRun(
  *  (D-2812); a fingerprint that IS present on a `failed` close is still
  *  shape-checked — malformed is refused, never silently ignored. */
 async function closeReviewRun(
-  deps: CloseRunDeps, run: RunRow, b: CloseRunBody, causedBy: CloseCause,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, run: RunRow, b: CloseRunBody, causedBy: CloseCause,
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
   /** The OTHER open runs on this workspace, read fresh at the decision point and never cached; the closing run
@@ -586,7 +586,7 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * (`single-read-bad-id.test.ts`).
  */
 export async function childGateAtClose(
-  deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
   final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null,
 ): Promise<ChildGate> {
   const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
@@ -697,7 +697,7 @@ export async function childGateAtClose(
   };
 }
 
-function mintingRowOf(coord: CoordStore, runId: number): ChildReclaimMinting {
+function mintingRowOf(coord: WatcherCoordPort, runId: number): ChildReclaimMinting {
   const r = coord.run(runId);
   if (!r.ok) return { kind: 'unreadable' };
   return r.run === null ? { kind: 'absent' }
@@ -710,7 +710,7 @@ function mintingRowOf(coord: CoordStore, runId: number): ChildReclaimMinting {
  *  minting row is a work run's (or is no row at all: the decision has already
  *  answered on the minting read). Four answers, never folded; the row carries
  *  its STATE, and the pure decision alone asks whether it is terminal. */
-function reviewedRowOf(coord: CoordStore, minting: ChildReclaimMinting): ChildReclaimReviewed {
+function reviewedRowOf(coord: WatcherCoordPort, minting: ChildReclaimMinting): ChildReclaimReviewed {
   if (minting.kind !== 'row' || minting.reviews === null) return { kind: 'none' };
   const r = coord.run(minting.reviews);
   if (!r.ok) return { kind: 'unreadable' };
@@ -722,7 +722,7 @@ function reviewedRowOf(coord: CoordStore, minting: ChildReclaimMinting): ChildRe
  *  throw out of here would reach `CoordMutex.run`'s `finally` as a bare 500
  *  about a close that happened. */
 function handOffChildReclaim(
-  deps: CloseRunDeps, gate: ChildGate,
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, gate: ChildGate,
 ): { childReclaim: 'queued' | 'not-queued'; childReclaimWhy?: ChildReclaimNotWhy } {
   if (!gate.decision.reclaim) return { childReclaim: 'not-queued', childReclaimWhy: gate.decision.why };
   if (deps.childReclaim === undefined || gate.request === null) return { childReclaim: 'not-queued' };
