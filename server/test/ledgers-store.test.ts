@@ -238,6 +238,15 @@ describe('blocking (plan PL2)', () => {
     expect(s.itemById(noLabel)?.neededBy).toBe('later');
   });
 
+  it('a soon item with NO label is restored to soon from the history, not guessed later from the missing label', () => {
+    const s = mk();
+    const id = raise(s, { neededBy: 'soon', soonLabel: null });
+    s.setBlocking(id, true, NOW + 1);
+    expect(s.itemById(id)?.neededBy).toBe('blocking');
+    s.setBlocking(id, false, NOW + 2);
+    expect(s.itemById(id)).toMatchObject({ neededBy: 'soon', soonLabel: null });
+  });
+
   it('answers unknown-item and not-open, and a repeat of the same level writes no second event', () => {
     const s = mk();
     expect(s.setBlocking(77, true, NOW)).toEqual({ ok: false, why: 'unknown-item' });
@@ -294,6 +303,15 @@ describe('the programme and its coordinator (plan PL2)', () => {
     expect(s.programmeHasOpenRun('prog-a')).toBe(true);
   });
 
+  it('an unclaimed lowest-id open run is skipped: the coordinator is the claimed run’s session', () => {
+    const s = mk();
+    const r1 = openRunFor(s, 'prog-a', 'lane-a', 1);
+    s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(r1);
+    const r2 = openRunFor(s, 'prog-a', 'lane-b', 2);
+    expect(r1).toBeLessThan(r2);
+    expect(s.programmeCoordinator('prog-a')).toBe('lane-b');
+  });
+
   it('claimsProgramme is false for a session that claims only a closed run', () => {
     const s = mk();
     const r1 = openRunFor(s, 'prog-a', 'lane-a', 1);
@@ -306,6 +324,19 @@ describe('the programme and its coordinator (plan PL2)', () => {
     setRunState(s, r2, 'planned');
     expect(s.claimsProgramme('lane-a', 'prog-a')).toBe(true);
     expect(s.claimsProgramme('', 'prog-a')).toBe(false);
+  });
+
+  it('claimsProgramme THROWS on a series it cannot represent, never answers false (all-or-failure, D-2545)', () => {
+    const s = mk();
+    openRunFor(s, 'prog-a', 'lane-a', 1);
+    expect(s.claimsProgramme('lane-a', 'prog-a')).toBe(true);
+    // A second open run the caller claims, whose wave this process cannot represent (as archive-store.test.ts writes one).
+    s.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', NOW);
+    expect(() => s.claimsProgramme('lane-a', 'prog-a')).toThrow(/claimsProgramme/);
+    // Another session's answer is unaffected: the unreadable run is not its.
+    expect(s.claimsProgramme('lane-z', 'prog-a')).toBe(false);
   });
 });
 

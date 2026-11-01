@@ -1042,7 +1042,7 @@ describe('the rejection table is total, in both directions', () => {
         // THE AUTOMATIC ROLL'S VERDICT (D-7452): `coord/rollTarget.ts` names its skip words, its opt-out suffix and its
         // actor as literals. A word names a skip in the lane's journal, never a `refused` or `reject.code`.
         || isAutoRollKebab(tok)
-        // THE PROGRAMME LEDGERS' ITEM MOVES (plan PL2): `coord/store.ts` answers a refused move of an operator item with
+        // THE PROGRAMME LEDGERS' ITEM MOVES (plan PL2): `coord/ledgersStore.ts` (behind `CoordStore`) answers a refused move of an operator item with
         // `'unknown-item'`, `'wrong-actor'`, `'not-open'` or `'programme-live'`. The decider's words and the store's, one
         // union in `shared/ledgers.ts`. Admitted through its exported guard, derived from `ITEM_MOVE_REFUSALS`, never NOT_CODES.
         || isItemMoveRefusal(tok),

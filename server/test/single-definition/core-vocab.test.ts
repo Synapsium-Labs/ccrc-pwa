@@ -799,7 +799,9 @@ describe('Build 7 nouns', () => {
   describe('the coord ring — only store.ts, rundefsTx.ts and routes.ts hold the handle', () => {
     const coordDir = path.join(ccrcRoot, 'server/src/coord');
     // D-5896: `rundefs.ts` left this set when its mail writes moved to `rundefsTx.ts`; `tx.ts` is `tx` itself.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts']);
+    // D-7709: `ledgersStore.ts` is `store.ts`'s ledger SQL moved out of the god-file (ARCH-01), so it holds the handle for the
+    // same reason `store.ts` does; it names it by `import type`, as `tx.ts` does, and every function takes it as an argument.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

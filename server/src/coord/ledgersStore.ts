@@ -8,16 +8,12 @@
 //
 // Everything here is keyed on the programme's SLUG (spec §3.4). The moves are decided by `nextItemState` in
 // `shared/ledgers.ts` and by nothing in this file: `moveItemInTx` is THE ONLY WRITER of `operator_items.state`.
-import type { CoordStore } from './store.js';
+import type { DatabaseSync } from 'node:sqlite';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState,
   type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
-
-/** The store's own handle: only `store.ts`, `rundefsTx.ts` and `routes.ts` name `node:sqlite` (single-definition), so the
- *  type is taken from the store that owns it. A type-only import, so there is no cycle at run time. */
-type DatabaseSync = CoordStore['db'];
 
 /** An operator item as the store holds it (migration 37). `how` and `options` are parsed from their JSON columns. */
 export interface ItemRow {
@@ -137,7 +133,8 @@ export function moveItem(
 
 /** The operator's tick and the mail it queues, in ONE transaction (the pattern of `correctWithMail`): the move runs,
  *  then `queue` gets the moved item and inserts the system mail. A throw from `queue` rolls the move back, so a ticked
- *  item always has its mail and a failed mail leaves the item open. A refused tick never calls `queue`. */
+ *  item always has its mail and a failed mail leaves the item open. A refused tick never calls `queue`. `queue` must
+ *  open no transaction of its own: `tx` does not nest (`insertSystemMailTx` is the shape, as for `correctWithMail`). */
 export function tickWithMail<T>(db: DatabaseSync, id: number, answer: string | null, now: number, queue: (item: ItemRow) => T):
   { ok: true; item: ItemRow; mail: T } | Extract<ItemMoveResult, { ok: false }> {
   return tx(db, () => {

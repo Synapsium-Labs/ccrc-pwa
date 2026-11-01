@@ -9842,7 +9842,7 @@ export class CoordStore {
   itemsFor(program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } { return ledgers.itemsFor(this.db, program, now); }
   /** One move of one item, atomic with its event; the decider is `nextItemState`. */
   moveItem(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }): ItemMoveResult { return ledgers.moveItem(this.db, id, act, actor, fields, now, ctx); }
-  /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back. */
+  /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back, and `queue` must open no transaction (`tx` does not nest). */
   tickWithMail<T>(id: number, answer: string | null, now: number, queue: (item: ItemRow) => T) { return ledgers.tickWithMail(this.db, id, answer, now, queue); }
   setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
@@ -9878,7 +9878,6 @@ export class CoordStore {
     return open.siblings.some((r) => r.program === program);
   }
 }
-
 
 // ── delegation broker wave 3, Task 7: the projection's two SQL spellings ─────────────────────────────────────────────
 // Both name their columns from the codec, which lists the DDL's columns in the DDL's order; no statement here is
