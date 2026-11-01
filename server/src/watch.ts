@@ -3336,7 +3336,7 @@ export class FleetWatcher {
    *  no other claimant to tell, and the operator gets one push, only from the
    *  call that wrote the row. Dispatches nothing; writes no run state, hold,
    *  claim or limit. Answers whether a parked row was woken. */
-  private sweepBriefs(store: CoordStore, briefs: readonly UnlandedBrief[], now: number,
+  private sweepBriefs(store: WatcherCoordPort, briefs: readonly UnlandedBrief[], now: number,
                       sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): boolean {
     let woke = false;
     for (const b of briefs) {
@@ -3393,7 +3393,7 @@ export class FleetWatcher {
    *  or, at the ceiling, that it was rejected. Never a role (`mailSender`
    *  degrades it to nobody), and never the recipient itself. `queueSystemMail`
    *  dedupes an identical outstanding notice. */
-  private tellParkedSender(store: CoordStore, mailId: number, toId: string,
+  private tellParkedSender(store: WatcherCoordPort, mailId: number, toId: string,
                            what: 'parked' | 'rejected', reason: string | null): void {
     const s = this.mailSender(store, mailId);
     if (s === null || s.senderId === toId) return;
@@ -7448,7 +7448,7 @@ export class FleetWatcher {
 
   /** The one executor of a settling `DeliveryAction` (`coord/delivery.ts`): a back-off or a rejection, and for a rejection
    *  that names a park, the sender's notice once the write landed. True when the write landed. */
-  private settleDelivery(store: CoordStore, id: number, a: SettleAction, who?: { mailId: number; toId: string }): boolean {
+  private settleDelivery(store: WatcherCoordPort, id: number, a: SettleAction, who?: { mailId: number; toId: string }): boolean {
     if (a.kind === 'backOff') return this.landed(store.backOff(id, a.why, a.until, a.countsAsAttempt), 'backOff', id);
     if (!this.landed(store.rejectDelivery(id, a.code, a.error), 'rejectDelivery', id)) return false;
     if (a.told !== null && who !== undefined) this.tellParkedSender(store, who.mailId, who.toId, 'rejected', a.told.reason);
@@ -7506,7 +7506,7 @@ export class FleetWatcher {
   }
 
   /** The parked rows' pass: the ceiling, the one escalation, and the per-recipient probe list. */
-  private passParked(store: CoordStore, parkedRows: ReturnType<CoordStore['parkedDeliveries']>, now: number,
+  private passParked(store: WatcherCoordPort, parkedRows: ReturnType<WatcherCoordPort['parkedDeliveries']>, now: number,
                      sessionProjects: ReadonlyMap<string, string>, projects: Set<string>) {
     let ceilinged = false;
     // D-5838 (verification round): the probe is grouped per RECIPIENT — one
@@ -7562,8 +7562,8 @@ export class FleetWatcher {
   }
 
   /** The act on a failed nudge send, by `decideSendFailure`'s answer (guard order in `coord/delivery.ts`). */
-  private async actOnSendFailure(store: CoordStore, d: ReturnType<CoordStore['dueDeliveries']>[number], error: string, now: number,
-                                 gated: (d: ReturnType<CoordStore['dueDeliveries']>[number], gate: MailGate) => void,
+  private async actOnSendFailure(store: WatcherCoordPort, d: ReturnType<WatcherCoordPort['dueDeliveries']>[number], error: string, now: number,
+                                 gated: (d: ReturnType<WatcherCoordPort['dueDeliveries']>[number], gate: MailGate) => void,
                                  sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): Promise<void> {
     /**
      * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
@@ -7633,7 +7633,7 @@ export class FleetWatcher {
     }
   }
 
-  private async mailPass(store: CoordStore, fleet?: FleetReadModel): Promise<void> {
+  private async mailPass(store: WatcherCoordPort, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
     // Fail-shut: a registry we cannot list is a kill-switch we cannot read. THIS listing stays fresh (D-5864): it is the
