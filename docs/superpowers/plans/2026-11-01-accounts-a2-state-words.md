@@ -20,12 +20,34 @@
 
 ## Per width × skin × mode (Step 4)
 
-Measured by `pwa/browser/accounts-cards.browser.test.ts` in a real Chrome, on the plan's fixture (lane-a on with a long label, lane-b 401, lane-c 5h at 100%, lane-d off, lane-e codex), all sixteen cells green: trouble cards first (lane-b, lane-c), the roll-up, no horizontal page scroll, nothing overflowing a card, every head's first line on one line, the rail on lane-b only, "weekly window only" on lane-e, and every command shown whole.
+Measured by `pwa/browser/accounts-cards.browser.test.ts` in a real Chrome over the production build, on the plan's fixture (lane-a on with a long label, lane-b 401, lane-c 5h at 100%, lane-d off, lane-e codex) and `someone@example.invalid`, with no fleet behind it. Every cell is its own case, and all sixteen are green.
 
-| Width | Refined | Instrument (until A4) |
-|---|---|---|
-| 360 / 390 | two-line heads; the long label ellipsises; the command field and Copy stack full width, both ≥ 44px | the same, in Instrument's tokens and LED meters |
-| 1280 | the column at `--page-max` 760, centred in the pane; the meters side by side | the column at Instrument's `--page-max`; meters side by side |
-| 1920 | as 1280; the column stays 760 | as 1280 |
+| | 360 | 390 | 1280 | 1920 |
+|---|---|---|---|---|
+| Refined · Phosphor & Ink (dark) | ✓ | ✓ | ✓ | ✓ |
+| Refined · Phosphor Daylight (light) | ✓ | ✓ | ✓ | ✓ |
+| Instrument · Phosphor & Ink (dark) | ✓ | ✓ | ✓ | ✓ |
+| Instrument · Phosphor Daylight (light) | ✓ | ✓ | ✓ | ✓ |
+
+What each ✓ measured, against the plan's §Acceptance list:
+
+- **The cell is the one it names:** the root's `data-skin` and `data-theme` are the cell's.
+- **No horizontal page scroll, no overflow:** the document does not scroll sideways, and no card's content is wider than the card.
+- **No clipped or overlapping text:** every head's line 1 stays on one line and its parts do not overlap; every command shows whole in its field; every truncation (the long label, the identity line) carries its whole value in `title`.
+- **44px tap targets on a coarse pointer** (360 and 390): the command field and Copy are 44px or taller and stack full width; every target in the list takes a tap 21px above and below its centre, by hit test, so the pool chip counts by its `::before` hit area.
+- **`--fs-input` 16 in every field:** the screen has no field; the pool chip's sheet has one, at 16px.
+- **The identity core, and no glyph without its word:** every lamp is its glyph and its word; lane hues on the ids.
+- **The sheet's container:** the pool chip opens the bottom sheet below 900 and the centred dialog from 900 (unchanged by A2).
+- **No secret, code or key:** the key shows only as `sk-or-v1-…a3f9`, and no unmasked key shape is on the page.
+- **Nothing moved that A2 did not intend:** trouble cards first (lane-b, lane-c), the roll-up, the rail on lane-b only, "weekly window only" on lane-e; at 1280 and 1920 the column at the skin's `--page-max` (760 in Refined) and the meters side by side. The picker row (`AccountRow.tsx`) changes only in a comment.
 
 Dark and light: the contrast gate measures every new ink on the card's ground (`--bg-surface`) and on the Signed-out card's (`--bg-raised`) in every palette (`node design/contrast-check.mjs`, all pass).
+
+**The offline row** (§Acceptance, spec §12.5), dark, each cell read twice in the same file. **Warm**: the link drops with the screen open (every `/api` request fails as disconnected and every socket closes), and the screen is left and opened again. **Cold**: the app starts with no link, from an offline snapshot holding one session and the roster.
+
+| Offline, dark | 360 | 1280 |
+|---|---|---|
+| Refined | Warm ✓: the five cards keep the server's words, sources and ages, the order and the roll-up; no field, no key. **Defects:** nothing on the screen says the link is down (no since-when, no read-line); the pool chip is not refused offline (from the code: its write is sent and fails with the write-failed toast); cold, the list is one count-free placeholder with no roll-up, so the snapshot's roster is not drawn with its age. | Warm ✓, as 360, and the fleet pane beside the screen says "Reconnecting…". **Defects:** that word is the only sign the link is down (no since-when, no read-line); the pool chip and the cold placeholder as at 360. |
+| Instrument | as Refined at 360 | as Refined at 1280 |
+
+The fix for every defect in the row is Task A18's, whose shape already says it: "The screen reads from the snapshot with its ages; every act … is refused with a sentence and the read-line". None of them is A2's doing: the placeholder, the pool chip's write and the missing sentence are the screen as it was. Nothing in either reading is Signed in on an absence, and no identity or key hint shows cold, because the snapshot never holds `lanes` (G15).

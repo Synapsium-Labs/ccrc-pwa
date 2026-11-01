@@ -3,10 +3,22 @@
 // 100%), lane-d (off), lane-e (codex). Sixteen cells: phone 360 and 390, laptop 1280 and wide 1920, both skins, light
 // and dark. Instrument draws the same cards in its own tokens until Task A4 moves it to its table, so the rail still
 // marks lane-b there.
+//
+// Each cell also reads what the plan's §Acceptance asks of every cell: the skin and theme the cell names are the ones
+// drawn, every truncation carries its whole value in `title`, nothing on a head's first line overlaps, every lamp is a
+// glyph with its word, a coarse pointer's every target in the list takes a tap 44px tall (the pool chip's own hit area
+// included), no key shows but its masked hint, and the pool chip's sheet is the bottom sheet below 900 and the centred
+// dialog from 900, its field at 16px. The screen itself has no field.
+//
+// THE OFFLINE ROW (§Acceptance, spec §12.5): one cell per skin at 360 and 1280, dark, each read twice. Warm: the link
+// drops while the screen is open, and the cards keep the last answer (the server's words, their ages, the roll-up).
+// Cold: the app starts with no link, from the offline snapshot (sessions and roster, never `lanes`, G15), and the
+// screen draws no card it cannot read, so nothing says Signed in and no identity or key hint shows.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright-core';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
+import { fleetSession } from '../test/fleetFixture';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const THEMES = [PHOSPHOR, 'light'];
@@ -76,6 +88,15 @@ afterAll(async () => {
 
 const CARDS = '.accounts-list .accounts-row[data-lane]';
 
+/** The SPA's own navigation, as a link tap makes it. */
+const go = (page: Page, to: string): Promise<void> => page.evaluate((path) => {
+  history.pushState(null, '', path);
+  dispatchEvent(new PopStateEvent('popstate'));
+}, to);
+
+/** An unmasked key or token: the one shape no cell may show (spec §3.3). The fixture carries only the masked hint. */
+const KEY_SHAPE = /\b(sk-or-v1-|sk-ant-|sk-)[A-Za-z0-9_-]{8,}/;
+
 /** What the page measures of its cards, in one read. */
 interface Measured {
   readonly order: string[];
@@ -93,6 +114,23 @@ interface Measured {
   readonly metersSideBySide: boolean;
   readonly weeklyOnly: boolean;
   readonly rollUp: string | null;
+  readonly skin: string | null;
+  readonly theme: string;
+  readonly untitledTruncations: string[];
+  readonly headOverlaps: string[];
+  readonly lamps: string[];
+  readonly missedTaps: string[];
+  readonly fields: number;
+  readonly text: string;
+}
+
+/** The pool chip's sheet, at rest. */
+interface SheetShot {
+  readonly animation: string;
+  readonly rect: { x: number; y: number; w: number; h: number };
+  readonly vw: number;
+  readonly vh: number;
+  readonly inputFontSizes: string[];
 }
 
 describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
@@ -101,10 +139,7 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await page.goto(server!.origin + '/');
-        await page.evaluate(() => {
-          history.pushState(null, '', '/accounts');
-          dispatchEvent(new PopStateEvent('popstate'));
-        });
+        await go(page, '/accounts');
         await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
         const m: Measured = await page.evaluate((sel) => {
           const cards = [...document.querySelectorAll<HTMLElement>(sel)];
@@ -137,8 +172,39 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
             metersSideBySide: meters.length === 2 && Math.abs(rect(meters[0]!).top - rect(meters[1]!).top) < 2,
             weeklyOnly: card('lane-e').textContent!.includes('weekly window only'),
             rollUp: document.querySelector('.accounts-rollup')?.textContent ?? null,
+            skin: document.documentElement.getAttribute('data-skin'),
+            theme: document.documentElement.getAttribute('data-theme') ?? 'phosphor',
+            untitledTruncations: [...document.querySelectorAll<HTMLElement>('[data-page-body] *')]
+              .filter((e) => getComputedStyle(e).textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth)
+              .filter((e) => e.title !== e.textContent).map((e) => e.textContent!),
+            headOverlaps: cards.filter((c) => {
+              const kids = [...c.querySelector('.accounts-row-head')!.children].map((k) => rect(k));
+              return kids.some((k, i) => i > 0 && k.left < kids[i - 1]!.right - 0.5);
+            }).map((c) => c.dataset['lane']!),
+            lamps: cards.map((c) => {
+              const glyph = c.querySelector('.acct-lamp-glyph')?.textContent ?? '';
+              const word = c.querySelector('.acct-lamp-word')?.textContent ?? '';
+              return glyph !== '' && word !== '' ? 'ok' : `${c.dataset['lane']}: ${JSON.stringify(glyph)} ${JSON.stringify(word)}`;
+            }).filter((x) => x !== 'ok'),
+            // A coarse pointer's target, by hit test: 21px above and below its centre must still land on it, so a
+            // chip whose hit area is a pseudo-element (the pool chip's `::before`) counts by what a tap reaches.
+            missedTaps: matchMedia('(pointer: coarse)').matches
+              ? [...document.querySelectorAll<HTMLElement>('.accounts-list button, .accounts-list [tabindex="0"]')].filter((t) => {
+                t.scrollIntoView({ block: 'center' });
+                const b = rect(t);
+                const cx = b.left + b.width / 2;
+                const cy = b.top + b.height / 2;
+                return [cy - 21, cy + 21].some((y) => {
+                  const hit = document.elementFromPoint(cx, y);
+                  return hit === null || (hit !== t && !t.contains(hit));
+                });
+              }).map((t) => `${t.className} ${t.textContent}`)
+              : [],
+            fields: document.querySelectorAll('[data-page-body] input, [data-page-body] textarea, [data-page-body] select').length,
+            text: document.querySelector('[data-page-body]')!.textContent!,
           };
         }, CARDS);
+        expect([m.skin, m.theme], 'the cell draws the skin and theme it names').toEqual([view.skin, view.theme]);
         expect(m.order, 'trouble cards first').toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e']);
         expect(m.rollUp).toBe('5 accounts · 1 signed out · 1 rate-limited · 1 off');
         expect(m.docOverflow, 'no horizontal page scroll').toBeLessThanOrEqual(0);
@@ -147,20 +213,156 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
         expect(m.rails, 'the rail on the Signed-out card only').toEqual(['lane-b']);
         expect(m.weeklyOnly).toBe(true);
         expect(m.clippedFields, 'every command shows whole').toEqual([]);
+        expect(m.untitledTruncations, 'every truncation carries its whole value in title').toEqual([]);
+        expect(m.headOverlaps, 'nothing on a head line 1 overlaps').toEqual([]);
+        expect(m.lamps, 'no glyph without its word').toEqual([]);
+        expect(m.fields, 'the screen has no field').toBe(0);
+        expect(m.text, 'the key shows only as its masked hint').toContain('sk-or-v1-…a3f9');
+        expect(m.text).not.toMatch(KEY_SHAPE);
         if (view.width < 900) {
           expect(m.labelEllipsised, 'the long label ellipsises').toBe(true);
           expect(m.fieldWidthShare, 'the CLI field takes the row').toBeGreaterThan(0.95);
           expect(m.copyBelowField, 'Copy stacks under the field').toBe(true);
           expect(m.smallTargets, '44px targets').toEqual([]);
+          expect(m.missedTaps, 'every target in the list takes a 44px tap').toEqual([]);
         } else {
           // The skin's own `--page-max`: Refined's 760 (spec §12.1), Instrument's wider reading column until A4.
           if (view.skin === REFINED) expect(m.pageMax).toBe(760);
           expect(m.bodyWidth, 'the column at --page-max').toBeLessThanOrEqual(m.pageMax);
           expect(m.metersSideBySide, 'the meters side by side').toBe(true);
         }
+        // The container the pool chip's sheet uses: unchanged by A2, read so the cell says it.
+        await page.locator('[data-testid="acct-pool-chip-lane-a"]').click();
+        await page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 10_000 });
+        const sheet: SheetShot = await page.evaluate(async () => {
+          const el = document.querySelector<HTMLElement>('.sheet-panel')!;
+          await Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined)));
+          const b = el.getBoundingClientRect();
+          return {
+            animation: getComputedStyle(el).animationName, rect: { x: b.x, y: b.y, w: b.width, h: b.height },
+            vw: innerWidth, vh: innerHeight,
+            inputFontSizes: [...el.querySelectorAll('input, textarea, select')].map((i) => getComputedStyle(i).fontSize),
+          };
+        });
+        if (view.width < 900) {
+          expect(sheet.animation, 'the bottom sheet').toBe('slideFromBottom');
+          expect(Math.round(sheet.rect.w)).toBe(sheet.vw);
+          expect(Math.abs(sheet.rect.y + sheet.rect.h - sheet.vh), 'on the foot of the screen').toBeLessThanOrEqual(1);
+        } else {
+          expect(sheet.animation, 'the centred dialog').toBe('sheet-pop-in');
+          expect(Math.abs(sheet.rect.x + sheet.rect.w / 2 - sheet.vw / 2), 'centred across').toBeLessThanOrEqual(1);
+          expect(Math.abs(sheet.rect.y + sheet.rect.h / 2 - sheet.vh / 2), 'centred down').toBeLessThanOrEqual(1);
+        }
+        expect(sheet.inputFontSizes.length, 'the sheet has its field').toBeGreaterThan(0);
+        expect(sheet.inputFontSizes.every((f) => f === '16px'), `--fs-input 16: ${sheet.inputFontSizes.join(', ')}`).toBe(true);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+// ---- the offline row ------------------------------------------------------------------------------------------------
+
+const OFFLINE_VIEWS: AppView[] = SKINS.flatMap((skin) => [360, 1280].map((width) => ({ skin, theme: PHOSPHOR, width })));
+
+/** What an offline cell reads off the page. */
+interface OfflineRead {
+  readonly cards: { lane: string; state: string; word: string; source: string; usage: string }[];
+  readonly loading: boolean;
+  readonly rollUp: string | null;
+  readonly reconnecting: boolean;
+  readonly docOverflow: number;
+  readonly fields: number;
+  readonly text: string;
+}
+
+const readOffline = (page: Page): Promise<OfflineRead> => page.evaluate((sel) => ({
+  cards: [...document.querySelectorAll<HTMLElement>(sel)].map((c) => ({
+    lane: c.dataset['lane']!, state: c.dataset['state']!,
+    word: c.querySelector('.acct-lamp-word')?.textContent ?? '',
+    source: c.querySelector('.accounts-state-source')?.textContent ?? '',
+    usage: c.querySelector('.accounts-fresh')?.textContent ?? '',
+  })),
+  loading: document.querySelector('.accounts-list [data-loading="true"]') !== null,
+  rollUp: document.querySelector('.accounts-rollup')?.textContent ?? null,
+  // The shell's own offline reading (the fleet store's `conn`), wherever this skin draws it at this width.
+  reconnecting: [...document.querySelectorAll<HTMLElement>('.offline-banner')]
+    .some((b) => b.checkVisibility() && (b.textContent ?? '').includes('Reconnecting')),
+  docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  fields: document.querySelectorAll('[data-page-body] input, [data-page-body] textarea, [data-page-body] select').length,
+  text: document.querySelector('[data-page-body]')?.textContent ?? '',
+}), CARDS);
+
+describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D-7718; spec §12.5)', () => {
+  for (const view of OFFLINE_VIEWS) {
+    it(`warm: the link drops with the screen open, and the cards keep the last answer — ${named(view)}`, async () => {
+      const app = await openApp(browser!, view, FIXTURE);
+      try {
+        await app.page.goto(server!.origin + '/');
+        await go(app.page, '/accounts');
+        await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
+        const before = await readOffline(app.page);
+        app.cut();
+        // Leave and come back: the remount asks for a fresh answer (D-7180), which now fails.
+        await go(app.page, '/');
+        await go(app.page, '/accounts');
+        await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
+        await app.page.waitForTimeout(1_500);
+        const m = await readOffline(app.page);
+        expect(m.cards.map((c) => [c.lane, c.state, c.word, c.source]), "the server's words and sources stand")
+          .toEqual(before.cards.map((c) => [c.lane, c.state, c.word, c.source]));
+        expect(m.cards.map((c) => c.lane)).toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e']);
+        expect(m.cards.every((c) => !c.source.includes('no lane state')), 'held lanes are not forgotten').toBe(true);
+        expect(m.cards.every((c) => c.usage !== ''), 'every card keeps its usage age').toBe(true);
+        expect(m.rollUp).toBe('5 accounts · 1 signed out · 1 rate-limited · 1 off');
+        // From 900 the fleet pane beside the screen carries the shell's "Reconnecting…". Below 900 nothing on the
+        // Accounts screen says the link is down: the PR's offline row names that, and A18 owns the sentence.
+        if (view.width >= 900) expect(m.reconnecting, "the shell's offline reading is on screen").toBe(true);
+        expect(m.docOverflow).toBeLessThanOrEqual(0);
+        expect(m.fields, 'no secret or code field').toBe(0);
+        expect(m.text).not.toMatch(KEY_SHAPE);
+        expect(app.errors).toEqual([]);
+      } finally {
+        await app.ctx.close();
+      }
+    }, 90_000);
+
+    it(`cold: a start with no link draws no card it cannot read — ${named(view)}`, async () => {
+      const app = await openApp(browser!, view, FIXTURE);
+      try {
+        // The offline snapshot `lib/offline.ts` writes (its key and shape): sessions and the roster, never `lanes`.
+        const snapshot = {
+          savedAt: now - 600_000, sessions: [fleetSession({ id: 'demo-quiet-basin', project: 'demo', wrapper: 'lane-a' })],
+          roster: ACCOUNTS.roster,
+        };
+        await app.ctx.addInitScript((snap) => { localStorage.setItem('ccrc.fleet-snapshot.v1', snap); }, JSON.stringify(snapshot));
+        app.cut();
+        await app.page.goto(server!.origin + '/');
+        // The snapshot was read: the fleet counts its one session, and the shell says it is reconnecting.
+        await app.page.getByText('1 session', { exact: true }).first().waitFor({ timeout: 30_000 });
+        await app.page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('.offline-banner')]
+          .some((b) => b.checkVisibility() && (b.textContent ?? '').includes('Reconnecting')), undefined, { timeout: 30_000 });
+        await go(app.page, '/accounts');
+        await app.page.locator('[data-page-body]').waitFor({ timeout: 30_000 });
+        await app.page.waitForTimeout(1_500);
+        const m = await readOffline(app.page);
+        expect(m.cards.filter((c) => c.state === 'signed-in'), 'never Signed in on an absence').toEqual([]);
+        if (view.width >= 900) expect(m.reconnecting, "the shell's offline reading is on screen").toBe(true);
+        expect(m.text, 'no identity on an absence').not.toContain('someone@example.invalid');
+        expect(m.text, 'no key hint either').not.toContain('a3f9');
+        expect(m.text).not.toMatch(KEY_SHAPE);
+        expect(m.fields, 'no secret or code field').toBe(0);
+        expect(m.docOverflow).toBeLessThanOrEqual(0);
+        // What it draws today, read so the PR's offline row can say it: no usage answer has landed, so the list is the
+        // one count-free placeholder and there is no roll-up (A18 owns drawing the snapshot's roster with its ages).
+        expect(m.loading).toBe(true);
+        expect(m.cards).toEqual([]);
+        expect(m.rollUp).toBeNull();
+        expect(app.errors).toEqual([]);
+      } finally {
+        await app.ctx.close();
       }
     }, 90_000);
   }
