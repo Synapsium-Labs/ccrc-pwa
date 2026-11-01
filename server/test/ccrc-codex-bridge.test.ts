@@ -385,11 +385,34 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect([st['mode'], st['upstream']]).toEqual(['direct', 'backend']);
     expect(st['bridge']).toEqual({
       statsAt: doc.updatedAt, lastUpstreamRequestId: 'req_fx1', refusals: doc.refusals, outcomes: doc.outcomes,
-      unexplained: doc.unexplained,
+      unexplained: doc.unexplained, store: null,
     });
     expect((st['tiers'] as Record<string, unknown>)['bridge']).toEqual(STOPPED);
     fs.writeFileSync(join(laneDir(home, 'codex-a'), 'bridge.stats.json'), 'not json');
     expect(statusJson(home)['bridge']).toBeNull();
+  }, 60_000);
+
+  it('status --json names the stats file\'s store entry under bridge.store, null when the file has none (D-7677)', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const file = join(laneDir(home, 'codex-a'), 'bridge.stats.json');
+    const store = {
+      state: 'disabled', reason: 'store:DatabaseError', at: '2026-10-24T09:05:00.000Z',
+      setAside: { at: '2026-10-24T09:00:00.000Z', found: 'integrity-check', file: 'reasoning.sqlite.damaged-20261024T090000Z' },
+    };
+    const doc = {
+      version: 1, lane: 'codex-a', since: '2026-10-20T00:00:00.000Z', startedAt: '2026-10-24T09:00:00.000Z',
+      updatedAt: '2026-10-24T10:00:00.000Z', routes: {}, refusals: {}, outcomes: { 'store:DatabaseError': 1 },
+      names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null, store,
+    };
+    fs.writeFileSync(file, JSON.stringify(doc), { mode: 0o600 });
+    expect((statusJson(home)['bridge'] as Record<string, unknown>)['store']).toEqual(store);
+    // No `store` key: a bridge that predates the entry, which reads null, never `ok`.
+    const { store: _dropped, ...older } = doc;
+    fs.writeFileSync(file, JSON.stringify(older), { mode: 0o600 });
+    const bridge = statusJson(home)['bridge'] as Record<string, unknown>;
+    expect(bridge).not.toBeNull();
+    expect(bridge['store']).toBeNull();
+    expect(bridge['statsAt']).toBe(doc.updatedAt);
   }, 60_000);
 
   it('removal reaps the bridge files, the markers and the recordings directory', async () => {

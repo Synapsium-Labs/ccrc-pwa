@@ -2307,7 +2307,7 @@ reasoning is lost. A store that cannot be used otherwise (a failure while the br
 start) is switched off for the rest of that process: every request is answered without earlier reasoning replayed,
 until the next start checks it again. The stats file's `store` entry says which, for the process that wrote it: `ok`,
 `set-aside` or `disabled`, with the reason and time (a file with no entry is from a bridge that predates it, never
-`ok`). On a `direct` lane doctor's `codex` check WARNs on `disabled` until a restart (`ccrc codex stop <id>`, then
+`ok`); `ccrc codex status <id> --json` shows it under `bridge.store` (`null`: the bridge predates it). On a `direct` lane doctor's `codex` check WARNs on `disabled` until a restart (`ccrc codex stop <id>`, then
 `start`) writes a fresh entry, and on `set-aside` while the copy is still in the lane directory, until you delete it
 with its `-wal` and `-shm`. `ccrc codex status <id> --json`
 adds `mode`, `upstream`, `tiers.bridge` and `bridge` (the stats file's time, last upstream request id, refusals,

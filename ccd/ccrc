@@ -14680,13 +14680,13 @@ _codex_cmd_status() {   # <id> <1 = --json>
     fi
     # `bridge` (codex-bridge Stage 2, Task 11): the bridge's non-secret stats
     # file, named by lane.json's `bridgeFiles.stats` — its time, last upstream
-    # request id, refusals, outcomes and unexplained names; null when lane.json
+    # request id, refusals, outcomes, unexplained names and `store` entry (D-7677: null when the file has none, a bridge that predates it, never `ok`); null when lane.json
     # names none, or the file is absent or not one JSON object.
     sf="$(jq -r 'if type == "object" then (.bridgeFiles.stats // empty | strings) else empty end' "$d/lane.json" 2>/dev/null)" || sf=''
     if [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] && [ -f "$d/$sf" ]; then
       stats="$(jq -cs 'if length == 1 and (.[0] | type) == "object" then .[0]
           | {statsAt: (.updatedAt // null), lastUpstreamRequestId: (.lastUpstreamRequestId // null),
-             refusals: (.refusals // null), outcomes: (.outcomes // null), unexplained: (.unexplained // null)}
+             refusals: (.refusals // null), outcomes: (.outcomes // null), unexplained: (.unexplained // null), store: (.store // null)}
           else null end' "$d/$sf" 2>/dev/null)" || stats=null
       [ -n "$stats" ] || stats=null
     fi
