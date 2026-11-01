@@ -8,6 +8,8 @@ import { PROVIDERS, PROVIDER_IDS, type ConnectMethod, type ProviderId } from '..
 import { ACCOUNT_ID_RE } from '../../../shared/roster.js';
 // D-5896: `NODE_ID_RE` straight from its L0 home; through `coord/store.ts` it loaded the store and `node:sqlite`.
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
+// The unprintable set and its one-line strip have one L0 home, shared with the Linear modules (#1444).
+import { stripLine } from '../../../shared/unprintable.js';
 import type { CurrentFleetIdentity } from '../fleetidentity.js';
 
 /**
@@ -50,19 +52,16 @@ const MINTED_ACTORS = new WeakSet<AccountActor>();
 /** The longest device label a row carries. The session row keeps up to 120 characters of a user-agent. */
 const ACTOR_LABEL_MAX = 64;
 const ACTOR_UNKNOWN = 'unknown device';
-/** C0, DEL and C1 controls (the 8-bit CSI among them), line and paragraph separators, the combining grapheme
- *  joiner, and every Unicode format character (\p{Cf}) a terminal or a viewer would act on or hide: zero-width and
- *  directional marks (the Arabic letter mark among them), bidi embeddings, overrides and isolates, the soft hyphen,
- *  the interlinear annotation marks, the tag block and the BOM (D-5621). */
-const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u034f\u2028\u2029\u2060-\u206f\p{Cf}]+/gu;
 
 /**
  * The actor of a gated request: the device label of the session the gate verified (`GateDecision.device`) and the
  * first 8 hex characters of its `idHash`. The label is attribution, never authentication (`auth/gate.ts`); it is
- * stripped of control and format characters and bounded, since a user-agent is attacker-chosen text.
+ * stripped of control and format characters (`stripLine`, the shared unprintable set: C0 and C1 controls, the line
+ * and paragraph separators, the combining grapheme joiner, U+2060 to U+206F and every \p{Cf}, D-5621) and bounded,
+ * since a user-agent is attacker-chosen text.
  */
 export function actorOf(device: string | null, idHash: string): AccountActor {
-  const cleaned = (device ?? '').replace(UNPRINTABLE, ' ').replace(/\s+/g, ' ').trim().slice(0, ACTOR_LABEL_MAX).trim();
+  const cleaned = stripLine(device ?? '').slice(0, ACTOR_LABEL_MAX).trim();
   const label = cleaned === '' ? ACTOR_UNKNOWN : cleaned;
   const idHash8 = /^[0-9a-f]{8}/.test(idHash) ? idHash.slice(0, 8) : '00000000';
   const text = `${label} ${idHash8}`;
