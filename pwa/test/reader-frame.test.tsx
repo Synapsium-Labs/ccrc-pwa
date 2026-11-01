@@ -168,12 +168,14 @@ describe('the triggers that land on the plain view (spec 4.6)', () => {
   });
 
   it.each([
-    ['refused', { kind: 'refused', why: 'container-depth', line: 3, value: 99 } as const],
-    ['not-rendered', { kind: 'not-rendered', why: 'over-limit' } as const],
-    ['threw', { kind: 'threw', error: 'Boom' } as const],
-    ['worker-failed', { kind: 'worker-failed', error: 'error' } as const],
-    ['worker-unavailable', { kind: 'worker-unavailable' } as const],
-  ])('a %s render shows the plain view, mounts nothing, and keeps the reason in the console', async (_name, outcome) => {
+    ['refused', { kind: 'refused', why: 'container-depth', line: 3, value: 99 } as const, 'refused: container-depth at line 3'],
+    ['not-rendered (over-limit)', { kind: 'not-rendered', why: 'over-limit' } as const, 'not-rendered: over-limit'],
+    ['not-rendered (output-over-limit)', { kind: 'not-rendered', why: 'output-over-limit' } as const, 'not-rendered: output-over-limit'],
+    ['not-rendered (failed)', { kind: 'not-rendered', why: 'failed' } as const, 'not-rendered: failed'],
+    ['threw', { kind: 'threw', error: 'Boom' } as const, 'threw: Boom'],
+    ['worker-failed', { kind: 'worker-failed', error: 'error' } as const, 'worker-failed: error'],
+    ['worker-unavailable', { kind: 'worker-unavailable' } as const, 'worker-unavailable'],
+  ])('a %s render shows the plain view, mounts nothing, and names the render`s own reason in the console', async (_name, outcome, reason) => {
     const h = harness({ outcome });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { container } = render(frame(h));
@@ -181,7 +183,8 @@ describe('the triggers that land on the plain view (spec 4.6)', () => {
     expect(h.parser).toHaveBeenCalled();
     expect(h.mountFn).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain(READER_FALLBACK_NOTE);
-    expect(warn.mock.calls.some((c) => String(c[0]).startsWith('ccrc: reader ') && String(c[0]).includes(outcome.kind))).toBe(true);
+    expect(warn.mock.calls.map((c) => String(c[0])), 'the line carries the arm and its own reason')
+      .toContain(`ccrc: reader not rendered (${reason})`);
   });
 
   it('a refused render shows DocMarkdown`s own refusal note', async () => {

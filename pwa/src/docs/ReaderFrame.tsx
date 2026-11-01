@@ -88,6 +88,23 @@ function reasonOf(e: unknown): string {
   return e instanceof Error ? `${e.name}: ${e.message}` : typeof e;
 }
 
+/** Why a render did not succeed, for the console only: the arm, then the arm's own reason (a refusal's rule and line, which
+ *  limit or failure a not-rendered answer names, the thrown error's name). Names and numbers only; the document's text is
+ *  never part of an outcome, so it is never part of this line. */
+function outcomeReason(o: Exclude<ReaderRenderOutcome, { kind: 'rendered' | 'timeout' }>): string {
+  switch (o.kind) {
+    case 'refused':
+      return `refused: ${o.why} at line ${o.line}`;
+    case 'not-rendered':
+      return `not-rendered: ${o.why}`;
+    case 'threw':
+    case 'worker-failed':
+      return `${o.kind}: ${o.error}`;
+    case 'worker-unavailable':
+      return o.kind;
+  }
+}
+
 /** A Markdown body in the rich reader. `MarkdownBody` answers the two byte kinds that are not Markdown before it mounts
  *  this, so `null` here has one meaning: that answer was not Markdown, and the caller has shown it already. */
 export function ReaderFrame(p: ReaderFrameProps): ReactNode {
@@ -204,8 +221,9 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         return;
       }
       if (outcome.kind !== 'rendered') {
-        console.warn(`ccrc: reader not rendered (${outcome.kind})`);
-        goPlain(outcome.kind);
+        const reason = outcomeReason(outcome);
+        console.warn(`ccrc: reader not rendered (${reason})`);
+        goPlain(reason);
         return;
       }
 
