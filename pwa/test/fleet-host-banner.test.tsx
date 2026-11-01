@@ -6,7 +6,7 @@
 // other box was a false claim about the reader's machine.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { FleetHealth, NodeWire, UpdateIntentWire } from '../../shared/api';
+import type { FleetHealth, NodeWire, ReleaseWire, UpdateIntentWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { FleetHostBanner } from '../src/fleet/FleetHostBanner';
@@ -382,5 +382,56 @@ describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
     rerender(<FleetHostBanner health={skewed} nodes={[fleet, movable('server', SERVER_V9)]} intent={autoOn} stale={false} />);
     expect(msg()).not.toContain(UPDATES_STALE_TEXT);
     expect(msg()).toContain('auto-install then moves the lagging box.');
+  });
+});
+
+// D-7680: the skew arm never leaves the split unexplained. With the fleet box ahead and nothing standing on the
+// server, it offers the console's own one-node move (the shared confirm sheet, a single-node apply to the fleet box's
+// tag); with a request or a lease already carrying the server there, it says so and offers nothing.
+describe('FleetHostBanner — the skew arm\'s queued and move arms (D-7680)', () => {
+  const skewed = health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+  const msg = (): string => document.querySelector('.banner-msg')?.textContent ?? '';
+  const FLEET_V9: BuildInfo = { ...FLEET_V7, version: 'v0.0.9' };
+  const SERVER_V8: BuildInfo = { ...SERVER_V9, version: 'v0.0.8' };
+  const movable = (role: 'fleet' | 'server', current: BuildInfo, over: Partial<NodeWire> = {}): NodeWire =>
+    ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null,
+      desiredTag: null, ...over });
+  const RELEASES: ReleaseWire[] = [
+    { tag: 'v0.0.9', version: 'v0.0.9', channel: 'stable', publishedAt: 1, commitSha: null, bundleListed: true, yanked: false, refused: [], notes: null },
+  ];
+  const off: UpdateIntentWire[] = [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'off', notify: 'off', setAt: 1, setBy: 'pwa' }];
+
+  it('the fleet box leads and the server is idle: "Update the server to v0.0.9" opens the move sheet, whose confirm sends the single-node apply', async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [movable('server', SERVER_V8).nodeId], skipped: [] });
+    const onMoved = vi.fn();
+    const nodes = [movable('fleet', FLEET_V9), movable('server', SERVER_V8)];
+    render(<FleetHostBanner health={skewed} nodes={nodes} intent={off} releases={RELEASES} onMoved={onMoved} />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.9 (bd2bf57a) · server v0.0.8 (2985b9d1). '
+      + "The console can move server to v0.0.9, the fleet box's release.");
+    expect(screen.queryByText(/ccrc rollout/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update the server to v0.0.9' }));
+    expect(screen.getByRole('list', { name: 'Nodes this moves, in order' }).textContent).toBe('1. server (server) v0.0.8 → v0.0.9');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.9' })); });
+    expect(apply).toHaveBeenCalledWith({ nodeId: nodes[1]!.nodeId, tag: 'v0.0.9' });
+    expect(onMoved).toHaveBeenCalled();
+  });
+
+  it('a request for the fleet box\'s tag already on the server: it says the server follows, and offers no button', () => {
+    const nodes = [movable('fleet', FLEET_V9), movable('server', SERVER_V8, { request: { tag: 'v0.0.9', kind: 'update', at: 1 } })];
+    render(<FleetHostBanner health={skewed} nodes={nodes} intent={off} releases={RELEASES} />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.9 (bd2bf57a) · server v0.0.8 (2985b9d1). '
+      + 'server is requested v0.0.9 and follows once the fleet box’s move settles.');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('without the catalogue, or stale, the terminal verbs stand and no button is offered', () => {
+    const cli = 'Run ccrc rollout from the deploying machine, or ccrc update on the lagging box, fleet box first.';
+    const nodes = [movable('fleet', FLEET_V9), movable('server', SERVER_V8)];
+    const { rerender } = render(<FleetHostBanner health={skewed} nodes={nodes} intent={off} />);
+    expect(msg()).toContain(cli);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    rerender(<FleetHostBanner health={skewed} nodes={nodes} intent={off} releases={RELEASES} stale />);
+    expect(msg()).toContain(cli);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });

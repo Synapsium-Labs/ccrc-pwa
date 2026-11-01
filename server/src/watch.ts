@@ -209,7 +209,7 @@ import { FLEET_LABEL, SERVER_LABEL, printableDetail, sweepInventory, type Invent
 import { changeLatch, changeLatchMap } from './changeLatch.js';
 import { writeServerCaps, type WriteServerCapsResult } from './update/serverCaps.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
-import { runDispatch, type DispatchRunResult } from './update/converge.js';
+import { followLandedMove, runDispatch, type DispatchRunResult } from './update/converge.js';
 import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
@@ -1670,6 +1670,9 @@ export class FleetWatcher {
       fleet: cfg.fleetMode === 'remote' && fleetState !== undefined
         ? { io: this.deps.io, state: fleetState, identity: this.deps.fleetIdentity } : null,
       ownIdentity: cfg.fleetMode === 'remote' ? undefined : this.deps.fleetIdentity,
+      // D-7679: a fleet row's requested update that lands pulls the server to the same tag, in the sweep that
+      // settled it; the dispatcher run this inventory run ends in moves it.
+      follow: (landed, now) => { followLandedMove({ store: coord, recordMove: (r) => { this.recordMoveFeed(r); } }, landed, now); },
     };
     return this.sweepThenProject(inv, Date.now());
   }

@@ -94,7 +94,9 @@ export function rollbackBlockers(nodes: readonly NodeWire[], release: ReleaseWir
   return out;
 }
 
-export function planMove(view: UpdatesView, intent: MoveIntent): PlannedMove {
+/** Reads only the view's `nodes`, so a caller holding just the inventory (the skew banner's one-node move, D-7680) plans
+ *  through this same builder. */
+export function planMove(view: Pick<UpdatesView, 'nodes'>, intent: MoveIntent): PlannedMove {
   const all: readonly NodeWire[] = Array.isArray(view.nodes) ? view.nodes : [];
   let picked: NodeWire[];
   if (intent.scope === 'node') {

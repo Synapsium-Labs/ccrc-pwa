@@ -35,10 +35,11 @@ import { resolveInputFor } from '../src/update/project.js';
 import { DETACH_CAP, ROLLBACK_CAP, planDispatch } from '../src/update/dispatch.js';
 import { dispatchViewsFor } from '../src/update/converge.js';
 import { spawnFromRunner } from './updateSpawnFake.js';
-import { parseApplyBody, parseRollbackBody } from '../src/update/routes.js';
+import { REFRESH_MIN_INTERVAL_MS, parseApplyBody, parseRollbackBody } from '../src/update/routes.js';
+import type { CataloguePoller } from '../src/update/catalogue.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { updateLauncherPath, updateSpawnArgv } from '../../shared/agent-protocol.js';
-import type { MoveRequestAnswer, RequestKind } from '../../shared/api.js';
+import type { CatalogueState, MoveRequestAnswer, RequestKind } from '../../shared/api.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -137,7 +138,7 @@ afterEach(async () => {
 
 /** `watcher` off by default: a route case measures the request row, and with no watcher
  *  `watcher?.triggerDispatch()` is a no-op, so nothing moves the lease under it. */
-const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner } = {}): Promise<Opened> => {
+const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner; catalogue?: (coord: CoordStore) => CataloguePoller } = {}): Promise<Opened> => {
   const home = mkTmp('ccrc-update-apply-');
   seedRoster(home);
   const cfg = { ...loadConfig({ CCRC_HOME: home }), authEnabled: o.auth ?? false };
@@ -153,6 +154,7 @@ const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner } = 
     // `Deps.updateRunner` is the two-template capability, never a raw Runner (Task 5,
     // D-3397): the recording Runner goes behind the same factory.
     ...(o.runner ? { updateRunner: spawnFromRunner(o.runner, cfg.home) } : {}),
+    ...(o.catalogue ? { catalogue: o.catalogue(coord) } : {}),
   };
   const bus = new Bus();
   // A REAL watcher, never started: the routes call its `triggerDispatch()` and nothing else.
@@ -581,23 +583,222 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     expect(plan.move, JSON.stringify(plan)).toBeNull();
   });
 
-  it("a fleet row's own busy lease skips it — and holds the server behind it too, never moving the server ahead (D-3406, D-3401 corrected)", async () => {
+  it("D-7678: a fleet row's own busy lease gets the request beside it (queued after the running move) — and still holds the server behind it, never moving the server ahead (D-3406 replaced, D-3401)", async () => {
     const f = await open();
     catalogue(f.coord);
     plant(f.coord, fleetNode());
     plant(f.coord, serverNode());
     hold(f.coord, FLEET_ID);   // an older tag's lease, still outstanding
-    const before = f.coord.node(FLEET_ID)!;
     const beforeServer = f.coord.node(SERVER_ID)!;
     const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.11' });
     expect(r.statusCode, r.body).toBe(202);
     expect(r.json()).toEqual({
-      ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why: 'busy' }, { nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+      ok: true, requested: [FLEET_ID], queued: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
     } satisfies MoveRequestAnswer);
-    // No request written, and no note either — the row is busy, not idle (`noteDispatchRefusal` refuses it
-    // anyway); the server was never asked at all, so nothing changed there either.
-    expect(f.coord.node(FLEET_ID)).toEqual(before);
+    // The request stands beside the lease, which is untouched; the server was never asked at all.
+    expect(f.coord.node(FLEET_ID)).toMatchObject({
+      updateState: 'pending', updateTarget: 'v0.0.10', updateDetail: 'fixture lease', requestedTag: 'v0.0.11', requestedKind: 'update',
+    });
     expect(f.coord.node(SERVER_ID)).toEqual(beforeServer);
+    // The running move settles: the request it did not serve survives it.
+    expect(f.coord.settleNode(FLEET_ID, 'done: v0.0.10', 5)).toMatchObject({ ok: true, keptRequest: true });
+    expect(f.coord.node(FLEET_ID)!.requestedTag).toBe('v0.0.11');
+  });
+
+  it('D-7678: Update all v(N+1) while the SERVER holds its own v(N) lease requests BOTH rows — the server\'s beside its lease, kept when that lease settles', async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode({ currentVersion: 'v0.0.10', highestVersion: 'v0.0.10' }));
+    plant(f.coord, serverNode());
+    hold(f.coord, SERVER_ID);   // the server's own v0.0.10 move, still running
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.11' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({
+      ok: true, requested: [FLEET_ID, SERVER_ID], queued: [SERVER_ID], skipped: [],
+    } satisfies MoveRequestAnswer);
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ requestedTag: 'v0.0.11', requestedKind: 'update' });
+    expect(f.coord.node(SERVER_ID)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.10', requestedTag: 'v0.0.11' });
+    expect(f.coord.settleNode(SERVER_ID, 'done: v0.0.10', 5)).toEqual({ ok: true, clearedRequest: false, keptRequest: true });
+    expect(f.coord.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.11', requestedKind: 'update' });
+  });
+
+  it('D-7688: Update all to a tag OLDER than a running fleet lease writes no fleet request — the settle leaves nothing that holds the server', async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    plant(f.coord, serverNode());
+    // The fleet's requested move to v0.0.11 is running; its floor is still v0.0.9.
+    expect(f.coord.requestNode(FLEET_ID, 'v0.0.11', 'update', 4).ok).toBe(true);
+    expect(f.coord.dispatchNode(FLEET_ID, 'v0.0.11', 'update', 5, 'fixture lease')).toEqual({ ok: true });
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.10' });
+    expect(r.statusCode, r.body).toBe(202);
+    // The busy row is judged against what its running move delivers, not its floor: v0.0.10 is not newer than
+    // v0.0.11, so nothing is queued beside the lease, and the server still waits behind the running fleet move.
+    expect(r.json()).toEqual({
+      ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why: 'not-newer' }, { nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+    } satisfies MoveRequestAnswer);
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.11', requestedTag: 'v0.0.11' });
+    // The fleet's move lands: the request it served is cleared, and no request is left that pins the server lane.
+    plant(f.coord, fleetNode({ currentVersion: 'v0.0.11', highestVersion: 'v0.0.11' }));
+    expect(f.coord.settleNode(FLEET_ID, 'done: v0.0.11', 5)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'idle', requestedTag: null });
+    expect(f.coord.requestNode(SERVER_ID, 'v0.0.11', 'update', 6).ok).toBe(true);
+    const plan = planDispatch({ nodes: dispatchViewsFor(f.coord), releases: resolveInputFor(f.coord, f.coord.node(SERVER_ID)!).releases });
+    expect(plan.refusals, JSON.stringify(plan)).toEqual([]);
+    expect(plan.move).toMatchObject({ nodeId: SERVER_ID, kind: 'update', target: 'v0.0.11' });
+  });
+
+  // D-7690: a running AUTO fleet move to T carries no request (the dispatcher's auto arm writes none), so an Update
+  // all for that SAME T is the one write `landedMoveOf` reads to make the server follow. Skipping it `not-newer`
+  // left both boxes split once the fleet landed with the server's auto off. Only a tag strictly OLDER than the
+  // lease's target is `not-newer`.
+  for (const named of [true, false]) {
+    it(`D-7690: Update all to the SAME tag a running auto fleet move delivers (${named ? 'named' : 'no tag, desiredTag'}) queues the fleet request beside the lease; the settle clears it and nothing pins the server`, async () => {
+      const f = await open();
+      catalogue(f.coord);
+      plant(f.coord, fleetNode());
+      plant(f.coord, serverNode());
+      if (!named) {
+        desire(f.coord, FLEET_ID, 'v0.0.11');
+        desire(f.coord, SERVER_ID, 'v0.0.11');
+      }
+      // The auto arm's lease: no request on the row.
+      expect(f.coord.dispatchNode(FLEET_ID, 'v0.0.11', 'update', 5, 'auto update from v0.0.9 to v0.0.11')).toEqual({ ok: true });
+      expect(f.coord.node(FLEET_ID)!.requestedTag).toBeNull();
+      const r = await post(f.app, '/api/updates/apply', named ? { all: true, tag: 'v0.0.11' } : { all: true });
+      expect(r.statusCode, r.body).toBe(202);
+      expect(r.json()).toEqual({
+        ok: true, requested: [FLEET_ID], queued: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+      } satisfies MoveRequestAnswer);
+      expect(f.coord.node(FLEET_ID)).toMatchObject({
+        updateState: 'pending', updateTarget: 'v0.0.11', requestedTag: 'v0.0.11', requestedKind: 'update',
+      });
+      expect(f.coord.node(SERVER_ID)!.requestedTag).toBeNull();
+      // The lease served that same tag, so the settle clears the request (D-7688's keep needs strictly newer).
+      plant(f.coord, fleetNode({ currentVersion: 'v0.0.11', highestVersion: 'v0.0.11' }));
+      expect(f.coord.settleNode(FLEET_ID, 'done: v0.0.11', 5)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+      expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'idle', requestedTag: null });
+    });
+  }
+
+  // D-7690 (closing fix): a NEWER request already queued beside a running fleet lease survives a later Update all for that lease's
+  // own target. Overwritten, `settleNode` would clear the same-tag request and the newer move would be lost.
+  for (const named of [true, false]) {
+    it(`D-7690: Update all for the running lease's own tag (${named ? 'named' : 'no tag, desiredTag'}) leaves a newer queued request standing — the settle keeps it`, async () => {
+      const f = await open();
+      catalogue(f.coord);
+      plant(f.coord, fleetNode());
+      plant(f.coord, serverNode());
+      hold(f.coord, FLEET_ID);   // the fleet's v0.0.10 move, still running
+      const first = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.11' });
+      expect(first.statusCode, first.body).toBe(202);
+      expect(f.coord.node(FLEET_ID)).toMatchObject({ updateTarget: 'v0.0.10', requestedTag: 'v0.0.11', requestedKind: 'update' });
+      const queuedAt = f.coord.node(FLEET_ID)!.requestedAt;
+      if (!named) {
+        desire(f.coord, FLEET_ID, 'v0.0.10');
+        desire(f.coord, SERVER_ID, 'v0.0.10');
+      }
+      const r = await post(f.app, '/api/updates/apply', named ? { all: true, tag: 'v0.0.10' } : { all: true });
+      expect(r.statusCode, r.body).toBe(202);
+      expect(r.json()).toEqual({
+        ok: true, requested: [FLEET_ID], queued: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+      } satisfies MoveRequestAnswer);
+      // Nothing was written: the newer request still stands, with its own stamp.
+      expect(f.coord.node(FLEET_ID)).toMatchObject({
+        updateState: 'pending', updateTarget: 'v0.0.10', requestedTag: 'v0.0.11', requestedKind: 'update', requestedAt: queuedAt,
+      });
+      expect(f.coord.node(SERVER_ID)!.requestedTag).toBeNull();
+      // The running move settles: the v0.0.11 request it did not serve survives it.
+      plant(f.coord, fleetNode({ currentVersion: 'v0.0.10', highestVersion: 'v0.0.10' }));
+      expect(f.coord.settleNode(FLEET_ID, 'done: v0.0.10', 5)).toMatchObject({ ok: true, keptRequest: true });
+      expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.11', requestedKind: 'update' });
+    });
+  }
+
+  it('a single named node with its own busy lease still answers 409 busy and writes nothing (D-3386 kept, D-7678)', async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    hold(f.coord, FLEET_ID);
+    const before = f.coord.node(FLEET_ID)!;
+    const r = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.11' });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json()).toEqual({ ok: false, error: 'busy', detail: 'pending' });
+    expect(f.coord.node(FLEET_ID)).toEqual(before);
+  });
+});
+
+describe('POST /api/updates/apply — a tag the catalogue has not listed yet runs one catalogue poll first (D-7681)', () => {
+  /** A poller whose poll lists `extra` (a release published after the last scheduled poll) through the store's own
+   *  listing writer, as the real poller does. */
+  const lateListing = (extra: ReleaseListingRow[], lastRequestAt: number | null = null) => {
+    const polls: number[] = [];
+    let last = lastRequestAt;
+    const make = (coord: CoordStore): CataloguePoller => {
+      const state: CatalogueState = { lastOkAt: null, lastError: null };
+      return {
+        poll: async (now) => {
+          polls.push(now);
+          last = now;
+          expect(coord.applyReleaseListing([...LISTING, ...extra], now, 'complete').ok).toBe(true);
+          state.lastOkAt = now;
+          return { ...state };
+        },
+        state: () => ({ ...state }),
+        lastRequestAt: () => last,
+      };
+    };
+    return { make, polls };
+  };
+
+  it('a tag published after the last poll is accepted after the on-demand poll', async () => {
+    const p = lateListing([rel('v0.0.13', 'stable', 1_600)]);
+    const f = await open({ catalogue: p.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    const r = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.13' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({ ok: true, requested: [FLEET_ID], skipped: [] });
+    expect(p.polls).toHaveLength(1);
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ requestedTag: 'v0.0.13', requestedKind: 'update' });
+  });
+
+  it('Update all with a tag published after the last poll requests it after the on-demand poll', async () => {
+    const p = lateListing([rel('v0.0.13', 'stable', 1_600)]);
+    const f = await open({ catalogue: p.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    plant(f.coord, serverNode());
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.13' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({ ok: true, requested: [FLEET_ID, SERVER_ID], skipped: [] });
+    expect(p.polls).toHaveLength(1);
+  });
+
+  it('a tag the catalogue already lists polls nothing; a poll that still does not list it answers unknown-tag', async () => {
+    const listed = lateListing([]);
+    const f = await open({ catalogue: listed.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    const ok = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.10' });
+    expect(ok.statusCode, ok.body).toBe(202);
+    expect(listed.polls).toHaveLength(0);
+    const missing = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.14' });
+    expect(missing.statusCode, missing.body).toBe(409);
+    expect(missing.json()).toMatchObject({ ok: false, error: 'unknown-tag' });
+    expect(listed.polls).toHaveLength(1);
+  });
+
+  it('inside the refresh interval no poll is sent (the catalogue budget is shared): unknown-tag, as before', async () => {
+    const p = lateListing([rel('v0.0.13', 'stable', 1_600)], Date.now());
+    const f = await open({ catalogue: p.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    const r = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.13' });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json()).toMatchObject({ ok: false, error: 'unknown-tag' });
+    expect(p.polls).toHaveLength(0);
+    expect(REFRESH_MIN_INTERVAL_MS).toBeGreaterThan(0);
   });
 });
 

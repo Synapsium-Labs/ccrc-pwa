@@ -395,7 +395,7 @@ export function FleetBanners(): ReactNode {
         {
           id: 'fleet-host',
           shows: fleetHostBannerShows(fleetHealth),
-          node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />,
+          node: <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} releases={updates.view?.releases ?? null} onMoved={updates.reload} stale={stale} />,
         },
         // The host's pressure (#1170), from the same health poll.
         { id: 'pressure', shows: pressureBannerShows(fleetHealth), node: <PressureBanner health={fleetHealth} /> },

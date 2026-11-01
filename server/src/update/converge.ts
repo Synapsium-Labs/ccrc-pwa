@@ -12,7 +12,7 @@
 // stretch's first row read and handed in (fix round 1 item 4). The acquire's own WHERE re-checks what SQL can.
 import path from 'node:path';
 import {
-  inFlightReport, type NodeRole, type RequestKind, type SettledUpdateState,
+  inFlightReport, type DispatchRefusal, type NodeRole, type RequestKind, type SettledUpdateState,
 } from '../../../shared/api.js';
 import {
   NODE_FILES, UPDATE_OP, decideKilledSpawn, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
@@ -20,9 +20,10 @@ import {
   type KillProbeOutcome, type ResOk, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
-  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, leaseHolder, linkFailedDeadlineDetail, moveFeedRecord, parseReportOrigin,
-  planDispatch,
-  type DispatchMove, type DispatchNodeView, type DispatchPlan, type MoveFeedRecord, type OpAnswer, type ReportOrigin,
+  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, followFeedRecord, followSteps, leaseHolder, linkFailedDeadlineDetail,
+  moveFeedRecord, parseReportOrigin, planDispatch,
+  type DispatchMove, type DispatchNodeView, type DispatchPlan, type LandedMove, type MoveFeedRecord, type OpAnswer,
+  type ReportOrigin,
 } from './dispatch.js';
 import { resolveNodeIntent } from './resolve.js';
 import { resolveInputFor } from './project.js';
@@ -34,7 +35,7 @@ import type { FleetIO } from '../io.js';
 import type { FleetState } from '../fleetstate.js';
 import type {
   DispatchNodeResult, NodeRow, NoteDispatchRefusalResult, NoteLeaseDetailResult, RefusalRow, ReleaseLeaseResult, ReleaseRow,
-  SettleNodeResult, UpdateIntentRow,
+  RequestNodeResult, SettleNodeResult, UpdateIntentRow,
 } from '../coord/store.js';
 
 /** The fleet link's `request()` narrowed to the one op; `index.ts` binds it with UPDATE_OP_TIMEOUT_MS. */
@@ -358,4 +359,59 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
     return recorded({ nodeId: holder, result: 'release-refused', to: action.to, detail: action.detail, why: released.why });
   }
   return recorded({ nodeId: holder, result: 'released', to: action.to, detail: action.detail });
+}
+
+// ── the follow-through's act (D-7679) ───────────────────────────────────────────────────────────────────────────
+
+/** The store port the follow-through needs (L2, declared by this consumer); CoordStore satisfies it structurally. */
+export interface FollowStore extends Omit<ConvergeStore, 'dispatchNode' | 'releaseLease' | 'settleNode' | 'noteLeaseDetail'> {
+  requestNode(nodeId: string, tag: string, kind: RequestKind, at: number): RequestNodeResult;
+}
+export interface FollowDeps {
+  store: FollowStore;
+  /** The move feed (`watch.ts` binds it, as `ConvergeDeps.recordMove`); `null` records nothing. A throw is caught. */
+  recordMove: ((r: MoveFeedRecord) => void) | null;
+}
+export type FollowOutcome =
+  | { nodeId: string; result: 'requested'; tag: string }
+  | { nodeId: string; result: 'noted'; refusal: DispatchRefusal; changed: boolean }
+  | { nodeId: string; result: 'write-refused'; why: string };
+
+/**
+ * The follow-through's ACT: the inventory sweep calls it (through `InventoryDeps.follow`) the moment it settles a
+ * fleet row's requested update from `done` — in the sweep's own synchronous stretch, so the server row the plan
+ * reads is the one the writes below land on. `followSteps` (L1) decides; this writes each step through the store's
+ * own writers — `requestNode` for a server that can follow (the dispatcher run the inventory run always ends in moves
+ * it), `noteDispatchRefusal` for one that cannot — and records each in the move feed. It never moves a node itself.
+ */
+export function followLandedMove(deps: FollowDeps, landed: LandedMove, now: number): FollowOutcome[] {
+  const { store } = deps;
+  const steps = followSteps(landed, dispatchViewsFor(store), store.releases());
+  const out: FollowOutcome[] = [];
+  for (const step of steps) {
+    if (step.kind === 'request') {
+      const w = store.requestNode(step.nodeId, step.tag, 'update', now);
+      if (!w.ok) {
+        out.push({ nodeId: step.nodeId, result: 'write-refused', why: w.why });
+        continue;
+      }
+      out.push({ nodeId: step.nodeId, result: 'requested', tag: step.tag });
+    } else {
+      const w = store.noteDispatchRefusal(step.nodeId, step.detail);
+      if (!w.ok) {
+        out.push({ nodeId: step.nodeId, result: 'write-refused', why: w.why });
+        continue;
+      }
+      out.push({ nodeId: step.nodeId, result: 'noted', refusal: step.refusal, changed: w.changed });
+      if (!w.changed) continue;   // the same words already stand: one feed row per change, like the note itself
+    }
+    if (deps.recordMove !== null) {
+      try {
+        deps.recordMove(followFeedRecord(landed, step));
+      } catch (e) {
+        console.warn(`ccrc-server: the follow-through's feed record was not written (${e instanceof Error ? e.message : String(e)}) — its request or note stands`);
+      }
+    }
+  }
+  return out;
 }

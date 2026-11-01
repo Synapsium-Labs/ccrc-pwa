@@ -2245,6 +2245,42 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     expect(reportOf(both)['phase']).toBe('reverted');
   });
 
+  // D-7679's input, pinned: the console's follow-through moves the server box when the FLEET row's lease settles from
+  // `done`, and the detached run the console starts (`--detach --from pwa`) is what writes that report. A fleet box
+  // whose spine completed under a failing doctor (exit 3, D-3114) must still end on `done` with the "the box moved"
+  // detail — a `failed` here would halt the fleet and the server would never follow a box that DID move.
+  itLinux('a detached console update whose doctor fails ends its report on `done`, the "the box moved" detail, from pwa — the follow-through\'s input (D-7679, D-3114)', async () => {
+    // gateBox's fleet box, packed where a console move fetches: it always names its tag (`--to`), so the run reads
+    // download/<tag>, not latest/download.
+    const home = freshUpdateBox('ccrc-update-detach-doctor-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0', installExit: 1 }), { tag: 'v2.0.0', latest: false });
+    writeFileSync(join(home, 'fixture-stub-installed'), 'yes\n');
+    writeFileSync(join(home, 'fixture-systemd-run-exec'), '');
+    writeFileSync(join(home, '.local', 'bin', 'ccrc'),
+      `#!/bin/sh\nexec '${BASH}' '${join(REPO, 'ccd', 'ccrc')}' "$@"\n`, { mode: 0o755 });
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    const parent = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--detach', '--to', 'v2.0.0', '--from', 'pwa'],
+      { env, encoding: 'utf8' });
+    expect(parent.status, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    const detachedLog = (): string => (existsSync(join(home, 'detached.log'))
+      ? readFileSync(join(home, 'detached.log'), 'utf8') : '(no detached.log)');
+    let final: Record<string, unknown> = {};
+    for (let until = Date.now() + 30_000; Date.now() < until;) {
+      try { final = reportOf(home); } catch { final = {}; }
+      if (final['phase'] === 'done' || final['phase'] === 'failed' || final['phase'] === 'reverted') break;
+      await new Promise<void>((res) => setTimeout(res, 50));
+    }
+    expect(final, `the detached run did not end on done\n${detachedLog()}`).toMatchObject({
+      phase: 'done', target: 'v2.0.0', from: 'pwa', detail: "doctor exited 1 - the box moved; its health is ccrc doctor's",
+    });
+    expect(detachedLog()).toMatch(/^update: the staged install completed \(the record is written\) but its trailing doctor exited 1/m);
+  }, 60_000);
+
   itLinux('fleet: ccrc-agent.service active AND staying up (verify-service.sh\'s two samples) passes with no /health asked; a MainPID that churns behind `active` fails', () => {
     const home = gateBox('ccrc-update-gate-fleet-', 'fleet');
     const r = runUpdate(home);

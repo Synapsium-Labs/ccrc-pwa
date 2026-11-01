@@ -427,7 +427,7 @@ const FIXTURE = `export class CoordStore {
   settleNode(nodeId: string, detail: string, reportStartedAt: number | null): SettleNodeResult {
     this.db.prepare('UPDATE nodes SET updateState = ?, requestedTag = NULL, resolveDetail = NULL WHERE nodeId = ?')
       .run('idle', nodeId);
-    return { ok: true, clearedRequest: true };
+    return { ok: true, clearedRequest: true, keptRequest: false };
   }
 
   clearRefusals(nodeId: string): ClearRefusalsResult {

@@ -10312,10 +10312,11 @@ export interface RollbackUpdateBody { nodeId: string; to?: string }
 /** Why `{all: true}` wrote no request for a live node (D-3385, D-3401):
  *  the dispatcher's own per-node refusal with the fleet's halt set aside (an update move is never asked for the
  *  rollback cap, and never `no-update-gate` — that is auto's), or no tag to move it to. Every refusal word but
- *  `not-newer` is also noted in that node's `updateDetail` (§12), which is where the inventory shows it. A node
- *  whose OWN lease is already busy is skipped `busy` too (D-3406): a request written there would be silently
- *  erased the moment that running move settles (`settleNode` clears the request columns unconditionally), and
- *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request.
+ *  `not-newer` is also noted in that node's `updateDetail` (§12), which is where the inventory shows it (a busy
+ *  row's refusal is not noted: its detail is its lease's). A node whose OWN lease is already busy is no longer
+ *  skipped `busy` (D-7678, replacing D-3406): `settleNode` keeps a request written beside a running lease for another
+ *  tag, so the request is written and the node is listed in the answer's `queued`. `busy` stays in this union for
+ *  an older server's answer; the single-node route still answers `409 busy` for a busy named node.
  *
  *  Two more words a row's OWN state can answer with (D-3408): a row that is ITSELF halting
  *  (`isHalting`, a `failed`/`reverted` row that is not a provenance verdict) is skipped `halted` before its move
@@ -10329,8 +10330,12 @@ export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollba
 export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
 /** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
  *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
- *  `request: {tag, kind, at}` until convergence or `ack` clears it. */
-export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[] }
+ *  `request: {tag, kind, at}` until convergence or `ack` clears it. `queued` (D-7678; present only when non-empty,
+ *  so an older reader's shape is unchanged) names the requested nodes whose OWN lease was still running when the
+ *  request was written: theirs waits beside that move and runs after it settles (`settleNode` keeps it). A row
+ *  tapped for its running lease's own target that already holds a newer update request is listed in both too, and
+ *  nothing is written: the newer request stands (D-7690). */
+export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[]; queued?: string[] }
 
 /** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict
  *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: the halt rule

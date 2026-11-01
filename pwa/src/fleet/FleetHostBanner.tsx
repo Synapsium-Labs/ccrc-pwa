@@ -20,7 +20,7 @@
 //    both versions (or shas, for an unversioned deploy.sh stamp) from the node
 //    inventory (`nodes`, FleetScreen's one /api/updates poll — centralised-
 //    update §14; the same `remoteSides` BuildLine reads), and says nothing of
-//    versions until that answer is in. No action button. The REMEDY it names is
+//    versions until that answer is in. The REMEDY it names is
 //    `skewRemedy`'s (updateHalt.ts; programme wave 14, R15(c)): while a node
 //    halts the fleet, the halt and its Ack (the halt banner), then what happens
 //    after the ack; while the fleet's auto-install is on and auto would move
@@ -29,19 +29,29 @@
 //    inventory has not answered, or a lease could not be read — `ccrc rollout`/
 //    `ccrc update` from a terminal. While a later poll's failure stands
 //    (`stale`, wave 19, R24(b)) it never advises auto, and it ends with the
-//    update plane's own sentence for the last answer that landed.
+//    update plane's own sentence for the last answer that landed. D-7680: before
+//    the terminal verbs, `queued` says the lagging box already has a request or a
+//    lease for the leading tag (no button), and `move` — the fleet box ahead, the
+//    server idle with no request, the release listed with its bundle — offers the
+//    arm's ONE action button, "Update the server to <tag>", which opens the shared
+//    UpdateMoveSheet over a single-node apply. The terminal sentence stands only
+//    when neither applies, the poll is stale or a lease is unreadable.
 //    `'unknown'` remains silent, same rule as the two above.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
 //    capability. No action button: the remedy is an agent-lane deploy.
 //    `'unknown'` remains silent.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetHealth, NodeWire, UpdateIntentWire } from '../../../shared/api';
+import type { FleetHealth, NodeWire, ReleaseWire, UpdateIntentWire } from '../../../shared/api';
 import { api, failedTo } from '../lib/api';
 import { Banner, Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc/ui';
 import { useFleetHealth } from './useFleetHealth';
 import { remoteSides, statedOf } from '../../../shared/update-summary';
-import { SKEW_AUTO_TEXT, SKEW_HALT_THEN_AUTO_TAIL, skewHaltLead, skewRemedy } from './updateHalt';
+import {
+  SKEW_AUTO_TEXT, SKEW_HALT_THEN_AUTO_TAIL, skewHaltLead, skewMoveLabel, skewMoveText, skewQueuedText, skewRemedy,
+} from './updateHalt';
+import { planMove, type PlannedMove } from './movePlan';
+import { UpdateMoveSheet } from './UpdateMoveSheet';
 import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
 
@@ -62,9 +72,13 @@ export function fleetHostBannerShows(health: FleetHealth | null | undefined): bo
 }
 
 export function FleetHostBanner(
-  { health: injected, nodes, intent, stale = false }: {
+  { health: injected, nodes, intent, stale = false, releases, onMoved }: {
     health?: FleetHealth | null; nodes?: readonly NodeWire[] | null; intent?: readonly UpdateIntentWire[] | null;
     stale?: boolean;
+    /** D-7680: the catalogue the same /api/updates poll carries — the skew arm's `move` needs the leading release's row. */
+    releases?: readonly ReleaseWire[] | null;
+    /** D-7680: re-polls /api/updates after the skew arm's own move sheet wrote a request. */
+    onMoved?: () => void;
   } = {},
 ): ReactNode {
   // Polls only when nothing was injected: FleetScreen polls once for this
@@ -76,6 +90,7 @@ export function FleetHostBanner(
   const health = injected === undefined ? polled : injected;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [rebooting, setRebooting] = useState(false);
+  const [movePlanned, setMovePlanned] = useState<PlannedMove | null>(null);
   const now = useNow(30_000);
   if (!fleetHostBannerShows(health)) return null;
 
@@ -113,11 +128,31 @@ export function FleetHostBanner(
     // Wave 19, R24(b): `stale` — a later poll failed, so the versions and the remedy are the last answer that
     // landed. The remedy never vouches for auto then, and the arm ends with the update plane's own sentence,
     // shown but not announced (the fleet screen's status region says it once, D-5124).
-    const remedy = skewRemedy(nodes, intent, stale);
+    const remedy = skewRemedy(nodes, intent, stale, releases);
+    // D-7680: the `move` arm's one control — the shared confirm sheet over a single-node apply to the fleet box's tag,
+    // planned through the one planner over the inventory this banner was handed.
+    const move = remedy.kind === 'move' && Array.isArray(nodes) ? remedy : null;
+    const openMove = (): void => {
+      if (move === null || !Array.isArray(nodes)) return;
+      setMovePlanned(planMove({ nodes: [...nodes] }, { scope: 'node', direction: 'update', nodeId: move.nodeId, tag: move.tag }));
+    };
     return (
-      <Banner tone="attention" sticky>
+      <>
+      <Banner
+        tone="attention"
+        sticky
+        action={move === null ? undefined : (
+          <Button variant="ghost" size="fit" className="flex-none" onClick={openMove}>
+            {skewMoveLabel(move)}
+          </Button>
+        )}
+      >
           The two boxes run different builds.{fleet}{' '}
-          {remedy.kind === 'halt' && remedy.then === 'auto' ? (
+          {remedy.kind === 'queued' ? (
+            skewQueuedText(remedy)
+          ) : remedy.kind === 'move' ? (
+            skewMoveText(remedy)
+          ) : remedy.kind === 'halt' && remedy.then === 'auto' ? (
             `${skewHaltLead(remedy.halting)}${SKEW_HALT_THEN_AUTO_TAIL}`
           ) : remedy.kind === 'halt' ? (
             <>
@@ -134,6 +169,13 @@ export function FleetHostBanner(
           )}
           {stale && <span aria-hidden="true">{` ${UPDATES_STALE_TEXT}`}</span>}
       </Banner>
+      <UpdateMoveSheet
+        open={movePlanned !== null}
+        plan={movePlanned}
+        onClose={() => setMovePlanned(null)}
+        onDone={() => onMoved?.()}
+      />
+      </>
     );
   }
 

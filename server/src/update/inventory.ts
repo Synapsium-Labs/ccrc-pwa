@@ -29,7 +29,7 @@
 // sweep's own clock.
 import path from 'node:path';
 import {
-  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, PROVENANCE_DETAIL_PREFIX, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase,
+  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, PROVENANCE_DETAIL_PREFIX, UNIX_SECONDS_MAX, dispatchRank, isReleaseTag, isUpdatePhase,
   settledDoneDetail, validCapWords,
   type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type SettledUpdateState, type StampRead,
   type TagFileRead,
@@ -46,6 +46,7 @@ import {
   type RekeyNodeResult, type ReleaseLeaseResult, type SettleNodeResult, type UpsertNodeResult,
 } from '../coord/store.js';
 import type { FleetIdentityPublish, FleetIdentityUnmeasuredWhy, FleetNodeMeasured } from '../fleetidentity.js';
+import type { LandedMove } from './dispatch.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO, ReadFailure } from '../io.js';
 import { openPoolReadDeadline, type PoolReadDeadline } from '../pools.js';
@@ -498,6 +499,10 @@ export interface FleetIdentityPublisher {
 }
 export interface InventoryDeps {
   store: InventoryStore; localIo: FleetIO; ccrcDir: string; role: NodeRole;
+  /** D-7679: called, in this sweep's synchronous stretch, right after a FLEET-role row's requested update settled
+   *  from `done` (`landedMoveOf`), so the server can follow it to the same tag (`followLandedMove`, converge.ts;
+   *  `watch.ts` binds it). Absent: nothing follows. A throw is caught and warned; the settle stands. */
+  follow?: (landed: LandedMove, now: number) => void;
   /** `identity`: the agent connection's identity cell, remote mode only. Absent: this sweep publishes nothing,
    *  which fails closed. */
   fleet: { io: FleetIO; state: FleetState; identity?: FleetIdentityPublisher } | null;
@@ -574,7 +579,18 @@ function unreachable(store: InventoryStore, now: number): SweepOutcome {
  *  re-key, the report/floor/previous unmeasured-carry overrides, plan against
  *  the pre-upsert row, the stamp-unmeasured report override (fix round 1,
  *  D-3214), upsert, refuse, lease. */
-function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unmeasuredReport: boolean, now: number): SweepOutcome {
+/** D-7679: the move a `done` settle of THIS pre-settle row landed, when it is one the server follows — a fleet-role
+ *  row (`dispatchRank` 0) whose lease served a requested UPDATE to its own target (the request the settle clears,
+ *  D-7678). An auto move (no request) leaves the server to its own auto, and a rollback is never followed. Read off
+ *  the row as it stood before the settle, because the settle clears the request it served. */
+export function landedMoveOf(preRow: NodeRow | null): LandedMove | null {
+  if (preRow === null || dispatchRank(preRow.role) !== 0 || preRow.updateTarget === null) return null;
+  if (preRow.requestedKind !== 'update' || preRow.requestedTag !== preRow.updateTarget) return null;
+  return { nodeId: preRow.nodeId, label: preRow.label, target: preRow.updateTarget };
+}
+
+function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unmeasuredReport: boolean, now: number,
+  follow?: InventoryDeps['follow']): SweepOutcome {
   const label = measured.label;
   let m = measured;
   let collision = false;
@@ -669,7 +685,17 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unme
   const expectedStartedAt = preRow === null ? null : preRow.updateStartedAt;
   let lease: LeaseAction['kind'] = 'none';
   if (plan.lease.kind === 'settle') {
-    if (store.settleNode(m.nodeId, plan.lease.detail, expectedStartedAt).ok) lease = 'settle';
+    if (store.settleNode(m.nodeId, plan.lease.detail, expectedStartedAt).ok) {
+      lease = 'settle';
+      const landed = follow === undefined ? null : landedMoveOf(preRow);
+      if (landed !== null && follow !== undefined) {
+        try {
+          follow(landed, now);
+        } catch (e) {
+          console.warn(`ccrc-server: update: the follow-through after ${landed.label}'s move to ${landed.target} failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
   } else if (plan.lease.kind === 'release') {
     if (store.releaseLease(m.nodeId, plan.lease.to, plan.lease.detail, expectedStartedAt).ok) lease = 'release';
   }
@@ -694,7 +720,7 @@ async function sweepOwn(deps: InventoryDeps, budget: number, now: number): Promi
     const ownReads = await readNodeFiles(deps.localIo, deps.ccrcDir, budget);
     nodeIdRead = ownReads.nodeId;
     const own = measurementFrom(ownReads, { label: SERVER_LABEL, role: deps.role, agentOps: null }, now);
-    out = applyMeasurement(deps.store, own, reportUnmeasured(ownReads.report), now);
+    out = applyMeasurement(deps.store, own, reportUnmeasured(ownReads.report), now, deps.follow);
   } catch (err) {
     out = { label: SERVER_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
   }
@@ -723,7 +749,7 @@ async function sweepFleet(deps: InventoryDeps, fleet: NonNullable<InventoryDeps[
     const fleetReads = await readNodeFiles(io, deps.ccrcDir, budget);
     nodeIdRead = fleetReads.nodeId;
     const m = measurementFrom(fleetReads, { label: FLEET_LABEL, role: 'fleet', agentOps: state.agentOps ?? [] }, now);
-    out = linkUp(state) ? applyMeasurement(deps.store, m, reportUnmeasured(fleetReads.report), now) : unreachable(deps.store, now);
+    out = linkUp(state) ? applyMeasurement(deps.store, m, reportUnmeasured(fleetReads.report), now, deps.follow) : unreachable(deps.store, now);
   } catch (err) {
     out = { label: FLEET_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
   }
