@@ -7015,7 +7015,7 @@ export class FleetWatcher {
   }
 
   /** One session past the row holds: the staged reads, the decision, and the send. */
-  private async idleNudgeOne(s: FleetSession, row: IdleNudgeRowFacts, coord: CoordStore, tick: StallTick): Promise<void> {
+  private async idleNudgeOne(s: FleetSession, row: IdleNudgeRowFacts, coord: WatcherCoordPort, tick: StallTick): Promise<void> {
     const rec = tick.records.find((r) => r.id === s.id);
     const ident = rec === undefined ? null : measuredIdentity(rec);
     const cfgDir = ident === null ? null : configDirFor(this.deps.cfg, ident.wrapper);
