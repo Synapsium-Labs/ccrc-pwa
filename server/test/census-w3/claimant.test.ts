@@ -103,7 +103,7 @@ describe('the claimant client census (D-7320)', () => {
     ]);
   });
 
-  it('FIXTURE: a call before the family test is unguarded; the definition inside the region and a comment are not calls', () => {
+  it('FIXTURE: a call before the claimant test is unguarded; the definition inside the region and a comment are not calls', () => {
     const t = tree({
       'ccd/ccrc-api': [
         '#!/usr/bin/env bash',
@@ -113,8 +113,8 @@ describe('the claimant client census (D-7320)', () => {
         '}',
         REGION!.end,
         '# _api_server_cap questions-v1 is read only for a claimant row',
-        'if [[ -n "$family" ]] && _api_server_cap questions-v1; then path="$family"; fi',
-        'if _api_server_cap questions-v1 && [[ -n "$family" ]]; then :; fi',
+        'if [[ -n "$claimant" ]] && _api_server_cap questions-v1; then path="$claimant"; fi',
+        'if _api_server_cap questions-v1 && [[ -n "$claimant" ]]; then :; fi',
         'if _api_server_cap questions-v1; then :; fi',
         '',
       ].join('\n'),
@@ -140,7 +140,7 @@ describe('the claimant client census (D-7320)', () => {
     // reader is the one hand-written copy, no cap-reader call is unguarded, every claimant door is a POST.
     for (const r of claimant) expect(['asks.answer', 'asks.release', 'approvals.rule', 'approvals.release'], r.key).toContain(r.key);
     expect(defs.filter((s) => s.kind === 'hand').map((s) => `${s.file}#${s.name}`), 'the hand-written cap reader').toEqual(['ccd/session-hook.sh#_hook_server_cap']);
-    expect(calls.filter((s) => !s.guarded), 'a cap-reader call no $family test guards').toEqual([]);
+    expect(calls.filter((s) => !s.guarded), 'a cap-reader call no $claimant test guards').toEqual([]);
     for (const d of server) expect(d.route, 'a claimant door').toMatch(/^POST \/api\//);
   });
 
@@ -153,9 +153,11 @@ describe('the claimant client census (D-7320)', () => {
   it('REAL, pinned since Q3l: client rows on an old claimant door: exactly 0 (D-7324)', () => {
     expect(clientClaimantRows().map((r) => r.key)).toEqual([]);
   });
-  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 1, guarded by the $family test before it (D-7322)', () => {
+  // Q3l re-pointed the guard from `$family` (the fifth field it removed) to `$claimant`, the row test it wrote (D-7324;
+  // named exception): still one call, for the four claimant rows only.
+  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 1, guarded by the $claimant test before it (D-7322, D-7324)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
-      [true, 'if [[ -n "$family" ]] && _api_server_cap questions-v1; then'],
+      [true, 'if [[ -n "$claimant" ]] && _api_server_cap "$want"; then'],
     ]);
   });
 });

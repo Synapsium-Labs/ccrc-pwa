@@ -103,8 +103,9 @@ export function capReaderDefinitions(root: string = REPO): CapReaderDefinitionSi
 export interface CapReaderCallSite extends CensusSite { readonly guarded: boolean }
 
 /** Every call of `_api_server_cap` in `ccd/ccrc-api` outside the generated regions (comment lines skipped, a definition
- *  line not a call), each `guarded` when the same line names `$family` BEFORE the call. At Q3h's base: 0; 0 at Q3i,
- *  exactly 1 guarded and 0 unguarded at Q3j. This census, not a runtime probe, is the proof that no other row reads
+ *  line not a call), each `guarded` when the same line names `$claimant` BEFORE the call (the claimant-row test; it
+ *  was `$family`, the row's fifth field, from Q3j until Q3l removed that field, D-7324). At Q3h's base: 0; 0 at Q3i,
+ *  exactly 1 guarded and 0 unguarded at Q3j, and still at Q3l. This census, not a runtime probe, is the proof that no other row reads
  *  the cap file (D-7339). */
 export function capReaderCalls(root: string = REPO): CapReaderCallSite[] {
   const src = readClient(root);
@@ -117,8 +118,8 @@ export function capReaderCalls(root: string = REPO): CapReaderCallSite[] {
     if (/^\s*#/.test(text) || inside(spans, start)) return;
     const call = /\b_api_server_cap\b(?!\s*\(\))/.exec(text);
     if (call === null) return;
-    const family = /\$\{?family\b/.exec(text);
-    out.push({ file: CLIENT, line: i + 1, text, guarded: family !== null && family.index < call.index });
+    const claimant = /\$\{?claimant\b/.exec(text);
+    out.push({ file: CLIENT, line: i + 1, text, guarded: claimant !== null && claimant.index < call.index });
   });
   return out;
 }
