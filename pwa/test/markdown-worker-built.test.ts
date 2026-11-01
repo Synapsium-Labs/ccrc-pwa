@@ -160,7 +160,10 @@ try {
   } else {
     if (typeof self.onmessage !== 'function') { report({ load: 'no-onmessage' }); process.exit(0); }
     self.onmessage({ data: { id: 9, kind: 'render', src } });
-    await new Promise((r) => setTimeout(r, 200));
+    // The reply comes after the chunk's dynamic import and the render: wait for it, not for a fixed time.
+    const deadline = Date.now() + 30000;
+    while (replies.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    if (replies.length === 0) { report({ load: 'no-reply', document: typeof document }); process.exit(0); }
   }
 } catch (e) {
   report({ load: 'threw', name: e?.name, message: String(e?.message).slice(0, 200), document: typeof document });
