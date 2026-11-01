@@ -1,6 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import { isMintedActor, type AccountActor } from '../accounts/audit.js';
+import type { LinearPolicyRefusal } from './policy.js';
+import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
 
 /**
  * THE LINEAR WRITE JOURNAL (#1444, spec §7, D-7671): the `linear_events` table in coord.db (`coord/schema.ts`,
@@ -78,13 +80,13 @@ export type LinearJournalRefusal =
 export type LinearJournalWrite = { ok: true; id: number } | { ok: false; why: LinearJournalRefusal };
 export type LinearJournalSettle = { ok: true } | { ok: false; why: LinearJournalRefusal };
 
-/** The refusal words a row may carry in `code`. */
-export type LinearJournalCode = RouteRefusal;
+/** The refusal words a row may carry in `code`: a route's, or the policy point's two (spec §8, D-7687). */
+export type LinearJournalCode = RouteRefusal | LinearPolicyRefusal;
 
 const OPS: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OPS);
 const WRITE_OPS: ReadonlySet<string> = new Set(['create', 'update', 'comment']);
 const SETTLED: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OUTCOMES.filter((o) => o !== 'pending'));
-const CODES: ReadonlySet<string> = new Set<string>(ROUTE_REFUSALS);
+const CODES: ReadonlySet<string> = new Set<string>([...ROUTE_REFUSALS, ...LINEAR_POLICY_REFUSALS]);
 /** The client's SAFE_RE (`ccd/ccrc-api`), bounded as the mail path bounds a session id. */
 const SAFE_RE = /^[A-Za-z0-9_-]{1,128}$/;
 /** A Linear id: a slot's workspace id, a created comment's id. Lowercase, as Linear sends it. */

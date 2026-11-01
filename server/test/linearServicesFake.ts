@@ -3,13 +3,15 @@
  * once for the process; a test that reaches one builds it here, over an in-memory coord.db and an injected clock, so
  * no test spells its own copy of a service and none reaches the network.
  *
- * Today it holds the write journal (task LK7). The rate service and the refresher (LK2, LK3)
+ * Today it holds the write journal and the policy point's default (task LK7). The rate service and the refresher (LK2, LK3)
  * join it as builders of their own; the one-instance census counts constructions in `server/src` only, so this file
  * never counts as a second instance.
  */
 import { DatabaseSync } from 'node:sqlite';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { LinearJournal } from '../src/linear/journal.js';
+import { allowAll } from '../src/linear/policyPoint.js';
+import type { LinearWritePolicy } from '../src/linear/policy.js';
 
 /** A coord.db in memory at this build's version: every migration, in order, as `openCoordDb` would run them. */
 export function memCoordDb(): DatabaseSync {
@@ -24,9 +26,11 @@ export interface LinearServicesFake {
   readonly db: DatabaseSync;
   /** The write journal over `db`, on the given clock. */
   readonly journal: LinearJournal;
+  /** The default policy, `allowAll`, as `index.ts` wires it. */
+  readonly policy: LinearWritePolicy;
 }
 
 export function linearServicesFake(opts: { clock?: () => number; db?: DatabaseSync } = {}): LinearServicesFake {
   const db = opts.db ?? memCoordDb();
-  return { db, journal: new LinearJournal(db, opts.clock ?? Date.now) };
+  return { db, journal: new LinearJournal(db, opts.clock ?? Date.now), policy: allowAll };
 }

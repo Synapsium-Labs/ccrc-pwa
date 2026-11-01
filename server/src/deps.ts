@@ -31,6 +31,8 @@ import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { AccountOps } from './accounts/ops.js';
 import type { FetchLike } from './linear/client.js';
+import type { LinearJournal } from './linear/journal.js';
+import type { LinearWritePolicy } from './linear/policy.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -169,6 +171,13 @@ export interface Deps {
   /** D-5516 (accounts plan Task A7): the account audit over this process's one coord.db, built in `index.ts`.
    *  Absent → no row is written (a test, a script). */
   accountAudit?: AccountAudit;
+  /** D-7671 (#1444, spec §7): the Linear write journal over this process's one coord.db, built in `index.ts`. Its
+   *  consumers are the proxy's write routes and the Settings key routes (LK9, LK11). Absent (a test, a script): a
+   *  route that needs it answers `linear-unavailable` before any other work, and nothing calls Linear (D-7684). */
+  linearJournal?: LinearJournal;
+  /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
+   *  `linearJournal`. Never a grant by actor. */
+  linearPolicy?: LinearWritePolicy;
   /** Spec §13.2, G13 (accounts plan Task A7): the ONE `AccountOps` arm, chosen in `index.ts` by `cfg.fleetMode` only
    *  (`accountOpsFor`). The account routes (A14 onward) are its consumers. */
   accountOps?: AccountOps;

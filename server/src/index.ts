@@ -35,6 +35,8 @@ import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
+import { LinearJournal } from './linear/journal.js';
+import { allowAll } from './linear/policyPoint.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
@@ -281,6 +283,11 @@ deps.tokenDriver = tokenDriver;
 // routes (A14 onward).
 const accountAudit = new AccountAudit(coord.db);
 deps.accountAudit = accountAudit;
+// The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
+// both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
+const linearJournal = new LinearJournal(coord.db);
+deps.linearJournal = linearJournal;
+deps.linearPolicy = allowAll;
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
 // runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.
@@ -321,9 +328,10 @@ const masker = new SecretMasker({
 deps.masker = masker;
 push?.setMasker(masker);
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
-// coordination sweeps, which another branch holds (D-5620).
+// coordination sweeps, which another branch holds (D-5620). The Linear journal's 365 days ride the same beat (D-7671).
 accountAudit.sweep(Date.now());
-setInterval(() => accountAudit.sweep(Date.now()), 86_400_000).unref();
+linearJournal.sweep(Date.now());
+setInterval(() => { accountAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
