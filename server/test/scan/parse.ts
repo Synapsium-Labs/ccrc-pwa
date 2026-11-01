@@ -996,12 +996,14 @@ export function storeReach(opts: StoreReachOptions): StoreReach {
   const leafPort: Leaf = (t) => isExactPort(t);
   const leafStore: Leaf = (t) => kindOf(t) !== null;
   const carryMemo = new Map<Leaf, Map<ts.Type, boolean>>([[leafWhole, new Map()], [leafPort, new Map()], [leafStore, new Map()]]);
-  /** Whether `t` is, or carries (a property three deep, or a call signature's return: a thunk), what `leaf` accepts. */
+  /** Whether `t` is, or carries (a property three deep, a member of an intersection such as the shared-deps rule's
+   *  `Omit<XDeps, 'coord'> & { coord: WatcherCoordPort }`, or a call signature's return: a thunk), what `leaf` accepts. */
   const carries = (t0: ts.Type | undefined, leaf: Leaf, depth = 0): boolean => {
     if (!t0 || depth > 3) return false;
     const t = strip(t0);
     if (!t) return t0.isUnion() ? t0.types.some((x) => carries(x, leaf, depth)) : false;
     if (leaf(t)) return true;
+    if (t.isIntersection()) return t.types.some((x) => carries(x, leaf, depth));
     if (kindOf(t) !== null || !(t.flags & ts.TypeFlags.Object)) return false;
     const memo = carryMemo.get(leaf)!;
     const hit = memo.get(t);
