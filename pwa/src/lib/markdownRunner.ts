@@ -15,12 +15,17 @@
 //     caller's promise rejects with the signal's reason, and an already-aborted signal rejects at once. `dispose()`
 //     terminates the worker and rejects every pending job with an `AbortError`. So `ParseOutcome` keeps its eight
 //     arms and none of them means "nobody is waiting" (the W4 plan's refinement (h)).
+//   - The reader's render job (W8a Task 4) is a second kind of job on the SAME runner: `render()` queues behind and
+//     ahead of parse jobs in the one FIFO, with the same budget timer, terminate-and-respawn, abort and dispose. A
+//     parse job posts exactly `{id, src, profile}`, a render job exactly `{id, kind: 'render', src}`, and
+//     `ParseOutcome` keeps its eight arms: a render job's own outcome type is `ReaderRenderOutcome`.
 // Messages are received by ASSIGNING `onmessage`, never by adding a listener (refinement (w)).
 //
 // Two module singletons, `docsRunner` and `chatRunner`: a 30 s docs job never delays a chat message. Neither spawns
 // anything until it is first used. The worker URL is one literal expression, so Vite's static analysis sees it and
 // emits the worker as its own chunk (`markdown-runner.test.ts` pins the text).
 import type { MarkdownJob, MarkdownProfile, ParseOutcome } from './markdownParse';
+import type { ReaderRenderJob, ReaderRenderOutcome } from './readerRenderJob';
 
 /** The type of `runner.parse`. Resolves with the job's outcome; rejects only on an abort or `dispose()`. */
 export type MarkdownParser = (
@@ -30,7 +35,7 @@ export type MarkdownParser = (
 
 /** The part of a `Worker` a runner uses; a test hands in a fake. */
 export interface WorkerLike {
-  postMessage(job: MarkdownJob): void;
+  postMessage(job: MarkdownJob | ReaderRenderJob): void;
   terminate(): void;
   onmessage: ((e: { data: unknown }) => void) | null;
   onerror: ((e: unknown) => void) | null;
@@ -46,6 +51,9 @@ export interface MarkdownRunnerDeps {
 
 export interface MarkdownRunner {
   readonly parse: MarkdownParser;
+  /** The reader's render job, on the same queue and budget as `parse`. Resolves with the job's outcome; rejects only
+   *  on an abort or `dispose()`. */
+  readonly render: (src: string, o: { budgetMs: number; signal?: AbortSignal }) => Promise<ReaderRenderOutcome>;
   /** Spawns the worker now, when there is none, so the first job does not wait for it to start. */
   prewarm(): void;
   /** Terminates the worker and rejects every pending job with an `AbortError`. A later job spawns again. */
@@ -57,17 +65,29 @@ export function defaultSpawn(): WorkerLike {
   return new Worker(new URL('./markdownWorker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike;
 }
 
-interface Job {
+/** What a job's two kinds share: the queue, the budget and the abort. */
+interface JobBase {
   readonly id: number;
   readonly src: string;
-  readonly profile: MarkdownProfile;
   readonly budgetMs: number;
   /** The caller's signal; absent when the caller gave none. */
   readonly signal?: AbortSignal;
-  readonly resolve: (outcome: ParseOutcome) => void;
   readonly reject: (reason: unknown) => void;
   readonly onAbort: () => void;
 }
+
+interface ParseJob extends JobBase {
+  readonly kind: 'parse';
+  readonly profile: MarkdownProfile;
+  readonly resolve: (outcome: ParseOutcome) => void;
+}
+
+interface RenderJob extends JobBase {
+  readonly kind: 'render';
+  readonly resolve: (outcome: ReaderRenderOutcome) => void;
+}
+
+type Job = ParseJob | RenderJob;
 
 /** The name of whatever was thrown: `name` for an error (a `DOMException` included), else its `typeof`. */
 function thrownName(e: unknown): string {
@@ -113,7 +133,7 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
       return undefined;
     }
     w.onmessage = (e) => {
-      const reply = e.data as { readonly id?: unknown; readonly outcome?: ParseOutcome } | null;
+      const reply = e.data as { readonly id?: unknown; readonly outcome?: ParseOutcome | ReaderRenderOutcome } | null;
       if (typeof reply !== 'object' || reply === null || reply.outcome === undefined) return;
       if (running !== undefined && reply.id === running.job.id) finish(reply.outcome);
     };
@@ -123,14 +143,17 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     return w;
   }
 
-  /** The running job answers `outcome`; the next queued job is posted. */
-  function finish(outcome: ParseOutcome): void {
+  /** The running job answers `outcome`; the next queued job is posted. A reply is matched to its job by `id`, and the
+   *  worker answers each kind with that kind's own outcome type (the runner's own arms, `timeout`, `worker-failed`
+   *  and `worker-unavailable`, belong to both), so each kind's `resolve` is handed an outcome of its own type. */
+  function finish(outcome: ParseOutcome | ReaderRenderOutcome): void {
     const r = running;
     if (r === undefined) return;
     running = undefined;
     clearTimer(r.timer);
     r.job.signal?.removeEventListener('abort', r.job.onAbort);
-    r.job.resolve(outcome);
+    if (r.job.kind === 'render') r.job.resolve(outcome as ReaderRenderOutcome);
+    else r.job.resolve(outcome as ParseOutcome);
     pump();
   }
 
@@ -168,7 +191,9 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
       }
       running = { job, timer: setTimer(() => expire(job), job.budgetMs) };
       try {
-        w.postMessage({ id: job.id, src: job.src, profile: job.profile });
+        w.postMessage(job.kind === 'render'
+          ? { id: job.id, kind: 'render', src: job.src }
+          : { id: job.id, src: job.src, profile: job.profile });
       } catch (e) {
         fail(thrownName(e));
       }
@@ -193,6 +218,13 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     }
   }
 
+  /** Queues `job` behind the ones ahead of it, whichever kind they are, and posts it when it is first. */
+  function enqueue(job: Job): void {
+    job.signal?.addEventListener('abort', job.onAbort, { once: true });
+    queue.push(job);
+    pump();
+  }
+
   const parse: MarkdownParser = (src, opts) =>
     new Promise<ParseOutcome>((resolve, reject) => {
       const signal = opts.signal;
@@ -202,7 +234,8 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
       }
       const id = nextId;
       nextId += 1;
-      const job: Job = {
+      const job: ParseJob = {
+        kind: 'parse',
         id,
         src,
         profile: opts.profile,
@@ -212,9 +245,29 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
         reject,
         onAbort: () => abort(job),
       };
-      signal?.addEventListener('abort', job.onAbort, { once: true });
-      queue.push(job);
-      pump();
+      enqueue(job);
+    });
+
+  const render: MarkdownRunner['render'] = (src, opts) =>
+    new Promise<ReaderRenderOutcome>((resolve, reject) => {
+      const signal = opts.signal;
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const id = nextId;
+      nextId += 1;
+      const job: RenderJob = {
+        kind: 'render',
+        id,
+        src,
+        budgetMs: opts.budgetMs,
+        signal,
+        resolve,
+        reject,
+        onAbort: () => abort(job),
+      };
+      enqueue(job);
     });
 
   function prewarm(): void {
@@ -237,7 +290,7 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     }
   }
 
-  return { parse, prewarm, dispose };
+  return { parse, render, prewarm, dispose };
 }
 
 /** The Docs screen's runner (W5 passes `docsRunner.parse` as its default parser). */

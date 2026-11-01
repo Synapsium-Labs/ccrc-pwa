@@ -8,21 +8,25 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { MarkdownJob, ParseOutcome } from '../src/lib/markdownParse';
+import type { ReaderRenderJob, ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import {
   chatRunner, createMarkdownRunner, defaultSpawn, docsRunner, type MarkdownRunner, type WorkerLike,
 } from '../src/lib/markdownRunner';
 import { CHAT_PARSE_BUDGET_MS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_PARSE_BUDGET_MS } from '../src/lib/markdownLimits';
 
+/** What a fake worker records of a job: a parse job's three fields, or a render job's `kind`. */
+type Posted = Partial<Pick<MarkdownJob, 'profile'>> & Pick<MarkdownJob, 'id' | 'src'> & { readonly kind?: 'render' };
+
 class FakeWorker implements WorkerLike {
   onmessage: ((e: { data: unknown }) => void) | null = null;
   onerror: ((e: unknown) => void) | null = null;
   onmessageerror: ((e: unknown) => void) | null = null;
-  readonly posts: MarkdownJob[] = [];
+  readonly posts: Posted[] = [];
   terminated = 0;
   /** When set, `postMessage` throws it instead of recording the job. */
   throwOnPost: unknown = undefined;
 
-  postMessage(job: MarkdownJob): void {
+  postMessage(job: MarkdownJob | ReaderRenderJob): void {
     if (this.throwOnPost !== undefined) throw this.throwOnPost;
     this.posts.push(job);
   }
@@ -85,11 +89,11 @@ class FakeClock {
 /** A promise's state, readable synchronously once `flush()` has run. */
 interface Tracked {
   state: 'pending' | 'resolved' | 'rejected';
-  value?: ParseOutcome;
+  value?: ParseOutcome | ReaderRenderOutcome;
   reason?: unknown;
 }
 
-function track(p: Promise<ParseOutcome>): Tracked {
+function track(p: Promise<ParseOutcome | ReaderRenderOutcome>): Tracked {
   const t: Tracked = { state: 'pending' };
   p.then(
     (value) => { t.state = 'resolved'; t.value = value; },
@@ -543,5 +547,96 @@ describe('T11 review 3-2: a spawn that fails mid-queue answers every queued job'
     expect(a.value).toEqual({ kind: 'timeout', budgetMs: CHAT_PARSE_BUDGET_MS });
     expect(b).toEqual({ state: 'resolved', value: { kind: 'worker-unavailable' } });
     expect(c).toEqual({ state: 'resolved', value: { kind: 'worker-unavailable' } });
+  });
+});
+
+// Docs W8a Task 4 (A6, M8.21): the reader's render job rides the same runner. It shares the FIFO, the budget timer,
+// terminate-and-respawn, abort and dispose with a parse job, and posts its own shape; a parse job's shape and
+// `ParseOutcome` are unchanged.
+const DOCS = { profile: 'docs', budgetMs: DOCS_PARSE_BUDGET_LARGE_MS } as const;
+const RENDER = { budgetMs: 5000 } as const;
+const NOT_RENDERED: ReaderRenderOutcome = { kind: 'not-rendered', why: 'over-limit' };
+
+describe('W8a Task 4: a render job on the same runner', () => {
+  it('a render job posts exactly {id, kind: render, src}', () => {
+    const { runner, workers } = harness();
+    void runner.render('# T', RENDER);
+    expect(workers[0]!.posts).toEqual([{ id: expect.any(Number), kind: 'render', src: '# T' }]);
+    expect(Object.keys(workers[0]!.posts[0]!).sort()).toEqual(['id', 'kind', 'src']);
+  });
+
+  it('a parse job still posts exactly {id, src, profile}', () => {
+    const { runner, workers } = harness();
+    void runner.parse('x', DOCS);
+    expect(workers[0]!.posts).toEqual([{ id: expect.any(Number), src: 'x', profile: 'docs' }]);
+    expect(Object.keys(workers[0]!.posts[0]!).sort()).toEqual(['id', 'profile', 'src']);
+  });
+
+  it('a render job answers with the worker\'s outcome for its id', async () => {
+    const { runner, workers } = harness();
+    const job = track(runner.render('x', RENDER));
+    workers[0]!.send({ id: workers[0]!.posts[0]!.id, outcome: NOT_RENDERED });
+    await flush();
+    expect(job).toEqual({ state: 'resolved', value: NOT_RENDERED });
+  });
+
+  it('a render job answers timeout at budgetMs and the worker is terminated', async () => {
+    const { runner, clock, workers, spawn } = harness();
+    const job = track(runner.render('x', RENDER));
+    clock.advance(RENDER.budgetMs - 1);
+    await flush();
+    expect(job.state).toBe('pending');
+    expect(workers[0]?.terminated).toBe(0);
+    clock.advance(1);
+    await flush();
+    expect(job).toEqual({ state: 'resolved', value: { kind: 'timeout', budgetMs: RENDER.budgetMs } });
+    expect(workers[0]?.terminated).toBe(1);
+    void runner.render('y', RENDER);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(workers[1]?.posts.map((j) => j.src)).toEqual(['y']);
+  });
+
+  it('render and parse share one FIFO: a render then a parse are posted in order, one at a time', async () => {
+    const { runner, workers } = harness();
+    const r = track(runner.render('r', RENDER));
+    const p = track(runner.parse('p', DOCS));
+    const w = workers[0]!;
+    expect(w.posts.map((j) => j.src)).toEqual(['r']);
+    w.send({ id: w.posts[0]!.id, outcome: NOT_RENDERED });
+    await flush();
+    expect(r.value).toEqual(NOT_RENDERED);
+    expect(p.state).toBe('pending');
+    expect(w.posts.map((j) => j.src)).toEqual(['r', 'p']);
+    w.reply(w.posts[1]!.id, answer(1));
+    await flush();
+    expect(p.value).toEqual(answer(1));
+  });
+
+  it('an aborted render job rejects with AbortError and dispose rejects pending renders', async () => {
+    const { runner, workers } = harness();
+    const ac = new AbortController();
+    const aborted = track(runner.render('a', { ...RENDER, signal: ac.signal }));
+    ac.abort(new DOMException('gone', 'AbortError'));
+    await flush();
+    expect(aborted.state).toBe('rejected');
+    expect((aborted.reason as DOMException).name).toBe('AbortError');
+    expect(workers[0]?.terminated).toBe(1);
+
+    const running = track(runner.render('b', RENDER));
+    const queued = track(runner.render('c', RENDER));
+    runner.dispose();
+    await flush();
+    expect(running.state).toBe('rejected');
+    expect(queued.state).toBe('rejected');
+    expect((running.reason as DOMException).name).toBe('AbortError');
+    expect((queued.reason as DOMException).name).toBe('AbortError');
+  });
+
+  it('ParseOutcome keeps its eight arms', () => {
+    const arms: Record<ParseOutcome['kind'], true> = {
+      tree: true, refused: true, 'too-deep': true, 'too-wide': true, threw: true, timeout: true,
+      'worker-unavailable': true, 'worker-failed': true,
+    };
+    expect(Object.keys(arms)).toHaveLength(8);
   });
 });

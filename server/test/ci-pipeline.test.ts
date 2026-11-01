@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -539,15 +540,18 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
   it('the least-privilege comment names every job that asks for more than contents: read (FR-6)', () => {
     // Derived, not listed: every job with a `permissions:` block of its own, against the top comment's census.
     const own = [...jobs(read(CI))].filter(([, b]) => /^ {4}permissions:$/m.test(b)).map(([id]) => id).sort();
-    expect(own).toEqual(['fast-plan', 'macos', 'macos-probe', 'map-build', 'select']);
+    expect(own).toEqual(['build-pwa', 'fast-plan', 'macos', 'macos-probe', 'map-build', 'select']);
     const comment = /^# Least privilege, stated rather than inherited[\s\S]*?(?=^permissions:)/m.exec(read(CI))?.[0] ?? '';
     expect(comment, 'the least-privilege comment is gone').not.toBe('');
     for (const id of own) {
       expect(comment, `the comment does not name ${id}`).toContain(`\`${id}\``);
-      expect(job(id), `${id} asks for more than contents: read + actions: read`)
-        .toMatch(/^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
+      // build-pwa asks for attestations: read instead (M8.16); the grant covers this repository's attestations, not the library's (see the census at the top of ci.yml).
+      const block = id === 'build-pwa'
+        ? /^ {4}permissions:\n {6}contents: read\n {6}attestations: read\n(?! {6}[a-z-]+:)/m
+        : /^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m;
+      expect(job(id), `${id} asks for more than its stated permissions`).toMatch(block);
     }
-    expect(comment).toContain('Five jobs ask for more than this');
+    expect(comment).toContain('Six jobs ask for more than this');
   });
 
   it('probe-macos runs on a push to main and the daily schedule only — never on a pull request, and never gating a called or dispatched full run', () => {
@@ -1462,7 +1466,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
   it('pwa is typechecked once per run: test (pwa) runs tsc, build-pwa runs vite build alone', () => {
     const build = job('build-pwa').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(build, 'build-pwa runs tsc a second time through `npm run build`').not.toMatch(/npm run build/);
-    expect(build).toMatch(/^ {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci && \.\/node_modules\/\.bin\/vite build$/m);
+    expect(build).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/vite build$/m);
     expect(build).not.toMatch(/\btsc\b[^\n]*--noEmit/);
     expect(step(job('test'), 'Typecheck')).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/tsc --noEmit$/m);
     // package.json's build is still `tsc && vite build` for a developer's `npm run build`; the CI step is its second half.
@@ -1807,5 +1811,178 @@ describe('ci.yml: the secret-mask slicing row runs in `perf (secret-mask)`, a jo
     for (const clock of ['performance.now', 'Date.now', 'process.hrtime']) {
       expect(required, `the required slicing row must not read ${clock}: no wall-clock assertion in a required check`).not.toContain(clock);
     }
+  });
+});
+
+// ── M8.16: the shared Markdown library is verified before it is installed ──
+describe('M8.16: build-pwa verifies the shared Markdown library before it builds', () => {
+  const SCRIPT = '.github/ci/library-provenance.sh';
+  const PROVENANCE_RUN = 'bash .github/ci/library-provenance.sh';
+  /** A step without its comment lines (a trailing comment block is read into the step before it). */
+  const code = (st: string): string => st.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  const runOf = (st: string): string | null => /^ {8}run: (.*)$/m.exec(code(st))?.[1] ?? null;
+  const buildSteps = (): string[] => steps(job('build-pwa')).map(code);
+  /** An install in any spelling: a bare or bounded `npm ci`, `npm install`/`npm i`, yarn, pnpm. */
+  const installs = (st: string): boolean =>
+    /\bnpm (?:ci|install|i|add)\b|\byarn (?:install|add)\b|\bpnpm (?:install|i|add)\b/.test(st);
+
+  it('build-pwa runs the provenance script before npm ci, then npm audit signatures, then vite build', () => {
+    const all = buildSteps();
+    const at = all.findIndex((st) => runOf(st) === PROVENANCE_RUN);
+    expect(at, 'the provenance step is missing').toBeGreaterThan(-1);
+    const setup = all.findIndex((st) => /^ {6}- uses: actions\/setup-node@/m.test(st));
+    expect(setup, 'setup-node is missing').toBeGreaterThan(-1);
+    expect(at, 'the provenance step is the first step after setup-node').toBe(setup + 1);
+    for (const st of all.slice(0, at)) expect(installs(st), `an install runs before the provenance check:\n${st}`).toBe(false);
+    const wanted = all.filter((st) => /^ {8}working-directory: pwa$/m.test(st) || runOf(st) === PROVENANCE_RUN);
+    expect(wanted.map(runOf)).toEqual([
+      PROVENANCE_RUN,
+      '../.github/ci/bounded.sh 180 npm ci',
+      '../.github/ci/bounded.sh 180 npm audit signatures',
+      './node_modules/.bin/vite build',
+    ]);
+    for (const st of wanted) {
+      expect(st, `a step without the leg switch:\n${st}`).toMatch(/^ {6}- if: env\.CCRC_LEG == 'run'$/m);
+      expect(st, 'a step that may fail soft').not.toMatch(/continue-on-error/);
+    }
+    // The pwa steps run in pwa/; the check reads the lock from the repo root.
+    expect(all[at]).not.toMatch(/working-directory/);
+  });
+
+  it('build-pwa grants attestations: read and gives GH_TOKEN to the provenance step only', () => {
+    const block = job('build-pwa');
+    expect(block).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}attestations: read\n(?! {6}[a-z-]+:)/m);
+    const all = buildSteps();
+    for (const st of all) {
+      if (runOf(st) === PROVENANCE_RUN) {
+        expect(st).toMatch(/^ {8}env:\n {10}GH_TOKEN: \$\{\{ github\.token \}\}$/m);
+      } else {
+        expect(st, `GH_TOKEN reaches a step other than the provenance check:\n${st}`).not.toMatch(/GH_TOKEN/);
+      }
+    }
+    expect(block.split('\n').filter((l) => !/^\s*#/.test(l)).filter((l) => /^ {4}env:/.test(l)).length).toBe(1);
+    expect(code(block).match(/GH_TOKEN/g) ?? []).toHaveLength(1);
+  });
+
+  it('the provenance script pins the library repo, its release workflow, the tag ref and hosted runners by exact text', () => {
+    const text = read(SCRIPT);
+    const lines = text.split('\n');
+    const times = (l: string): number => lines.filter((x) => x === l).length;
+    expect(times('REPO=Synapsium-Labs/docserver')).toBe(1);
+    expect(times('SIGNER=Synapsium-Labs/docserver/.github/workflows/release.yml')).toBe(1);
+    const verify = '"$bounded" 90 gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners';
+    expect(lines.filter((l) => l.trim() === verify), 'exactly one verify line').toHaveLength(1);
+    expect(text.match(/gh attestation verify/g) ?? [], 'no other mention of the verify call').toHaveLength(1);
+    expect(lines[0]).toBe('#!/usr/bin/env bash');
+    expect(lines).toContain('set -euo pipefail');
+    expect(statSync(join(REPO, SCRIPT)).mode & 0o100, 'the owner can execute it').toBe(0o100);
+  });
+
+  it('the provenance script compares the packed tarball sha512 with the lock integrity before it verifies the attestation', () => {
+    const text = read(SCRIPT);
+    expect(text).toContain('packages["node_modules/@synapsium-labs/docserver"]');
+    expect(text).toContain('package-lock.json');
+    const cmp = text.indexOf('if [ "$actual" = "$integrity" ]; then');
+    const verify = text.indexOf('gh attestation verify');
+    expect(cmp, 'the integrity comparison is missing').toBeGreaterThan(-1);
+    expect(verify).toBeGreaterThan(-1);
+    expect(cmp, 'the comparison comes first').toBeLessThan(verify);
+    const tail = text.slice(cmp, verify);
+    expect(tail, 'the else-branch exits non-zero').toMatch(/\n\s*else\n(?:.*\n)*?\s*exit 1\n\s*fi\n/);
+    expect(text, 'the script never reads node_modules from disk').not.toMatch(/\.\/node_modules|cat node_modules|require\('\.\/node_modules/);
+  });
+
+  it('the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines)', () => {
+    const lines = read(SCRIPT).split('\n');
+    const times = (l: string): number => lines.filter((x) => x === l).length;
+    expect(times('"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }'), 'the pack line').toBe(1);
+    expect(times('tgz="$dest/synapsium-labs-docserver-$version.tgz"'), 'the tgz line').toBe(1);
+    expect(times('actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"'), 'the actual line').toBe(1);
+    // `actual` has one writer, and it never reads the lock's value.
+    expect(lines.filter((l) => /^\s*actual=/.test(l)), 'one assignment of actual').toHaveLength(1);
+    expect(lines.filter((l) => /^\s*tgz=/.test(l)), 'one assignment of tgz').toHaveLength(1);
+    expect(lines.filter((l) => /^\s*integrity=/.test(l)), 'integrity is only read from the lock').toHaveLength(0);
+  });
+
+  // Linux only: the script runs only on ubuntu-latest in CI and uses GNU `base64 -w0`, which BSD base64 (the macOS legs'
+  // userland, where no gnubin joins PATH) rejects; the real-script cases would go red there for a reason that is not a defect.
+  describe.skipIf(process.platform !== 'linux')('the provenance script, run for real against fake npm, gh and timeout', () => {
+    const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
+    const VERSION = '1.2.3';
+    const TARBALL = 'the packed bytes';
+    const integrityOf = (bytes: string): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+    const run = (lockIntegrity: string, deadline: 'pass' | 'expire' | 'expire-gh' = 'pass') => {
+      const root = mkTmp('ccrc-prov-root-');
+      mkdirSync(join(root, 'pwa'));
+      writeFileSync(join(root, 'pwa', 'package-lock.json'), JSON.stringify({
+        packages: { 'node_modules/@synapsium-labs/docserver': { version: VERSION, integrity: lockIntegrity } },
+      }));
+      const log = join(mkTmp('ccrc-prov-log-'), 'log');
+      writeFileSync(log, '');
+      const dir = fakeBin({
+        // npm pack writes the tarball where --pack-destination says, as the real one does.
+        npm: `echo "npm $*" >> '${log}'\nwhile [ "$#" -gt 0 ]; do [ "$1" = --pack-destination ] && dest=$2; shift; done\nprintf '%s' '${TARBALL}' > "$dest/synapsium-labs-docserver-${VERSION}.tgz"`,
+        gh: `echo "gh $*" >> '${log}'`,
+        // bounded.sh's deadline tool: it logs its argv; `expire` is a deadline that fires (124) without running the command, `expire-gh` one that fires on gh alone.
+        timeout: `echo "timeout $1 $2 $3" >> '${log}'\n${deadline === 'expire' ? 'exit 124' : deadline === 'expire-gh' ? '[ "$4" = gh ] && exit 124\nshift 3\nexec "$@"' : 'shift 3\nexec "$@"'}`,
+      });
+      for (const bin of ['bash', 'sh', 'env', 'cat', 'dirname', 'perl', 'node', 'openssl', 'base64', 'mktemp'])
+        execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+      const r = spawnSync(real('bash'), [join(REPO, SCRIPT)], {
+        cwd: root, encoding: 'utf8', timeout: 60_000,
+        env: { PATH: dir, RUNNER_TEMP: mkTmp('ccrc-prov-rt-') },
+      });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr, log: readFileSync(log, 'utf8') };
+    };
+
+    it('a lock integrity that matches the packed bytes passes, and the attestation is then verified once, pinned', () => {
+      const r = run(integrityOf(TARBALL));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log.match(/^gh attestation verify /gm), 'one verify call').toHaveLength(1);
+      expect(r.log).toContain(`--repo Synapsium-Labs/docserver --signer-workflow Synapsium-Labs/docserver/.github/workflows/release.yml --source-ref refs/tags/v${VERSION} --deny-self-hosted-runners`);
+    });
+
+    it('npm pack and the attestation lookup each run under a 90 second deadline', () => {
+      const r = run(integrityOf(TARBALL));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toMatch(/^timeout -k 10 90\nnpm pack @synapsium-labs\/docserver@1\.2\.3 /m);
+      expect(r.log).toMatch(/^timeout -k 10 90\ngh attestation verify /m);
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'one deadline per call').toHaveLength(2);
+    });
+
+    it('a deadline that fires on npm pack fails the script closed: nothing is compared or verified, and the pack is tried twice', () => {
+      const r = run(integrityOf(TARBALL), 'expire');
+      expect(r.status).not.toBe(0);
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'one retry, no third attempt').toHaveLength(2);
+      expect(r.log, 'gh ran after the pack timed out').not.toContain('gh attestation verify');
+      // The helper's warnings stay visible (the pack's stdout is not discarded), and the script says what failed.
+      expect(r.stdout).toContain('::warning::bounded: attempt 1 of 2 failed or passed 90s: npm pack ');
+      expect(r.stderr).toContain('library-provenance: npm pack failed or passed its deadline twice');
+      expect(r.stdout, 'the match message was printed after a timed-out pack').not.toContain('matches the lock');
+    });
+
+    it('a deadline that fires on the attestation lookup fails the script closed: the lookup is tried twice and the script never reports success', () => {
+      const r = run(integrityOf(TARBALL), 'expire-gh');
+      expect(r.status).not.toBe(0);
+      expect(r.log, 'the lookup itself never ran: its deadline fired first').not.toContain('gh attestation verify');
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'pack once, the lookup twice').toHaveLength(3);
+      expect(r.stdout, 'success was reported after a timed-out lookup').not.toContain('was built by');
+    });
+
+    it('a lock integrity that does not match the packed bytes fails, and the attestation is never asked', () => {
+      const r = run(integrityOf('some other bytes'));
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('is not the one the lock records');
+      expect(r.log, 'gh ran although the packed bytes are not the lock\'s').not.toContain('gh attestation verify');
+    });
+  });
+
+  it('no other file under .github names the release signer workflow', () => {
+    const listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.github'],
+      { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    const names = [...new Set(listed.split('\0').filter((n) => n !== ''))].filter((n) => existsSync(join(REPO, n)) && statSync(join(REPO, n)).isFile());
+    expect(names.length, 'the .github scan went vacuous').toBeGreaterThan(10);
+    const holders = names.filter((n) => read(n).includes('docserver/.github/workflows/release.yml')).sort();
+    expect(holders).toEqual([SCRIPT]);
   });
 });

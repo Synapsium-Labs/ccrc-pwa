@@ -277,6 +277,35 @@
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
 }
 
+/* — the rich reader (W8a): the frame fills the pane, and its two sheets lay their lines out. The frame's own page is
+   drawn inside the iframe, so nothing here colours it. The sheets' buttons are @ccrc/ui's `Button`, which carries its own
+   `min-height: var(--tap-min)`; the sheets paint no ground or ink of their own (the `Sheet` panel's are inherited). — */
+/* §4.1: the reader is sized to the Docs pane and the frame scrolls itself. A Docs page that holds the reader is one
+   pane tall: the shell is a viewport-tall column (the desktop grid already is), the pane and the screen and the leaf are
+   columns in turn, and the frame takes what the chrome above it leaves (never below `min-block-size`, where the pane
+   scrolls again). Every other Docs page, the plain view and the fallbacks keep the pane's own scrolling. */
+.app-shell:has(.docs-reader) { height: 100dvh; }
+.app-shell:has(.docs-reader) > .shell-detail { display: flex; flex-direction: column; min-block-size: 0; }
+@media (max-width: 899.98px) {
+  .app-shell:has(.docs-reader) { display: flex; flex-direction: column; }
+  .app-shell:has(.docs-reader) > .shell-detail { flex: 1 1 auto; }
+}
+.shell-detail > .docs-screen:has(.docs-reader) { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; }
+.docs-screen:has(.docs-reader) > * { flex: none; }
+.docs-screen:has(.docs-reader) > .docs-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: var(--sp-2); }
+.docs-leaf:has(.docs-reader) > .doc-formatting { flex: none; }
+/* The frame fills its host by position, and the host takes the room by `flex-basis: 0`, so neither a percentage height
+   nor an auto flex basis has to resolve: the same in every engine. */
+.docs-reader { position: relative; flex: 1 1 0; inline-size: 100%; min-block-size: 20rem; }
+.docs-reader iframe { position: absolute; inset: 0; border: 0; inline-size: 100%; block-size: 100%; }
+.docs-reader-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
+.docs-reader-sheet-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
+.docs-reader-sheet-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+.docs-reader-sheet-text {
+  margin: 0; max-block-size: 40dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+}
+
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both
    halves). — */

@@ -728,19 +728,25 @@ Each refinement that contradicts the spec's text is a departure and gets one iss
 
 ## Deviations found
 
-The departures, in issue order, named by refinement letter. Their numbers are issued at W8a's run-open (`POST /api/ledger/deviations`), and Task 11 Step 3 writes them here in the `- **D-<n> (<date>)** — …` form. No `D-TBD` token lands in a merged copy (`server/test/dtbd.test.ts`).
+W8a's departures, numbered as issued at the run's opening (D-7691 to D-7701 for refinements (a)-(j) and (o), in that order), then the departures found while executing, in the order found.
 
-- **Refinement (a), `w8-split`.** Operator ruling (1): W8 runs as W8a (the frame core, beside W5h-a and Share, needing W5 part 1 and library v1 only) and W8b (G5, G6's version menu, `at=<sha>`, `only`, the seed's history, after W5b), with W7 last. Departs from RD24 ("W8, gated on library v1"), the §8 W8 row's dependencies (W5b, W6, W7, v1, W5h-b) and Figure 3's edges, A19, and RD14's op counts (6 and 2 in W8a). Applied by the plan's scope and Task 7's adapter key set (W8A-T7-M2).
-- **Refinement (b), `w8a-host-mount`.** Operator ruling (2), with the plan's finding of no conflict: ccrc mounts the reader with the library's `mountDocFrame` through one adapter, `docs/reader/bridge.ts`, and spells no frame policy, port, parser, seed or `<iframe>`. Departs from §3.1's Host helper row ("ccrc does not use it"), §3.8's CSP-hashes bullet, §4.1's Element row, §4.2's home bullet, §4.4's Checking bullet ("one pure L0 parser … in `shared/`"), §4.7 (table and bullets), A1, A2b, A5, A17, M8.5, M8.10, M8.12 and RD14; M8.1, M8.3, M8.4, M8.6 and M8.8 measure the installed library. Tasks 7, 9, 10 (W8A-T7-M1-M6, W8A-T9-M2, W8A-T10-M1-M3).
-- **Refinement (c), `w8a-mermaid-on-request`.** Operator ruling (4): the contingency `reader-mermaid-on-tap` (§4.6, §5.2's WebKit row, E17) becomes W8a's default without waiting for E17, through `mermaidDraw: 'on-request'`; the watchdog carries no Mermaid allowance. Task 7 (W8A-T7-M1), Task 10 (M8.B1's tap).
-- **Refinement (d), `w8a-images-interim`.** Operator ruling (3): until W6, A7's §5.6.3 planner is replaced by the plain view's own pin rule, at most 30 images and 5 MiB, as `data:`; deferred and over-budget images are the library's "not loaded" chip. Task 6 (W8A-T6-M1-M4).
-- **Refinement (e), `w8a-colouring`.** Operator ruling (5): the W8 row's divergences (1) and (3) are accepted for now rather than closed; (2) is measured resolved (ccrc's lock holds 11.12.0, one copy). Task 1 (the single highlight.js case).
-- **Refinement (f), `w8a-shell-meta-owner`.** M5.19's shell meta, assigned to W6, lands in W8a with M8.13's test. Task 3 (W8A-T3-M1-M3), Task 9 (built half).
-- **Refinement (g), `w8a-gate-512k`.** The reader serves at most `DOCS_RENDER_GATE_BYTES`; "Format anyway" formats plain; departs from §4.3's "the base spec's 2 MiB document cap". Task 8 (W8A-T8-M1).
-- **Refinement (h), `w8a-link-sheet-host`.** The sheet highlights any host other than the console's own, not only a different registrable name (§4.4, M8.7). Task 5 (W8A-T5-M3), Task 8.
-- **Refinement (i), `w8a-precache-fonts`.** M8.14's woff2 half is read as ccrc's own fonts; Mermaid's entry is a chunk glob, not a directory (A9); A21's `vite.config.ts` exception is unused. Tasks 1, 8 and 9 (W8A-T1-M5; `globIgnores` in Task 8, measured by W8A-T9-M1).
-- **Refinement (j), `w8a-readme-to-w7`.** A22's README "rendering" bullet moves from W8 to W7, which runs last. No task (W8a edits no README).
-- **Refinement (o), `w8a-provenance-first`.** The provenance identity check runs first in `build-pwa`, before any `npm ci`, then `npm ci`, `npm audit signatures` and `vite build`; departs from M8.16's and §3.6's order (`npm audit signatures` after `npm ci`, then the identity check), because `npm ci` runs install scripts that could plant the tools the check runs. Spec amendment entries 59-60. Task 2 (W8A-T2-M4).
+- **D-7691 (2026-11-01)** — `w8-split` (refinement (a)). Operator ruling (1): W8 runs as W8a (the frame core, beside W5h-a and Share, needing W5 part 1 and library v1 only) and W8b (G5, G6's version menu, `at=<sha>`, `only`, the seed's history, after W5b), with W7 last. Departs from RD24 ("W8, gated on library v1"), the §8 W8 row's dependencies (W5b, W6, W7, v1, W5h-b) and Figure 3's edges, A19, §4's "It lands in W8", RD14's op counts (6 and 2 in W8a), and the acceptance rows that move to W8b (G5, G6's version menu, `at=<sha>`, `only`, the seed's history, M8.9, M8.22, M8.5's `changes` fixture, M9.10). Applied by the plan's scope and Task 7's adapter key set (W8A-T7-M2).
+- **D-7692 (2026-11-01)** — `w8a-host-mount` (refinement (b)). Operator ruling (2), with the plan's finding of no conflict: ccrc mounts the reader with the library's `mountDocFrame` through one adapter, `docs/reader/bridge.ts`, and spells no frame policy, port, parser, seed or `<iframe>`. Departs from §3.1's Host helper row ("ccrc does not use it"), §3.8's CSP-hashes bullet, §4.1's Element row, §4.2's home bullet, §4.4's Checking bullet ("one pure L0 parser … in `shared/`"), §4.7 (table and bullets), A1, A2b, A5, A17, M8.5, M8.10, M8.12 and RD14; M8.1, M8.3, M8.4, M8.6 and M8.8 measure the installed library. Tasks 7, 9, 10 (W8A-T7-M1-M6, W8A-T9-M2, W8A-T10-M1-M3).
+- **D-7693 (2026-11-01)** — `w8a-mermaid-on-request` (refinement (c)). Operator ruling (4): the contingency `reader-mermaid-on-tap` (§4.6, §5.2's WebKit row, E17) becomes W8a's default without waiting for E17, through `mermaidDraw: 'on-request'`; the watchdog carries no Mermaid allowance. Task 7 (W8A-T7-M1), Task 10 (M8.B1's tap).
+- **D-7694 (2026-11-01)** — `w8a-images-interim` (refinement (d)). Operator ruling (3): until W6, A7's §5.6.3 planner is replaced by the plain view's own pin rule, at most 30 images and 5 MiB, as `data:`; deferred and over-budget images are the library's "not loaded" chip. Task 6 (W8A-T6-M1-M4).
+- **D-7695 (2026-11-01)** — `w8a-colouring` (refinement (e)). Operator ruling (5): the W8 row's divergences (1) and (3) are accepted for now rather than closed; (2) is measured resolved (ccrc's lock holds 11.12.0, one copy). Task 1 (the single highlight.js case).
+- **D-7696 (2026-11-01)** — `w8a-shell-meta-owner` (refinement (f)). M5.19's shell meta, assigned to W6, lands in W8a with M8.13's test. Task 3 (W8A-T3-M1-M3), Task 9 (built half).
+- **D-7697 (2026-11-01)** — `w8a-gate-512k` (refinement (g)). The reader serves at most `DOCS_RENDER_GATE_BYTES`; "Format anyway" formats plain; departs from §4.3's "the base spec's 2 MiB document cap". Task 8 (W8A-T8-M1).
+- **D-7698 (2026-11-01)** — `w8a-link-sheet-host` (refinement (h)). The sheet highlights any host other than the console's own, not only a different registrable name (§4.4, M8.7). Task 5 (W8A-T5-M3), Task 8.
+- **D-7699 (2026-11-01)** — `w8a-precache-fonts` (refinement (i)). M8.14's woff2 half is read as ccrc's own fonts; Mermaid's entry is a chunk glob, not a directory (A9); A21's `vite.config.ts` exception is unused. Tasks 1, 8 and 9 (W8A-T1-M5; `globIgnores` in Task 8, measured by W8A-T9-M1).
+- **D-7700 (2026-11-01)** — `w8a-readme-to-w7` (refinement (j)). A22's README "rendering" bullet moves from W8 to W7, which runs last. No task (W8a edits no README).
+- **D-7701 (2026-11-01)** — `w8a-provenance-first` (refinement (o)). The provenance identity check runs first in `build-pwa`, before any `npm ci`, then `npm ci`, `npm audit signatures` and `vite build`; departs from M8.16's and §3.6's order (`npm audit signatures` after `npm ci`, then the identity check), because `npm ci` runs install scripts that could plant the tools the check runs. Spec amendment entries 59-60. Task 2 (W8A-T2-M4).
+- **D-7702 (2026-11-01)** — `w8a-bounded-npm-ci` (found while executing, Task 2). `build-pwa`'s pwa install runs as `../.github/ci/bounded.sh 180 npm ci`, not the bare `npm ci` of Task 2's step text and M8.16's step list: #2050 bounded every CI install after the plan's base (46da405e2), and the replay keeps that bound, after the provenance check and before `npm audit signatures`. This entry credits #2050 for the bounded `npm ci` only; the other deadlines in `build-pwa` are this wave's own (D-7704). Task 2 (M8.16's step-order case, which spells the bounded install; W8A-T2-M4).
+- **D-7703 (2026-11-01)** — `w8a-image-index-distinct` (found while executing, Task 6). The reader numbers images by distinct `src` (the library's `scanRefs` dedupes), where the plain view numbers every `img` element, so "exactly the images the plain view already shows" (A7 as amended, and refinement (d)) holds per distinct image, not per element: a doc that repeats one image counts it once against the 30-image and 5 MiB limits. W6's planner replaces the path wholesale. Task 6 (W8A-T6-M1-M5).
+- **D-7704 (2026-11-01)** — `w8a-supply-chain-deadlines` (found while executing, Task 11). The held-out review's fix bounds the rest of `build-pwa`'s supply-chain steps: `npm audit signatures` runs as `../.github/ci/bounded.sh 180 npm audit signatures`, and the provenance script runs `npm pack` and `gh attestation verify` under `bounded.sh 90` (one retry; a call that never answers still fails the script closed). Departs from Task 2 Step 1 case 1 (the run value is exactly `npm audit signatures`), Step 3's bare pack and verify lines, and M8.16's step list; a stalled registry or attestation call now costs minutes rather than the job's 15-minute limit. Task 11 (M8.16's deadline cases; W8A-T11-M9-M11, M15).
+- **D-7705 (2026-11-01)** — `w8a-reader-theme-follows-palette-mode` (found while executing, Task 8). `readerPrefsOf(themeChoice, palettes)` maps a named palette to that palette's own mode (`THEMES`), so the frame's theme matches the shell's. Departs from Task 5's Interfaces (`readerPrefsOf(themeChoice: string)`) and Decision (5), which sent every named palette to `auto`. The policy tests state the rule case by case: `system` gives auto, `light` and `dark` pass through, a named palette gives its own mode, an unknown id gives auto. Task 8's fix round (reader-policy.test.ts).
+- **D-7706 (2026-11-01)** — `w8a-mermaid-asset-deadline` (found by review). `mountReader` bounds its wait for the Mermaid asset by `readerWatchdogMs(bytes)`, the value the mount already passes as `watchdogMs`; past it, the mount takes exactly the rejected-import path (no `scan`, the figures show as source) and a late chunk is ignored. Departs from Task 7 Decision (4), which names only an import that rejects; it makes refinement (c)'s "ready does not wait for Mermaid" true of a stalled chunk as well. Fix round 1 (reader-bridge.test.ts; W8A-T7-M16).
+- **D-7707 (2026-11-01)** — `w8a-copy-failed-sheet` (found while executing, Tasks 8 and 11). A copy the clipboard refuses opens a third sheet (`copy-failed`), which shows the text and says to copy it by hand, and the hidden-characters sheet shows the text with each hidden character marked in place: the first `READER_COPY_SHEET_MARKERS_MAX` (64) markers are named inline, every later one is an unnamed hidden marker, and a count line follows. Departs from the plan's two-sheet design, where Task 8 Decision (5) sends a rejected copy to the copy sheet: that sheet's hidden-character warning would be false for clean text. Tasks 8 and 11 (reader-frame.test.tsx; W8A-T11-M6, M14).
 
 ### Review dispositions
 
@@ -751,6 +757,1189 @@ The plan review of 2026-10-31 confirmed 37 findings. All of them are applied in 
 - **`LinkBase` against the helpers' full context.** Of the two fixes offered, the plan takes the second: `ReaderFrame` builds `{ ...p.link, urls: new WeakMap() }` once, as `RasterBody` does. Widening the helpers' parameter types would not work, because `routeReaderLink` hands its context to `docLinkTarget`, and `docLinkTarget` takes a full `DocLinkContextValue` in a file this wave does not edit.
 
 One item is outside this pass: the architecture document's R8 wording of the reader stylesheet's path (`assets/frame/reader.css`, not `assets/reader.css`) is not edited here, because this pass edits only the plan and the spec amendment. It goes to the architect.
+
+
+## W8a results
+
+Every suite and every mutation row below ran at one tip, `398147e9e` (the branch after the second review's fixes and before this section was rewritten), on 2026-11-01. The first measurement, at `a27b637bb` before the review rounds, is superseded by this one and kept only in git history.
+
+### Suites at `398147e9e` (each through `ccrc test`, first run green, no re-run)
+
+| Suite | Files | Tests |
+|---|---|---|
+| pwa, five batches | 381 passed | 11839 passed, 3 skipped |
+| pwa `reader-built`, alone | 1 passed | 6 passed |
+| pwa `markdown-worker-built`, alone | 1 passed | 6 passed |
+| pwa `fonts-built`, alone | 1 passed | 4 passed |
+| pwa typecheck (`tsc` with no emit) |  | clean |
+| browser `reader-frame.browser.test.ts` (Chromium 153) | 1 passed | 24 passed (46.39 s) |
+| server `docs-parity`, `ci-pipeline`, `census-w7/pwa`, `rings/pwa-rings`, `deviation-refs`, `dtbd`, `topology-clean`, `anchors`, `citations` (after `git fetch origin main`) | 9 passed | 350 passed |
+
+The whole browser leg ran on the pull request's CI (Chrome, `browser (pwa)`): 42 of 42 files at `9c9435ca9` and green at `bad17ff56`. Locally, at Task 10, `session-header.browser.test.ts` failed two 900 px cases on the local Chromium; CI's run of it is green, so it is the local browser's.
+
+### The mutation table at `398147e9e`
+
+115 rows, the last occurrence of each id, run at `398147e9e` in the workspace, one at a time, each bounded by `timeout -k 10 600` and `ulimit -u 4096`, each restored from a saved copy with its sha256 checked, `git status --porcelain` empty after every row. All 115 are red. W8A-T9-M1 reds the whole file (its build refuses the Mermaid chunk), which is the guard's own clause. Rows planted in the installed library were also checked against the pinned 1.0.0 tarball after restore, and at the end all 394 installed files equal the tarball's. Rows were re-spelt where a later commit changed their text or an earlier row described the edit in prose (W8A-T1-M3, T1-M5, T2-M1, T2-M3, T2-M4, T3-M2, T3-M3, T4-M2, T7-M4). W8A-T6-M1 was re-spelt in fix round 1: its earlier `new` named a function `images.ts` does not import, so it went red on a ReferenceError and proved nothing; its `new` is now a `blob:` literal in place of the data URL, which reds the named case alone on its assertion. The `tests` and `red` of every row are as measured at this tip, under the test names the tip carries.
+
+Task 1:
+
+```json
+[
+ {
+  "id": "W8A-T1-M1",
+  "pkg": "pwa",
+  "file": "package.json",
+  "old": "\"@synapsium-labs/docserver\": \"1.0.0\"",
+  "new": "\"@synapsium-labs/docserver\": \"^1.0.0\"",
+  "tests": "test/reader-pin.test.ts",
+  "red": "Tests  1 failed | 4 passed (5) | first failing: × pwa/package.json pins @synapsium-labs/docserver at exactly 1.0.0 5ms | AssertionError: expected '^1.0.0' to be '1.0.0' // Object.is equality"
+ },
+ {
+  "id": "W8A-T1-M2",
+  "pkg": "server",
+  "file": "test/docs-parity.test.ts",
+  "old": "@synapsium-labs\\/docserver\\/(?:",
+  "new": "@[a-z-]+\\/docserver\\/(?:",
+  "tests": "test/docs-parity.test.ts",
+  "red": "Tests  1 failed | 70 passed (71) | first failing: × M8.18: another scope is a hit 105ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T1-M3",
+  "pkg": "server",
+  "file": "test/docs-parity.test.ts",
+  "old": "line.replace(M79_LIBRARY_SPECIFIER, (hit, lead: string, quote: string, at: number) => (m79InCode(line.slice(0, at)) ? lead + quote + quote : hit))",
+  "new": "(M79_LIBRARY_SPECIFIER.test(line) ? '' : line)",
+  "tests": "test/docs-parity.test.ts",
+  "red": "Tests  5 failed | 66 passed (71) | first failing: × the shipped source is clean 46ms | AssertionError: expected [ …(2) ] to deeply equal []"
+ },
+ {
+  "id": "W8A-T1-M4",
+  "pkg": "server",
+  "file": "test/docs-parity.test.ts",
+  "old": "(?:render|frame|host|assets",
+  "new": "(?:render|frame(?:\\?raw)?|host|assets",
+  "tests": "test/docs-parity.test.ts",
+  "red": "Tests  1 failed | 70 passed (71) | first failing: × M8.18: /frame?raw is a hit 84ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T1-M5",
+  "pkg": "server",
+  "file": "test/docs-parity.test.ts",
+  "old": "name.startsWith('pwa/src/')\n        ? line.replace(",
+  "new": "true\n        ? line.replace(",
+  "tests": "test/docs-parity.test.ts",
+  "red": "Tests  1 failed | 70 passed (71) | first failing: × M8.18: an allowed specifier in pwa/vite.config.ts is still a hit 125ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T1-M6",
+  "pkg": "server",
+  "file": "test/docs-parity.test.ts",
+  "old": "(m79InCode(line.slice(0, at)) ? lead + quote + quote : hit)",
+  "new": "(lead + quote + quote)",
+  "tests": "test/docs-parity.test.ts",
+  "red": "Tests  2 failed | 69 passed (71) | first failing: × M8.18: a comment that quotes a full specifier is a hit 88ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T1-M7",
+  "pkg": "server",
+  "file": "test/docs-parity.test.ts",
+  "old": "(?!(?:[A-Za-z0-9._-]+\\/)*\\.\\.[\\/?])",
+  "new": "",
+  "tests": "test/docs-parity.test.ts",
+  "red": "Tests  1 failed | 70 passed (71) | first failing: × M8.18: an /assets specifier with a .. segment is a hit 88ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ }
+]
+```
+
+Task 2:
+
+```json
+[
+ {
+  "id": "W8A-T2-M1",
+  "pkg": "server",
+  "file": "../.github/workflows/ci.yml",
+  "old": "      - if: env.CCRC_LEG == 'run'\n        working-directory: pwa\n        run: ../.github/ci/bounded.sh 180 npm audit signatures\n",
+  "new": "",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  1 failed | 110 passed (111) | first failing: × build-pwa runs the provenance script before npm ci, then npm audit signatures, then vite build 5ms | AssertionError: expected [ …(3) ] to deeply equal [ …(4) ]"
+ },
+ {
+  "id": "W8A-T2-M2",
+  "pkg": "server",
+  "file": "../.github/ci/library-provenance.sh",
+  "old": "REPO=Synapsium-Labs/docserver",
+  "new": "REPO=example-org/docserver",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  2 failed | 109 passed (111) | first failing: × the provenance script pins the library repo, its release workflow, the tag ref and hosted runners by exact text 4ms | AssertionError: expected +0 to be 1 // Object.is equality"
+ },
+ {
+  "id": "W8A-T2-M5",
+  "pkg": "server",
+  "file": "../.github/workflows/ci.yml",
+  "old": "The sixth, `build-pwa`, asks for",
+  "new": "The sixth, asks for",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  1 failed | 110 passed (111) | first failing: × the least-privilege comment names every job that asks for more than contents: read (FR-6) 6ms | AssertionError: the comment does not name build-pwa: expected '# Least privilege, stated rather than…' to contain '`build-pwa`'"
+ },
+ {
+  "id": "W8A-T2-M6",
+  "pkg": "server",
+  "file": "../.github/ci/library-provenance.sh",
+  "old": " --source-ref \"refs/tags/v$version\"",
+  "new": "",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  2 failed | 109 passed (111) | first failing: × the provenance script pins the library repo, its release workflow, the tag ref and hosted runners by exact text 5ms | AssertionError: exactly one verify line: expected [] to have a length of 1 but got +0"
+ },
+ {
+  "id": "W8A-T2-M7",
+  "pkg": "server",
+  "file": "../.github/ci/library-provenance.sh",
+  "old": "actual=\"sha512-$(openssl dgst -sha512 -binary \"$tgz\" | base64 -w0)\"",
+  "new": "actual=\"$integrity\"",
+  "tests": "test/ci-pipeline.test.ts (M8.16)",
+  "red": "Tests  2 failed | 109 passed (111) | first failing: × the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines) 6ms | AssertionError: the actual line: expected +0 to be 1 // Object.is equality"
+ },
+ {
+  "id": "W8A-T2-M3",
+  "pkg": "server",
+  "file": "../.github/ci/library-provenance.sh",
+  "old": "if [ \"$actual\" = \"$integrity\" ]; then\n  echo \"library-provenance: the packed tarball matches the lock's integrity\"\nelse\n  echo \"library-provenance: the packed tarball is not the one the lock records\" >&2\n  echo \"  lock:   $integrity\" >&2\n  echo \"  packed: $actual\" >&2\n  exit 1\nfi\n",
+  "new": "",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  2 failed | 109 passed (111) | first failing: × the provenance script compares the packed tarball sha512 with the lock integrity before it verifies the attestation 3ms | AssertionError: the integrity comparison is missing: expected -1 to be greater than -1"
+ },
+ {
+  "id": "W8A-T2-M4",
+  "pkg": "server",
+  "file": "../.github/workflows/ci.yml",
+  "old": "      - if: env.CCRC_LEG == 'run'\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: bash .github/ci/library-provenance.sh\n      # The build reads ui SOURCE through `exports['.']`. Same resolution rule\n      # as the test leg: ui's own node_modules or nothing resolves.\n      #\n      # `vite build` alone, not `npm run build` (`tsc --noEmit && vite build`):\n      # `test (pwa)`'s Typecheck step (in `pwa-static`, D-6768) already runs\n      # that same `tsc --noEmit` on every run, so the second copy here bought\n      # nothing but a duplicate (D-6770). Exactly one pwa typecheck runs per CI\n      # run, in that job.\n      - if: env.CCRC_LEG == 'run'\n        working-directory: ui\n        run: ../.github/ci/bounded.sh 180 npm ci\n      - if: env.CCRC_LEG == 'run'\n        working-directory: pwa\n        run: ../.github/ci/bounded.sh 180 npm ci\n",
+  "new": "      # The build reads ui SOURCE through `exports['.']`. Same resolution rule\n      # as the test leg: ui's own node_modules or nothing resolves.\n      #\n      # `vite build` alone, not `npm run build` (`tsc --noEmit && vite build`):\n      # `test (pwa)`'s Typecheck step (in `pwa-static`, D-6768) already runs\n      # that same `tsc --noEmit` on every run, so the second copy here bought\n      # nothing but a duplicate (D-6770). Exactly one pwa typecheck runs per CI\n      # run, in that job.\n      - if: env.CCRC_LEG == 'run'\n        working-directory: ui\n        run: ../.github/ci/bounded.sh 180 npm ci\n      - if: env.CCRC_LEG == 'run'\n        working-directory: pwa\n        run: ../.github/ci/bounded.sh 180 npm ci\n      - if: env.CCRC_LEG == 'run'\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: bash .github/ci/library-provenance.sh\n",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  1 failed | 110 passed (111) | first failing: × build-pwa runs the provenance script before npm ci, then npm audit signatures, then vite build 8ms | AssertionError: the provenance step is the first step after setup-node: expected 4 to be 2 // Object.is equality"
+ }
+]
+```
+
+Task 3:
+
+```json
+[
+ {
+  "id": "W8A-T3-M1",
+  "pkg": "pwa",
+  "file": "index.html",
+  "old": "content=\"frame-src 'none'\"",
+  "new": "content=\"frame-src 'none'; script-src 'self'\"",
+  "tests": "test/shell-csp.test.ts",
+  "red": "Tests  2 failed | 2 passed (4) | first failing: × its policy re-tokenised is exactly frame-src none 4ms | AssertionError: expected [ [ 'frame-src', '\\'none\\'' ], …(1) ] to deeply equal [ [ 'frame-src', '\\'none\\'' ] ]"
+ },
+ {
+  "id": "W8A-T3-M2",
+  "pkg": "pwa",
+  "file": "index.html",
+  "old": "    <meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'none'\" />\n",
+  "new": "    <meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'none'\" />\n    <meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'none'\" />\n",
+  "tests": "test/shell-csp.test.ts",
+  "red": "Tests  2 failed | 2 passed (4) | first failing: × index.html holds exactly one Content-Security-Policy meta 5ms | AssertionError: expected [ <meta …(2)></meta>, …(1) ] to have a length of 1 but got 2"
+ },
+ {
+  "id": "W8A-T3-M3",
+  "pkg": "pwa",
+  "file": "index.html",
+  "old": "    <meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'none'\" />\n    <meta name=\"description\"",
+  "new": "    <meta name=\"description\"",
+  "tests": "test/shell-csp.test.ts",
+  "also": {
+   "file": "index.html",
+   "old": "    <title>ccrc</title>\n  </head>",
+   "new": "    <title>ccrc</title>\n    <meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'none'\" />\n  </head>"
+  },
+  "red": "Tests  1 failed | 3 passed (4) | first failing: × it precedes the first script and the first style 3ms | AssertionError: expected 15 to be less than 6"
+ }
+]
+```
+
+Task 4:
+
+```json
+[
+ {
+  "id": "W8A-T4-M1",
+  "pkg": "pwa",
+  "file": "src/lib/markdownRunner.ts",
+  "old": "running = { job, timer: setTimer(() => expire(job), job.budgetMs) };",
+  "new": "running = { job, timer: job.kind === 'render' ? undefined : setTimer(() => expire(job), job.budgetMs) };",
+  "tests": "test/markdown-runner.test.ts",
+  "red": "Tests  1 failed | 44 passed (45) | first failing: × a render job answers timeout at budgetMs and the worker is terminated 8ms | AssertionError: expected { state: 'pending' } to deeply equal { state: 'resolved', value: { …(2) } }"
+ },
+ {
+  "id": "W8A-T4-M3",
+  "pkg": "pwa",
+  "file": "src/lib/readerRenderJob.ts",
+  "old": "  if (!scan.ok) return { kind: 'refused', why: scan.why, line: scan.line, value: scan.value };\n",
+  "new": "",
+  "tests": "test/reader-render-job.test.ts",
+  "red": "Tests  1 failed | 6 passed (7) | first failing: × a delimiter run the pre-scan refuses answers refused, before render runs 4ms | AssertionError: expected 'rendered' to be 'refused' // Object.is equality"
+ },
+ {
+  "id": "W8A-T4-M4",
+  "pkg": "pwa",
+  "file": "src/lib/readerRenderJob.ts",
+  "old": "{ maxBytes: DOCS_RENDER_GATE_BYTES, maxHtmlBytes: READER_HTML_MAX_BYTES }",
+  "new": "{ maxBytes: DOCS_RENDER_GATE_BYTES }",
+  "tests": "test/reader-render-job.test.ts",
+  "red": "Tests  1 failed | 6 passed (7) | first failing: × html past READER_HTML_MAX_BYTES answers not-rendered output-over-limit 630ms | AssertionError: expected [ { id: 3, outcome: { …(5) } } ] to deeply equal [ { id: 3, outcome: { …(2) } } ]"
+ },
+ {
+  "id": "W8A-T4-M5",
+  "pkg": "pwa",
+  "file": "src/lib/markdownRunner.ts",
+  "old": "{ id: job.id, kind: 'render', src: job.src }",
+  "new": "{ id: job.id, src: job.src, profile: 'docs' }",
+  "tests": "test/markdown-runner.test.ts",
+  "red": "Tests  1 failed | 44 passed (45) | first failing: × a render job posts exactly {id, kind: render, src} 6ms | AssertionError: expected [ { id: 1, src: '# T', …(1) } ] to deeply equal [ { id: Any<Number>, …(2) } ]"
+ },
+ {
+  "id": "W8A-T4-M2",
+  "pkg": "pwa",
+  "file": "src/lib/markdownWorker.ts",
+  "old": "    (renderJob ??= import('./readerRenderJob')).then(\n      ({ answerRenderJob }) => answerRenderJob(e.data, (r) => worker.postMessage(r)),\n      () => undefined,\n    );",
+  "new": "    answerRenderJob(e.data, (r) => worker.postMessage(r));",
+  "tests": "test/markdown-purity.test.ts",
+  "also": {
+   "file": "src/lib/markdownWorker.ts",
+   "old": "import { answerMarkdownJob, type MarkdownReply } from './markdownParse';\n",
+   "new": "import { answerMarkdownJob, type MarkdownReply } from './markdownParse';\nimport { answerRenderJob } from './readerRenderJob';\n"
+  },
+  "red": "Tests  1 failed | 33 passed (34) | first failing: × the worker entry holds no static import of readerRenderJob 4ms | AssertionError: expected [ './readerRenderJob' ] to deeply equal []"
+ }
+]
+```
+
+Task 5:
+
+```json
+[
+ {
+  "id": "W8A-T5-M1",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "const target = docLinkTarget(ctx, link.fragment === null ? link.path : `${link.path}#${link.fragment}`);",
+  "new": "const target: DocLinkTarget = { kind: 'in-app', href: link.path, fragment: link.fragment };",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  5 failed | 52 passed (57) | first failing: × relative /api/x is inert 6ms | AssertionError: expected { Object (kind, href, ...) } to deeply equal { kind: 'inert' }"
+ },
+ {
+  "id": "W8A-T5-M2",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "hidden.length === 0 && ",
+  "new": "",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × ESC, U+202E and U+200B each send the text to the sheet with their indices 4ms | AssertionError: expected 'write' to be 'sheet' // Object.is equality"
+ },
+ {
+  "id": "W8A-T5-M3",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "host !== ownHost",
+  "new": "host.split('.').slice(-2).join('.') !== ownHost.split('.').slice(-2).join('.')",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  2 failed | 55 passed (57) | first failing: × an external https link opens the sheet, foreign, with its host 5ms | AssertionError: expected { kind: 'sheet', …(4) } to deeply equal { kind: 'sheet', …(4) }"
+ },
+ {
+  "id": "W8A-T5-M5",
+  "pkg": "pwa",
+  "file": "src/lib/router.ts",
+  "old": "history.replaceState(history.state,",
+  "new": "history.replaceState(null,",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × keeps history.state and does not notify 4ms | AssertionError: expected null to deeply equal { a: 1 }"
+ },
+ {
+  "id": "W8A-T5-M6",
+  "pkg": "pwa",
+  "file": "src/lib/router.ts",
+  "old": "history.replaceState(history.state, '', '#' + id);",
+  "new": "history.replaceState(history.state, '', '#' + id);\n  dispatchEvent(new PopStateEvent('popstate'));",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × keeps history.state and does not notify 4ms | AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+ },
+ {
+  "id": "W8A-T5-M4",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "  if (state.s === 'fallback' || state.s === 'plain') return state;",
+  "new": "  if (state.s === 'fallback' && ev.e === 'mount') return { s: 'mounting' };\n  if (state.s === 'fallback' || state.s === 'plain') return state;",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × fallback is terminal for a body key 7ms | AssertionError: expected { s: 'mounting' } to be { s: 'fallback', reason: 'timeout' } // Object.is equality"
+ },
+ {
+  "id": "W8A-T5-M7",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "  return palette === undefined ? { theme: 'auto' } : { theme: palette.mode };",
+  "new": "  return { theme: 'auto' };",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  16 failed | 41 passed (57) | first failing: × the choice light passes through as light 4ms | AssertionError: expected { theme: 'auto' } to deeply equal { theme: 'light' }"
+ },
+ {
+  "id": "W8A-T5-M8",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "      return ev.budgetMs === undefined ? { s: 'plain', why: ev.why } : { s: 'plain', why: ev.why, budgetMs: ev.budgetMs };",
+  "new": "      return { s: 'plain', why: ev.why };",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × plain carries the render budget of a timeout, and only then 5ms | AssertionError: expected { s: 'plain', why: 'timeout' } to deeply equal { s: 'plain', why: 'timeout', …(1) }"
+ },
+ {
+  "id": "W8A-T5-M9",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "  if (themeChoice === 'system') return { theme: 'auto' };\n",
+  "new": "",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × the choice system gives auto even when a palette carries that id 5ms | AssertionError: expected { theme: 'dark' } to deeply equal { theme: 'auto' }"
+ },
+ {
+  "id": "W8A-T5-M10",
+  "pkg": "pwa",
+  "file": "src/docs/reader/policy.ts",
+  "old": "  if (!SHEET_SCHEMES.includes(scheme)) return { kind: 'inert' };",
+  "new": "  if (false) return { kind: 'inert' };",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × an external link whose URL does not parse, or whose scheme is outside the allowlist, is inert 5ms | AssertionError: expected { kind: 'sheet', …(4) } to deeply equal { kind: 'inert' }"
+ }
+]
+```
+
+Task 6:
+
+```json
+[
+ {
+  "id": "W8A-T6-M1",
+  "pkg": "pwa",
+  "file": "src/docs/reader/images.ts",
+  "old": "rasterDataUrl(f.bytes, f.mime)",
+  "new": "'blob:' + rasterDataUrl(f.bytes, f.mime)",
+  "tests": "test/reader-images.test.ts",
+  "red": "Tests  1 failed | 10 passed (11) | first failing: × a raster becomes a data:image/png;base64 URL in the library's image grammar 6ms | AssertionError: expected 'blob:data:image/png;base64,iVBORw0KGg…' to match /…/(png|jpeg|gif|webp|avif|svg\\+xml);base64,[A-Za-z0-9+"
+ },
+ {
+  "id": "W8A-T6-M2",
+  "pkg": "pwa",
+  "file": "src/docs/reader/images.ts",
+  "old": "if (plan.kind !== 'pinned' || plan.deferred) return;",
+  "new": "if (plan.kind !== 'pinned') return;",
+  "tests": "test/reader-images.test.ts",
+  "red": "Tests  1 failed | 10 passed (11) | first failing: × index 30 and later are absent 5ms | AssertionError: expected [ 'i0.png', 'i1.png', 'i2.png', …(28) ] to have a length of 30 but got 31"
+ },
+ {
+  "id": "W8A-T6-M3",
+  "pkg": "pwa",
+  "file": "src/docs/reader/images.ts",
+  "old": "if (total + size > READER_IMAGE_BUDGET_BYTES) {",
+  "new": "if (false) {",
+  "tests": "test/reader-images.test.ts",
+  "red": "Tests  2 failed | 9 passed (11) | first failing: × the byte budget stops adding 129ms | AssertionError: expected [ 'a.png', 'b.png', 'c.png' ] to deeply equal [ 'a.png', 'b.png' ]"
+ },
+ {
+  "id": "W8A-T6-M4",
+  "pkg": "pwa",
+  "file": "src/docs/DocImage.tsx",
+  "old": "if (typeof size === 'number' && size > cap)",
+  "new": "if (false)",
+  "tests": "test/docs-images.test.tsx",
+  "red": "Tests  2 failed | 72 passed (74) | first failing: × an image listed over its class cap is refused too-large before any fetch; at the cap it loads 7ms | AssertionError: expected undefined to be 'Image not loaded: it is 2049 KiB; Doc…' // Object.is equality"
+ },
+ {
+  "id": "W8A-T6-M5",
+  "pkg": "pwa",
+  "file": "src/docs/reader/images.ts",
+  "old": "  return Math.floor(b64.length * 3 / 4) - pad;",
+  "new": "  return 0;",
+  "tests": "test/reader-images.test.ts",
+  "red": "Tests  1 failed | 10 passed (11) | first failing: × an SVG counts its decoded size toward the budget, to the byte 190ms | AssertionError: 3145729: expected [ 'a.png', 'b.png', 'c.svg' ] to deeply equal [ 'a.png', 'b.png' ]"
+ }
+]
+```
+
+Task 7:
+
+```json
+[
+ {
+  "id": "W8A-T7-M1",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "mermaidDraw: 'on-request'",
+  "new": "mermaidDraw: 'auto'",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: × mermaidDraw is on-request, storePrefix is ccrc:reader:v1:, focus is true 4ms | AssertionError: expected 'auto' to be 'on-request' // Object.is equality"
+ },
+ {
+  "id": "W8A-T7-M2",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "    focus: true,\n",
+  "new": "    focus: true,\n    changes: async () => null,\n",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: × the adapters are exactly ccrc's fourteen keys, with no changes or openVersion 6ms | AssertionError: expected [ 'assets', 'changes', 'copy', …(12) ] to deeply equal [ 'assets', 'copy', 'docKey', …(11) ]"
+ },
+ {
+  "id": "W8A-T7-M3",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "storePrefix: READER_STORE_PREFIX",
+  "new": "storePrefix: 'docreader:'",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  2 failed | 19 passed (21) | first failing: × mermaidDraw is on-request, storePrefix is ccrc:reader:v1:, focus is true 3ms | AssertionError: expected 'docreader:' to be 'ccrc:reader:v1:' // Object.is equality"
+ },
+ {
+  "id": "W8A-T7-M5",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/frame/gate.js",
+  "old": "maxFences: 24,",
+  "new": "maxFences: 25,",
+  "tests": "test/reader-assets.test.ts",
+  "red": "Tests  1 failed | 10 passed (11) | first failing: × the Mermaid gate defaults are the spec's 24, 16384 and 131072 4ms | AssertionError: expected { maxFences: 25, …(2) } to deeply equal { maxFences: 24, …(2) }"
+ },
+ {
+  "id": "W8A-T7-M6",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/mount.js",
+  "old": "iframe.setAttribute('sandbox', 'allow-scripts');",
+  "new": "iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: × M8.1 in jsdom: the installed mount's iframe has sandbox allow-scripts, referrerpolicy no-referrer, csp equal to frameCsp and to the srcdoc meta's content, and no src, name or allow 46ms | AssertionError: expected 'allow-scripts allow-same-origin' to be 'allow-scripts' // Object.is equality"
+ },
+ {
+  "id": "W8A-T7-M7",
+  "pkg": "pwa",
+  "file": "src/docs/reader/assets.ts",
+  "old": "assets/frame/reader.css?raw",
+  "new": "assets/reader.css?raw",
+  "tests": "test/reader-assets.test.ts",
+  "red": "Tests  2 failed | 9 passed (11) | first failing: × each asset text's sha256 equals FRAME_MANIFEST's entry 54ms | AssertionError: expected '901ccd09d3377419f7db51e97ce336bfacb3a…' to be '99c87d57f9e2a944e2cec431705e5aa6004a4…' // Object.is equality"
+ },
+ {
+  "id": "W8A-T7-M8",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "    setPrefs(p) {\n      if (destroyed) return;\n      frame.setPrefs({ theme: p.theme });\n    },",
+  "new": "    setPrefs() {},",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: × setPrefs forwards to DocFrame.setPrefs and never remounts 2ms | AssertionError: expected \"vi.fn()\" to be called 1 times, but got 0 times"
+ },
+ {
+  "id": "W8A-T7-M9",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/frame/csp.js",
+  "old": "style-src 'unsafe-inline' data:;",
+  "new": "style-src 'unsafe-inline' data: wss:;",
+  "tests": "test/reader-assets.test.ts",
+  "red": "Tests  1 failed | 10 passed (11) | first failing: × M8.2: the re-tokenised policy is exactly this map 4ms | AssertionError: expected { 'default-src': [ '\\'none\\'' ], …(6) } to deeply equal { 'default-src': [ '\\'none\\'' ], …(6) }"
+ },
+ {
+  "id": "W8A-T7-M10",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/store.js",
+  "old": "if (projected() > BRIDGE_LIMITS.storeBudgetBytes)",
+  "new": "if (false)",
+  "tests": "test/w7-storage-keys.test.ts",
+  "red": "Tests  1 failed | 18 passed (19) | first failing: × a write that cannot fit without evicting the prefs, the current document or a non-document key is refused with budget and evicts nothing 6ms | AssertionError: expected { ok: true } to deeply equal { ok: false, reason: 'budget' }"
+ },
+ {
+  "id": "W8A-T7-M11",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/store.js",
+  "old": "if (utf8Bytes(value) > BRIDGE_LIMITS.valueMaxBytes)",
+  "new": "if (false)",
+  "tests": "test/w7-storage-keys.test.ts",
+  "red": "Tests  1 failed | 18 passed (19) | first failing: × a value over 64 KiB is refused 5ms | AssertionError: expected { ok: true } to deeply equal { ok: false, reason: 'oversize' }"
+ },
+ {
+  "id": "W8A-T7-M12",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "mermaidGate(document.scan.mermaid).inline",
+  "new": "document.scan.mermaid.fences <= 24",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: × M8.20: a doc over the total cap mounts with scan and no Mermaid text 3ms | AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+ },
+ {
+  "id": "W8A-T7-M13",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "copy: (text, check) => input.copy(text, check.hidden),",
+  "new": "copy: input.copy as never,",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: × copy receives the library's check.hidden array; onLink receives a ReaderLink mapped from HostLink; onHash is forwarded; update is never called 6ms | AssertionError: expected last \"vi.fn()\" call to have been called with [ 'a\\u202e', [ { index: 1, …(2) } ] ]"
+ },
+ {
+  "id": "W8A-T7-M14",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/store.js",
+  "old": "evicted.add(doc);",
+  "new": "",
+  "tests": "test/w7-storage-keys.test.ts",
+  "red": "Tests  1 failed | 18 passed (19) | first failing: × a store.set flood past 1 MiB evicts the oldest other documents, only ccrc:reader:v1: keys, stays within the budget and leaves ccrc.fleet-snapshot.v1 writable 19ms | AssertionError: expected 1080804 to be less than or equal to 1048576"
+ },
+ {
+  "id": "W8A-T7-M15",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/store.js",
+  "old": "docStorageKey(docKey, key.slice('doc:'.length))",
+  "new": "`${docPrefix}${key.slice('doc:'.length)}`",
+  "tests": "test/w7-storage-keys.test.ts",
+  "red": "Tests  2 failed | 17 passed (19) | first failing: × a store.set flood past 1 MiB evicts the oldest other documents, only ccrc:reader:v1: keys, stays within the budget and leaves ccrc.fleet-snapshot.v1 writable 17ms | AssertionError: expected +0 to be 6 // Object.is equality"
+ },
+ {
+  "id": "W8A-T7-M4",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/assets/frame/guard.js",
+  "old": "ubmit\", (e) => preventDefault.call(e), true);\n  })();\n})();\n",
+  "new": "ubmit\", (e) => preventDefault.call(e), true);\n  })();\n})();\n\n",
+  "tests": "test/reader-assets.test.ts",
+  "red": "Tests  1 failed | 10 passed (11) | first failing: × each asset text's sha256 equals FRAME_MANIFEST's entry 48ms | AssertionError: expected 'b9d6de41dd84fb5345380c48d94c2685f4f9e…' to be 'ff3c25da5703bc06d40ca0412b2e760c619a7…' // Object.is equality"
+ },
+ {
+  "id": "W8A-T7-M16",
+  "pkg": "pwa",
+  "file": "src/docs/reader/bridge.ts",
+  "old": "await Promise.race([(deps.mermaid ?? loadMermaidAsset)(), deadline])",
+  "new": "await (deps.mermaid ?? loadMermaidAsset)()",
+  "tests": "test/reader-bridge.test.ts",
+  "red": "Tests  1 failed | 20 passed (21) | first failing: × a Mermaid import that never settles mounts without scan once the watchdog passes, and a late chunk changes nothing 5ms | Errors  1 error"
+ }
+]
+```
+
+Task 8:
+
+```json
+[
+ {
+  "id": "W8A-T8-M1",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "    if (overGate) return undefined;\n    const ac = new AbortController();",
+  "new": "    const ac = new AbortController();",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × M8.17: a doc over the render gate never renders or mounts, and shows the gate prompt 27ms | AssertionError: expected \"vi.fn()\" to not be called at all, but actually been called 1 times"
+ },
+ {
+  "id": "W8A-T8-M2",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "      drop();\n      giveBack();\n      dispatch({ e: 'fallback', reason });",
+  "new": "      drop();\n      giveBack();\n      dispatch({ e: 'fallback', reason });\n      void live.current.props.reader.mount(hostRef.current as HTMLElement, {} as ReaderMountInput);",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  2 failed | 37 passed (39) | first failing: × M8.11: onFallback unmounts, shows the fixed note, never shows the reason, and never mounts again 83ms | Errors  1 error"
+ },
+ {
+  "id": "W8A-T8-M3",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "<p className=\"doc-plain-note\">{READER_FALLBACK_NOTE}</p>",
+  "new": "<p className=\"doc-plain-note\">{`${READER_FALLBACK_NOTE} (${state.reason})`}</p>",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  6 failed | 33 passed (39) | first failing: × M8.11: onFallback unmounts, shows the fixed note, never shows the reason, and never mounts again 1058ms"
+ },
+ {
+  "id": "W8A-T8-M4",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "          setAsk({ kind: 'link', ask: { url: r.url, host: r.host, foreign: r.foreign } });",
+  "new": "          window.open(r.url, '_blank', 'noopener,noreferrer');",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  2 failed | 37 passed (39) | first failing: × M8.7: an external link opens the sheet, and window.open runs only on Open, with _blank and noopener,noreferrer 1057ms"
+ },
+ {
+  "id": "W8A-T8-M5",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "      if (d.kind === 'sheet') {",
+  "new": "      if (d.kind === ('sheet' as string) && false) {",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  3 failed | 36 passed (39) | first failing: × M8.19: a copy with hidden characters shows the sheet with a marker each, and copyText waits for its button 1056ms"
+ },
+ {
+  "id": "W8A-T8-M6",
+  "pkg": "pwa",
+  "file": "src/screens/DocsScreen.tsx",
+  "old": "reader = typeof Worker === 'function' ? DEFAULT_READER : null,",
+  "new": "reader = DEFAULT_READER,",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × with no Worker, DocsScreen`s default reader is null and docsRunner.render is never called 17ms | AssertionError: expected \"render\" to not be called at all, but actually been called 1 times"
+ },
+ {
+  "id": "W8A-T8-M7",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "        fallBack(`mount ${reasonOf(e)}`);\n        return;\n      } finally {",
+  "new": "        throw e;\n      } finally {",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  3 failed | 36 passed (39) | first failing: × a rejected adapter import falls back with the fixed note 1004ms | Errors  3 errors"
+ },
+ {
+  "id": "W8A-T8-M8",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "    seededPrefs.current = prefs;\n    m.setPrefs({ theme: prefs });\n  }, [prefs]);",
+  "new": "    seededPrefs.current = prefs;\n  }, [prefs]);",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  2 failed | 37 passed (39) | first failing: × a theme change calls setPrefs once and never remounts 1059ms | AssertionError: expected \"vi.fn()\" to be called 1 times, but got 0 times"
+ },
+ {
+  "id": "W8A-T8-M9",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "      drop();\n      giveBack();\n      dispatch({ e: 'fallback', reason });",
+  "new": "      drop();\n      dispatch({ e: 'fallback', reason });",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × a fallback takes the drafts back once, and the unmount takes back nothing more 61ms | AssertionError: expected [ [ 2 ] ] to deeply equal [ [ 2 ], [ -2 ] ]"
+ },
+ {
+  "id": "W8A-T8-M10",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "      if (cur.props.pendingFragment !== null) cur.props.onFragmentConsumed();\n      const latest",
+  "new": "      const latest",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × hands the mount the document, the file name and the fragment, and spends the fragment 1056ms | AssertionError: expected \"vi.fn()\" to be called 1 times, but got 0 times"
+ },
+ {
+  "id": "W8A-T8-M11",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "      copyText(d.text).catch(() => setAsk({ kind: 'copy-failed', ask: { text: d.text } }));",
+  "new": "      copyText(d.text).catch(() => setAsk({ kind: 'copy', ask: { text: d.text, hidden: [], failed: false } }));",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  2 failed | 37 passed (39) | first failing: × clean text calls copyText directly; a rejected write opens the copy-failed sheet 1058ms"
+ },
+ {
+  "id": "W8A-T8-M12",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "    seededPrefs.current = prefs;\n    m.setPrefs({ theme: prefs });",
+  "new": "    seededPrefs.current = prefs;\n    m.setPrefs({ theme: prefs });\n    m.setPrefs({ theme: prefs });",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  2 failed | 37 passed (39) | first failing: × a theme change calls setPrefs once and never remounts 1058ms | AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times"
+ },
+ {
+  "id": "W8A-T8-M13",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "onCopy={(a) => writeFromSheet(a.text, () => setAsk({ kind: 'copy', ask: { ...a, failed: true } }))}",
+  "new": "onCopy={(a) => { setAsk(null); void copyText(a.text).catch(() => {}); }}",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × a Copy anyway that the clipboard refuses keeps the sheet open and says so 1069ms"
+ },
+ {
+  "id": "W8A-T8-M14",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "    return decodeURIComponent(fragment);",
+  "new": "    return fragment;",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × F1: a percent-encoded fragment is decoded before the frame is seeded; a malformed escape stays raw 58ms | AssertionError: expected 'caf%C3%A9' to be 'café' // Object.is equality"
+ }
+]
+```
+
+Task 9:
+
+```json
+[
+ {
+  "id": "W8A-T9-M1",
+  "pkg": "pwa",
+  "file": "vite.config.ts",
+  "old": "        globIgnores: ['**/mermaid.frame-*.js'],\n",
+  "new": "",
+  "tests": "test/reader-built.test.ts",
+  "red": "Test Files 1 failed (1), Tests 6 skipped (6): the file's beforeAll vite build throws: Assets exceeding the limit: assets/mermaid.frame-*.js is 3.77 MB, and won't be precached"
+ },
+ {
+  "id": "W8A-T9-M2",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "(file) => file === 'src/docs/reader/bridge.ts']",
+  "new": "(file) => file.startsWith('src/docs/')]",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a /host import in DocsLeaf is red 336ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M3",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "file.startsWith('src/');",
+  "new": "file.startsWith('src/docs/');",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  4 failed | 49 passed (53) | first failing: × M8.10 planted: a message listener in lib/router is red 264ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M4",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "return file === (kind === 'iframe' ? 'src/docs/export/buildExport.tsx' : 'src/docs/export/policy.ts');",
+  "new": "return file.startsWith('src/docs/');",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  6 failed | 47 passed (53) | first failing: × M8.10 planted: srcDoc and default-src none in DocsLeaf are red 324ms | AssertionError: expected [] to deeply equal [ …(2) ]"
+ },
+ {
+  "id": "W8A-T9-M5",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "(file: string): boolean => file === 'src/lib/markdownWorker.ts';",
+  "new": "(file: string): boolean => file.startsWith('src/');",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.21 planted: a value import of readerRenderJob in ReaderFrame is red 313ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M6",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "ts.isIdentifier(n.tagName) && n.tagName.text === 'iframe'",
+  "new": "ts.isIdentifier(n.tagName) && n.tagName.text === 'iframe-off'",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a JSX iframe in DocsLeaf is red 338ms | AssertionError: expected [] to deeply equal [ 'src/docs/DocsLeaf.tsx docs:iframe' ]"
+ },
+ {
+  "id": "W8A-T9-M7",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "n.text === 'MessageChannel') hit",
+  "new": "n.text === 'MessageChannelOff') hit",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a MessageChannel in DocsLeaf is red 283ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M8",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "['window', 'self', 'globalThis'].includes(owner.text)",
+  "new": "['window', 'globalThis'].includes(owner.text)",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a self.onmessage assignment in lib/router is red 360ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M9",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "ts.isIdentifier(target) && target.text === 'onmessage'",
+  "new": "ts.isIdentifier(target) && target.text === 'onmessageOff'",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a bare onmessage assignment in lib/router is red 299ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M10",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "if (home === undefined || !home[1](file))",
+  "new": "if (home !== undefined && !home[1](file))",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  2 failed | 51 passed (53) | first failing: × M8.10 planted: the bare package import in DocsLeaf is red 285ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M11",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "(file) => file.startsWith('src/docs/reader/')]",
+  "new": "(file) => file.startsWith('src/')]",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a /frame import in DocsLeaf is red 310ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M12",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "(file) => file === 'src/docs/reader/assets.ts']",
+  "new": "(file) => file.startsWith('src/')]",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: an /assets raw import outside assets.ts is red 294ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M13",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "if (/srcdoc/i.test(text) && ",
+  "new": "if (false && /srcdoc/i.test(text) && ",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a srcdoc string in DocsLeaf is red 355ms | AssertionError: expected [] to deeply equal [ 'src/docs/DocsLeaf.tsx docs:srcDoc' ]"
+ },
+ {
+  "id": "W8A-T9-M14",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "n.text.toLowerCase() === 'srcdoc'",
+  "new": "n.text.toLowerCase() === 'srcdocOff'",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  2 failed | 51 passed (53) | first failing: × M8.10 planted: srcDoc and default-src none in DocsLeaf are red 307ms | AssertionError: expected [ Array(1) ] to deeply equal [ …(2) ]"
+ },
+ {
+  "id": "W8A-T9-M15",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "if (/<iframe/i.test(text) && ",
+  "new": "if (/<iframeOff/i.test(text) && ",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a string holding an iframe tag in DocsLeaf is red 316ms | AssertionError: expected [] to deeply equal [ 'src/docs/DocsLeaf.tsx docs:iframe' ]"
+ },
+ {
+  "id": "W8A-T9-M16",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "/default-src\\s+'none'/i.test(text)",
+  "new": "/default-src\\s+'none'/.test(text)",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: an upper-case default-src none string in DocsLeaf is red 298ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M17",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "(ts.isIdentifier(callee) && callee.text === 'addEventListener') || memberName(callee) === 'addEventListener'",
+  "new": "memberName(callee) === 'addEventListener'",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a bare addEventListener message listener in lib/router is red 289ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M18",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "if (use.value && !adapterUseAllowed(file, target, use.dynamic)) hit(",
+  "new": "if (false && use.value && !adapterUseAllowed(file, target, use.dynamic)) hit(",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  3 failed | 50 passed (53) | first failing: × Library imports planted: a static import of ./reader/bridge in DocsLeaf is red 296ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M19",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "memberName(n) === 'onmessage') hit(n, 'docs:onmessage')",
+  "new": "memberName(n) === 'onmessageOff') hit(n, 'docs:onmessage')",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: an onmessage member in DocsLeaf is red 295ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M20",
+  "pkg": "pwa",
+  "file": "vite.config.ts",
+  "old": "globIgnores: ['**/mermaid.frame-*.js'],",
+  "new": "globIgnores: ['**/mermaid.frame-*.js', '**/readerRenderJob-*.js'],",
+  "tests": "test/reader-built.test.ts",
+  "red": "Tests  1 failed | 5 passed (6) | first failing: × sw.js precaches the chunks that carry guard, bootstrap, enhance and the reader css 4ms | AssertionError: expected [ 'push-sw.js', …(24) ] to include 'assets/readerRenderJob-CdYRK6-z.js'"
+ },
+ {
+  "id": "W8A-T9-M21",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "memberName(callee) === 'postMessage') hit(n, 'docs:postMessage')",
+  "new": "memberName(callee) === 'postMessageOff') hit(n, 'docs:postMessage')",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × M8.10 planted: a postMessage call in DocsLeaf is red 295ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ },
+ {
+  "id": "W8A-T9-M22",
+  "pkg": "pwa",
+  "file": "test/docs-scans.test.ts",
+  "old": "(file === ADAPTER_LOADER && dynamic)",
+  "new": "(file === ADAPTER_LOADER)",
+  "tests": "test/docs-scans.test.ts",
+  "red": "Tests  1 failed | 52 passed (53) | first failing: × Library imports planted: a static import of ./reader/bridge or ./reader/assets in ReaderFrame is red; a literal dynamic import there is the one allowed use 300ms | AssertionError: expected [] to deeply equal [ Array(1) ]"
+ }
+]
+```
+
+Task 10:
+
+```json
+[
+ {
+  "id": "W8A-T10-M1",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/mount.js",
+  "old": "            if (loads === 1) {",
+  "new": "            if (loads >= 1) {",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  3 failed | 21 passed (24) | first failing: × M8.B5: a second load gives the plain view with the fixed note 20362ms | AssertionError: a blocked self-navigation still fires a second load, and the reader falls back: expected 'timeout' to be 'fallback' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M2",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/mount.js",
+  "old": "iframe.setAttribute('sandbox', 'allow-scripts');",
+  "new": "iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  22 failed | 2 passed (24) | first failing: × M8.B1: the 27-channel battery inside the frame reaches neither origin, Mermaid draws on tap, and the hostile directive injects no style 573ms | AssertionError: expected 'fallback' to be 'ready' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M3",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/mount.js",
+  "old": "            fail('navigated');\n        });\n        // The handles are published",
+  "new": "        });\n        // The handles are published",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  3 failed | 21 passed (24) | first failing: × M8.B5: a second load gives the plain view with the fixed note 20392ms | AssertionError: a blocked self-navigation still fires a second load, and the reader falls back: expected 'timeout' to be 'fallback' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M4",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/frame/document.js",
+  "old": "        `<script>${p.guard}</script>` +\n        `<script type=\"application/json\">${p.seed}</script>` +",
+  "new": "        `<script type=\"application/json\">${p.seed}</script>` +\n        `<script>${p.guard}</script>` +",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  22 failed | 2 passed (24) | first failing: × M8.B1: the 27-channel battery inside the frame reaches neither origin, Mermaid draws on tap, and the hostile directive injects no style 2310ms | AssertionError: expected 'fallback' to be 'ready' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M5",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/frame/document.js",
+  "old": "content=\"${p.policy}\">` +\n",
+  "new": "content=\"${p.policy}\">` +\n        `<link rel=preconnect href=https://a.example>` +\n",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  22 failed | 2 passed (24) | first failing: × M8.B1: the 27-channel battery inside the frame reaches neither origin, Mermaid draws on tap, and the hostile directive injects no style 528ms | AssertionError: expected 'fallback' to be 'ready' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M6",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/frame/document.js",
+  "old": "content=\"${p.policy}\"",
+  "new": "content=\"default-src *\"",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  22 failed | 2 passed (24) | first failing: × M8.B1: the 27-channel battery inside the frame reaches neither origin, Mermaid draws on tap, and the hostile directive injects no style 2377ms | AssertionError: expected 'fallback' to be 'ready' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M7",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/frame/seed.js",
+  "old": "    return escapeSeedJson(JSON.stringify(seed));",
+  "new": "    return JSON.stringify(seed);",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  1 failed | 23 passed (24) | first failing: × M8.8: a seed value with </script><script> and U+2028 round-trips inert, and ids named like every bootstrap global change nothing 315ms | AssertionError: the seed text holds no raw \"<\": expected true to be false // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M8",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/mount.js",
+  "old": "iframe.setAttribute('sandbox', 'allow-scripts');",
+  "new": "iframe.setAttribute('sandbox', 'allow-scripts allow-popups');",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  2 failed | 22 passed (24) | first failing: × M8.B4: window.open returns null, top.location= throws, and _blank is inert (a planted target=_blank link, and the author link) 2359ms | AssertionError: window.open returns null: expected 'window' to be 'null' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M9",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/dist/host/mount.js",
+  "old": "                else\n                    refused();\n                return;\n            }\n            if (!parsed.ok || parsed.msg.t === 'ready') {",
+  "new": "                else if (parsed.ok)\n                    effect(parsed.msg);\n                else\n                    refused();\n                return;\n            }\n            if (!parsed.ok || parsed.msg.t === 'ready') {",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "red": "Tests  2 failed | 22 passed (24) | first failing: × M8.B5: a navigate sent before ready has no effect 1210ms | AssertionError: no route: expected '/docs/demo/specs/other.md' to be '/docs/demo/specs/small.md' // Object.is equality"
+ },
+ {
+  "id": "W8A-T10-M10",
+  "pkg": "pwa",
+  "file": "node_modules/@synapsium-labs/docserver/assets/frame/bootstrap.js",
+  "old": "return}dt(n,O)}catch{N(\"boot\")",
+  "new": "return}}catch{N(\"boot\")",
+  "tests": "browser/reader-frame.browser.test.ts (browser config)",
+  "also": {
+   "file": "node_modules/@synapsium-labs/docserver/dist/frame/manifest.generated.js",
+   "old": "bootstrap: { path: \"frame/bootstrap.js\", sha256: \"7660d62d5edc48db520205fd2d24041f409b35270b2739d5f43497abef06310c\", bytes: 27689, chars: 27689, csp: \"'sha256-dmDWLV7cSNtSAgX9LSQEH0CbNScLJznV9DSXq+8GMQw='\" },",
+   "new": "bootstrap: { path: \"frame/bootstrap.js\", sha256: \"e956a98a06873a4b1593778eb4af438ff81a613706e418bb32230983c9e79089\", bytes: 27682, chars: 27682, csp: \"'sha256-6VapigaHOksVk3eOtK9Dj/gaYTcG5Bi7MiMJg8nnkIk='\" },",
+   "why": "the library refuses an asset whose sha256 is not the manifest's, and the frame's CSP names the bootstrap by its hash, so the manifest entry is re-hashed for the edited text"
+  },
+  "red": "Tests  1 failed | 23 passed (24) | first failing: × M8.8: a seed value with </script><script> and U+2028 round-trips inert, and ids named like every bootstrap global change nothing 1372ms | AssertionError: no global the bootstrap guards reads as the element with its id (the pin holds): expected [ 'Buffer', 'Dimension', …(15) ] to deeply equal []"
+ },
+ {
+  "id": "W8A-T10-M11",
+  "pkg": "pwa",
+  "file": "index.html",
+  "old": "    <meta http-equiv=\"Content-Security-Policy\" content=\"frame-src 'none'\" />\n",
+  "new": "",
+  "tests": "browser/reader-frame.browser.test.ts -t 'M8.B5 wall'",
+  "red": "Tests  1 failed | 23 skipped (24) | first failing: × M8.B5 wall: with the shell meta present and the local-network checks off, the frame navigating itself reaches nothing (A3) 1430ms | AssertionError: the shell meta blocked the navigation: nothing reached origin A: expected [ Array(1) ] to deeply equal []"
+ }
+]
+```
+
+Task 11 (the held-out review's fixes):
+
+```json
+[
+ {
+  "id": "W8A-T11-M2",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "          version: cur.props.show.source === 'draft'\n            ? { sha: cur.props.show.head ?? null, draft: true }\n            : { sha: cur.props.show.commit ?? null, draft: false },\n",
+  "new": "",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × refinement (k): a committed doc reaches the mount with its commit and no draft flag, a draft with its head and the flag 58ms | AssertionError: expected undefined to deeply equal { …(2) }"
+ },
+ {
+  "id": "W8A-T11-M3",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderFrame.tsx",
+  "old": "        const reason = outcomeReason(outcome);\n        console.warn(`ccrc: reader not rendered (${reason})`);\n        goPlain(reason);\n",
+  "new": "        console.warn(`ccrc: reader not rendered (${outcome.kind})`);\n        goPlain(outcome.kind);\n",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  6 failed | 33 passed (39) | first failing: × a refused render shows the plain view, mounts nothing, and names the render`s own reason in the console 9ms | AssertionError: the line carries the arm and its own reason: expected [ Array(1) ] to include 'ccrc: reader not rendered (refused: c…'"
+ },
+ {
+  "id": "W8A-T11-M4",
+  "pkg": "pwa",
+  "file": "src/lib/readerLimits.ts",
+  "old": "export const READER_COPY_WRITE_MAX_BYTES = 65536;",
+  "new": "export const READER_COPY_WRITE_MAX_BYTES = 131072;",
+  "tests": "test/reader-policy.test.ts, test/w7-storage-keys.test.ts",
+  "red": "Tests  2 failed | 74 passed (76) | first failing: × the write cap is the library's own copy cap, so the library refuses an over-cap copy first and this is its backstop 5ms | AssertionError: expected 131072 to be 65536 // Object.is equality"
+ },
+ {
+  "id": "W8A-T11-M5",
+  "pkg": "pwa",
+  "file": "src/lib/readerLimits.ts",
+  "old": "export const READER_DOC_KEY_MAX_UNITS = 1024;",
+  "new": "export const READER_DOC_KEY_MAX_UNITS = 2048;",
+  "tests": "test/reader-policy.test.ts, test/w7-storage-keys.test.ts",
+  "red": "Tests  2 failed | 74 passed (76) | first failing: × a key over 1024 code units is null 4ms | AssertionError: expected 'demo:specs:aaaaaaaaaaaaaaaaaaaaaaaaaa…' to be null"
+ },
+ {
+  "id": "W8A-T11-M6",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderSheets.tsx",
+  "old": "        <pre className=\"docs-reader-sheet-text\">{marked.text}</pre>\n",
+  "new": "",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  3 failed | 36 passed (39) | first failing: × M8.19: a copy with hidden characters shows the sheet with a marker each, and copyText waits for its button 65ms | AssertionError: expected '' to be 'a⟦U+001B ESCAPE⟧b⟦U+202E RIGHT-TO-LEF…' // Object.is equality"
+ },
+ {
+  "id": "W8A-T11-M7",
+  "pkg": "pwa",
+  "file": "src/docs/reader/readerText.ts",
+  "old": "    if (named < namedMax) {",
+  "new": "    if (true) {",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × a copy with more hidden characters than the cap names the first ones, marks the rest without a name, and says how many 67ms | AssertionError: the named markers stop at the cap: expected 71 to be 64 // Object.is equality"
+ },
+ {
+  "id": "W8A-T11-M8",
+  "pkg": "pwa",
+  "file": "src/docs/reader/readerText.ts",
+  "old": "    host === ''\n      ? 'This link opens your mail app. Check the address before you open it.' // a mailto with no host to name\n      : `This link",
+  "new": "    `This link",
+  "tests": "test/reader-policy.test.ts",
+  "red": "Tests  1 failed | 56 passed (57) | first failing: × a mailto with no host (empty, or recipients only in ?to=) still opens a sheet, and its warning never reads \"goes to .\" 4ms | AssertionError: expected 'This link leaves this console and goe…' not to match /goes to\\s*\\./"
+ },
+ {
+  "id": "W8A-T11-M9",
+  "pkg": "server",
+  "file": "../.github/ci/library-provenance.sh",
+  "old": "\"$bounded\" 90 npm pack",
+  "new": "npm pack",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  4 failed | 107 passed (111) | first failing: × the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines) 4ms | AssertionError: the pack line: expected +0 to be 1 // Object.is equality"
+ },
+ {
+  "id": "W8A-T11-M10",
+  "pkg": "server",
+  "file": "../.github/ci/library-provenance.sh",
+  "old": "\"$bounded\" 90 gh attestation verify",
+  "new": "gh attestation verify",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  3 failed | 108 passed (111) | first failing: × the provenance script pins the library repo, its release workflow, the tag ref and hosted runners by exact text 7ms | AssertionError: exactly one verify line: expected [] to have a length of 1 but got +0"
+ },
+ {
+  "id": "W8A-T11-M11",
+  "pkg": "server",
+  "file": "../.github/workflows/ci.yml",
+  "old": "../.github/ci/bounded.sh 180 npm audit signatures",
+  "new": "npm audit signatures",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  1 failed | 110 passed (111) | first failing: × build-pwa runs the provenance script before npm ci, then npm audit signatures, then vite build 5ms | AssertionError: expected [ …(4) ] to deeply equal [ …(4) ]"
+ },
+ {
+  "id": "W8A-T11-M1",
+  "pkg": "pwa",
+  "file": "src/docs/docs.css",
+  "old": "/* §4.1: the reader is sized to the Docs pane and the frame scrolls itself. A Docs page that holds the reader is one\n   pane tall: the shell is a viewport-tall column (the desktop grid already is), the pane and the screen and the leaf are\n   columns in turn, and the frame takes what the chrome above it leaves (never below `min-block-size`, where the pane\n   scrolls again). Every other Docs page, the plain view and the fallbacks keep the pane's own scrolling. */\n.app-shell:has(.docs-reader) { height: 100dvh; }\n.app-shell:has(.docs-reader) > .shell-detail { display: flex; flex-direction: column; min-block-size: 0; }\n@media (max-width: 899.98px) {\n  .app-shell:has(.docs-reader) { display: flex; flex-direction: column; }\n  .app-shell:has(.docs-reader) > .shell-detail { flex: 1 1 auto; }\n}\n.shell-detail > .docs-screen:has(.docs-reader) { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; }\n.docs-screen:has(.docs-reader) > * { flex: none; }\n.docs-screen:has(.docs-reader) > .docs-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: var(--sp-2); }\n.docs-leaf:has(.docs-reader) > .doc-formatting { flex: none; }\n/* The frame fills its host by position, and the host takes the room by `flex-basis: 0`, so neither a percentage height\n   nor an auto flex basis has to resolve: the same in every engine. */\n.docs-reader { position: relative; flex: 1 1 0; inline-size: 100%; min-block-size: 20rem; }\n.docs-reader iframe { position: absolute; inset: 0; border: 0; inline-size: 100%; block-size: 100%; }\n",
+  "new": ".docs-reader { inline-size: 100%; block-size: calc(100dvh - var(--sp-12)); min-block-size: 20rem; }\n.docs-reader iframe { border: 0; inline-size: 100%; block-size: 100%; }\n",
+  "tests": "browser/reader-frame.browser.test.ts -t \"sized to the Docs pane\" (browser config)",
+  "red": "Tests  1 failed | 23 skipped (24) | first failing: × the reader is sized to the Docs pane and only the frame scrolls, at 1280x800 and 390x844 991ms | AssertionError: the reader is one pane tall and only its frame scrolls, at both sizes: expected [ …(5) ] to deeply equal []"
+ },
+ {
+  "id": "W8A-T11-M12",
+  "pkg": "pwa",
+  "file": "src/docs/docs.css",
+  "old": ".shell-detail > .docs-screen:has(.docs-reader) { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; }\n",
+  "new": "",
+  "tests": "browser/reader-frame.browser.test.ts -t \"sized to the Docs pane\" (browser config)",
+  "red": "Tests  1 failed | 23 skipped (24) | first failing: × the reader is sized to the Docs pane and only the frame scrolls, at 1280x800 and 390x844 968ms | AssertionError: the reader is one pane tall and only its frame scrolls, at both sizes: expected [ …(4) ] to deeply equal []"
+ },
+ {
+  "id": "W8A-T11-M13",
+  "pkg": "pwa",
+  "file": "src/docs/reader/readerText.ts",
+  "old": " || text.codePointAt(h.index) !== h.codePoint",
+  "new": "",
+  "tests": "test/reader-policy.test.ts, test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 95 passed (96) | first failing: × skips an entry out of range or naming another character, and that character stays as it is 5ms | AssertionError: expected { text: 'a⟦U+001B ESCAPE⟧b', …(1) } to deeply equal { text: 'a​b', unnamed: +0 }"
+ },
+ {
+  "id": "W8A-T11-M14",
+  "pkg": "pwa",
+  "file": "src/docs/ReaderSheets.tsx",
+  "old": "{READER_SHEET_TEXT.copyByHandMarked}",
+  "new": "{READER_SHEET_TEXT.copyByHand}",
+  "tests": "test/reader-frame.test.tsx",
+  "red": "Tests  1 failed | 38 passed (39) | first failing: × a Copy anyway that the clipboard refuses keeps the sheet open and says so 69ms"
+ },
+ {
+  "id": "W8A-T11-M15",
+  "pkg": "server",
+  "file": "../.github/ci/library-provenance.sh",
+  "old": " --silent || { echo \"library-provenance: npm pack failed or passed its deadline twice\" >&2; exit 1; }",
+  "new": " --silent >/dev/null",
+  "tests": "test/ci-pipeline.test.ts",
+  "red": "Tests  2 failed | 109 passed (111) | first failing: × the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines) 4ms | AssertionError: the pack line: expected +0 to be 1 // Object.is equality"
+ }
+]
+```
+
+### Measurements
+
+- **Provenance (Task 2).** `bash .github/ci/library-provenance.sh`: rc 0, last line `library-provenance: @synapsium-labs/docserver@1.0.0 was built by Synapsium-Labs/docserver/.github/workflows/release.yml at refs/tags/v1.0.0`. Negative control with `--repo Synapsium-Labs/ccrc-pwa`: rc 1, `Error: HTTP 404: Not Found` (no attestation of that tarball in this repository). No escalation.
+- **jsdom (Task 7 Step 0).** `MessageChannel` exists and an `iframe`'s `srcdoc` loads, so the real-mount cases and W8A-T7-M6 stay in Task 7.
+- **Worst case (Task 10).** A 512 KiB document (524 288 bytes), 30 images totalling 5 242 880 bytes, and a passing Mermaid gate with 6 fences (57 295 elements in the frame): srcdoc 13 540 112 characters; main-thread mount 102-112 ms; ready 1.41-1.46 s after the mount starts, against a 10 s watchdog; all 30 images decoded. Final `READER_IMAGE_BUDGET_BYTES` = 5242880 (unchanged).
+- **Mermaid chunk (Task 9).** `assets/mermaid.frame-_6G3RlMM.js`, 3.77 MB, not in `sw.js`'s precache; the `readerRenderJob` chunk is precached.
+- **E14.** The shell meta `script-src 'self'` is inherited by the srcdoc, its inline scripts do not run, and the 2 s watchdog falls back to the plain view with the fixed note.
+- **E15.** Five figures (flowchart, sequence, gantt, two hostile) each show Render; none is drawn before the tap and all five are drawn after, one svg each; no style carries the hostile `themeCSS` payload; the loose-level `img` label and click binding reach neither origin.
+- **E16.** `history.pushState` in the frame throws SecurityError (the console's URL and history length unchanged); `clipboard.writeText` in the frame rejects NotAllowedError; a Copy tap on a block holding ESC reaches the parent's copy sheet, which names U+001B.
+- **Sizing (Task 11).** 1280x800: the reader spans 277-792 px, the iframe is 515 px, the pane ends at 800 and nothing outside the frame scrolls. 390x844: 230-836 px, iframe 606 px, nothing outside the frame scrolls.
+
+### Named, without a number
+
+These were judged fills of a silence or choices of measurement, not departures from a spec sentence: the vitest `css` include line for `.css?raw` imports (Task 7); `w7-storage-keys`' red at Task 7 was a whole-file import failure, not the plan's predicted case (the rows carry the red); Task 10's pre-ready navigate clause is driven from the parent's end of the port (W8A-T10-M9), because a Playwright init script reaches the srcdoc frame early in some loads and late in others; the reader seeds the pending fragment decoded (a guarded `decodeURIComponent`, as the plain view's `fragmentTarget` does, keeping the raw text when decoding throws), because Task 8 Decision (6) is silent on encoding and the library's fragment grammar refuses a percent-encoded id (W8A-T8-M14); and `pageStorage` is retyped to return the enumerable port, with `enumerablePageStorage` delegating to it (Task 11's one guard body): the same store, no behaviour change.
+
+### Carried, not fixed
+
+- Task 4's `answerRenderJob` mirrors `answerMarkdownJob` (a third `errorName`), as the plan mandates.
+- `docs/reader/images.ts` (L3) imports `DocImage.tsx` (L4) for the plain view's pin rule; a ring bend, gone when W6's planner replaces the path.
+- `pwa/package-lock.json` re-syncs the stale `../ui` link entry's ranges (metadata only, equal to `ui/package.json`).
+- A failed image load, a 401 included, is left out of the reader (Task 6 Decision (2)); the plain view retries after sign-in, the reader on remount. W6 replaces the path.
+- A render chunk that fails to load in the worker ends as the timeout note (plan Task 4 Step 6); the chunk is precached.
+- The copy check flags exactly §4.4's "Hidden characters in a copy" set (U+202A-202E, U+2066-2069, U+200B-200D, U+2060, U+FEFF), the library's set and W8a's accepted floor. U+200E, U+200F, U+061C and the tag characters U+E0000-E007F are not flagged; extending the set is a spec and library change that has been put to the operator.
+- `.github/ci/bounded.sh`'s header still says it bounds an install command; it now also bounds the pack, the attestation lookup and the signature audit.
+- `build-pwa` keeps `attestations: read` as the plan specifies; whether the step needs it is measured on the pull request's run.
+- The frame's click net cannot see a non-composed click inside a shadow root; only library code can make one (raw HTML is off), and the sandbox is the wall (W8A-T10-M8).
+- Only Chromium is measured; the phone steps E17 and E18 follow rollout.
+- Fixed waits before "nothing happened" checks in the jsdom and browser tests; one jsdom case matches vitest's own mocking error text.
+- `docs/reader/policy.ts` (L1) imports a type from `DocLink.tsx` and `docLinkTarget` from `docsLinks.ts`, which reaches a hook module; the fix needs those two files, outside this wave's edit list. The adapter-import scan lets any file under `docs/reader/` import `/frame`.
+- Browser-battery control gaps, for W8b beside E17 and E18: no row reds the M8.B1 meta-only assertion itself (the planted rows red through the boot gate); the `parent.postMessage` navigate case has no control; and the battery's `iframe` channel cannot tell the frame's policy from the shell's inherited `frame-src 'none'`, so the meta-only row measures 26 channels against the frame's own policy, not 27.
+- An image `src` over the library's 2048-code-unit seed limit (`imageRefMaxCodeUnits`) makes the seed invalid, so the whole document falls back to the plain view: graceful, and it belongs to W8b or W6 with the image planner.
 
 ## Where things stand
 

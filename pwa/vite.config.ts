@@ -164,6 +164,10 @@ export default defineConfig({
         // machine — see deploy/deploy.sh's header. An entry covering `/docs`,
         // ccrc's own Docs pages, fails the build (src/lib/sw-denylist.ts).
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],
+        // The reader frame's Mermaid script is far over workbox's 2 MiB precache ceiling, which makes the build throw.
+        // It is not precached: it loads on demand, only for a document the Mermaid gate lets in (A9, M8.14; the
+        // precache exclusion is the W8a plan's refinement (i)).
+        globIgnores: ['**/mermaid.frame-*.js'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
         // Web Push handlers (push + notificationclick) live in public/push-sw.js
@@ -192,6 +196,9 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // Vitest otherwise turns a `.css?raw` import into an empty string, so the reader's stylesheet text (and the
+    // test that hashes it against the manifest) needs the real bytes. Only the `?raw` form is let through.
+    css: { include: [/\.css\?raw$/] },
     setupFiles: ['./test/setup.ts'],
     // The real-browser leg (browser/**, driven by vitest.browser.config.ts and CI's `browser (pwa)` job) needs a
     // Chrome; the hermetic run never does. vitest's default include would collect browser/*.browser.test.ts, so it

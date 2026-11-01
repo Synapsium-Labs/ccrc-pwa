@@ -57,8 +57,8 @@ name: ci
 # happens to be that week. Especially worth fixing before the repo is public:
 # `pull_request` (not `pull_request_target`) already gives a fork's run a
 # read-only token and no secrets, and this keeps that true if the org default
-# is ever loosened. Five jobs ask for more than this, each in its own
-# `permissions:` block, and each for exactly `contents: read` plus
+# is ever loosened. Six jobs ask for more than this, each in its own
+# `permissions:` block. Five of them ask for exactly `contents: read` plus
 # `actions: read`: `select` (it lists and downloads the trusted main runs'
 # map and durations, and on the daily run lists the workflow runs and jobs
 # of main's head to find a green full-suite), `fast-plan` (the durations it
@@ -66,8 +66,17 @@ name: ci
 # ceilings of their calls of macos.yml, whose direct-run `plan` reads the
 # durations: GitHub checks a called job's permissions even when it would skip), and `map-build`
 # (its check, just before a refresh publishes, that the map it was built on
-# is still the newest trusted one). No job reads check runs, and none asks
-# for any write.
+# is still the newest trusted one). The sixth, `build-pwa`, asks for
+# `contents: read` plus `attestations: read` instead (not `actions: read`). That
+# grant covers THIS repository's attestations, which the job never reads: the
+# provenance step checks the shared Markdown library's attestation (M8.16;
+# section 3.6 of docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md,
+# amended 2026-10-31) before it installs the library, and the library's repository
+# is public, so the lookup does not need the grant: an unauthenticated read of the
+# library's attestations answered, and `contents: read` already gives `gh` a token.
+# The grant is kept because the W8a plan specifies it (FR-6 pins the block);
+# it is not a minimum the step is known to need. No job reads check
+# runs, and none asks for any write.
 permissions:
   contents: read
 
@@ -1148,6 +1157,11 @@ jobs:
     runs-on: ubuntu-latest
     # Under a minute in practice; 15 is headroom for a cold npm cache.
     timeout-minutes: 15
+    # attestations: read, declared for the provenance step alone (M8.16); the census at the top of this file says what it
+    # does and does not grant.
+    permissions:
+      contents: read
+      attestations: read
     # Required by name, like `test`: no job-level `if:`, steps skip instead.
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
@@ -1173,6 +1187,18 @@ jobs:
           cache-dependency-path: |
             pwa/package-lock.json
             ui/package-lock.json
+      # THE SHARED MARKDOWN LIBRARY'S PROVENANCE, BEFORE ANY INSTALL (M8.16 and
+      # section 3.6 of the rich-docs spec, amended 2026-10-31; W8a). `npm ci` runs every
+      # installed package's lifecycle scripts, and a tarball published outside
+      # the library's release workflow could use them to plant the `gh` and
+      # `openssl` this check runs, so the check comes first and needs only node,
+      # `npm pack`, `openssl`, `gh` and pwa's lock. No `continue-on-error`: an
+      # attestation outage reds the job and the remedy is a re-run. Then pwa's
+      # `npm audit signatures` checks every registry signature after the install.
+      - if: env.CCRC_LEG == 'run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/ci/library-provenance.sh
       # The build reads ui SOURCE through `exports['.']`. Same resolution rule
       # as the test leg: ui's own node_modules or nothing resolves.
       #
@@ -1186,7 +1212,13 @@ jobs:
         run: ../.github/ci/bounded.sh 180 npm ci
       - if: env.CCRC_LEG == 'run'
         working-directory: pwa
-        run: ../.github/ci/bounded.sh 180 npm ci && ./node_modules/.bin/vite build
+        run: ../.github/ci/bounded.sh 180 npm ci
+      - if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ../.github/ci/bounded.sh 180 npm audit signatures
+      - if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ./node_modules/.bin/vite build
       # The build is only proven by its output existing. A green build step with
       # no artifact is the failure this repo has already shipped once.
       - if: env.CCRC_LEG == 'run'

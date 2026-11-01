@@ -17,6 +17,7 @@
   "dependencies": {
     "@ccrc/ui": "file:../ui",
     "@radix-ui/react-popover": "~1.3.1",
+    "@synapsium-labs/docserver": "1.0.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "framer-motion": "^14.6.0",
