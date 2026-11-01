@@ -34,6 +34,14 @@ on:
         type: boolean
         default: false
 
+env:
+  # A STALLED CACHE DOWNLOAD IS A MISS AFTER 3 MINUTES (D-7689). The cache library
+  # (server-deps' cache restores, and setup-node's `cache: npm`)
+  # reads this and gives up on a download past it, reporting a miss, so the
+  # job falls to its bounded npm ci instead of waiting on the cache service.
+  # Its default is 10 minutes; a healthy restore here takes seconds.
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '3'
+
 # A direct run (`github.workflow` is this file's name only then: a called run carries its caller's) shares one
 # group, never cancelled, so pushes coalesce. A called run gets a group of its caller's run and its inputs.
 concurrency:
@@ -219,10 +227,10 @@ jobs:
       # about the darwin arm. Measuring the deadline shim bare is a DIFFERENT
       # probe and needs its own job, not this one's omission.
       - name: Install system dependencies
-        run: brew install bash tmux flock jq coreutils
+        run: .github/ci/bounded.sh 300 brew install bash tmux flock jq coreutils
       - name: Install
         working-directory: server
-        run: npm ci
+        run: ../.github/ci/bounded.sh 180 npm ci
       - name: Probe
         working-directory: server
         run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts test/compact-lock-darwin-probe.test.ts --reporter=verbose

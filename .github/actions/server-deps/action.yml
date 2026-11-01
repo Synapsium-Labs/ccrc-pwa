@@ -19,6 +19,12 @@
 # passes `save: 'true'`: it installs on a miss and writes the cache, and every
 # other job restores what it wrote. macOS installs as before (the trees hold
 # platform binaries, and no Linux job can write them).
+#
+# EVERY INSTALL HAS A DEADLINE (D-7689). Composite steps cannot take
+# `timeout-minutes`, so each command carries its own: apt through
+# .github/ci/apt-bounded.sh, npm ci and brew through .github/ci/bounded.sh,
+# each at most twice; a stalled cache restore is a miss after
+# SEGMENT_DOWNLOAD_TIMEOUT_MINS (set by the calling workflow).
 name: server-deps
 description: System packages plus npm ci in server/, agent/, pwa/ and ui/ — what any server test file may need — restored from the run's cache on Linux.
 
@@ -150,13 +156,13 @@ runs:
     - name: Install system dependencies (macos)
       if: inputs.platform == 'macos'
       shell: bash
-      run: brew install bash tmux flock jq coreutils
+      run: .github/ci/bounded.sh 300 brew install bash tmux flock jq coreutils
 
     - name: Install server
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: server
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     # server/test/typecheck-tests.test.ts spawns tsc against agent/'s own
     # tests-inclusive project too (`agentRoot` resolved two levels up) — a
@@ -166,7 +172,7 @@ runs:
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: agent
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     # Same cross-package need, for pwa: typecheck-tests.test.ts also spawns
     # tsc against `pwa/tsconfig.json` (pwaRoot, resolved the same way as
@@ -179,7 +185,7 @@ runs:
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: pwa
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     # AND ui, because installing pwa is not enough. pwa consumes @ccrc/ui as
     # SOURCE (`exports['.']` points at `src/index.ts`), so the tsc spawned
@@ -196,7 +202,7 @@ runs:
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: ui
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     - name: Keep the installed trees (linux)
       if: inputs.platform == 'linux' && inputs.save == 'true' && steps.trees.outputs.cache-hit != 'true'

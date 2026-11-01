@@ -1189,12 +1189,12 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     // The miss arm of the apt install (D-6770): the hit arm dpkg-installs the cached packages first, and the miss
     // arm runs under a deadline with one retry (D-7686).
     expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n(?: {6}.*\n)*? {8}\.github\/ci\/apt-bounded\.sh 180 sh -c 'apt-get update && apt-get install -y tmux jq strace python3'$/m);
-    expect(a).toMatch(/^ {4}- name: Install system dependencies \(macos\)\n {6}if: inputs\.platform == 'macos'\n {6}shell: bash\n {6}run: brew install bash tmux flock jq coreutils$/m);
+    expect(a).toMatch(/^ {4}- name: Install system dependencies \(macos\)\n {6}if: inputs\.platform == 'macos'\n {6}shell: bash\n {6}run: \.github\/ci\/bounded\.sh 300 brew install bash tmux flock jq coreutils$/m);
     for (const pkg of ['server', 'agent', 'pwa']) {
-      expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: npm ci$`, 'm'));
+      expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: \\.\\./\\.github/ci/bounded\\.sh 180 npm ci$`, 'm'));
     }
     // ui too: pwa reads it as source (the census above), and the cache entry holds all four trees.
-    expect(a).toMatch(/^ {6}working-directory: ui\n {6}run: npm ci$/m);
+    expect(a).toMatch(/^ {6}working-directory: ui\n {6}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci$/m);
   });
 });
 
@@ -1286,7 +1286,106 @@ describe('apt runs only when needed, and never without a deadline (D-7686)', () 
     expect(sb, 'storybook-a11y no longer installs the browser libraries').toBeDefined();
     expect(sb).toMatch(/^ {8}timeout-minutes: \d+$/m);
     expect(sb).toMatch(/^ {10}\.\.\/\.github\/ci\/apt-bounded\.sh \d+ \.\/node_modules\/\.bin\/playwright install-deps chromium$/m);
-    expect(sb).toMatch(/^ {10}timeout -k 10 \d+ \.\/node_modules\/\.bin\/playwright install chromium$/m);
+    expect(sb).toMatch(/^ {10}\.\.\/\.github\/ci\/bounded\.sh \d+ \.\/node_modules\/\.bin\/playwright install chromium$/m);
+  });
+});
+
+// ── D-7689: every install command has a deadline and one retry ───────────────
+describe('every install command runs under a deadline, at most twice (D-7689)', () => {
+  const BOUNDED = join(REPO, '.github', 'ci', 'bounded.sh');
+  const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
+
+  /**
+   * Runs bounded.sh with a PATH of fakes only: `deadline` is the fake deadline tool's name (timeout, gtimeout, or
+   * none — then the script must fall back to perl), and `install` fails its first `failures` calls.
+   */
+  const sandbox = (deadline: 'timeout' | 'gtimeout' | 'none', failures: number, args?: string[]) => {
+    const log = join(mkTmp('ccrc-bounded-log-'), 'log');
+    writeFileSync(log, '');
+    const count = `${log}.n`;
+    writeFileSync(count, '0');
+    const fakes: Record<string, string> = {
+      install: `echo "install $*" >> '${log}'\nn=$(cat '${count}'); echo $((n + 1)) > '${count}'\n[ "$n" -ge ${failures} ]`,
+    };
+    if (deadline !== 'none') fakes[deadline] = `echo "${deadline} $1 $2 $3" >> '${log}'\nshift 3\nexec "$@"`;
+    const dir = fakeBin(fakes);
+    for (const bin of ['bash', 'sh', 'env', 'cat', 'perl']) execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+    const r = spawnSync(real('bash'), [BOUNDED, ...(args ?? ['90', 'install', 'ci'])], {
+      encoding: 'utf8', env: { PATH: dir }, timeout: 30_000,
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, log: readFileSync(log, 'utf8') };
+  };
+
+  it('a command that succeeds runs once, under `timeout -k 10 <seconds>`', () => {
+    const r = sandbox('timeout', 0);
+    expect(r.status).toBe(0);
+    expect(r.log).toBe('timeout -k 10 90\ninstall ci\n');
+  });
+
+  it('a failed (or timed-out) attempt is retried once, with a warning; two failures fail — never a third attempt', () => {
+    const once = sandbox('timeout', 1);
+    expect(once.status).toBe(0);
+    expect(once.log.match(/^install ci$/gm), 'two attempts').toHaveLength(2);
+    expect(once.stdout).toContain('::warning::bounded: attempt 1 of 2 failed or passed 90s: install ci');
+    const never = sandbox('timeout', 99);
+    expect(never.status).not.toBe(0);
+    expect(never.log.match(/^install ci$/gm), 'exactly two attempts').toHaveLength(2);
+  });
+
+  it('macOS: gtimeout (coreutils) when there is no timeout, and perl\'s alarm when there is neither — never no deadline', () => {
+    const g = sandbox('gtimeout', 0);
+    expect(g.status).toBe(0);
+    expect(g.log).toBe('gtimeout -k 10 90\ninstall ci\n');
+    // The perl arm, for real: a command that would sleep 30 s is cut at 1 s, twice, and the script fails.
+    const dir = fakeBin({ hang: 'exec perl -e "sleep 30"' });
+    for (const bin of ['bash', 'perl']) execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+    const t0 = Date.now();
+    const r = spawnSync(real('bash'), [BOUNDED, '1', 'hang'], { encoding: 'utf8', env: { PATH: dir }, timeout: 25_000 });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout.match(/::warning::bounded: attempt [12] of 2/g)).toHaveLength(2);
+    expect(Date.now() - t0, 'the perl deadline did not cut the command').toBeLessThan(15_000);
+  });
+
+  it('refuses a missing or non-numeric deadline', () => {
+    for (const args of [['install'], ['soon', 'install'], ['0', 'install']]) {
+      const r = sandbox('timeout', 0, args);
+      expect(r.status, args.join(' ')).toBe(2);
+      expect(r.log, 'ran anyway').toBe('');
+    }
+  });
+
+  /** Code lines only (comments dropped) of every workflow and composite action. */
+  const sources = (): Array<[string, string]> => {
+    const workflows = readdirSync(join(REPO, '.github', 'workflows')).filter((f) => /\.ya?ml$/.test(f))
+      .map((f) => `.github/workflows/${f}`);
+    const actions = readdirSync(join(REPO, '.github', 'actions')).map((d) => `.github/actions/${d}/action.yml`)
+      .filter((f) => existsSync(join(REPO, f)));
+    expect(workflows, 'the workflow scan went vacuous').toContain(CI);
+    expect(actions, 'the composite-action scan went vacuous').toContain(DEPS);
+    return [...workflows, ...actions].map((f) => [f, read(f).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')]);
+  };
+
+  it('every npm ci, brew install and playwright browser download goes through bounded.sh, with a deadline of at most 5 minutes', () => {
+    let seen = 0;
+    for (const [f, code] of sources()) {
+      for (const m of code.matchAll(/^.*\b(?:npm ci|brew install|playwright install(?!-deps))\b.*$/gm)) {
+        if (/^\s*(?:- )?(?:name|description):/.test(m[0])) continue; // prose, not a command
+        seen++;
+        const bound = /(?:^|\s)(?:\.\.\/)?\.github\/ci\/bounded\.sh (\d+) (?:npm ci|brew install|\.\/node_modules\/\.bin\/playwright install)\b/.exec(m[0]);
+        expect(bound, `${f}: an install with no deadline: ${m[0].trim()}`).not.toBeNull();
+        expect(Number(bound![1]), `${f}: ${m[0].trim()}`).toBeLessThanOrEqual(300);
+      }
+    }
+    expect(seen, 'the install census went vacuous').toBeGreaterThanOrEqual(14);
+  });
+
+  it('every cache restore (actions/cache/restore and setup-node\'s npm cache) gives up on a stalled download after 3 minutes', () => {
+    // @actions/cache reads SEGMENT_DOWNLOAD_TIMEOUT_MINS (default 10) and treats a download past it as a MISS, so a
+    // stalled restore falls to the bounded npm ci instead of holding the job. Workflow-level, so the composite's
+    // restore steps and every setup-node inherit it.
+    for (const f of [CI, MACOS]) {
+      expect(read(f), f).toMatch(/^env:\n(?: {2}.*\n| *\n)*? {2}SEGMENT_DOWNLOAD_TIMEOUT_MINS: '3'$/m);
+    }
   });
 });
 
@@ -1363,7 +1462,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
   it('pwa is typechecked once per run: test (pwa) runs tsc, build-pwa runs vite build alone', () => {
     const build = job('build-pwa').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(build, 'build-pwa runs tsc a second time through `npm run build`').not.toMatch(/npm run build/);
-    expect(build).toMatch(/^ {8}run: npm ci && \.\/node_modules\/\.bin\/vite build$/m);
+    expect(build).toMatch(/^ {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci && \.\/node_modules\/\.bin\/vite build$/m);
     expect(build).not.toMatch(/\btsc\b[^\n]*--noEmit/);
     expect(step(job('test'), 'Typecheck')).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/tsc --noEmit$/m);
     // package.json's build is still `tsc && vite build` for a developer's `npm run build`; the CI step is its second half.
@@ -1522,9 +1621,9 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     expect(s[2]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
     expect(s[2]).toMatch(/^ {10}node-version: '22'$/m);
     expect(s[2]).toMatch(/^ {10}cache-dependency-path: \|\n {12}pwa\/package-lock\.json\n {12}ui\/package-lock\.json$/m);
-    expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);
+    expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
     // pwa reads @ccrc/ui as SOURCE and the leg's imports reach it, so ui is installed too, before the Test step.
-    expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: npm ci\n/m);
+    expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
     expect(s.findIndex((st) => /- name: Install @ccrc\/ui$/m.test(st)), 'ui is installed before the Test step')
       .toBeLessThan(s.findIndex((st) => /- name: Test$/m.test(st)));
     expect(step(job('browser-pwa'), 'Test'))

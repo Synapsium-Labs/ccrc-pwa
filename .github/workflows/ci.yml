@@ -131,6 +131,12 @@ on:
 # was selected. One line, defined once — server/test/ci-pipeline.test.ts.
 env:
   CCRC_SELECTION: enforce
+  # A STALLED CACHE DOWNLOAD IS A MISS AFTER 3 MINUTES (D-7689). The cache library
+  # (server-deps' cache restores, and setup-node's `cache: npm`)
+  # reads this and gives up on a download past it, reporting a miss, so the
+  # job falls to its bounded npm ci instead of waiting on the cache service.
+  # Its default is 10 minutes; a healthy restore here takes seconds.
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '3'
 
 # Pull requests: one group per PR, and a newer push cancels the older run.
 # Everything else never cancels, and each mode has its own group, so an hourly
@@ -626,7 +632,7 @@ jobs:
           cache-dependency-path: server/package-lock.json
       - name: Install
         working-directory: server
-        run: npm ci
+        run: ../.github/ci/bounded.sh 180 npm ci
       - name: Typecheck
         working-directory: server
         run: ./node_modules/.bin/tsc --noEmit
@@ -798,7 +804,7 @@ jobs:
       - name: Install
         if: env.CCRC_LEG == 'run'
         working-directory: ${{ matrix.package }}
-        run: npm ci
+        run: ../.github/ci/bounded.sh 180 npm ci
 
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
@@ -1064,7 +1070,7 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - working-directory: ui
-        run: npm ci
+        run: ../.github/ci/bounded.sh 180 npm ci
       # Chromium only, plus its system libraries (`install-deps`): a bare
       # runner has none of the shared libraries headless chromium links
       # against. Every tool in this
@@ -1075,12 +1081,13 @@ jobs:
       # Split in two (D-7686): the system libraries go through apt, so they
       # run under apt-bounded.sh (a deadline per attempt and one retry — a
       # stalled mirror once held this step to the job limit), and the browser
-      # download is bounded on its own. The step's limit is the backstop.
+      # download runs under bounded.sh (its own deadline and one retry,
+      # D-7689). The step's limit is the backstop.
       - working-directory: ui
         timeout-minutes: 12
         run: |
           ../.github/ci/apt-bounded.sh 240 ./node_modules/.bin/playwright install-deps chromium
-          timeout -k 10 240 ./node_modules/.bin/playwright install chromium
+          ../.github/ci/bounded.sh 240 ./node_modules/.bin/playwright install chromium
       # ONE BUILD PER SKIN (D-5093, its verification clause): the default
       # build is Refined (STORYBOOK_SKIN unset, `resolveSkin` of undefined) and
       # the second opens every story in Instrument. The catalogue's ids and
@@ -1176,10 +1183,10 @@ jobs:
       # run, in that job.
       - if: env.CCRC_LEG == 'run'
         working-directory: ui
-        run: npm ci
+        run: ../.github/ci/bounded.sh 180 npm ci
       - if: env.CCRC_LEG == 'run'
         working-directory: pwa
-        run: npm ci && ./node_modules/.bin/vite build
+        run: ../.github/ci/bounded.sh 180 npm ci && ./node_modules/.bin/vite build
       # The build is only proven by its output existing. A green build step with
       # no artifact is the failure this repo has already shipped once.
       - if: env.CCRC_LEG == 'run'
@@ -1247,14 +1254,14 @@ jobs:
       - name: Install
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
-        run: npm ci
+        run: ../.github/ci/bounded.sh 180 npm ci
       # BEFORE the browser config runs, for the test matrix's reason above: pwa
       # reads @ccrc/ui as SOURCE, and the leg's imports reach it (lib/router.ts,
       # through DocImage), which resolves only from ui's own node_modules.
       - name: Install @ccrc/ui
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
-        run: npm ci
+        run: ../.github/ci/bounded.sh 180 npm ci
       # Local binary, never npx (see the test matrix above).
       - name: Test
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
