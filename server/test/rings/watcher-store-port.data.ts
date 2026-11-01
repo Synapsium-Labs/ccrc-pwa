@@ -40,7 +40,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'updateEpoch', 'upsertNodeMeasurement',
 ];
 
-/** Each whole hand-off key (30) with its call-site count (31 in all), sorted by key. */
+/** Each whole hand-off key (27) with its call-site count (28 in all), sorted by key. */
 export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.archivedExpiryPass -> coord/expireArchived.ts#expireArchived': 1,
   'watch.ts#FleetWatcher.archivedExpiryPass -> coord/expireArchived.ts#recordExpireFeed': 1,
@@ -59,17 +59,14 @@ export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/routes.ts#CoordRoutesHandle.withSweepAbandon': 1,
   'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#readDeadCoordinatorJournalTrust': 1,
   'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreaker': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/reclaim.ts#measureClaimant': 1,
   'watch.ts#FleetWatcher.deadDispatchStep -> coord/abandonDeadDispatch.ts#abandonDeadDispatches': 1,
   'watch.ts#FleetWatcher.digestBeat -> coord/digest.ts#buildDigest': 1,
   'watch.ts#FleetWatcher.execChildReclaim -> coord/childReclaim.ts#reclaimChild': 1,
   'watch.ts#FleetWatcher.execChildReclaimRelease -> coord/childReclaim.ts#releaseRetiredChildHold': 1,
-  'watch.ts#FleetWatcher.judgeStall -> coord/reclaim.ts#measureClaimant': 1,
   'watch.ts#FleetWatcher.mirrorFor -> coord/mirror.ts#JournalMirror': 1,
   'watch.ts#FleetWatcher.noteDeadCoordinatorSeed -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreakerSeed': 1,
   'watch.ts#FleetWatcher.orphanBeat -> orphanTreeBeat.ts#OrphanTreeBeat': 1,
   'watch.ts#FleetWatcher.recordChildShadow -> coord/expireArchived.ts#recordExpireFeed': 1,
   'watch.ts#FleetWatcher.staleArchive -> staleArchiveBeat.ts#StaleArchiveBeat': 1,
-  'watch.ts#FleetWatcher.sweepDrift -> coord/reclaim.ts#measureClaimant': 1,
   'watch.ts#FleetWatcher.tick -> fleet.ts#assembleFleet': 1,
 };
