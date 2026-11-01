@@ -5949,7 +5949,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     const AT = 1767225600;   // 2026-01-01T00:00:00.000Z
     const AT_ISO = '2026-01-01T00:00:00.000Z';
     const COPY = 'reasoning.sqlite.damaged-20260101T000000Z';
-    const STORE_LINE = /the bridge's reasoning store is switched off|found its reasoning store damaged/;
+    const STORE_LINE = /the bridge's reasoning store is switched off|found its reasoning store damaged|set a damaged reasoning store aside/;
     const DISABLED = (id: string, reason: string, at: string, copy = ''): string =>
       `WARN codex: ${id}: the bridge's reasoning store is switched off for the rest of its last process (${reason}, since ${at}): every request that process answers is answered without the model's earlier reasoning replayed${copy} (names only, never content).`;
     const COPY_CLAUSE = (found: string, file: string): string => `; at its start it had set its damaged store (${found}) aside as ${file}`;
@@ -5959,6 +5959,12 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
       `WARN codex: ${id}: at its start the bridge found its reasoning store damaged (${found}) and set it aside as ${file}, starting a fresh store; only the model's earlier reasoning was lost.`;
     const SET_ASIDE_FIX = (dir: string, file: string): string =>
       `  remedy: nothing to repair: the bridge serves from its fresh store. Read the copy, ${dir}/${file}, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- ${dir}/${file} ${dir}/${file}-wal ${dir}/${file}-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you`;
+    // Fix round 3, F2: a copy found on disk whose entry does not name it (the bridge restarted since): no `found`.
+    const EARLIER = (id: string, file: string): string =>
+      `WARN codex: ${id}: at an earlier start the bridge set a damaged reasoning store aside as ${file}, and the copy is still in the lane directory (what was found is not in the stats file, whose entry describes only the bridge's last process); only the model's earlier reasoning was lost.`;
+    // Fix round 3, F4: a newer build's store is never checked or touched, so a restart is not its remedy.
+    const NEWER_FIX = (id: string, dir: string): string =>
+      `  remedy: a newer build of the bridge wrote this reasoning store (its user_version is above USER_VERSION in ccd/codexbridge/store.py), and a restart does not change it: the start never checks or touches a newer store. Run that build again (ccrc update --to <its version>, or ccrc rollout --to <its version> across the fleet), or stop the lane (ccrc codex stop ${id}), move ${dir}/reasoning.sqlite and its -wal and -shm aside by hand, then start it again (ccrc codex start ${id}): the bridge makes a fresh store, without the model's earlier reasoning — ccrc never moves it for you`;
     /** Lane `id`'s stats file as its bridge writes it, with `events` passed to the real `Stats.store_event`. */
     const writeStore = async (home: string, id: string,
       events: ReadonlyArray<{ reason: string; found?: string; file?: string }>): Promise<string> => {
@@ -6078,6 +6084,93 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
       expect(r.stdout).not.toContain('fx-sentinel');
       expect(r.stdout).not.toMatch(/codex-b: at its start the bridge/);
       noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F4: `store:newer-version` names what wrote the store, and its remedy is that build, or a hand move.
+    it('a store a newer build wrote warns as disabled, and its remedy is that build, never a restart', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-newer-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      await writeStore(home, 'codex-a', [{ reason: 'store:newer-version' }]);
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-a', 'store:newer-version', AT_ISO), NEWER_FIX('codex-a', laneDir(home, 'codex-a')));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F2: the entry is per process, so a restart writes `ok` while the copy stays. The copy is found on
+    // disk, so its WARN lasts until it is deleted; with no entry naming it, the line says no `found`.
+    it('a copy still in the lane directory after a restart warns, though the entry reads ok', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-restarted-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', []);
+      expect(storeOf(file)).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
+      const dir = laneDir(home, 'codex-a');
+      const older = 'reasoning.sqlite.damaged-20251231T235959Z';
+      for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) writeFileSync(join(dir, f), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      // The newest copy by its stamp is the one named; its -wal and -shm are not copies of their own.
+      expectOnce(r.stdout, EARLIER('codex-a', COPY), SET_ASIDE_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+      for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) rmSync(join(dir, f));
+      const again = runDoctor(home);
+      expect(again.stdout, again.stdout).not.toMatch(STORE_LINE);
+      noRunnerBugLine(again.stdout, 'codex');
+    });
+
+    // Fix round 3, F2/F3: only the store's OWN copy shape counts — keyed on lane.json's `bridgeFiles.store`, a regular
+    // file, never a symlink: another file's copy, a short stamp, a suffix and a symlink are no copy, so no row.
+    it('a look-alike that is not the store\'s copy, or a symlink of its shape, has no store row', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-lookalike-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      await writeStore(home, 'codex-a', []);
+      const dir = laneDir(home, 'codex-a');
+      for (const f of ['bridge.stats.json.damaged-20260101T000000Z', 'other.sqlite.damaged-20260101T000000Z',
+        'reasoning.sqlite.damaged-2026010T000000Z', 'reasoning.sqlite.damaged-20260101T00000Z',
+        `${COPY}-x`, `${COPY}-wal`, `x${COPY}`]) {
+        writeFileSync(join(dir, f), 'fixture\n', { mode: 0o600 });
+      }
+      const target = join(home, 'elsewhere-copy');
+      writeFileSync(target, 'fixture\n', { mode: 0o600 });
+      symlinkSync(target, join(dir, COPY));
+      const r = runDoctor(home);
+      expect(r.stdout, r.stdout).not.toMatch(STORE_LINE);
+      expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).toMatch(/^PASS codex: /);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F3: the copy's name shape, end to end. A REAL copy, made by the store's own set-aside at a start
+    // (store.py's DAMAGED_STAMP), is named by the doctor's WARN and removed by the lane's reap, so a change of that
+    // stamp that the doctor and `_codex_reap_files` do not follow reds this case.
+    it('a copy the store itself set aside is named by the WARN and reaped with the lane', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-real-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const dir = laneDir(home, 'codex-a');
+      const store = join(dir, (JSON.parse(readFileSync(join(dir, 'lane.json'), 'utf8')) as
+        { bridgeFiles: Record<string, string> }).bridgeFiles['store']);
+      const ops = [
+        { op: 'store-damage', path: store, how: 'not-a-database' },
+        { op: 'stats-open', path: statsFile(home, 'codex-a'), lane: 'codex-a' },
+        { op: 'store-open', path: store, stats: true },
+        { op: 'stats-call', method: 'flush', kwargs: { force: true } },
+      ];
+      const run = await runBridgeDriver(home, { ops });
+      expect(run.timedOut, run.stderr).toBe(false);
+      const lines = driverLines(run.stdout);
+      expect(lines.map((l) => l['op']), `${run.stdout}\n${run.stderr}`).toEqual(ops.map((o) => o.op));
+      expect(lines[2]['disabled'], JSON.stringify(lines[2])).toBeNull();
+      const copies = readdirSync(dir).filter((n) => n.startsWith(`${store.slice(dir.length + 1)}.damaged-`));
+      expect(copies).toHaveLength(1);
+      const copy = copies[0]!;
+      const found = (lines[0]['probe'] as { raised: string }).raised;
+      const r = runDoctor(home);
+      expectOnce(r.stdout, SET_ASIDE('codex-a', found, copy), SET_ASIDE_FIX(dir, copy));
+      noRunnerBugLine(r.stdout, 'codex');
+      // The reap removes with `rm` and `rmdir`, which the doctor's contained PATH holds only when linked in.
+      for (const bin of ['rm', 'rmdir']) linkReal(home, bin);
+      const reap = spawnSync(BASH, ['-c', `. ${JSON.stringify(join(home, 'ccrc', 'ccd', 'ccrc'))}; _codex_reap_files codex-a; echo "rc=$?"`],
+        { env: doctorEnv(home), encoding: 'utf8' });
+      expect(reap.stdout, reap.stderr).toBe('rc=0\n');
+      expect(existsSync(join(dir, copy))).toBe(false);
+      expect(existsSync(dir), existsSync(dir) ? readdirSync(dir).join(' ') : '').toBe(false);
     });
   });
 });
