@@ -409,7 +409,7 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(copyText).toHaveBeenCalledWith(`x${zws}`.repeat(total));
   });
 
-  it('clean text calls copyText directly; a rejected write opens the copy sheet', async () => {
+  it('clean text calls copyText directly; a rejected write opens the copy-failed sheet', async () => {
     const h = harness();
     render(frame(h));
     const input = await ready(h);
