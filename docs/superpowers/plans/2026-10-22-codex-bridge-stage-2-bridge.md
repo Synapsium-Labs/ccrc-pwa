@@ -4162,6 +4162,36 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   `OSError`, the fresh store failing) disables the store as `store:set-aside-failed`. Nothing raises, and nothing else
   changes at runtime: a failure after the start still disables the store for the process, and the next start's check
   is what repairs a store damaged while running.
+  - The classes, measured on the fixtures (Python 3.14.4, sqlite 3.46.1): a file whose bytes are not sqlite's raises
+    exactly `sqlite3.DatabaseError` (`file is not a database`) at `PRAGMA user_version`; a torn primary-key index (the
+    index page written back as it stood before three later rows) and an index page filled with 0xff raise nothing at
+    `user_version` or at the check, which answers them in rows (the first exactly `wrong # of entries in index
+    sqlite_autoindex_reasoning_1`, the incident's text); a store another connection holds exclusively raises
+    `sqlite3.OperationalError` (`database is locked`).
+  - The close before the renames passes `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` (Python 3.12's `setconfig`, when present):
+    measured, a plain last close checkpoints a damaged store's WAL into the file and deletes it, so the copy would lose
+    its WAL. A connection `_conn` refuses is closed the same way. With the WAL left at `<path>-wal` instead, sqlite
+    deletes it when the fresh, empty file is first opened (measured), so the row is never replayed, but the copy loses
+    it.
+  - Not set aside, by the brief's order: `_conn`'s `PRAGMA journal_mode = WAL` runs before the check, so a damaged store
+    in rollback-journal mode is switched to WAL (its header written) before it is set aside.
+
+  Pins, in `server/test/codex-bridge-store.test.ts`'s "the start check" block: CONTROL (a healthy store with a row
+  survives a restart, no copy, the entry `ok`); NOT A DATABASE (set aside, the copy 0600 from a 0644 plant and byte for
+  byte the planted file, the fresh store serving, `store:set-aside` counted once, `found` the measured class);
+  DAMAGED INDEX OR PAGE (both shapes set aside with `found` `quick-check`, their rows not answered); the WAL case (the
+  fresh store never answers the WAL's row, the copy's `-wal` is the damaged one's byte for byte, and the copy with it
+  still answers the row); RETENTION (two damaged starts, an older copy and a stray sibling planted: only the newest
+  copy is left, and two names outside the shape stay); LOCKED (`store:OperationalError`, no copy, the file's inode and
+  bytes unchanged); SET-ASIDE FAILS (the first `os.rename` fails with EACCES: `store:set-aside-failed`, the request
+  still built, the file unchanged). The newer-version case also checks that no copy is made. Rows, each restored from
+  a saved copy with sha256 compared: the `quick_check` call replaced by an `ok` answer, DAMAGED INDEX OR PAGE, the WAL
+  case and RETENTION red (`stale-index: expected { items: [], phase: null } to be null`); the exact-class test
+  widened to every `DatabaseError`, LOCKED red (`expected null to be 'store:OperationalError'`); the sibling renames
+  skipped, the WAL case and RETENTION red; the retention call removed, RETENTION red (`expected [ …(2) ] to have a
+  length of 1 but got 2`); the unchecked close made a plain close, the WAL case and RETENTION red; the set-aside's own
+  reason replaced by a re-raise, SET-ASIDE FAILS red (`expected 'store:PermissionError' to be
+  'store:set-aside-failed'`).
 - **Why:** On 2026-10-28 the fleet box moved to a new machine and each lane's directory was carried over with its
   `reasoning.sqlite`. Both lanes' stores arrived damaged: `PRAGMA quick_check` on them as they stood answered
   `wrong # of entries in index sqlite_autoindex_reasoning_1`, a torn primary-key index, which fits a live sqlite file
@@ -4194,7 +4224,19 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   `ReasoningStore` as its callback, and forces a stats flush after the store is built and before the server binds
   its port, so the file describes this process from its first moment. A reader of an older file finds no `store`
   key, which means the bridge predates the entry, never `ok`. The doctor's WARN that reads the entry lands in a later
-  commit of the same pull request: its file is held by another change.
+  commit of the same pull request: its file is held by another change. `file` is kept only as a basename (a value
+  with a `/` is `unrecognised`), since NAME_RE alone admits a path.
+
+  Pins, in `server/test/codex-bridge-count-stats.test.ts`'s "the store entry" block: the entry reset at construction
+  while a planted file's outcomes are carried; a set-aside recorded and counted through `store_event`; `disabled`
+  outranking `set-aside` in either order with `setAside` kept; a `found` or `file` outside the bounds written
+  `unrecognised`; and the first stats-file case's key list now holding `store`. In
+  `server/test/codex-bridge-server.test.ts`, "the stats file describes this process before its first request": a
+  healthy start and a damaged one, each reading the file before any request. Rows, each restored from a saved copy
+  with sha256 compared: the entry dropped from the constructor, five stats cases red; the loaded entry carried in
+  `_load`, the reset case red; the outranking guard removed, the either-order case red (`disabled-first`); the
+  basename guard removed, the bounds case red; the pre-bind flush removed, both server cases red (`expected
+  '2026-01-01T00:00:00.000Z' not to be '2026-01-01T00:00:00.000Z'`).
 - **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
   the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
   nothing. A per-process entry, written before the first request, is what a reader can rule on.
