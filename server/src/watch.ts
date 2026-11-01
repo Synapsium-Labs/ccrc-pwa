@@ -5045,7 +5045,7 @@ export class FleetWatcher {
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
    *  calls and never awaits them (`sweepTempRootCollect`). Its connection epoch is read at its head and again after the
    *  gather (path-identity spec 2026-10-12 §5.5), and its listing is handed to the switch's latch (§5.4) and nothing else. */
-  private async collectPass(coord: CoordStore, names: readonly string[]): Promise<void> {
+  private async collectPass(coord: WatcherCoordPort, names: readonly string[]): Promise<void> {
     // ZERO — THE CONNECTION EPOCH (path-identity spec 2026-10-12 §5.5): the epoch the lane's observation pairs stand under.
     // One that moved since the last pass clears every pair, so no pair straddles two connections. An act job is queued
     // under it (`collectAct`), and its executor composes nothing when the epoch it reads after its final listing differs.
@@ -5135,7 +5135,7 @@ export class FleetWatcher {
    *  generations as it composes, through the port. An answer folds through Task 4's `collectAfterAudit`, an observation
    *  only under its capture; a missing capability is a lane-wide clear; a rejection is a defect the reader could not
    *  name, folded as an audit with no document that observes nothing (`a-thrown-job-reads-as-no-document`). */
-  private collectLearn(coord: CoordStore, id: string, pass: number, mono: number): void {
+  private collectLearn(coord: WatcherCoordPort, id: string, pass: number, mono: number): void {
     this.collectEntryOf(id);
     this.collectInFlight.set(id, { kind: 'learn', sinceMono: mono, phase: 'queued' });
     void this.deps.queue.run(id, () => learnCollect({
@@ -5162,7 +5162,7 @@ export class FleetWatcher {
    *  nothing. The job reaches this lane's memory through `collectPortFor` alone, and the switch's control state through
    *  `collectControlDeps`. Its answer is folded for the LANE first (`collectJobEffects`: the slot, the flock latch),
    *  then for its id (`collectFoldJob`). */
-  private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {
+  private collectAct(coord: WatcherCoordPort, id: string, pass: number, mono: number): void {
     this.collectEntryOf(id);
     this.collectInFlight.set(id, { kind: 'act', sinceMono: mono, phase: 'queued' });
     this.collectSlot = { kind: 'job', id, sinceMono: mono };
@@ -5193,7 +5193,7 @@ export class FleetWatcher {
 
   /** A settled act job (spec §5.10): its LANE effects first (L1's `collectJobEffects`: the slot, the latch), then its
    *  fold for the id. A lane-wide clear the job saw was applied through the port the instant it saw it, never here. */
-  private collectSettleJob(coord: CoordStore, id: string, pass: number,
+  private collectSettleJob(coord: WatcherCoordPort, id: string, pass: number,
     s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }): void {
     const clock = this.collectClock();
     const fx = collectJobEffects(s, clock.mono, CHILD_RECLAIM_STALL_MS);
@@ -5215,7 +5215,7 @@ export class FleetWatcher {
    *  - an id forgotten while the job was out: every fold is dropped but an `acted` outcome's word about the box and a
    *    `collected` act's row (`collectForgottenActRow`), worded from the job's own observation-2 document.
    *  - `threw`: an audit with no document, which observes nothing. */
-  private collectFoldJob(coord: CoordStore, id: string, pass: number,
+  private collectFoldJob(coord: WatcherCoordPort, id: string, pass: number,
     s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }, clock: CollectClock): void {
     if (s.kind === 'threw') {
       this.collectFoldAudit(coord, id, null, { kind: 'no-document', stderr: s.detail }, clock, null);
@@ -5268,7 +5268,7 @@ export class FleetWatcher {
    *  `composed` is given and both generations it captured still stand (`collectFresh`); then the feed cue. An id
    *  forgotten while the call was out has no entry, and the answer is dropped for it
    *  (`an-answer-for-a-forgotten-id-is-dropped`): the entry written, or null. */
-  private collectFoldAudit(coord: CoordStore, id: string, pass: number | null, a: CollectAudit, arrived: CollectClock,
+  private collectFoldAudit(coord: WatcherCoordPort, id: string, pass: number | null, a: CollectAudit, arrived: CollectClock,
     composed: CollectGenerations | null): CollectEntry | null {
     this.collectBoxProbesAnswered(a, arrived.mono);
     if (pass !== null) this.collectPassTally.get(pass)?.audits.set(id, collectPassClass(a));
@@ -5292,7 +5292,7 @@ export class FleetWatcher {
 
   /** Writes `next` back after one step's feed cue (Task 4's `collectFeedStep`, over Task 5's cue), and writes the
    *  episode's ONE row only when the step opened one: a repeat is quiet. */
-  private collectFeedAfter(coord: CoordStore, id: string, next: CollectEntry, cue: CollectFeedCue,
+  private collectFeedAfter(coord: WatcherCoordPort, id: string, next: CollectEntry, cue: CollectFeedCue,
     row: () => { readonly title: string; readonly body: string }): CollectEntry {
     const stepped = collectFeedStep(next, cue);
     this.collectState.set(id, stepped.entry);
@@ -5336,7 +5336,7 @@ export class FleetWatcher {
   /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
    *  (`coord/collectTempRoot.ts`) — a `run` row, recorded and archived, never pushed (`notify`'s `'record-only'`, D-5857);
    *  a failed archive write is said in the collector's own sentence and never stops the lane. */
-  private collectRecordFeed(coord: CoordStore, row: {
+  private collectRecordFeed(coord: WatcherCoordPort, row: {
     readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
   }): void {
     notify({ notifyLog: this.deps.notifyLog, coord },
@@ -5348,7 +5348,7 @@ export class FleetWatcher {
    *  a change to the switch's control state with no run and no session: `kind:'coord'`, `sessionId:''` and
    *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed (`notify`'s
    *  `'record-only'`, D-5857). A failed archive write is said in the collector's own sentence and never stops the lane. */
-  private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void {
+  private collectRecordCoordFeed(coord: WatcherCoordPort, title: string, body: string): void {
     notify({ notifyLog: this.deps.notifyLog, coord }, { kind: 'coord', sessionId: '', runId: null, title, body },
       'record-only', { degraded: `temp-root collector ${title}, feed archive degraded` });
   }
@@ -5356,7 +5356,7 @@ export class FleetWatcher {
   /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
    *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and
    *  resolves the switch with none between its reads and the flip. `id` is the job's, which the flip's row names. */
-  private collectPortFor(coord: CoordStore, id: string): CollectLanePort {
+  private collectPortFor(coord: WatcherCoordPort, id: string): CollectLanePort {
     return {
       clock: () => this.collectClock(),
       generations: (of) => ({ lane: this.collectLaneGen, id: this.collectState.get(of)?.idGen ?? -1 }),
@@ -5387,7 +5387,7 @@ export class FleetWatcher {
    *  executor): the store, the process's ONE generation journal (`Deps.collectLane`, built in `index.ts`), the wall
    *  clock, and the latch's row writer. A server built with no journal hands null, which the executor reads as an
    *  unmeasurable control state, never as a missing journal. Wiring only: the deciding is the executor's and L1's. */
-  private collectControlDeps(coord: CoordStore): CollectControlDeps {
+  private collectControlDeps(coord: WatcherCoordPort): CollectControlDeps {
     return {
       coord,
       journal: this.deps.collectLane?.journal ?? null,

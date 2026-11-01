@@ -10,14 +10,14 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (164, with #1614's `delegationRunStamps`): on `main` every reach is
+/** The members reached through the whole store (162, with #1614's `delegationRunStamps`): on `main` every reach is
  *  whole. Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'absorbParkEscalation', 'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById',
   'autoContinueHeldUntil', 'backOff', 'baselineParkBox', 'bindingRunsOf', 'bindingsOf', 'bumpReplayCount',
   'cancelDeliveriesTo', 'checksRows', 'childReclaimCoordinatorClaims', 'childReclaimSessionIds', 'childStaleActivity',
-  'claimDigestDay', 'closeRun', 'collectLaneRow', 'commitDeadCoordinatorBreakerState', 'coordPlacementStamps',
-  'currentAskFor', 'currentAsksFor', 'currentEpisode', 'db', 'deadAnchors', 'deadCoordinatorBreakerHeldLatest',
+  'claimDigestDay', 'closeRun', 'commitDeadCoordinatorBreakerState', 'coordPlacementStamps', 'currentAskFor',
+  'currentAsksFor', 'currentEpisode', 'db', 'deadAnchors', 'deadCoordinatorBreakerHeldLatest',
   'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows', 'declineApproval', 'declineAsk',
   'delegationEventStats', 'delegationRunStamps', 'deliveredUnacked', 'delivery', 'digestApprovals', 'digestAsks',
   'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
@@ -38,7 +38,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'recordObservation', 'recordRejection', 'recordRunEvent', 'recordShadowVerdict', 'recordStallObservation',
   'refusalsFor', 'refuseRelease', 'rejectDelivery', 'rekeyNode', 'releaseAsk', 'releaseLease', 'releases',
   'renewClaimRow', 'resolveNode', 'restampAsk', 'retireGeneration', 'rollSettings', 'run', 'runEvents',
-  'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState', 'setCollectLane',
+  'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
   'setDeliveryEnvelope', 'setSession', 'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
   'stallCandidates', 'stallMailFor', 'stallSettings', 'stalledDispatchRunIds', 'strandedClear', 'takeApprovalForRule',
   'takeAskForAnswer', 'unlandedBriefs', 'unsealDeadCoordinatorBreakerState', 'untakeAsk', 'updateEpoch',
