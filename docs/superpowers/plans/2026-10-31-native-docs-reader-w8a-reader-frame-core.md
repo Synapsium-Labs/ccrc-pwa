@@ -1902,7 +1902,8 @@ These were judged fills of a silence or choices of measurement, not departures f
 - Only Chromium is measured; the phone steps E17 and E18 follow rollout.
 - Fixed waits before "nothing happened" checks in the jsdom and browser tests; one jsdom case matches vitest's own mocking error text.
 - `docs/reader/policy.ts` (L1) imports a type from `DocLink.tsx` and `docLinkTarget` from `docsLinks.ts`, which reaches a hook module; the fix needs those two files, outside this wave's edit list. The adapter-import scan lets any file under `docs/reader/` import `/frame`.
-- Browser-battery control gaps, for W8b beside E17 and E18: no row reds the M8.B1 meta-only assertion itself (the planted rows red through the boot gate); the `parent.postMessage` navigate case has no control; and the battery's `iframe` channel cannot tell the frame's policy from the shell's inherited `frame-src 'none'`.
+- Browser-battery control gaps, for W8b beside E17 and E18: no row reds the M8.B1 meta-only assertion itself (the planted rows red through the boot gate); the `parent.postMessage` navigate case has no control; and the battery's `iframe` channel cannot tell the frame's policy from the shell's inherited `frame-src 'none'`, so the meta-only row measures 26 channels against the frame's own policy, not 27.
+- An image `src` over the library's 2048-code-unit seed limit (`imageRefMaxCodeUnits`) makes the seed invalid, so the whole document falls back to the plain view: graceful, and it belongs to W8b or W6 with the image planner.
 
 ## Where things stand
 
