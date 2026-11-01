@@ -374,13 +374,15 @@ function writeCensus(home: string, passes: RepoRow[][], status = 'ok', at = new 
     started: at, finished: at, pin: '0.9.9', status, repos })) }));
 }
 
-/** A published build of one repository: `<store>/<key>/builds/<id>/meta.json` and `current` naming it (spec §2.1, §2.3). */
+/** A published build of one repository: `<store>/<key>/builds/<id>/meta.json` and `current` naming it (spec §2.1, §2.3).
+ *  A healthy build by default on every platform: a full build with a measured peak (1 GiB, under 75% of
+ *  SLICE_LOADED's MemoryMax), so the Linux-only sizing arm stays silent unless a row asks for a null or a large peak. */
 function plantBuild(home: string, key: string, meta: Record<string, unknown>): void {
   const kd = join(storeOf(home), key);
   mkdirSync(join(kd, 'builds', 'b1'), { recursive: true });
   writeFileSync(join(kd, 'builds', 'b1', 'meta.json'), JSON.stringify({
     schema: 1, build_id: 'b1', repo_key: key, engine: '0.9.9', kind: 'full', commit: 'a'.repeat(40),
-    built_at: new Date().toISOString(), last_full_at: new Date().toISOString(), peak_mem_kb: null, ...meta }));
+    built_at: new Date().toISOString(), last_full_at: new Date().toISOString(), peak_mem_kb: 1048576, ...meta }));
   rmSync(join(kd, 'current'), { force: true });
   symlinkSync(join('builds', 'b1'), join(kd, 'current'));
 }
@@ -878,6 +880,9 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     expect(line).toContain(`${KEY} has 2 tree(s) and no published graph at the pin 0.9.9 (current: 0.9.8)`);
     plantBuild(home, KEY, { engine: '0.9.9' });
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);
+    // The same healthy published build on the fleet's platform: the Linux-only sizing arm reads its measured peak.
+    stubSliceSystemctl(home, SLICE_LOADED);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
   });
   it('an excluded repository, or one with no trees, is not asked for a build', () => {
     const home = healthy('ccrc-doctor-gfx2-excluded-'); graphifyHealthy(home);
@@ -923,6 +928,8 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     expect(line).toContain('the safety net is not running');
     plantBuild(home, KEY, { last_full_at: isoAgo(86400) });
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);
+    stubSliceSystemctl(home, SLICE_LOADED);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
   });
 
   // §8 rows 8 and 9: real per-tree directories (migration pending), and dangling links.
@@ -985,6 +992,21 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     expect(line).toMatch(/^WARN graphify:/);
     expect(line).toContain(KEY);
     expect(gfxVerdicts(runCheck(home, 'darwin').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+  });
+
+  it('with no rebuilt row in the census, the sizing reads the served full build\'s meta: a null peak WARNs, a large one names both numbers', () => {
+    const home = healthy('ccrc-doctor-gfx2-metapeak-'); graphifyHealthy(home);
+    stubSliceSystemctl(home, SLICE_LOADED);
+    writeCensus(home, [[repoRow({ 'trees': 1, outcome: 'fresh' })]]);
+    plantBuild(home, KEY, { peak_mem_kb: null });
+    let line = gfxVerdicts(runCheck(home, 'linux').stdout).find((l) => l.includes('peak unmeasured'));
+    expect(line).toMatch(/^WARN graphify:/);
+    expect(line).toContain(KEY);
+    plantBuild(home, KEY, { peak_mem_kb: 5000000 });
+    line = gfxVerdicts(runCheck(home, 'linux').stdout).find((l) => l.includes('MemoryMax'));
+    expect(line).toContain(`${KEY}'s last full build peaked at 5000000 KiB, above 75% of the tests slice's MemoryMax=6442450944 (6291456 KiB)`);
+    plantBuild(home, KEY, { peak_mem_kb: null, kind: 'incremental' });
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
   });
 
   // §8 row 13 and plan finding 1: the backoff WARN, with the shrink remedy; N28's doctor half.
