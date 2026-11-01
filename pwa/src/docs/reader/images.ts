@@ -27,8 +27,11 @@ function decodedSize(dataUrl: string): number {
   return Math.floor(b64.length * 3 / 4) - pad;
 }
 
-/** Loads the images of `refs` (index `i` is the image's index on its page, as the plain view counts it). Only a
- *  pinned plan before `DOCS_MAX_IMAGES_PER_PAGE` loads; the page's byte budget stops further adds; a failed load is
+/** Loads the images of `refs`, which are the DISTINCT srcs `scanRefs` returns, in first-seen order (the library dedupes
+ *  them, so no ref repeats and nothing here dedupes again). Index `i` is a ref's place in that list, NOT the plain view's
+ *  count, which numbers every `img` element: on a page whose repeats push a new src past the plain view's 30th element,
+ *  the reader may load an image the plain view defers. The bound of `DOCS_MAX_IMAGES_PER_PAGE` loads holds either way
+ *  (refinement (d)). Only a pinned plan before that index loads; the page's byte budget stops further adds; a failed load is
  *  left out; an aborted `signal` ends the walk with what had loaded. The loads are launched together and run through
  *  the screen's queue (its concurrency bounds them), and are read back in ref order, so the budget is order-stable. */
 export async function loadReaderImages(
@@ -36,12 +39,9 @@ export async function loadReaderImages(
 ): Promise<ReaderImages> {
   let full = false;
   const launched: { readonly ref: string; readonly draft: boolean; readonly result: Promise<Fetched | null> }[] = [];
-  const seen = new Set<string>();
   refs.forEach((ref, i) => {
-    if (seen.has(ref)) return;
     const plan = planImageRef(ctx, ref, i);
     if (plan.kind !== 'pinned' || plan.deferred) return;
-    seen.add(ref);
     const job: LoadJob = {
       key: docsApi.file(ctx.project, plan.pin), project: ctx.project, pin: plan.pin, cls: plan.cls,
       loaders: assets.loaders, queue: assets.queue,

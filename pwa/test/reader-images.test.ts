@@ -4,6 +4,7 @@
 // the page's byte budget. Loaders and queue are injected; every page is a placeholder (`demo`, `https://a.example`).
 import { describe, expect, it, vi } from 'vitest';
 import type { Element as HastElement, Nodes as HastNode } from 'hast';
+import { scanRefs } from '@synapsium-labs/docserver/render';
 import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocsEntry, type DocsTreeOk } from '../../shared/docs';
 import { planImageRef, type DocsAssetContextValue } from '../src/docs/DocImage';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
@@ -118,6 +119,35 @@ describe('loadReaderImages: the reader frame\'s images as data: URLs (refinement
     expect(Object.keys(urls)).toEqual(['a.png', 'b.png']);
   });
 
+  it('the index counts the distinct srcs scanRefs returns, so a repeat does not spend the cap', async () => {
+    // Thirty img elements of one src, then a second src as the 31st element: the plain view defers the second (its
+    // element index is 30), the reader's list is ['a.png', 'b.png'] and b.png sits at index 1, so it loads.
+    const src = Array.from({ length: DOCS_MAX_IMAGES_PER_PAGE }, () => '![i](a.png)').join('\n\n') + '\n\n![i](b.png)\n';
+    const refs = scanRefs(src).images;
+    expect(refs).toEqual(['a.png', 'b.png']);
+    const a = rig();
+    const { urls } = await run(refs, withImages(['a.png', 'b.png']), a);
+    expect(Object.keys(urls)).toEqual(['a.png', 'b.png']);
+    expect(a.raster).toHaveBeenCalledTimes(2);
+  });
+
+  it('an SVG counts its decoded size toward the budget, to the byte', async () => {
+    const svgOf = (len: number): DocsFileAnswer => {
+      const head = '<svg xmlns="http://www.w3.org/2000/svg">';
+      const r = fileResponse(head + ' '.repeat(len - head.length - 6) + '</svg>');
+      return { s: 'ok', value: { ...r, contentClass: 'svg', show: { ...r.show, path: 'c.svg' } } };
+    };
+    const names = ['a.png', 'b.png', 'c.svg'];
+    // Two 1 MiB rasters leave exactly 3 MiB: an SVG of 3 MiB fits (its base64 has no padding), one byte more does not
+    // (its base64 ends in '==', so the count must subtract the padding to land on the byte).
+    for (const [len, fits] of [[3 * MIB, true], [3 * MIB + 1, false]] as const) {
+      const a = rig(async () => ({ s: 'ok', value: { bytes: pngOf(MIB), mime: 'image/png' } }));
+      a.file.mockImplementation(async () => svgOf(len));
+      const { urls } = await run(names, withImages(names), a);
+      expect(Object.keys(urls), String(len)).toEqual(fits ? names : ['a.png', 'b.png']);
+    }
+  });
+
   it('a space-in-path ref in scanRefs\' encoded form pins like the plain view\'s own recorded src', () => {
     // The plain view's recorded src for a spaced path is already the encoded form (the parse encodes it), and the
     // raw spelling is refused as malformed, so the encoded ref is the one both views pin.
@@ -133,6 +163,7 @@ describe('loadReaderImages: the reader frame\'s images as data: URLs (refinement
     const viaRef = planImageRef(ctx, 'a%20b.png', recorded?.imageIndex ?? null);
     expect(viaRef.kind).toBe('pinned');
     if (viaRef.kind === 'pinned') expect(viaRef.pin).toMatchObject({ kind: 'committed', section: 'specs', path: 'a b.png' });
+    expect(scanRefs('![i](<a b.png>)').images).toEqual(['a%20b.png']);
     expect(planImageRef(ctx, 'a b.png', 0)).toMatchObject({ kind: 'refused', why: 'malformed' });
   });
 
