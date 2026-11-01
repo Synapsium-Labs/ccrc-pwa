@@ -35,10 +35,11 @@ import { resolveInputFor } from '../src/update/project.js';
 import { DETACH_CAP, ROLLBACK_CAP, planDispatch } from '../src/update/dispatch.js';
 import { dispatchViewsFor } from '../src/update/converge.js';
 import { spawnFromRunner } from './updateSpawnFake.js';
-import { parseApplyBody, parseRollbackBody } from '../src/update/routes.js';
+import { REFRESH_MIN_INTERVAL_MS, parseApplyBody, parseRollbackBody } from '../src/update/routes.js';
+import type { CataloguePoller } from '../src/update/catalogue.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { updateLauncherPath, updateSpawnArgv } from '../../shared/agent-protocol.js';
-import type { MoveRequestAnswer, RequestKind } from '../../shared/api.js';
+import type { CatalogueState, MoveRequestAnswer, RequestKind } from '../../shared/api.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -137,7 +138,7 @@ afterEach(async () => {
 
 /** `watcher` off by default: a route case measures the request row, and with no watcher
  *  `watcher?.triggerDispatch()` is a no-op, so nothing moves the lease under it. */
-const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner } = {}): Promise<Opened> => {
+const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner; catalogue?: (coord: CoordStore) => CataloguePoller } = {}): Promise<Opened> => {
   const home = mkTmp('ccrc-update-apply-');
   seedRoster(home);
   const cfg = { ...loadConfig({ CCRC_HOME: home }), authEnabled: o.auth ?? false };
@@ -153,6 +154,7 @@ const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner } = 
     // `Deps.updateRunner` is the two-template capability, never a raw Runner (Task 5,
     // D-3397): the recording Runner goes behind the same factory.
     ...(o.runner ? { updateRunner: spawnFromRunner(o.runner, cfg.home) } : {}),
+    ...(o.catalogue ? { catalogue: o.catalogue(coord) } : {}),
   };
   const bus = new Bus();
   // A REAL watcher, never started: the routes call its `triggerDispatch()` and nothing else.
@@ -581,23 +583,129 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     expect(plan.move, JSON.stringify(plan)).toBeNull();
   });
 
-  it("a fleet row's own busy lease skips it — and holds the server behind it too, never moving the server ahead (D-3406, D-3401 corrected)", async () => {
+  it("D-7678: a fleet row's own busy lease gets the request beside it (queued after the running move) — and still holds the server behind it, never moving the server ahead (D-3406 replaced, D-3401)", async () => {
     const f = await open();
     catalogue(f.coord);
     plant(f.coord, fleetNode());
     plant(f.coord, serverNode());
     hold(f.coord, FLEET_ID);   // an older tag's lease, still outstanding
-    const before = f.coord.node(FLEET_ID)!;
     const beforeServer = f.coord.node(SERVER_ID)!;
     const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.11' });
     expect(r.statusCode, r.body).toBe(202);
     expect(r.json()).toEqual({
-      ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why: 'busy' }, { nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+      ok: true, requested: [FLEET_ID], queued: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
     } satisfies MoveRequestAnswer);
-    // No request written, and no note either — the row is busy, not idle (`noteDispatchRefusal` refuses it
-    // anyway); the server was never asked at all, so nothing changed there either.
-    expect(f.coord.node(FLEET_ID)).toEqual(before);
+    // The request stands beside the lease, which is untouched; the server was never asked at all.
+    expect(f.coord.node(FLEET_ID)).toMatchObject({
+      updateState: 'pending', updateTarget: 'v0.0.10', updateDetail: 'fixture lease', requestedTag: 'v0.0.11', requestedKind: 'update',
+    });
     expect(f.coord.node(SERVER_ID)).toEqual(beforeServer);
+    // The running move settles: the request it did not serve survives it.
+    expect(f.coord.settleNode(FLEET_ID, 'done: v0.0.10', 5)).toMatchObject({ ok: true, keptRequest: true });
+    expect(f.coord.node(FLEET_ID)!.requestedTag).toBe('v0.0.11');
+  });
+
+  it('D-7678: Update all v(N+1) while the SERVER holds its own v(N) lease requests BOTH rows — the server\'s beside its lease, kept when that lease settles', async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode({ currentVersion: 'v0.0.10', highestVersion: 'v0.0.10' }));
+    plant(f.coord, serverNode());
+    hold(f.coord, SERVER_ID);   // the server's own v0.0.10 move, still running
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.11' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({
+      ok: true, requested: [FLEET_ID, SERVER_ID], queued: [SERVER_ID], skipped: [],
+    } satisfies MoveRequestAnswer);
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ requestedTag: 'v0.0.11', requestedKind: 'update' });
+    expect(f.coord.node(SERVER_ID)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.10', requestedTag: 'v0.0.11' });
+    expect(f.coord.settleNode(SERVER_ID, 'done: v0.0.10', 5)).toEqual({ ok: true, clearedRequest: false, keptRequest: true });
+    expect(f.coord.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.11', requestedKind: 'update' });
+  });
+
+  it('a single named node with its own busy lease still answers 409 busy and writes nothing (D-3386 kept, D-7678)', async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    hold(f.coord, FLEET_ID);
+    const before = f.coord.node(FLEET_ID)!;
+    const r = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.11' });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json()).toEqual({ ok: false, error: 'busy', detail: 'pending' });
+    expect(f.coord.node(FLEET_ID)).toEqual(before);
+  });
+});
+
+describe('POST /api/updates/apply — a tag the catalogue has not listed yet runs one catalogue poll first (D-7681)', () => {
+  /** A poller whose poll lists `extra` (a release published after the last scheduled poll) through the store's own
+   *  listing writer, as the real poller does. */
+  const lateListing = (extra: ReleaseListingRow[], lastRequestAt: number | null = null) => {
+    const polls: number[] = [];
+    let last = lastRequestAt;
+    const make = (coord: CoordStore): CataloguePoller => {
+      const state: CatalogueState = { lastOkAt: null, lastError: null };
+      return {
+        poll: async (now) => {
+          polls.push(now);
+          last = now;
+          expect(coord.applyReleaseListing([...LISTING, ...extra], now, 'complete').ok).toBe(true);
+          state.lastOkAt = now;
+          return { ...state };
+        },
+        state: () => ({ ...state }),
+        lastRequestAt: () => last,
+      };
+    };
+    return { make, polls };
+  };
+
+  it('a tag published after the last poll is accepted after the on-demand poll', async () => {
+    const p = lateListing([rel('v0.0.13', 'stable', 1_600)]);
+    const f = await open({ catalogue: p.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    const r = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.13' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({ ok: true, requested: [FLEET_ID], skipped: [] });
+    expect(p.polls).toHaveLength(1);
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ requestedTag: 'v0.0.13', requestedKind: 'update' });
+  });
+
+  it('Update all with a tag published after the last poll requests it after the on-demand poll', async () => {
+    const p = lateListing([rel('v0.0.13', 'stable', 1_600)]);
+    const f = await open({ catalogue: p.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    plant(f.coord, serverNode());
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.13' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({ ok: true, requested: [FLEET_ID, SERVER_ID], skipped: [] });
+    expect(p.polls).toHaveLength(1);
+  });
+
+  it('a tag the catalogue already lists polls nothing; a poll that still does not list it answers unknown-tag', async () => {
+    const listed = lateListing([]);
+    const f = await open({ catalogue: listed.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    const ok = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.10' });
+    expect(ok.statusCode, ok.body).toBe(202);
+    expect(listed.polls).toHaveLength(0);
+    const missing = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.14' });
+    expect(missing.statusCode, missing.body).toBe(409);
+    expect(missing.json()).toMatchObject({ ok: false, error: 'unknown-tag' });
+    expect(listed.polls).toHaveLength(1);
+  });
+
+  it('inside the refresh interval no poll is sent (the catalogue budget is shared): unknown-tag, as before', async () => {
+    const p = lateListing([rel('v0.0.13', 'stable', 1_600)], Date.now());
+    const f = await open({ catalogue: p.make });
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    const r = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.13' });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json()).toMatchObject({ ok: false, error: 'unknown-tag' });
+    expect(p.polls).toHaveLength(0);
+    expect(REFRESH_MIN_INTERVAL_MS).toBeGreaterThan(0);
   });
 });
 

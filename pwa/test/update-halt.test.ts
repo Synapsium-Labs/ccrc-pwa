@@ -1,11 +1,11 @@
 // updateHalt.ts (centralised-update programme wave 14, R15): who halts the fleet, what Update all says while a node
 // does, and which remedy the skew banner names. Pure reads of one /api/updates answer.
 import { describe, expect, it } from 'vitest';
-import type { NodeWire, UpdateIntentWire } from '../../shared/api';
+import type { NodeWire, ReleaseWire, UpdateIntentWire } from '../../shared/api';
 import { FLEET_SCOPE, UPDATE_STATES } from '../../shared/api';
 import { isHaltingUpdate } from '../../shared/update-move';
 import {
-  autoWouldMove, consoleCanMove, haltLine, haltingNodes, skewHaltLead, skewRemedy, updateAllHaltedText,
+  autoWouldMove, consoleCanMove, haltLine, haltingNodes, skewHaltLead, skewQueuedText, skewRemedy, updateAllHaltedText,
 } from '../src/fleet/updateHalt';
 
 const FLEET_ID = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
@@ -217,5 +217,78 @@ describe('skewRemedy — a standing poll failure never vouches for auto (wave 19
   it('fresh (false) answers exactly as with no third argument', () => {
     expect(skewRemedy(movable, [intent('channel')], false)).toEqual({ kind: 'auto' });
     expect(skewRemedy(null, [intent('channel')], true)).toEqual({ kind: 'cli' });
+  });
+});
+
+// D-7680: the skew banner never leaves a split unexplained. Two arms outrank the terminal verbs: `queued` — the
+// lagging box already has a request or a lease for the leading tag, so it is on its way — and `move` — the fleet box
+// leads, the server is idle with no request, and the leading release is listed with its bundle and not yanked, so
+// the console offers the one-node move itself. The terminal stays only when neither applies, the poll is stale or a
+// lease is unreadable.
+describe('skewRemedy — queued and move arms before the terminal verbs (D-7680)', () => {
+  const at = (version: string) => ({ sha: 'c'.repeat(40), ref: 'main', builtAt: '2026-10-05T12:00:00Z', dirty: false, version });
+  const rel = (tag: string, over: Partial<ReleaseWire> = {}): ReleaseWire => ({
+    tag, version: tag, channel: 'stable', publishedAt: 1, commitSha: null, bundleListed: true, yanked: false, refused: [], notes: null, ...over,
+  });
+  // The incident's shape: the fleet box moved to the new tag, the server box is one behind, auto is off.
+  const lead = node({ current: at('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: null });
+  const lag = (over: Partial<NodeWire> = {}): NodeWire =>
+    server({ current: at('v0.0.8'), highestVersion: 'v0.0.8', desiredTag: null, ...over });
+  const RELEASES = [rel('v0.0.8'), rel('v0.0.9')];
+
+  it('move: the fleet leads, the server is idle with no request, and the leading release is installable', () => {
+    expect(skewRemedy([lead, lag()], [intent('off')], false, RELEASES))
+      .toEqual({ kind: 'move', nodeId: SERVER_ID, label: 'server', tag: 'v0.0.9' });
+  });
+
+  it('queued: the lagging server has a request for the leading tag, or its lease runs to it', () => {
+    expect(skewRemedy([lead, lag({ request: { tag: 'v0.0.9', kind: 'update', at: 1 } })], [intent('off')], false, RELEASES))
+      .toEqual({ kind: 'queued', nodeId: SERVER_ID, label: 'server', tag: 'v0.0.9', moving: false });
+    expect(skewRemedy([lead, lag({ update: lease('applying', null, 'v0.0.9') })], [intent('off')], false, RELEASES))
+      .toEqual({ kind: 'queued', nodeId: SERVER_ID, label: 'server', tag: 'v0.0.9', moving: true });
+    // Without the catalogue too: a request needs no release row to be said.
+    expect(skewRemedy([lead, lag({ request: { tag: 'v0.0.9', kind: 'update', at: 1 } })], [intent('off')]))
+      .toMatchObject({ kind: 'queued', tag: 'v0.0.9' });
+  });
+
+  it('queued outranks auto: the request stands, whatever auto would do', () => {
+    const autoLead = node({ current: at('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: null });
+    const autoLag = server({ current: at('v0.0.8'), highestVersion: 'v0.0.8', desiredTag: 'v0.0.9', request: { tag: 'v0.0.9', kind: 'update', at: 1 } });
+    expect(skewRemedy([autoLead, autoLag], [intent('channel')], false, RELEASES)).toMatchObject({ kind: 'queued' });
+  });
+
+  it('a halt outranks both arms', () => {
+    const halted = node({ current: at('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: null, update: lease('failed', 'gate: unit not up') });
+    expect(skewRemedy([halted, lag()], [intent('off')], false, RELEASES)).toEqual({ kind: 'halt', halting: [halted], then: 'cli' });
+  });
+
+  it.each([
+    ['no catalogue answer', [lead, lag()], undefined],
+    ['the leading release is not listed', [lead, lag()], [rel('v0.0.8')]],
+    ['the leading release has no bundle listed', [lead, lag()], [rel('v0.0.9', { bundleListed: false })]],
+    ['the leading release is yanked', [lead, lag()], [rel('v0.0.9', { yanked: true })]],
+    ['the SERVER leads — never update the fleet from here, and never the server past the fleet', [node({ current: at('v0.0.8'), highestVersion: 'v0.0.8', desiredTag: null }), server({ current: at('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: null })], RELEASES],
+    ['the server already has a request for another tag', [lead, lag({ request: { tag: 'v0.0.8', kind: 'rollback', at: 1 } })], RELEASES],
+    ['the server is busy moving elsewhere', [lead, lag({ update: lease('applying', null, 'v0.0.8') })], RELEASES],
+    ['the console cannot move the server (no detach)', [lead, lag({ caps: [] })], RELEASES],
+    ['the server is macOS', [lead, lag({ os: 'darwin' })], RELEASES],
+    ['the server\'s floor is at the leading tag (rolled back below it)', [lead, lag({ highestVersion: 'v0.0.9' })], RELEASES],
+    ['the server\'s stamp did not read', [lead, lag({ stampRead: 'unreadable', current: null })], RELEASES],
+  ] as const)('the terminal verbs when %s', (_what, nodes, releases) => {
+    expect(skewRemedy(nodes as readonly NodeWire[], [intent('off')], false, releases as readonly ReleaseWire[] | undefined)).toEqual({ kind: 'cli' });
+  });
+
+  it('a stale poll or an unreadable lease keeps the terminal verbs, even where move or queued would apply', () => {
+    expect(skewRemedy([lead, lag()], [intent('off')], true, RELEASES)).toEqual({ kind: 'cli' });
+    expect(skewRemedy([lead, lag({ request: { tag: 'v0.0.9', kind: 'update', at: 1 } })], [intent('off')], true, RELEASES)).toEqual({ kind: 'cli' });
+    const broken = { ...lead, update: undefined } as unknown as NodeWire;
+    expect(skewRemedy([broken, lag()], [intent('off')], false, RELEASES)).toEqual({ kind: 'cli' });
+  });
+
+  it('the queued sentence names the tag and says the server follows the fleet box', () => {
+    expect(skewQueuedText({ label: 'server', tag: 'v0.0.9', moving: false }))
+      .toBe('server is requested v0.0.9 and follows once the fleet box’s move settles.');
+    expect(skewQueuedText({ label: 'server', tag: 'v0.0.9', moving: true }))
+      .toBe('server is moving to v0.0.9 — follow the move in Settings.');
   });
 });

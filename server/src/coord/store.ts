@@ -485,7 +485,8 @@ export type ReleaseLeaseResult =
   | { ok: false; why: 'stale-report'; updateStartedAt: number };
 
 export type SettleNodeResult =
-  | { ok: true; clearedRequest: boolean }
+  /** D-7678: `keptRequest` — a request written beside the running lease survived it (see `settleNode`). */
+  | { ok: true; clearedRequest: boolean; keptRequest: boolean }
   | { ok: false; why: 'unknown-node' }
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'halted'; state: 'failed' | 'reverted' }
@@ -9117,20 +9118,34 @@ export class CoordStore {
     return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt! };
   }
 
-  /** Convergence (§10): the row back to `idle` and its request cleared — the
-   *  only path besides `ack` that clears one. Refused on a HALTED row
-   *  (`failed`/`reverted` wait for the operator's `ack`); takes the same
-   *  identity guard as `releaseLease` (C33, D-3405). */
+  /** Convergence (§10): the row back to `idle` and the request THIS lease served cleared — the only path besides
+   *  `ack` that clears one. Refused on a HALTED row (`failed`/`reverted` wait for the operator's `ack`); takes the
+   *  same identity guard as `releaseLease` (C33, D-3405).
+   *
+   *  D-7678: a request written BESIDE the running lease is kept — the row was busy, the lease is dated, the
+   *  request is later than the lease's start and names another tag than the lease's target — because the lease
+   *  could not have served it: it is the operator's newer tap, waiting its turn, and the dispatcher moves it next.
+   *  Both times are this server's own ms clock (`requestNode`'s `at`, `dispatchNode`'s `startedAt`), so no
+   *  cross-box ordering is involved. Every other request is cleared exactly as before: one the lease served (its
+   *  own tag, or written before the lease started or in its millisecond), one beside a lease nothing dated, and a
+   *  met request on an idle row (the dispatcher's `met:` settle). `keptRequest` says which. SQLite reads every
+   *  right-hand side against the row's values BEFORE the update, so the CASE sees the busy state and the lease. */
   settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult {
     return tx(this.db, (): SettleNodeResult => {
       const had = this.requestedTagOf(nodeId) !== null;
+      const keep = `(updateState NOT IN ${SETTLED_UPDATE_SQL} AND requestedTag IS NOT NULL AND requestedAt IS NOT NULL ` +
+        'AND updateStartedAt IS NOT NULL AND requestedAt > updateStartedAt AND requestedTag IS NOT updateTarget)';
+      const kept = (this.db.prepare(`SELECT ${keep} AS k FROM nodes WHERE nodeId = ?`).get(nodeId) as { k: number | null } | undefined)?.k === 1;
       const res = this.db.prepare(
-        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, requestedTag = NULL, requestedKind = NULL, " +
-        'requestedAt = NULL WHERE nodeId = ? AND supersededBy IS NULL ' +
+        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, " +
+        `requestedTag = CASE WHEN ${keep} THEN requestedTag ELSE NULL END, ` +
+        `requestedKind = CASE WHEN ${keep} THEN requestedKind ELSE NULL END, ` +
+        `requestedAt = CASE WHEN ${keep} THEN requestedAt ELSE NULL END ` +
+        'WHERE nodeId = ? AND supersededBy IS NULL ' +
         `AND updateState NOT IN ${HALTED_UPDATE_SQL} ` +
         'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
       ).run(detail, nodeId, expectedStartedAt, expectedStartedAt);
-      if (Number(res.changes) > 0) return { ok: true, clearedRequest: had };
+      if (Number(res.changes) > 0) return { ok: true, clearedRequest: had && !kept, keptRequest: had && kept };
       const row = this.nodeLeaseRow(nodeId);
       if (row === null) return { ok: false, why: 'unknown-node' };
       if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
@@ -9183,14 +9198,10 @@ export class CoordStore {
    *  stands until convergence (`settleNode`) or the operator (`ackNode`)
    *  clears it — a refusal or a drop never does (decision 7). Writes the three
    *  request columns and nothing else, on a LIVE row. THIS WRITER does not
-   *  refuse a row that holds a lease — it is written beside it. But `settleNode`
-   *  clears the request columns UNCONDITIONALLY the moment that lease settles
-   *  (it does not read them first), so a request written beside a row's OWN
-   *  held lease is not "waiting its turn": it is erased under the operator's
-   *  own newer tap the instant the running move finishes. That is why the
-   *  routes never write one there — the single-node route refuses a busy named
-   *  node `409 busy` (D-3386), and `{all: true}`'s `requestAll` skips a node
-   *  whose own lease is busy before it ever calls this writer (D-3406). The
+   *  refuse a row that holds a lease — it is written beside it, and since D-7678
+   *  `settleNode` KEEPS a request written after that lease started for another tag (it clears only the request the
+   *  lease served), so `{all: true}`'s `requestAll` writes one beside a busy row and reports it `queued`. The
+   *  single-node route still refuses a busy named node `409 busy` (D-3386). The
    *  previous request is read inside the same IMMEDIATE transaction only to
    *  REPORT it (`replaced`); the write's own `WHERE` is the guard. `at` is the
    *  caller's clock: a value that is not a non-negative safe integer throws,

@@ -1121,14 +1121,22 @@ Both are session-only: the box token never moves a node. A single-node move the 
 word in the same request (not newer, an unread stamp or floor, halted, the node's own lease busy, a missing capability, an
 agent that predates the op, an unknown or refused tag, a rollback to a release the catalogue lists no provenance bundle for on
 a verified node, no previous version, no desired tag); `{all: true}` always answers `202`, writing a request only for a node
-the tag takes forward and the dispatcher could move, and naming every other live node as skipped, with its word: a node whose
-own lease is busy, or that is itself halting, is skipped, and while a fleet node is skipped for either, so is every server-role
-node (`waiting-for-fleet`); a halt caused by another row still writes the request, and the sheet says each `halted`
+the tag takes forward and the dispatcher could move, and naming every other live node as skipped, with its word. A node whose
+own lease is still running gets its request beside that lease, listed in the answer's `queued`: the settle keeps a request
+written after the lease started for another tag, and the node moves to it next (D-7678). A node that is itself halting is
+skipped. While a fleet node is busy or halting, every server-role node is skipped `waiting-for-fleet`; a halt caused by another
+row still writes the request, and the sheet says each `halted`
 skip, even of a node it did not list, in the `halted` sentence, which names both places the Ack is. What is written
 is a **request** on the
 node's row, never a command. On a `server` or `both` box the dispatcher reads the rows after every inventory sweep, every
 intent write and every request write, and moves at most one node at a time across the fleet: fleet-role nodes before
-server-role ones, and the server node waits while any fleet node's request is outstanding. A fleet node is moved over the agent
+server-role ones, and the server node waits while any fleet node's request is outstanding. When a fleet node's requested
+update lands (its lease settles from `done` with the stamp at the tag — a failed doctor still moved the box), every idle
+server-role node with no request and a floor below that tag is requested the same tag, so the server follows the fleet as
+`ccrc rollout` does; one the dispatcher would refuse is noted on its row instead, and each is a move-feed row (D-7679). A
+`failed` or `reverted` fleet move never follows. With the fleet ahead and nothing standing on the server, the skew banner offers
+**Update the server to <tag>**, a single-node move through the same sheet (D-7680). An `apply` naming a tag the catalogue
+does not list yet runs one catalogue poll first, inside the refresh route's own interval (D-7681). A fleet node is moved over the agent
 link by the `update` op, which only an agent that advertises it in its ready frame is ever sent (an older agent's node is
 refused `agent-predates-update-op` until that box is updated by hand). The agent answers `busy` while a run is in flight (its
 report's writer alive, or no readable pid) or the lock is held; otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach

@@ -608,10 +608,10 @@ describe('the lease group — releaseLease, settleNode, ackNode', () => {
   it('settleNode returns a busy or idle row to idle and clears the request — convergence', () => {
     const s = leased('applying', T0);
     plantRequest(s, UUID_A);
-    expect(s.settleNode(UUID_A, 'converged at v0.0.10', T0)).toEqual({ ok: true, clearedRequest: true });
+    expect(s.settleNode(UUID_A, 'converged at v0.0.10', T0)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
     expect(s.node(UUID_A)).toMatchObject({ updateState: 'idle', updateDetail: 'converged at v0.0.10',
       updateTarget: 'v0.0.10', requestedTag: null, requestedKind: null, requestedAt: null });
-    expect(s.settleNode(UUID_A, 'converged at v0.0.10', null)).toEqual({ ok: true, clearedRequest: false });
+    expect(s.settleNode(UUID_A, 'converged at v0.0.10', null)).toEqual({ ok: true, clearedRequest: false, keptRequest: false });
   });
 
   it('settleNode refuses a halted row — failed and reverted wait for ack — and keeps its request', () => {
@@ -622,6 +622,38 @@ describe('the lease group — releaseLease, settleNode, ackNode', () => {
       expect(s.node(UUID_A)).toMatchObject({ updateState: state, requestedTag: 'v0.0.10' });
     }
     expect(fresh().settleNode(UUID_A, 'x', null)).toEqual({ ok: false, why: 'unknown-node' });
+  });
+
+  it('D-7678: settleNode KEEPS a request written beside the running lease — later than the lease start and for another tag — and clears only the one the lease served', () => {
+    // The busy drop: the lease moves the node to v0.0.10, and the operator's newer tap for v0.0.11 lands
+    // while it runs. Settling v0.0.10 must not erase v0.0.11.
+    const s = leased('applying', T0);
+    plantRequest(s, UUID_A, 'v0.0.11');
+    s.db.prepare('UPDATE nodes SET requestedAt = ? WHERE nodeId = ?').run(T0 + 1, UUID_A);
+    expect(s.settleNode(UUID_A, 'done: v0.0.10', T0)).toEqual({ ok: true, clearedRequest: false, keptRequest: true });
+    expect(s.node(UUID_A)).toMatchObject({ updateState: 'idle', updateDetail: 'done: v0.0.10',
+      requestedTag: 'v0.0.11', requestedKind: 'update', requestedAt: T0 + 1 });
+    // A request beside the lease for the lease's OWN tag is the one it served: cleared.
+    const same = leased('applying', T0);
+    plantRequest(same, UUID_A, 'v0.0.10');
+    same.db.prepare('UPDATE nodes SET requestedAt = ? WHERE nodeId = ?').run(T0 + 1, UUID_A);
+    expect(same.settleNode(UUID_A, 'done: v0.0.10', T0)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(same.node(UUID_A)).toMatchObject({ requestedTag: null, requestedKind: null, requestedAt: null });
+    // A request written BEFORE the lease started (or in its millisecond) is the one it served, whatever its tag.
+    const older = leased('applying', T0);
+    plantRequest(older, UUID_A, 'v0.0.11');
+    expect(older.settleNode(UUID_A, 'done: v0.0.10', T0)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(older.node(UUID_A)).toMatchObject({ requestedTag: null });
+    // A lease nothing dated cannot be ordered against the request: cleared, as before.
+    const undated = leased('applying', null);
+    plantRequest(undated, UUID_A, 'v0.0.11');
+    expect(undated.settleNode(UUID_A, 'x', null)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    // A met request on an IDLE row (the dispatcher's met settle) is cleared even when it postdates the last lease.
+    const met = leased('idle', T0);
+    plantRequest(met, UUID_A, 'v0.0.9');
+    met.db.prepare('UPDATE nodes SET requestedAt = ? WHERE nodeId = ?').run(T0 + 1, UUID_A);
+    expect(met.settleNode(UUID_A, 'met: v0.0.9', null)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(met.node(UUID_A)).toMatchObject({ requestedTag: null, requestedKind: null, requestedAt: null });
   });
 
   it('settleNode takes the same identity guard as releaseLease — an expected lease on either side of the row\'s own current one is refused (W4 review 155, C33)', () => {

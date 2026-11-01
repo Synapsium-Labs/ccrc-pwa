@@ -14,6 +14,8 @@ import {
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import { dispatchViewsFor } from './converge.js';
+import type { CataloguePoller } from './catalogue.js';
+import { updateTargetListed } from '../../../shared/update-move.js';
 import {
   DETACH_CAP, ROLLBACK_CAP, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, type DispatchNodeView, type FleetGate,
 } from './dispatch.js';
@@ -415,14 +417,22 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
   }
 }
 
+/** D-7681: the catalogue lists `tag` as a release an update can move to — moveRefusal's own `unknown-tag` test for
+ *  an update (a row, listed with its bundle, not yanked), asked before the on-demand poll. */
+function installableTag(coord: CoordStore, tag: string): boolean {
+  return updateTargetListed(coord.releases().find((r) => r.tag === tag));
+}
+
 /**
  * `{all: true}` — every live node, in DISPATCH order (`compareDispatchOrder`, fleet first), so `requested`
  * reads in the order the dispatcher will move them. A request is written only for a node the move can take
  * FORWARD: with no tag named and no `desiredTag`, it is skipped `no-desired`; a node whose OWN lease is already
- * busy is skipped `busy` BEFORE `moveRefusal` is even asked (D-3406) — `settleNode` clears a row's request
- * unconditionally the moment that running move settles, so a request written here would be erased under the
- * operator's own newer tap, and the single-node route already answers `409 busy` for the same row rather than
- * writing a doomed request; otherwise it is skipped with the dispatcher's own refusal of that node, the fleet's
+ * busy gets its request BESIDE that lease and is listed in `queued` (D-7678, replacing D-3406's `busy` skip):
+ * `settleNode` keeps a request written after the lease started for another tag, so the operator's newer tap waits
+ * its turn instead of being dropped — the drop that left a server row with no request after its own lease
+ * settled, so the fleet moved and the server never followed. The single-node route still answers `409 busy` for
+ * a busy named node (D-3386: a one-node tap on a moving node is a refusal the operator sees at once); otherwise it
+ * is skipped with the dispatcher's own refusal of that node, the fleet's
  * halt set aside (`NO_HALT`) — `not-newer`, `stamp-unread` (D-3385), `floor-unread` (a floor never measured, W2
  * D-3213), or a word the node cannot outgrow by waiting, `no-detach-cap` and the rest (D-3401: a request the
  * dispatcher can only refuse stands until `ack`, and on a fleet row it would hold every server move behind it,
@@ -439,8 +449,9 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
  * other row.
  *
  * THE SERVER NEVER MOVES AHEAD OF A SKIPPED FLEET ROW (D-3408): while ANY live fleet-role row
- * (`dispatchRank(row.role) === 0`) was skipped in this same call for its OWN lease (`busy`) or its OWN halt
- * (`halted`) — never for a capability word or `not-newer`, which do not block the row's peers — every row whose
+ * (`dispatchRank(row.role) === 0`) was found in this same call holding its OWN lease (queued beside it, D-7678) or
+ * skipped for its OWN halt (`halted`) — never for a capability word or `not-newer`, which do not block the row's
+ * peers — every row whose
  * rank is not fleet's is skipped `waiting-for-fleet` instead of being asked anything else, with no request and
  * no note. `compareDispatchOrder` sorts fleet rows first, so this is decided as the loop reaches them: without
  * it, a request written on the server in the same breath as a skipped fleet row would move the server AHEAD of
@@ -452,17 +463,17 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
  * reaches it — the route notes the refusal itself, through the dispatcher's writer and its own PAST-tense
  * sentence (`noteDispatchRefusal`, `skipDetail`): the note is written once and nothing clears it, so it says what was
  * measured when the request was made, never a state the node may since have left. That writer answers `not-idle` for a `failed`/`reverted`/
- * busy row (a verdict or a lease keeps its detail) and `changed: false` for a repeated text. `not-newer` is not
+ * busy row (a verdict or a lease keeps its detail), so a busy row's refusal is not noted at all, and `changed: false` for a repeated text. `not-newer` is not
  * noted: that node was not refused a capability — it already runs the tag or a newer one, or it was rolled back
  * below a floor at or above the tag (D-3403) — and its row already reads what it runs
- * and its floor; the 202's `skipped` says it. A `busy` skip is likewise never noted: `noteDispatchRefusal`
- * refuses a busy row anyway (D-3375), and the row's own lease detail already says what it is doing. Neither is
+ * and its floor; the 202's `skipped` says it. Neither is
  * `halted` or `waiting-for-fleet` (above): the first's detail is already the verdict, and the second names no
  * refusal of the row at all.
  */
 function requestAll(coord: CoordStore, tag: string | null, now: number): MoveRequestAnswer {
   const requested: string[] = [];
   const skipped: MoveSkip[] = [];
+  const queued: string[] = [];
   const views = new Map(dispatchViewsFor(coord).map((v) => [v.row.nodeId, v] as const));
   // Set once any live fleet-role row is skipped THIS call for its own lease or its own halt — read only for a
   // rank!=0 row, and only fleet rows (sorted first by compareDispatchOrder) ever set it.
@@ -487,18 +498,17 @@ function requestAll(coord: CoordStore, tag: string | null, now: number): MoveReq
       skipped.push({ nodeId: row.nodeId, why: 'no-desired' });
       continue;
     }
-    // D-3406: this row's OWN lease, checked BEFORE moveRefusal — a request written beside it is erased,
-    // unconditionally, the instant that running move settles (`settleNode`), so it is never written.
-    if (!(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
-      skipped.push({ nodeId: row.nodeId, why: 'busy' });
-      if (isFleetRow) fleetSelfSkipped = true;
-      continue;
-    }
+    // D-7678 (replacing D-3406's skip): this row's OWN lease is running. `settleNode` now keeps a request written
+    // beside a running lease for another tag, so the request is written and waits its turn (`queued`). A busy FLEET
+    // row still holds every server-role row behind it in this call: the server never jumps ahead of a fleet move
+    // the operator's tap had to queue (the follow-through, D-7679, moves it once the fleet's move lands).
+    const busyRow = !(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState);
+    if (busyRow && isFleetRow) fleetSelfSkipped = true;
     const refusal = moveRefusal(view, { kind: 'update', target, source: 'request' }, resolveInputFor(coord, row).releases, NO_HALT);
     if (refusal !== null) {
       const why = skipWord(refusal);
       skipped.push({ nodeId: row.nodeId, why });
-      if (why !== 'not-newer') {
+      if (why !== 'not-newer' && !busyRow) {
         const noted = coord.noteDispatchRefusal(row.nodeId, skipDetail(refusal, view, target));
         if (!noted.ok && noted.why !== 'not-idle') {
           throw new Error(`update: noteDispatchRefusal refused live node ${row.nodeId} (${noted.why}) in the same synchronous read`);
@@ -511,8 +521,9 @@ function requestAll(coord: CoordStore, tag: string | null, now: number): MoveReq
       throw new Error(`update: requestNode refused live node ${row.nodeId} (${written.why}) in the same synchronous read`);
     }
     requested.push(row.nodeId);
+    if (busyRow) queued.push(row.nodeId);
   }
-  return { ok: true, requested, skipped };
+  return queued.length > 0 ? { ok: true, requested, skipped, queued } : { ok: true, requested, skipped };
 }
 
 export function registerUpdateRoutes(
@@ -650,6 +661,27 @@ export function registerUpdateRoutes(
     return answer;
   });
 
+  /** THE on-demand poll (the refresh route's path, shared with apply's D-7681 arm): the interval door against the
+   *  poller's own `lastRequestAt()` — `rate-limited` with the seconds to wait inside it — else ONE poll, the
+   *  re-projection, and the release push. */
+  const pollCatalogueNow = async (req: FastifyRequest, catalogue: CataloguePoller, now: number):
+    Promise<{ ok: true; state: CatalogueState } | { ok: false; retryAfterS: number }> => {
+    const last = catalogue.lastRequestAt();
+    if (last !== null) {
+      const since = now - last;
+      if (since >= 0 && since < REFRESH_MIN_INTERVAL_MS) {
+        return { ok: false, retryAfterS: Math.max(1, Math.ceil((REFRESH_MIN_INTERVAL_MS - since) / 1000)) };
+      }
+    }
+    const state: CatalogueState = await catalogue.poll(now);
+    await reproject(req);
+    // Plan W3 Task 3: *Check now* polls here, outside `tick()`, so a release this poll listed is decided in this
+    // request rather than a minute later on the inventory run. Synchronous and never throws; the answer is the
+    // catalogue state whatever it decides (with no watcher — a test's `open()` — there is nothing to decide).
+    watcher?.pushReleaseAfterPoll(Date.now());
+    return { ok: true, state };
+  };
+
   /**
    * An on-demand catalogue poll. RATE-LIMITED to one POLL per
    * `REFRESH_MIN_INTERVAL_MS` (spec §7: the unauthenticated budget is
@@ -668,23 +700,12 @@ export function registerUpdateRoutes(
    */
   app.post('/api/updates/refresh', async (req, reply) => {
     if (!deps.coord || !deps.catalogue) return refuse(reply, { error: 'not-configured' });
-    const now = Date.now();
-    const last = deps.catalogue.lastRequestAt();
-    if (last !== null) {
-      const since = now - last;
-      if (since >= 0 && since < REFRESH_MIN_INTERVAL_MS) {
-        const retryAfterS = Math.max(1, Math.ceil((REFRESH_MIN_INTERVAL_MS - since) / 1000));
-        reply.header('retry-after', String(retryAfterS));
-        return refuse(reply, { error: 'rate-limited', retryAfterS });
-      }
+    const polled = await pollCatalogueNow(req, deps.catalogue, Date.now());
+    if (!polled.ok) {
+      reply.header('retry-after', String(polled.retryAfterS));
+      return refuse(reply, { error: 'rate-limited', retryAfterS: polled.retryAfterS });
     }
-    const state: CatalogueState = await deps.catalogue.poll(now);
-    await reproject(req);
-    // Plan W3 Task 3: *Check now* polls here, outside `tick()`, so a release this poll listed is decided in this
-    // request rather than a minute later on the inventory run. Synchronous and never throws; the answer is the
-    // catalogue state whatever it decides (with no watcher — a test's `open()` — there is nothing to decide).
-    watcher?.pushReleaseAfterPoll(Date.now());
-    return state;
+    return polled.state;
   });
 
   /**
@@ -726,6 +747,14 @@ export function registerUpdateRoutes(
     if (!deps.coord) return refuse(reply, { error: 'not-configured' });
     const parsed = parseApplyBody(req.body);
     if (!parsed.ok) return refuse(reply, { error: parsed.error, field: parsed.field });
+    // D-7681: a named tag the catalogue does not list as installable yet (no row, no provenance bundle, or yanked)
+    // may simply have been published since the last scheduled poll (every 30 minutes, in this process's memory).
+    // ONE on-demand poll — the refresh route's own path and interval door — runs before the dispatcher's
+    // `unknown-tag` answers, so the operator's tap is judged on what the catalogue lists now. Inside the interval
+    // nothing is sent, and the stored rows answer as before.
+    if (parsed.tag !== null && deps.catalogue && !installableTag(deps.coord, parsed.tag)) {
+      await pollCatalogueNow(req, deps.catalogue, Date.now());
+    }
     const now = Date.now();
     if ('all' in parsed.target) {
       const all = requestAll(deps.coord, parsed.tag, now);

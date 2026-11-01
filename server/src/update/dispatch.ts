@@ -22,7 +22,7 @@ import {
 } from '../../../shared/agent-protocol.js';
 import { isNewerTag } from '../../../shared/semver.js';
 import {
-  DETACH_CAP, agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread,
+  DETACH_CAP, agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread, updateTargetListed,
 } from '../../../shared/update-move.js';
 import { floorOf, type EligibilityRow } from './resolve.js';
 
@@ -177,7 +177,7 @@ export function moveRefusal(view: DispatchNodeView, move: { kind: RequestKind; t
     // no floor has nothing to compare against: it is never "not newer" (spec §10). floorOf answers a tag or null.
     const floor = floorOf(row.highestVersion, row.currentVersion);
     if (tagOk && floor !== null && !isNewerTag(move.target, floor)) return 'not-newer';
-    if (known === undefined || known.yanked || !known.bundleListed) return 'unknown-tag';
+    if (!updateTargetListed(known)) return 'unknown-tag';
   } else {
     // Wave 8 item C, D-3587: a rollback the node is KNOWN to refuse is refused here, before any lease or spawn, with
     // L0's predicate (the PWA calls the same one). A non-tag target leaves `known` undefined: 'unknown-tag', as
@@ -536,4 +536,66 @@ export function moveFeedRecord(move: DispatchMove, label: string, r: LeasedMoveR
     : 'to' in r ? `released ${r.to}`
     : 'lease held';
   return { title, body: `${move.detail} — ${what}: ${r.detail}`.slice(0, UPDATE_OP_DETAIL_MAX) };
+}
+
+// ── rollout parity: the server follows a fleet move that landed (D-7679) ───────────────────────────────────────
+
+/** A fleet-role row's REQUESTED update to `target` that LANDED: the inventory sweep settled its lease from a `done`
+ *  report with the stamp at the target (`leaseActionFor`), and that settle cleared the request the lease served.
+ *  Every `done` counts, whatever its detail ("doctor exited N — the box moved…", "the floor write died … the box
+ *  moved"): the box moved. `failed` and `reverted` release the lease instead, halt, and never land. Built by the
+ *  sweep (`inventory.ts`), which alone sees the settle happen. */
+export interface LandedMove { nodeId: string; label: string; target: string }
+/** What the follow-through does for one server-role row: request the fleet's tag on it, or note on it why it
+ *  cannot follow. A row it leaves alone has no step. */
+export type FollowStep =
+  | { kind: 'request'; nodeId: string; label: string; tag: string }
+  | { kind: 'note'; nodeId: string; label: string; refusal: DispatchRefusal; detail: string };
+
+/** `<fleet> moved to <T> — <server> cannot follow: <the dispatcher's own refusal sentence>`. */
+export function followRefusalDetail(landed: LandedMove, view: DispatchNodeView, refusal: DispatchRefusal): string {
+  return `${landed.label} moved to ${landed.target} — ${view.row.label} cannot follow: ${dispatchRefusalDetail(refusal, view, landed.target)}`;
+}
+
+/**
+ * THE FOLLOW-THROUGH (D-7679): `ccrc rollout`'s fleet-box-then-server-box order, for the update plane. The dispatcher
+ * only HOLDS a server-role move back while a fleet row has a request (`waiting-for-fleet`); nothing pulled the server
+ * forward once the fleet moved, so a fleet-only tap, or an Update all whose server request was dropped, left the two
+ * boxes on different builds. Pure: for each live server-role row (`dispatchRank` not 0), in dispatch order —
+ *   - left alone: a row that is not `idle` (its own lease runs, or it halts and waits for `ack`), a row with a request
+ *     standing (the operator's own, which this never overwrites), and a row whose floor is already at or above the
+ *     target (`floorOf`: it runs the tag or newer, or was rolled back below a floor at or above it — the
+ *     dispatcher's not-newer, said nowhere because nothing was refused);
+ *   - `request`: `moveRefusal` clears a REQUESTED update to the target (whatever the row's auto: the fleet moved on
+ *     the operator's request, and the server goes where the fleet went, never anywhere else);
+ *   - `note`: `moveRefusal` refuses it, and the row is told the fleet moved and why it cannot follow.
+ * A non-tag target follows nowhere.
+ */
+export function followSteps(landed: LandedMove, nodes: readonly DispatchNodeView[], releases: readonly EligibilityRow[]): FollowStep[] {
+  if (!isReleaseTag(landed.target)) return [];
+  const gate = fleetGate(nodes.map((v) => v.row));
+  const out: FollowStep[] = [];
+  for (const v of [...nodes].sort((a, b) => compareDispatchOrder(a.row, b.row))) {
+    const row = v.row;
+    if (dispatchRank(row.role) === 0 || row.nodeId === landed.nodeId) continue;
+    if (row.updateState !== 'idle' || row.requestedTag !== null) continue;
+    const floor = floorOf(row.highestVersion, row.currentVersion);
+    if (floor !== null && !isNewerTag(landed.target, floor)) continue;
+    const refusal = moveRefusal(v, { kind: 'update', target: landed.target, source: 'request' }, releases, gate);
+    out.push(refusal === null
+      ? { kind: 'request', nodeId: row.nodeId, label: row.label, tag: landed.target }
+      : { kind: 'note', nodeId: row.nodeId, label: row.label, refusal, detail: followRefusalDetail(landed, v, refusal) });
+  }
+  return out;
+}
+
+/** The follow-through's audit row, beside each move's own (`moveFeedRecord`): the feed is where the operator reads
+ *  why the server moved with no tap of its own, or why it did not. */
+export function followFeedRecord(landed: LandedMove, step: FollowStep): MoveFeedRecord {
+  return step.kind === 'request'
+    ? {
+      title: `update ${step.label}: follows ${landed.label} to ${step.tag}`,
+      body: `${landed.label} moved to ${landed.target} on a requested update — ${step.label} is requested ${step.tag} so the two boxes run one build`.slice(0, UPDATE_OP_DETAIL_MAX),
+    }
+    : { title: `update ${step.label}: cannot follow ${landed.label} to ${landed.target}`, body: step.detail.slice(0, UPDATE_OP_DETAIL_MAX) };
 }
