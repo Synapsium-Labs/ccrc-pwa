@@ -6412,7 +6412,7 @@ export class FleetWatcher {
     await this.runLane('stalls', () => this.stallPass(store, sessions, names, tick));
   }
 
-  private async stallPass(store: CoordStore, sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
+  private async stallPass(store: WatcherCoordPort, sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
     const now = Date.now();
     let judging = false;
     try {
@@ -6424,7 +6424,7 @@ export class FleetWatcher {
       const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
       if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
-      let candidates: ReturnType<CoordStore['stallCandidates']>;
+      let candidates: ReturnType<WatcherCoordPort['stallCandidates']>;
       try {
         candidates = store.stallCandidates();
       } catch (err) {
@@ -6560,7 +6560,7 @@ export class FleetWatcher {
    *  (orphan E, failed, each mail stuck, orphan D). Its throws are the caller's to catch. `quietMs` is the resolved
    *  quiet time (stall watch settings §7), set on the run verdict's input; the session verdicts use fixed constants. */
   private async judgeStall(
-    store: CoordStore, subject: StallSubject, sessions: readonly FleetSession[], tick: StallTick,
+    store: WatcherCoordPort, subject: StallSubject, sessions: readonly FleetSession[], tick: StallTick,
     arming: StallArming, paused: boolean, now: number, quietMs: number,
   ): Promise<void> {
     const primary = subject.primary;
@@ -6636,7 +6636,7 @@ export class FleetWatcher {
    *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
    *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
   private async judgeStallCoordinator(
-    store: CoordStore, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
+    store: WatcherCoordPort, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
     sessions: readonly FleetSession[], tick: StallTick, arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const id = c.sessionId;
@@ -6689,7 +6689,7 @@ export class FleetWatcher {
    *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable` (D-3654)). Nor does a row with no live pane,
    *  which orphan D can never wake: a read-budget skip. */
   private async judgeStallOrphan(
-    store: CoordStore, r: SessionRecord, sessions: readonly FleetSession[], tick: StallTick,
+    store: WatcherCoordPort, r: SessionRecord, sessions: readonly FleetSession[], tick: StallTick,
     arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const ident = measuredIdentity(r);
@@ -6871,7 +6871,7 @@ export class FleetWatcher {
    *    transaction (the row, then the mail).
    *  - Send to the operator: record the row first, then push, and only when the row is new.
    *  A refused write (`duplicate`, or `run-gone`: absent or no longer active, D-3584) sends and warns nothing. */
-  private applyStall(store: CoordStore, input: StallInput, n: StallNotify, now: number): void {
+  private applyStall(store: WatcherCoordPort, input: StallInput, n: StallNotify, now: number): void {
     const primary = input.subject.primary;
     const worker = primary.sessionId;
     if (stallNotifyDelivery(n.arm, n.to, input.arming) === 'shadow') {
@@ -6934,7 +6934,7 @@ export class FleetWatcher {
    *    `stallPushRoute` names the push's kind and tag, which is also the latch key. */
   /** `pushText` words an operator push whose arm reads more than the session's facts (coord-blocked's claimed runs);
    *  absent, `stallSessionPushText` does. */
-  private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number,
+  private applyStallSession(store: WatcherCoordPort, si: StallSessionInput, project: string, v: StallVerdict, now: number,
     pushText: (n: StallNotify) => { readonly title: string; readonly body: string } = (n) => stallSessionPushText(si, n, now)): void {
     const id = si.sessionId;
     if (v.act === 'hold' && v.why === 'failed-unknown') {
