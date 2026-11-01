@@ -119,3 +119,67 @@ Waves 2 and 3 made `builds` a view derived from the inventory rows and moved the
 ## Deviations found
 
 Block D-7719 to D-7726, issued 2026-11-01 for this wave. Define a number only where this plan's text is departed from, and only from this block.
+
+## As built
+
+Commits on this workspace's branch, in order: the plan copy; Task 2 (W33-b); Task 1 (W33-a) and its fix round; the README lines; this section.
+
+### Rulings during the wave
+
+- **Ask 280 (Task 1, URL redaction): userinfo only.** Measured on `main`: `_upd_redact` masks a URL's userinfo and this box's home directory, and passes a query (`?token=x`) and a fragment (`#frag`) through whole, as its own OUT OF SCOPE note says. So Step 1's row "no line contains `token=x` or `frag`" contradicted the Global Constraint that `install.sh`'s copy is byte-equal to `_upd_redact`. The operator and the coordinator ruled the same way: the Global Constraint and Review Focus row 3 govern; the query and fragment rows are dropped; the userinfo row stays; no refusal of a base URL carrying `?` or `#` is added. The coordinator carries that gap, and the updater's matching one, to the programme's follow-up issue. No deviation number: the plan's governing text is unchanged.
+- **The redactor copy is held equal by OUTPUT, not by text.** `install.sh --release` runs before the script's macOS bash-3.2 refusal, and bash up to 4.2 keeps the quotes of a quoted `${s/pat/"rep"}` replacement literally (measured with `BASH_COMPAT=42` and `=40`: `https"://"h/r/...`; the userinfo was still removed). The copy's replacements are written as a first-occurrence replace with no pattern substitution (`s="${s%%"$m"*}$r${s#*"$m"}"`), which also avoids bash 5.2's `&` expansion in an unquoted replacement. Three pins hold it to `_upd_redact` byte for byte: under the default bash, under `BASH_COMPAT=42` and under `BASH_COMPAT=40`, each over the eight named shapes and the log-line redaction corpus. No real bash 3.2 binary was run; the compatibility levels stand in for its quoting rule.
+- **`derivedBuilds` stays.** It is still called by `inventoryBuilds`, whose pair is now only the input `buildAgreement` decides from; its comments no longer call that pair `FleetHealth.builds`.
+- **Task 2, Step 5:** `ccd/ccrc`'s `_box_health` reads `j.build`, never `builds`, so nothing in the shell had to change and `_upd_fleet_warn` still warns on `skewed`.
+- **`server/test/single-definition.test.ts`** is the directory `server/test/single-definition/` on `main`; all of it was run. No allowlist entry was needed for the installer's copies.
+- **`server/test/fleet-build-skew.test.ts`** asserted the `builds` pair in about ten places and is changed with Task 2. `fleet-health.test.ts`'s two other remote rows (connected and disconnected) changed with its `:182` row.
+
+### What pins each Review Focus row
+
+| Row | Pinned by (`server/test/`) |
+|---|---|
+| 1. A tarball name with `/`, `..`, a control or non-printable byte, or over 128 bytes: refused before any `curl -o`, never printed | `install-sh.test.ts`: the name-rule rows (path separator, traversal, `..`, ESC, non-ASCII, UTF-8 caller locale, 129 bytes refused and 128 bytes installed, not a ccrc tarball, the `*` marker); each asserts exit 1, that the second fetch never ran, and that the raw name is on neither stream |
+| 2. SHA256SUMS over 4096 bytes, or trickled forever: refused within the bounds, URL redacted | `install-sh.test.ts`: the 4097-byte row, the below-the-floor rows (SHA256SUMS and tarball), the above-the-floor trickle row ended by `--max-time`, the flag-set row and the five-defaults pin |
+| 3. A base URL with userinfo: every printed line redacted exactly as `_upd_redact` would | `install-sh.test.ts`: the userinfo rows (a good run, a failed SHA256SUMS fetch, a failed tarball fetch) and the three redactor equality pins |
+| 4. A base URL with `[`, `]`, `{` or `}`: fetched literally on both fetches | `install-sh.test.ts`: the `[1]` base path row (real curl) and the flag-set row (`-g` on both fetches) |
+| 5. No `builds` key in remote mode; `build` unchanged; `_upd_fleet_warn` still warns on `skewed` | `fleet-health.test.ts` (the remote rows and the new two-rows-skewed row), `fleet-build-skew.test.ts`, `pwa/test/build-line.test.tsx`'s source scan for a `.builds` reader |
+
+### Mutation table
+
+Each mutant was applied to a saved, sha-checked copy, run against its covering tests, and restored from that copy.
+
+| # | Mutation | Red |
+|---|---|---|
+| 0 | no `-g` on the SHA256SUMS fetch | `[1]` base path row; flag-set row |
+| 1 | no `-g` on the tarball fetch | `[1]` base path row; flag-set row |
+| 2 | no `--max-filesize` | 4097-byte row; flag-set; defaults |
+| 3 | no `--max-time` | above-the-floor trickle row; flag-set; defaults |
+| 4 | no speed floor on SHA256SUMS | below-the-floor SHA256SUMS row; flag-set; defaults |
+| 5 | no speed floor on the tarball | below-the-floor tarball row; flag-set; defaults |
+| 6 | no connect bound on the tarball | flag-set; defaults |
+| 7 | SHA256SUMS "fetching" line unredacted | userinfo good-run row |
+| 8 | tarball "fetching" line unredacted | userinfo good-run row |
+| 9 | SHA256SUMS "download failed" line unredacted | userinfo SHA256SUMS-failed row |
+| 10 | tarball "download failed" line unredacted | userinfo tarball-failed row |
+| 11 | `/` rule removed | path separator row; traversal row |
+| 12 | `..` rule removed | `..` row |
+| 13 | printable-ASCII rule removed | ESC row; non-ASCII row |
+| 14 | length bound removed | 129-byte row |
+| 15 | length bound 127 | 128-byte-installs row |
+| 16 | `ccrc-*.tar.gz` shape removed | not-a-ccrc-tarball row |
+| 17 | `LC_ALL=C` dropped from the name rule | UTF-8 caller locale row |
+| 18 | the whole name refusal skipped | every name row |
+| 19 | the raw name printed again | every name row with a name to print |
+| 20 | the `*` marker strip removed | marker row |
+| 21 | `CCRC_RELEASE_SPEED_LIMIT` default 1024 to 2048 | defaults pin; flag-set |
+| 22 | `CCRC_RELEASE_SUMS_MAX_FILESIZE` default to 1048576 | defaults pin; 4097-byte row; flag-set |
+| 23 | redactor: trailing-slash HOME strip removed | the three redactor equality pins |
+| 24 | redactor: userinfo rule weakened | the three redactor equality pins; the userinfo rows |
+| 25 | redactor: the cut note reworded | the three redactor equality pins |
+| 26 | redactor: the quoted `${s/…/"…"}` replacement put back (the copy before the fix round) | the `BASH_COMPAT=42` and `=40` equality pins |
+| 27 | `builds` put back into `/api/fleet/health`'s remote answer | `fleet-health.test.ts`: connected, disconnected, unreadable inventory, two-rows-skewed (4 of 51) |
+
+Two first choices were weak and were replaced: row 17 first survived because the fixture's sums file was written in latin1, so its byte was invalid UTF-8 under either locale; it now writes UTF-8. Row 25's first form (`4001` to `4002`) was an equivalent mutant.
+
+### Deviations
+
+None of the block D-7719 to D-7726 was used.
