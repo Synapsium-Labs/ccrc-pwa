@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1889,6 +1890,60 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     const tail = text.slice(cmp, verify);
     expect(tail, 'the else-branch exits non-zero').toMatch(/\n\s*else\n(?:.*\n)*?\s*exit 1\n\s*fi\n/);
     expect(text, 'the script never reads node_modules from disk').not.toMatch(/\.\/node_modules|cat node_modules|require\('\.\/node_modules/);
+  });
+
+  it('the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines)', () => {
+    const lines = read(SCRIPT).split('\n');
+    const times = (l: string): number => lines.filter((x) => x === l).length;
+    expect(times('npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent >/dev/null'), 'the pack line').toBe(1);
+    expect(times('tgz="$dest/synapsium-labs-docserver-$version.tgz"'), 'the tgz line').toBe(1);
+    expect(times('actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"'), 'the actual line').toBe(1);
+    // `actual` has one writer, and it never reads the lock's value.
+    expect(lines.filter((l) => /^\s*actual=/.test(l)), 'one assignment of actual').toHaveLength(1);
+    expect(lines.filter((l) => /^\s*tgz=/.test(l)), 'one assignment of tgz').toHaveLength(1);
+    expect(lines.filter((l) => /^\s*integrity=/.test(l)), 'integrity is only read from the lock').toHaveLength(0);
+  });
+
+  describe('the provenance script, run for real against fake npm and gh', () => {
+    const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
+    const VERSION = '1.2.3';
+    const TARBALL = 'the packed bytes';
+    const integrityOf = (bytes: string): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+    const run = (lockIntegrity: string) => {
+      const root = mkTmp('ccrc-prov-root-');
+      mkdirSync(join(root, 'pwa'));
+      writeFileSync(join(root, 'pwa', 'package-lock.json'), JSON.stringify({
+        packages: { 'node_modules/@synapsium-labs/docserver': { version: VERSION, integrity: lockIntegrity } },
+      }));
+      const log = join(mkTmp('ccrc-prov-log-'), 'log');
+      writeFileSync(log, '');
+      const dir = fakeBin({
+        // npm pack writes the tarball where --pack-destination says, as the real one does.
+        npm: `echo "npm $*" >> '${log}'\nwhile [ "$#" -gt 0 ]; do [ "$1" = --pack-destination ] && dest=$2; shift; done\nprintf '%s' '${TARBALL}' > "$dest/synapsium-labs-docserver-${VERSION}.tgz"`,
+        gh: `echo "gh $*" >> '${log}'`,
+      });
+      for (const bin of ['bash', 'sh', 'env', 'cat', 'dirname', 'timeout', 'perl', 'node', 'openssl', 'base64', 'mktemp'])
+        execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+      const r = spawnSync(real('bash'), [join(REPO, SCRIPT)], {
+        cwd: root, encoding: 'utf8', timeout: 60_000,
+        env: { PATH: dir, RUNNER_TEMP: mkTmp('ccrc-prov-rt-') },
+      });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr, log: readFileSync(log, 'utf8') };
+    };
+
+    it('a lock integrity that matches the packed bytes passes, and the attestation is then verified once, pinned', () => {
+      const r = run(integrityOf(TARBALL));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log.match(/^gh attestation verify /gm), 'one verify call').toHaveLength(1);
+      expect(r.log).toContain(`--repo Synapsium-Labs/docserver --signer-workflow Synapsium-Labs/docserver/.github/workflows/release.yml --source-ref refs/tags/v${VERSION} --deny-self-hosted-runners`);
+    });
+
+    it('a lock integrity that does not match the packed bytes fails, and the attestation is never asked', () => {
+      const r = run(integrityOf('some other bytes'));
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('is not the one the lock records');
+      expect(r.log, 'gh ran although the packed bytes are not the lock\'s').not.toContain('gh attestation verify');
+    });
   });
 
   it('no other file under .github names the release signer workflow', () => {
