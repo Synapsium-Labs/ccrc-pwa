@@ -19,6 +19,8 @@ export const READER_SHEET_TEXT = {
   linkTitle: 'Open this link?',
   /** The warning shown for a host other than the console's own (the W8a plan's refinement (h): any other host). */
   linkForeign: (host: string): string =>
+    // Only a mailto reaches the sheet with an empty host (policy.ts#routeReaderLink keeps the classifier's host for it, and
+    // it is empty when the first address names none), so an empty host is worded as the mail link it is.
     host === ''
       ? 'This link opens your mail app. Check the address before you open it.' // a mailto with no host to name
       : `This link leaves this console and goes to ${host}. Check the address before you open it.`,
