@@ -10,7 +10,7 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (111, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
+/** The members reached through the whole store (106, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
  *  before D-7580, WP3, whose lanes' units read 11 through the port; 155 before D-7581, WP4, whose mail helpers and mail,
  *  landing-checks and tmp-sweep units take the port; 132 before D-7582, WP5, whose stall lane takes the port; 129
  *  before D-7583, WP6, whose child-reclaim chain and lane take the port; 123 before D-7584, WP7, whose archive
@@ -25,18 +25,18 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
   'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows',
   'firstMailIdWithPrefix', 'hasMailWithSubject', 'hasNotice', 'heldApprovalRowsByChild',
-  'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'ingestJournal', 'insertApproval', 'insertAsk',
-  'insertDelegationEvents', 'intentFor', 'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
+  'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'insertApproval', 'insertAsk',
+  'insertDelegationEvents', 'intentFor', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
   'ledgerFloor', 'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor',
-  'lifecycleStats', 'mailQueuedSince',
+  'mailQueuedSince',
   'markApprovalOperator', 'markApprovalOperatorRows', 'markDriftPushed', 'markDriftShadowed', 'markLanded',
   'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns', 'node',
   'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteLeaseDetail', 'openAllocations', 'openCoordinatorIds',
   'outstandingMailFor', 'poolEpoch', 'projectDelegationCheckpoint',
   'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions', 'raiseLedgerFloor',
-  'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap',
+  'recentProvenance', 'recordDriftPass', 'recordFeedEvent',
   'refusalsFor', 'refuseRelease', 'rekeyNode', 'releaseAsk',
-  'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk', 'retireGeneration',
+  'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk',
   'rollSettings', 'run',
   'runEventsSince', 'runLastMoves', 'runs', 'sealDeadCoordinatorBreakerState',
   'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
@@ -44,10 +44,9 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'updateEpoch', 'upsertNodeMeasurement',
 ];
 
-/** Each whole hand-off key (4) with its call-site count (4 in all), sorted by key. */
+/** Each whole hand-off key (3) with its call-site count (3 in all), sorted by key. */
 export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.constructor -> coord/questions.ts#createQuestions': 1,
   'watch.ts#FleetWatcher.digestBeat -> coord/digest.ts#buildDigest': 1,
-  'watch.ts#FleetWatcher.mirrorFor -> coord/mirror.ts#JournalMirror': 1,
   'watch.ts#FleetWatcher.tick -> fleet.ts#assembleFleet': 1,
 };
