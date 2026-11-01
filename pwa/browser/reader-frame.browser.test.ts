@@ -143,6 +143,9 @@ function fixtureFiles(o: Origins): Map<string, Body> {
   files.set('small.md', `# Small page\n\nRead [the other page](./other.md), the [external link](https://a.example/p) and the `
     + `[popup link](${o.a}/popup).\n\n![pixel](pix.png)\n\n\`\`\`text\ncopy me ${ESC} here\n\`\`\`\n`);
   files.set('other.md', '# Other page\n\nSecond.\n');
+  let long = '# Long page\n\n';
+  for (let i = 0; i < 120; i += 1) long += `## Part ${i}\n\nA paragraph of the long page, number ${i}, with enough words to fill a line or two of the frame.\n\n`;
+  files.set('long.md', long);
   files.set('flow.md', `# Flow page\n\n[the other page](./other.md)\n\n${FLOWCHART}${SEQUENCE}${GANTT}${HOSTILE}${hostileLinks(o)}`);
   let many = '# Many figures\n\n';
   for (let i = 0; i < 25; i += 1) many += fence(`flowchart LR\n  M${i} --> N${i}`);
@@ -1137,11 +1140,11 @@ describe('W8a reader frame in Chrome', () => {
     expect(figures.filter((f) => f.render !== 0 || f.svgs !== 0), 'no Render button, no drawing').toEqual([]);
   }, 120_000);
 
-  it('records the .docs-reader box against the pane at 1280x800 and 390x844', async () => {
-    const out: Record<string, unknown> = {};
+  it('the reader is sized to the Docs pane and only the frame scrolls, at 1280x800 and 390x844', async () => {
+    const problems: string[] = [];
     for (const [w, h] of [[1280, 800], [390, 844]] as const) {
-      const { s, outcome } = await open('small.md', { width: w, height: h });
-      expect(outcome).toBe('ready');
+      const { s, outcome } = await open('long.md', { width: w, height: h });
+      expect(outcome, `${w}x${h}: the reader is up`).toBe('ready');
       const m = await s.page.evaluate(() => {
         const reader = document.querySelector('.docs-reader');
         if (reader === null) return null;
@@ -1149,23 +1152,31 @@ describe('W8a reader frame in Chrome', () => {
         const se = document.scrollingElement as Element;
         const scrollers: { tag: string; cls: string; scrollHeight: number; clientHeight: number }[] = [];
         for (let n: Element | null = reader.parentElement; n !== null; n = n.parentElement) {
-          const oy = getComputedStyle(n).overflowY;
-          if (/(auto|scroll)/.test(oy) && n.scrollHeight > n.clientHeight + 1) {
+          if (n.scrollHeight > n.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(n).overflowY)) {
             scrollers.push({ tag: n.tagName, cls: String(n.className), scrollHeight: n.scrollHeight, clientHeight: n.clientHeight });
           }
         }
         return {
-          innerHeight: window.innerHeight, readerTop: Math.round(r.top), readerHeight: Math.round(r.height), readerBottom: Math.round(r.bottom),
-          docScrollHeight: se.scrollHeight, docClientHeight: se.clientHeight, pageScrolls: se.scrollHeight > se.clientHeight + 1, scrollers,
+          innerHeight: window.innerHeight, readerTop: Math.round(r.top), readerBottom: r.bottom,
+          docScrollHeight: se.scrollHeight, docClientHeight: se.clientHeight, scrollers,
         };
       });
-      expect(m).not.toBeNull();
-      out[`${w}x${h}`] = m;
+      expect(m, `${w}x${h}: the reader is in the page`).not.toBeNull();
+      const got = m as NonNullable<typeof m>;
+      if (got.readerBottom > got.innerHeight + 1) problems.push(`${w}x${h}: the reader's bottom is below the viewport ${JSON.stringify(got)}`);
+      if (got.docScrollHeight > got.docClientHeight + 1) problems.push(`${w}x${h}: the document scrolls ${JSON.stringify(got)}`);
+      if (got.scrollers.length > 0) problems.push(`${w}x${h}: an ancestor of the reader scrolls ${JSON.stringify(got.scrollers)}`);
+      const frame = await readerFrame(s.page);
+      const inner = await frame.evaluate(() => {
+        const se = document.scrollingElement as Element;
+        return { scrollHeight: se.scrollHeight, clientHeight: se.clientHeight };
+      });
+      if (inner.scrollHeight <= inner.clientHeight + 1) problems.push(`${w}x${h}: the frame's own document does not scroll for a long page ${JSON.stringify(inner)}`);
       await s.app.ctx.close();
       sessions.splice(sessions.indexOf(s.app), 1);
     }
-    console.log(`T10-FIGURES pane ${JSON.stringify(out)}`);
-  }, 120_000);
+    expect(problems, 'the reader is one pane tall and only its frame scrolls, at both sizes').toEqual([]);
+  }, 180_000);
 
   it('the worst case renders inside the watchdog', async () => {
     const files = FILES.get('worst.md');
