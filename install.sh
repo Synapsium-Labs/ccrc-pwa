@@ -23,6 +23,90 @@ ROOT="$(cd "${HERE%/*}" && pwd)"
 CCRC_RELEASE_OWNER="Synapsium-Labs"
 CCRC_RELEASE_REPO="ccrc-pwa"
 
+# ── The release-host bounds — the updater's five knobs, same names, same values.
+# The updater reads these from ccd/ccrc (`: "${CCRC_RELEASE_…:=…}"`); this file
+# is the bootstrap and sources nothing, so it holds a COPY. install-sh.test.ts
+# reds when any of the five lines differs from ccd/ccrc's. The connect and
+# stall bounds ride both fetches; the total-time and size bounds ride only
+# SHA256SUMS (small by design — a host that keeps sending forever is not "a
+# slow but live download"), as the updater's two fetches do. A tarball gets
+# no total bound: a large live transfer must be let finish.
+: "${CCRC_RELEASE_CONNECT_TIMEOUT:=10}"
+: "${CCRC_RELEASE_SPEED_LIMIT:=1024}"
+: "${CCRC_RELEASE_SPEED_TIME:=30}"
+: "${CCRC_RELEASE_SUMS_MAX_TIME:=20}"
+: "${CCRC_RELEASE_SUMS_MAX_FILESIZE:=4096}"
+
+# ── The URL redactor — a held-equal COPY of `_upd_redact` (ccd/ccrc), code
+# verbatim, comments dropped, under an install.sh-local name. It masks a URL's
+# userinfo and the home directory; it does NOT mask a query or a fragment
+# (accepted: the operator's ruling, shared with the updater). install-sh.test.ts
+# runs both functions over the same inputs and reds on any byte of difference,
+# which is what makes this a derived copy rather than a second mechanism.
+_inst_redact() {
+  local s="${1:-}" mode="${2:-}" LC_ALL=C cut=""
+  if [ "${#s}" -gt 4096 ]; then
+    local head="${s:0:4001}"
+    if [[ "$head" =~ ^(.*)[[:space:]] ]]; then head="${BASH_REMATCH[1]}"; else head=""; fi
+    cut="${head:+ }[cut: $(( ${#s} - ${#head} )) more bytes withheld, over the redactor's 4096-byte cap]"
+    s="$head"
+  fi
+  local sre=':((\\?/)+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
+  local kre='(^|[[:space:]"'"'"'<(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*=)([^:=/?#[:space:]"'"'"'<(][^/?#[:space:]]*(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $kre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[2]}"}"; done
+  local re='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([^0-9A-Za-z.!}_~-]|$|[.!}]+([^0-9A-Za-z.!}_~-]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  if [ "$mode" = bare-host ]; then
+    local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
+    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  fi
+  local home="${HOME:-}"
+  home="${home%/}"
+  if [ -n "$home" ]; then
+    local seen="" out="" pre="" post="" before="" after="" left=0 right=0
+    while [[ "$s" == *"$home"* ]]; do
+      pre="${s%%"$home"*}"
+      post="${s#*"$home"}"
+      seen+="$pre"
+      before="${seen: -1}"
+      after="${post:0:1}"
+      left=0; right=0
+      case "$before" in
+        ''|' '|$'\t'|$'\n'|'"'|"'"|'`'|'='|':'|'('|'['|'{'|','|';'|'<'|'>'|'|') left=1 ;;
+        '/') case "$seen" in *://) left=1 ;; esac ;;
+      esac
+      case "$after" in
+        ''|'/'|' '|$'\t'|$'\n'|'"'|"'"|':'|')') right=1 ;;
+      esac
+      if [ "$left" -eq 1 ] && [ "$right" -eq 1 ]; then out+="${pre}~"; else out+="${pre}${home}"; fi
+      seen+="$home"
+      s="$post"
+    done
+    s="${out}${s}"
+  fi
+  s+="$cut"
+  printf '%s' "$s"
+}
+
+# The tarball name SHA256SUMS supplies reaches `curl -o` before any checksum is
+# checked, so it is held to a rule where it is read. Prints the rule broken (or
+# nothing). The length test runs FIRST so a long value is never pattern-scanned;
+# counted and matched under LC_ALL=C so "bytes" and "printable ASCII" mean bytes.
+# A refusal built from this names the rule, never the raw name (it may carry a
+# terminal escape).
+_inst_name_refusal() {
+  local n="$1" LC_ALL=C
+  if [ "${#n}" -gt 128 ]; then echo "is ${#n} bytes, over the 128-byte limit"; return 0; fi
+  if [[ "$n" == *[^[:print:]]* ]]; then echo "is not printable ASCII"; return 0; fi
+  case "$n" in
+    */*) echo "has a path separator"; return 0 ;;
+    *..*) echo 'has a ".."'; return 0 ;;
+    ccrc-*.tar.gz) ;;
+    *) echo "is no ccrc tarball (names no ccrc-*.tar.gz)"; return 0 ;;
+  esac
+  return 0
+}
+
 usage() { echo "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)"; }
 
 # `cmd_install`'s own loop (ccd/ccrc:1730-1735), one layer up: an install that
@@ -68,19 +152,32 @@ if [ "$RELEASE_MODE" = true ]; then
   # SHA256SUMS first: under `latest/` the tag is unknown until the sums file
   # names the tarball. A missing release is curl's own failure, surfaced —
   # `-f` turns the 404 into exit 22 and the message below names the URL.
-  echo "install.sh: fetching $URL_DIR/SHA256SUMS …"
-  curl -fsSL -o "$STAGING/SHA256SUMS" "$URL_DIR/SHA256SUMS" \
-    || { echo "install.sh: download failed: $URL_DIR/SHA256SUMS (is there a release?)" >&2; exit 1; }
+  URL_SAFE="$(_inst_redact "$URL_DIR")"
+  # `-g` on every release curl: curl expands `{…}` and `[…]` before it parses a
+  # URL, so a base spelled `http:{/}/u:p@h` would authenticate while the line
+  # below printed it whole; with globbing off curl refuses it before a byte is
+  # sent, and a tarball name is never globbed (the updater's D-6748).
+  echo "install.sh: fetching $URL_SAFE/SHA256SUMS …"
+  curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --max-time "$CCRC_RELEASE_SUMS_MAX_TIME" --max-filesize "$CCRC_RELEASE_SUMS_MAX_FILESIZE" \
+    --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
+    -o "$STAGING/SHA256SUMS" "$URL_DIR/SHA256SUMS" \
+    || { echo "install.sh: download failed: $URL_SAFE/SHA256SUMS (is there a release, or did the connection stall or time out?)" >&2; exit 1; }
   read -r _sum TARNAME < "$STAGING/SHA256SUMS" \
     || { echo "install.sh: SHA256SUMS is empty — refusing" >&2; exit 1; }
+  # The sha256sum binary-mode marker (`<digest> *<name>`) is the line format's,
+  # not part of the name: it goes FIRST, so the rules below judge (and count)
+  # the name itself. It is a one-character prefix strip, cheap on any length.
   TARNAME="${TARNAME#\*}"
-  case "$TARNAME" in
-    ccrc-*.tar.gz) ;;
-    *) echo "install.sh: SHA256SUMS names no ccrc tarball (got: $TARNAME) — refusing" >&2; exit 1 ;;
-  esac
-  echo "install.sh: fetching $URL_DIR/$TARNAME …"
-  curl -fsSL -o "$STAGING/$TARNAME" "$URL_DIR/$TARNAME" \
-    || { echo "install.sh: download failed: $URL_DIR/$TARNAME" >&2; exit 1; }
+  NAME_RULE="$(_inst_name_refusal "$TARNAME")"
+  if [ -n "$NAME_RULE" ]; then
+    echo "install.sh: SHA256SUMS's tarball name $NAME_RULE — refusing" >&2; exit 1
+  fi
+  echo "install.sh: fetching $URL_SAFE/$TARNAME …"
+  curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
+    -o "$STAGING/$TARNAME" "$URL_DIR/$TARNAME" \
+    || { echo "install.sh: download failed: $URL_SAFE/$TARNAME (did the connection stall — under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s?)" >&2; exit 1; }
 
   # Verify BEFORE extracting: a tarball that fails its checksum never gets
   # to put a single file on disk, let alone run one.

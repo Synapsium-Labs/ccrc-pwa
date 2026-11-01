@@ -28,7 +28,7 @@
 // alone — it must answer with the REAL floor, or the test would not be
 // measuring "current < floor" at all.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync, copyFileSync, symlinkSync,
   appendFileSync, readdirSync, rmSync,
@@ -36,6 +36,8 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { itLinux } from './platformFixtures.js';
+import { ccdFunctionDefinition } from '../../shared/hook-helpers.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -328,18 +330,23 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     writeFileSync(join(bin, 'curl'), [
       '#!/bin/sh',
       '# stub curl: local://<path> is a file on disk; missing = curl\'s own 404.',
+      '# `curl-argv` records the URL alone, `curl-full` the whole argv, one line per call.',
+      'printf \'%s\\n\' "$*" >> "$HOME/curl-full"',
       'dest=""; url=""',
       'while [ $# -gt 0 ]; do',
       '  case "$1" in',
       '    -o) dest="$2"; shift 2 ;;',
+      '    --connect-timeout|--speed-limit|--speed-time|--max-time|--max-filesize) shift 2 ;;',
       '    -*) shift ;;',
       '    *) url="$1"; shift ;;',
       '  esac',
       'done',
       'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
+      '# a userinfo before the path is dropped, as a real transfer would not use it as a file name',
       'src="${url#local://}"',
+      'case "$src" in /*) ;; *) src="/${src#*@}" ;; esac',
       'if [ ! -f "$src" ]; then',
-      '  echo "curl: (22) The requested URL returned error: 404 for $url" >&2',
+      '  echo "curl: (22) The requested URL returned error: 404" >&2',
       '  exit 22',
       'fi',
       'cp "$src" "$dest"',
@@ -353,16 +360,19 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
    *  so "extracted" and "not extracted" are both observable facts. SHA256SUMS
    *  is computed from the REAL tarball bytes; `tamper` appends to the
    *  tarball AFTERWARD, so the sums file is honest and the bytes are not. */
-  function fixtureRelease(home: string, opts: { tag?: string; tamper?: boolean } = {}): void {
+  function fixtureRelease(home: string, opts: {
+    tag?: string; tamper?: boolean; releases?: string; omitTarball?: boolean;
+  } = {}): void {
     const payload = join(home, 'payload');
     mkdirSync(join(payload, 'ccd'), { recursive: true });
     writeFileSync(join(payload, 'ccd', 'ccrc'),
       '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/ccrc-argv"\n'
       + 'printf \'%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" > "$HOME/ccrc-env"\nexit 0\n', { mode: 0o755 });
     writeFileSync(join(payload, 'MARKER'), 'release payload\n');
+    const releases = opts.releases ?? join(home, 'releases');
     const relDir = opts.tag
-      ? join(home, 'releases', 'download', opts.tag)
-      : join(home, 'releases', 'latest', 'download');
+      ? join(releases, 'download', opts.tag)
+      : join(releases, 'latest', 'download');
     mkdirSync(relDir, { recursive: true });
     const name = `ccrc-${opts.tag ?? 'v9.9.9'}.tar.gz`;
     const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', payload, '.'], { encoding: 'utf8' });
@@ -376,6 +386,7 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     { cwd: relDir, encoding: 'utf8' });
     if (sumRes.status !== 0) throw new Error(`fixture digest failed: ${sumRes.stderr}`);
     if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
+    if (opts.omitTarball) rmSync(join(relDir, name));
   }
 
   /** TMPDIR is pointed INSIDE the fixture home so the `mktemp -d` staging
@@ -384,13 +395,14 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
   function runRelease(root: string, args: string[], home: string, extraEnv: NodeJS.ProcessEnv = {}): Result {
     mkdirSync(join(home, 'tmp'), { recursive: true });
     const env = {
+      CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
       ...extraEnv,
       HOME: home,
       PATH: fixtureBin(home),
       TMPDIR: join(home, 'tmp'),
-      CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
     };
-    const r = spawnSync(BASH, [join(root, 'install.sh'), ...args], { env, encoding: 'utf8' });
+    // A bound: a release run that cannot end (an unbounded fetch of a host that never stops) reds, never hangs.
+    const r = spawnSync(BASH, [join(root, 'install.sh'), ...args], { env, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   }
 
@@ -561,6 +573,291 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
     expect(readFileSync(join(home, 'ccrc-env'), 'utf8')).toBe('unset\n');
   });
+
+  // ── R48 (W33-a): the release-host defences `ccrc update` already has ──────
+  const readLog = (home: string, name: string): string[] => (existsSync(join(home, name))
+    ? readFileSync(join(home, name), 'utf8').split('\n').filter((l) => l !== '')
+    : []);
+  const HEX64 = '0'.repeat(64);
+  const sumsLine = (name: string): string => `${HEX64}  ${name}\n`;
+  /** A release URL space holding ONLY a SHA256SUMS (the refusal rows never get as far as a tarball). */
+  const plantSumsOnly = (home: string, body: string): void => {
+    const dir = join(home, 'releases', 'latest', 'download');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SHA256SUMS'), body, 'utf8');
+  };
+  /** Every line install.sh printed, on both streams. */
+  const allLines = (r: Result): string[] => [...r.stdout.split('\n'), ...r.stderr.split('\n')];
+  /** The REAL curl behind a recording wrapper, for the rows the stub cannot measure (globbing, the size bound, the
+   *  speed floor). The wrapper logs the whole argv to `curl-full`, then execs the real binary by absolute path. */
+  function plantRealCurl(home: string): void {
+    writeFileSync(join(fixtureBin(home), 'curl'),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/curl-full"\nexec ${realPath('curl')} "$@"\n`, { mode: 0o755 });
+  }
+
+  it('both release curls carry -g, the connect bound and the speed floor; only SHA256SUMS carries the total and size bounds', () => {
+    const home = mkTmp('install-sh-release-flags-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const calls = readLog(home, 'curl-full');
+    expect(calls).toHaveLength(2);
+    const [sums, tarball] = calls as [string, string];
+    for (const c of [sums, tarball]) {
+      expect(c, c).toMatch(/(^| )-g( |$)/);
+      expect(c, c).toMatch(/ --connect-timeout 10 /);
+      expect(c, c).toMatch(/ --speed-limit 1024 /);
+      expect(c, c).toMatch(/ --speed-time 30 /);
+    }
+    expect(sums).toMatch(/ --max-time 20 /);
+    expect(sums).toMatch(/ --max-filesize 4096 /);
+    expect(sums).toMatch(/SHA256SUMS$/);
+    // The tarball is a stall-bounded fetch, never a total-bounded one: a slow but LIVE download must finish.
+    expect(tarball).not.toMatch(/--max-time/);
+    expect(tarball).not.toMatch(/--max-filesize/);
+    expect(tarball).toMatch(/\.tar\.gz$/);
+  });
+
+  it('the five knobs are read from their environment names and reach the curls', () => {
+    const home = mkTmp('install-sh-release-knobs-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const r = runRelease(root, ['--release'], home, {
+      CCRC_RELEASE_CONNECT_TIMEOUT: '7', CCRC_RELEASE_SPEED_LIMIT: '2000', CCRC_RELEASE_SPEED_TIME: '9',
+      CCRC_RELEASE_SUMS_MAX_TIME: '11', CCRC_RELEASE_SUMS_MAX_FILESIZE: '512',
+    });
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const [sums, tarball] = readLog(home, 'curl-full') as [string, string];
+    expect(sums).toMatch(/ --connect-timeout 7 .* --speed-limit 2000 --speed-time 9 /);
+    expect(sums).toMatch(/ --max-time 11 --max-filesize 512 /);
+    expect(tarball).toMatch(/ --connect-timeout 7 --speed-limit 2000 --speed-time 9 /);
+  });
+
+  // ── the tarball name, before the second curl ──────────────────────────────
+  // A name the release host supplies reaches `curl -o` before any checksum is checked. Each refusal names the RULE
+  // broken, never the raw name (it may carry a terminal escape), and the second curl never runs.
+  const longName = (n: number): string => `ccrc-${'a'.repeat(n - 'ccrc-.tar.gz'.length)}.tar.gz`;
+  const refusedNames: ReadonlyArray<{ label: string; name: string; rule: RegExp; raw: string }> = [
+    { label: 'a path traversal', name: 'ccrc-../x.tar.gz', rule: /path separator/, raw: 'x.tar.gz' },
+    { label: 'a path separator', name: 'ccrc-a/b.tar.gz', rule: /path separator/, raw: 'a/b' },
+    { label: 'a ".." with no separator', name: 'ccrc-v1..2.tar.gz', rule: /"\.\."/, raw: 'v1..2' },
+    { label: 'an ESC byte', name: 'ccrc-\u001b[31mx.tar.gz', rule: /not printable ASCII/, raw: '\u001b' },
+    { label: 'a non-ASCII byte', name: 'ccrc-é.tar.gz', rule: /not printable ASCII/, raw: 'é' },
+    { label: 'a 129-byte name', name: longName(129), rule: /129 bytes, over the 128-byte limit/, raw: 'aaaaaaaaaa' },
+    { label: 'a name that is no ccrc tarball', name: 'evil.tar.gz', rule: /is no ccrc tarball/, raw: 'evil' },
+  ];
+  for (const row of refusedNames) {
+    it(`SHA256SUMS naming ${row.label} is refused before the second fetch, the rule named and the raw name never printed`, () => {
+      const home = mkTmp('install-sh-release-name-');
+      const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+      plantReleaseTools(home);
+      plantSumsOnly(home, sumsLine(row.name));
+      const r = runRelease(root, ['--release'], home);
+      expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+      expect(r.stderr).toMatch(row.rule);
+      expect(r.stderr).toMatch(/refusing/);
+      // Only SHA256SUMS was fetched: the name never reached `curl -o`.
+      expect(readLog(home, 'curl-argv').map((u) => u.replace(/^.*\//, ''))).toEqual(['SHA256SUMS']);
+      expect(r.stdout + r.stderr, 'the raw name was printed').not.toContain(row.raw);
+      // No tarball path was written anywhere under the fixture home but the planted release itself.
+      const written = filesUnder(home).filter((f) => /tar\.gz$/.test(f) && !f.startsWith('releases'));
+      expect(written, `a tarball path was written: ${written.join(', ')}`).toEqual([]);
+    });
+  }
+
+  it('the printable-ASCII rule is counted in bytes under LC_ALL=C even when the caller\'s locale is UTF-8', () => {
+    // In a UTF-8 locale an accented letter IS printable; the rule must not follow the caller's locale.
+    const home = mkTmp('install-sh-release-name-utf8-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    plantSumsOnly(home, sumsLine('ccrc-\u00e9.tar.gz'));
+    const r = runRelease(root, ['--release'], home, { LC_ALL: 'C.UTF-8' });
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    expect(r.stderr).toMatch(/not printable ASCII/);
+    expect(readLog(home, 'curl-argv')).toHaveLength(1);
+  });
+
+  it('a 128-byte tarball name is within the rule and installs', () => {
+    const home = mkTmp('install-sh-release-name128-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const dir = join(home, 'releases', 'latest', 'download');
+    const name = longName(128);
+    expect(name).toHaveLength(128);
+    copyFileSync(join(dir, 'ccrc-v9.9.9.tar.gz'), join(dir, name));
+    const sum = spawnSync('bash', ['-c',
+      'sha=sha256sum; [ "$(uname -s)" = Darwin ] && sha="shasum -a 256";'
+      + ` $sha '${name}' > SHA256SUMS`], { cwd: dir, encoding: 'utf8' });
+    expect(sum.status, sum.stderr).toBe(0);
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(readLog(home, 'curl-argv')).toHaveLength(2);
+  });
+
+  it('the sha256sum binary-mode marker ("*name") is stripped before the rules run', () => {
+    // `sha256sum -b` writes `<digest> *<name>`. The marker is the line format's, not part of the name, so the
+    // rules (and the length count) run on the stripped name — the strip stays where it always was.
+    const home = mkTmp('install-sh-release-star-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const f = join(home, 'releases', 'latest', 'download', 'SHA256SUMS');
+    writeFileSync(f, readFileSync(f, 'utf8').replace('  ccrc-', ' *ccrc-'));
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+  });
+
+  // ── the base URL's userinfo is never printed ──────────────────────────────
+  // Redaction here is the updater's: it masks a URL's userinfo (and the home directory). A query or a fragment is
+  // NOT masked, by the operator's ruling, so no row asks it.
+  const userinfoBase = (home: string): { CCRC_RELEASE_BASE_URL: string } =>
+    ({ CCRC_RELEASE_BASE_URL: `local://user:pass@${home}/releases` });
+
+  it('a base URL carrying user:pass@ prints it nowhere on a good run (both "fetching" lines)', () => {
+    const home = mkTmp('install-sh-release-userinfo-ok-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const r = runRelease(root, ['--release'], home, userinfoBase(home));
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(allLines(r).filter((l) => /fetching/.test(l))).toHaveLength(2);
+    expect(allLines(r).filter((l) => /pass/.test(l)), 'a line carries the password').toEqual([]);
+  });
+
+  it('... and in the SHA256SUMS "download failed" line', () => {
+    const home = mkTmp('install-sh-release-userinfo-sums-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    const r = runRelease(root, ['--release'], home, userinfoBase(home));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/download failed: .*SHA256SUMS/);
+    expect(allLines(r).filter((l) => /pass/.test(l)), 'a line carries the password').toEqual([]);
+  });
+
+  it('... and in the tarball "download failed" line', () => {
+    const home = mkTmp('install-sh-release-userinfo-tar-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home, { omitTarball: true });
+    const r = runRelease(root, ['--release'], home, userinfoBase(home));
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/download failed: .*\.tar\.gz/);
+    expect(allLines(r).filter((l) => /pass/.test(l)), 'a line carries the password').toEqual([]);
+  });
+
+  // ── a base path containing "[1]" is fetched literally (-g) ────────────────
+  // Without `-g` curl expands `[1]` to `1` before it parses the URL and looks in the wrong directory.
+  it('a base path containing [1] is fetched literally — the REAL curl, globbing off on both fetches', () => {
+    const home = mkTmp('install-sh-release-glob-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    plantRealCurl(home);
+    const releases = join(home, 'rel[1]');
+    fixtureRelease(home, { releases });
+    const r = runRelease(root, ['--release'], home, { CCRC_RELEASE_BASE_URL: `file://${releases}` });
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(readLog(home, 'curl-full')).toHaveLength(2);
+    expect(existsSync(join(home, 'ccrc-argv')), 'the staged ccrc did not run').toBe(true);
+  });
+
+  // ── the bounds, measured against a REAL host ──────────────────────────────
+  // THE HOST IS A SEPARATE PROCESS: `spawnSync` blocks this process's event loop, so an in-process server would
+  // accept the connection in the kernel and never write a byte (the pattern of ccrc-update-fetch.test.ts).
+  const HOST_JS = [
+    "const http = require('node:http'); const fs = require('node:fs');",
+    "const [mode, n, log] = [process.argv[1], Number(process.argv[2]), process.argv[3]];",
+    "const line = '0'.repeat(64) + '  ccrc-v9.9.9.tar.gz';",
+    "const trickle = (res) => { res.writeHead(200); res.write('x');",
+    "  const iv = setInterval(() => { try { res.write('x'); } catch (e) {} }, 100);",
+    "  res.on('close', () => clearInterval(iv)); };",
+    "const s = http.createServer((req, res) => {",
+    "  fs.appendFileSync(log, req.url + '\\n');",
+    "  if (req.url.endsWith('/SHA256SUMS')) {",
+    "    if (mode === 'slow-sums') return trickle(res);",
+    "    const body = mode === 'sums-size' ? line + ' '.repeat(n - line.length - 1) + '\\n' : line + '\\n';",
+    "    res.writeHead(200, { 'Content-Length': Buffer.byteLength(body) }); return res.end(body);",
+    "  }",
+    "  if (mode === 'slow-tar') return trickle(res);",
+    "  res.writeHead(404); res.end();",
+    "});",
+    "s.listen(0, '127.0.0.1', () => process.stdout.write(String(s.address().port) + '\\n'));",
+    "process.on('SIGTERM', () => process.exit(0));",
+  ].join('\n');
+  const startHost = async (mode: string, n: number, log: string): Promise<{ port: number; stop: () => Promise<void> }> => {
+    const child = spawn(process.execPath, ['-e', HOST_JS, mode, String(n), log], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
+    const closed = new Promise<void>((resolve) => { child.once('close', () => resolve()); });
+    const port = await new Promise<number>((resolve, reject) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const m = /^(\d+)\n/.exec(out);
+        if (m) { clearInterval(iv); resolve(Number(m[1])); }
+        else if (Date.now() - t0 > 10_000) { clearInterval(iv); reject(new Error('the fixture host never listened')); }
+      }, 20);
+    });
+    return {
+      port,
+      stop: async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await closed; },
+    };
+  };
+  /** Run install.sh against a loopback host with the REAL curl; returns what it did and how long it took. */
+  const runAgainstHost = async (mode: string, n: number, env: NodeJS.ProcessEnv): Promise<{
+    r: Result; ms: number; requests: string[]; home: string;
+  }> => {
+    const home = mkTmp('install-sh-release-host-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    plantRealCurl(home);
+    const log = join(home, 'host-requests');
+    const host = await startHost(mode, n, log);
+    try {
+      const t0 = Date.now();
+      const r = runRelease(root, ['--release'], home, {
+        CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${host.port}/rel`, CCRC_RELEASE_CONNECT_TIMEOUT: '2', ...env,
+      });
+      return { r, ms: Date.now() - t0, requests: readLog(home, 'host-requests'), home };
+    } finally {
+      await host.stop();
+    }
+  };
+
+  itLinux('a 4097-byte SHA256SUMS is refused at the size bound; one of exactly 4096 bytes is not', async () => {
+    const big = await runAgainstHost('sums-size', 4097, {});
+    expect(big.r.code, big.r.stderr).toBe(1);
+    expect(big.r.stderr).toMatch(/download failed: .*\/SHA256SUMS/);
+    expect(big.requests, 'the size bound did not stop the run before the tarball fetch').toEqual(['/rel/latest/download/SHA256SUMS']);
+    // The control: the same host at the bound goes on to ask for the tarball (which this host does not have), so the
+    // refusal above is the size bound and nothing else.
+    const ok = await runAgainstHost('sums-size', 4096, {});
+    expect(ok.r.code, ok.r.stderr).toBe(1);
+    expect(ok.requests).toEqual(['/rel/latest/download/SHA256SUMS', '/rel/latest/download/ccrc-v9.9.9.tar.gz']);
+    expect(ok.r.stderr).toMatch(/download failed: .*\.tar\.gz/);
+  }, 60_000);
+
+  itLinux('a SHA256SUMS sent slower than the speed floor is refused within the stall window, not left to the total bound', async () => {
+    // ~10 B/s against a 1000 B/s floor with a 1 s window; the total bound is 30 s, so only the floor can end it early.
+    const { r, ms } = await runAgainstHost('slow-sums', 0, {
+      CCRC_RELEASE_SPEED_LIMIT: '1000', CCRC_RELEASE_SPEED_TIME: '1', CCRC_RELEASE_SUMS_MAX_TIME: '30',
+    });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS/);
+    expect(ms, `took ${ms}ms`).toBeLessThan(10_000);
+  }, 60_000);
+
+  itLinux('a tarball sent slower than the speed floor is refused within the stall window', async () => {
+    const { r, ms, requests } = await runAgainstHost('slow-tar', 0, {
+      CCRC_RELEASE_SPEED_LIMIT: '1000', CCRC_RELEASE_SPEED_TIME: '1',
+    });
+    expect(r.code, r.stderr).toBe(1);
+    expect(requests).toEqual(['/rel/latest/download/SHA256SUMS', '/rel/latest/download/ccrc-v9.9.9.tar.gz']);
+    expect(r.stderr).toMatch(/download failed: .*\.tar\.gz/);
+    expect(ms, `took ${ms}ms`).toBeLessThan(10_000);
+  }, 60_000);
 });
 
 describe('install.sh: the checkout hand-off strips an ambient CCRC_UPDATE_VERIFIED too (M6)', () => {
@@ -588,5 +885,89 @@ describe('install.sh: the checkout hand-off strips an ambient CCRC_UPDATE_VERIFI
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
     expect(readFileSync(join(home, 'ccrc-argv'), 'utf8')).toBe('install\n');
     expect(readFileSync(join(home, 'ccrc-env'), 'utf8')).toBe('unset\n');
+  });
+});
+
+// ── The two held-equal copies (R48, W33-a) ──────────────────────────────────
+// install.sh is the bootstrap and sources nothing, so the updater's release-host defaults and its URL redactor live
+// in it as COPIES. These pins are what make a copy a derived one: the day either side moves alone, a row here reds.
+describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
+  const read = (f: string): string => readFileSync(join(REPO, f), 'utf8');
+  const KNOBS = [
+    'CCRC_RELEASE_CONNECT_TIMEOUT', 'CCRC_RELEASE_SPEED_LIMIT', 'CCRC_RELEASE_SPEED_TIME',
+    'CCRC_RELEASE_SUMS_MAX_TIME', 'CCRC_RELEASE_SUMS_MAX_FILESIZE',
+  ] as const;
+  /** Every `: "${CCRC_RELEASE_…:=value}"` line of a file, name → value. */
+  const defaultsOf = (src: string): Map<string, string> => new Map(
+    [...src.matchAll(/^: "\$\{(CCRC_RELEASE_[A-Z_]+):=([^}]*)\}"\s*$/gm)].map((m) => [m[1]!, m[2]!] as [string, string]));
+
+  it('install.sh carries the five release-host defaults, each equal to ccd/ccrc\'s line', () => {
+    const mine = defaultsOf(read('install.sh'));
+    const theirs = defaultsOf(read('ccd/ccrc'));
+    for (const k of KNOBS) {
+      expect(theirs.has(k), `ccd/ccrc lost its ${k} default — this pin went vacuous`).toBe(true);
+      expect(mine.has(k), `install.sh has no ${k} default line`).toBe(true);
+      expect(mine.get(k), `${k} differs from ccd/ccrc's`).toBe(theirs.get(k));
+    }
+    // install.sh holds exactly the five: a sixth would be a knob the updater does not have.
+    expect([...mine.keys()].sort()).toEqual([...KNOBS].sort());
+  });
+
+  /** Run a function's definition over NUL-separated inputs under a fixture HOME; stdout is the NUL-separated
+   *  outputs, compared as bytes. The inputs travel in a file (an argv string cannot carry an invalid byte). */
+  function runRedactor(def: string, name: string, inputs: readonly Buffer[], fixtureHome: string): Buffer {
+    const work = mkTmp('install-sh-redact-eq-');
+    writeFileSync(join(work, 'defs.sh'), `${def}\n`);
+    writeFileSync(join(work, 'inputs'), Buffer.concat(inputs.flatMap((b) => [b, Buffer.from([0])])));
+    const driver = `. "$1"\nwhile IFS= read -r -d '' line; do ${name} "$line"; printf '\\0'; done < "$2"\n`;
+    const r = spawnSync(BASH, ['--noprofile', '--norc', '-c', driver, 'driver', join(work, 'defs.sh'), join(work, 'inputs')], {
+      env: { HOME: fixtureHome, PATH: process.env['PATH'] ?? '' }, encoding: 'buffer',
+    });
+    expect(r.status, `${name} failed: ${r.stderr.toString()}`).toBe(0);
+    return r.stdout;
+  }
+
+  const EIGHT = [
+    'http://example.invalid/releases',                                   // plain
+    'https://user:pass@example.invalid/releases',                        // userinfo
+    'https://example.invalid/releases?token=x',                          // query
+    'https://example.invalid/releases#frag',                             // fragment
+    'https://user:pass@example.invalid/releases?token=x#frag',           // all three
+    'http://u:p@[::1]:8080/releases/latest/download/SHA256SUMS',          // IPv6 literal
+    'user:pass@example.invalid/releases',                                // no scheme
+    '',                                                                  // empty
+  ];
+
+  it('install.sh\'s redactor gives byte-equal output to _upd_redact on the eight shapes and on the whole shared corpus', () => {
+    const upd = ccdFunctionDefinition(read('ccd/ccrc'), '_upd_redact');
+    const mine = ccdFunctionDefinition(read('install.sh'), '_inst_redact');
+    expect(upd, 'ccd/ccrc has no _upd_redact').not.toBeNull();
+    expect(mine, 'install.sh has no _inst_redact').not.toBeNull();
+    const fixtureHome = '/home/u';
+    const sets: Array<{ home: string; inputs: Buffer[] }> = [{ home: fixtureHome, inputs: EIGHT.map((s) => Buffer.from(s)) }];
+    // The log-line corpus: every row with a plain, hex or run-built input, grouped by the home its row was written for.
+    interface CorpusRow {
+      home: string; input?: string; inputHex?: string; inputRuns?: Array<{ text: string; times: number }>;
+    }
+    const rows = (JSON.parse(read('server/test/fixtures/redact/log-line.json')) as { rows: CorpusRow[] }).rows;
+    const byHome = new Map<string, Buffer[]>();
+    for (const row of rows) {
+      const b = row.input !== undefined ? Buffer.from(row.input)
+        : row.inputHex !== undefined ? Buffer.from(row.inputHex, 'hex')
+          : row.inputRuns !== undefined ? Buffer.from(row.inputRuns.map((u) => u.text.repeat(u.times)).join(''))
+            : null;
+      if (b === null || b.includes(0)) continue;
+      byHome.set(row.home, [...(byHome.get(row.home) ?? []), b]);
+    }
+    for (const [home, inputs] of byHome) sets.push({ home, inputs });
+    expect(sets.reduce((n, s) => n + s.inputs.length, 0), 'the corpus read went vacuous').toBeGreaterThan(150);
+    for (const s of sets) {
+      const want = runRedactor(upd!, '_upd_redact', s.inputs, s.home);
+      const got = runRedactor(mine!, '_inst_redact', s.inputs, s.home);
+      expect(got.toString('hex'), `the copy diverged for HOME=${s.home}`).toBe(want.toString('hex'));
+    }
+    // And the pin is not vacuous: the userinfo shape is really masked by both.
+    const masked = runRedactor(mine!, '_inst_redact', [Buffer.from(EIGHT[1]!)], fixtureHome).toString().replace(/\0$/, '');
+    expect(masked).toBe('https://example.invalid/releases');
   });
 });
