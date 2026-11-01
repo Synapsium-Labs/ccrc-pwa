@@ -1042,7 +1042,7 @@ describe('W8a reader frame in Chrome', () => {
     // The frame is driven to a second load: the count stays one.
     const frame = await readerFrame(s.page);
     await frame.evaluate(`setTimeout(() => { location.href = ${JSON.stringify(origins.a + '/nav-m86')}; }, 0)`);
-    await settle(s.page, 20_000, 'fallback');
+    expect(await settle(s.page, 20_000, 'fallback'), 'the second load settles in the fallback').toBe('fallback');
     await sleep(600);
     expect((await postsSeen(s.page)).length, 'a second load posts nothing').toBe(1);
 
