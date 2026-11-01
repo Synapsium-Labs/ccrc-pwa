@@ -99,11 +99,20 @@ export const GENERIC_REFUSALS = [
   'linear-unavailable',
   // The named workspace create (named workspaces S5): ccd's three refusals, mapped by the route.
   'slug-taken', 'bad-slug', 'account-refused',
-  // The programme ledgers' coordinator routes (plan PL3): a coordinator outside the programme, a spec pin the Docs
-  // reader could not safely link, and an In short outside its bounds.
-  'not-your-programme', 'bad-spec-path', 'bad-in-short',
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
+
+/**
+ * The programme ledgers' coordinator routes' own words (plan PL3): a coordinator acting outside its programme, a spec pin
+ * the Docs reader could not safely link, and an In short outside its bounds. Declared once, here, and spelled by the
+ * routes through this table (the idiom of `SWAP_REFUSALS` and `ARCHIVE_REFUSALS`), so no code is spelled a second time
+ * and the coord code-word census (`mail-routes.test.ts`) has no literal of theirs to find. An item move's four words
+ * (`unknown-item`, `wrong-actor`, `not-open`, `programme-live`) are `shared/ledgers.ts`'s `ItemMoveRefusal`, below.
+ */
+export const LEDGER_ROUTE_REFUSALS = {
+  notYourProgramme: 'not-your-programme', badSpecPath: 'bad-spec-path', badInShort: 'bad-in-short',
+} as const;
+export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -116,7 +125,7 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
   | DispatchAbandonRefusal
   // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
-  | ItemMoveRefusal;
+  | ItemMoveRefusal | LedgerRouteRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -213,7 +222,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // outside its programme (the family of `not-owner` and `not-parent`), 400 for what the caller sent (the spec path and
   // the In short copy), and an item move's four words from `shared/ledgers.ts`: 404 for an item that is not there, 409 for
   // an item that is not in a state the move starts from, for the wrong actor and for a programme still running.
-  'not-your-programme': 403, 'bad-spec-path': 400, 'bad-in-short': 400,
+  [LEDGER_ROUTE_REFUSALS.notYourProgramme]: 403, [LEDGER_ROUTE_REFUSALS.badSpecPath]: 400, [LEDGER_ROUTE_REFUSALS.badInShort]: 400,
   'unknown-item': 404, 'not-open': 409, 'wrong-actor': 409, 'programme-live': 409,
 };
 

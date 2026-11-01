@@ -18,6 +18,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Bus } from '../bus.js';
 import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
+import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import {
   ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SOON_LABEL_MAX,
   isSlotSlug, isSpecPath, type ItemKind, type ItemView, type NeededBy,
@@ -133,7 +134,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       refuseRoute(reply, 'run-unreadable', { detail: errText(err) });
       return false;
     }
-    refuseRoute(reply, 'not-your-programme', { detail: `${byId} holds no open run of programme ${program}` });
+    refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `${byId} holds no open run of programme ${program}` });
     return false;
   };
 
@@ -279,10 +280,10 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const b = req.body as Body;
     const specPath = b['specPath'];
     if (typeof specPath !== 'string' || !isSpecPath(specPath)) {
-      return refuseRoute(reply, 'bad-spec-path', { detail: 'specPath is a .md file under docs/superpowers/specs/, with no .. in it' });
+      return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSpecPath, { detail: 'specPath is a .md file under docs/superpowers/specs/, with no .. in it' });
     }
     const inShort = text(b['inShort'], IN_SHORT_MAX);
-    if (inShort === null) return refuseRoute(reply, 'bad-in-short', { detail: `inShort is 1 to ${IN_SHORT_MAX} characters` });
+    if (inShort === null) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badInShort, { detail: `inShort is 1 to ${IN_SHORT_MAX} characters` });
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     coord.setSpecPin(slug, specPath, inShort, deps.now());
@@ -320,7 +321,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (itemId !== null) {
       const item = coord.itemById(itemId);
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
-      if (item.program !== slug) return refuseRoute(reply, 'not-your-programme', { detail: `item ${itemId} belongs to another programme` });
+      if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
     const id = coord.addModification(slug, { text: modText, ruling, itemId, pr }, deps.now());
     changed();
