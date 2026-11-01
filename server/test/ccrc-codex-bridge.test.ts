@@ -441,6 +441,28 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(fs.existsSync(join(d, 'lane.json'))).toBe(false);
   }, 60_000);
 
+  // Fix round 3, F1: the store's set-aside copy (D-7676) holds the lane's encrypted reasoning as the store does, so
+  // removal reaps it with its -wal and -shm, keyed on lane.json's store name and store.py's stamp shape. A look-alike
+  // of another name or another stamp is left, as every file the reap does not own is, so the directory stays.
+  it('removal reaps the store\'s set-aside copy with its -wal and -shm, and leaves a look-alike', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const d = laneDir(home, 'codex-a');
+    const copy = 'reasoning.sqlite.damaged-20261024T090000Z';
+    for (const f of [copy, `${copy}-wal`, `${copy}-shm`]) fs.writeFileSync(join(d, f), 'fixture\n');
+    const r = lib(home, '_codex_reap_files codex-a; echo "rc=$?"');
+    expect(r.stdout, r.stderr).toBe('rc=0\n');
+    expect(fs.existsSync(d), fs.existsSync(d) ? fs.readdirSync(d).join(' ') : '').toBe(false);
+    const again = lib(home, '_codex_lane_json_ensure codex-a');
+    expect(again.code, again.stderr).toBe(0);
+    const alike = ['bridge.stats.json.damaged-20261024T090000Z', 'other.sqlite.damaged-20261024T090000Z',
+      'reasoning.sqlite.damaged-2026102T090000Z', 'reasoning.sqlite.damaged-20261024T09000Z', `${copy}-x`, `x${copy}`,
+      'reasoning.sqlite.damaged-'];
+    for (const f of alike) fs.writeFileSync(join(d, f), 'fixture\n');
+    const r2 = lib(home, '_codex_reap_files codex-a; echo "rc=$?"');
+    expect(r2.stdout, r2.stderr).toBe('rc=0\n');
+    expect(fs.readdirSync(d).sort()).toEqual([...alike].sort());
+  }, 60_000);
+
   // PLATFORM-ONLY: the instrument is systemd-run's argv (the unit's --setenv pairs), and darwin's nohup arm leaves no
   // argv record of its pairs. The bridge arm's two forwards are pinned on both platforms by the recorder case
   // 'with both bases set, the bridge arm forwards both' below (D-6994).
