@@ -182,7 +182,10 @@ describe('ccd hibernate --roll: one verb sleeps and wakes (D-7458)', () => {
     expect(r.out).not.toContain('rolled');
     expect(has('hibernated'), 'the marker the wake cleared is stamped again').toBe(true);
     expect(has('stopped'), 'the stop stamp the wake cleared is stamped again').toBe(true);
-    expect(calls().slice(at).some((l) => /^systemctl .*disable/.test(l)), 'the unit the wake enabled is stopped').toBe(true);
+    // The platform's own stop of THIS unit: systemd's `disable --now` on Linux, launchd's `disable` of the session's
+    // label on macOS (`_svc_disable_now`, after its `bootout`). The stubs log both managers, so the row runs on either.
+    const stopped = new RegExp(`^(?:systemctl --user disable --now claude-session@${ID}|launchctl disable gui/\\d+/app\\.ccrc\\.session\\.${ID})$`);
+    expect(calls().slice(at).some((l) => stopped.test(l)), 'the unit the wake enabled is stopped').toBe(true);
     expect(eventsOf(h.home, 'hibernate'), 'still ONE deliberate act').toHaveLength(1);
   });
 
