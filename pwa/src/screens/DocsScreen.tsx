@@ -18,6 +18,8 @@ import { DocsHead, soonUntil, type FreshChipState } from '../docs/DocsHead';
 import { DocsFailureView } from '../docs/DocsFailureView';
 import { DocsIndexView } from '../docs/DocsIndexView';
 import { DocsLeaf } from '../docs/DocsLeaf';
+import { lazyMountReader, type ReaderDeps } from '../docs/ReaderFrame';
+import { loadReaderImages } from '../docs/reader/images';
 import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
 import { createFetchQueue } from '../docs/fetchQueue';
 import { docsRetryPlan, type DocsLoaders, type DocsNotOk } from '../docs/failures';
@@ -38,6 +40,14 @@ import '../docs/docs.css';
  *  renders: a new `loaders` would reload every image on the page (`DocsAssetContext`'s contract). */
 const DEFAULT_DOCS_LOADERS: DocsLoaders = api.docs;
 const DEFAULT_DOCS_PARSER: MarkdownParser = (src, o) => docsRunner.parse(src, o);
+/** The rich reader's defaults: the runner's render job, the lazily loaded mount, and the page's image loader. The
+ *  screen takes them only where a `Worker` exists (the render job needs one); without it a Markdown leaf is the plain
+ *  view, exactly as before the reader. */
+const DEFAULT_READER: ReaderDeps = {
+  render: (src, o) => docsRunner.render(src, o),
+  mount: lazyMountReader,
+  images: loadReaderImages,
+};
 
 /** The index's answer this visit. `null` has one meaning: no index request has been made in this visit yet. */
 type IndexSlot = { s: 'loading' } | { s: 'ok'; answer: DocsProjectsResponse } | DocsNotOk;
@@ -146,8 +156,13 @@ function treeOf(slot: TreeSlot | null): DocsTreeOk | null {
 
 export function DocsScreen(p: {
   path: string; search: string; loaders?: DocsLoaders; parser?: MarkdownParser;
+  /** The rich reader's deps. Absent: the default where this browser has a `Worker`, else none. `null`: none. */
+  reader?: ReaderDeps | null;
 }): ReactNode {
-  const { path, search, loaders = DEFAULT_DOCS_LOADERS, parser = DEFAULT_DOCS_PARSER } = p;
+  const {
+    path, search, loaders = DEFAULT_DOCS_LOADERS, parser = DEFAULT_DOCS_PARSER,
+    reader = typeof Worker === 'function' ? DEFAULT_READER : null,
+  } = p;
   const here = path + search;
   const parsed = useMemo(() => parseDocsPage(path, search), [path, search]);
   const page = parsed.ok ? parsed.loc : null;
@@ -261,7 +276,7 @@ export function DocsScreen(p: {
       const leaf = page.kind === 'path' && !page.dirSlash
         && docsPathKind(t, page.section, page.path, page.ref === null ? 'default' : 'ref').kind === 'leaf';
       body = leaf && page.kind === 'path'
-        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} />
+        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} reader={reader} />
         : <DocsTreeView tree={t} page={page} />;
     } else if (isOwnedElsewhere(slot) && typeof slot.body.owner === 'string' && !looped) {
       body = <p className="docs-loading">{fillSentence(DOCS_VIEW_TEXT.redirecting, { owner: slot.body.owner })}</p>;

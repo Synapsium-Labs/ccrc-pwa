@@ -277,6 +277,19 @@
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
 }
 
+/* — the rich reader (W8a): the frame fills the pane, and its two sheets lay their lines out. The frame's own page is
+   drawn inside the iframe, so nothing here colours it. The sheets' buttons are @ccrc/ui's `Button`, which carries its own
+   `min-height: var(--tap-min)`; the sheets paint no ground or ink of their own (the `Sheet` panel's are inherited). — */
+.docs-reader { inline-size: 100%; block-size: calc(100dvh - var(--sp-12)); min-block-size: 20rem; }
+.docs-reader iframe { border: 0; inline-size: 100%; block-size: 100%; }
+.docs-reader-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
+.docs-reader-sheet-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
+.docs-reader-sheet-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+.docs-reader-sheet-marks {
+  margin: 0; padding-inline-start: var(--sp-4); display: grid; gap: var(--sp-1);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere;
+}
+
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both
    halves). — */

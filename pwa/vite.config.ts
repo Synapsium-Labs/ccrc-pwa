@@ -164,6 +164,10 @@ export default defineConfig({
         // machine — see deploy/deploy.sh's header. An entry covering `/docs`,
         // ccrc's own Docs pages, fails the build (src/lib/sw-denylist.ts).
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],
+        // The reader frame's Mermaid script is far over workbox's 2 MiB precache ceiling, which makes the build throw.
+        // It is not precached: it loads on demand, only for a document the Mermaid gate lets in (A9, M8.14; the
+        // precache exclusion is refinement (i)).
+        globIgnores: ['**/mermaid.frame-*.js'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
         // Web Push handlers (push + notificationclick) live in public/push-sw.js
