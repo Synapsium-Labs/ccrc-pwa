@@ -4231,7 +4231,7 @@ export class FleetWatcher {
   }
 
   /** One pass of the child-reclaim lane, run by `sweepChildReclaim` once its row says it is due. */
-  private async childReclaimPass(coord: CoordStore, records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+  private async childReclaimPass(coord: WatcherCoordPort, records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     // THE PASS'S ONE AWAIT BEFORE ITS LOOP (spec §5.5): every marked row's
     // registry generation, read concurrently. Gathered whole, here, so the
     // per-child loop below stays synchronous: no await sits between a row's
@@ -4973,7 +4973,7 @@ export class FleetWatcher {
    *  `now` unset — built HERE, inside the queue callback, as the close port
    *  does. `Deps.childReclaimExec` replaces the whole call in a test, and
    *  nowhere else. */
-  private execChildReclaim(coord: CoordStore, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
+  private execChildReclaim(coord: WatcherCoordPort, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
     const seam = this.deps.childReclaimExec;
     if (seam) return seam(req);
     // The close route's OWN shape (`coord/routes.ts`'s `childReclaimPort`):
@@ -6233,7 +6233,7 @@ export class FleetWatcher {
    *  the release job's own re-reads are exactly what a test wants to observe,
    *  so a test runs it for real against a recording `runCcd` instead. */
   private execChildReclaimRelease(
-    coord: CoordStore, req: ChildReclaimReleaseRequest,
+    coord: WatcherCoordPort, req: ChildReclaimReleaseRequest,
   ): Promise<ChildReclaimReleaseOutcome> {
     return this.deps.queue.run(req.sessionId, () => releaseRetiredChildHold({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
