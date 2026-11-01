@@ -42,7 +42,7 @@ import { spawnChip, type SpawnChip } from './spawnWords';
 import { substrateFaultText } from './substrateWords';
 import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
-import { unmeasuredTitle } from './chips';
+import { unmeasuredTitle } from './unmeasuredWords';
 import { delegatedChip, type Chip } from './delegationWords';
 
 /** Routing policy calls a window critical above this. */
