@@ -59,10 +59,10 @@ describe('the Linear key check cleans a name as main does', () => {
     ['team-a', 'team-a'],
     [' team-a\n', 'team-a'],
     ['a\tb', 'a b'],
-    ['a  b', 'a  b'],
-    ['a\u202eb', 'a\u202eb'],
-    ['a\u200bb', 'a\u200bb'],
-    ['a\u2028b', 'a\u2028b'],
+    ['a  b', 'a b'], // re-pointed: cleanName on stripLine collapses runs (#1444)
+    ['a\u202eb', 'a b'], // re-pointed: cleanName on stripLine strips the whole set (#1444)
+    ['a\u200bb', 'a b'], // re-pointed: cleanName on stripLine strips the whole set (#1444)
+    ['a\u2028b', 'a b'], // re-pointed: cleanName on stripLine strips the whole set (#1444)
     ['\u0001x\u0002', 'x'],
     ['\u0001\u0002', 'malformed'],
     ['\u00e9\u{1f600}', '\u00e9\u{1f600}'],

@@ -47,10 +47,11 @@ export function stripMultiline(s: string): string {
  *  and on the screen. */
 export const LINEAR_NAME_MAX_CHARS = 80;
 
-/** A name from Linear, made safe to store and show: control runs collapse to one space, trimmed, bounded. Null when
- *  nothing is left (a name that is all control characters is no name). */
+/** A name from Linear, made safe to store and show: {@link stripLine} (the whole set, so no control, format or bidi
+ *  character reaches a file, a screen or a refusal detail), then bounded to {@link LINEAR_NAME_MAX_CHARS} code
+ *  points and trimmed. Null when nothing is left (a name that is all unprintable characters is no name). */
 export function cleanName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
-  const s = [...raw.replace(/\p{Cc}+/gu, ' ').trim()].slice(0, LINEAR_NAME_MAX_CHARS).join('').trim();
+  const s = [...stripLine(raw)].slice(0, LINEAR_NAME_MAX_CHARS).join('').trim();
   return s === '' ? null : s;
 }

@@ -7,7 +7,7 @@
 //   - `stripMultiline`, for the two markdown fields only: `\r\n`, then a lone `\r`, become `\n`, and the set less `\n`
 //     and `\t` is removed to nothing, with nothing collapsed, so a description keeps its line structure byte for byte.
 import { describe, it, expect } from 'vitest';
-import { UNPRINTABLE, stripLine, stripMultiline } from '../../shared/unprintable.js';
+import { LINEAR_NAME_MAX_CHARS, UNPRINTABLE, cleanName, stripLine, stripMultiline } from '../../shared/unprintable.js';
 
 /** One of each class the set names: C0, DEL, C1 (the 8-bit CSI and NEL among them), the combining grapheme joiner,
  *  the line and paragraph separators, U+2060 to U+206F, and \p{Cf} (soft hyphen, Arabic letter mark, zero-width
@@ -100,4 +100,22 @@ describe('stripMultiline: a markdown field keeps its lines', () => {
   it('is idempotent', () => {
     for (const s of [DESCRIPTION, 'a\r\nb\u202e', 'x\u0007\ty']) expect(stripMultiline(stripMultiline(s))).toBe(stripMultiline(s));
   });
+});
+
+describe('cleanName: a name from Linear passes stripLine, then the bound (spec section 6.5)', () => {
+  const ROWS: [raw: unknown, cleaned: string | null][] = [
+    ['team-a', 'team-a'],
+    ['  team  a ', 'team a'],
+    ['a\u202eb', 'a b'],
+    ['a\u200bb\u2066c\u2069', 'a b c'],
+    ['line one\nline two', 'line one line two'],
+    ['\u202e\u200b\u0007', null],
+    ['', null],
+    [42, null],
+    [null, null],
+    ['x'.repeat(200), 'x'.repeat(LINEAR_NAME_MAX_CHARS)],
+    [`${'x'.repeat(LINEAR_NAME_MAX_CHARS - 1)} yy`, `${'x'.repeat(LINEAR_NAME_MAX_CHARS - 1)}`],
+  ];
+  for (const [raw, cleaned] of ROWS) it(JSON.stringify(raw), () => { expect(cleanName(raw)).toBe(cleaned); });
+  it('the bound is 80 code points', () => { expect(LINEAR_NAME_MAX_CHARS).toBe(80); });
 });
