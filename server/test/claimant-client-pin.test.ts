@@ -44,9 +44,9 @@ import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { CHILD, PARENT, requestBody, standardFixture, TOKEN, uuidOf } from './approvalsHarness.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  ANSWER, ASK_PANE, bodyOf, DIFFERENCE, EXPECTED, hookstate, installRealServerHooks, json, LADDER, lastRunDoors,
-  mailBodiesTo, NONCE, NOW, ORDINARY, type Outcome, P, realServer, REL, type Row, RULE, runRow, statusOf, type Verb, VERBS,
-  withKind,
+  ANSWER, ASK_PANE, bodyOf, DIFFERENCE, EXPECTED, FAMILY_DIFFERENCE, hookstate, installRealServerHooks, json, LADDER,
+  lastRunDoors, mailBodiesTo, NONCE, NOW, ORDINARY, P, realServer, REL, type Row, RULE, runRow, statusOf, THROUGH_FAMILY,
+  type Verb, VERBS, withKind,
 } from './claimantClientFixture.js';
 
 /** The old door each verb sends whenever `questions-v1` is not advertised, current and listed. */
@@ -255,45 +255,6 @@ describe('(a) what the four verbs send, per cap-file state (the old door and the
 // ── (b), (c), (d): a real server ──────────────────────────────────────────────────────────────────────────────────
 
 installRealServerHooks();
-
-/** The family's own answers to the named-difference rows (D-7325), MEASURED through the family: the unconfigured box
- *  token's detail names the family's route; a contrary kind is read by the family's ladder for that kind (on `rule`
- *  the body's kind picks the arm before attribution and the id check, so the mailed body with the contrary kind is the
- *  other arm's `bad-request`, and only a body well formed for the contrary kind reaches `kind-mismatch`; on `release`,
- *  `kind-mismatch`); a non-object body is refused by the client (`bad-body`, exit 2, no response: status -1). Every
- *  other cell is `EXPECTED`'s, the base's, unedited. */
-const HELD_ASK = { state: 'held', answeredBy: null, answer: null };
-const HELD_APPROVAL = { state: 'held', answeredBy: null, releaseReason: null };
-const NOTHING = { doorIns: [], keys: [], mailToParent: 0 };
-const CLIENT_BAD_BODY = '{"ok":false,"error":"bad-body","detail":"the body is not a JSON object; kind cannot be added"}';
-const unconfigured = (route: string): string =>
-  `{"ok":false,"error":"unauthenticated","detail":"no box token is configured on this server — ${route} fails shut on an unconfigured token, it does not fail open"}`;
-const FAMILY_DIFFERENCE: Record<string, Outcome> = {
-  'difference | asks answer | the mailed body with "kind":"approval"':
-    { status: 400, body: '{"ok":false,"error":"bad-request","detail":"fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to 1000 characters"}', effects: { row: HELD_ASK, ...NOTHING } },
-  'difference | asks answer | a body well formed for an approval':
-    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_ASK, ...NOTHING } },
-  'difference | asks release | the mailed body with "kind":"approval"':
-    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_ASK, ...NOTHING } },
-  'difference | approvals rule | the mailed body with "kind":"ask"':
-    { status: 400, body: '{"ok":false,"error":"bad-request","detail":"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given"}', effects: { row: HELD_APPROVAL, ...NOTHING } },
-  'difference | approvals release | the mailed body with "kind":"ask"':
-    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_APPROVAL, ...NOTHING } },
-  'difference | asks answer | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_ASK, ...NOTHING } },
-  'difference | asks release | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_ASK, ...NOTHING } },
-  'difference | approvals rule | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_APPROVAL, ...NOTHING } },
-  'difference | approvals release | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_APPROVAL, ...NOTHING } },
-  'difference | asks answer | the box token unconfigured':
-    { status: 401, body: unconfigured('POST /api/questions/:id/rule'), effects: { row: HELD_ASK, ...NOTHING } },
-  'difference | asks release | the box token unconfigured':
-    { status: 401, body: unconfigured('POST /api/questions/:id/release'), effects: { row: HELD_ASK, ...NOTHING } },
-  'difference | approvals rule | the box token unconfigured':
-    { status: 401, body: unconfigured('POST /api/questions/:id/rule'), effects: { row: HELD_APPROVAL, ...NOTHING } },
-  'difference | approvals release | the box token unconfigured':
-    { status: 401, body: unconfigured('POST /api/questions/:id/release'), effects: { row: HELD_APPROVAL, ...NOTHING } },
-};
-/** The table the family answers: the base's, with the named differences and nothing else. */
-const THROUGH_FAMILY: Record<string, Outcome> = { ...EXPECTED, ...FAMILY_DIFFERENCE };
 
 /** The door a row's own call reaches: the family's, with the row's id (a bad id rides through to the server, which
  *  refuses it); none for a body the client refuses. */

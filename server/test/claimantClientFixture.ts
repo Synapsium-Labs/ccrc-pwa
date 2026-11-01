@@ -3,8 +3,8 @@
 // pin and `claimant-client-skew.test.ts` run the same rows against the same server and read the same outcome table:
 // a real `buildServer` (`approvalsHarness.ts`'s standard family, the fixture signing key, a fixed clock), per verb the
 // success arm and each front-ladder refusal a caller of the client can reach, and the named-difference rows (D-7325).
-// `EXPECTED` is the table as the base answers it, through the old doors; the pin names the family's differences beside
-// it. Neutral ids only (`approvalsHarness.ts`'s). Nothing here touches the live HOME or a live server.
+// `EXPECTED` is the table as the base answers it, through the old doors; `FAMILY_DIFFERENCE` names the family's
+// differences beside it (moved here from the pin in K5 Q3l). Neutral ids only (`approvalsHarness.ts`'s). Nothing here touches the live HOME or a live server.
 import { beforeEach, afterEach, vi } from 'vitest';
 import { createHash, createPrivateKey } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
@@ -342,6 +342,46 @@ export const EXPECTED: Record<string, Outcome> = {
   "difference | approvals release | the box token unconfigured":
     {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token is configured on this server — POST /api/approvals/:id/release fails shut on an unconfigured token, it does not fail open\"}", "effects": {"row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "mailToParent": 0}},
 };
+
+/** MOVED here from `claimant-client-pin.test.ts` (K5 Q3l), never copied, so the skew suite reads the same table.
+ *  The family's own answers to the named-difference rows (D-7325), MEASURED through the family: the unconfigured box
+ *  token's detail names the family's route; a contrary kind is read by the family's ladder for that kind (on `rule`
+ *  the body's kind picks the arm before attribution and the id check, so the mailed body with the contrary kind is the
+ *  other arm's `bad-request`, and only a body well formed for the contrary kind reaches `kind-mismatch`; on `release`,
+ *  `kind-mismatch`); a non-object body is refused by the client (`bad-body`, exit 2, no response: status -1). Every
+ *  other cell is `EXPECTED`'s, the base's, unedited. */
+export const HELD_ASK = { state: 'held', answeredBy: null, answer: null };
+export const HELD_APPROVAL = { state: 'held', answeredBy: null, releaseReason: null };
+export const NOTHING = { doorIns: [], keys: [], mailToParent: 0 };
+export const CLIENT_BAD_BODY = '{"ok":false,"error":"bad-body","detail":"the body is not a JSON object; kind cannot be added"}';
+export const unconfigured = (route: string): string =>
+  `{"ok":false,"error":"unauthenticated","detail":"no box token is configured on this server — ${route} fails shut on an unconfigured token, it does not fail open"}`;
+export const FAMILY_DIFFERENCE: Record<string, Outcome> = {
+  'difference | asks answer | the mailed body with "kind":"approval"':
+    { status: 400, body: '{"ok":false,"error":"bad-request","detail":"fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to 1000 characters"}', effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks answer | a body well formed for an approval':
+    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks release | the mailed body with "kind":"approval"':
+    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | approvals rule | the mailed body with "kind":"ask"':
+    { status: 400, body: '{"ok":false,"error":"bad-request","detail":"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given"}', effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | approvals release | the mailed body with "kind":"ask"':
+    { status: 400, body: '{"ok":false,"error":"kind-mismatch"}', effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | asks answer | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks release | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | approvals rule | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | approvals release | a non-object body': { status: -1, body: CLIENT_BAD_BODY, effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | asks answer | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/rule'), effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | asks release | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/release'), effects: { row: HELD_ASK, ...NOTHING } },
+  'difference | approvals rule | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/rule'), effects: { row: HELD_APPROVAL, ...NOTHING } },
+  'difference | approvals release | the box token unconfigured':
+    { status: 401, body: unconfigured('POST /api/questions/:id/release'), effects: { row: HELD_APPROVAL, ...NOTHING } },
+};
+/** The table the family answers: the base's, with the named differences and nothing else. */
+export const THROUGH_FAMILY: Record<string, Outcome> = { ...EXPECTED, ...FAMILY_DIFFERENCE };
 
 /** The requests the last `runRow` call's own call sent (its `before` setup excluded): method and path. */
 let lastDoors: string[] = [];
