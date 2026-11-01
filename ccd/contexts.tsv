@@ -57,6 +57,7 @@ _svc_have_user_manager	C2
 _svc_run_supervised	C2
 _launchd_class	C2
 die	K
+_roster_fp_to	C1
 _rc_enabled	C2
 _lane_enabled	C1
 _authdead	C1
@@ -434,6 +435,8 @@ _route_effort_for	C1
 _route_wanted	C3
 _route_pending_word	C3
 _home_measured	C1
+_roster_eval	C1
+_roster_reread_check	C1
 cmd_supervise	C2
 _sanitize_anthropic	C1
 _transcript_matches	C1
