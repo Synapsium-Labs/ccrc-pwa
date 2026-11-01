@@ -23,7 +23,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ccdSource, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ccdSource, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
@@ -81,10 +81,13 @@ const supervise = (ticks: number): { code: number | null; stderr: string } => {
       fi
     }
     cmd_supervise ${ID}`;
+  // The harness's own environment, re-contained here so the census in
+  // ccd-workspaces.test.ts reads every poison at this call site.
+  const env = ghContainedEnv(h.home, { ...h.env(), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet },
+    { systemd: true, tmux: true, net: true });
   const r = spawnSync('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
     + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; eval "$ccd_h_snippet"'], {
-    encoding: 'utf8', cwd: h.home, timeout: 30000,
-    env: { ...h.env(), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet },
+    encoding: 'utf8', cwd: h.home, timeout: 30000, env,
   });
   return { code: r.status, stderr: r.stderr ?? '' };
 };
@@ -143,7 +146,7 @@ describe('ccd supervise re-reads accounts.sh at the loop boundary (D-7717)', () 
     stageNext(3, gen(withNewLane()) + LOG_LINE);
     const r = supervise(4);
     expect(swaps()).toEqual([OLD, OLD, OLD, NEW]);
-    expect(r.stderr.split('\n').filter((l) => l.includes('changed but does not source cleanly'))).toHaveLength(1);
+    expect(r.stderr.split('\n').filter((l) => l.includes('changed and is refused'))).toHaveLength(1);
     expect(events().filter((e) => e === 'src 0')).toEqual(['src 0', 'src 0']);   // startup, then the good file only
   });
 
@@ -170,7 +173,7 @@ describe('ccd supervise re-reads accounts.sh at the loop boundary (D-7717)', () 
     fs.writeFileSync(path.join(h.home, 'rm-1'), '');
     const r = supervise(3);
     expect(swaps()).toEqual([OLD, OLD, OLD]);
-    expect(r.stderr.split('\n').filter((l) => l.includes('is missing, empty, unreadable or not a regular file'))).toHaveLength(1);
+    expect(r.stderr.split('\n').filter((l) => l.includes('changed and is refused'))).toHaveLength(1);
   });
 
   it('a name the new file no longer defines does not survive from the old roster', () => {

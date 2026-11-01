@@ -1789,8 +1789,7 @@ _roster_fp_to() {   # var -> var = the bytes of accounts.sh; rc 1 when there are
   local __rf_v=""
   [[ -f "$CCRC_ACCOUNTS_SH" && -r "$CCRC_ACCOUNTS_SH" ]] || return 1
   { IFS= read -r -d '' __rf_v < "$CCRC_ACCOUNTS_SH"; } 2>/dev/null || :
-  [[ -n "$__rf_v" ]] || return 1
-  printf -v "$1" '%s' "$__rf_v"
+  [[ -n "$__rf_v" ]] && printf -v "$1" '%s' "$__rf_v"
 }
 [[ -e "$CCRC_ACCOUNTS_SH" ]] \
   || die "no account roster at $CCRC_ACCOUNTS_SH — generate it from ~/.ccrc/accounts.json (deploy/deploy.sh, or \`ccrc install\`)"
@@ -26423,14 +26422,8 @@ _CCD_ROSTER_REFUSED=""   # "x" + the bytes last refused ("x" alone: nothing coul
 _roster_eval() { eval "$1"; }   # bytes -> their rc, evaluated in THIS shell one function deep (see above)
 _roster_reread_check() {   # [id] -> re-reads accounts.sh into this shell iff its bytes changed and pass validation
   local fp="" who="${1:+$1: }"
-  _roster_fp_to fp || fp=""
-  [[ -n "$fp" && "$fp" == "$_CCD_ROSTER_FP" ]] && return 0
-  [[ "x$fp" == "$_CCD_ROSTER_REFUSED" ]] && return 0
-  if [[ -z "$fp" ]]; then
-    _CCD_ROSTER_REFUSED="x"
-    echo "ccd: warn: ${who}account roster $CCRC_ACCOUNTS_SH is missing, empty, unreadable or not a regular file — keeping the roster this supervisor holds (${CCRC_ACCOUNTS[*]}); regenerate it: ccrc install" >&2
-    return 0
-  fi
+  _roster_fp_to fp || fp=""   # "" (nothing readable) is never evaluated from the file: it fails validation below
+  [[ ( -n "$fp" && "$fp" == "$_CCD_ROSTER_FP" ) || "x$fp" == "$_CCD_ROSTER_REFUSED" ]] && return 0
   if ! (
     unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
     { _roster_eval "$fp"; } >/dev/null 2>&1 || exit 1
@@ -26440,15 +26433,13 @@ _roster_reread_check() {   # [id] -> re-reads accounts.sh into this shell iff it
     declare -F _ccrc_cfg_dir _ccrc_label _ccrc_hue >/dev/null 2>&1 || exit 1
   ); then
     _CCD_ROSTER_REFUSED="x$fp"
-    echo "ccd: warn: ${who}account roster $CCRC_ACCOUNTS_SH changed but does not source cleanly to a non-empty CCRC_ACCOUNTS, a CCRC_HOME_ABLE and _ccrc_cfg_dir/_ccrc_label/_ccrc_hue — keeping the roster this supervisor holds (${CCRC_ACCOUNTS[*]}); regenerate it: ccrc install" >&2
+    echo "ccd: warn: ${who}account roster $CCRC_ACCOUNTS_SH changed and is refused: it must be a readable regular file that sources cleanly to a non-empty CCRC_ACCOUNTS, a CCRC_HOME_ABLE and _ccrc_cfg_dir/_ccrc_label/_ccrc_hue — keeping the roster this supervisor holds (${CCRC_ACCOUNTS[*]}); regenerate it: ccrc install" >&2
     return 0
   fi
   unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
   { _roster_eval "$fp"; } >/dev/null 2>&1 \
     || echo "ccd: warn: ${who}account roster re-read returned non-zero in this shell after it validated" >&2
-  _CCD_CFG_DIR_MEMO=()
-  _CCD_ROSTER_FP=$fp
-  _CCD_ROSTER_REFUSED=""
+  _CCD_CFG_DIR_MEMO=(); _CCD_ROSTER_FP=$fp; _CCD_ROSTER_REFUSED=""
   echo "ccd: ${who}account roster re-read — lanes now: ${CCRC_ACCOUNTS[*]}" >&2
 }
 

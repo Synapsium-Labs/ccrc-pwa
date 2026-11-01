@@ -427,6 +427,7 @@ cmd_supervise -> _auto_stale_check
 cmd_supervise -> _auto_swap_check
 cmd_supervise -> _ci_held_wait
 cmd_supervise -> _reg_set
+cmd_supervise -> _roster_reread_check
 cmd_supervise -> _route_apply_check
 cmd_supervise -> _session_probe
 cmd_supervise -> _substrate_clear
