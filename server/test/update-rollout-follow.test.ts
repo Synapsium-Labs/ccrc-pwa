@@ -17,7 +17,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ResOk } from '../../shared/agent-protocol.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
-import type { RequestKind } from '../../shared/api.js';
+import type { MoveRequestAnswer, RequestKind } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type ReleaseListingRow } from '../src/coord/store.js';
 import type { ExecResult, Runner } from '../src/exec.js';
@@ -29,7 +29,7 @@ import {
 import type { MoveFeedRecord } from '../src/update/dispatch.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps } from '../src/update/inventory.js';
 import { Bus } from '../src/bus.js';
-import type { Deps } from '../src/server.js';
+import { buildServer, type Deps } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { spawnFromRunner } from './updateSpawnFake.js';
@@ -286,6 +286,38 @@ describe('D-7688: a request older than the running lease never survives its sett
     expect(h.store.requestNode(SERVER_ID, 'v0.0.11', 'update', T0 + 60_500).ok).toBe(true);
     const next = ran(await runDispatch(h.deps, T0 + 61_000));
     expect(next.plan.refusals, JSON.stringify(next.plan)).toEqual([]);
+    expect(next.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: serverArgv('v0.0.11') }]);
+  });
+});
+
+describe('D-7690: Update all to the SAME tag a running auto fleet move delivers still makes the server follow', () => {
+  it("the tap is queued beside the auto lease (POST /api/updates/apply); the fleet's done-settle requests v0.0.11 on the server, and the next plan moves it — with the server's auto off", async () => {
+    const h = harness();
+    expect(dispatchViewsFor(h.store).find((v) => v.row.nodeId === SERVER_ID)!.auto, 'auto is off for the server').toBe('off');
+    // The fleet's auto arm moved it: a lease to v0.0.11 and no request on the row.
+    expect(h.store.dispatchNode(FLEET_ID, 'v0.0.11', 'update', T0, 'auto update from v0.0.9 to v0.0.11')).toEqual({ ok: true });
+    const base = testDeps(mkTmp('update-rollout-follow-app-'));
+    const app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: false }, coord: h.store }, new Bus());
+    try {
+      await app.ready();
+      const r = await app.inject({ method: 'POST', url: '/api/updates/apply', payload: { all: true, tag: 'v0.0.11' } });
+      expect(r.statusCode, r.body).toBe(202);
+      expect(r.json()).toEqual({
+        ok: true, requested: [FLEET_ID], queued: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+      } satisfies MoveRequestAnswer);
+    } finally {
+      await app.close();
+    }
+    plantBox(h.fleetDir, { id: FLEET_ID, version: 'v0.0.11', report: {
+      target: 'v0.0.11', phase: 'done', startedAt: T_S + 2, updatedAt: T_S + 90, detail: null, from: 'pwa',
+    } });
+    plantBox(h.serverDir, { id: SERVER_ID, version: 'v0.0.9' });
+    await sweepInventory(h.inv, T0 + 60_000);
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'idle', updateDetail: 'done: v0.0.11', requestedTag: null });
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.11', requestedKind: 'update' });
+    expect(h.records.map((x) => x.title)).toContain('update server: follows fleet to v0.0.11');
+    const next = ran(await runDispatch(h.deps, T0 + 61_000));
     expect(next.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
     expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: serverArgv('v0.0.11') }]);
   });

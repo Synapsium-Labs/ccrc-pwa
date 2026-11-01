@@ -429,8 +429,9 @@ function installableTag(coord: CoordStore, tag: string): boolean {
  * reads in the order the dispatcher will move them. A request is written only for a node the move can take
  * FORWARD: with no tag named and no `desiredTag`, it is skipped `no-desired`; a node whose OWN lease is already
  * busy gets its request BESIDE that lease and is listed in `queued` (D-7678, replacing D-3406's `busy` skip) when
- * the tag is strictly newer than that lease's target — at or below it, it is skipped `not-newer` (D-7688), judged
- * against max(floor, lease target): `settleNode` keeps a request written after the lease started only for an update
+ * the tag is not older than that lease's target — strictly older, it is skipped `not-newer` (D-7688). The lease's
+ * own target is queued too (D-7690): settled, that request is the one `landedMoveOf` reads so the server follows,
+ * and `settleNode` clears it. `settleNode` keeps a request written after the lease started only for an update
  * strictly newer than the lease's target, so the operator's newer tap waits
  * its turn instead of being dropped — the drop that left a server row with no request after its own lease
  * settled, so the fleet moved and the server never followed. The single-node route still answers `409 busy` for
@@ -508,11 +509,13 @@ function requestAll(coord: CoordStore, tag: string | null, now: number): MoveReq
     const busyRow = !(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState);
     if (busyRow && isFleetRow) fleetSelfSkipped = true;
     let refusal = moveRefusal(view, { kind: 'update', target, source: 'request' }, resolveInputFor(coord, row).releases, NO_HALT);
-    // D-7688: a busy row is judged against max(floor, the running lease's target), not its floor alone — the lease
-    // delivers its target, so a tag at or below it is `not-newer` once the move lands. Queued anyway, it would be a
+    // D-7688: a busy row is judged against the running lease's target as well as its floor — the lease delivers its
+    // target, so a tag strictly OLDER than it is `not-newer` once the move lands. Queued anyway, it would be a
     // request the dispatcher can only refuse, and on a fleet row it would hold every server move behind it until an
-    // ack (`settleNode` no longer keeps one either).
-    if (refusal === null && busyRow && isReleaseTag(row.updateTarget) && !isNewerTag(target, row.updateTarget)) refusal = 'not-newer';
+    // ack (`settleNode` no longer keeps one either). D-7690: the lease's OWN target is still written beside it. An
+    // auto lease carries no request, and this write is the one `landedMoveOf` reads to make the server follow;
+    // `settleNode` clears it (its keep needs strictly newer), so it never pins the server.
+    if (refusal === null && busyRow && isReleaseTag(row.updateTarget) && isNewerTag(row.updateTarget, target)) refusal = 'not-newer';
     if (refusal !== null) {
       const why = skipWord(refusal);
       skipped.push({ nodeId: row.nodeId, why });
