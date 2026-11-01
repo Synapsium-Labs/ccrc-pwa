@@ -29,6 +29,14 @@ each box that hosts sessions, and gives a session a way to recall what it compac
 session-written leaves in W3), and a `ccrc history` CLI plus a skill. Modelled on lossless-claw (MIT), ported rather
 than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W4 ship at all.
 
+## Current checkpoint — 2026-11-01
+
+The latest accepted state is recorded here and in the live run board; older dated completion-plan and operational
+measurements below are history, not authority to repeat their actions. W2's prospective observation is **seven days**,
+excluding setup and pilot. No valid live start or W2 PASS is established by this checkpoint. The two capped drafts
+and the separately refused runbook correction remain held. The independent ingestion-test follow-up (#2063) is
+accepted **for landing**, not yet merged. Run 1022 remains planned, open and undispatched to preserve continuity.
+
 ## Waves
 
 | # | scope | deploy class | PRs | state |
@@ -56,10 +64,69 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | W1-fix (CP-39b) | a sidecar over 8 MiB (`SIDECAR_READ_WHOLE_MAX`) is captured by the streamed arm, which reads into one reused piece | fleet | #1561 | **merged** 2026-10-26 12:55Z as `f70956cc3` at head `bb917402a`, release v0.0.725 (run 973; reviews 979 and 987; one fix round) |
 | W1-fix (CP-39c) | the export pass runs on its own slice of the run budget, and the check after a bind on a slice of its own | fleet | #1577 | **merged** 2026-10-26 as `ce7b94dab`, release v0.0.728 (run 982; review 999; accepted with no fix round); its live check passed on 2026-10-27 on v0.0.745: export due 0 and overdue 0 (597 due before), health PASS (§8) |
 | W1-fix (CP-39d) | grep drives each referrer arm from its scope; the sweep reads a registered session's mid-turn growth within a tick; W1-b's and W1-f's measures; the sweep's carried review items | fleet | #1693 | **merged** 2026-10-27 21:11Z as `5377d23c1` at head `a8e707cff`, release v0.0.767 (run 1039; reviews 1065 and 1088; one fix round); the final W2 release carries it (CP-35) |
+| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft; run 1190 awaiting-review, review rounds 3/3; no cap lift or implementation authority |
+| 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **held/unaccepted**, draft; run 1233 awaiting-review, review rounds 3/3; operator's seven-day ruling stands independently of this draft |
+| 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **held/unaccepted**, draft; run 1236 awaiting-review, review rounds 1/3; review 1238 closed/read, bounded correction not sent after routing refusal |
+| 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **accepted for landing** at `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 awaiting-review, item 1/1, review rounds 1/3; review 1321 done/released; fresh landing gates still required |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the operator records the W2 gate as passed |
 | 8 | W4: subagents and `touched` | fleet | — | only if the operator records the W2 gate as passed, and never before wave 5 is live |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-10-30 to 2026-11-01
+
+- **Seven-day observation, operator ruling 2026-10-30.** Explicitly set `window_plan.planned_days=7` in every signed
+  or superseding draft, and schedule `window.end_ms = window.start_ms + 604800000`. Setup and pilot do not count.
+  Retain `lookback_days=14` for the retrospective census and recompute Q18 with seven planned days. The existing
+  positive-integer duration contract already represents seven days; fourteen is a default, not a minimum. No runtime
+  or default-change release is needed merely to select seven. Validator tolerance does not authorise an eighth
+  scheduled day. Preserve sampling, pilot, statistical/quality/PASS bars, budget, private signing, privacy and freeze
+  conditions. If seven days cannot meet them, halt for operator disposition; do not extend or lower a gate.
+- **Held drafts are not accepted work.** Runs 1190 and 1233 remain at their three-review caps. General directions
+  to progress the programme do not lift those caps, accept their drafts or authorise W3/W4 implementation. Run 1022
+  stays open and undispatched. Current PR metadata independently confirms #1876, #1969 and #1975 remain open drafts.
+- **Review 1238/run 1236, not acceptance.** The exact reviewer fingerprint was accepted at close before report
+  read. Uphold three bounded corrections: distinguish pre-start finalisation from at/after an invalid or unestablished
+  signed start, which halts for operator disposition; preserve separately applicable added-node census/registry
+  checks before power consumes those nodes without introducing universal act 11; attribute private record/readback
+  confirmations to the operator when that is the evidence, never to an independent coordinator measurement. No new
+  post-start recovery, disclosure or closure policy is selected. Other majority-refuted variants are dropped. Extra
+  reviewer test execution outside the named set and the disclosed protocol departures are retained limitations, not
+  authorised execution or green evidence. The attempted effort-routing act answered
+  `{"ok":false,"error":"registry-unreadable","file":"class"}`. It stopped there: no accepted routing change,
+  work advance or correction mail. The correction remains unsent; do not retry it or send at the old effort as a
+  workaround without specific recovery authority.
+- **Research follow-ups and filing.** External research is complete; no external repository was executed, imported
+  or made a dependency. Five local enhancement drafts cover recall guidance/source references, metric distinctions,
+  incremental-ingest evidence, recovery states/summary lineage, and bounded additive retrieval before context
+  rewriting. Filing was explicitly postponed on 2026-11-01; no ticket was created or changed. Do not resume access
+  investigation or invent a substitute tracker. These follow-ups add no W2 prerequisite or experiment authority.
+- **Run 1320/review 1321: accept the bounded test-only deliverable for landing.** A read-only audit of committed
+  main established existing identity/cursor/tail-proof/rescan and cross-pass pairing mechanisms, not a runtime bug.
+  The independent wave adds one-shot versus actual writer-reopen semantic coverage and exact prepared-line offset
+  counts for append, unchanged revisit and deliberate tail-proof failure. Only `server/test/history-ingest.test.ts`
+  changes (+218/-0); no runtime, schema, dependency or evaluation record changes. The exact worker handoff was
+  server-verified before settling the one item. A NEW review run closed at the exact reviewed fingerprint before
+  its immutable report was read. It is done/released; no reuse for a later tip.
+- **Review 1321 evidence and limits.** Three fresh held-out lenses and the prescribed refuters returned no surviving
+  critical/important finding, no unverified lens and no unexamined finding. The important oracle-scope finding was
+  refuted by the required majority. Its refuters lacked the temporary plan path: retain that limitation, do not
+  claim they read the plan or that uncertainty proves conformance, and do not override the prescribed majority with
+  a newly invented gate. The specification lens and whole-branch mapping separately cover the explicit bounded
+  task list. Six distinct minor advisories remain: broad transaction/O1-O4 labels; no-delete assertions not comparing
+  surrogate row identities; no direct canonical-blob assertion after the rewrite; an empty variant comparison in
+  the equivalence case; the oracle's bounded column subset; and close-on-reopen-error hygiene. They do not alone
+  require a fix round or a new exhaustive whole-database oracle.
+- **Verification is scoped evidence.** The reviewer independently ran the focused group (3 passed), whole affected
+  file (229 passed) and separate test-project typecheck (exit 0) through the test launcher. The reproduction lens's
+  two expressly allowed test runs are disclosed. Exact-tip fast CI selected and executed the affected file in a
+  server shard; the required summaries succeeded at capture. Browser/PWA test steps and macOS were skipped, not
+  passed executions. No full-suite green, pre-change runtime defect or live evaluation result is claimed. A failed
+  non-required external review-gate app had inaccessible details: unverified evidence, neither waived nor a proven
+  product defect. Fresh repository rules, reviews, comments/threads/alerts, checks, exact head and landing-line
+  gates still govern enqueue. No merge is claimed by this ledger commit.
+
+### Earlier dated rulings
 
 - **Operator rulings 2026-10-05** (spec §15.1): Q1 fixed root + `db/` symlink; Q2 spool on PostCompact, Stop,
   SessionStart(startup|resume|clear); Q3 many fleet and many server boxes (one store per session-hosting box, none on
@@ -1731,6 +1798,15 @@ holds over an earlier one for the same item.
 
 ## Carried constraints
 
+- **Current holds override historical action lists.** No cap lift for runs 1190/1233, no retry of run 1236's refused
+  correction, no live W2 start/PASS and no W3/W4 implementation are established. Check prior primary records before
+  reasking operator-owned selections; do not manufacture account/model/node/budget, pilot, signing, pin or start
+  evidence. The prospective interval is seven days, not a renewed fourteen-day requirement. Archive fidelity is not
+  proof of active-context semantic fidelity. The ingestion tests neither alter this contract nor delay W2 setup.
+- **Ledger and feature separation.** Programme status belongs on a `ledger/ccrc-history` branch/PR, never inside
+  #2063 or the old coordinator branch. Close a producer only after exact-head merge proof, and send its MERGED mail
+  before close can reclaim its child. Keep run 1022 open. Do not turn the held preparation drafts into successors
+  or dispatch new work merely to avoid their caps/refusal.
 - **Order.** Part A merged first (#300), then B1 (#315), then B2 (#404), then B3 (#425), then B4 (#623), then 5h-1
   (#737), then 5h-2 (#1010), then W2-1 (#1105), which builds on them and on W2-3 (#856) and W2-4 (#826). W2-2a (fleet
   lane) and W2-5a (deploy lane) built on W2-1 alongside each other, on disjoint files, and both merged (#1126, #1134).
@@ -1851,4 +1927,24 @@ holds over an earlier one for the same item.
 
 ## Next-wave brief
 
-No build wave is dispatched next. The programme waits on the operator's acts for W2's live evaluation (CP-04, CP-05 and CP-31, as "Waiting on you" says, then acts 5 and 6 on the final W2 release, the release whose history code is v0.0.767's, rolled onto the fleet box first if it is not on it, then Stage 4's acts), run by the runbook (#1622). After the rollout the coordinator re-measures W1-b and W1-f read-only, outside an FTS re-derivation generation or reported apart from it, and W1-e over a week. The replay driver's carries from review 1030 and `lib.mjs`'s from review 1088 wait until W2 closes; the sweep's and `recall.mjs`'s from reviews 1065 and 1088 wait for the next wave that edits each file; the re-derivation's cost is backlog after W2 (Carried constraints). Earlier briefs, run 864's, run 851's and run 954's among them, are in this file's history.
+1. Finish landing the independently reviewed test-only #2063 at `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`.
+   Run 1320 is awaiting-review with item 1/1; review 1321 is already done/released and the deliverable accepted for
+   landing. Do not repeat that review or read the worker diff in the coordinator. Advance to merging with the exact
+   verified fingerprint, read repository policy fresh, apply the required-check gate and the unpaused exact-head
+   landing-line gate, then use the normal native queue if that remains the measured route. Never bypass or update
+   the branch. Prove an actual queue entry and end the turn for server mail. Any refusal/stop is reported, not retried
+   through another route. After exact-head merge proof, send MERGED mail before closing/reclaim; keep 1022 open.
+2. Preserve the capped/unaccepted preparation in #1876 and #1969, and the unsent correction for #1975 after the
+   refused routing act. They await their respective operator dispositions; no implicit cap reset or recovery.
+3. Progress only already-authorised W2 preparation under the seven-day ruling and existing decisions/runbook.
+   No live start is established. Verify prior selections before requesting any missing operator input. Setup,
+   pilot, budget/signature, operator pin/freeze and measured start remain distinct from seven days of observation.
+   If unchanged gates cannot be met in seven days, halt for disposition. W3/W4 remain conditional on an
+   operator-recorded W2 PASS; their held drafts are not implementation authority.
+4. Keep the five research enhancement drafts unfiled while filing is postponed. Do not repeat completed research
+   or access investigations. Further audit/design work starts with current-code and in-flight-work evidence, and
+   must not invent a new current-evaluation prerequisite or a model-backed experiment.
+
+Earlier dated completion plans and briefs remain historical records. Existing W1 acceptance/integrity and residual
+obligations are not silently waived by this test PR or by shortening the observation interval. This checkpoint is
+not a live rollout, start, verdict, programme completion percentage or completion-date claim.
