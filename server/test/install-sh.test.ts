@@ -797,7 +797,9 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
       const iv = setInterval(() => {
         const m = /^(\d+)\n/.exec(out);
         if (m) { clearInterval(iv); resolve(Number(m[1])); }
-        else if (Date.now() - t0 > 10_000) { clearInterval(iv); reject(new Error('the fixture host never listened')); }
+        else if (Date.now() - t0 > 10_000) {
+          clearInterval(iv); child.kill('SIGKILL'); reject(new Error('the fixture host never listened'));
+        }
       }, 20);
     });
     return {
@@ -806,7 +808,7 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     };
   };
   /** Run install.sh against a loopback host with the REAL curl; returns what it did and how long it took. */
-  const runAgainstHost = async (mode: string, n: number, env: NodeJS.ProcessEnv): Promise<{
+  const runAgainstHost = async (mode: string, n: number, env: NodeJS.ProcessEnv, userinfo = ''): Promise<{
     r: Result; ms: number; requests: string[]; home: string;
   }> => {
     const home = mkTmp('install-sh-release-host-');
@@ -818,7 +820,7 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     try {
       const t0 = Date.now();
       const r = runRelease(root, ['--release'], home, {
-        CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${host.port}/rel`, CCRC_RELEASE_CONNECT_TIMEOUT: '2', ...env,
+        CCRC_RELEASE_BASE_URL: `http://${userinfo}127.0.0.1:${host.port}/rel`, CCRC_RELEASE_CONNECT_TIMEOUT: '2', ...env,
       });
       return { r, ms: Date.now() - t0, requests: readLog(home, 'host-requests'), home };
     } finally {
@@ -847,6 +849,20 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     expect(r.code, r.stderr).toBe(1);
     expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS/);
     expect(ms, `took ${ms}ms`).toBeLessThan(10_000);
+  }, 60_000);
+
+  itLinux('a SHA256SUMS that trickles ABOVE the speed floor forever is ended by its total bound, and the URL it names is redacted', async () => {
+    // ~10 B/s against a 1 B/s floor: no stall can end it, and ~20 bytes never reach the size bound. Only
+    // `--max-time` (2 s here) is left to end the transfer.
+    const { r, ms } = await runAgainstHost('slow-sums', 0, {
+      CCRC_RELEASE_SPEED_LIMIT: '1', CCRC_RELEASE_SPEED_TIME: '30', CCRC_RELEASE_SUMS_MAX_TIME: '2',
+    }, 'user:pass@');
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS/);
+    expect(r.stderr).toMatch(/curl: \(28\)/);
+    expect(ms, `took ${ms}ms`).toBeGreaterThanOrEqual(1800);
+    expect(ms, `took ${ms}ms`).toBeLessThan(8_000);
+    expect(allLines(r).filter((l) => /pass/.test(l)), 'a line carries the password').toEqual([]);
   }, 60_000);
 
   itLinux('a tarball sent slower than the speed floor is refused within the stall window', async () => {
@@ -915,13 +931,14 @@ describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
 
   /** Run a function's definition over NUL-separated inputs under a fixture HOME; stdout is the NUL-separated
    *  outputs, compared as bytes. The inputs travel in a file (an argv string cannot carry an invalid byte). */
-  function runRedactor(def: string, name: string, inputs: readonly Buffer[], fixtureHome: string): Buffer {
+  function runRedactor(def: string, name: string, inputs: readonly Buffer[], fixtureHome: string,
+    extraEnv: NodeJS.ProcessEnv = {}): Buffer {
     const work = mkTmp('install-sh-redact-eq-');
     writeFileSync(join(work, 'defs.sh'), `${def}\n`);
     writeFileSync(join(work, 'inputs'), Buffer.concat(inputs.flatMap((b) => [b, Buffer.from([0])])));
     const driver = `. "$1"\nwhile IFS= read -r -d '' line; do ${name} "$line"; printf '\\0'; done < "$2"\n`;
     const r = spawnSync(BASH, ['--noprofile', '--norc', '-c', driver, 'driver', join(work, 'defs.sh'), join(work, 'inputs')], {
-      env: { HOME: fixtureHome, PATH: process.env['PATH'] ?? '' }, encoding: 'buffer',
+      env: { ...extraEnv, HOME: fixtureHome, PATH: process.env['PATH'] ?? '' }, encoding: 'buffer',
     });
     expect(r.status, `${name} failed: ${r.stderr.toString()}`).toBe(0);
     return r.stdout;
@@ -938,11 +955,8 @@ describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
     '',                                                                  // empty
   ];
 
-  it('install.sh\'s redactor gives byte-equal output to _upd_redact on the eight shapes and on the whole shared corpus', () => {
-    const upd = ccdFunctionDefinition(read('ccd/ccrc'), '_upd_redact');
-    const mine = ccdFunctionDefinition(read('install.sh'), '_inst_redact');
-    expect(upd, 'ccd/ccrc has no _upd_redact').not.toBeNull();
-    expect(mine, 'install.sh has no _inst_redact').not.toBeNull();
+  /** The inputs both redactor pins run: the eight shapes, then every log-line corpus row, grouped by HOME. */
+  function redactCorpus(): Array<{ home: string; inputs: Buffer[] }> {
     const fixtureHome = '/home/u';
     const sets: Array<{ home: string; inputs: Buffer[] }> = [{ home: fixtureHome, inputs: EIGHT.map((s) => Buffer.from(s)) }];
     // The log-line corpus: every row with a plain, hex or run-built input, grouped by the home its row was written for.
@@ -961,6 +975,16 @@ describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
     }
     for (const [home, inputs] of byHome) sets.push({ home, inputs });
     expect(sets.reduce((n, s) => n + s.inputs.length, 0), 'the corpus read went vacuous').toBeGreaterThan(150);
+    return sets;
+  }
+
+  it('install.sh\'s redactor gives byte-equal output to _upd_redact on the eight shapes and on the whole shared corpus', () => {
+    const upd = ccdFunctionDefinition(read('ccd/ccrc'), '_upd_redact');
+    const mine = ccdFunctionDefinition(read('install.sh'), '_inst_redact');
+    expect(upd, 'ccd/ccrc has no _upd_redact').not.toBeNull();
+    expect(mine, 'install.sh has no _inst_redact').not.toBeNull();
+    const fixtureHome = '/home/u';
+    const sets = redactCorpus();
     for (const s of sets) {
       const want = runRedactor(upd!, '_upd_redact', s.inputs, s.home);
       const got = runRedactor(mine!, '_inst_redact', s.inputs, s.home);
@@ -970,4 +994,27 @@ describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
     const masked = runRedactor(mine!, '_inst_redact', [Buffer.from(EIGHT[1]!)], fixtureHome).toString().replace(/\0$/, '');
     expect(masked).toBe('https://example.invalid/releases');
   });
+
+  // Held equal by OUTPUT, not by text. install.sh's `--release` runs before its own bash version refusal, so the copy
+  // can run on macOS /bin/bash 3.2 (and any bash up to 4.2), where a QUOTED replacement string inside
+  // "${s/pat/rep}" keeps its quotes: `https://user:pass@h/r` printed as `https"://"h/r`. ccd/ccrc needs 4.4 and
+  // never sees that, so the copy spells its replacements without a pattern substitution. `BASH_COMPAT` makes this
+  // box's bash behave like the older ones for exactly that quoting rule.
+  for (const compat of ['42', '40']) {
+    it(`the copy under BASH_COMPAT=${compat} is byte-equal to _upd_redact under the default bash, on the whole corpus`, () => {
+      const upd = ccdFunctionDefinition(read('ccd/ccrc'), '_upd_redact');
+      const mine = ccdFunctionDefinition(read('install.sh'), '_inst_redact');
+      expect(upd).not.toBeNull();
+      expect(mine).not.toBeNull();
+      const sets = redactCorpus();
+      for (const set of sets) {
+        const want = runRedactor(upd!, '_upd_redact', set.inputs, set.home);
+        const got = runRedactor(mine!, '_inst_redact', set.inputs, set.home, { BASH_COMPAT: compat });
+        expect(got.toString('hex'), `the copy diverged under BASH_COMPAT=${compat} for HOME=${set.home}`).toBe(want.toString('hex'));
+      }
+      const masked = runRedactor(mine!, '_inst_redact', [Buffer.from(EIGHT[1]!)], '/home/u', { BASH_COMPAT: compat })
+        .toString().replace(/\0$/, '');
+      expect(masked).toBe('https://example.invalid/releases');
+    });
+  }
 });

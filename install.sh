@@ -37,28 +37,34 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 : "${CCRC_RELEASE_SUMS_MAX_TIME:=20}"
 : "${CCRC_RELEASE_SUMS_MAX_FILESIZE:=4096}"
 
-# ── The URL redactor — a held-equal COPY of `_upd_redact` (ccd/ccrc), code
-# verbatim, comments dropped, under an install.sh-local name. It masks a URL's
-# userinfo and the home directory; it does NOT mask a query or a fragment
-# (accepted: the operator's ruling, shared with the updater). install-sh.test.ts
-# runs both functions over the same inputs and reds on any byte of difference,
-# which is what makes this a derived copy rather than a second mechanism.
+# ── The URL redactor — a COPY of `_upd_redact` (ccd/ccrc), held equal by OUTPUT,
+# not by text, under an install.sh-local name. It masks a URL's userinfo and the
+# home directory; it does NOT mask a query or a fragment (accepted: the
+# operator's ruling, shared with the updater). Why the text differs: this file
+# runs `--release` BEFORE its bash version refusal, so the copy can run on
+# macOS /bin/bash 3.2, where (as in every bash up to 4.2) a quoted replacement
+# string inside "${s/pat/rep}" keeps its quotes and would print `https"://"h/r`;
+# ccd/ccrc needs bash 4.4 and never meets that. So each replacement here is a
+# first-occurrence cut-and-join (`${s%%"$m"*}$r${s#*"$m"}`) with no pattern
+# substitution in it (an unquoted `$r` in a `${s/…/$r}` would also expand a `&`
+# under bash 5.2). install-sh.test.ts runs both functions over the same inputs,
+# the copy also under BASH_COMPAT=42 and 40, and reds on any byte of difference.
 _inst_redact() {
-  local s="${1:-}" mode="${2:-}" LC_ALL=C cut=""
+  local s="${1:-}" mode="${2:-}" LC_ALL=C cut="" m="" r=""
   if [ "${#s}" -gt 4096 ]; then
     local head="${s:0:4001}"
     if [[ "$head" =~ ^(.*)[[:space:]] ]]; then head="${BASH_REMATCH[1]}"; else head=""; fi
     cut="${head:+ }[cut: $(( ${#s} - ${#head} )) more bytes withheld, over the redactor's 4096-byte cap]"
     s="$head"
   fi
-  local sre=':((\\?/)+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
-  local kre='(^|[[:space:]"'"'"'<(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*=)([^:=/?#[:space:]"'"'"'<(][^/?#[:space:]]*(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $kre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[2]}"}"; done
-  local re='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
-  local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
-  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([^0-9A-Za-z.!}_~-]|$|[.!}]+([^0-9A-Za-z.!}_~-]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  local sre=':((\\?/)+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do m="${BASH_REMATCH[0]}"; r=":${BASH_REMATCH[1]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local kre='(^|[[:space:]"'"'"'<(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*=)([^:=/?#[:space:]"'"'"'<(][^/?#[:space:]]*(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $kre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local re='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([^0-9A-Za-z.!}_~-]|$|[.!}]+([^0-9A-Za-z.!}_~-]|$)))'; while [[ "$s" =~ $ptre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
   if [ "$mode" = bare-host ]; then
     local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
-    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+    while [[ "$s" =~ $bre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
   fi
   local home="${HOME:-}"
   home="${home%/}"
