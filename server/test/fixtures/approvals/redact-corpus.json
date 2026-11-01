@@ -194,5 +194,6 @@
   { "why": "round 9: twine upload -p", "input": "twine upload -u bob -p hunter2fake dist/*", "output": "twine upload -u bob -p [REDACTED] dist/*" },
   { "why": "round 9: a letters-only Hugging Face token (30 letters, the shortest masked)", "input": "echo hf_jBQhzWBNlDjZtHkzVaRGtKRdqzBkUl", "output": "echo [REDACTED]" },
   { "why": "round 9: control: a short hf_ identifier stays readable", "input": "python -c \"from huggingface_hub import hf_hub_download\"", "output": "python -c \"from huggingface_hub import hf_hub_download\"" },
-  { "why": "round 9 control: a separate -p followed by a flag (mysql prompts) takes no value", "input": "mysql -u root -p -h db.invalid", "output": "mysql -u root -p -h db.invalid" }
+  { "why": "round 9 control: a separate -p followed by a flag (mysql prompts) takes no value", "input": "mysql -u root -p -h db.invalid", "output": "mysql -u root -p -h db.invalid" },
+  { "why": "a Linear API key by its lin_api_ prefix, at any length (#1444)", "input": "echo lin_api_fixtureK3y0001 > key.txt", "output": "echo [REDACTED] > key.txt" }
 ]

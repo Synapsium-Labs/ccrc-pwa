@@ -30,7 +30,9 @@ describe('shared/redact.mjs: profiles list their rule ids explicitly (D-5867)', 
     ]);
   });
   it('the docs profile is these rule ids, in this order', () => {
-    expect([...PROFILES.docs]).toEqual(['docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-authorization']);
+    expect([...PROFILES.docs]).toEqual([
+      'docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-linear-key', 'docs-authorization',
+    ]);
   });
   it('a profile is a plain list: it inherits nothing', () => {
     for (const ids of Object.values(PROFILES)) {

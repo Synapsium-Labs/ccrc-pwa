@@ -80,8 +80,8 @@ const PROFILES: {
 } = JSON.parse(readFileSync(path.join(here, 'fixtures/redact/profiles.json'), 'utf8'));
 
 describe('the docs redactor over its own corpus (D-5867)', () => {
-  it('has one row per DOCS_REDACT_RULES rule at least, and the rules are the four of docs W1', () => {
-    expect(DOCS_REDACT_RULES.length).toBe(4);
+  it('has one row per DOCS_REDACT_RULES rule at least, and the rules are the four of docs W1 and the Linear key (#1444)', () => {
+    expect(DOCS_REDACT_RULES.length).toBe(5);
     expect(PROFILES.docs.length).toBeGreaterThanOrEqual(DOCS_REDACT_RULES.length);
   });
   for (const [why, input, output] of PROFILES.docs) {

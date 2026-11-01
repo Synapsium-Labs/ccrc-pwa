@@ -66,7 +66,7 @@
 //     Hugging Face `hf_` token of 30 or more letters and digits;
 //   - a known token by its prefix, at any length: `sk_live_`, `sk_test_`, `rk_live_`, `ghp_`, `gho_`, `ghu_`, `ghs_`,
 //     `ghr_`, `github_pat_`, `glpat-`, `xox[abprs]-`, `xapp-`, `npm_`, `pypi-`, `AKIA...`, `ASIA...`, `AIza...`,
-//     `sk-...` (D-5360), and a Slack webhook's path and a Telegram bot token;
+//     `sk-...` (D-5360), a Linear API key's `lin_api_` (#1444), and a Slack webhook's path and a Telegram bot token;
 //   - every `/`-separated segment of 32 or more base64 or hex characters that holds a digit and a letter (spec section
 //     6.7; D-5360): a segment is judged on its own, so a secret inside a URL path or a base64 value with a `/` in it is
 //     masked, while a path whose segments are short or are words (`project-a-quiet-basin-with-a-long-name`) stays
@@ -161,7 +161,7 @@ const SINGLE_DASH_SECRET = new RegExp(String.raw`(^|[\s'"])(-(?!-)[A-Za-z0-9-]*(
 const CAMEL_SECRET_FLAG = new RegExp(String.raw`(^|[\s'"])(--?[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)*?(?:Token|Secret|Password|Passwd|Pass|ApiKey|Key))(\s+(?![<>-])|=)${VALUE}`, 'g');
 /** D-5360 round 8: xfreerdp's `/p:<password>`. */
 const RDP_PASS = /(^|[\s'"])\/p:[^\s;&|'"]+/g;
-const KNOWN_TOKEN_PREFIX = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`;
+const KNOWN_TOKEN_PREFIX = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`;
 const SLACK_HOOK = /(hooks\.slack\.com\/(?:services|workflows|triggers)\/)[^\s'"]+/gi;
 const TELEGRAM_BOT = /\bbot[0-9]{5,}:[A-Za-z0-9_-]{20,}/g;
 /** A base64 (standard or URL-safe) or hex run; hex is a subset of the class. Linear: one class, no nesting. */
@@ -234,6 +234,8 @@ const DOCS_ROWS = {
   'docs-url-userinfo': [String.raw`(://)[^/@\t\n\v\f\r ]+@`, '***@'],
   'docs-query-token': [String.raw`([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+`, '***'],
   'docs-gh-token': [String.raw`(gh[opsu]_)[A-Za-z0-9]{20,}`, '***'],
+  /** A Linear API key by its prefix, at any length (#1444), as the egress `known-token` rule reads it. */
+  'docs-linear-key': [String.raw`(lin_api_)[A-Za-z0-9_-]+`, '***'],
   'docs-authorization': [String.raw`(?<![^\n])[^\n]*Authorization:[^\n]*`, 'Authorization: ***'],
 };
 
@@ -309,7 +311,7 @@ export const PROFILES = Object.freeze({
     'user-empty-pass', 'p-flag', 'p-quoted', 'secret-flag', 'single-dash-secret', 'camel-secret-flag', 'rdp-pass',
     'pass-arg', 'slack-hook', 'telegram-bot', 'known-token', 'token-segments',
   ]),
-  docs: Object.freeze(['docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-authorization']),
+  docs: Object.freeze(['docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-linear-key', 'docs-authorization']),
 });
 
 const BY_ID = new Map(RULES.map((r) => [r.id, r]));

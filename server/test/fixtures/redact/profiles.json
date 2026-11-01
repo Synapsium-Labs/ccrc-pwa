@@ -69,6 +69,16 @@
    "password= survives",
    "password=hunter2",
    "password=hunter2"
+  ],
+  [
+   "a Linear API key by its lin_api_ prefix (#1444)",
+   "key lin_api_fixtureK3y0001 rejected",
+   "key lin_api_*** rejected"
+  ],
+  [
+   "a bare lin_api_ word with no body stays",
+   "the lin_api_ prefix",
+   "the lin_api_ prefix"
   ]
  ],
  "cross": [
@@ -101,6 +111,11 @@
    "Authorization: Basic Zm9v\nnext",
    "Authorization: [REDACTED]\nnext",
    "Authorization: ***\nnext"
+  ],
+  [
+   "export LINEAR=lin_api_fixture_key_one_0001",
+   "export LINEAR=[REDACTED]",
+   "export LINEAR=lin_api_***"
   ]
  ]
 }
