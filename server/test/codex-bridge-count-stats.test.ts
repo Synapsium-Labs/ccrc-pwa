@@ -855,4 +855,37 @@ describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this pro
     ]);
     expect(snap.doc.store.setAside).toEqual({ at: '2023-11-14T22:13:20.000Z', found: 'unrecognised', file: 'unrecognised' });
   });
+
+  it('a store event makes the next unforced flush write at once, whatever FLUSH_S says; a count does not', async () => {
+    const { home, file } = lane('cb-stats-store-due-');
+    const [, first, , quiet, , due] = await run(home, [
+      open(file),
+      call('flush', [], { force: true }),
+      call('outcome', ['2xx']),
+      call('flush'),
+      call('store_event', ['store:DatabaseError']),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 600 } });
+    expect(first.result).toBe(true);
+    expect(quiet.result).toBe(false); // inside FLUSH_S an ordinary count waits
+    expect(due.result).toBe(true);
+    expect(readDoc(file).store).toMatchObject({ state: 'disabled', reason: 'store:DatabaseError' });
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'store:DatabaseError': 1 });
+  });
+
+  it('a store event while a write is in flight still makes the next unforced flush write', async () => {
+    const { home, file } = lane('cb-stats-store-due-race-');
+    const [, r, next] = await run(home, [
+      open(file),
+      { op: 'stats-race', flush: { force: true }, during: [{ method: 'store_event', args: ['store:DatabaseError'], kwargs: {} }],
+        waitS: 5 },
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 600 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(true);
+    expect(r.duringRaised).toEqual([]);
+    // The write in flight serialised the document before the event; its success must not spend the event's one-shot.
+    expect(next.result).toBe(true);
+    expect(readDoc(file).store).toMatchObject({ state: 'disabled', reason: 'store:DatabaseError' });
+  });
 });

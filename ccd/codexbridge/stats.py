@@ -56,7 +56,8 @@ lock and writes it outside it, under a second lock, so a slow fsync never stalls
 another write is in flight writes nothing (its changes stay dirty for the next one), a forced one waits for it. No
 method raises into a request: a malformed argument is ignored (a headers argument that is not a mapping of headers,
 or a header item that is not a (name, value) pair, counts nothing; a byte count that is not an int moves no ratio), and
-a `now` that is not a finite number in range reads as the wall clock.
+a `now` that is not a finite number in range reads as the wall clock. A store event makes the next flush call write
+at once too, whatever FLUSH_S says (D-7677: a store disabled by a request is in the file right after that request).
 
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """
@@ -170,7 +171,7 @@ class Stats:
         self._lock = threading.RLock()
         self._write_lock = threading.Lock()  # one write at a time, held without self._lock (flush)
         self._dirty = False
-        self._retry = False
+        self._retry = False  # the next flush writes whatever FLUSH_S says: after a failed write, or a store event
         self._last_flush = None  # type: Optional[float]
         started = _iso(time.time())
         # D-6821: `usageHeaders` and `lastUpstreamRequestId` are null until a first value, and
@@ -318,6 +319,7 @@ class Stats:
         optional, the wall clock."""
         with self._lock:
             self._count(reason)
+            self._retry = True  # the next flush writes at once, whatever FLUSH_S says (the module docstring)
             entry = self._doc["store"]
             at = _stamp(now)
             if reason == store.SET_ASIDE:
@@ -438,8 +440,9 @@ class Stats:
 
     def flush(self, *, force: bool = False) -> bool:
         """Write the file when something changed, at most every FLUSH_S (a forced flush, and the first call after a
-        failed one, write at once). True when it wrote; a failure is counted and kept for the next call, never
-        raised. The write runs outside self._lock; an unforced flush while another write is in flight returns False."""
+        failed one or a store event, write at once). True when it wrote; a failure is counted and kept for the next
+        call, never raised. The write runs outside self._lock; an unforced flush while another write is in flight
+        returns False."""
         if not self._write_lock.acquire(blocking=force):
             return False
         try:
@@ -453,6 +456,7 @@ class Stats:
                 self._doc["updatedAt"] = _iso(time.time())
                 data = json.dumps(self._doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
                 self._dirty = False  # a change made during the write sets it again
+                self._retry = False  # so does a store event, and a failure below (cleared here, never after the write)
             try:
                 self._write(data)
             except Exception:  # a full disk, a removed directory: counted, retried at the next call
@@ -462,7 +466,6 @@ class Stats:
                 return False
             with self._lock:
                 self._last_flush = tick
-                self._retry = False
             return True
         finally:
             self._write_lock.release()

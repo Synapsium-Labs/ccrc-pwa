@@ -9,7 +9,7 @@
 // CCRC_CODEX_AUTH_BASE; a case that needs neither leaves both at CLOSED_AUTH_BASE. Every timer a case exercises is
 // lowered through the driver's `consts`, never waited out. Tokens are synthetic JWTs built at runtime.
 import { afterEach, describe, it, expect } from 'vitest';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
 import path, { join } from 'node:path';
@@ -964,6 +964,31 @@ describe.skipIf(!PY)('the stats file describes this process before its first req
         writeFileSync(lane.store, 'this file is not an sqlite database\n'.repeat(40), { mode: 0o600 });
       },
     });
+  });
+
+  it('a store disabled at the first request is in the file right after it, inside FLUSH_S', async () => {
+    const sse = created()
+      + done(0, { type: 'reasoning', id: 'rs_fx1', summary: [], encrypted_content: 'ENC-1' })
+      + done(1, { type: 'function_call', id: 'fc_fx1', call_id: 'call_fx1', name: 'Read', arguments: '{"file_path":"a.txt"}' })
+      + completed();
+    // FLUSH_S far past the case: the pre-bind flush set the last write's time, so only the store event's one-shot
+    // can make the request's unforced flush write.
+    await withBridge([{ status: 200, sse }], async ({ bridge, lane }) => {
+      expect(readStats(lane).store.state).toBe('ok');
+      // A file swapped in under the running store: the handler thread's first use disables it as store:replaced.
+      renameSync(lane.store, `${lane.store}.moved`);
+      writeFileSync(lane.store, '', { mode: 0o600 });
+      const t0 = Date.now();
+      const a = await call(bridge, '/v1/messages', {
+        body: { ...messages(), tools: [READ_TOOL] }, headers: { 'x-claude-code-session-id': 'sess-fx1' },
+      });
+      expect(a.status, a.text).toBe(200);
+      const doc = await statsWhen(lane, (d) => d.store?.state === 'disabled');
+      expect(Date.now() - t0).toBeLessThan(10_000);
+      expect(doc.store).toMatchObject({ state: 'disabled', reason: 'store:replaced', setAside: null });
+      expect(doc.store.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(doc.outcomes['store:replaced']).toBe(1);
+    }, { consts: { 'stats.FLUSH_S': 600 } });
   });
 });
 
