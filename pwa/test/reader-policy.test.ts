@@ -66,6 +66,28 @@ describe('routeReaderLink', () => {
     expect(r).toMatchObject({ kind: 'sheet', host: 'b.a.example', foreign: false });
   });
 
+  it('an external link with a port compares and reports its hostname, without the port', () => {
+    const r = routeReaderLink(ctx(), external('https://b.a.example:8443/p', 'b.a.example:8443'), 'b.a.example');
+    expect(r).toEqual({ kind: 'sheet', url: 'https://b.a.example:8443/p', scheme: 'https', host: 'b.a.example', foreign: false });
+  });
+
+  it('a mailto external link opens the sheet with its scheme and its host', () => {
+    expect(routeReaderLink(ctx(), external('mailto:x@c.a.example', 'c.a.example', 'mailto'), 'b.a.example')).toEqual({
+      kind: 'sheet', url: 'mailto:x@c.a.example', scheme: 'mailto', host: 'c.a.example', foreign: true,
+    });
+  });
+
+  it('an external link whose URL does not parse, or whose scheme is outside the allowlist, is inert', () => {
+    expect(routeReaderLink(ctx(), external('not a url', 'x'), 'b.a.example')).toEqual({ kind: 'inert' });
+    // The classifier said https; the URL says otherwise: the URL rules.
+    expect(routeReaderLink(ctx(), external('ftp://c.a.example/p', 'c.a.example'), 'b.a.example')).toEqual({ kind: 'inert' });
+    expect(routeReaderLink(ctx(), external('javascript:alert(1)', 'c.a.example'), 'b.a.example')).toEqual({ kind: 'inert' });
+  });
+
+  it('a link to this same page with a fragment becomes a hash', () => {
+    expect(routeReaderLink(ctx(), { kind: 'relative', path: 'b.md', fragment: 'h' }, 'b.a.example')).toEqual({ kind: 'hash', id: 'h' });
+  });
+
   it('the comparison is exact and lower-cased', () => {
     expect(routeReaderLink(ctx(), external('https://B.A.Example/p', 'B.A.Example'), 'b.a.example'))
       .toMatchObject({ foreign: false });
@@ -170,6 +192,14 @@ describe('readerBodyReducer', () => {
     for (const ev of events) expect(readerBodyReducer(s, ev)).toBe(s);
   });
 
+  it('plain is chosen only before a mount: from rendering', () => {
+    expect(readerBodyReducer({ s: 'rendering' }, { e: 'plain', why: 'gate' })).toEqual({ s: 'plain', why: 'gate' });
+    const mounting: ReaderBodyState = { s: 'mounting' };
+    const ready: ReaderBodyState = { s: 'ready' };
+    expect(readerBodyReducer(mounting, { e: 'plain', why: 'gate' })).toBe(mounting);
+    expect(readerBodyReducer(ready, { e: 'plain', why: 'gate' })).toBe(ready);
+  });
+
   it('rendering mounts, mounting becomes ready, and a failure falls back', () => {
     expect(readerBodyReducer({ s: 'rendering' }, { e: 'mount' })).toEqual({ s: 'mounting' });
     expect(readerBodyReducer({ s: 'mounting' }, { e: 'ready' })).toEqual({ s: 'ready' });
@@ -218,8 +248,16 @@ describe('enumerablePageStorage', () => {
 describe('replaceFragment', () => {
   it('keeps history.state and does not notify', () => {
     history.replaceState({ a: 1 }, '', '/docs/demo');
-    const spy = vi.spyOn(window, 'dispatchEvent');
-    replaceFragment('h');
+    // Two observers, because the router calls the global `dispatchEvent`: a spy on it, and a `popstate` listener.
+    const spy = vi.spyOn(globalThis, 'dispatchEvent');
+    const heard = vi.fn();
+    addEventListener('popstate', heard);
+    try {
+      replaceFragment('h');
+    } finally {
+      removeEventListener('popstate', heard);
+    }
+    expect(heard).not.toHaveBeenCalled();
     expect(history.state).toEqual({ a: 1 });
     expect(location.hash).toBe('#h');
     expect(location.pathname).toBe('/docs/demo');

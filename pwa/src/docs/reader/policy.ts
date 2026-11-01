@@ -4,15 +4,18 @@
 // shared Markdown library (`ReaderLink` mirrors the library's host-link shape instead of importing it). Delivery
 // (`ReaderFrame.tsx`) asks these and acts on the answer: it decides nothing.
 //
-// Every link kind goes through `docLinkTarget`, the one decision for a Markdown link on a Docs page, so the reader
-// cannot route a link the plain view would refuse. Each `null` here has one meaning, stated at the function.
+// A `relative` link goes through `docLinkTarget`, the one decision for a Markdown link on a Docs page, so the reader
+// cannot route a link the plain view would refuse; an `external` link is re-derived from its URL (the scheme and host
+// the classifier reported are not trusted). Each `null` here has one meaning, stated at the function.
 import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
 import { utf8ByteLength } from '../../lib/markdownGuard';
+import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS } from '../../lib/readerLimits';
 import { docLinkTarget } from '../docsLinks';
 import type { DocLinkContextValue } from '../DocLink';
 import type { ReaderHiddenChar } from './readerText';
 
-/** A link the frame reports to the host (mirrors the library's host-link shape; nothing is imported from it). */
+/** A link as the host's classifier of the frame's href yields it (mirrors the library's host-link shape; nothing is
+ *  imported from it). The frame's content is untrusted: `external` is re-derived from its `url` before it is used. */
 export type ReaderLink =
   | { kind: 'fragment'; id: string }
   | { kind: 'relative'; path: string; fragment: string | null }
@@ -27,9 +30,14 @@ export type ReaderRoute =
   | { kind: 'sheet'; url: string; scheme: string; host: string; foreign: boolean }
   | { kind: 'inert' };
 
-/** The sheet for a URL. A host is foreign when it is not exactly the console's own, both lower-cased (refinement (h):
- *  `pwa/src` has no public-suffix data, so the stricter exact comparison stands in for "registrable name"). */
+/** The only schemes a sheet may offer to open. */
+const SHEET_SCHEMES: readonly string[] = ['http', 'https', 'mailto'];
+
+/** The sheet for a URL, or `inert` when `scheme` is not http, https or mailto. A host is foreign when it is not
+ *  exactly the console's own, both lower-cased (refinement (h): `pwa/src` has no public-suffix data, so the stricter
+ *  exact comparison stands in for "registrable name"). `hostRaw` and `ownHostRaw` are hostnames, with no port. */
 function sheetFor(url: string, scheme: string, hostRaw: string, ownHostRaw: string): ReaderRoute {
+  if (!SHEET_SCHEMES.includes(scheme)) return { kind: 'inert' };
   const host = hostRaw.toLowerCase();
   const ownHost = ownHostRaw.toLowerCase();
   return { kind: 'sheet', url, scheme, host, foreign: host !== ownHost };
@@ -42,8 +50,18 @@ export function routeReaderLink(ctx: DocLinkContextValue, link: ReaderLink, ownH
   switch (link.kind) {
     case 'fragment':
       return { kind: 'hash', id: link.id };
-    case 'external':
-      return sheetFor(link.url, link.scheme, link.host, ownHost);
+    case 'external': {
+      // Re-derive from the URL: a parse failure or a protocol outside the allowlist is inert. http(s) takes the
+      // parse's hostname (no port, the shape of `ownHost`); mailto keeps the link's host, because its hostname is ''.
+      let u: URL;
+      try {
+        u = new URL(link.url);
+      } catch {
+        return { kind: 'inert' };
+      }
+      const scheme = u.protocol.slice(0, -1);
+      return sheetFor(link.url, scheme, scheme === 'mailto' ? link.host : u.hostname, ownHost);
+    }
     case 'relative': {
       const target = docLinkTarget(ctx, link.fragment === null ? link.path : `${link.path}#${link.fragment}`);
       switch (target.kind) {
@@ -68,11 +86,8 @@ export function routeReaderLink(ctx: DocLinkContextValue, link: ReaderLink, ownH
   }
 }
 
-/** The most UTF-8 bytes the reader writes to the clipboard without asking (64 KiB). */
-export const READER_COPY_WRITE_MAX_BYTES = 65536;
-
 /** What the host does with a copy request. `write`: put `text` on the clipboard. `sheet`: ask first, naming each
- *  hidden character (`hidden` is the list the frame's own scan produced). */
+ *  hidden character (`hidden` is the list the host's own scan of the copy text produced). */
 export type CopyDecision =
   | { kind: 'write'; text: string }
   | { kind: 'sheet'; text: string; hidden: readonly ReaderHiddenChar[] };
@@ -83,14 +98,11 @@ export function copyDecision(text: string, hidden: readonly ReaderHiddenChar[]):
   return { kind: 'sheet', text, hidden };
 }
 
-/** The most UTF-16 code units a doc key may have. */
-const DOC_KEY_MAX_UNITS = 1024;
-
 /** The key of a document's per-doc state: `project:section:path`. `null` has one meaning, "no per-doc state for this
  *  doc": the key is over 1024 code units or holds a control character (C0, DEL or C1). */
 export function readerDocKey(project: string, section: string, path: string): string | null {
   const key = `${project}:${section}:${path}`;
-  if (key.length > DOC_KEY_MAX_UNITS) return null;
+  if (key.length > READER_DOC_KEY_MAX_UNITS) return null;
   for (let i = 0; i < key.length; i += 1) {
     const c = key.charCodeAt(i);
     if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) return null;
@@ -121,7 +133,8 @@ export type ReaderBodyState =
   | { s: 'plain'; why: string };
 
 /** What happens to a body: `mount` (the render answered and the frame is being mounted), `ready` (the frame said so),
- *  `fallback` (the frame or its start failed) and `plain` (the plain view was chosen before any mount). */
+ *  `fallback` (the frame or its start failed) and `plain` (the plain view was chosen, which is decided before a
+ *  mount, so only from `rendering`). */
 export type ReaderBodyEvent =
   | { e: 'mount' }
   | { e: 'ready' }
@@ -129,14 +142,14 @@ export type ReaderBodyEvent =
   | { e: 'plain'; why: string };
 
 /** The next state of a body. A terminal state answers itself (the same object); `ready` is only reached from
- *  `mounting`, and a failure from any live state is a fallback. */
+ *  `mounting`, `plain` only from `rendering`, and a failure from any live state is a fallback. */
 export function readerBodyReducer(state: ReaderBodyState, ev: ReaderBodyEvent): ReaderBodyState {
   if (state.s === 'fallback' || state.s === 'plain') return state;
   switch (ev.e) {
     case 'fallback':
       return { s: 'fallback', reason: ev.reason };
     case 'plain':
-      return { s: 'plain', why: ev.why };
+      return state.s === 'rendering' ? { s: 'plain', why: ev.why } : state;
     case 'mount':
       return state.s === 'rendering' ? { s: 'mounting' } : state;
     case 'ready':

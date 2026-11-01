@@ -44,7 +44,7 @@ export const pageStorage: StorageSource = () => {
   }
 };
 
-/** The page's store as an enumerable port, or `null` for one condition only: "no storage here" (there is no window, or
+/** Same store as `pageStorage`, typed for enumeration (see the header). The page's store as an enumerable port, or `null` for one condition only: "no storage here" (there is no window, or
  *  naming the store throws). The same store `pageStorage` names; it declares no `getItem` of its own. */
 export function enumerablePageStorage(): EnumerableStoragePort | null {
   try {
