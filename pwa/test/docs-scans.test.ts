@@ -554,6 +554,13 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     expect(planted(LEAF, "\nexport const planted = () => import('./reader/assets');\n")).toEqual([`${LEAF} main-bundle:value-import`]);
   });
 
+  it("Library imports planted: a static import of ./reader/bridge or ./reader/assets in ReaderFrame is red; a literal dynamic import there is the one allowed use", () => {
+    const FRAME = 'src/docs/ReaderFrame.tsx';
+    expect(planted(FRAME, "\nimport { mountReader as plantedMount } from './reader/bridge';\nvoid plantedMount;\n")).toEqual([`${FRAME} main-bundle:value-import`]);
+    expect(planted(FRAME, "\nimport * as plantedAssets from './reader/assets';\nvoid plantedAssets;\n")).toEqual([`${FRAME} main-bundle:value-import`]);
+    expect(planted(FRAME, "\nexport const plantedLoad = () => import('./reader/assets');\n")).toEqual([]);
+  });
+
   it('Library imports planted: an import type of ./reader/bridge in DocsLeaf is allowed', () => {
     expect(planted(LEAF, "\nimport type { ReaderMount } from './reader/bridge';\nexport type PlantedMount = ReaderMount;\n")).toEqual([]);
   });
