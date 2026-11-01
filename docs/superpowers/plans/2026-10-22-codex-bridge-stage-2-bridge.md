@@ -4173,8 +4173,8 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
     its WAL. A connection `_conn` refuses is closed the same way. With the WAL left at `<path>-wal` instead, sqlite
     deletes it when the fresh, empty file is first opened (measured), so the row is never replayed, but the copy loses
     it.
-  - Not set aside, by the brief's order: `_conn`'s `PRAGMA journal_mode = WAL` runs before the check, so a damaged store
-    in rollback-journal mode is switched to WAL (its header written) before it is set aside.
+  - One write the order leaves: `_conn`'s `PRAGMA journal_mode = WAL` runs before the check, so a damaged store in
+    rollback-journal mode is switched to WAL (its header written) before it is set aside.
 
   Pins, in `server/test/codex-bridge-store.test.ts`'s "the start check" block: CONTROL (a healthy store with a row
   survives a restart, no copy, the entry `ok`); NOT A DATABASE (set aside, the copy 0600 from a 0644 plant and byte for
