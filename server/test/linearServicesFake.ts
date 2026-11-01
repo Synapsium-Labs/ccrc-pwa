@@ -14,6 +14,7 @@ import { LinearJournal } from '../src/linear/journal.js';
 import { allowAll } from '../src/linear/policyPoint.js';
 import type { LinearWritePolicy } from '../src/linear/policy.js';
 import { LinearRateService } from '../src/linear/rate.js';
+import type { Deps } from '../src/deps.js';
 
 /** A coord.db in memory at this build's version: every migration, in order, as `openCoordDb` would run them. */
 export function memCoordDb(): DatabaseSync {
@@ -38,4 +39,11 @@ export function linearServicesFake(opts: { clock?: () => number; db?: DatabaseSy
   const db = opts.db ?? memCoordDb();
   const clock = opts.clock ?? Date.now;
   return { db, journal: new LinearJournal(db, clock), policy: allowAll, rate: new LinearRateService(clock) };
+}
+
+/** The Linear members of `Deps` that the title lookups and the legacy Check again reach, from one fake: what a
+ *  `buildServer` test spreads into its deps when it reaches Linear, so a service those paths gain later reaches every
+ *  such test from here, with no test of its own changed. */
+export function linearDeps(fx: LinearServicesFake): Pick<Deps, 'linearRate'> {
+  return { linearRate: fx.rate };
 }

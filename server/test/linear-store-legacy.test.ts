@@ -20,6 +20,12 @@ import {
   type LegacyTeams, type LinearLegacySlot, type LinearStoreRead,
 } from '../src/linear/store.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import type { FastifyInstance } from 'fastify';
+import type { FetchLike } from '../src/linear/client.js';
+import { buildServer } from '../src/server.js';
+import { testDeps } from './helpers.js';
+import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
+import { linearDeps, linearServicesFake } from './linearServicesFake.js';
 
 removeTmpFixturesEachTest();
 afterEach(() => { vi.restoreAllMocks(); });
@@ -267,5 +273,78 @@ describe('legacy-teams.json is written under the one lock', () => {
     vi.restoreAllMocks();
     expect(readdirSync(path.join(dir, LINEAR_STORE_DIR))).toEqual([]);
     expect(pairState(dir)).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CHARACTERIZATION of the legacy Check again (`POST /api/linear/connection/check`), green on the code before its query
+// became the §4.1 key check (plan task LK3): its answer is today's view of the pair, it writes the v1 record by the
+// digest rule, and nothing else. It never changes after it lands. Driven through `buildServer` with the services
+// handed in `Deps`, as `index.ts` hands them; the route stamps the wall clock, so `checkedAt` is any number.
+// ---------------------------------------------------------------------------
+
+interface CheckRig {
+  app: FastifyInstance;
+  dir: string;
+  calls: number;
+  answer: (a: LinearAnswer | (() => Promise<LinearAnswer>)) => void;
+}
+let openApp: FastifyInstance | null = null;
+afterEach(async () => { await openApp?.close(); openApp = null; });
+
+async function checkRig(): Promise<CheckRig> {
+  const deps = testDeps();
+  const dir = deps.cfg.ccrcDir;
+  mkdirSync(dir, { recursive: true });
+  let next: LinearAnswer | (() => Promise<LinearAnswer>) = viewerOk();
+  const rig = { calls: 0 } as CheckRig;
+  const f: FetchLike = async () => { rig.calls += 1; return typeof next === 'function' ? next() : next; };
+  const app = await buildServer({ ...deps, linear: { fetch: f }, ...linearDeps(linearServicesFake({ clock: () => NOW })) });
+  openApp = app;
+  return Object.assign(rig, { app, dir, answer: (a: typeof next) => { next = a; } });
+}
+const viewerOk = (org = 'Workspace A', user = 'user-a'): LinearAnswer =>
+  linearAnswer({ ok: true, status: 200, json: async () => ({ data: { viewer: { name: user }, organization: { name: org } } }) });
+const checkAgain = async (r: CheckRig): Promise<{ status: number; body: unknown }> => {
+  const res = await r.app.inject({ method: 'POST', url: '/api/linear/connection/check' });
+  return { status: res.statusCode, body: JSON.parse(res.body) as unknown };
+};
+const v1Of = (dir: string): LinearDetails | null => parseLinearDetails(readFileSync(path.join(dir, LINEAR_DETAILS_FILE), 'utf8'));
+
+describe('characterization: the legacy Check again', () => {
+  it('answers today\'s view and writes the v1 record of the key it checked', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(viewerOk('Workspace A2', 'user-a2'));
+    const got = await checkAgain(r);
+    expect(got.status).toBe(200);
+    expect(got.body).toEqual({
+      ok: true, connection: { state: 'connected', outcome: 'ok', org: 'Workspace A2', user: 'user-a2', keyTail: keyTailOf(LEGACY_KEY), checkedAt: expect.any(Number) },
+    });
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY, { org: 'Workspace A2', user: 'user-a2', checkedAt: expect.any(Number) as number }));
+    expect(r.calls).toBe(1);
+  });
+
+  it('a 401 records rejected and keeps the names the record had for this key', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(linearAnswer({ ok: false, status: 401, json: async () => ({}) }));
+    expect((await checkAgain(r)).body).toMatchObject({ ok: true, connection: { state: 'key-rejected', org: 'Workspace A' } });
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY, { outcome: 'rejected', checkedAt: expect.any(Number) as number }));
+  });
+
+  it('a key replaced while Linear is asked wins: the check records nothing over it', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(async () => { await connect(r.dir, LEGACY_KEY2); return viewerOk('Workspace X', 'user-x'); });
+    expect((await checkAgain(r)).body).toMatchObject({ ok: true, connection: { state: 'connected', org: 'Workspace A', keyTail: keyTailOf(LEGACY_KEY2) } });
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY2));
+  });
+
+  it('with no key it answers not-connected and asks Linear nothing', async () => {
+    const r = await checkRig();
+    const got = await checkAgain(r);
+    expect(got).toEqual({ status: 409, body: { ok: false, error: 'not-connected', connection: { state: 'not-connected' } } });
+    expect(r.calls).toBe(0);
   });
 });
