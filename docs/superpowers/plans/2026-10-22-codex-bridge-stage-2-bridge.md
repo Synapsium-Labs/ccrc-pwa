@@ -4252,8 +4252,8 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   counts `reason` in `outcomes` as `outcome()` does; `serve()` (`ccd/codexbridge/server.py`) passes it to the
   `ReasoningStore` as its callback, and forces a stats flush after the store is built and before the server binds
   its port, so the file describes this process from its first moment. A reader of an older file finds no `store`
-  key, which means the bridge predates the entry, never `ok`. The doctor's WARN that reads the entry lands in a later
-  commit of the same pull request: its file is held by another change. `file` is kept only as a basename (a value
+  key, which means the bridge predates the entry, never `ok`. The doctor's row that reads the entry landed in this pull
+  request (below). `file` is kept only as a basename (a value
   with a `/` is `unrecognised`), since NAME_RE alone admits a path. Fix round 1: `store_event` makes the next flush
   write at once, whatever `FLUSH_S` says (the one-shot a failed write already used), so a store disabled at the first
   request is in the file right after it, not `FLUSH_S` later behind the pre-bind flush's time; the one-shot is cleared
@@ -4277,6 +4277,36 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   carried in `_load`, the reset case red; the outranking guard removed, the either-order case red (`disabled-first`);
   the basename guard removed, the bounds case red; the pre-bind flush removed, both pre-bind server cases red (`expected
   '2026-01-01T00:00:00.000Z' not to be '2026-01-01T00:00:00.000Z'`).
+
+  The doctor's store row (`ccd/ccrc-doctor-checks`, `_dr_cx_store`), called from `_dr_cx_lane` beside the drift row
+  and, like it, on a `direct` lane only. It reads the stats file through `_dr_cx_stats_read`, the one reader the drift
+  row now shares (lane.json's `bridgeFiles.stats`, a regular file and not a symlink, at most READ_MAX), and bounds
+  every value it prints through `_dr_cx_bound`, whose `name_re` is stats.py's NAME_RE (the existing pin now reads it
+  there), else `unrecognised`. No `store` key, an `ok` entry, or a file the reader cannot read as the bridge's (the
+  drift row's unmeasured WARN names that) is no line. `disabled` is a WARN: "the bridge's reasoning store is switched
+  off for the rest of its last process (<reason>, since <at>): every request that process answers is answered without
+  the model's earlier reasoning replayed", adding "; at its start it had set its damaged store (<found>) aside as
+  <file>" when the entry carries a `setAside` record, and "(names only, never content)". Its remedy is `ccrc codex
+  stop <id>`, then `ccrc codex start <id>` (the start alone when the bridge is not running): the stop drains the bridge
+  (a request in flight gets DRAIN_S to finish, one still open then is cut with an error Claude Code sends again), the
+  start's check sets a damaged store aside, and the line clears when the new process writes its entry, before it binds
+  its port. `set-aside` is a WARN only while the copy `setAside.file` names is in the lane directory: "at its start the
+  bridge found its reasoning store damaged (<found>) and set it aside as <file>, starting a fresh store; only the
+  model's earlier reasoning was lost", with the remedy to read the copy if needed and delete it with its `-wal` and
+  `-shm`, which clears the line. The copy is checked only when its name is a bare name in store.py's shape
+  (`<name>.damaged-<YYYYmmddTHHMMSSZ>`); any other value is `unrecognised` and checks nothing. Whether the bridge runs
+  is not measured for this row: it is asked before `_dr_cx_tiers` measures the tiers, and asking it there would be new
+  I/O, so the WARN names the LAST process, the one that wrote the file, and holds for a stopped bridge until its next
+  start. Pins, in `server/test/ccrc-doctor-codex.test.ts`'s "the store row (D-7677)" block, each file written by the
+  real `Stats` through the driver unless named: no `store` key (planted by removing it) and `ok`, no line; `disabled`,
+  the WARN with its reason and time; a `store:set-aside-failed` naming its copy, the WARN naming it; `set-aside` with
+  the copy present, the WARN, then no line once the copy is deleted; a litellm lane with a `disabled` entry, no line,
+  beside a direct lane that warns; and hand-planted values outside the bound, each `unrecognised` with no byte of them
+  printed, and a set-aside naming a path, no line. Rows, each restored from a saved copy with sha256 compared: the
+  row's call removed from `_dr_cx_lane`, five cases red (the `disabled`, failed set-aside, set-aside, litellm and bounds
+  cases); the copy-exists test removed, the set-aside case red at the deleted copy; the bound removed, the bounds case
+  red. The `status --json` projection of the entry is not in this change (its existing case in another test file pins
+  the `bridge` object exactly).
 - **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
   the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
   nothing. A per-process entry, written before the first request, is what a reader can rule on.
