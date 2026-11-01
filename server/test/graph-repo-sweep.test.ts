@@ -1189,15 +1189,22 @@ describe('links and excludes', () => {
     expect(fs.readlinkSync(path.join(repo, 'graphify-out'))).toBe(path.join(keyDir(repo), 'current'));
   });
 
-  it('a tree whose graphify-out is a real directory is left for migration (GR6), counted as pending', { timeout: T }, () => {
+  // GR6 (D-7352): a real directory is no longer left once the repository publishes; it is migrated in that pass and
+  // linked (graph-migrate.test.ts holds the migration's rows). What stays of this row is the wait before the publish.
+  it('a tree whose graphify-out is a real directory is left for migration until the repository publishes, counted as pending; then migrated and linked', { timeout: T }, () => {
     const repo = makeRepo();
     fs.mkdirSync(path.join(repo, 'graphify-out'));
     fs.writeFileSync(path.join(repo, 'graphify-out', 'graph.json'), '{}');
     fs.appendFileSync(path.join(repo, '.git', 'info', 'exclude'), 'graphify-out/\n');
-    sweep();
+    sweep({ GRAPH_STUB_MODE: 'false' });
+    expect(rowOf(repo).outcome).toBe('failed');
     expect(fs.lstatSync(path.join(repo, 'graphify-out')).isDirectory()).toBe(true);
     expect(fs.readFileSync(path.join(repo, 'graphify-out', 'graph.json'), 'utf8')).toBe('{}');
     expect(rowOf(repo)).toMatchObject({ linked: 0, migrate: { done: 0, pending: 1, refused: [] } });
+    sweep();
+    expect(rowOf(repo).outcome).toBe('rebuilt');
+    expect(fs.readlinkSync(path.join(repo, 'graphify-out'))).toBe(path.join(keyDir(repo), 'current'));
+    expect(rowOf(repo)).toMatchObject({ linked: 1, migrate: { done: 1, pending: 0, refused: [] } });
   });
 
   it('§Review focus 1 — nothing in a tree changes but the link: a before-and-after listing of every tree', { timeout: T }, () => {
