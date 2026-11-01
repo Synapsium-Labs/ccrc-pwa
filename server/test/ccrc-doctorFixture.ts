@@ -118,6 +118,9 @@ export function installCcrc(home: string): void {
   symlinkSync(join(REPO, 'ccd', 'history'), join(ccd, 'history'));
   // D-7298: `_check_test-slice` asks the shipped `ccrc test` wrapper for the slice and the queue.
   symlinkSync(join(REPO, 'ccd', 'ccrc-test'), join(ccd, 'ccrc-test'));
+  // GR7 (D-7353): `_check_graphify` sources the graph resolver beside ccrc and runs the engine wrapper's `--probe`.
+  symlinkSync(join(REPO, 'ccd', 'graph-resolve'), join(ccd, 'graph-resolve'));
+  symlinkSync(join(REPO, 'ccd', 'graph-build'), join(ccd, 'graph-build'));
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
   // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
@@ -1404,10 +1407,16 @@ export function healthy(prefix: string): string {
   linkReal(home, 'realpath');
   symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
     join(home, '.local', 'bin', 'graphify'));
-  // repos[] is what the repository sweep writes (GR4, D-7350); the per-tree array stays beside it while the doctor reads it (GR7).
+  // repos[] is what the repository sweep writes (GR4, D-7350), and all the doctor reads (GR7, D-7353).
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
-    pin: '0.9.9', status: 'ok', repos: [], trees: [] }] }));
+    pin: '0.9.9', status: 'ok', repos: [] }] }));
+  // …the store `ccrc install` creates with its marker (D-7360), at the default CCRC_GRAPH_STORE, and the venv's
+  // interpreter that `graph-build --probe` runs under, answering the probe (GR7): healthy()'s contract is that every
+  // check PASSES.
+  mkdirSync(join(home, '.ccrc', 'graphs'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'graphs', '.ccrc-graph-store'), 'ccrc graph store (graph revision 2); removed only by ccrc\n');
+  writeFileSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'python'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   // …and its ccd answers Docs (spec 2026-10-01 §7.2): `docs` is a check, and
   // healthy()'s contract is that every check PASSES. `$HOME/.local/bin/ccd`,
   // the file the agent execs and the check runs, prints the canned ready
