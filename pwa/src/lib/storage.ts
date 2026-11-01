@@ -17,7 +17,7 @@
 // in-memory instance below; production passes nothing and gets the page's.
 //
 // enumerablePageStorage hands the page's store to one guarded consumer (the reader mount), which needs key() and
-// length; it is the same store and adds no owner.
+// length; it is `pageStorage` under a name that says why it is asked for, and adds no owner and no second guard.
 
 /** The slice of `Storage` the PWA uses: the one storage type. The DOM's `Storage` is one, and so is `memoryStorage`. */
 export interface StoragePort {
@@ -36,7 +36,7 @@ export interface EnumerableStoragePort extends StoragePort {
 export type StorageSource = () => StoragePort | null;
 
 /** The page's store, `window.localStorage`, or `null` where there is none (no window) or naming it throws. */
-export const pageStorage: StorageSource = () => {
+export const pageStorage = (): EnumerableStoragePort | null => {
   try {
     return window.localStorage ?? null;
   } catch {
@@ -44,14 +44,10 @@ export const pageStorage: StorageSource = () => {
   }
 };
 
-/** Same store as `pageStorage`, typed for enumeration (see the header). The page's store as an enumerable port, or `null` for one condition only: "no storage here" (there is no window, or
- *  naming the store throws). The same store `pageStorage` names; it declares no `getItem` of its own. */
+/** The page's store as an enumerable port, or `null` for one condition only: "no storage here" (there is no window, or
+ *  naming the store throws). It is `pageStorage`, the one guard, and declares no body of its own. */
 export function enumerablePageStorage(): EnumerableStoragePort | null {
-  try {
-    return window.localStorage ?? null;
-  } catch {
-    return null;
-  }
+  return pageStorage();
 }
 
 /** The answer a caller passes to tell "the read threw, or there is no store" from "nothing is stored". */
