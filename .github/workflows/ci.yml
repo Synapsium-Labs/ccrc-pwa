@@ -1065,13 +1065,22 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - working-directory: ui
         run: npm ci
-      # Chromium only, and `--with-deps` because a bare runner has none of the
-      # shared libraries headless chromium links against. Every tool in this
+      # Chromium only, plus its system libraries (`install-deps`): a bare
+      # runner has none of the shared libraries headless chromium links
+      # against. Every tool in this
       # job is a LOCAL binary out of ui/package-lock.json, never `npx`: a bare
       # `npx <tool>` that misses node_modules fetches whatever version is
       # newest that day and runs it.
+      #
+      # Split in two (D-7686): the system libraries go through apt, so they
+      # run under apt-bounded.sh (a deadline per attempt and one retry — a
+      # stalled mirror once held this step to the job limit), and the browser
+      # download is bounded on its own. The step's limit is the backstop.
       - working-directory: ui
-        run: ./node_modules/.bin/playwright install --with-deps chromium
+        timeout-minutes: 12
+        run: |
+          ../.github/ci/apt-bounded.sh 240 ./node_modules/.bin/playwright install-deps chromium
+          timeout -k 10 240 ./node_modules/.bin/playwright install chromium
       # ONE BUILD PER SKIN (D-5093, its verification clause): the default
       # build is Refined (STORYBOOK_SKIN unset, `resolveSkin` of undefined) and
       # the second opens every story in Instrument. The catalogue's ids and
