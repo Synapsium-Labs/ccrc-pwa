@@ -4202,15 +4202,22 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   names outside the shape stay); LOCKED (`store:OperationalError`, no copy, the file's inode and bytes unchanged);
   SET-ASIDE FAILS (the first `os.rename` fails with EACCES: `store:set-aside-failed`, the request still built, the
   file unchanged, `setAside` null); SET-ASIDE FAILS AFTER ITS RENAMES (the fresh store's `os.open` fails: disabled as
-  `store:set-aside-failed`, the entry's `setAside` naming the copy and `found`). The WAL case and RETENTION skip where
-  the driver's python3 has no no-checkpoint close (below 3.12; the driver's `store-caps` op says), since their
-  fixture's WAL is checkpointed there. The newer-version case also checks that no copy is made. Rows, each restored
+  `store:set-aside-failed`, the entry's `setAside` naming the copy and `found`). The WAL case and RETENTION skip only
+  on a measured python3 below 3.12 (the driver's `store-caps` op answers its `sys.version_info[:2]` beside
+  `noCkptClose`), since their fixture's WAL is checkpointed there; fix round 2: a probe that failed (an import failure,
+  a timeout, a renamed op) skips nothing, and "the capability probe answers" (a case of its own, run wherever python3
+  runs) is red unless the probe line exists, did not raise, names the version, and says `noCkptClose` on 3.12 and
+  later. DAMAGED INDEX OR PAGE takes the 0xff page's expected `found` from the probe (`raised`, else
+  `integrity-check`), as NOT A DATABASE does, since which SQLite raises there is that SQLite's choice; its pin on the
+  page is that `integrity_check` did not answer `ok`. The newer-version case also checks that no copy is made. Rows, each restored
   from a saved copy with sha256 compared: the check's call replaced by an `ok` answer, DAMAGED INDEX OR PAGE, the WAL
   case and RETENTION red (`stale-index: expected { items: [], phase: null } to be null`); `integrity_check` swapped
   back to `quick_check`, EQUAL COUNT red (`expected 'store:DatabaseError' to be null`) and DAMAGED INDEX OR PAGE red
   on the 0xff page's `found` (the stale index stays green: `quick_check` sees its count); the failed set-aside's
   detail dropped, SET-ASIDE FAILS AFTER ITS RENAMES red (`expected null to deeply equal { Object (at, found, ...)
-  }`); the driver made to report no no-checkpoint close, the WAL case and RETENTION skipped and the other 24 green;
+  }`); the driver made to report no no-checkpoint close, the WAL case and RETENTION skipped and the other 24 green
+  (fix round 2: now the capability case red, `{"noCkptClose":false,"op":"store-caps","python":[3,14]}: expected false
+  to be true`, and the WAL case and RETENTION run; the op renamed, the capability case red and neither skipped);
   the exact-class test
   widened to every `DatabaseError`, LOCKED red (`expected null to be 'store:OperationalError'`); the sibling renames
   skipped, the WAL case and RETENTION red; the retention call removed, RETENTION red (`expected [ …(2) ] to have a
@@ -4256,7 +4263,9 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   request (below). `file` is kept only as a basename (a value
   with a `/` is `unrecognised`), since NAME_RE alone admits a path. Fix round 1: `store_event` makes the next flush
   write at once, whatever `FLUSH_S` says (the one-shot a failed write already used), so a store disabled at the first
-  request is in the file right after it, not `FLUSH_S` later behind the pre-bind flush's time; the one-shot is cleared
+  request is written at the next flush, which is that request's own unless another write is in flight, then the next
+  one's (an unforced flush that finds the write lock held returns before it reads the one-shot; nothing is lost), not
+  `FLUSH_S` later behind the pre-bind flush's time; the one-shot is cleared
   when a flush serialises the document, never after its write, so an event made while a write is in flight survives
   it. A `store:set-aside-failed` that names a copy (D-7676) records `setAside` (`at`, `found`, `file`) while `state`
   is `disabled`.
@@ -4305,8 +4314,15 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   printed, and a set-aside naming a path, no line. Rows, each restored from a saved copy with sha256 compared: the
   row's call removed from `_dr_cx_lane`, five cases red (the `disabled`, failed set-aside, set-aside, litellm and bounds
   cases); the copy-exists test removed, the set-aside case red at the deleted copy; the bound removed, the bounds case
-  red. The `status --json` projection of the entry is not in this change (its existing case in another test file pins
-  the `bridge` object exactly).
+  red.
+
+  Fix round 2: `ccrc codex status <id> --json` (`ccd/ccrc`, `_codex_cmd_status`) projects the entry as `bridge.store`,
+  `null` when the file has no `store` key (a bridge that predates it, never `ok`), on the projection's existing line.
+  Pins, in `server/test/ccrc-codex-bridge.test.ts`: "status --json names the mode and the bridge's stats" now expects
+  `store: null` in its exact `bridge` object (its file has no entry), and "status --json names the stats file's store
+  entry under bridge.store" reads a planted `disabled` entry with a `setAside` record back unchanged, then `null` with
+  the key removed. Row, restored from a saved copy with sha256 compared: the projection's `store` removed, both cases
+  red (`expected { …(5) } to deeply equal { …(6) }`; `expected undefined to deeply equal { state: 'disabled', …(3) }`).
 - **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
   the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
   nothing. A per-process entry, written before the first request, is what a reader can rule on.
