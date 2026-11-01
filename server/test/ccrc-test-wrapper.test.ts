@@ -6,13 +6,14 @@
 // after `--`, so a row can read what the wrapper asked for and still see the command run in this process tree. The
 // queue rows run on both platforms (macOS runs the command uncontained, as the wrapper says) and need a real `flock`,
 // which every Linux box has (util-linux, doctor's `flock` check); a box without one skips them.
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { itDarwin, itLinux, IS_DARWIN, platformContrast } from './platformFixtures.js';
+import { groupAlive, killGroup } from './spawnGroup.js';
 
 removeTmpFixturesEachTest();
 
@@ -92,14 +93,51 @@ function noServiceManagerPath(b: Box): string {
   return dir;
 }
 
+// EVERY HELD TREE IS RELEASED AND REAPED BY THE CASE THAT STARTED IT. A held command polls for its release file and
+// nothing else, so one that outlives its case polls a fixture home the root afterEach has already removed, forever:
+// measured, the macOS SIGKILL row below left its orphaned holder spinning in a deleted home in 6 of 12 runs of this
+// describe, the leak the release-stable gate's process-leak check (D-3533) named. So each tree starts in a process
+// group of its own (`detached`, libuv's setsid(): the group id is the wrapper's pid, and an orphaned command keeps it
+// after its wrapper is killed), and `reapHeld`, a describe-level afterEach that runs before the root one removes the
+// homes, writes every release file, waits for every group to empty, and ends what is left through the group it
+// created. The run-level check cannot see a group of the case's own, so a group still standing after its release is
+// this file's leak report: the case fails, naming it (the `spawnSyncGroup` contract, `spawnGroup.ts`).
+interface Tracked { label: string; pgid: number; releaseFile: string; exit: Promise<number | null> }
+const tracked: Tracked[] = [];
+/** How long a released tree gets to end on its own before it is a leak: a poll is 50 ms; a loaded macOS runner is slow. */
+const REAP_GRACE_MS = 10_000;
+function track(proc: ChildProcess, label: string, releaseFile: string): Promise<number | null> {
+  const exit = new Promise<number | null>((res) => proc.on('exit', (c) => res(c)));
+  if (proc.pid) tracked.push({ label, pgid: proc.pid, releaseFile, exit });
+  return exit;
+}
+async function reapHeld(): Promise<void> {
+  const mine = tracked.splice(0);
+  for (const t of mine) {
+    try { if (existsSync(path.dirname(t.releaseFile))) writeFileSync(t.releaseFile, ''); } catch { /* its home is gone: the kill below ends it */ }
+  }
+  const pause = () => new Promise((r) => setTimeout(r, 50));
+  const deadline = Date.now() + REAP_GRACE_MS;
+  while (mine.some((t) => groupAlive(t.pgid)) && Date.now() < deadline) await pause();
+  const left = mine.filter((t) => groupAlive(t.pgid));
+  for (const t of left) killGroup(t.pgid);
+  const killDeadline = Date.now() + 5000;
+  while (left.some((t) => groupAlive(t.pgid)) && Date.now() < killDeadline) await pause();
+  await Promise.all(mine.map((t) => t.exit));
+  if (left.length > 0) {
+    throw new Error(`${left.length} held tree(s) still ran ${REAP_GRACE_MS} ms after their release and were killed: `
+      + left.map((t) => `${t.label} (group ${t.pgid})`).join(', '));
+  }
+}
+
 /** A heavy-or-light run that marks `started-<tag>` and holds until `release-<tag>` exists. */
 interface Held { proc: ChildProcess; stderr: () => string; exit: Promise<number | null> }
 function hold(b: Box, tag: string, flags: string[] = ['--heavy'], extra: NodeJS.ProcessEnv = {}): Held {
   const script = `touch "$HOME/started-${tag}"; while [ ! -f "$HOME/release-${tag}" ]; do sleep 0.05; done`;
-  const proc = spawn('bash', [WRAPPER, ...flags, '--', 'sh', '-c', script], { env: { ...b.env, ...extra }, cwd: b.home });
+  const proc = spawn('bash', [WRAPPER, ...flags, '--', 'sh', '-c', script], { env: { ...b.env, ...extra }, cwd: b.home, detached: true });
   let err = '';
   proc.stderr!.on('data', (d: Buffer) => { err += d.toString(); });
-  const exit = new Promise<number | null>((res) => proc.on('exit', (c) => res(c)));
+  const exit = track(proc, `hold ${tag}`, path.join(b.home, `release-${tag}`));
   return { proc, stderr: () => err, exit };
 }
 async function until(what: string, p: () => boolean, ms = 15000): Promise<void> {
@@ -433,6 +471,7 @@ describe('ccrc test: heavy or light (D-7298)', () => {
 });
 
 describe('ccrc test: the admission queue (D-7298)', () => {
+  afterEach(reapHeld);
   const slice = (b: Box) => writeFileSync(path.join(b.home, 'fixture-slice-show'),
     'LoadState=loaded\nMemoryCurrent=0\nMemoryMax=6442450944\nMemorySwapMax=1073741824\nCPUWeight=20\nCPUQuotaPerSecUSec=4s\nIOWeight=20\n');
 
@@ -521,8 +560,8 @@ describe('ccrc test: the admission queue (D-7298)', () => {
     slice(b);
     const dir = path.join(b.home, '.cc-sessions', 'test-slots');
     mkdirSync(dir, { recursive: true });
-    const holder = spawn('flock', [path.join(dir, 'slot-3'), 'sh', '-c', `touch "${b.home}/held-3"; while [ ! -f "${b.home}/release-3" ]; do sleep 0.05; done`], { env: b.env });
-    const done = new Promise((res) => holder.on('exit', res));
+    const holder = spawn('flock', [path.join(dir, 'slot-3'), 'sh', '-c', `touch "${b.home}/held-3"; while [ ! -f "${b.home}/release-3" ]; do sleep 0.05; done`], { env: b.env, detached: true });
+    const done = track(holder, 'the slot-3 holder', path.join(b.home, 'release-3'));
     await until('slot-3 to be held', () => existsSync(path.join(b.home, 'held-3')));
     const w = hold(b, 'w');
     await until('the run to queue behind slot-3', () => w.stderr().includes('ccrc test: queued: all 1 heavy test slots are held (slot-3: unknown)'));
@@ -638,6 +677,7 @@ describe('ccrc test: the admission queue (D-7298)', () => {
 });
 
 describe('ccrc test: a run ends with its whole tree (D-7298)', () => {
+  afterEach(reapHeld);
   itLinux('the run\'s scope is stopped when its command ends, so a process it left behind ends too', async () => {
     const b = box();
     const r = run(b, ['--light', '--', 'sh', '-c', 'sleep 300 & for f in "$HOME"/ccrc-test-*.pids; do echo $! >> "$f"; done; echo $! > "$HOME/leftover"']);
