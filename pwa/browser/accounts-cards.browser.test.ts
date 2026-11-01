@@ -297,6 +297,19 @@ const readOffline = (page: Page): Promise<OfflineRead> => page.evaluate((sel) =>
   text: document.querySelector('[data-page-body]')?.textContent ?? '',
 }), CARDS);
 
+/** Hold the shell on its offline reading for the read that follows. With the link cut the fleet socket still climbs its
+ *  backoff ladder, and for each attempt's instant the store reads `connecting`, which draws no "Reconnecting…" (with
+ *  sessions held, "Last known state — connecting…" instead): a read that lands in that instant misses the shell's
+ *  reading (merge-group run 41356259563, Instrument at 1280). The page's clock is paused, so no rung's timer starts an
+ *  attempt during the read; an attempt already under way still closes, its close being no timer, and the hold waits
+ *  for the store's `down`. The caller resumes the clock if the cell goes on. */
+const holdOffline = async (page: Page): Promise<void> => {
+  const at = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(at + 1_000);
+  await page.waitForFunction(() => document.querySelector('.fleet')?.getAttribute('data-conn') === 'down', undefined,
+    { polling: 50, timeout: 10_000 });
+};
+
 describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D-7718; spec §12.5)', () => {
   for (const view of OFFLINE_VIEWS) {
     it(`warm: the link drops with the screen open, and the cards keep the last answer — ${named(view)}`, async () => {
@@ -314,7 +327,9 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
         await go(app.page, '/accounts');
         await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
         await app.page.waitForTimeout(1_500);
+        await holdOffline(app.page);
         const m = await readOffline(app.page);
+        await app.page.clock.resume();
         expect(m.cards.map((c) => [c.lane, c.state, c.word, c.source]), "the server's words and sources stand")
           .toEqual(before.cards.map((c) => [c.lane, c.state, c.word, c.source]));
         expect(m.cards.map((c) => c.lane)).toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e']);
@@ -365,6 +380,8 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
         };
         await app.ctx.addInitScript((snap) => { localStorage.setItem('ccrc.fleet-snapshot.v1', snap); }, JSON.stringify(snapshot));
         app.cut();
+        // The page's clock runs as the real one does; it is installed so `holdOffline` can pause it for the read.
+        await app.page.clock.install({ time: now });
         await app.page.goto(server!.origin + '/');
         // The snapshot was read: the fleet counts its one session, and the shell says it is reconnecting.
         await app.page.getByText('1 session', { exact: true }).first().waitFor({ timeout: 30_000 });
@@ -373,6 +390,7 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
         await go(app.page, '/accounts');
         await app.page.locator('[data-page-body]').waitFor({ timeout: 30_000 });
         await app.page.waitForTimeout(1_500);
+        await holdOffline(app.page);
         const m = await readOffline(app.page);
         expect(m.cards.filter((c) => c.state === 'signed-in'), 'never Signed in on an absence').toEqual([]);
         if (view.width >= 900) expect(m.reconnecting, "the shell's offline reading is on screen").toBe(true);
