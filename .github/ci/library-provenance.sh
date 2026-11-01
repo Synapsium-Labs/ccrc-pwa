@@ -17,10 +17,15 @@
 # pwa/package-lock.json, and never reads node_modules.
 #
 # Run from the repository root. `gh` reads GH_TOKEN from its own environment.
+# Both network calls (the pack and the attestation lookup) run under bounded.sh,
+# a 90 s deadline per attempt and one retry, so a stalled registry or API ends
+# the step in at most about 3 minutes; a call that never answers is a failure, and
+# the script fails closed on it like on any other.
 # Exit 0: verified. Any other exit: the library is not what the lock says, or
 # the check could not be made; an outage reds the job and the remedy is a re-run.
 set -euo pipefail
 
+bounded="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bounded.sh"
 REPO=Synapsium-Labs/docserver
 SIGNER=Synapsium-Labs/docserver/.github/workflows/release.yml
 
@@ -33,7 +38,7 @@ read -r version integrity < <(node -e '
 
 # Under the runner's temp directory (or the system's), never inside the work tree. Left for the runner to reap.
 dest=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lib-prov.XXXXXX")
-npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent >/dev/null
+"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent >/dev/null
 tgz="$dest/synapsium-labs-docserver-$version.tgz"
 
 actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"
@@ -46,5 +51,5 @@ else
   exit 1
 fi
 
-gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners
+"$bounded" 90 gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners
 echo "library-provenance: @synapsium-labs/docserver@$version was built by $SIGNER at refs/tags/v$version"

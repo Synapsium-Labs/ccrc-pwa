@@ -1207,7 +1207,7 @@ jobs:
         run: ../.github/ci/bounded.sh 180 npm ci
       - if: env.CCRC_LEG == 'run'
         working-directory: pwa
-        run: npm audit signatures
+        run: ../.github/ci/bounded.sh 180 npm audit signatures
       - if: env.CCRC_LEG == 'run'
         working-directory: pwa
         run: ./node_modules/.bin/vite build

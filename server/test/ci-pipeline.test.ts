@@ -1838,7 +1838,7 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     expect(wanted.map(runOf)).toEqual([
       PROVENANCE_RUN,
       '../.github/ci/bounded.sh 180 npm ci',
-      'npm audit signatures',
+      '../.github/ci/bounded.sh 180 npm audit signatures',
       './node_modules/.bin/vite build',
     ]);
     for (const st of wanted) {
@@ -1870,7 +1870,7 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     const times = (l: string): number => lines.filter((x) => x === l).length;
     expect(times('REPO=Synapsium-Labs/docserver')).toBe(1);
     expect(times('SIGNER=Synapsium-Labs/docserver/.github/workflows/release.yml')).toBe(1);
-    const verify = 'gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners';
+    const verify = '"$bounded" 90 gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners';
     expect(lines.filter((l) => l.trim() === verify), 'exactly one verify line').toHaveLength(1);
     expect(text.match(/gh attestation verify/g) ?? [], 'no other mention of the verify call').toHaveLength(1);
     expect(lines[0]).toBe('#!/usr/bin/env bash');
@@ -1895,7 +1895,7 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
   it('the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines)', () => {
     const lines = read(SCRIPT).split('\n');
     const times = (l: string): number => lines.filter((x) => x === l).length;
-    expect(times('npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent >/dev/null'), 'the pack line').toBe(1);
+    expect(times('"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent >/dev/null'), 'the pack line').toBe(1);
     expect(times('tgz="$dest/synapsium-labs-docserver-$version.tgz"'), 'the tgz line').toBe(1);
     expect(times('actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"'), 'the actual line').toBe(1);
     // `actual` has one writer, and it never reads the lock's value.
@@ -1904,12 +1904,12 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     expect(lines.filter((l) => /^\s*integrity=/.test(l)), 'integrity is only read from the lock').toHaveLength(0);
   });
 
-  describe('the provenance script, run for real against fake npm and gh', () => {
+  describe('the provenance script, run for real against fake npm, gh and timeout', () => {
     const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
     const VERSION = '1.2.3';
     const TARBALL = 'the packed bytes';
     const integrityOf = (bytes: string): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
-    const run = (lockIntegrity: string) => {
+    const run = (lockIntegrity: string, deadline: 'pass' | 'expire' | 'expire-gh' = 'pass') => {
       const root = mkTmp('ccrc-prov-root-');
       mkdirSync(join(root, 'pwa'));
       writeFileSync(join(root, 'pwa', 'package-lock.json'), JSON.stringify({
@@ -1921,8 +1921,10 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
         // npm pack writes the tarball where --pack-destination says, as the real one does.
         npm: `echo "npm $*" >> '${log}'\nwhile [ "$#" -gt 0 ]; do [ "$1" = --pack-destination ] && dest=$2; shift; done\nprintf '%s' '${TARBALL}' > "$dest/synapsium-labs-docserver-${VERSION}.tgz"`,
         gh: `echo "gh $*" >> '${log}'`,
+        // bounded.sh's deadline tool: it logs its argv; `expire` is a deadline that fires (124) without running the command, `expire-gh` one that fires on gh alone.
+        timeout: `echo "timeout $1 $2 $3" >> '${log}'\n${deadline === 'expire' ? 'exit 124' : deadline === 'expire-gh' ? '[ "$4" = gh ] && exit 124\nshift 3\nexec "$@"' : 'shift 3\nexec "$@"'}`,
       });
-      for (const bin of ['bash', 'sh', 'env', 'cat', 'dirname', 'timeout', 'perl', 'node', 'openssl', 'base64', 'mktemp'])
+      for (const bin of ['bash', 'sh', 'env', 'cat', 'dirname', 'perl', 'node', 'openssl', 'base64', 'mktemp'])
         execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
       const r = spawnSync(real('bash'), [join(REPO, SCRIPT)], {
         cwd: root, encoding: 'utf8', timeout: 60_000,
@@ -1936,6 +1938,30 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       expect(r.status, r.stderr).toBe(0);
       expect(r.log.match(/^gh attestation verify /gm), 'one verify call').toHaveLength(1);
       expect(r.log).toContain(`--repo Synapsium-Labs/docserver --signer-workflow Synapsium-Labs/docserver/.github/workflows/release.yml --source-ref refs/tags/v${VERSION} --deny-self-hosted-runners`);
+    });
+
+    it('npm pack and the attestation lookup each run under a 90 second deadline', () => {
+      const r = run(integrityOf(TARBALL));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toMatch(/^timeout -k 10 90\nnpm pack @synapsium-labs\/docserver@1\.2\.3 /m);
+      expect(r.log).toMatch(/^timeout -k 10 90\ngh attestation verify /m);
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'one deadline per call').toHaveLength(2);
+    });
+
+    it('a deadline that fires on npm pack fails the script closed: nothing is compared or verified, and the pack is tried twice', () => {
+      const r = run(integrityOf(TARBALL), 'expire');
+      expect(r.status).not.toBe(0);
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'one retry, no third attempt').toHaveLength(2);
+      expect(r.log, 'gh ran after the pack timed out').not.toContain('gh attestation verify');
+      expect(r.stdout, 'the match message was printed after a timed-out pack').not.toContain('matches the lock');
+    });
+
+    it('a deadline that fires on the attestation lookup fails the script closed: the lookup is tried twice and the script never reports success', () => {
+      const r = run(integrityOf(TARBALL), 'expire-gh');
+      expect(r.status).not.toBe(0);
+      expect(r.log, 'the lookup itself never ran: its deadline fired first').not.toContain('gh attestation verify');
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'pack once, the lookup twice').toHaveLength(3);
+      expect(r.stdout, 'success was reported after a timed-out lookup').not.toContain('was built by');
     });
 
     it('a lock integrity that does not match the packed bytes fails, and the attestation is never asked', () => {
