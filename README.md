@@ -6133,7 +6133,7 @@ It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
-| `lander` | the mirror of the conf's `lander=coordinator`, with its own time; absent means there is no usable mirror (a pause, an invalid conf, a project that is not a main checkout or a symlinked landing directory leave none), and nothing reads it yet: stage 5's landing line will read it in a later wave |
+| `lander` | the mirror of the conf's `lander=coordinator`, with its own time; absent means there is no usable mirror (a project's pause, an invalid conf, a project that is not a main checkout, or a landing directory that is a symlink leaves none), and nothing reads it yet: stage 5's landing line will read it in a later wave |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That covers a
 failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write. A child the

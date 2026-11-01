@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, ghPoisonAt, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghPoisonAt, ghContainedEnv, type CcdHarness } from './ccdWsHelpers.js';
 import { makeLandFixture, holdLandLock, lockHeld, pidGone, until, PROBE, type LandFixture, type CheckRun } from './ccdLandProbeFixture.js';
 
 let h: CcdHarness;
@@ -2067,7 +2067,8 @@ describe('ccd-land-probe: the lander key and its mirror (landing order wave 5d)'
       + 'ns["reconcile_enabled"]([sys.argv[2]])\n'
       + 'print(json.dumps(len(calls)))\n';
     const out = execFileSync('python3', ['-I', '-c', driver, progFile, fx.project], {
-      encoding: 'utf8', cwd: h.home, env: { PATH: process.env['PATH'] ?? '', HOME: h.home },
+      encoding: 'utf8', cwd: h.home,
+      env: ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home }, { systemd: true, tmux: true, net: true }),
     });
     const first = '2000-01-01T00:00:01Z';
     expect(fx.readJson('enabled').at).toBe(first);
