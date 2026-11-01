@@ -4366,6 +4366,26 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   replaced by any prefix, the look-alike case red; the symlink test removed, the look-alike case red; the
   newer-version special case removed, the newer-version case red (`expected '  remedy: restart the lane\'s bridge …'
   to be '  remedy: a newer build of the bridge…'`).
+
+  Fix round 4 (a re-review), replacing fix round 3's two copy-line forms: the copy line printed under a `disabled`
+  entry said "starting a fresh store" and "nothing to repair: the bridge serves from its fresh store" beneath the
+  `disabled` WARN, whose remedy is a restart. A `store:set-aside-failed` that names its copy always has that copy on
+  disk (store.py names it only after its rename succeeded), so that case printed both lines, and its pin, which never
+  planted the copy, checked one. The descriptive form, with its "nothing to repair" remedy, is now printed only when
+  the entry's `state` is `set-aside` and its `setAside.file` is that copy. Every other case (an `ok` entry after a
+  restart, `disabled`, an entry naming another file) gets the NEUTRAL line: "a set-aside copy of the lane's reasoning
+  store, <copy>, is in the lane directory", adding " (set aside at a start that found the store damaged: <found>)"
+  when the entry's `setAside.file` is that copy and "; the line above names the store's own repair" under `disabled`;
+  its remedy is to read the copy if the damage needs explaining, then delete it with its `-wal` and `-shm`, which
+  clears the line. It never says the bridge serves from a fresh store. Pins, in the store row block: the failed
+  set-aside case now plants the copy and pins exactly two store lines in order, the `disabled` WARN with the restart
+  remedy, then the neutral copy line with its `found` and the pointer, with no "fresh store" in the copy line or its
+  remedy; "a store disabled at runtime with an older copy on disk warns as disabled, and its copy line is neutral"
+  (`store:OperationalError`, `setAside` null), the same two lines with no `found`; and the restart case now expects
+  the neutral line. With the previous doctor, all three were red. Rows, each restored from a saved copy with sha256
+  compared: the `state` condition removed (the descriptive form whenever the entry names the copy), the failed
+  set-aside case red; the `found` clause made unconditional, the runtime-disabled and restart cases red; the
+  `disabled` pointer removed, both two-line cases red.
 - **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
   the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
   nothing. A per-process entry, written before the first request, is what a reader can rule on.

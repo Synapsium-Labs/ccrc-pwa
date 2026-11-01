@@ -2310,7 +2310,9 @@ until the next start checks it again. The stats file's `store` entry says which,
 `ok`); `ccrc codex status <id> --json` shows it under `bridge.store` (`null`: the bridge predates it). On a `direct` lane doctor's `codex` check WARNs on `disabled` until a restart (`ccrc codex stop <id>`, then
 `start`) writes a fresh entry (for `store:newer-version`, a store a newer build wrote, a restart changes nothing: run
 that build, or move the store aside by hand), and on a set-aside copy for as long as it is in the lane directory: the
-WARN is read off the directory, so it survives a restart, until you delete the copy with its `-wal` and `-shm`. `ccrc codex status <id> --json`
+WARN is read off the directory, so it survives a restart, until you delete the copy with its `-wal` and `-shm` (it says
+the bridge serves from a fresh store only while the entry is `set-aside` and names that copy; otherwise it only names
+the copy, and under `disabled` the line above it names the repair). `ccrc codex status <id> --json`
 adds `mode`, `upstream`, `tiers.bridge` and `bridge` (the stats file's time, last upstream request id, refusals,
 outcomes and unknown names; `null` when there is none). Doctor's `codex` check reads the lane by its mode: on a
 `direct` lane the bridge tier's running, stale (a WARN, cured by `ccrc update` (`--force` on a box already converged),

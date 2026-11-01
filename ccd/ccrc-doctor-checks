@@ -8109,14 +8109,19 @@ _dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
 # regular file (never a symlink) named `<store>.damaged-<8 digits>T<6 digits>Z`,
 # store.py's DAMAGED_STAMP, keyed on the store's OWN name (lane.json's
 # `bridgeFiles.store`, a bare name only, else no copy is looked for), its
-# `-wal`/`-shm` not counted; the newest such name is the one named. When the
-# entry's `setAside.file` is that copy, the line adds what was found. The
-# entry's own copy name is printed only in store.py's shape, so no path from
-# the file is ever checked or printed. Every value printed from the file goes
-# through `_dr_cx_bound`; the copy's name is built from the bare store name and
-# that shape.
+# `-wal`/`-shm` not counted; the newest such name is the one named. The copy
+# line says the bridge serves from a fresh store ONLY when the entry's `state`
+# is `set-aside` and its `setAside.file` is that copy (fix round 4): every
+# other entry (`ok` after a restart, `disabled`, one naming another file) gets
+# the NEUTRAL line, that the copy is in the lane directory, with what was found
+# when the entry names it, and, under `disabled`, a pointer to the line above,
+# whose remedy is the store's own; a disabled store serves from no store, so
+# "nothing to repair" would contradict it. The entry's own copy name is
+# printed only in store.py's shape, so no path from the file is ever checked or
+# printed. Every value printed from the file goes through `_dr_cx_bound`; the
+# copy's name is built from the bare store name and that shape.
 _dr_cx_store() {   # <id>
-  local id="$1" dir state='' reason at found file aside='' sn='' sp copy='' p rest clause='' fix LC_ALL=C
+  local id="$1" dir state='' reason at found file aside='' sn='' sp copy='' p rest clause='' fix del LC_ALL=C
   local -a got=()
   _dr_cx_stats_read "$id" '$doc | if . != null and (.store | type) == "object"
       then .store | "entry", (.state | line), (.reason | line), (.at | line),
@@ -8151,11 +8156,14 @@ _dr_cx_store() {   # <id>
     _dr_cx_warn "$id: the bridge's reasoning store is switched off for the rest of its last process ($reason, since $at): every request that process answers is answered without the model's earlier reasoning replayed$clause (names only, never content)." "$fix"
   fi
   [ -n "$copy" ] || return 0
-  fix="nothing to repair: the bridge serves from its fresh store. Read the copy, $dir/$copy, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- $dir/$copy $dir/$copy-wal $dir/$copy-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you"
-  if [ "$aside" = copy ] && [ "$file" = "$copy" ]; then
-    _dr_cx_warn "$id: at its start the bridge found its reasoning store damaged ($found) and set it aside as $copy, starting a fresh store; only the model's earlier reasoning was lost." "$fix"
+  del="the copy, $dir/$copy, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- $dir/$copy $dir/$copy-wal $dir/$copy-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you"
+  if [ "$state" = set-aside ] && [ "$aside" = copy ] && [ "$file" = "$copy" ]; then
+    _dr_cx_warn "$id: at its start the bridge found its reasoning store damaged ($found) and set it aside as $copy, starting a fresh store; only the model's earlier reasoning was lost." "nothing to repair: the bridge serves from its fresh store. Read $del"
   else
-    _dr_cx_warn "$id: at an earlier start the bridge set a damaged reasoning store aside as $copy, and the copy is still in the lane directory (what was found is not in the stats file, whose entry describes only the bridge's last process); only the model's earlier reasoning was lost." "$fix"
+    clause=''
+    [ "$aside" != copy ] || [ "$file" != "$copy" ] || clause=" (set aside at a start that found the store damaged: $found)"
+    [ "$state" != disabled ] || clause+="; the line above names the store's own repair"
+    _dr_cx_warn "$id: a set-aside copy of the lane's reasoning store, $copy, is in the lane directory$clause." "read $del"
   fi
   return 0
 }

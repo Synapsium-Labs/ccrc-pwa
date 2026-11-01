@@ -5949,7 +5949,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     const AT = 1767225600;   // 2026-01-01T00:00:00.000Z
     const AT_ISO = '2026-01-01T00:00:00.000Z';
     const COPY = 'reasoning.sqlite.damaged-20260101T000000Z';
-    const STORE_LINE = /the bridge's reasoning store is switched off|found its reasoning store damaged|set a damaged reasoning store aside/;
+    const STORE_LINE = /the bridge's reasoning store is switched off|found its reasoning store damaged|a set-aside copy of the lane's reasoning store/;
     const DISABLED = (id: string, reason: string, at: string, copy = ''): string =>
       `WARN codex: ${id}: the bridge's reasoning store is switched off for the rest of its last process (${reason}, since ${at}): every request that process answers is answered without the model's earlier reasoning replayed${copy} (names only, never content).`;
     const COPY_CLAUSE = (found: string, file: string): string => `; at its start it had set its damaged store (${found}) aside as ${file}`;
@@ -5959,9 +5959,13 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
       `WARN codex: ${id}: at its start the bridge found its reasoning store damaged (${found}) and set it aside as ${file}, starting a fresh store; only the model's earlier reasoning was lost.`;
     const SET_ASIDE_FIX = (dir: string, file: string): string =>
       `  remedy: nothing to repair: the bridge serves from its fresh store. Read the copy, ${dir}/${file}, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- ${dir}/${file} ${dir}/${file}-wal ${dir}/${file}-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you`;
-    // Fix round 3, F2: a copy found on disk whose entry does not name it (the bridge restarted since): no `found`.
-    const EARLIER = (id: string, file: string): string =>
-      `WARN codex: ${id}: at an earlier start the bridge set a damaged reasoning store aside as ${file}, and the copy is still in the lane directory (what was found is not in the stats file, whose entry describes only the bridge's last process); only the model's earlier reasoning was lost.`;
+    // Fix round 4, G1: a copy found on disk in every case but a `set-aside` entry naming it (an `ok` entry after a
+    // restart, a `disabled` one, an entry naming another file) is NEUTRAL: it never says the bridge serves from a
+    // fresh store. `found` is said only when the entry's copy is this one; a `disabled` entry adds its pointer.
+    const NEUTRAL = (id: string, file: string, found = '', disabled = false): string =>
+      `WARN codex: ${id}: a set-aside copy of the lane's reasoning store, ${file}, is in the lane directory${found === '' ? '' : ` (set aside at a start that found the store damaged: ${found})`}${disabled ? '; the line above names the store\'s own repair' : ''}.`;
+    const NEUTRAL_FIX = (dir: string, file: string): string =>
+      `  remedy: read the copy, ${dir}/${file}, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- ${dir}/${file} ${dir}/${file}-wal ${dir}/${file}-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you`;
     // Fix round 3, F4: a newer build's store is never checked or touched, so a restart is not its remedy.
     const NEWER_FIX = (id: string, dir: string): string =>
       `  remedy: a newer build of the bridge wrote this reasoning store (its user_version is above USER_VERSION in ccd/codexbridge/store.py), and a restart does not change it: the start never checks or touches a newer store. Run that build again (ccrc update --to <its version>, or ccrc rollout --to <its version> across the fleet), or stop the lane (ccrc codex stop ${id}), move ${dir}/reasoning.sqlite and its -wal and -shm aside by hand, then start it again (ccrc codex start ${id}): the bridge makes a fresh store, without the model's earlier reasoning — ccrc never moves it for you`;
@@ -5989,6 +5993,17 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
       expect(stdout, stdout).toMatch(re);
       expect(remedyAfter(stdout, re)).toBe(fix);
       expect(stdout.split('\n').filter((l) => STORE_LINE.test(l))).toHaveLength(1);
+    };
+    /** Fix round 4, G1: a `disabled` entry with a copy on disk prints exactly two store lines, in this order: the
+     *  entry's `disabled` WARN with the restart remedy, then the NEUTRAL copy line, which never says "fresh store". */
+    const expectDisabledThenCopy = (stdout: string, disabled: string, disabledFix: string, copy: string, copyFix: string): void => {
+      expect(stdout.split('\n').filter((l) => STORE_LINE.test(l)), stdout).toEqual([disabled, copy]);
+      expect(remedyAfter(stdout, new RegExp(`^${reEsc(disabled)}$`, 'm'))).toBe(disabledFix);
+      const copyRe = new RegExp(`^${reEsc(copy)}$`, 'm');
+      expect(remedyAfter(stdout, copyRe)).toBe(copyFix);
+      const ls = stdout.split('\n');
+      const i = ls.findIndex((l) => copyRe.test(l));
+      expect(`${ls[i]}\n${ls[i + 1]}`).not.toContain('fresh store');
     };
 
     // (a) A bridge from before the entry writes no `store` key: no row, never read as `ok` or as anything else.
@@ -6021,14 +6036,36 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
       noRunnerBugLine(r.stdout, 'codex');
     });
 
-    // (d) A set-aside that failed after its renames names its copy (D-7676): the WARN names it too.
-    it('a failed set-aside that named its copy warns as disabled, naming the copy', async () => {
+    // (d) A set-aside that failed after its renames names its copy (D-7676): the WARN names it too. The copy is then
+    // always on disk (store.py names it only once its rename succeeded), so it is planted here, and the real output is
+    // pinned: the `disabled` WARN with the restart remedy, then the NEUTRAL copy line (fix round 4, G1).
+    it('a failed set-aside that named its copy warns as disabled, naming the copy, and its copy line is neutral', async () => {
       const home = await healthyCodexBox('ccrc-doctor-codex-store-failed-', ['codex-a']);
       plantDirectLane(home, 'codex-a');
       const file = await writeStore(home, 'codex-a', [{ reason: 'store:set-aside-failed', found: 'integrity-check', file: COPY }]);
       expect(storeOf(file)).toMatchObject({ state: 'disabled', reason: 'store:set-aside-failed', setAside: { found: 'integrity-check', file: COPY } });
+      const dir = laneDir(home, 'codex-a');
+      writeFileSync(join(dir, COPY), 'fixture\n', { mode: 0o600 });
       const r = runDoctor(home);
-      expectOnce(r.stdout, DISABLED('codex-a', 'store:set-aside-failed', AT_ISO, COPY_CLAUSE('integrity-check', COPY)), DISABLED_FIX('codex-a'));
+      expectDisabledThenCopy(r.stdout,
+        DISABLED('codex-a', 'store:set-aside-failed', AT_ISO, COPY_CLAUSE('integrity-check', COPY)), DISABLED_FIX('codex-a'),
+        NEUTRAL('codex-a', COPY, 'integrity-check', true), NEUTRAL_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 4, G1: a store disabled at runtime, with an older copy still on disk, prints the same two lines; the
+    // entry names no copy, so the copy line says no `found`.
+    it('a store disabled at runtime with an older copy on disk warns as disabled, and its copy line is neutral', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-disabled-copy-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:OperationalError' }]);
+      expect(storeOf(file)).toEqual({ state: 'disabled', reason: 'store:OperationalError', at: AT_ISO, setAside: null });
+      const dir = laneDir(home, 'codex-a');
+      writeFileSync(join(dir, COPY), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      expectDisabledThenCopy(r.stdout,
+        DISABLED('codex-a', 'store:OperationalError', AT_ISO), DISABLED_FIX('codex-a'),
+        NEUTRAL('codex-a', COPY, '', true), NEUTRAL_FIX(dir, COPY));
       noRunnerBugLine(r.stdout, 'codex');
     });
 
@@ -6097,7 +6134,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
     });
 
     // Fix round 3, F2: the entry is per process, so a restart writes `ok` while the copy stays. The copy is found on
-    // disk, so its WARN lasts until it is deleted; with no entry naming it, the line says no `found`.
+    // disk, so its WARN lasts until it is deleted; with no entry naming it, the line is NEUTRAL and says no `found`.
     it('a copy still in the lane directory after a restart warns, though the entry reads ok', async () => {
       const home = await healthyCodexBox('ccrc-doctor-codex-store-restarted-', ['codex-a']);
       plantDirectLane(home, 'codex-a');
@@ -6108,7 +6145,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
       for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) writeFileSync(join(dir, f), 'fixture\n', { mode: 0o600 });
       const r = runDoctor(home);
       // The newest copy by its stamp is the one named; its -wal and -shm are not copies of their own.
-      expectOnce(r.stdout, EARLIER('codex-a', COPY), SET_ASIDE_FIX(dir, COPY));
+      expectOnce(r.stdout, NEUTRAL('codex-a', COPY), NEUTRAL_FIX(dir, COPY));
       noRunnerBugLine(r.stdout, 'codex');
       for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) rmSync(join(dir, f));
       const again = runDoctor(home);
