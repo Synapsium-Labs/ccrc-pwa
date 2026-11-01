@@ -6784,7 +6784,7 @@ export class FleetWatcher {
    *  reads are synchronous. A failed auto-continue read has no slot of its own: it is a failed store read, hold 1,
    *  so it raises `unmeasured`. The one constructor of `StallWorker`: an id this tick's listing refused is its own
    *  arm, built before the absent test and never folded into it (`tick-lanes-hold-a-refused-id`), with no store read. */
-  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
+  private stallWorkerFor(store: WatcherCoordPort, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
     if (refused) return { present: 'refused' };
     if (s === undefined || lr === null) return { present: false };
     const ask = this.questions.currentAskOf(s.id);
