@@ -56,14 +56,28 @@ async function run(
 
 const rs = (n: number): object => ({ type: 'reasoning', id: `rs_fx${n}`, summary: [], encrypted_content: `ENC-${n}` });
 
-/** Whether the driver's python3 closes a connection without its checkpoint (`Connection.setconfig` and
- *  SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, Python 3.12 and later; the driver's `store-caps` op). Below it, the driver's
- *  `walCall` close and the store's own close before a set-aside may checkpoint a damaged WAL into its file, so a case
- *  that needs that WAL left beside the copy cannot be built there, and skips (D-7676). */
-const NO_CKPT_CLOSE: boolean = PY
-  ? driverLines((await runBridgeDriver(mkTmp('cb-store-caps-'), { ops: [{ op: 'store-caps' }] }, {},
-    { timeoutMs: 60_000 })).stdout)[0]?.noCkptClose === true
-  : false;
+/** The driver's `store-caps` line: whether its python3 closes a connection without its checkpoint
+ *  (`Connection.setconfig` and SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, Python 3.12 and later) and that interpreter's
+ *  [major, minor]. Below 3.12, the driver's `walCall` close and the store's own close before a set-aside may
+ *  checkpoint a damaged WAL into its file, so a case that needs that WAL left beside the copy cannot be built there,
+ *  and skips (D-7676) — but only on a MEASURED older Python (OLD_PY): a probe that failed to answer (an import
+ *  failure, a timeout, a renamed op) skips nothing, and the capability case below goes red on it. */
+const CAPS_RUN = PY
+  ? await runBridgeDriver(mkTmp('cb-store-caps-'), { ops: [{ op: 'store-caps' }] }, {}, { timeoutMs: 60_000 })
+  : null;
+const CAPS: Line | null = CAPS_RUN ? (driverLines(CAPS_RUN.stdout)[0] ?? null) : null;
+const CAPS_PY: unknown = CAPS?.python;
+const OLD_PY: boolean = Array.isArray(CAPS_PY) && CAPS_PY.length === 2
+  && CAPS_PY.every((n) => Number.isInteger(n)) && (CAPS_PY[0] < 3 || (CAPS_PY[0] === 3 && CAPS_PY[1] < 12));
+
+it.skipIf(!PY)('the capability probe answers, and a Python of 3.12 or later closes without its checkpoint', () => {
+  expect(CAPS_RUN?.timedOut, CAPS_RUN?.stderr).toBe(false);
+  expect(CAPS, `${CAPS_RUN?.stdout}\n${CAPS_RUN?.stderr}`).toMatchObject({ op: 'store-caps' });
+  expect(CAPS?.raised, JSON.stringify(CAPS)).toBeUndefined();
+  expect(CAPS_PY).toEqual([expect.any(Number), expect.any(Number)]);
+  // Only a measured older Python may skip the WAL cases; 3.12 and later must have the close they need.
+  if (!OLD_PY) expect(CAPS?.noCkptClose, JSON.stringify(CAPS)).toBe(true);
+});
 
 /** A reduce op over events written here, one SSE event per object, ending in `response.completed`. */
 function stream(items: object[]): object {
@@ -499,21 +513,21 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
   });
 
   it('DAMAGED INDEX OR PAGE: a store integrity_check does not pass is set aside, its rows not answered', async () => {
-    // Measured: the stale index raises nothing and each check answers it in rows; on the 0xff page quick_check answers
-    // in rows but integrity_check raises exactly DatabaseError, which the start reads as damage too.
-    for (const [how, found] of [['stale-index', 'integrity-check'], ['garbage-page', 'DatabaseError']] as const) {
+    // Measured: the stale index raises nothing and each check answers it in rows. On the 0xff page quick_check answers
+    // in rows, and this box's SQLite raises exactly DatabaseError from integrity_check, which the start reads as damage
+    // too; another SQLite may answer that page in rows instead, so the expected `found` is the probe's, as in NOT A
+    // DATABASE, and the page's pin is only that integrity_check did not answer `ok`.
+    for (const how of ['stale-index', 'garbage-page'] as const) {
       const { home, dir, db } = lane(`cb-store-start-${how}-`);
       const [planted] = await run(home, [{ op: 'store-damage', path: db, how }]);
       expect(planted.probe.quickCheck, how).not.toEqual(['ok']);
       expect(planted.probe.quickCheck, how).not.toBeNull();
+      expect(planted.probe.integrityCheck, how).not.toEqual(['ok']);
       if (how === 'stale-index') {
         expect(planted.probe.raised).toBeNull();
         expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
-        expect(planted.probe.integrityCheck).not.toEqual(['ok']);
-      } else {
-        expect(planted.probe.raised).toBe('DatabaseError');
-        expect(planted.probe.integrityCheck).toBeNull();
       }
+      const found: string = planted.probe.raised ?? 'integrity-check';
       const [, open, old, put, got, snap] = await run(home, [
         { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
         { op: 'store-open', path: db, stats: true },
@@ -565,8 +579,8 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
   });
 
-  // Skipped below Python 3.12 (NO_CKPT_CLOSE): there the damaged WAL may be checkpointed into the file, not left.
-  it.skipIf(!NO_CKPT_CLOSE)('a damaged store\'s WAL goes with its copy, which still answers its row', async () => {
+  // Skipped on a measured Python below 3.12 (OLD_PY): there the damaged WAL may be checkpointed into the file, not left.
+  it.skipIf(OLD_PY)('a damaged store\'s WAL goes with its copy, which still answers its row', async () => {
     const { home, dir, db } = lane('cb-store-start-wal-');
     const [planted] = await run(home, [{ op: 'store-damage', path: db, how: 'stale-index', walCall: 'call_fx_wal' }]);
     expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
@@ -594,8 +608,8 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     expect(dump.rows.map((r: Line) => r.key)).toContain(keys.call[0]);
   });
 
-  // Skipped below Python 3.12 (NO_CKPT_CLOSE): its first start's copy is pinned to keep a WAL beside it.
-  it.skipIf(!NO_CKPT_CLOSE)('RETENTION: two damaged starts in a row leave only the newest copy and its siblings', async () => {
+  // Skipped on a measured Python below 3.12 (OLD_PY): its first start's copy is pinned to keep a WAL beside it.
+  it.skipIf(OLD_PY)('RETENTION: two damaged starts in a row leave only the newest copy and its siblings', async () => {
     const { home, dir, db } = lane('cb-store-start-keep-');
     // An older copy and a stray sibling of another, both in the copy's name shape; two names outside it stay.
     for (const n of ['reasoning.sqlite.damaged-20200101T000000Z', 'reasoning.sqlite.damaged-20200101T000000Z-wal',

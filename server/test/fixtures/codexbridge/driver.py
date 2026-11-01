@@ -89,8 +89,10 @@ THE OPS, run in order; each prints ONE JSON line `{"op": <name>, ...}` and the r
                    "noCkptClose" is true; below Python 3.12 that close checkpoints it). "probe" is what a raw
                    connection then meets: the class name `PRAGMA user_version`, `PRAGMA quick_check` or `PRAGMA
                    integrity_check` raised (None when none did) and each check's rows (None when not reached)
-  store-caps       -> {"noCkptClose"}: whether this Python can close a connection without its checkpoint
-                   (`Connection.setconfig` and SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, Python 3.12 and later)
+  store-caps       -> {"noCkptClose", "python"}: whether this Python can close a connection without its checkpoint
+                   (`Connection.setconfig` and SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, Python 3.12 and later), and this
+                   interpreter's [major, minor] (`sys.version_info[:2]`), so a suite can tell a measured older Python
+                   from a probe that failed
   store-lock       {path} -> {}: a raw connection of this process takes an exclusive lock on the file and holds it
   store-unlock     -> {}: that connection rolls back and closes
   store-dump       {path} -> {"rows": [{"key", "turn", "created", "size"}] by key, "userVersion", "journalMode",
@@ -457,7 +459,7 @@ def _store_op(name, op, cb):
     if name == "store-damage":
         return _store_damage(op, cb)
     if name == "store-caps":
-        return {"noCkptClose": _no_ckpt_close()}
+        return {"noCkptClose": _no_ckpt_close(), "python": list(sys.version_info[:2])}
     if name == "store-lock":
         conn = sqlite3.connect(op["path"], isolation_level=None)
         conn.execute("PRAGMA locking_mode = EXCLUSIVE")
