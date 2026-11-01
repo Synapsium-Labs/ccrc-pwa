@@ -2061,6 +2061,9 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
       '_uninst_wrappers',
       '_uninst_cc_sessions',
       '_uninst_graphify_skills',
+      // D-7354 (spec §9.2): the marked graph store and its links, before `_uninst_tree_bins` removes the tree the
+      // resolver is read from.
+      '_uninst_graph_store',
       '_uninst_tree_bins',
       '_uninst_keep_asides',
     ]);

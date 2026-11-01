@@ -78,14 +78,15 @@ const TREES_CEILING: Record<string, number> = {
 /** Files that name the census and read no per-tree row: documentation of the
  *  path (README), GR1's hook pins (their census fixture is written by the
  *  sweep's own writer), GR5's linked-tree rows (their census rows are the
- *  repository rows), the vocabulary scan that names it, and the lifecycle
- *  row that declares it. A new consumer of the census is added to one of the two
+ *  repository rows), the vocabulary scan that names it, the lifecycle
+ *  row that declares it, and the lifecycle test that pins that row's root. A new consumer of the census is added to one of the two
  *  lists in the PR that adds it, so a reviewer sees it. */
 const NAMES_ONLY = [
   'ccd/ccd-graph-sweep',                            // the writer (GR4: repos[] only)
   'README.md',
   'server/test/graph-migrate.test.ts',              // GR6's rows read repos[] (D-7352)
   'server/test/graph-repo-sweep.test.ts',           // GR4's rows read repos[]
+  'server/test/lifecycle.test.ts',                  // pins the census row's root
   'server/test/session-hook-graph-pins.test.ts',
   'server/test/session-hook-graph-repo.test.ts',
   'server/test/single-definition/vocabularies.test.ts',

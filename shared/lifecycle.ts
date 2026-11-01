@@ -14,22 +14,30 @@ export interface LifecycleClass {
 }
 
 export const LIFECYCLE: readonly LifecycleClass[] = [
-  { name: 'workspace-graph-store', root: '<workdir>/graphify-out/', pattern: 'W',
-    creators: ['ccd-graph-sweep'],
-    collector: 'git worktree remove via cmd_ws_rm / reap tail / ws-gc orphan arm (ccd:4225-4232, :9298, :9989)',
-    bound: 'workspace lifetime', tier: '~11 MB/tree measured (ccrc, 763 files)', ruling: null },
-  { name: 'project-graph-store', root: '<projects-root>/<repo>/graphify-out/', pattern: 'O',
-    creators: ['ccd-graph-sweep'], collector: null, bound: 'repo lifetime',
-    tier: '~11 MB/repo, AST-only, backups disabled',
-    ruling: '~11 MB per repo, AST-only, backups disabled, regenerable at any time; persists for the repo\'s lifetime; reclaim manually (rm -rf <repo>/graphify-out) if ever needed.' },
-  { name: 'graph-corpus-filter', root: '<tree>/.graphifyignore', pattern: 'E',
-    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (trap EXIT INT TERM + stray sweep)',
-    bound: 'one build', tier: '<1 KB', ruling: null },
-  { name: 'graph-build-lock', root: '<tree>/graphify-out/.rebuild.lock', pattern: 'E',
-    creators: ['graphify'], collector: 'graphify', bound: 'one build', tier: 'negligible', ruling: null },
+  // Graph revision 2 (D-7354; spec 2026-10-28 §10): one graph per repository in the store (`CCRC_GRAPH_STORE`, default
+  // ~/.ccrc/graphs, marked by `.ccrc-graph-store`), and one ignored link per tree. These six rows replace the per-tree
+  // classes (`workspace-graph-store`, `project-graph-store`, `graph-corpus-filter`, `graph-build-lock`), whose paths
+  // nothing writes any more. No class is permanent, so none carries a ruling. `ccrc uninstall` removes a marked store.
+  { name: 'graph-repo-build', root: '<store>/<repo-key>/builds/', pattern: 'E',
+    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (pass end: beyond CCRC_GRAPH_KEEP_BUILDS and older than CCRC_GRAPH_BUILD_GRACE_SECS)',
+    bound: 'CCRC_GRAPH_KEEP_BUILDS published builds per repository', tier: 'one AST graph per build', ruling: null },
+  // The checkout sits under <key>/checkout/, never <key>/<name>, so a repository named builds, memory or staging
+  // cannot collide with its siblings (D-7664; ccd-graph-sweep writes this layout).
+  { name: 'graph-repo-checkout', root: '<store>/<repo-key>/checkout/<repo-name>/', pattern: 'O',
+    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep, when the repository is gone or excluded (after CCRC_GRAPH_BUILD_GRACE_SECS)',
+    bound: 'one per repository', tier: 'one checkout of the main line per repository', ruling: null },
+  { name: 'graph-repo-memory', root: '<store>/<repo-key>/memory/', pattern: 'O',
+    creators: ['graphify save-result'], collector: 'ccd-graph-sweep, with its repository',
+    bound: 'repository lifetime', tier: 'saved query results; small', ruling: null },
+  { name: 'graph-staging', root: '<store>/<repo-key>/staging/', pattern: 'E',
+    creators: ['ccd-graph-sweep'], collector: 'the build\'s trap, and ccd-graph-sweep at the next pass after a crash',
+    bound: 'one build', tier: 'one build in progress', ruling: null },
+  { name: 'graph-tree-link', root: '<tree>/graphify-out (a symlink to <store>/<repo-key>/current)', pattern: 'W',
+    creators: ['ccd-graph-sweep'], collector: 'the worktree\'s own collectors (git worktree remove, ws-rm, reap, ws-gc; the link is ignored)',
+    bound: 'tree lifetime', tier: 'one symlink', ruling: null },
   { name: 'graph-sweep-census', root: '~/.ccrc/graph-sweep.json', pattern: 'R',
     creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (last 10 passes kept)',
-    bound: 'rolling', tier: 'bounded by pass count', ruling: null },
+    bound: 'rolling', tier: 'bounded by pass count; one row per repository a pass', ruling: null },
   // Policy row #9: "a root we declare to agents in their own system prompt and
   // then never collect". Session-bound (S), collected by age PLUS the absence of
   // a live owner — the live-session, open-fd and newest-mtime checks the

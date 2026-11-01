@@ -31,6 +31,7 @@ import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, installedSkillMd, skillMd } from './graphifySkillFixture.js';
 import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
+import { itLinux } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -1712,7 +1713,7 @@ describe('ccrc install: graphify exclude writer (_inst_graph_excludes)', () => {
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(
-      /^install: graphify: exclude lines converged \(graphify-out\/, \.graphifyignore; \d+ new\)$/m);
+      /^install: graphify: exclude lines converged \(graphify-out\/, graphify-out, \.graphifyignore; \d+ new\)$/m);
 
     const excludeFile = join(repoA, '.git', 'info', 'exclude');
     const excl = readFileSync(excludeFile, 'utf8');
@@ -1741,6 +1742,17 @@ describe('ccrc install: graphify exclude writer (_inst_graph_excludes)', () => {
     const r2 = runInstall(home, ['install']);
     expect(r2.code, r2.stderr).toBe(0);
     expect(readFileSync(excludeFile, 'utf8')).toBe(first);
+
+    // N1 (spec §6.1, D-7354): a worktree holding the link is removed WITHOUT --force, and the link's target, the
+    // store's shared build, is left intact.
+    const target = join(home, 'graph-store-build');
+    mkdirSync(target);
+    writeFileSync(join(target, 'graph.json'), '{}\n');
+    symlinkSync(target, join(ws1, 'graphify-out'));
+    expect(execFileSync('git', ['-C', ws1, 'status', '--porcelain'], { encoding: 'utf8' }), 'the link is not untracked').toBe('');
+    execFileSync('git', ['-C', repoA, 'worktree', 'remove', ws1]);
+    expect(existsSync(ws1)).toBe(false);
+    expect(readFileSync(join(target, 'graph.json'), 'utf8')).toBe('{}\n');
   });
 
   it('is skipped entirely on a server-role box', () => {
@@ -2095,3 +2107,258 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
 // cost swings tenfold with load and how cold the metadata has gone, not with the bytes alone. At the END of the
 // file so no line above moves.
 removeTmpFixturesEachTest();
+
+// ── graph revision 2 GR8 (D-7354; spec §5.2, §6.1, §9.2): the sweep's units are RENDERED from the settings ──────────
+// `deploy/systemd/ccd-graph-sweep.{timer,service}` are templates whose `OnUnitActiveSec=` and `TimeoutStartSec=` are
+// the defaults. `ccrc install`/`update` (`_inst_units`) and `deploy.sh agent` (`_graph_units`) render them through
+// `_inst_graph_timer` and `_inst_graph_service` in ccd/ccrc, from the graph settings `_gr_knobs` validates: the period
+// is CCRC_GRAPH_REFRESH_SECS, the start timeout BUDGET x (SLOT_WAIT_SECS + BUILD_TIMEOUT) + 600. Unset, both render
+// the template's bytes. Every bash run below is a FIXED driver: paths and values arrive as arguments or environment.
+const GRAPH_TIMER_T = join(REPO, 'deploy', 'systemd', 'ccd-graph-sweep.timer');
+const GRAPH_SERVICE_T = join(REPO, 'deploy', 'systemd', 'ccd-graph-sweep.service');
+
+/** A clean environment for the renderer: no graph setting leaks in from the developer's shell. */
+function graphEnv(home: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, LC_ALL: 'C' };
+  return { ...env, ...extra };
+}
+
+/** Source ccd/ccrc (its dispatch is guarded), then call `<fn> <template> <dest>`. `envFile` lines go to the fixture
+ *  box's ~/.ccrc/ccrc.env. */
+function renderGraphUnit(fn: '_inst_graph_timer' | '_inst_graph_service', template: string,
+  extra: Record<string, string> = {}, envFile?: string[]): Result & { dest: string } {
+  const home = mkTmp('ccrc-graph-unit-');
+  if (envFile !== undefined) {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), envFile.map((l) => `${l}\n`).join(''));
+  }
+  const driver = join(home, 'driver.sh');
+  writeFileSync(driver, '. "$1" || exit 97\nshift\nf="$1"\nshift\n"$f" "$@"\n');
+  const dest = join(home, 'unit.out');
+  const r = spawnSync(BASH, [driver, ccrcIn(REPO), fn, template, dest], { encoding: 'utf8', env: graphEnv(home, extra) });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', dest };
+}
+
+/** The template with one directive's value replaced; every other byte unchanged. */
+function withValue(template: string, directive: string, value: string): string {
+  const t = readFileSync(template, 'utf8');
+  const re = new RegExp(`^${directive}=.*$`, 'm');
+  if (!re.test(t)) throw new Error(`${template} carries no ${directive}= line`);
+  return t.replace(re, `${directive}=${value}`);
+}
+
+describe('N14: the sweep\'s timer and service are rendered from the graph settings (D-7354, spec §5.2)', () => {
+  it('characterization: the templates carry today\'s values, the defaults the formula gives (15min; 4 x (600 + 600) + 600)', () => {
+    expect(readFileSync(GRAPH_TIMER_T, 'utf8').split('\n').filter((l) => l.startsWith('OnUnitActiveSec='))).toEqual(['OnUnitActiveSec=15min']);
+    expect(readFileSync(GRAPH_SERVICE_T, 'utf8').split('\n').filter((l) => l.startsWith('TimeoutStartSec='))).toEqual(['TimeoutStartSec=5400']);
+  });
+
+  it('unset: both render the template byte for byte, at 644, with nothing on stderr', () => {
+    for (const [fn, t] of [['_inst_graph_timer', GRAPH_TIMER_T], ['_inst_graph_service', GRAPH_SERVICE_T]] as const) {
+      const r = renderGraphUnit(fn, t);
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(r.dest)).toEqual(readFileSync(t));
+      expect(statSync(r.dest).mode & 0o777).toBe(0o644);
+      expect(readdirSync(dirname(r.dest)).filter((n) => n.startsWith('unit.out.')), 'no staging file is left').toEqual([]);
+      expect(r.stderr).toBe('');
+    }
+  });
+
+  it('CCRC_GRAPH_REFRESH_SECS sets the period: whole minutes as min, anything else as seconds', () => {
+    for (const [secs, want] of [['1800', '30min'], ['90', '90s'], ['900', '15min']] as const) {
+      const r = renderGraphUnit('_inst_graph_timer', GRAPH_TIMER_T, { CCRC_GRAPH_REFRESH_SECS: secs });
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(r.dest, 'utf8'), secs).toBe(withValue(GRAPH_TIMER_T, 'OnUnitActiveSec', want));
+    }
+  });
+
+  it('the start timeout is BUDGET x (SLOT_WAIT_SECS + BUILD_TIMEOUT) + 600, read from the box\'s ccrc.env', () => {
+    const r = renderGraphUnit('_inst_graph_service', GRAPH_SERVICE_T, {},
+      ['CCRC_GRAPH_BUDGET=2', 'CCRC_GRAPH_SLOT_WAIT_SECS=300', 'CCRC_GRAPH_BUILD_TIMEOUT=900']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8')).toBe(withValue(GRAPH_SERVICE_T, 'TimeoutStartSec', String(2 * (300 + 900) + 600)));
+  });
+
+  it('a value that is not its shape keeps the default and warns with the key, the value and where it came from', () => {
+    const r = renderGraphUnit('_inst_graph_timer', GRAPH_TIMER_T, { CCRC_GRAPH_REFRESH_SECS: 'soon' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest)).toEqual(readFileSync(GRAPH_TIMER_T));
+    expect(r.stderr).toMatch(/WARN.*CCRC_GRAPH_REFRESH_SECS: 'soon' from the environment/);
+  });
+
+  it('a template without exactly one such line is refused, and nothing at the destination is replaced', () => {
+    const home = mkTmp('ccrc-graph-unit-bad-');
+    const bad = join(home, 'bad.timer');
+    writeFileSync(bad, '[Timer]\nOnBootSec=5min\n');
+    const r = renderGraphUnit('_inst_graph_timer', bad);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/exactly one OnUnitActiveSec= line/);
+    expect(existsSync(r.dest)).toBe(false);
+  });
+
+  it('_inst_units renders both through the two functions; no verbatim _inst_atomic copy of either remains', () => {
+    const src = readFileSync(ccrcIn(REPO), 'utf8');
+    const body = /\n_inst_units\(\) \{([\s\S]*?)\n\}/.exec(src)?.[1] ?? '';
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).not.toMatch(/_inst_atomic "\$tree\/deploy\/systemd\/ccd-graph-sweep\./);
+    expect(code.match(/_inst_graph_service "\$tree\/deploy\/systemd\/ccd-graph-sweep\.service" "\$dir\/ccd-graph-sweep\.service"/g) ?? []).toHaveLength(1);
+    expect(code.match(/_inst_graph_timer "\$tree\/deploy\/systemd\/ccd-graph-sweep\.timer" "\$dir\/ccd-graph-sweep\.timer"/g) ?? []).toHaveLength(1);
+  });
+
+  itLinux('install renders the box\'s period, and a later install (update\'s spine) re-renders when the setting changes', () => {
+    const home = freshBox('ccrc-inst-gfx-units-');
+    plantFakeVenv(home);
+    const unit = (n: string): string => join(home, '.config', 'systemd', 'user', n);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(unit('ccd-graph-sweep.timer'))).toEqual(readFileSync(GRAPH_TIMER_T));
+    expect(readFileSync(unit('ccd-graph-sweep.service'))).toEqual(readFileSync(GRAPH_SERVICE_T));
+    const r2 = runInstall(home, ['install'], { CCRC_GRAPH_REFRESH_SECS: '1800', CCRC_GRAPH_BUDGET: '2' });
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(readFileSync(unit('ccd-graph-sweep.timer'), 'utf8')).toBe(withValue(GRAPH_TIMER_T, 'OnUnitActiveSec', '30min'));
+    expect(readFileSync(unit('ccd-graph-sweep.service'), 'utf8')).toBe(withValue(GRAPH_SERVICE_T, 'TimeoutStartSec', '3000'));
+  });
+});
+
+/** deploy.sh's AGENT_BUILD_CMD, split the way slice-limits-config.test.ts splits it. */
+function agentBuildLinks(): { defs: string; links: string[] } {
+  const deploy = readFileSync(join(REPO, 'deploy', 'deploy.sh'), 'utf8');
+  const m = /AGENT_BUILD_CMD='([\s\S]*?)'/.exec(deploy);
+  if (!m) throw new Error('deploy.sh has no single-quoted AGENT_BUILD_CMD');
+  const body = m[1]!;
+  const cut = body.indexOf('\ncd ~/ccrc/agent');
+  if (cut < 0) throw new Error('AGENT_BUILD_CMD no longer starts its chain with `cd ~/ccrc/agent`');
+  return { defs: body.slice(0, cut), links: body.slice(cut + 1).split('&&').map((s) => s.replace(/\\\s*$/, '').trim()) };
+}
+
+describe('deploy.sh agent renders the sweep\'s units through the same functions (D-7354)', () => {
+  const { defs, links } = agentBuildLinks();
+  const placing = links.filter((l) => l.includes('ccd-graph-sweep.'));
+
+  it('two _graph_units links, of _slice_limits_unit\'s shape, and no _unit_atomic copy of either unit', () => {
+    expect(placing.filter((l) => l.startsWith('_unit_atomic'))).toEqual([]);
+    expect(placing).toEqual([
+      '_graph_units service ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service',
+      '_graph_units timer ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer',
+    ]);
+    expect(defs.split('\n')).toContain(
+      '_graph_units() { bash -c ". \\"\\$1\\" || exit 1; _inst_graph_\\$2 \\"\\$3\\" \\"\\$4\\"" graph-units ~/ccrc/ccd/ccrc "$1" "$2" "$3"; }');
+  });
+
+  it('the timer-enable lines are unchanged: deploy.sh enables and starts the sweep timer once, ccrc through _inst_enable_timer', () => {
+    const deploy = readFileSync(join(REPO, 'deploy', 'deploy.sh'), 'utf8');
+    expect(deploy.split('\n').filter((l) => l.includes('systemctl --user enable --now ccd-graph-sweep.timer'))).toHaveLength(1);
+    expect(readFileSync(ccrcIn(REPO), 'utf8').split('\n').filter((l) => l.includes('_inst_enable_timer graphify ccd-graph-sweep.timer')))
+      .toEqual(['  [ "$INST_ROLE" = server ] || _inst_enable_timer graphify ccd-graph-sweep.timer']);
+  });
+
+  for (const [label, envFile, timer, service] of [
+    ['no ccrc.env: the templates\' bytes', undefined, null, null],
+    ['the box\'s ccrc.env: its values', ['CCRC_GRAPH_REFRESH_SECS=600', 'CCRC_GRAPH_BUDGET=1'], '10min', '1800'],
+  ] as const) {
+    it(`the box-side half renders from the box's config (${label})`, () => {
+      const home = mkTmp('ccrc-graph-deploy-');
+      symlinkSync(REPO, join(home, 'ccrc'));
+      if (envFile !== undefined) {
+        mkdirSync(join(home, '.ccrc'), { recursive: true });
+        writeFileSync(join(home, '.ccrc', 'ccrc.env'), envFile.map((l) => `${l}\n`).join(''));
+      }
+      const mkdirs = links.filter((l) => l.startsWith('mkdir -p ~/.config/systemd/user'));
+      const driver = join(home, 'deploy-lane.sh');
+      writeFileSync(driver, `${defs}\n${[...mkdirs, ...placing].join(' \\\n  && ')}\n`);
+      const r = spawnSync(BASH, [driver], { encoding: 'utf8', cwd: home, env: graphEnv(home) });
+      expect(r.status, r.stderr).toBe(0);
+      const unit = (n: string): string => join(home, '.config', 'systemd', 'user', n);
+      expect(readFileSync(unit('ccd-graph-sweep.timer'), 'utf8'))
+        .toBe(timer === null ? readFileSync(GRAPH_TIMER_T, 'utf8') : withValue(GRAPH_TIMER_T, 'OnUnitActiveSec', timer));
+      expect(readFileSync(unit('ccd-graph-sweep.service'), 'utf8'))
+        .toBe(service === null ? readFileSync(GRAPH_SERVICE_T, 'utf8') : withValue(GRAPH_SERVICE_T, 'TimeoutStartSec', service));
+    });
+  }
+});
+
+describe('install and update: the graph store and the sweep\'s hold (D-7360, D-7365)', () => {
+  it('install creates the store root with its .ccrc-graph-store marker, and a second run keeps it', () => {
+    const home = freshBox('ccrc-inst-gfx-store-');
+    plantFakeVenv(home);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    const marker = join(home, '.ccrc', 'graphs', '.ccrc-graph-store');
+    expect(existsSync(marker)).toBe(true);
+    const before = readFileSync(marker);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(readFileSync(marker)).toEqual(before);
+  });
+
+  it('a configured store root that holds someone else\'s files is not adopted: install warns and goes on', () => {
+    const home = freshBox('ccrc-inst-gfx-store-foreign-');
+    plantFakeVenv(home);
+    const foreign = join(home, 'not-a-store');
+    mkdirSync(foreign);
+    writeFileSync(join(foreign, 'keep.txt'), 'mine\n');
+    const r = runInstall(home, ['install'], { CCRC_GRAPH_STORE: foreign });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/graphify: WARN: .*no \.ccrc-graph-store marker; refusing to adopt it/);
+    expect(existsSync(join(foreign, '.ccrc-graph-store'))).toBe(false);
+  });
+
+  itLinux('install (and so update, whose spine it is) leaves ~/.ccrc/graph-sweep-paused in place while it enables the timer', () => {
+    const home = freshBox('ccrc-inst-gfx-paused-');
+    plantFakeVenv(home);
+    const paused = join(home, '.ccrc', 'graph-sweep-paused');
+    mkdirSync(dirname(paused), { recursive: true });
+    writeFileSync(paused, 'held by the operator\n');
+    for (const extra of [{}, { CCRC_GRAPH_REFRESH_SECS: '1800' }]) {
+      const r = runInstall(home, ['install'], extra);
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(paused, 'utf8')).toBe('held by the operator\n');
+    }
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').map((l) => l.split('\t')[0]);
+    expect(calls.filter((c) => c === '--user enable --now ccd-graph-sweep.timer')).toHaveLength(2);
+  });
+});
+
+describe('N20: ccrc uninstall removes a marked store and its links, and nothing else (D-7354, spec §9.2)', () => {
+  it('a marked store goes, read-only builds included, with every in-tree link into it; a link elsewhere stays', () => {
+    const home = freshBox('ccrc-uninst-gfx-store-');
+    plantFakeVenv(home);
+    const repoA = makeFixtureRepo(home, 'projects/repoA');
+    mkdirSync(join(home, 'worktrees', 'repoA'), { recursive: true });
+    const ws1 = join(home, 'worktrees', 'repoA', 'ws1');
+    execFileSync('git', ['-C', repoA, 'worktree', 'add', '-q', ws1, '-b', 'ws1']);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    const store = realpathSync(join(home, '.ccrc', 'graphs'));
+    const build = join(store, 'repoA-0123abcd', 'builds', 'b1');
+    mkdirSync(build, { recursive: true });
+    writeFileSync(join(build, 'graph.json'), '{}\n');
+    chmodSync(join(build, 'graph.json'), 0o444);
+    chmodSync(build, 0o555);
+    symlinkSync(build, join(store, 'repoA-0123abcd', 'current'));
+    for (const t of [repoA, ws1]) symlinkSync(join(store, 'repoA-0123abcd', 'current'), join(t, 'graphify-out'));
+    const elsewhere = join(home, 'elsewhere');
+    mkdirSync(elsewhere);
+    const repoB = makeFixtureRepo(home, 'projects/repoB');
+    symlinkSync(elsewhere, join(repoB, 'graphify-out'));
+
+    const r = runInstall(home, ['uninstall', '--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(store)).toBe(false);
+    for (const t of [repoA, ws1]) expect(() => lstatSync(join(t, 'graphify-out')), t).toThrow();
+    expect(readlinkSync(join(repoB, 'graphify-out'))).toBe(elsewhere);
+    expect(r.stdout).toMatch(/^uninstall: graphify: the graph store .* removed, and 2 link\(s\) into it$/m);
+  });
+
+  it('a store root without the .ccrc-graph-store marker is refused: it and every file in it stay', () => {
+    const home = freshBox('ccrc-uninst-gfx-nomark-');
+    plantFakeVenv(home);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    const foreign = join(home, 'not-a-store');
+    mkdirSync(foreign);
+    writeFileSync(join(foreign, 'keep.txt'), 'mine\n');
+    const r = runInstall(home, ['uninstall', '--force'], { CCRC_GRAPH_STORE: foreign });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(join(foreign, 'keep.txt'), 'utf8')).toBe('mine\n');
+    expect(r.stdout).toMatch(/^uninstall: graphify: .*not-a-store has no graph-store marker — left in place$/m);
+    expect(existsSync(join(home, '.ccrc', 'graphs', '.ccrc-graph-store')), 'the default store is not the configured one: untouched').toBe(true);
+  });
+});
