@@ -488,7 +488,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/asks/:id/answer`, `POST /api/asks/:id/release`, the question door family's claimant pair `POST
+  /api/asks/:id/release`, the question door family's claimant pair `POST
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
   `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's

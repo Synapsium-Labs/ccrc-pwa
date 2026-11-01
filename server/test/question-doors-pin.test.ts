@@ -156,8 +156,14 @@ const noCoordApp = async () => {
 
 type Row = readonly [name: string, run: () => Promise<Outcome>];
 
+// K5 Q3l (D-7324; plan 2026-10-29-consolidation-k5-claimant-doors.md, Task Q3l): the four claimant aliases are retired,
+// one per commit. A retired door's rows keep their names and their EXPECTED outcomes, byte for byte, and run through the
+// family door that replaced it, `POST /api/questions/<ask|approval>-<n>/rule|release`, with the same body plus the row's
+// `kind`: the same claimant core, which `question-doors.test.ts`'s pairs held equal to the old door before the
+// retirement. The one exception is the cell that names its own route (`no box token presented — <route>`, the box
+// token's refusal), which names the family's route. A re-point, listed in Q3l's PR with the cell diff.
 const askAnswer = (f: Approvals, id: number | string, body: Record<string, unknown>, headers: Record<string, string> = TOK) =>
-  f.app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers, payload: body });
+  f.app.inject({ method: 'POST', url: `/api/questions/ask-${id}/rule`, headers, payload: { kind: 'ask', ...body } });
 const askRelease = (f: Approvals, id: number | string, body: Record<string, unknown>, headers: Record<string, string> = TOK) =>
   f.app.inject({ method: 'POST', url: `/api/asks/${id}/release`, headers, payload: body });
 const P = { fromId: PARENT, fromUuid: uuidOf(PARENT) };
@@ -175,7 +181,7 @@ const askOutcome = async (s: Awaited<ReturnType<typeof askFixture>>, res: LightM
 const ASK_ANSWER_ROWS: Row[] = [
   ['POST /api/asks/:id/answer | 1 | no coordination store', async () => {
     const { app } = await noCoordApp();
-    const res = await app.inject({ method: 'POST', url: '/api/asks/1/answer', headers: TOK, payload: { ...P, optionIndexes: [0] } });
+    const res = await app.inject({ method: 'POST', url: '/api/questions/ask-1/rule', headers: TOK, payload: { kind: 'ask', ...P, optionIndexes: [0] } });
     return { status: res.statusCode, body: bodyOf(res), effects: {} };
   }],
   ['POST /api/asks/:id/answer | 2 | no box token', async () => {
@@ -1032,11 +1038,11 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/asks/:id/answer | 1 | no coordination store":
     {"status": 501, "body": "{\"ok\":false,\"error\":\"not-configured\"}", "effects": {}},
   "POST /api/asks/:id/answer | 2 | no box token":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/asks/:id/answer grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/rule grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/answer | 2 | a wrong box token":
     {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"wrong box token\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/answer | pair 2+3 | no box token and a bad body":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/asks/:id/answer grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/rule grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/answer | 3 | a bad body (optionIndexes not numbers)":
     {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/answer | 3 | a bad body (askKey not a string)":
@@ -1359,7 +1365,6 @@ describe('question-doors pin: each door\'s auth posture', () => {
   // and the origin check are the operator's. A claimant door is exempt from the session gate BY NAME and skips the
   // origin check; an operator door is in neither table, so the gate and the origin check both run.
   const POSTURE: Record<string, { exempt: boolean; originCheck: boolean }> = {
-    'POST /api/asks/:id/answer': { exempt: true, originCheck: false },
     'POST /api/asks/:id/release': { exempt: true, originCheck: false },
     'POST /api/approvals': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/rule': { exempt: true, originCheck: false },
@@ -1367,6 +1372,8 @@ describe('question-doors pin: each door\'s auth posture', () => {
     // W7 C7p (D-7194): `POST /api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi` retired; the door that
     // answers their rows above holds their posture.
     'POST /api/questions/:id/answer': { exempt: false, originCheck: true },
+    // K5 Q3l (D-7324): the four claimant aliases retired; the family's two claimant doors hold their posture.
+    'POST /api/questions/:id/rule': { exempt: true, originCheck: false },
     'POST /api/sessions/:id/dialog/tab': { exempt: false, originCheck: true },
   };
   it.each(Object.entries(POSTURE))('%s', (route, want) => {

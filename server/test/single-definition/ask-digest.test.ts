@@ -1603,7 +1603,6 @@ describe('the question doors: one reader, one core per principal, the old doors 
   /** The aliases (eight at W3 Q3f; W7 C7p, D-7194, retires the four operator ones one per commit), each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
    *  404), and the reader that must come before its core call when it reads an ask's answer. */
   const ALIASES: ReadonlyArray<readonly [file: string, route: string, words: readonly string[], reader: string | null]> = [
-    ['server/src/coord/routes.ts', '/api/asks/:id/answer', ['bad-request'], 'readAskAnswer('],
     ['server/src/coord/routes.ts', '/api/asks/:id/release', ['bad-request'], null],
     ['server/src/coord/routes.ts', '/api/approvals/:id/rule', ['bad-request'], null],
     ['server/src/coord/routes.ts', '/api/approvals/:id/release', ['bad-request'], null],

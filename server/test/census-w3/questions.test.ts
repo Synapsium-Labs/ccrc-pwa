@@ -54,7 +54,8 @@ describe('W3 question census (slug question-census)', () => {
   const routes = [
     'export function registerCoordRoutes(app: App, deps: Deps): void {',
     '  const approvalInputs = new Map<number, string>();',
-    "  app.post('/api/asks/:id/answer', async () => { deps.coord.askById(1); deps.watcher?.releaseHeldAsk('x'); });",
+    // K5 Q3l (D-7324): the claimant door here is the family's `/rule`, since `/api/asks/:id/answer` left QUESTION_DOOR_TAGS.
+    "  app.post('/api/questions/:id/rule', async () => { deps.coord.askById(1); deps.watcher?.releaseHeldAsk('x'); });",
     "  app.post('/api/approvals', async () => { deps.coord.insertApproval(1); });",
     "  app.get('/api/approvals/:id/ruling', async () => { deps.coord.approvalById(1); });",
     "  app.post('/api/asks/:id/shout', async () => {});",
@@ -154,7 +155,7 @@ describe('W3 question census (slug question-census)', () => {
     const t = tree({ 'server/src/coord/routes.ts': routes, 'server/src/server.ts': server });
     try {
       expect(questionDoors(t).map((s) => [s.route, s.tag])).toEqual([
-        ['POST /api/asks/:id/answer', 'claimant'], ['POST /api/asks/:id/shout', 'untagged'],
+        ['POST /api/questions/:id/rule', 'claimant'], ['POST /api/asks/:id/shout', 'untagged'],
         ['POST /api/sessions/:id/dialog/tab', 'navigation'], ['POST /api/questions/:id/answer', 'operator'],
       ]);
     } finally { rmSync(t, { recursive: true, force: true }); }
@@ -163,7 +164,7 @@ describe('W3 question census (slug question-census)', () => {
   it('FIXTURE: a door-in is a public watcher method touching a carrier that a route calls; private and uncalled ones are not', () => {
     const t = tree({ 'server/src/watch.ts': watch, 'server/src/coord/routes.ts': routes });
     try {
-      expect(questionDoorIns(t).map((s) => [s.method, s.callers])).toEqual([['releaseHeldAsk', ['POST /api/asks/:id/answer']]]);
+      expect(questionDoorIns(t).map((s) => [s.method, s.callers])).toEqual([['releaseHeldAsk', ['POST /api/questions/:id/rule']]]);
     } finally { rmSync(t, { recursive: true, force: true }); }
   });
 
@@ -177,7 +178,7 @@ describe('W3 question census (slug question-census)', () => {
     try {
       expect(questionStoreCallsOutside(t).map((s) => [s.file, s.symbol, s.method, s.excluded])).toEqual([
         ['server/src/coord/digest.ts', 'buildDigest', 'digestAsks', false],
-        ['server/src/coord/routes.ts', 'POST /api/asks/:id/answer', 'askById', false],
+        ['server/src/coord/routes.ts', 'POST /api/questions/:id/rule', 'askById', false],
         ['server/src/coord/routes.ts', 'POST /api/approvals', 'insertApproval', false],
         ['server/src/coord/routes.ts', 'GET /api/approvals/:id/ruling', 'approvalById', true],
         ['server/src/server.ts', 'POST /api/questions/:id/answer', 'heldAskFor', false],
@@ -225,9 +226,10 @@ describe('W3 question census (slug question-census)', () => {
     // 9 at the base (4 claimant, 4 operator, 1 navigation); 12 since Q3f (D-7030): 9 + the 3 routes of the family.
     // W7 C7p (D-7194) retires the operator aliases one per commit: 11 (4 operator) with `/api/sessions/:id/ask` gone,
     // 10 (3 operator) with `/dialog/multi`, 9 (2 operator) with `/dialog/text`, 8 (1 operator, the family's `/answer`
-    // alone) with `/dialog`.
+    // alone) with `/dialog`. K5 Q3l (D-7324) retires the four claimant aliases one per commit: 7 (5 claimant) with
+    // `/api/asks/:id/answer` gone.
     const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
-    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([8, 6, 1, 1]);
+    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([7, 5, 1, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
     // W3 Q3f (D-7030; slug q3f-door-in-repoint), at the target, may only shrink: no route calls the watcher for a question, and the four
     // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the
