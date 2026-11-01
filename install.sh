@@ -37,6 +37,29 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 : "${CCRC_RELEASE_SUMS_MAX_TIME:=20}"
 : "${CCRC_RELEASE_SUMS_MAX_FILESIZE:=4096}"
 
+# curl reads 0 (and a negative or non-numeric spelling) for each of these as "no
+# limit" or an error, so a value is used only when it is a plain whole number
+# from 1 to the updater's own ceiling; anything else falls back to the default
+# with one warning line (the updater's `_upd_validate_timeout`, same sentence,
+# on stderr here). The calls below repeat its arguments, and install-sh.test.ts
+# reds when a default or a ceiling differs from the ones ccd/ccrc passes.
+# Indirect read and `printf -v`: no eval, and both are bash 3.1+.
+_inst_validate_knob() {
+  local name="$1" default="$2" what="${3:-a whole number of seconds from 1 to 3600}" max="${4:-3600}" val LC_ALL=C
+  val="${!name:-}"
+  if [ -z "$val" ]; then return 0; fi
+  if [[ "$val" =~ ^[1-9][0-9]{0,9}$ ]] && [ "$val" -le "$max" ]; then return 0; fi
+  echo "install.sh: WARN: $name='${val//[![:print:]]/?}' is not $what — using $default" >&2
+  printf -v "$name" '%s' "$default"
+}
+_inst_validate_knob CCRC_RELEASE_CONNECT_TIMEOUT 10
+_inst_validate_knob CCRC_RELEASE_SPEED_LIMIT 1024 \
+  'a whole number of bytes/second from 1 to 100000000' 100000000
+_inst_validate_knob CCRC_RELEASE_SPEED_TIME 30
+_inst_validate_knob CCRC_RELEASE_SUMS_MAX_TIME 20
+_inst_validate_knob CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
+  'a whole number of bytes from 1 to 1048576' 1048576
+
 # ── The URL redactor — a COPY of `_upd_redact` (ccd/ccrc), held equal by OUTPUT,
 # not by text, under an install.sh-local name. It masks a URL's userinfo and the
 # home directory; it does NOT mask a query or a fragment (accepted: the
@@ -48,7 +71,7 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # first-occurrence cut-and-join (`${s%%"$m"*}$r${s#*"$m"}`) with no pattern
 # substitution in it (an unquoted `$r` in a `${s/…/$r}` would also expand a `&`
 # under bash 5.2). install-sh.test.ts runs both functions over the same inputs,
-# the copy also under BASH_COMPAT=42 and 40, and reds on any byte of difference.
+# the copy also under BASH_COMPAT=42, 40 and 32, and reds on any byte of difference.
 _inst_redact() {
   local s="${1:-}" mode="${2:-}" LC_ALL=C cut="" m="" r=""
   if [ "${#s}" -gt 4096 ]; then

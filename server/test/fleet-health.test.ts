@@ -155,7 +155,7 @@ describe('GET /api/fleet/health', () => {
     }
   });});
 
-describe('GET /api/fleet/health — the inventory-derived `builds` degrades, never 500s (design 2026-09-20 §14)', () => {
+describe('GET /api/fleet/health — the inventory-derived `build` degrades, never 500s (design 2026-09-20 §14)', () => {
   const STAMP: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-09-21T00:00:00Z', dirty: false, version: 'v0.0.11' };
   const serverRow = (role: 'server' | 'both'): NodeMeasurement => ({
     nodeId: 'server', role, label: 'server',

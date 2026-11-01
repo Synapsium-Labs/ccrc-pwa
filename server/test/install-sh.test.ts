@@ -65,6 +65,20 @@ const REAL_FLOOR = REAL_FLOOR_RANGE.replace(/^>=/, '').trim();
 
 interface Result { code: number; stdout: string; stderr: string }
 
+/** Every `<fn> NAME default ['what' max]` call of a file, name -> {default, max}; the ceiling defaults to the
+ *  validator's own 3600. A name called twice must agree with itself. */
+function validatorCalls(src: string, fn: string): Map<string, { def: string; max: number }> {
+  const out = new Map<string, { def: string; max: number }>();
+  const re = new RegExp(`^\\s*${fn} (CCRC_RELEASE_[A-Z_]+) (\\d+)(?: \\\\\\n\\s+'[^']*' (\\d+))?\\s*$`, 'gm');
+  for (const m of src.matchAll(re)) {
+    const v = { def: m[2]!, max: Number(m[3] ?? '3600') };
+    const prev = out.get(m[1]!);
+    if (prev) expect(v, `${fn} calls ${m[1]} twice, differently`).toEqual(prev);
+    out.set(m[1]!, v);
+  }
+  return out;
+}
+
 /** `<home>/checkout/install.sh` — a copy, not a symlink, so a fixture that
  *  wants to see it refuse never has to touch the checked-in script. Sibling
  *  `server/package.json` is the ONE file install.sh reads before deciding
@@ -636,6 +650,57 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     expect(tarball).toMatch(/ --connect-timeout 7 --speed-limit 2000 --speed-time 9 /);
   });
 
+  // ── a knob curl would read as "no limit" is refused, as the updater refuses it ──
+  // `curl --max-filesize 0` downloads any size, and `--max-time 0`, `--connect-timeout 0` and `--speed-limit 0`
+  // are "no limit" too. A value is used only as a whole number from 1 to the updater's ceiling (read from ccd/ccrc,
+  // never retyped here); anything else falls back to the default with ONE warning line.
+  const KNOB_FLAGS: ReadonlyArray<readonly [string, string]> = [
+    ['CCRC_RELEASE_CONNECT_TIMEOUT', '--connect-timeout'], ['CCRC_RELEASE_SPEED_LIMIT', '--speed-limit'],
+    ['CCRC_RELEASE_SPEED_TIME', '--speed-time'], ['CCRC_RELEASE_SUMS_MAX_TIME', '--max-time'],
+    ['CCRC_RELEASE_SUMS_MAX_FILESIZE', '--max-filesize'],
+  ];
+  const upd = validatorCalls(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'), '_upd_validate_timeout');
+  for (const [knob, flag] of KNOB_FLAGS) {
+    const want = upd.get(knob);
+    it(`${knob}: 0, abc and the ceiling plus one each warn once and use the default; the ceiling itself is used`, () => {
+      expect(want, `ccd/ccrc no longer validates ${knob}`).toBeDefined();
+      for (const bad of ['0', 'abc', String(want!.max + 1)]) {
+        const home = mkTmp('install-sh-release-knob-bad-');
+        const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+        plantReleaseTools(home);
+        fixtureRelease(home);
+        const r = runRelease(root, ['--release'], home, { [knob]: bad });
+        expect(r.code, `${knob}=${bad}; stderr: ${r.stderr}`).toBe(0);
+        const warns = r.stderr.split('\n').filter((l) => l.startsWith('install.sh: WARN: '));
+        expect(warns, `${knob}=${bad}`).toEqual([
+          expect.stringContaining(`${knob}='${bad}' is not `)]);
+        expect(warns[0], `${knob}=${bad}`).toContain(`— using ${want!.def}`);
+        const sums = readLog(home, 'curl-full')[0]!;
+        expect(sums, `${knob}=${bad}`).toContain(` ${flag} ${want!.def} `);
+        expect(sums, `${knob}=${bad}`).not.toContain(` ${flag} ${bad} `);
+      }
+      const home = mkTmp('install-sh-release-knob-max-');
+      const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+      plantReleaseTools(home);
+      fixtureRelease(home);
+      const r = runRelease(root, ['--release'], home, { [knob]: String(want!.max) });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).not.toContain('WARN');
+      expect(readLog(home, 'curl-full')[0]!).toContain(` ${flag} ${want!.max} `);
+    });
+  }
+
+  it('a knob holding a non-printable byte is warned about with the byte shown as ?', () => {
+    const home = mkTmp('install-sh-release-knob-esc-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const r = runRelease(root, ['--release'], home, { CCRC_RELEASE_SPEED_TIME: '5\u001b[31m' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain("CCRC_RELEASE_SPEED_TIME='5?[31m' is not ");
+    expect(r.stderr).not.toContain('\u001b');
+  });
+
   // ── the tarball name, before the second curl ──────────────────────────────
   // A name the release host supplies reaches `curl -o` before any checksum is checked. Each refusal names the RULE
   // broken, never the raw name (it may carry a terminal escape), and the second curl never runs.
@@ -929,6 +994,17 @@ describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
     expect([...mine.keys()].sort()).toEqual([...KNOBS].sort());
   });
 
+  it('install.sh validates the five knobs with the same defaults and ceilings as ccd/ccrc\'s _upd_resolve', () => {
+    const mine = validatorCalls(read('install.sh'), '_inst_validate_knob');
+    const theirs = validatorCalls(read('ccd/ccrc'), '_upd_validate_timeout');
+    for (const k of KNOBS) {
+      expect(theirs.has(k), `ccd/ccrc stopped validating ${k} — this pin went vacuous`).toBe(true);
+      expect(mine.get(k), `install.sh's validation of ${k} differs from ccd/ccrc's`).toEqual(theirs.get(k));
+    }
+    expect(theirs.get('CCRC_RELEASE_SPEED_LIMIT')!.max, 'the multi-line call parse went vacuous').toBeGreaterThan(3600);
+    expect([...mine.keys()].sort()).toEqual([...KNOBS].sort());
+  });
+
   /** Run a function's definition over NUL-separated inputs under a fixture HOME; stdout is the NUL-separated
    *  outputs, compared as bytes. The inputs travel in a file (an argv string cannot carry an invalid byte). */
   function runRedactor(def: string, name: string, inputs: readonly Buffer[], fixtureHome: string,
@@ -1000,7 +1076,7 @@ describe('install.sh --release: the copies it holds equal to ccd/ccrc', () => {
   // "${s/pat/rep}" keeps its quotes: `https://user:pass@h/r` printed as `https"://"h/r`. ccd/ccrc needs 4.4 and
   // never sees that, so the copy spells its replacements without a pattern substitution. `BASH_COMPAT` makes this
   // box's bash behave like the older ones for exactly that quoting rule.
-  for (const compat of ['42', '40']) {
+  for (const compat of ['42', '40', '32']) {
     it(`the copy under BASH_COMPAT=${compat} is byte-equal to _upd_redact under the default bash, on the whole corpus`, () => {
       const upd = ccdFunctionDefinition(read('ccd/ccrc'), '_upd_redact');
       const mine = ccdFunctionDefinition(read('install.sh'), '_inst_redact');
