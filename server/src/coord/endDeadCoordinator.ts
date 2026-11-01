@@ -3,6 +3,7 @@ import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { CoordStore } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 import type { CloseOutcome, SweepCloseGuard } from './close.js';
 import { closeRefusalOf } from './archiveDoor.js';
 import { measureClaimant, type ReclaimDeps } from './reclaim.js';
@@ -76,7 +77,7 @@ export interface EndDeadCoordinatorDeps {
  *  - `ok`: trusted, with the gaps and the last write failure for the clause to place against each claimant's last start.
  */
 export async function readDeadCoordinatorJournalTrust(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'io' | 'cfg'>, health: LifecycleHealth | null,
+  deps: Omit<Pick<EndDeadCoordinatorDeps, 'coord' | 'io' | 'cfg'>, 'coord'> & { coord: WatcherCoordPort }, health: LifecycleHealth | null,
 ): Promise<{ readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust }> {
   const untrusted = journalUntrusted;
   if (health === null) return untrusted('there is no coordination store to mirror the journal into', true);
@@ -113,7 +114,7 @@ const journalUntrusted = (why: string, hold: boolean): { readonly hold: string |
  *  unmeasured. It never trusts more than the early read did: an untrusted early read stays untrusted, and a count the
  *  early read had already placed keeps its instant (a further failure on top of it is not seen before the commit). */
 export function rereadDeadCoordinatorJournalTrust(
-  coord: CoordStore, health: LifecycleHealth | null, early: DeadCoordinatorJournalTrust,
+  coord: WatcherCoordPort, health: LifecycleHealth | null, early: DeadCoordinatorJournalTrust,
 ): { readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust } {
   if (health === null) return journalUntrusted('there is no coordination store to mirror the journal into', true);
   if (health.state === 'unknown' || health.state === 'stale') {
@@ -146,7 +147,7 @@ const byProgramme = (runs: readonly { id: number; program: string }[]): DeadCoor
 
 /** The journal clause, read fresh for one claimant against the lane's trust. A read that throws is `unreadable` —
  *  never "no history". */
-export function deadCoordinatorJournalOf(coord: CoordStore, id: string, trust: DeadCoordinatorJournalTrust): DeadCoordinatorJournal {
+export function deadCoordinatorJournalOf(coord: WatcherCoordPort, id: string, trust: DeadCoordinatorJournalTrust): DeadCoordinatorJournal {
   try {
     const j = coord.deadCoordinatorJournalRows([id]).get(id)!;
     return deadCoordinatorJournal(j.rows, j.hasHistory, trust);
@@ -157,7 +158,7 @@ export function deadCoordinatorJournalOf(coord: CoordStore, id: string, trust: D
 
 /** Is the claimant STILL crashed, and is the lane still armed and unpaused? `null` when it may go on; otherwise why
  *  it stops — typed (`DeadCoordinatorStop`), so the lane never re-splits the prose. */
-export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Promise<DeadCoordinatorStop | null> {
+export async function stillCrashed(deps: Omit<EndDeadCoordinatorDeps, 'coord'> & { coord: WatcherCoordPort }, id: string): Promise<DeadCoordinatorStop | null> {
   // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the stop says which it was.
   let listed: MeasuredDirectoryRead;
   try { listed = await deps.io.readdirMeasured(deps.cfg.registryDir); } catch { listed = { ok: false, reason: 'unreadable' }; }
@@ -190,7 +191,7 @@ export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Pr
 /** `_passNowMs` is the pass's instant, kept on the signature for the lane's call and for what is genuinely the pass's
  *  (anchors, feed rows — both the lane's). NO re-measure here may use it: each reads `deps.now()` as it measures. */
 export async function endDeadCoordinator(
-  deps: EndDeadCoordinatorDeps, claimantId: string, _passNowMs: number,
+  deps: Omit<EndDeadCoordinatorDeps, 'coord'> & { coord: WatcherCoordPort }, claimantId: string, _passNowMs: number,
 ): Promise<DeadCoordinatorActOutcome> {
   // 1 — the switches, from ONE listing, nearest the act.
   // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the pause says which it was.
@@ -279,7 +280,7 @@ export class DeadCoordinatorActThrew extends Error {
  *  degrades the record and never the act. Through the funnel's batch (`notice.ts` `notifyEach`, D-5859),
  *  `'record-only'`: one try over the rows, so a failed archive drops the rows after it and is said once. */
 function recordRows(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, sessionId: string,
+  deps: Omit<Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, sessionId: string,
   rows: readonly { readonly title: string; readonly body: string }[], what: string,
 ): void {
   notifyEach(deps, rows.map((row) => ({ kind: 'run', sessionId, runId: null, title: row.title, body: row.body })),
@@ -289,14 +290,14 @@ function recordRows(
 /** The feed rows for an act or its shadow — ONE per programme, in the spec's words, with the instant the hour counted
  *  from (`deadCoordinatorFeedRows`, L1). */
 export function recordDeadCoordinatorFeed(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, claimantId: string, o: DeadCoordinatorActOutcome, since: number,
+  deps: Omit<Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, claimantId: string, o: DeadCoordinatorActOutcome, since: number,
 ): void {
   recordRows(deps, claimantId, deadCoordinatorFeedRows(claimantId, o, since), o.kind);
 }
 
 /** The feed row for an act that THREW — every one, whatever it had done (review 339, F13). */
 export function recordDeadCoordinatorThrew(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, claimantId: string,
+  deps: Omit<Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, claimantId: string,
   done: Extract<DeadCoordinatorActOutcome, { kind: 'ended' }> | null, error: string, since: number,
 ): void {
   recordRows(deps, claimantId, [deadCoordinatorThrewFeedRow(claimantId, done, error, since)], 'act failed');
@@ -304,7 +305,7 @@ export function recordDeadCoordinatorThrew(
 
 /** The breaker's feed row, under its first claimant — written by the lane when the trip begins or names a new set. */
 export function recordDeadCoordinatorBreaker(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, b: Extract<DeadCoordinatorBreaker, { tripped: true }>,
+  deps: Omit<Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, b: Extract<DeadCoordinatorBreaker, { tripped: true }>,
 ): void {
   recordRows(deps, b.claimants[0] ?? 'fleet', [deadCoordinatorBreakerFeedRow(b)], 'breaker');
 }
@@ -313,7 +314,7 @@ export function recordDeadCoordinatorBreaker(
  *  absent, dirty, unsealed or unreadable. Written once, by the pass that seeds, under the first claimant held (else the first of
  *  the population, else `fleet`). */
 export function recordDeadCoordinatorBreakerSeed(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, cause: DeadCoordinatorSeedCause, held: readonly string[],
+  deps: Omit<Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, cause: DeadCoordinatorSeedCause, held: readonly string[],
   tripped: boolean, population: readonly string[], landed: boolean,
 ): void {
   recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerSeedFeedRow(cause, held, tripped, landed)], 'breaker seed');
