@@ -4224,6 +4224,25 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   length of 1 but got 2`); the unchecked close made a plain close, the WAL case and RETENTION red; the set-aside's own
   reason replaced by a re-raise, SET-ASIDE FAILS red (`expected 'store:PermissionError' to be
   'store:set-aside-failed'`).
+
+  Fix round 3 (a final held-out review): removing the lane reaps the copy. `_codex_reap_files` (`ccd/ccrc`) removed
+  lane.json's store with its `-wal`/`-shm` but no `<store>.damaged-<stamp>` copy, so the lane directory outlived a
+  removed account holding that account's encrypted reasoning. The `runtime.env.tmp.*` glob line now also globs the
+  copy's exact shape, `<store>.damaged-` + 8 digits + `T` + 6 digits + `Z` with `-wal`, `-shm` or neither, keyed on
+  the store's own name from lane.json and only once that name passed the bare-name check (never a bare
+  `*.damaged-*`), with the same `rm -f` and `lane-unwritable` handling; `ccd/ccrc` is 27695 lines before and after.
+  Pins: in `server/test/ccrc-codex-bridge.test.ts`, "removal reaps the store's set-aside copy with its -wal and -shm,
+  and leaves a look-alike" (the copy and both siblings reaped and the directory removed; another file's copy, a short
+  stamp, a suffix, a prefix and a bare `reasoning.sqlite.damaged-` all left); and, end to end through the driver, in
+  `server/test/ccrc-doctor-codex.test.ts`'s store row block, "a copy the store itself set aside is named by the WARN
+  and reaped with the lane": a real set-aside (`store-damage` `not-a-database`, then a store open with the stats
+  callback and a forced flush) makes the copy under store.py's DAMAGED_STAMP, the doctor's WARN names it with the
+  probe's `found`, and `_codex_reap_files` removes it and the directory, so a change of that stamp the doctor and the
+  reap do not follow reds it. Rows, each restored from a saved copy with sha256 compared: the copy's glob made never to
+  fire, the reap case red (the copy and both siblings left); the glob keyed on any prefix, the reap case red (three
+  look-alikes reaped). The end-to-end case, with the previous doctor and `ccd/ccrc` swapped in, was red at the reap
+  (the copy left). DAMAGED INDEX OR PAGE pins `quick_check` (not null, not `ok`, the exact row) for the
+  stale index only; for the 0xff page it pins only that `integrity_check` did not answer exactly `ok`.
 - **Why:** On 2026-10-28 the fleet box moved to a new machine and each lane's directory was carried over with its
   `reasoning.sqlite`. Both lanes' stores arrived damaged: `PRAGMA quick_check` on them as they stood answered
   `wrong # of entries in index sqlite_autoindex_reasoning_1`, a torn primary-key index, which fits a live sqlite file
@@ -4323,6 +4342,30 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   entry under bridge.store" reads a planted `disabled` entry with a `setAside` record back unchanged, then `null` with
   the key removed. Row, restored from a saved copy with sha256 compared: the projection's `store` removed, both cases
   red (`expected { …(5) } to deeply equal { …(6) }`; `expected undefined to deeply equal { state: 'disabled', …(3) }`).
+
+  Fix round 3 (a final held-out review), replacing the `set-aside` arm above: the entry is per process, so a restart
+  wrote `ok` and cleared the copy's WARN while the copy stayed. The row now finds the copy ON DISK, whatever the entry
+  says: a regular file, never a symlink, in the lane directory named `<store>.damaged-<8 digits>T<6 digits>Z`, keyed on
+  lane.json's `bridgeFiles.store` (a bare name, else no copy is looked for), its `-wal`/`-shm` not counted, the newest
+  such name the one named. While one exists the row WARNs, with the same remedy: "at its start the bridge found its
+  reasoning store damaged (<found>) and set it aside as <copy>, …" when the entry's `setAside.file` is that copy, else
+  "at an earlier start the bridge set a damaged reasoning store aside as <copy>, and the copy is still in the lane
+  directory (what was found is not in the stats file, whose entry describes only the bridge's last process); only the
+  model's earlier reasoning was lost." The `disabled` WARN stays entry-driven, and a stats file that is absent or
+  unreadable as the bridge's is still no line. `store:newer-version` has its own remedy: a newer build wrote the store
+  and a restart does not change it, so run that build again (`ccrc update --to <its version>`, or `ccrc rollout --to
+  <its version>`), or stop the lane, move the store and its `-wal`/`-shm` aside by hand, and start it again. Pins, in
+  the store row block: "a store a newer build wrote warns as disabled, and its remedy is that build, never a restart";
+  "a copy still in the lane directory after a restart warns, though the entry reads ok" (an older copy and the newest
+  copy's `-wal`/`-shm` planted beside it: the newest is named, once; no line once they are deleted); "a look-alike that
+  is not the store's copy, or a symlink of its shape, has no store row" (another file's copy, `bridge.stats.json`'s
+  included, short stamps, a suffix, a prefix, and a symlink at the copy's own name); the set-aside case above, whose
+  entry names the copy, keeps its `found`; and the end-to-end case of D-7676's fix round 3. With the previous doctor
+  and `ccd/ccrc` swapped in, the newer-version, restart and end-to-end cases were red. Rows, each restored from a saved copy with
+  sha256 compared: the on-disk look removed, the set-aside, restart and end-to-end cases red; the store-name key
+  replaced by any prefix, the look-alike case red; the symlink test removed, the look-alike case red; the
+  newer-version special case removed, the newer-version case red (`expected '  remedy: restart the lane\'s bridge …'
+  to be '  remedy: a newer build of the bridge…'`).
 - **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
   the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
   nothing. A per-process entry, written before the first request, is what a reader can rule on.
