@@ -9,7 +9,9 @@ import {
   keyTailOf, readLinearDetails, readLinearKey, recordLinearCheck, removeLinearConnection,
   withConnectionLock, writeLinearConnection, type LinearKeyRead,
 } from './connection.js';
+import { oneCallOutcome, type LinearRateRefusal, type LinearRateService } from './rate.js';
 import { resolveName } from './resolve.js';
+import { LEGACY_SLOT } from './store.js';
 import { checkOutcomeOf, linearConnectionView, type KeyMeasure } from './view.js';
 
 export interface LinearRouteOpts {
@@ -21,6 +23,15 @@ export interface LinearRouteOpts {
    * without one is a credential write with no gate.
    */
   gate: AccountGate;
+  /**
+   * The ONE Linear rate service (D-7670, spec §6.7), built by the composition root and passed through by `server.ts`.
+   * REQUIRED as the service or `null`, so a direct caller decides. The preview and the Check again ask it on the
+   * `request` lane (cookie-gated: reachable with no token while sign-in is unarmed); the Connect, account-gated with a
+   * step-up, on the `floor`. Null (a test, a script): the preview's title is the offline one, and the Check again and
+   * the Connect answer `linear-unavailable` before any Linear call (D-7684). The GET and the DELETE never call Linear
+   * and are unchanged.
+   */
+  rate: LinearRateService | null;
   /** Test seams: the network, the deadline and the clock. Absent in production. */
   fetch?: FetchLike;
   timeoutMs?: number;
@@ -42,6 +53,12 @@ const noStore = {
  */
 const bodyError = (err: Error & { statusCode?: number }, _req: FastifyRequest, reply: FastifyReply): FastifyReply =>
   refuseRoute(reply, err.statusCode === 413 ? 'oversize' : 'bad-request');
+
+/** `rate-limited` (429) with its detail and its wait, in the `Retry-After` header and the body (spec §6.7, §6.8). */
+const refuseRate = (reply: FastifyReply, detail: LinearRateRefusal, retryAfterS: number): FastifyReply => {
+  reply.header('retry-after', String(retryAfterS));
+  return refuseRoute(reply, 'rate-limited', { detail, retryAfterS });
+};
 
 const measure = (k: LinearKeyRead): KeyMeasure =>
   k.kind === 'key' ? { kind: 'key', digest: valueDigestHex(k.key) } : { kind: k.kind };
@@ -80,7 +97,7 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
     const ref = typeof q === 'object' && q !== null && 'ref' in q ? q.ref : undefined;
     if (typeof ref !== 'string') return refuseRoute(reply, 'bad-ref');
     if (ref.length > LINEAR_REF_MAX_CHARS) return refuseRoute(reply, 'ref-too-long');
-    return resolveName(ref, { ccrcDir: opts.ccrcDir, ...net, now });
+    return resolveName(ref, { ccrcDir: opts.ccrcDir, rate: opts.rate, ...net, now });
   });
 
   /** The section's state, from two fresh reads. Never the key. */
@@ -108,7 +125,14 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
     // make `fetch` throw on a header and be reported as unreachable.
     if (!isLinearKeyShape(key)) return refuseRoute(reply, 'bad-key');
 
+    // The rate service before Linear (spec §6.7): the Connect is an account-gated key act, so it spends the floor of
+    // the legacy slot, the one this key becomes, and never the request lane a tokenless caller can reach.
+    const rate = opts.rate;
+    if (rate === null) return refuseRoute(reply, 'linear-unavailable');
+    const ask = rate.take({ lane: 'floor', slot: LEGACY_SLOT, calls: 1 });
+    if (!ask.ok) return refuseRate(reply, ask.detail, ask.retryAfterS);
     const v = await verifyLinearKey(key, net);
+    rate.settle(ask.grant, oneCallOutcome(v));
     if (!v.ok) {
       // One literal word per arm (`refusal-status.test.ts` reads each from its call), never Linear's text.
       switch (v.reason) {
@@ -117,6 +141,8 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
         case 'timeout': return refuseRoute(reply, 'timeout');
         case 'malformed': return refuseRoute(reply, 'malformed');
         case 'unreachable': return refuseRoute(reply, 'unreachable');
+        // Linear's own refusal over its limit (spec §6.7, §6.8): `rate-limited` `linear`, with the wait it gave.
+        case 'rate-limited': return refuseRate(reply, 'linear', v.retryAfterS);
       }
     }
 
@@ -131,11 +157,18 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
   });
 
   app.post('/api/linear/connection/check', noStore, async (_req, reply) => {
+    // No rate service, no Linear call: before any other work (D-7684).
+    const rate = opts.rate;
+    if (rate === null) return refuseRoute(reply, 'linear-unavailable');
     const key = await readLinearKey(opts.ccrcDir);
     // Nothing to check, and the view says which kind of nothing (not connected, or unreadable, or unusable).
     if (key.kind !== 'key') return refuseRoute(reply, 'not-connected', { connection: await currentView() });
 
+    // The request lane: this route is cookie-gated, so a tokenless caller on an unarmed box can reach it (spec §6.7).
+    const ask = rate.take({ lane: 'request', slot: LEGACY_SLOT, calls: 1 });
+    if (!ask.ok) return refuseRate(reply, ask.detail, ask.retryAfterS);
     const v = await verifyLinearKey(key.key, net);
+    rate.settle(ask.grant, oneCallOutcome(v));
     try {
       // Recorded only if the key checked is still the stored one: a Connect that landed while Linear was being
       // asked wins, and its record is the answer below.

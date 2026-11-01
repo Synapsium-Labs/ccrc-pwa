@@ -21,6 +21,8 @@ import { LINEAR_DETAILS_FILE, LINEAR_KEY_FILE, parseLinearDetails } from '../src
 import { registerLinearRoutes } from '../src/linear/routes.js';
 import type { FetchLike } from '../src/linear/client.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { RATELIMITED_ERRORS, linearAnswer } from './linearFetchFake.js';
+import { linearServicesFake } from './linearServicesFake.js';
 
 removeTmpFixturesEachTest();
 
@@ -33,8 +35,8 @@ const NOW = 1_800_000_000_000;
 
 type Answer = Awaited<ReturnType<FetchLike>>;
 const viewerOk = (org = 'team-a', user = 'user-a'): Answer =>
-  ({ ok: true, status: 200, json: async () => ({ data: { viewer: { name: user }, organization: { name: org } } }) });
-const status = (n: number): Answer => ({ ok: false, status: n, json: async () => ({ errors: [{ message: LEAK }], key: LEAK }) });
+  linearAnswer({ ok: true, status: 200, json: async () => ({ data: { viewer: { name: user }, organization: { name: org } } }) });
+const status = (n: number): Answer => linearAnswer({ ok: false, status: n, json: async () => ({ errors: [{ message: LEAK }], key: LEAK }) });
 
 interface Call { auth: string; body: string }
 interface Rig {
@@ -85,7 +87,7 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
   };
   const clock = { now: NOW };
   const app = Fastify({ logger: false });
-  registerLinearRoutes(app, { ccrcDir: dir, gate, fetch: fetchStub, timeoutMs: o.timeoutMs, now: () => clock.now });
+  registerLinearRoutes(app, { ccrcDir: dir, gate, rate: linearServicesFake().rate, fetch: fetchStub, timeoutMs: o.timeoutMs, now: () => clock.now });
   await app.ready();
   open = app;
   return {
@@ -395,11 +397,10 @@ describe('PUT /api/linear/connection', () => {
     await r.stamp();
     const cases: [Parameters<Rig['answer']>[0], string][] = [
       [status(500), 'unreachable'],
-      [status(429), 'unreachable'],
       [async () => { throw new Error(`connect ECONNREFUSED ${LEAK}`); }, 'unreachable'],
-      [{ ok: true, status: 200, json: async () => ({ nope: LEAK }) }, 'malformed'],
-      [{ ok: true, status: 200, json: async () => ({ data: { viewer: {}, organization: {} } }) }, 'malformed'],
-      [{ ok: true, status: 200, json: async () => ({ errors: [{ message: LEAK }] }) }, 'unreachable'],
+      [linearAnswer({ ok: true, status: 200, json: async () => ({ nope: LEAK }) }), 'malformed'],
+      [linearAnswer({ ok: true, status: 200, json: async () => ({ data: { viewer: {}, organization: {} } }) }), 'malformed'],
+      [linearAnswer({ ok: true, status: 200, json: async () => ({ errors: [{ message: LEAK }] }) }), 'unreachable'],
     ];
     for (const [ans, word] of cases) {
       r.answer(ans);
@@ -415,6 +416,27 @@ describe('PUT /api/linear/connection', () => {
     expect(hung.statusCode).toBe(503);
     expect(json(hung)).toEqual({ ok: false, error: 'timeout' });
     expect(files(r)).toEqual([]);
+  });
+
+  // Row 13 (spec §6.7, §6.8): the 429 row left the 503 table above for its own word.
+  it('a Linear 429, or its RATELIMITED code on a 200, is rate-limited linear with Retry-After, and NOTHING is written', async () => {
+    const cases: Answer[] = [
+      linearAnswer({ ok: false, status: 429, headers: { 'retry-after': '45' }, json: async () => ({ errors: [{ message: LEAK }] }) }),
+      linearAnswer({ ok: true, status: 200, headers: { 'retry-after': '45' }, json: async () => RATELIMITED_ERRORS }),
+    ];
+    for (const ans of cases) {
+      const r = await rig();
+      await r.stamp();
+      r.answer(ans);
+      const res = await put(r, KEY);
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['retry-after']).toBe('45');
+      expect(json(res)).toEqual({ ok: false, error: 'rate-limited', detail: 'linear', retryAfterS: 45 });
+      expect(res.body).not.toContain(LEAK);
+      expect(files(r)).toEqual([]);
+      await r.app.close();
+      open = null;
+    }
   });
 
   it('a good key asks Linear with the bare key and the viewer query, then writes both files at 0600', async () => {
@@ -548,6 +570,16 @@ describe('POST /api/linear/connection/check', () => {
     expect(view(await check(r))).toMatchObject({ state: 'unreachable', org: 'team-a', user: 'user-a' });
   });
 
+  it('a check Linear refuses over its rate limit is stored as unreachable: the v1 record keeps its four outcome words', async () => {
+    const r = await rig();
+    await connect(r);
+    r.answer(status(429));
+    const res = await check(r);
+    expect(res.statusCode).toBe(200);
+    expect(view(res)).toMatchObject({ state: 'unreachable', outcome: 'unreachable', org: 'team-a', user: 'user-a' });
+    expect(JSON.parse(readFileSync(detailsPath(r), 'utf8'))).toMatchObject({ v: 1, outcome: 'unreachable' });
+  });
+
   it('a key with no details is checked into a full record (the details-unknown cure)', async () => {
     const r = await rig();
     await connect(r);
@@ -583,7 +615,7 @@ describe('POST /api/linear/connection/check', () => {
   it('never carries Linear\'s text or the key', async () => {
     const r = await rig();
     await connect(r);
-    for (const ans of [status(401), status(500), { ok: true, status: 200, json: async () => ({ viewer: LEAK }) }]) {
+    for (const ans of [status(401), status(500), linearAnswer({ ok: true, status: 200, json: async () => ({ viewer: LEAK }) })]) {
       r.answer(ans);
       const res = await check(r);
       expect(res.body).not.toContain(LEAK);
@@ -677,7 +709,7 @@ describe('a Linear 401 on the resolve read marks the connection rejected (only f
   it('does not mark on a failure that is not a 401, a 403 included (spec 5.1: only a 401 condemns the key)', async () => {
     const r = await rig();
     await connect(r);
-    for (const ans of [status(403), status(502), status(429), { ok: true, status: 200, json: async () => ({ data: { issue: null } }) }]) {
+    for (const ans of [status(403), status(502), status(429), linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: null } }) })]) {
       r.answer(ans);
       await resolve(r);
       expect(view(await get(r)).state).toBe('connected');
@@ -693,7 +725,7 @@ describe('a Linear 401 on the resolve read marks the connection rejected (only f
     await resolve(r);
     expect(view(await get(r)).state).toBe('key-rejected');
     r.clock.now = NOW + 120_000;
-    r.answer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'Fix the login flow' } } }) });
+    r.answer(linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'Fix the login flow' } } }) }));
     expect(json(await resolve(r))['source']).toBe('linear');
     expect(view(await get(r))).toEqual({
       state: 'connected', outcome: 'ok', org: 'team-a', user: 'user-a', keyTail: '0001', checkedAt: NOW + 120_000,
@@ -703,7 +735,7 @@ describe('a Linear 401 on the resolve read marks the connection rejected (only f
   it('also clears a forbidden mark, and writes nothing for a connected key (no file churn per lookup)', async () => {
     const r = await rig();
     await connect(r);
-    const okIssue = { ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) };
+    const okIssue = linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) });
     r.answer(okIssue);
     const before = readFileSync(detailsPath(r), 'utf8');
     r.clock.now = NOW + 5_000;
@@ -728,7 +760,7 @@ describe('a Linear 401 on the resolve read marks the connection rejected (only f
       writeFileSync(detailsPath(r), `${JSON.stringify({
         v: 1, org: 'team-b', user: 'user-b', keyTail: '0002', keyDigest: valueDigestHex(KEY2), checkedAt: NOW, outcome: 'rejected',
       })}\n`);
-      return { ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) };
+      return linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) });
     });
     await resolve(r);
     expect(view(await get(r))).toMatchObject({ state: 'key-rejected', keyTail: '0002' });
@@ -742,7 +774,7 @@ describe('a Linear 401 on the resolve read marks the connection rejected (only f
     const stale = readFileSync(detailsPath(r), 'utf8');
     r.answer(async () => {
       writeFileSync(keyPath(r), `${KEY2}\n`);   // the record is left describing KEY: a Connect caught between its two writes
-      return { ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) };
+      return linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) });
     });
     await resolve(r);
     expect(readFileSync(detailsPath(r), 'utf8')).toBe(stale);

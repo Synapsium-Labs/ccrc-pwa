@@ -64,16 +64,21 @@ export interface LinearTicket { key: string; num: string }
 export type LinearLookup =
   | { ok: true; identifier: string; title: string; keyDigest: string }
   | { ok: false; reason: 'not-configured'; key: Exclude<LinearKeyRead['kind'], 'key'> }
-  | { ok: false; reason: Exclude<LinearFailure, 'not-configured'>; keyDigest: string };
+  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'rate-limited'>; keyDigest: string }
+  | { ok: false; reason: 'rate-limited'; keyDigest: string; retryAfterS: number };
 
-/** Injectable so tests never reach the network. Matches `fetch`'s shape. */
+/**
+ * Injectable so tests never reach the network. Matches `fetch`'s shape. The answer's `headers` is the one method of
+ * `fetch`'s own `Headers` this file reads (spec §6.7: the wait of a rate-limited answer); every test fake gains it
+ * through `server/test/linearFetchFake.ts`.
+ */
 export type FetchLike = (url: string, init: {
   method: string;
   headers: Record<string, string>;
   body: string;
   signal: AbortSignal;
   redirect?: 'error';
-}) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+}) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; json: () => Promise<unknown> }>;
 
 /**
  * `issue(id:)` accepts the human identifier (`ENG-1234`) as well as the UUID,
@@ -88,21 +93,51 @@ const IDENTIFIER = /^[A-Za-z][A-Za-z0-9]*-[0-9]+$/;
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** The bounds `Retry-After` is held to, and the wait when Linear sent none (spec §6.7), in seconds. */
+export const LINEAR_RETRY_AFTER_MIN_S = 1;
+export const LINEAR_RETRY_AFTER_MAX_S = 3_600;
+export const LINEAR_RATE_LIMITED_FALLBACK_S = 60;
+
+/** A header read as a non-negative integer, or not at all: a date, a fraction, a sign or an exponent is not one. */
+const headerCount = (headers: { get(name: string): string | null }, name: string): number | null => {
+  const raw = headers.get(name)?.trim() ?? '';
+  return /^[0-9]+$/.test(raw) ? Number(raw) : null;
+};
+
+/**
+ * How long a rate-limited answer says to wait: `Retry-After`, held to 1 to 3,600 seconds, else sixty seconds.
+ * `X-RateLimit-Requests-Reset` is NOT read yet: whether it is a wait or a reset time, and in which unit, is recorded
+ * from a fixture first (spec §6.7; the plan's build note for this task), so until then a missing `Retry-After` is the
+ * fallback, never a guess at that header's unit.
+ */
+const waitOf = (headers: { get(name: string): string | null }): number => {
+  const after = headerCount(headers, 'retry-after');
+  return after === null ? LINEAR_RATE_LIMITED_FALLBACK_S
+    : Math.min(LINEAR_RETRY_AFTER_MAX_S, Math.max(LINEAR_RETRY_AFTER_MIN_S, after));
+};
+
+/** Linear's refusal of a request over its limit: an `errors` entry whose `extensions.code` is `RATELIMITED`. */
+const isRateLimitedBody = (body: unknown): boolean =>
+  isRecord(body) && Array.isArray(body['errors'])
+  && body['errors'].some((e) => isRecord(e) && isRecord(e['extensions']) && e['extensions']['code'] === 'RATELIMITED');
+
 /**
  * What one call to Linear produced, before anything reads its body for a meaning: the parsed JSON, or the
  * fixed word for why there is none. THE ONE FETCH PATH in this file (the lookup and the key check both go
- * through it), so the deadline, the header and the failure arms exist once.
+ * through it), so the deadline, the header and the failure arms exist once. Exported with this type for the
+ * callers that ask the one rate service before each call and settle with its outcome (spec §6.7).
  */
-type Call =
+export type LinearCall =
   | { ok: true; body: unknown }
-  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found'> };
+  | { ok: false; reason: 'rate-limited'; retryAfterS: number }
+  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found' | 'rate-limited'> };
 
-async function callLinear(
+export async function callLinear(
   token: string,
   query: string,
   variables: Record<string, unknown>,
   deps: { fetch?: FetchLike; timeoutMs?: number },
-): Promise<Call> {
+): Promise<LinearCall> {
   const doFetch: FetchLike = deps.fetch ?? ((url, init) => fetch(url, init));
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), deps.timeoutMs ?? LINEAR_TIMEOUT_MS);
@@ -123,22 +158,32 @@ async function callLinear(
       redirect: 'error',
     });
 
+    // RATE-LIMITED (spec §6.7): a 429, or an `errors` entry with the `RATELIMITED` code whatever the status (Linear
+    // refuses over its limit on a 200 and a 400 too). Its own arm, carrying the wait, so the caller can close the
+    // slot until then; it is not a credential fault, and a title still degrades to the offline one.
+    const limited = (): LinearCall => ({ ok: false, reason: 'rate-limited', retryAfterS: waitOf(res.headers) });
+    if (res.status === 429) return limited();
+
+    let body: unknown;
+    let read = true;
+    try {
+      body = await res.json();
+    } catch {
+      read = false;
+    }
+    if (read && isRateLimitedBody(body)) return limited();
+
     if (!res.ok) {
       // ONLY a 401 says the key is bad (spec 5.1). A 403 is Linear refusing this
       // request (a scope, a team the key cannot see): its own arm, which no caller
-      // may treat as a verdict on the key. Everything else is the service. 429
-      // lands in `unreachable` deliberately: it is not a credential fault and the
-      // caller's answer (use the offline title) is the same as for a 500.
+      // may treat as a verdict on the key. Everything else is the service. The
+      // body of a refusal is read only for the rate-limit code above, never kept.
       return { ok: false, reason: res.status === 401 ? 'unauthorised' : res.status === 403 ? 'forbidden' : 'unreachable' };
     }
-
-    try {
-      return { ok: true, body: await res.json() };
-    } catch {
-      // The deadline can fire while the body is still arriving; that is a
-      // timeout, not a shape fault.
-      return { ok: false, reason: ac.signal.aborted ? 'timeout' : 'malformed' };
-    }
+    // The deadline can fire while the body is still arriving; that is a
+    // timeout, not a shape fault.
+    if (!read) return { ok: false, reason: ac.signal.aborted ? 'timeout' : 'malformed' };
+    return { ok: true, body };
   } catch {
     // An abort is the deadline, and it is worth telling apart from a DNS
     // failure: one is worth retrying on the same input, the other means the
@@ -166,11 +211,15 @@ export async function lookupLinearIssue(
 
   const keyDigest = valueDigestHex(key.key);
   const asked = `${ref.key.toUpperCase()}-${ref.num}`;
-  const fail = (reason: Exclude<LinearFailure, 'not-configured'>): LinearLookup =>
+  const fail = (reason: Exclude<LinearFailure, 'not-configured' | 'rate-limited'>): LinearLookup =>
     ({ ok: false, reason, keyDigest });
 
   const call = await callLinear(key.key, QUERY, { id: asked }, deps);
-  if (!call.ok) return fail(call.reason);
+  // `rate-limited` is read as `unreachable` is: a failure the caller degrades to the offline title, with its wait.
+  if (!call.ok) {
+    return call.reason === 'rate-limited'
+      ? { ok: false, reason: 'rate-limited', keyDigest, retryAfterS: call.retryAfterS } : fail(call.reason);
+  }
   const body = call.body;
 
   if (!isRecord(body)) return fail('malformed');
@@ -218,7 +267,8 @@ export type LinearVerifyFailure = Exclude<LinearFailure, 'not-configured' | 'not
  */
 export type LinearVerify =
   | { ok: true; org: string; user: string; keyDigest: string }
-  | { ok: false; reason: LinearVerifyFailure; keyDigest: string };
+  | { ok: false; reason: Exclude<LinearVerifyFailure, 'rate-limited'>; keyDigest: string }
+  | { ok: false; reason: 'rate-limited'; keyDigest: string; retryAfterS: number };
 
 /**
  * Ask Linear who `key` is. The Settings route's Connect and Check again: a key is stored only once this
@@ -231,7 +281,7 @@ export async function verifyLinearKey(
 ): Promise<LinearVerify> {
   const keyDigest = valueDigestHex(key);
   const call = await callLinear(key, VIEWER_QUERY, {}, deps);
-  if (!call.ok) return { ok: false, reason: call.reason, keyDigest };
+  if (!call.ok) return { ...call, keyDigest };
   const body = call.body;
   if (!isRecord(body)) return { ok: false, reason: 'malformed', keyDigest };
   const data = body['data'];

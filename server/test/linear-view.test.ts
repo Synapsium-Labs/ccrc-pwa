@@ -61,7 +61,7 @@ describe('checkOutcomeOf', () => {
   it('only a 401 condemns a key, a 403 is its own outcome, and every other arm decided nothing about it', () => {
     expect(checkOutcomeOf('unauthorised')).toBe('rejected');
     expect(checkOutcomeOf('forbidden')).toBe('forbidden');
-    for (const r of ['timeout', 'malformed', 'unreachable'] as const) expect(checkOutcomeOf(r)).toBe('unreachable');
+    for (const r of ['timeout', 'malformed', 'unreachable', 'rate-limited'] as const) expect(checkOutcomeOf(r)).toBe('unreachable');
   });
 });
 
