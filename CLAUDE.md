@@ -352,7 +352,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
   The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
   resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
-  `/api/fleet/health`'s `builds` is a view of it. The PWA's one tap (`POST /api/updates/apply` or
+  `/api/fleet/health`'s `build` word is decided from it (the `builds` pair was retired in wave 33). The PWA's one tap (`POST /api/updates/apply` or
   `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
   node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
   locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and

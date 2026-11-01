@@ -3700,16 +3700,12 @@ export interface FleetHealth {
    * server's response omits it, and absent reads as `'unknown'`.
    */
   build?: BuildAgreement;
-  /**
-   * The EVIDENCE beside the decision (release/rollout design §6): what THIS
-   * box's stamp and the fleet host's say, per the node inventory (design
-   * 2026-09-20 §14, `derivedBuilds`); `null` = no readable stamp. `build`
-   * above still decides — a reader renders `skewed`/`agreed`/`unknown`
-   * from it and uses these only to SAY which versions are involved
-   * (`version` is optional per `BuildInfo`; a deploy.sh stamp has none).
-   * Remote mode only, optional so an older server's response still parses.
+  /*
+   * There is no `builds` here. The `{own, fleet}` pair of stamps this field once carried beside `build` was derived
+   * from the node inventory (design 2026-09-20 §14) and read by no shipped reader once the console moved onto
+   * `NodeWire[]`; wave 33 retired it from the wire. `build` above stays the decision, and the inventory
+   * (`GET /api/updates`) is where a reader finds which versions are involved.
    */
-  builds?: { own: BuildInfo | null; fleet: BuildInfo | null };
   /**
    * Whether the fleet host's deployed `ccd` HONOURS project pools — the verb
    * `ccd project-pool` present in its `caps` list (account pools, spec §5.11).

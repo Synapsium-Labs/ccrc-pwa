@@ -180,18 +180,18 @@ describe('GET /api/fleet/health — the skew answer reaches the operator', () =>
     expect(health).toMatchObject({ mode: 'local', build: 'unknown' });
   });
 
-  it('carries BOTH stamps as `builds` beside the agreement — version included when a stamp has one (spec §6)', async () => {
+  it('answers the agreement word only — the retired `builds` pair is gone from the wire, whatever the stamps carry (wave 33)', async () => {
     const fleet: BuildInfo = { sha: 'abc1234', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.7' };
     const own: BuildInfo = { ...OWN, version: 'v0.0.9', sha: 'def5678' };
     const h = await healthOf(remoteDeps(fleet, own));
     expect(h['build']).toBe('skewed');
-    expect(h['builds']).toEqual({ own, fleet });
+    expect('builds' in h).toBe(false);
   });
 
-  it('`builds` is honest about absence: null per side, never a fabricated stamp', async () => {
+  it('absence still reads unknown, and still carries no `builds` key', async () => {
     const h = await healthOf(remoteDeps(null, OWN));
     expect(h['build']).toBe('unknown');
-    expect(h['builds']).toEqual({ own: OWN, fleet: null });
+    expect('builds' in h).toBe(false);
   });
 });
 
@@ -230,7 +230,7 @@ describe('derivedBuilds — the pair as a view of the node rows (design 2026-09-
   });
 });
 
-describe('GET /api/fleet/health — `builds` is derived from the inventory when one is wired (design 2026-09-20 §14)', () => {
+describe('GET /api/fleet/health — the `build` word is decided from the inventory when one is wired (design 2026-09-20 §14)', () => {
   async function health(deps: Deps, coord: CoordStore): Promise<Record<string, unknown>> {
     try { return await healthOf(deps); } finally { coord.db.close(); }
   }
@@ -243,7 +243,7 @@ describe('GET /api/fleet/health — `builds` is derived from the inventory when 
       { fleet: DECOY_FLEET, own: DECOY_OWN });
     const h = await health(deps, coord);
     expect(h['build']).toBe('agreed');
-    expect(h['builds']).toEqual({ own: SERVER, fleet: FLEET });
+    expect('builds' in h).toBe(false);
   });
 
   it('a dirty fleet row reads skewed — dirty survives the five current* columns (§18 "a full BuildInfo round-trips")', async () => {
@@ -255,7 +255,7 @@ describe('GET /api/fleet/health — `builds` is derived from the inventory when 
       { fleet: OWN, own: OWN });
     const h = await health(deps, coord);
     expect(h['build']).toBe('skewed');
-    expect(h['builds']).toEqual({ own: SERVER, fleet: dirty });
+    expect('builds' in h).toBe(false);
   });
 
   it('a row whose stamp did not read ok is null on that side, whatever its current* columns hold', async () => {
@@ -268,7 +268,7 @@ describe('GET /api/fleet/health — `builds` is derived from the inventory when 
         { fleet: SERVER, own: SERVER });
       const h = await health(deps, coord);
       expect(h['build'], stampRead).toBe('unknown');
-      expect(h['builds'], stampRead).toEqual({ own: SERVER, fleet: null });
+      expect('builds' in h, stampRead).toBe(false);
     }
   });
 
@@ -277,10 +277,10 @@ describe('GET /api/fleet/health — `builds` is derived from the inventory when 
     const { deps, coord } = inventoryDeps([], { fleet: OWN, own: OWN });
     const h = await health(deps, coord);
     expect(h['build']).toBe('unknown');
-    expect(h['builds']).toEqual({ own: null, fleet: null });
+    expect('builds' in h).toBe(false);
   });
 
-  it('a superseded label row is invisible to `builds` (§18 "a superseded row is invisible")', async () => {
+  it('a superseded label row is invisible to `build` (§18 "a superseded row is invisible")', async () => {
     // The label row sorts FIRST (`nodes()` orders by label; 'a-…' < 'fleet'), so a reader that stopped filtering
     // `supersededBy` would take the stale stamp as the fleet side.
     const FLEET_ID = '3f2a9c1e-7b4d-4e8a-9f10-2c3d4e5f6a7b';
@@ -293,7 +293,7 @@ describe('GET /api/fleet/health — `builds` is derived from the inventory when 
     // the only other row here carries label `fleet`, not `a-old-connection`.
     expect(coord.rekeyNode('a-old-connection', FLEET_ID)).toEqual({ ok: true, how: 'superseded', retired: 0, revived: false });
     const h = await health(deps, coord);
-    expect(h['builds']).toEqual({ own: SERVER, fleet: FLEET });
+    expect('builds' in h).toBe(false);
     expect(h['build']).toBe('agreed');
   });
 
@@ -303,14 +303,13 @@ describe('GET /api/fleet/health — `builds` is derived from the inventory when 
       { fleet: null, own: null });
     expect(coord.markUnreachable(FLEET_LABEL, 'fleet', 1_758_000_060_000)).toMatchObject({ ok: true, created: false });
     const h = await health(deps, coord);
-    expect(h['builds']).toEqual({ own: SERVER, fleet: FLEET });
+    expect(h['build']).toBe('agreed');
+    expect('builds' in h).toBe(false);
   });
 
-  it("an older PWA's reading of `builds` is unchanged — the same stamps through either source are the same JSON", async () => {
-    // The field's readers today are `BuildLine` and `FleetHostBanner`'s skewed arm (pwa/src/fleet/), both of which
-    // read `version` by type (`typeof b.version === 'string'`, `b.version ?? …`). `toStrictEqual` on the PARSED
-    // body is the whole contract they see: an unversioned stamp must arrive with NO `version` key — not
-    // `version: null` — and a versioned one with it, exactly as `parseBuildInfo` shapes the boot and handshake reads.
+  it('the same stamps through either source answer the same word, and neither answer carries `builds` (wave 33)', async () => {
+    // The pair was retired from the wire in wave 33; `derivedBuilds` stays as the input `buildAgreement` decides from,
+    // so the inventory path and the no-coordination fallback must still agree on the word for the same stamps.
     const unversioned: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false };
     for (const [ownStamp, fleetStamp] of [[SERVER, FLEET], [unversioned, FLEET], [SERVER, { ...unversioned, dirty: true }]] as const) {
       const before = await healthOf(remoteDeps(fleetStamp, ownStamp));
@@ -318,12 +317,10 @@ describe('GET /api/fleet/health — `builds` is derived from the inventory when 
         [row('server', 'server', ownStamp), row(FLEET_LABEL, 'fleet', fleetStamp)],
         { fleet: null, own: null });
       const after = await health(deps, coord);
-      expect(after['builds'], JSON.stringify([ownStamp, fleetStamp])).toStrictEqual(before['builds']);
+      expect('builds' in before, JSON.stringify([ownStamp, fleetStamp])).toBe(false);
+      expect('builds' in after, JSON.stringify([ownStamp, fleetStamp])).toBe(false);
       expect(after['build']).toBe(before['build']);
     }
-    const { deps, coord } = inventoryDeps([row('server', 'server', unversioned)], { fleet: null, own: null });
-    const own = ((await health(deps, coord))['builds'] as { own: Record<string, unknown> }).own;
-    expect('version' in own).toBe(false);
   });
 });
 
@@ -351,7 +348,7 @@ describe('end to end (the NO-COORD FALLBACK path) — a stamp on the fleet host\
   // `buildServer(...)` call below wires NO `coord` — production always wires
   // one (`index.ts` constructs it unconditionally; `coord` is undefined only
   // when a caller builds `Deps` by hand without it, as this fixture does), so
-  // `GET /api/fleet/health`'s `builds` is derived from the INVENTORY there
+  // `GET /api/fleet/health`'s `build` is decided from the INVENTORY there
   // (`inventoryBuilds`, `update-inventory.test.ts`), never from this
   // handshake-stamp comparison. This describe's cases exercise the OLDER,
   // still-live fallback — `FleetHealth.build`'s three-way `buildAgreement`
@@ -485,7 +482,7 @@ describe('end to end (the NO-COORD FALLBACK path) — a stamp on the fleet host\
     expect(await healthOverWire(fleet, OWN)).toMatchObject({ connected: true, build: 'unknown' });
   });
 
-  it('the fleet host\'s stamp reaches `builds` through the INVENTORY — agent read, sweep, row, route', async () => {
+  it('the fleet host\'s stamp reaches `build` through the INVENTORY — agent read, sweep, row, route', async () => {
     // The whole W2 path with no fakes: a real agent admits `~/.ccrc/build.json` through the exact-basename read set
     // (Task 8), `sweepInventory` measures it over the live socket (Task 11), the row lands in a real coord.db, and
     // the route derives from the row. The server's config points at the agent's fixture HOME — the
@@ -510,7 +507,7 @@ describe('end to end (the NO-COORD FALLBACK path) — a stamp on the fleet host\
       try {
         const h = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
         expect(h['build']).toBe('agreed');
-        expect(h['builds']).toEqual({ own: tagged, fleet: tagged });
+        expect('builds' in h).toBe(false);
       } finally {
         await app.close();
       }
