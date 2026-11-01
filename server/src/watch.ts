@@ -5594,7 +5594,7 @@ export class FleetWatcher {
 
   /** One pass of the expiry lane — `sweepArchivedExpiry`'s body, run only while no other pass runs. */
   private async archivedExpiryPass(
-    coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
+    coord: WatcherCoordPort, records: readonly SessionRecord[], names: readonly string[], now: number,
   ): Promise<void> {
     const forgetSightings = (): void => {
       for (const [id, e] of this.archivedExpiryState) {
@@ -5693,7 +5693,7 @@ export class FleetWatcher {
 
   /** A marked child the verdict would take but for `expire-child-live` (D-6641): ONE feed row per archive, "would be
    *  cleaned up (child)", so the operator sees the arm's population before arming it. Nothing is composed. */
-  private recordChildShadow(coord: CoordStore, r: SessionRecord, v: ArchivedExpiryVerdict, entry: ArchivedExpiryEntry,
+  private recordChildShadow(coord: WatcherCoordPort, r: SessionRecord, v: ArchivedExpiryVerdict, entry: ArchivedExpiryEntry,
     laneLive: boolean): ArchivedExpiryEntry {
     if (v.eligible || v.why !== 'child-shadow' || entry.expiresAt === null || entry.lastOutcome === CHILD_SHADOW_OUTCOME) return entry;
     recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, { kind: 'would-expire', sensitive: 0, child: true,
@@ -5706,7 +5706,7 @@ export class FleetWatcher {
    *  for a row PAST its instant (`past`), the only rows it can decide; a read that fails is the store's failure for
    *  this row. */
   private archivedExpiryStoreRead(
-    coord: CoordStore, id: string, openWorker: boolean, openClaimant: boolean, past: boolean, child: SessionRecord | null,
+    coord: WatcherCoordPort, id: string, openWorker: boolean, openClaimant: boolean, past: boolean, child: SessionRecord | null,
   ): ExpiryStoreRead {
     if (!past || openWorker || openClaimant) return { ok: true, openWorker, openClaimant, reviewing: false };
     const review = expiryReviewing(coord, id);
