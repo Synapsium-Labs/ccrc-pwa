@@ -527,12 +527,13 @@ describe('one eligibility rule and one answer body for the parent and the operat
   });
 
   // W7 C7p (D-7194): the operator's ask answer is the family's `POST /api/questions/:id/answer` since
-  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler.
+  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler. K5 Q3l: the parent's answer is the
+  // family's `POST /api/questions/:id/rule` before `/api/asks/:id/answer` is retired, so the parent side reads that one.
   it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
     const operator = between('POST /api/questions/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
       "app.post('/api/questions/:id/answer'", "app.post('/api/questions/:id/rule'");
-    const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
-      "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
+    const parent = between('POST /api/questions/:id/rule', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/questions/:id/rule'", "app.post('/api/questions/:id/release'");
     for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
       expect(code, name).toMatch(/\breadAskAnswer\(/);
       expect(code, name).not.toMatch(INDEX_CHECK);

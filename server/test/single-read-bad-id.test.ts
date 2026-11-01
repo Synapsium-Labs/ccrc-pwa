@@ -257,7 +257,7 @@ describe('every absence-acting caller holds on bad-id (spec §2.3)', () => {
     expect(rec.calls).toEqual([]);
   });
 
-  it('POST /api/asks/:id/answer for an ask whose stored childId is --actor answers 409 child-unmeasurable', async () => {
+  it('POST /api/questions/ask-<n>/rule for an ask whose stored childId is --actor answers 409 child-unmeasurable', async () => {
     const home = mkTmp('ccrc-bad-id-ask-');
     seedRow(home, PARENT);
     seedRow(home, BAD);   // planted, with a live hook state, so only the read's own answer can refuse
@@ -273,9 +273,9 @@ describe('every absence-acting caller holds on bad-id (spec §2.3)', () => {
       childId: BAD, parentId: PARENT, runId: null, askKey: ASK_KEY, askAt: now, dialogId: 'dlg-1',
       question: QUESTION.question, options: QUESTION.options.map((o) => o.label), now,
     });
-    const res = await app.inject({ method: 'POST', url: `/api/asks/${askId}/answer`,
+    const res = await app.inject({ method: 'POST', url: `/api/questions/ask-${askId}/rule`,
       headers: { 'x-ccrc-mail-token': TOKEN },
-      payload: { fromId: PARENT, fromUuid: uuidOf(home, PARENT), optionIndexes: [1] } });
+      payload: { kind: 'ask', fromId: PARENT, fromUuid: uuidOf(home, PARENT), optionIndexes: [1] } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, error: 'child-unmeasurable' });
     expect(panes.calls.filter((c) => c[0] === 'send-keys'), 'no tmux keys are sent').toEqual([]);
