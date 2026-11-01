@@ -26,7 +26,7 @@ worker.onmessage = (e) => {
   const d = e.data as { kind?: unknown } | null;
   if (typeof d === 'object' && d !== null && d.kind === 'render') {
     (renderJob ??= import('./readerRenderJob')).then(
-      (m) => m.answerRenderJob(e.data, (r) => worker.postMessage(r)),
+      ({ answerRenderJob }) => answerRenderJob(e.data, (r) => worker.postMessage(r)),
       () => undefined,
     );
     return;
