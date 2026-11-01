@@ -202,6 +202,48 @@ const SIZES_OPEN = paneFixture('cc300-ask-multiselect-sizes-open');
 const TEXT = '- only in staging, sampled 10%';
 
 const PAIRS: Pair[] = [
+];
+
+/** The pairs whose old door W7 C7p (the operator's) or K5 Q3l (the claimant's, D-7324) retired, each unchanged from its
+ *  PAIRS row. */
+const RETIRED_PAIRS: Pair[] = [
+  // The operator's ask answer: `POST /api/sessions/:id/ask` and `POST /api/questions/session-<id>/answer {kind:'ask'}`.
+  ['answer ask | an unknown session', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [0] }, 'project-a-nobody-here')],
+  ['answer ask | no askKey', askSide, ...opAsk({ optionIndexes: [0] })],
+  ['answer ask | optionIndexes not numbers', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [true] })],
+  ['answer ask | nothing held: pressed, nothing recorded', () => askSide({ mint: 'none' }), ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
+  ['answer ask | held and taken: answered by the operator', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
+  ['answer ask | held, the press refused: rolled back', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [5] })],
+  ['answer ask | the CAS lost: pressed, the row untouched', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }), (s) => { hookstate(s.f, CHILD, s.now + 5); }],
+  ['answer ask | the store refuses: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
+    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockReturnValue({ ok: false, detail: 'fixture: the asks table is unreadable' } as never); }],
+  ['answer ask | the store throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
+    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
+  ['answer ask | the take throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
+    (s) => { vi.spyOn(s.f.coord, 'takeAskForAnswer').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
+  // The operator's dialog answers: the row, the own words and the multiSelect set.
+  ['answer dialog multi | a bad body', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: ['1'] })],
+  ['answer dialog multi | bad-indexes is a 400', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [1, 1] })],
+  ['answer dialog multi | another dialog id is a 409', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: 'not-this-one', optionIndexes: [3, 1] })],
+  ['answer dialog multi | success: the next screen back', () => dialogSide([TOOLS_OPEN, TOOLS_2_1, SIZES_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [3, 1] })],
+  ['answer dialog text | a bad body (no text is the plain dialog; text not a string)', () => dialogSide([SAME_LABELS_Q2]),
+    (s) => post(s, `/api/sessions/${CHILD}/dialog/text`, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 }),
+    (s) => post(s, `/api/questions/session-${CHILD}/answer`, { kind: 'dialog', dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 })],
+  ['answer dialog text | bad-text is a 400', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' })],
+  ['answer dialog text | another dialog id is a 409', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: 'not-this-one', optionIndex: 3, text: TEXT })],
+  ['answer dialog text | success', () => dialogSide([SAME_LABELS_Q2, FOCUSED, TYPED]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT })],
+  ['answer dialog | an unknown session', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }, 'project-a-nobody-here')],
+  ['answer dialog | a bad body', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 7, optionIndex: 1 })],
+  ['answer dialog | another dialog id: 409', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 })],
+  ['answer dialog | success', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 })],
+  ['answer dialog | a held approval row is marked operator before the key', () => dialogSide([PERMISSION_PANE]),
+    ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 }), async (s) => {
+      const res = await s.f.request(requestBody(ORDINARY));
+      expect(res.statusCode).toBe(201);
+      s.id = (res.json() as { id: number }).id;
+    }],
+  ['answer dialog | the marking throws: answered anyway', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }),
+    (s) => { vi.spyOn(s.f.coord, 'markApprovalOperator').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
   // The claimant's ask ruling: `POST /api/asks/:id/answer` and `POST /api/questions/ask-<n>/rule {kind:'ask'}`.
   ['rule ask | a bad body', askSide, ...ruleAsk({ ...P, optionIndexes: ['0'] })],
   ['rule ask | a stale uuid', askSide, ...ruleAsk({ fromId: PARENT, fromUuid: 'stale', optionIndexes: [0] })],
@@ -246,52 +288,12 @@ const PAIRS: Pair[] = [
   ['release approval | not the stored parent', approvalSide, ...releaseApproval({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
   ['release approval | not held', approvalSide, ...releaseApproval(P), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
   ['release approval | success: declined, the door-in fires', approvalSide, ...releaseApproval(P)],
-];
-
-/** The pairs whose old door W7 C7p retired, each unchanged from its PAIRS row. */
-const RETIRED_PAIRS: Pair[] = [
-  // The operator's ask answer: `POST /api/sessions/:id/ask` and `POST /api/questions/session-<id>/answer {kind:'ask'}`.
-  ['answer ask | an unknown session', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [0] }, 'project-a-nobody-here')],
-  ['answer ask | no askKey', askSide, ...opAsk({ optionIndexes: [0] })],
-  ['answer ask | optionIndexes not numbers', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [true] })],
-  ['answer ask | nothing held: pressed, nothing recorded', () => askSide({ mint: 'none' }), ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
-  ['answer ask | held and taken: answered by the operator', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] })],
-  ['answer ask | held, the press refused: rolled back', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [5] })],
-  ['answer ask | the CAS lost: pressed, the row untouched', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }), (s) => { hookstate(s.f, CHILD, s.now + 5); }],
-  ['answer ask | the store refuses: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
-    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockReturnValue({ ok: false, detail: 'fixture: the asks table is unreadable' } as never); }],
-  ['answer ask | the store throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
-    (s) => { vi.spyOn(s.f.coord, 'heldAskFor').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
-  ['answer ask | the take throws: pressed unrecorded', askSide, ...opAsk({ askKey: ASK_KEY, optionIndexes: [1] }),
-    (s) => { vi.spyOn(s.f.coord, 'takeAskForAnswer').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
-  // The operator's dialog answers: the row, the own words and the multiSelect set.
-  ['answer dialog multi | a bad body', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: ['1'] })],
-  ['answer dialog multi | bad-indexes is a 400', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [1, 1] })],
-  ['answer dialog multi | another dialog id is a 409', () => dialogSide([TOOLS_OPEN]), ...opDialog('dialog/multi', { dialogId: 'not-this-one', optionIndexes: [3, 1] })],
-  ['answer dialog multi | success: the next screen back', () => dialogSide([TOOLS_OPEN, TOOLS_2_1, SIZES_OPEN]), ...opDialog('dialog/multi', { dialogId: idOf(TOOLS_OPEN), optionIndexes: [3, 1] })],
-  ['answer dialog text | a bad body (no text is the plain dialog; text not a string)', () => dialogSide([SAME_LABELS_Q2]),
-    (s) => post(s, `/api/sessions/${CHILD}/dialog/text`, { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 }),
-    (s) => post(s, `/api/questions/session-${CHILD}/answer`, { kind: 'dialog', dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: 7 })],
-  ['answer dialog text | bad-text is a 400', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: '   ' })],
-  ['answer dialog text | another dialog id is a 409', () => dialogSide([SAME_LABELS_Q2]), ...opDialog('dialog/text', { dialogId: 'not-this-one', optionIndex: 3, text: TEXT })],
-  ['answer dialog text | success', () => dialogSide([SAME_LABELS_Q2, FOCUSED, TYPED]), ...opDialog('dialog/text', { dialogId: idOf(SAME_LABELS_Q2), optionIndex: 3, text: TEXT })],
-  ['answer dialog | an unknown session', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }, 'project-a-nobody-here')],
-  ['answer dialog | a bad body', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 7, optionIndex: 1 })],
-  ['answer dialog | another dialog id: 409', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 })],
-  ['answer dialog | success', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 })],
-  ['answer dialog | a held approval row is marked operator before the key', () => dialogSide([PERMISSION_PANE]),
-    ...opDialog('dialog', { dialogId: 'not-this-one', optionIndex: 1 }), async (s) => {
-      const res = await s.f.request(requestBody(ORDINARY));
-      expect(res.statusCode).toBe(201);
-      s.id = (res.json() as { id: number }).id;
-    }],
-  ['answer dialog | the marking throws: answered anyway', () => dialogSide([PERMISSION_PANE]), ...opDialog('dialog', { dialogId: idOf(PERMISSION_PANE), optionIndex: 1 }),
-    (s) => { vi.spyOn(s.f.coord, 'markApprovalOperator').mockImplementation(() => { throw new Error('fixture: disk I/O error'); }); }],
   // (a row moves here from PAIRS in the commit that retires its door)
 ];
 
-/** Each retired pair's OLD-door outcome, recorded on the base (`origin/main` at `b99070116`, the old doors live)
- *  before the commit that retired the door, through this file's own `outcome`. */
+/** Each retired pair's OLD-door outcome, recorded on the base before the commit that retired the door (the operator's
+ *  at `origin/main` `b99070116`, W7 C7p; the claimant's at `c49e0e583`, K5 Q3l, the old doors live), through this file's
+ *  own `outcome`. */
 const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
   "answer ask | an unknown session":
     {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-session\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
@@ -341,6 +343,74 @@ const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
     {"status": 409, "body": "{\"ok\":false,\"error\":\"stale-dialog\"}", "effects": {"ask": null, "approval": {"state": "operator", "answeredBy": "operator", "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "answer dialog | the marking throws: answered anyway":
     {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin Enter"], "feed": [], "pushes": []}},
+  "rule ask | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | a stale uuid":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"stale-uuid\",\"detail\":\"fromUuid does not match the registry \u2014 stale sender; re-read your own .uuid\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | the store refuses the read":
+    {"status": 503, "body": "{\"ok\":false,\"error\":\"ask-unreadable\",\"detail\":\"fixture: the asks table is unreadable\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | not the stored parent":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only this child's derived parent may pre-empt its question\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | a row minted released":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"ask": {"state": "released", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | another askKey":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"ask-mismatch\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | the child unmeasurable":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"child-unmeasurable\",\"detail\":\"this box could not read the child's live state \u2014 nothing was pressed, and the ask is unchanged\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | the CAS lost: the ask moved":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"ask-moved\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | the CAS lost: declined":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"declined\"}", "effects": {"ask": {"state": "declined", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | the press refused: the take rolled back":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"range\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule ask | success: pressed, recorded, settled":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Blue"}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": ["question answered"], "pushes": []}},
+  "rule ask | success after the lapse: the late answer":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Red"}, "approval": null, "doorIns": ["answeredLate(\"project-a-quiet-basin\",1,\"project-a-calm-mesa\")"], "keys": ["project-a-quiet-basin 1"], "feed": ["question answered"], "pushes": []}},
+  "release ask | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | the store refuses the read":
+    {"status": 503, "body": "{\"ok\":false,\"error\":\"ask-unreadable\",\"detail\":\"fixture: the asks table is unreadable\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | no such ask":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-ask\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | not the stored parent":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only this child's derived parent may decline its question\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | not held":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"ask": {"state": "declined", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | success: declined, the door-in fires":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "declined", "answeredBy": null, "answer": null}, "approval": null, "doorIns": ["released(\"project-a-quiet-basin\")"], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | a widening field":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"a ruling allows once only; permanent is never accepted\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to 1000 characters\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | a stale uuid":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"stale-uuid\",\"detail\":\"fromUuid does not match the registry \u2014 stale sender; re-read your own .uuid\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | the store refuses the read":
+    {"status": 503, "body": "{\"ok\":false,\"error\":\"approval-unreadable\",\"detail\":\"fixture: the approvals table is unreadable\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | no such approval":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-approval\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | the kill switch":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"approvals-disabled\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | not the stored parent":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only the claimant this prompt was held for may rule on it\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | declined":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"declined\"}", "effects": {"ask": null, "approval": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | already ruled":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"already-ruled\"}", "effects": {"ask": null, "approval": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "rule approval | allowed: signed, stored, recorded":
+    {"status": 200, "body": "{\"ok\":true,\"state\":\"allowed\"}", "effects": {"ask": null, "approval": {"state": "allowed", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"allow\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "rule approval | denied: signed, stored, recorded":
+    {"status": 200, "body": "{\"ok\":true,\"state\":\"denied\"}", "effects": {"ask": null, "approval": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "release approval | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release approval | no such approval":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-approval\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release approval | not the stored parent":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only the claimant this prompt was held for may hand it over\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release approval | not held":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"ask": null, "approval": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "release approval | success: declined, the door-in fires":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalReleased(\"project-a-quiet-basin\")"], "keys": [], "feed": [], "pushes": []}},
   // (each row's old-door outcome, recorded on the base before the commit that retired its door)
 };
 
@@ -351,13 +421,16 @@ describe('the new paths answer the old doors\' rows (W3 Q3f, D-7030)', () => {
   it('the pairs are uniquely named', () => {
     expect(new Set(PAIRS.map(([n]) => n)).size).toBe(PAIRS.length);
   });
+  it('no pair is left live: every old answer door is retired and its pairs are RETIRED_PAIRS rows (K5 Q3l, D-7324)', () => {
+    expect(PAIRS.map(([n]) => n)).toEqual([]);
+  });
   it.each(PAIRS.map((p) => [p[0], p] as const))('%s', async (_n, pair) => {
     const { old, nu } = await runPair(pair);
     expect(nu).toEqual(old);
   });
 });
 
-describe('a retired operator door is gone, and the new path answers its recorded rows (W7 C7p, D-7194)', () => {
+describe('a retired door is gone, and the new path answers its recorded rows (W7 C7p, D-7194; K5 Q3l, D-7324)', () => {
   it('every retired pair has its recorded outcome, and every recorded outcome a pair; no name is in both lists', () => {
     expect(Object.keys(RETIRED_OUTCOMES).sort()).toEqual(RETIRED_PAIRS.map(([n]) => n).sort());
     const live = new Set(PAIRS.map(([n]) => n));
@@ -366,6 +439,9 @@ describe('a retired operator door is gone, and the new path answers its recorded
   it.each(RETIRED_PAIRS.map((p) => [p[0], p] as const))('%s', async (name, [, setup, old, nu, before]) => {
     const a = await setup();
     await before?.(a);
+    // A row's `before` may arm a one-shot store read (`mockReturnValueOnce`) for the door's own read; a retired door
+    // reads nothing, so the first read here would take it. Read once to spend it, then take the snapshot (K5 Q3l).
+    effectsNow(a);
     const untouched = effectsNow(a);
     const gone = await old(a);
     expect(gone.statusCode, 'the retired door is not a route').toBe(404);
@@ -399,7 +475,12 @@ const noCoordApp = async (): Promise<FastifyInstance> => {
 };
 
 describe('with no coordination store', () => {
-  it('the claimant\'s doors answer not-configured, as the old ones do', async () => {
+  // K5 Q3l (D-7324): a claimant alias is retired one per commit. Its row held the new path equal to it; a retired
+  // one's now holds the old door gone (fastify's 404) and the new path equal to what the old door answered on the base,
+  // recorded (the same bytes as `question-doors-pin`'s `no coordination store` rows): 501 `not-configured`.
+  const NOT_CONFIGURED = '{"ok":false,"error":"not-configured"}';
+  const RETIRED_CLAIMANT = new Set<string>(['/api/asks/1/answer', '/api/asks/1/release', '/api/approvals/1/rule', '/api/approvals/1/release']);
+  it('the claimant\'s doors answer not-configured, as the old ones did', async () => {
     const app = await noCoordApp();
     for (const [old, nu, body] of [
       ['/api/asks/1/answer', '/api/questions/ask-1/rule', { kind: 'ask', ...P, optionIndexes: [0] }],
@@ -409,7 +490,12 @@ describe('with no coordination store', () => {
     ] as const) {
       const a = await app.inject({ method: 'POST', url: old, headers: TOK, payload: body });
       const b = await app.inject({ method: 'POST', url: nu, headers: TOK, payload: body });
-      expect([b.statusCode, b.body], nu).toEqual([a.statusCode, a.body]);
+      if (RETIRED_CLAIMANT.has(old)) {
+        expect([a.statusCode, (a.json() as { error: unknown }).error], `${old} is not a route`).toEqual([404, 'Not Found']);
+        expect([b.statusCode, b.body], nu).toEqual([501, NOT_CONFIGURED]);
+      } else {
+        expect([b.statusCode, b.body], nu).toEqual([a.statusCode, a.body]);
+      }
       expect(b.statusCode).toBe(501);
     }
   });

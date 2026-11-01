@@ -326,9 +326,10 @@ describe('the client stays closed', () => {
     // and `show` derives its query from the pane as `asks list` does — a query, not a body fill.
     // The test box's two (test box plan TB9, D-7411) took it to thirty-three; neither takes a body or fills one.
     // The landing line's read (landing order wave 5e, D-7625) took it to thirty-four; it takes no body and fills none.
-    // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, and only while the
-    // server advertises `questions-v1`, the client splices a `kind` read from the row's family template, never from the
-    // caller, so it is counted by its own scan below rather than by the two keyed fills' spelling.
+    // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
+    // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
+    // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
+    // the scan reads the `$claimant` test Q3l writes (named exception).
     const code = clientCode();
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
@@ -337,14 +338,14 @@ describe('the client stays closed', () => {
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
-    // The family's splice: one guard line, one `kind` splice, its value the variable read from `$family`'s prefix, and
-    // the rows that carry a family are exactly the four claimant rows.
-    expect([...code.matchAll(/^\s*if \[\[ -n "\$family" \]\] && _api_server_cap questions-v1; then$/gm)], 'the family guard line').toHaveLength(1);
+    // The family's splice: one guard line, one `kind` splice, its value the variable read from the row template's
+    // prefix (`$claimant`), and the rows whose template is the family's are exactly the four claimant rows.
+    expect([...code.matchAll(/^\s*if \[\[ -n "\$claimant" \]\] && _api_server_cap "\$want"; then$/gm)], 'the family guard line').toHaveLength(1);
     const kindSplices = [...code.matchAll(/splice_body_field 'kind' "\$([a-z_]+)"/g)].map((m) => m[1]!);
-    expect(kindSplices, 'the kind splice').toEqual(['qkind']);
+    expect(kindSplices, 'the kind splice').toEqual(['claimant']);
     expect(code, 'the spliced kind is derived from the family template\'s prefix').toMatch(
-      /^\s*local qkind="\$\{family#\/api\/questions\/\}"\n\s*qkind="\$\{qkind%%-\*\}"$/m);
-    expect(clientRoutes().filter((r) => r.family !== null).map((r) => r.key))
+      /^\s*claimant="\$\{tmpl#\/api\/questions\/\}"\n\s*claimant="\$\{claimant%%-\*\}"$/m);
+    expect(clientRoutes().filter((r) => r.path.startsWith('/api/questions/')).map((r) => r.key))
       .toEqual(['asks.answer', 'asks.release', 'approvals.rule', 'approvals.release']);
   });
 });

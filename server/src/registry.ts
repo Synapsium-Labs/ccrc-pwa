@@ -1513,14 +1513,14 @@ export const UNMEASURED_ASK_AT = -1;
  * IT IS THE CALLER'S JOB TO TELL THE TWO REFUSALS APART (whole-branch review
  * M2). A caller that hands this value straight to `takeAskForAnswer` gets
  * `ask-moved` back, which is a TRUE statement about the CAS and a FALSE one
- * about the world: nothing moved, a read failed. `POST /api/asks/:id/answer`
+ * about the world: nothing moved, a read failed. `POST /api/questions/ask-<n>/rule`
  * therefore compares against `UNMEASURED_ASK_AT` first and answers
  * `child-unmeasurable`. `server.ts`'s operator route does not need to: a
  * lost CAS never refuses the operator there, so the distinction changes
  * nothing it does.
  *
  * ONE definition for both callers of this guard — `coord/routes.ts`'s
- * `POST /api/asks/:id/answer` and the operator's ask (`server.ts`'s `POST
+ * `POST /api/questions/ask-<n>/rule` (the parent's answer) and the operator's ask (`server.ts`'s `POST
  * /api/sessions/:id/ask` until W7 C7p, `POST /api/questions/session-<id>/
  * answer` since, both through `coord/questions.ts`) — deliberately: both already close over the SAME
  * `Deps` object (`registerCoordRoutes(app, deps, ...)` passes `buildServer`'s
@@ -1539,7 +1539,7 @@ export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string):
     // An id `isRegistryId` refuses (spec §2.3) is a child this box did not
     // measure, exactly as the two above: it answers as they do, by design.
     // Its pins are `readSessionRecord`'s zero-listing case and, end to end,
-    // `POST /api/asks/:id/answer`'s `child-unmeasurable` for a stored
+    // `POST /api/questions/ask-<n>/rule`'s `child-unmeasurable` for a stored
     // non-registry `childId`.
     case 'bad-id': return UNMEASURED_ASK_AT;
     default: {
