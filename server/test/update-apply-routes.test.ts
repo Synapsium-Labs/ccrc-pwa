@@ -622,6 +622,32 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     expect(f.coord.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.11', requestedKind: 'update' });
   });
 
+  it('D-7688: Update all to a tag OLDER than a running fleet lease writes no fleet request — the settle leaves nothing that holds the server', async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    plant(f.coord, serverNode());
+    // The fleet's requested move to v0.0.11 is running; its floor is still v0.0.9.
+    expect(f.coord.requestNode(FLEET_ID, 'v0.0.11', 'update', 4).ok).toBe(true);
+    expect(f.coord.dispatchNode(FLEET_ID, 'v0.0.11', 'update', 5, 'fixture lease')).toEqual({ ok: true });
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.10' });
+    expect(r.statusCode, r.body).toBe(202);
+    // The busy row is judged against what its running move delivers, not its floor: v0.0.10 is not newer than
+    // v0.0.11, so nothing is queued beside the lease, and the server still waits behind the running fleet move.
+    expect(r.json()).toEqual({
+      ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why: 'not-newer' }, { nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+    } satisfies MoveRequestAnswer);
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.11', requestedTag: 'v0.0.11' });
+    // The fleet's move lands: the request it served is cleared, and no request is left that pins the server lane.
+    plant(f.coord, fleetNode({ currentVersion: 'v0.0.11', highestVersion: 'v0.0.11' }));
+    expect(f.coord.settleNode(FLEET_ID, 'done: v0.0.11', 5)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'idle', requestedTag: null });
+    expect(f.coord.requestNode(SERVER_ID, 'v0.0.11', 'update', 6).ok).toBe(true);
+    const plan = planDispatch({ nodes: dispatchViewsFor(f.coord), releases: resolveInputFor(f.coord, f.coord.node(SERVER_ID)!).releases });
+    expect(plan.refusals, JSON.stringify(plan)).toEqual([]);
+    expect(plan.move).toMatchObject({ nodeId: SERVER_ID, kind: 'update', target: 'v0.0.11' });
+  });
+
   it('a single named node with its own busy lease still answers 409 busy and writes nothing (D-3386 kept, D-7678)', async () => {
     const f = await open();
     catalogue(f.coord);

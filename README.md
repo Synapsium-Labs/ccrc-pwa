@@ -1122,8 +1122,10 @@ word in the same request (not newer, an unread stamp or floor, halted, the node'
 agent that predates the op, an unknown or refused tag, a rollback to a release the catalogue lists no provenance bundle for on
 a verified node, no previous version, no desired tag); `{all: true}` always answers `202`, writing a request only for a node
 the tag takes forward and the dispatcher could move, and naming every other live node as skipped, with its word. A node whose
-own lease is still running gets its request beside that lease, listed in the answer's `queued`: the settle keeps a request
-written after the lease started for another tag, and the node moves to it next (D-7678). A node that is itself halting is
+own lease is still running gets its request beside that lease, listed in the answer's `queued`, when the tag is newer than
+that lease's target: the settle keeps a request written after the lease started for an update newer than the lease's
+target, and the node moves to it next (D-7678, D-7688). A tag at or below the running lease's target is skipped
+`not-newer`. A node that is itself halting is
 skipped. While a fleet node is busy or halting, every server-role node is skipped `waiting-for-fleet`; a halt caused by another
 row still writes the request, and the sheet says each `halted`
 skip, even of a node it did not list, in the `halted` sentence, which names both places the Ack is. What is written

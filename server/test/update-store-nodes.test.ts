@@ -656,6 +656,32 @@ describe('the lease group — releaseLease, settleNode, ackNode', () => {
     expect(met.node(UUID_A)).toMatchObject({ requestedTag: null, requestedKind: null, requestedAt: null });
   });
 
+  it('D-7688: settleNode keeps a request beside the lease ONLY when it is an update strictly newer than the lease target and what the row now runs — an older tag, a rollback or a met tag is cleared', () => {
+    // The lease moves the node to v0.0.11; a later request for v0.0.10 is older than what the settle lands, so
+    // keeping it would leave a request the dispatcher can only refuse `not-newer` (and, on a fleet row, one that
+    // holds every server move behind it until an ack).
+    const older = leased('applying', T0);
+    plantLease(older, UUID_A, 'applying', T0, 'v0.0.11');
+    plantRequest(older, UUID_A, 'v0.0.10');
+    older.db.prepare('UPDATE nodes SET requestedAt = ? WHERE nodeId = ?').run(T0 + 1, UUID_A);
+    expect(older.settleNode(UUID_A, 'done: v0.0.11', T0)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(older.node(UUID_A)).toMatchObject({ updateState: 'idle', requestedTag: null, requestedKind: null, requestedAt: null });
+    // A rollback request written beside the lease is not "the next update": cleared.
+    const rb = leased('applying', T0);
+    plantRequest(rb, UUID_A, 'v0.0.11');
+    rb.db.prepare("UPDATE nodes SET requestedKind = 'rollback', requestedAt = ? WHERE nodeId = ?").run(T0 + 1, UUID_A);
+    expect(rb.settleNode(UUID_A, 'done: v0.0.10', T0)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(rb.node(UUID_A)).toMatchObject({ requestedTag: null });
+    // Newer than the lease target, but the row already runs it (the measurement the settle follows read it): met,
+    // so cleared.
+    const met = leased('applying', T0);
+    met.db.prepare("UPDATE nodes SET currentVersion = 'v0.0.11', highestVersion = 'v0.0.11' WHERE nodeId = ?").run(UUID_A);
+    plantRequest(met, UUID_A, 'v0.0.11');
+    met.db.prepare('UPDATE nodes SET requestedAt = ? WHERE nodeId = ?').run(T0 + 1, UUID_A);
+    expect(met.settleNode(UUID_A, 'done: v0.0.10', T0)).toEqual({ ok: true, clearedRequest: true, keptRequest: false });
+    expect(met.node(UUID_A)).toMatchObject({ requestedTag: null });
+  });
+
   it('settleNode takes the same identity guard as releaseLease — an expected lease on either side of the row\'s own current one is refused (W4 review 155, C33)', () => {
     const s = leased('applying', T0 + 5000);
     plantRequest(s, UUID_A);

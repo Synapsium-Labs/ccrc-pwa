@@ -266,6 +266,31 @@ describe('D-7678: Update all tapped while the server finishes an older move conv
   });
 });
 
+describe('D-7688: a request older than the running lease never survives its settle to pin the server lane', () => {
+  it('a fleet request for v0.0.10 written beside its running v0.0.11 move is cleared when v0.0.11 lands — no not-newer refusal, nothing holds the server', async () => {
+    const h = harness();
+    await fleetMoving(h, 'v0.0.11', T0);
+    // The write an Update all for the OLDER v0.0.10 made beside the busy row before D-7688 (requestAll now
+    // refuses it `not-newer`); the settle must not keep it either.
+    expect(h.store.requestNode(FLEET_ID, 'v0.0.10', 'update', T0 + 10).ok).toBe(true);
+    plantBox(h.fleetDir, { id: FLEET_ID, version: 'v0.0.11', report: {
+      target: 'v0.0.11', phase: 'done', startedAt: T_S + 2, updatedAt: T_S + 90, detail: null, from: 'pwa',
+    } });
+    plantBox(h.serverDir, { id: SERVER_ID, version: 'v0.0.9' });
+    await sweepInventory(h.inv, T0 + 60_000);
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'idle', updateDetail: 'done: v0.0.11', requestedTag: null });
+    // The stale request replaced the one the lease served, so this settle is not a requested move the follow-through
+    // reads (`landedMoveOf`); the server is moved by the operator's tap (the banner's `move` arm), and nothing on the
+    // fleet row holds that tap `waiting-for-fleet`.
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: null });
+    expect(h.store.requestNode(SERVER_ID, 'v0.0.11', 'update', T0 + 60_500).ok).toBe(true);
+    const next = ran(await runDispatch(h.deps, T0 + 61_000));
+    expect(next.plan.refusals, JSON.stringify(next.plan)).toEqual([]);
+    expect(next.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: serverArgv('v0.0.11') }]);
+  });
+});
+
 describe('D-7679: the FleetWatcher wires the follow-through into its own inventory run', () => {
   it("the watcher's inventory run settles the fleet's landed move and requests the same tag on the server", async () => {
     const home = mkTmp('update-rollout-follow-watch-');

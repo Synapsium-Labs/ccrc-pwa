@@ -22,7 +22,7 @@ terminal: the fleet box first, then the server box to the SAME tag. A real fleet
 - **D-7678 (2026-10-31)** — update plane: settle keeps a request written beside the running lease; Update all requests a busy row.
   `settleNode` clears only the request the settled lease served. A request is KEPT when the row was busy, the lease is
   dated, the request was written after the lease started (both this server's own ms clock, so no cross-box ordering)
-  and names another tag than the lease's target. It returns `{ok, clearedRequest, keptRequest}`. A met settle on an
+  and names another tag than the lease's target (narrowed by D-7688: an update strictly newer than it). It returns `{ok, clearedRequest, keptRequest}`. A met settle on an
   idle row clears as before. `requestAll` now writes the request beside a row's own running lease and lists it in the
   202's new `queued` (present only when non-empty, so an older reader's shape is unchanged), replacing D-3406's `busy`
   skip. A busy FLEET row still holds every server-role row behind it in that call (`waiting-for-fleet`), so the server

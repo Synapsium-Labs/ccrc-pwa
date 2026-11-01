@@ -71,7 +71,7 @@ import {
 import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
-import { newestTag } from '../../../shared/semver.js';
+import { isNewerTag, newestTag } from '../../../shared/semver.js';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import type { RollSettingsRead } from './rollTarget.js';
 import {
@@ -9123,28 +9123,30 @@ export class CoordStore {
    *  same identity guard as `releaseLease` (C33, D-3405).
    *
    *  D-7678: a request written BESIDE the running lease is kept — the row was busy, the lease is dated, the
-   *  request is later than the lease's start and names another tag than the lease's target — because the lease
-   *  could not have served it: it is the operator's newer tap, waiting its turn, and the dispatcher moves it next.
-   *  Both times are this server's own ms clock (`requestNode`'s `at`, `dispatchNode`'s `startedAt`), so no
+   *  request is later than the lease's start — because the lease could not have served it: it is the operator's
+   *  newer tap, waiting its turn, and the dispatcher moves it next. D-7688: only an UPDATE strictly newer than the
+   *  lease's target, and than what the row now runs, is such a tap. A tag at or below either is one the settled
+   *  move already delivers or passes, so the dispatcher could only refuse it `not-newer` — and on a fleet row that
+   *  refusal holds every server move `waiting-for-fleet` until an ack, the very split the keep exists to close.
+   *  `isNewerTag` is not SQL, so the keep is decided here, in JS, inside the same IMMEDIATE transaction as the
+   *  write. Both times are this server's own ms clock (`requestNode`'s `at`, `dispatchNode`'s `startedAt`), so no
    *  cross-box ordering is involved. Every other request is cleared exactly as before: one the lease served (its
    *  own tag, or written before the lease started or in its millisecond), one beside a lease nothing dated, and a
-   *  met request on an idle row (the dispatcher's `met:` settle). `keptRequest` says which. SQLite reads every
-   *  right-hand side against the row's values BEFORE the update, so the CASE sees the busy state and the lease. */
+   *  met request on an idle row (the dispatcher's `met:` settle). `keptRequest` says which. */
   settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult {
     return tx(this.db, (): SettleNodeResult => {
       const had = this.requestedTagOf(nodeId) !== null;
-      const keep = `(updateState NOT IN ${SETTLED_UPDATE_SQL} AND requestedTag IS NOT NULL AND requestedAt IS NOT NULL ` +
-        'AND updateStartedAt IS NOT NULL AND requestedAt > updateStartedAt AND requestedTag IS NOT updateTarget)';
-      const kept = (this.db.prepare(`SELECT ${keep} AS k FROM nodes WHERE nodeId = ?`).get(nodeId) as { k: number | null } | undefined)?.k === 1;
+      const kept = this.requestOutlivesLease(nodeId);
+      const keep = kept ? 1 : 0;
       const res = this.db.prepare(
         "UPDATE nodes SET updateState = 'idle', updateDetail = ?, " +
-        `requestedTag = CASE WHEN ${keep} THEN requestedTag ELSE NULL END, ` +
-        `requestedKind = CASE WHEN ${keep} THEN requestedKind ELSE NULL END, ` +
-        `requestedAt = CASE WHEN ${keep} THEN requestedAt ELSE NULL END ` +
+        'requestedTag = CASE WHEN ? = 1 THEN requestedTag ELSE NULL END, ' +
+        'requestedKind = CASE WHEN ? = 1 THEN requestedKind ELSE NULL END, ' +
+        'requestedAt = CASE WHEN ? = 1 THEN requestedAt ELSE NULL END ' +
         'WHERE nodeId = ? AND supersededBy IS NULL ' +
         `AND updateState NOT IN ${HALTED_UPDATE_SQL} ` +
         'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
-      ).run(detail, nodeId, expectedStartedAt, expectedStartedAt);
+      ).run(detail, keep, keep, keep, nodeId, expectedStartedAt, expectedStartedAt);
       if (Number(res.changes) > 0) return { ok: true, clearedRequest: had && !kept, keptRequest: had && kept };
       const row = this.nodeLeaseRow(nodeId);
       if (row === null) return { ok: false, why: 'unknown-node' };
@@ -9199,8 +9201,8 @@ export class CoordStore {
    *  clears it — a refusal or a drop never does (decision 7). Writes the three
    *  request columns and nothing else, on a LIVE row. THIS WRITER does not
    *  refuse a row that holds a lease — it is written beside it, and since D-7678
-   *  `settleNode` KEEPS a request written after that lease started for another tag (it clears only the request the
-   *  lease served), so `{all: true}`'s `requestAll` writes one beside a busy row and reports it `queued`. The
+   *  `settleNode` KEEPS a request written after that lease started for an update
+   *  newer than its target (D-7688; it clears only the request the lease served), so `{all: true}`'s `requestAll` writes one beside a busy row and reports it `queued`. The
    *  single-node route still refuses a busy named node `409 busy` (D-3386). The
    *  previous request is read inside the same IMMEDIATE transaction only to
    *  REPORT it (`replaced`); the write's own `WHERE` is the guard. `at` is the
@@ -9378,6 +9380,28 @@ export class CoordStore {
     if (r === undefined) return null;
     return { updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
              updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail, supersededBy: r.supersededBy };
+  }
+
+  /** D-7678/D-7688: whether `settleNode` keeps this row's request — a busy row with a dated lease, a request written
+   *  after the lease started, and an UPDATE strictly newer than the lease's target and than every version the row
+   *  now reads (`currentVersion`, `highestVersion`: the measurement the settle follows). A tag that is not a
+   *  release tag is never newer, so it is cleared. Read inside `settleNode`'s transaction. */
+  private requestOutlivesLease(nodeId: string): boolean {
+    const r = this.db.prepare(
+      'SELECT updateState, updateTarget, updateStartedAt, requestedTag, requestedKind, requestedAt, currentVersion, highestVersion ' +
+      'FROM nodes WHERE nodeId = ?',
+    ).get(nodeId) as {
+      updateState: string; updateTarget: string | null; updateStartedAt: number | null; requestedTag: string | null;
+      requestedKind: string | null; requestedAt: number | null; currentVersion: string | null; highestVersion: string | null;
+    } | undefined;
+    if (r === undefined || (SETTLED_UPDATE_STATES as readonly string[]).includes(r.updateState)) return false;
+    if (r.requestedKind !== 'update' || r.requestedAt === null || r.updateStartedAt === null || r.requestedAt <= r.updateStartedAt) return false;
+    const tag = r.requestedTag;
+    if (!isReleaseTag(tag) || !isReleaseTag(r.updateTarget) || !isNewerTag(tag, r.updateTarget)) return false;
+    for (const v of [r.currentVersion, r.highestVersion]) {
+      if (isReleaseTag(v) && !isNewerTag(tag, v)) return false;
+    }
+    return true;
   }
 
   /** Whether a request was outstanding, for `clearedRequest` — a report,

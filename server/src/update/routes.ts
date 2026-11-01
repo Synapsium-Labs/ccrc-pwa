@@ -16,6 +16,7 @@ import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import { dispatchViewsFor } from './converge.js';
 import type { CataloguePoller } from './catalogue.js';
 import { updateTargetListed } from '../../../shared/update-move.js';
+import { isNewerTag } from '../../../shared/semver.js';
 import {
   DETACH_CAP, ROLLBACK_CAP, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, type DispatchNodeView, type FleetGate,
 } from './dispatch.js';
@@ -427,8 +428,10 @@ function installableTag(coord: CoordStore, tag: string): boolean {
  * `{all: true}` — every live node, in DISPATCH order (`compareDispatchOrder`, fleet first), so `requested`
  * reads in the order the dispatcher will move them. A request is written only for a node the move can take
  * FORWARD: with no tag named and no `desiredTag`, it is skipped `no-desired`; a node whose OWN lease is already
- * busy gets its request BESIDE that lease and is listed in `queued` (D-7678, replacing D-3406's `busy` skip):
- * `settleNode` keeps a request written after the lease started for another tag, so the operator's newer tap waits
+ * busy gets its request BESIDE that lease and is listed in `queued` (D-7678, replacing D-3406's `busy` skip) when
+ * the tag is strictly newer than that lease's target — at or below it, it is skipped `not-newer` (D-7688), judged
+ * against max(floor, lease target): `settleNode` keeps a request written after the lease started only for an update
+ * strictly newer than the lease's target, so the operator's newer tap waits
  * its turn instead of being dropped — the drop that left a server row with no request after its own lease
  * settled, so the fleet moved and the server never followed. The single-node route still answers `409 busy` for
  * a busy named node (D-3386: a one-node tap on a moving node is a refusal the operator sees at once); otherwise it
@@ -499,12 +502,17 @@ function requestAll(coord: CoordStore, tag: string | null, now: number): MoveReq
       continue;
     }
     // D-7678 (replacing D-3406's skip): this row's OWN lease is running. `settleNode` now keeps a request written
-    // beside a running lease for another tag, so the request is written and waits its turn (`queued`). A busy FLEET
+    // beside a running lease for a NEWER tag (D-7688), so the request is written and waits its turn (`queued`). A busy FLEET
     // row still holds every server-role row behind it in this call: the server never jumps ahead of a fleet move
     // the operator's tap had to queue (the follow-through, D-7679, moves it once the fleet's move lands).
     const busyRow = !(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState);
     if (busyRow && isFleetRow) fleetSelfSkipped = true;
-    const refusal = moveRefusal(view, { kind: 'update', target, source: 'request' }, resolveInputFor(coord, row).releases, NO_HALT);
+    let refusal = moveRefusal(view, { kind: 'update', target, source: 'request' }, resolveInputFor(coord, row).releases, NO_HALT);
+    // D-7688: a busy row is judged against max(floor, the running lease's target), not its floor alone — the lease
+    // delivers its target, so a tag at or below it is `not-newer` once the move lands. Queued anyway, it would be a
+    // request the dispatcher can only refuse, and on a fleet row it would hold every server move behind it until an
+    // ack (`settleNode` no longer keeps one either).
+    if (refusal === null && busyRow && isReleaseTag(row.updateTarget) && !isNewerTag(target, row.updateTarget)) refusal = 'not-newer';
     if (refusal !== null) {
       const why = skipWord(refusal);
       skipped.push({ nodeId: row.nodeId, why });
