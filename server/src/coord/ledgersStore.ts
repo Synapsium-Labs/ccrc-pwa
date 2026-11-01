@@ -1,18 +1,23 @@
 // Programme ledgers (plan PL2): the SQL behind `CoordStore`'s item, history, modification and spec-pin methods.
 //
-// Ring L3 (adapter over `coord.db`), context Coordination. Every function takes the store's `DatabaseSync` and is
-// synchronous, like the store: there is no repository or async wrapper over `CoordStore`. `CoordStore` keeps the public
+// It sits beside `store.ts` in the same ring and context (Coordination), because it is that file's body moved out. Every
+// function takes the store's `DatabaseSync` and is synchronous, like the store: there is no repository or async wrapper
+// over `CoordStore`. `CoordStore` keeps the public
 // methods as one-line delegates, so a caller still says `coord.moveItem(...)`; this file exists so the god-file `store.ts`
 // does not take the SQL (ARCH-01, `growth-check`).
 //
 // Everything here is keyed on the programme's SLUG (spec §3.4). The moves are decided by `nextItemState` in
 // `shared/ledgers.ts` and by nothing in this file: `moveItemInTx` is THE ONLY WRITER of `operator_items.state`.
-import type { DatabaseSync } from 'node:sqlite';
+import type { CoordStore } from './store.js';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState,
   type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
+
+/** The store's own handle: only `store.ts`, `rundefsTx.ts` and `routes.ts` name `node:sqlite` (single-definition), so the
+ *  type is taken from the store that owns it. A type-only import, so there is no cycle at run time. */
+type DatabaseSync = CoordStore['db'];
 
 /** An operator item as the store holds it (migration 37). `how` and `options` are parsed from their JSON columns. */
 export interface ItemRow {
