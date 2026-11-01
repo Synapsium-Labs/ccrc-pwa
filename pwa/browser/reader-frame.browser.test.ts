@@ -356,7 +356,17 @@ beforeAll(async () => {
   browser = await chromium.launch({ executablePath, headless: true });
 }, 240_000);
 
+/** The one browser with Chrome's local-network checks off (nothing else changed), launched on first use and shared by the
+ *  rows that need it: those checks already refuse a sandboxed frame's navigation to a loopback address, which would hide
+ *  what the shell meta alone does. */
+let checksOff: Browser | undefined;
+async function checksOffBrowser(): Promise<Browser> {
+  checksOff ??= await chromium.launch({ executablePath: resolveChrome(), headless: true, args: ['--disable-features=LocalNetworkAccessChecks'] });
+  return checksOff;
+}
+
 afterAll(async () => {
+  await checksOff?.close();
   await browser?.close();
   await server?.close();
   await origins?.close();
@@ -938,27 +948,44 @@ describe('W8a reader frame in Chrome', () => {
     ];
     // Chrome's local-network checks refuse a sandboxed frame's navigation to a loopback address (the child here is
     // on one), which a child on the public internet would not meet; this one browser has them off, nothing else changed.
-    const lna = await chromium.launch({ executablePath: resolveChrome(), headless: true, args: ['--disable-features=LocalNetworkAccessChecks'] });
-    try {
-      const s = await openSession({
-        index: (html) => html.replace(SHELL_META, ''),
-        hook: { delayLoadMs: 700, navigateTo: child, onHello: ops },
-      }, lna);
-      sessions.splice(sessions.indexOf(s.app), 1);
-      const from = origins.hits.length;
-      await s.goto(leafUrl('small.md'));
-      expect(await settle(s.page, 30_000)).toBe('fallback');
-      await sleep(500);
-      const childHits = origins.hits.slice(from).filter((h) => h.origin === 'b' && h.path === '/child');
-      expect(childHits.length, 'without the shell meta the frame navigated, and the child loaded').toBeGreaterThan(0);
-      expect(s.logs.filter((l) => l.includes('ccrc-hook hello') && l.includes('/child')).length, 'the child received the port').toBeGreaterThan(0);
-      expect(pathOf(s.page), 'no route').toBe(leafUrl('small.md'));
-      expect(await readerKeys(s.page), 'no store write').toEqual([]);
-      expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
-      await s.app.ctx.close();
-    } finally {
-      await lna.close();
-    }
+    const lna = await checksOffBrowser();
+    const s = await openSession({
+      index: (html) => html.replace(SHELL_META, ''),
+      hook: { delayLoadMs: 700, navigateTo: child, onHello: ops },
+    }, lna);
+    sessions.splice(sessions.indexOf(s.app), 1);
+    const from = origins.hits.length;
+    await s.goto(leafUrl('small.md'));
+    expect(await settle(s.page, 30_000)).toBe('fallback');
+    await sleep(500);
+    const childHits = origins.hits.slice(from).filter((h) => h.origin === 'b' && h.path === '/child');
+    expect(childHits.length, 'without the shell meta the frame navigated, and the child loaded').toBeGreaterThan(0);
+    expect(s.logs.filter((l) => l.includes('ccrc-hook hello') && l.includes('/child')).length, 'the child received the port').toBeGreaterThan(0);
+    expect(pathOf(s.page), 'no route').toBe(leafUrl('small.md'));
+    expect(await readerKeys(s.page), 'no store write').toEqual([]);
+    expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
+    await s.app.ctx.close();
+  }, 120_000);
+
+  it('M8.B5 wall: with the shell meta present and the local-network checks off, the frame navigating itself reaches nothing (A3)', async () => {
+    // The same browser as the control above, the meta left in: any refusal of the navigation is the meta's alone.
+    const s = await openSession({}, await checksOffBrowser());
+    await s.app.ctx.addInitScript(`if (window === window.top) {
+      window.__cspViolations = [];
+      document.addEventListener('securitypolicyviolation', (e) => { window.__cspViolations.push(e.violatedDirective + ' ' + e.blockedURI); });
+    }`);
+    await s.goto(leafUrl('small.md'));
+    expect(await settle(s.page)).toBe('ready');
+    const frame = await readerFrame(s.page);
+    const from = origins.hits.length;
+    await frame.evaluate(`setTimeout(() => { location.href = ${JSON.stringify(origins.a + '/nav-wall')}; }, 0)`);
+    expect(await settle(s.page, 20_000, 'fallback'), 'the blocked self-navigation still fires a second load, and the reader falls back').toBe('fallback');
+    await sleep(800);
+    expect(origins.hits.slice(from).filter((h) => h.path.startsWith('/nav-wall')), 'the shell meta blocked the navigation: nothing reached origin A').toEqual([]);
+    expect(s.responses.filter((u) => u.startsWith(origins.a)), 'and no response came from origin A').toEqual([]);
+    // Measured on 5 of 5 runs: the parent document reports the refusal as a frame-src violation naming origin A.
+    const violations = await s.page.evaluate(() => (window as unknown as { __cspViolations: string[] }).__cspViolations);
+    expect(violations.filter((v) => v.startsWith('frame-src ') && v.includes(origins.a.replace(/^https?:\/\//, ''))), 'the parent realm saw the frame-src violation for origin A').not.toEqual([]);
   }, 120_000);
 
   it('M8.B6 control: a shell meta with script-src self makes the reader fall back (E14)', async () => {
