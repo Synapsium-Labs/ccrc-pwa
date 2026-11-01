@@ -66,14 +66,18 @@ export type LinearLookup =
   | { ok: false; reason: 'not-configured'; key: Exclude<LinearKeyRead['kind'], 'key'> }
   | { ok: false; reason: Exclude<LinearFailure, 'not-configured'>; keyDigest: string };
 
-/** Injectable so tests never reach the network. Matches `fetch`'s shape. */
+/**
+ * Injectable so tests never reach the network. Matches `fetch`'s shape. The answer's `headers` is the one method of
+ * `fetch`'s own `Headers` this file reads (spec §6.7: the wait of a rate-limited answer); every test fake gains it
+ * through `server/test/linearFetchFake.ts`.
+ */
 export type FetchLike = (url: string, init: {
   method: string;
   headers: Record<string, string>;
   body: string;
   signal: AbortSignal;
   redirect?: 'error';
-}) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+}) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; json: () => Promise<unknown> }>;
 
 /**
  * `issue(id:)` accepts the human identifier (`ENG-1234`) as well as the UUID,

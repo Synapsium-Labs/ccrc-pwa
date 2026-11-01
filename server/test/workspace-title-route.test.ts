@@ -15,13 +15,14 @@ import type { FetchLike } from '../src/linear/client.js';
 import { testDeps } from './helpers.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { linearAnswer } from './linearFetchFake.js';
 
 removeTmpFixturesEachTest();
 
 const ID = 'project-a-quiet-basin';
 const KEY = 'lin_api_titlefixture';
 const linearOk = (identifier: string, title: string): Awaited<ReturnType<FetchLike>> =>
-  ({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }) });
+  linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }) });
 
 let open: FastifyInstance | null = null;
 afterEach(async () => { await open?.close(); open = null; });

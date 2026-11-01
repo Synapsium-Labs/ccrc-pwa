@@ -14,6 +14,7 @@ import type { FetchLike } from '../src/linear/client.js';
 import { WS_ID_MAX, WS_SLUG_MAX, WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { testDeps } from './helpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { linearAnswer } from './linearFetchFake.js';
 
 removeTmpFixturesEachTest();
 
@@ -22,7 +23,7 @@ const BOTH = ['ws-add', WS_TITLE_CAP, WS_WRAPPER_CAP];
 const LINK = ['https:/', ['linear', 'app'].join('.'), 'team-a', 'issue', 'ENG-1234', 'fix-the-login-flow'].join('/');
 const KEY = 'lin_api_createfixture';
 const linearOk = (identifier: string, title: string): Awaited<ReturnType<FetchLike>> =>
-  ({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }) });
+  linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }) });
 
 let open: FastifyInstance | null = null;
 afterEach(async () => { await open?.close(); open = null; });
@@ -223,7 +224,7 @@ describe('a named create', () => {
   });
 
   it('Linear rejecting the key, or no key connected, degrades the same way', async () => {
-    const denied: FetchLike = async () => ({ ok: false, status: 401, json: async () => ({}) });
+    const denied: FetchLike = async () => linearAnswer({ ok: false, status: 401, json: async () => ({}) });
     const a = await boot({ fetch: denied });
     expect((await post(a.app, { name: 'ENG-1234' })).json()).toMatchObject({ ok: true, title: 'ENG-1234' });
     await a.app.close();

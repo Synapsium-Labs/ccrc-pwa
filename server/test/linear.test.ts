@@ -22,6 +22,7 @@ import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 import { LINEAR_FAILURES } from '../../shared/linear.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { linearAnswer } from './linearFetchFake.js';
 
 removeTmpFixturesEachTest();
 afterEach(() => { vi.useRealTimers(); });
@@ -33,10 +34,10 @@ const HAVE_KEY: LinearKeyRead = { kind: 'key', key: KEY };
 const bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 type Answer = Awaited<ReturnType<FetchLike>>;
-const okBody = (identifier: string, title: string): Answer => ({
+const okBody = (identifier: string, title: string): Answer => linearAnswer({
   ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }),
 });
-const bodyOf = (v: unknown, status = 200): Answer => ({ ok: status < 400, status, json: async () => v });
+const bodyOf = (v: unknown, status = 200): Answer => linearAnswer({ ok: status < 400, status, json: async () => v });
 
 /** Records the calls it is given, so the header can be asserted exactly. */
 const spyFetch = (answer: Answer): { f: FetchLike; calls: { url: string; init: Parameters<FetchLike>[1] }[] } => {
@@ -139,7 +140,7 @@ describe('lookupLinearIssue', () => {
 
   it('answers malformed for a 200 that is not the shape asked for, one case at a time', async () => {
     const shapes: [string, Answer][] = [
-      ['json() throws', { ok: true, status: 200, json: async () => { throw new Error('bad'); } }],
+      ['json() throws', linearAnswer({ ok: true, status: 200, json: async () => { throw new Error('bad'); } })],
       ['body is a string', bodyOf('nope')],
       ['body is null', bodyOf(null)],
       ['body is an array', bodyOf([])],
@@ -202,12 +203,12 @@ describe('lookupLinearIssue', () => {
     let signal: AbortSignal | undefined;
     const slowBody: FetchLike = async (_u, init) => {
       signal = init.signal;
-      return {
+      return linearAnswer({
         ok: true, status: 200,
         json: () => new Promise((_res, rej) => {
           init.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
         }),
-      };
+      });
     };
     await expect(lookupLinearIssue(REF, HAVE_KEY, { fetch: slowBody, timeoutMs: 20 }))
       .resolves.toMatchObject({ ok: false, reason: 'timeout' });
@@ -337,7 +338,7 @@ describe('verifyLinearKey', () => {
       [viewer({ data: {} }), 'malformed'],
       [viewer({ data: { viewer: { name: 'u' }, organization: {} } }), 'malformed'],
       [viewer({ data: { viewer: { name: '\u0001\u0002' }, organization: { name: 'o' } } }), 'malformed'],
-      [{ ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } }, 'malformed'],
+      [linearAnswer({ ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } }), 'malformed'],
     ];
     for (const [ans, word] of cases) {
       const f: FetchLike = async () => (typeof ans === 'function' ? ans() : ans);
