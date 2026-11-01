@@ -1904,7 +1904,9 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     expect(lines.filter((l) => /^\s*integrity=/.test(l)), 'integrity is only read from the lock').toHaveLength(0);
   });
 
-  describe('the provenance script, run for real against fake npm, gh and timeout', () => {
+  // Linux only: the script runs only on ubuntu-latest in CI and uses GNU `base64 -w0`, which BSD base64 (the macOS legs'
+  // userland, where no gnubin joins PATH) rejects; the real-script cases would go red there for a reason that is not a defect.
+  describe.skipIf(process.platform !== 'linux')('the provenance script, run for real against fake npm, gh and timeout', () => {
     const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
     const VERSION = '1.2.3';
     const TARBALL = 'the packed bytes';
