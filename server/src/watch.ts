@@ -9234,7 +9234,7 @@ export class FleetWatcher {
     void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
   }
 
-  private async askPass(_store: CoordStore, fleet?: FleetReadModel): Promise<void> {
+  private async askPass(_store: WatcherCoordPort, fleet?: FleetReadModel): Promise<void> {
     const now = Date.now();
 
     // Fail-shut, same discipline as `sweepMail`'s own `MAIL_DISABLED_MARKER`
