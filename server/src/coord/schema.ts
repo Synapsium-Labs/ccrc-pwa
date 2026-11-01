@@ -1947,6 +1947,43 @@ export const MIGRATIONS: readonly string[] = [
     mainRedHold    INTEGER NOT NULL DEFAULT 0
   );
   `,
+  // ── 36: user_version 35 -> 36 ─────────────────────────────────────────────
+  // D-7671 (Linear central key, #1444, spec §7): `linear_events`, the journal of every Linear write a session sends
+  // through the server and of every Settings act on a workspace key. Its ONE writer is `LinearJournal`
+  // (`server/src/linear/journal.ts`), which checks every value against its grammar before the INSERT: `op`,
+  // `outcome` and `code` are closed words, the ids are SAFE_RE or UUIDs, `teamKey`, `target` and `result` are a
+  // team key, an issue identifier or a UUID, and `fields` holds only names from the operation's closed list. So no
+  // column can carry a title, a body, a name, the key, its tail or its digest. `at` is epoch ms, set when the row is
+  // inserted `pending`; the outcome replaces `pending` when the route answers, and a row left `pending` reads as
+  // "outcome unknown". `sessionId`/`sessionUuid` are NULL on a key act and `actor` is NULL on a session write.
+  // `result` is indexed for the read side's `viaFleet` (spec §5.4). Rows older than 365 days are swept
+  // (`LinearJournal.sweep`, on `index.ts`'s daily beat beside the account audit's). v1 ships no reader (spec §16 Q3).
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 36` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR
+  // and before merge (it must print 35 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at          INTEGER NOT NULL,
+    sessionId   TEXT,
+    sessionUuid TEXT,
+    actor       TEXT,
+    workspaceId TEXT,
+    teamKey     TEXT,
+    op          TEXT    NOT NULL,
+    target      TEXT,
+    result      TEXT,
+    fields      TEXT,
+    outcome     TEXT    NOT NULL CHECK (outcome IN ('pending', 'ok', 'refused', 'denied', 'failed', 'unknown')),
+    code        TEXT,
+    masked      INTEGER,
+    decisionId  TEXT
+  );
+  CREATE INDEX linear_events_by_result ON linear_events(result);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

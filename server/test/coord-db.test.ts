@@ -687,9 +687,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // (secret_fingerprints, D-5513, accounts plan Task A10) and MIGRATIONS[28]
     // (feed_events.dedupe_key, D-5860, consolidation W1a Task C1f) and MIGRATIONS[29] (review_cap, D-6795), and
     // MIGRATIONS[32] (dispatch_abandon_settings, D-7319), and MIGRATIONS[33] (roll_settings, D-7453), and
-    // MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e).
-    expect(COORD_SCHEMA_VERSION).toBe(35);
-    expect(MIGRATIONS.length).toBe(35);
+    // MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e), and MIGRATIONS[35]
+    // (linear_events, D-7671, #1444).
+    expect(COORD_SCHEMA_VERSION).toBe(36);
+    expect(MIGRATIONS.length).toBe(36);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -753,9 +754,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // MIGRATIONS[21] (the six delegation_* tables), MIGRATIONS[22]
     // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected), MIGRATIONS[25]
     // (account_events), MIGRATIONS[26] (the mail_deliveries park columns), MIGRATIONS[27] (secret_fingerprints) and
-    // MIGRATIONS[28] (feed_events.dedupe_key), up to MIGRATIONS[33] (roll_settings, D-7453) and MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e); the migration
-    // above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(35);
+    // MIGRATIONS[28] (feed_events.dedupe_key), up to MIGRATIONS[33] (roll_settings, D-7453) and MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e) and MIGRATIONS[35]
+    // (linear_events, D-7671); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(36);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
