@@ -149,6 +149,33 @@ The first release ships pasting secrets into the console (operator, 2026-11-01: 
 - **A secret used outside ccrc is not pasted here.** A secret whose consumer lies outside ccrc, such as a CI service's repository secret, is never taken by the console. The coordinator raises a Do item whose steps the operator runs in their own shell (for example `gh secret set NAME`), and it checks the result by the secret's name and date. That keeps the server's deliberate absence of any `gh` exec grant intact.
 - **No session reads the store.** The operator-secrets directory joins the paths sessions are denied, beside `~/.cc-secrets/` and `~/.ccrc/auth-scratch/`, through the same account deny rules.
 
+### 5.1 Two ways to give a credential: paste, or sign in
+
+A credential can come in two ways: the operator pastes it, or the operator signs in on the service's own page (OAuth) and the console receives a token it never showed anyone (operator, 2026-11-01). Which methods a service offers is a row in a closed L1 table. The first release ships one sign-in service, **Linear**, beside the pasted Linear key the console already takes.
+
+```mermaid
+sequenceDiagram
+  participant O as Operator
+  participant P as Console (PWA)
+  participant S as ccrc server
+  participant L as Linear
+  O->>P: Sign in with Linear
+  P->>S: start sign-in
+  S-->>P: Linear's authorise address, with a one-time state
+  P->>L: operator approves access on Linear's page
+  L->>S: return address, with a code and the state
+  S->>S: checks the state, swaps the code for a token
+  S->>S: writes the connection (method: sign-in)
+  S-->>P: connected: workspace name, method, when
+```
+*Figure 5. Signing in with Linear. The token goes from Linear to the server and is written straight to the connection; the console only ever sees the answer.*
+
+- **Both methods, one connection.** Settings' Linear section offers "Paste a key" and "Sign in with Linear". Either one writes the same connection under the existing connection lock (`server/src/linear/connection.ts`), now recording its method. Connecting by one method replaces a connection made by the other. The Linear client already tells the two apart, sending an OAuth token with `Bearer` and a pasted key without it (`server/src/linear/client.ts:114`).
+- **One-time setup.** Signing in needs a Linear OAuth app registered by the operator, with the console's public address plus the callback path as its return address. Its client id is an ordinary value and its client secret is a secret, so the setup is done on the Linear section's own setup panel, or as items on the list when a coordinator needs Linear and sign-in is not yet set up. Sign-in needs the console's sign-in armed and its public origin set, the same conditions as the step-up. Without them the button is disabled, with a line saying why.
+- **The state is single-use and bound.** The start route mints a random state bound to the operator's console session and a short expiry. The callback refuses an unknown, expired, reused or foreign state before it calls Linear, and every refusal is a fixed word. The code, the token and any refresh token never appear in a response, a log line, mail or the feed, and the token's fingerprint is recorded with the masker like any stored secret.
+- **Expiry and refresh.** If Linear issues a refresh token with an expiring access token, the server stores both and refreshes before use. If refreshing fails, the connection reads "needs signing in again", and a coordinator that needs Linear raises an item for it. The builder confirms against Linear's current documentation whether its tokens expire and which scopes the console's existing Linear use needs, and the console asks for no more than those.
+- **Secret items can offer sign-in.** A "Give a secret" item whose service has a sign-in method shows both choices. The coordinator checks either the same way: the connection's answer (connected, method, when), never the token.
+
 ## 6. The coordinator's part
 
 This section covers what coordinators do with the ledgers and how they do it.
@@ -223,6 +250,8 @@ The operator's rulings are marked Agreed. The coordinator's own calls are marked
 | D15 | Items of an ended programme | Delete; mark orphaned in the store; show as ended while no run is open | Shown as ended while no run is open, dismissable then, live again if a run reopens | Proposed |
 | D16 | Seeding from a spec | Parse specs continuously; seed once at approval | Seed once at approval; the list is the source of truth afterwards | Proposed |
 | D17 | "In short" source | Parse the spec; snapshot at approval | Snapshot at approval, so Goals shows what was agreed | Proposed |
+| D21 | Ways to give a credential | Paste only; paste or sign in | Both: paste, or sign in on the service's page; Linear is the first sign-in service | Agreed |
+| D22 | Where Linear's OAuth app is set up | Hard-coded app; operator registers one | Operator registers one; its id and secret go in through the Linear section or list items | Proposed |
 | D18 | Which session questions join | Asks only; every question model; including held ones | Asks, permission prompts and dialogs, once they have reached the operator | Proposed |
 | D19 | A tick nobody picks up | Push the operator; label only | A label computed on read; no push, no new stall arm | Proposed |
 | D20 | Clause 19 (questions in closing text) | Replace with items; keep and add items | Keep clause 19; clause 20 adds an item for each such question | Proposed |
@@ -235,6 +264,7 @@ This section names how each promise will be shown to hold.
 - **One transaction.** A tick that fails to queue its mail leaves the item open, with no half-state; measured by forcing the mail insert to fail.
 - **Secrets never leave the store.** A test pastes a marked value and then scans the mail table, the feed, the items table, the amendments table, the server's console output and every route's response for it; any hit reds. The slot route refuses a path-shaped slot, and a session's attempt to read the directory is refused by the deny rules.
 - **Ownership.** A coordinator's verb on another programme's item is refused.
+- **Sign-in.** The callback refuses an unknown, expired, reused and foreign state, each red when its check is deleted; a stubbed Linear proves the token lands in the connection and nowhere else (the same leak scan as the secret test); a connection made by sign-in is replaced by a pasted key and the other way round; and the Linear client sends each with its own header form.
 - **"Waiting on" decider.** Pure-function tests over each run-state mix, including "stopped with nothing on the list".
 - **Census and skill.** The box-token census counts each new door. The coordinator-skill test pins clause 20 verbatim.
 - **Screens.** Browser tests at desktop and phone width for the three views, the chip and the nav count, in each palette the contrast gate already measures.
@@ -245,12 +275,13 @@ This section names how each promise will be shown to hold.
 
 - Both ledgers, the item kinds, the tick-and-verify loop, the combined list, session questions on the list, and secrets kept away from coordinators (operator, 2026-10-31, D1 to D10).
 - Pasting secrets into the console ships in the first release (operator, 2026-11-01, D12).
+- A second way to give a credential, signing in on the service's own page, with Linear first (operator, 2026-11-01, D21).
 - The prototype's three views as the shape of the screens ("pretty great overall", operator, 2026-10-31).
 - The Docs reader coordinator's guidance on linking, amendments and the spec's own box (2026-10-31).
 
 ### Waiting on you
 
-- Check the coordinator's calls D11 and D13 to D20 in §8.
+- Check the coordinator's calls D11, D13 to D20 and D22 in §8.
 - Approve this spec. The plan and the programme's next run start from it.
 
 ### Later
