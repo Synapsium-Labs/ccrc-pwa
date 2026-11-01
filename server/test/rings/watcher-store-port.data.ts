@@ -1,49 +1,17 @@
 /**
  * D-7578 (plan docs/superpowers/plans/2026-10-30-consolidation-increment7-watcher-store-port.md, Task WP1;
  * increment 7). The series' record of what the store census (`scan/parse.ts#storeReach`) measures for `watch.ts` and
- * its lane files: the members they reach, the members they reach through `Deps.coord`'s whole store, and where they
- * hand the whole store on (each key with its call-site count). This is the series' record, which each series task
+ * its lane files: the members they reach through `Deps.coord`'s whole store, and where they hand the whole store on
+ * (each key with its call-site count). The members they reach at all are no longer listed here: since D-7579 (WP2)
+ * they are `coord/ports.ts#WatcherCoordMember`, the port's own list. This is the series' record, which each series task
  * rewrites to what the census measures. Before WP10 no row reds on it except under `WATCHER_PORT_STRICT=1` (spec
  * §5.1 rule 3 rev 2: a census reports, and its may-only-shrink pin lands in the commit that reaches the series'
  * target). Each set may only shrink, except that a reached member is added in the series PR that measures it.
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** Every `CoordStore` member the scope reaches (165), sorted. */
-export const WATCHER_STORE_REACH: readonly string[] = [
-  'absorbParkEscalation', 'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById',
-  'autoContinueHeldUntil', 'backOff', 'baselineParkBox', 'bindingRunsOf', 'bindingsOf', 'bumpReplayCount',
-  'cancelDeliveriesTo', 'checksRows', 'childReclaimCoordinatorClaims', 'childReclaimSessionIds', 'childStaleActivity',
-  'claimDigestDay', 'closeRun', 'collectLaneRow', 'commitDeadCoordinatorBreakerState', 'coordPlacementStamps',
-  'currentAskFor', 'currentAsksFor', 'currentEpisode', 'db', 'deadAnchors', 'deadCoordinatorBreakerHeldLatest',
-  'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows', 'declineApproval', 'declineAsk',
-  'delegationEventStats', 'deliveredUnacked', 'delivery', 'digestApprovals', 'digestAsks', 'dispatchAbandonSetting',
-  'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt', 'driftHeldQuestions',
-  'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows', 'dueDeliveries',
-  'firstMailIdWithPrefix', 'foldPrLineage', 'hasMailWithSubject', 'hasNotice', 'hasOutstandingMail',
-  'heldApprovalRowsByChild', 'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'holdParked', 'ingestJournal',
-  'insertApproval', 'insertAsk', 'insertDelegationEvents', 'insertMail', 'insertObservation',
-  'insertStallObservation', 'intentFor', 'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
-  'laterReviewClosedFor', 'ledgerFloor', 'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor',
-  'lifecycleCreatesFor', 'lifecycleFor', 'lifecycleGapGens', 'lifecycleLeafEndsFor', 'lifecycleReclaimRowsSince',
-  'lifecycleStats', 'mailOrigin', 'mailQueuedSince', 'markApprovalOperator', 'markApprovalOperatorRows',
-  'markDeadCoordinatorBreakerDirty', 'markDelivered', 'markDriftPushed', 'markDriftShadowed', 'markIngested',
-  'markLanded', 'markParkEscalated', 'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId',
-  'mergingRuns', 'node', 'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteGate', 'noteLeaseDetail',
-  'openAllocations', 'openCoordinatorIds', 'outstandingMailFor', 'parkDelivery', 'parkedDeliveries', 'poolEpoch',
-  'programOpenRunCount', 'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'pruneApprovalInputs',
-  'pruneAskQuestions', 'queueDelivery', 'raiseLedgerFloor', 'recentProvenance', 'recordDriftPass', 'recordFeedEvent',
-  'recordGap', 'recordObservation', 'recordRejection', 'recordRunEvent', 'recordShadowVerdict',
-  'recordStallObservation', 'refusalsFor', 'refuseRelease', 'rejectDelivery', 'rekeyNode', 'releaseAsk',
-  'releaseLease', 'releases', 'renewClaimRow', 'resolveNode', 'restampAsk', 'retireGeneration', 'rollSettings', 'run',
-  'runEvents', 'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
-  'setCollectLane', 'setDeliveryEnvelope', 'setSession', 'settleAsk', 'settleNode', 'staleAllocations',
-  'staleApproval', 'staleAsk', 'stallCandidates', 'stallMailFor', 'stallSettings', 'stalledDispatchRunIds',
-  'strandedClear', 'takeApprovalForRule', 'takeAskForAnswer', 'unlandedBriefs', 'unsealDeadCoordinatorBreakerState',
-  'untakeAsk', 'updateEpoch', 'upsertNodeMeasurement', 'wakeParked',
-];
-
-/** The members reached through the whole store (165): on `main` every reach is whole. Sorted. */
+/** The members reached through the whole store (166, with #1614's `delegationRunStamps`): on `main` every reach is
+ *  whole. Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'absorbParkEscalation', 'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById',
   'autoContinueHeldUntil', 'backOff', 'baselineParkBox', 'bindingRunsOf', 'bindingsOf', 'bumpReplayCount',
@@ -51,10 +19,10 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'claimDigestDay', 'closeRun', 'collectLaneRow', 'commitDeadCoordinatorBreakerState', 'coordPlacementStamps',
   'currentAskFor', 'currentAsksFor', 'currentEpisode', 'db', 'deadAnchors', 'deadCoordinatorBreakerHeldLatest',
   'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows', 'declineApproval', 'declineAsk',
-  'delegationEventStats', 'deliveredUnacked', 'delivery', 'digestApprovals', 'digestAsks', 'dispatchAbandonSetting',
-  'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt', 'driftHeldQuestions',
-  'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows', 'dueDeliveries',
-  'firstMailIdWithPrefix', 'foldPrLineage', 'hasMailWithSubject', 'hasNotice', 'hasOutstandingMail',
+  'delegationEventStats', 'delegationRunStamps', 'deliveredUnacked', 'delivery', 'digestApprovals', 'digestAsks',
+  'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
+  'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows',
+  'dueDeliveries', 'firstMailIdWithPrefix', 'foldPrLineage', 'hasMailWithSubject', 'hasNotice', 'hasOutstandingMail',
   'heldApprovalRowsByChild', 'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'holdParked', 'ingestJournal',
   'insertApproval', 'insertAsk', 'insertDelegationEvents', 'insertMail', 'insertObservation',
   'insertStallObservation', 'intentFor', 'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',

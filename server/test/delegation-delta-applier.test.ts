@@ -834,8 +834,16 @@ describe('R23: the only server code that writes the five delegation tables is th
     const OLD = /\bprojectDelegationCheckpoint\b/;
     const NEW = /\bprojectDelegationCheckpointChanges\b/;
     const DEFINITION = /^projectDelegationCheckpoint(?:Changes)?\(/;
+    // D-7579: coord/ports.ts names both methods as quoted members of the type-only `WatcherCoordMember` union (the
+    // watcher's store port Picks them); a type member is no call site, so the scan skips that file, and the pin below
+    // holds that its only occurrences are those two quoted members, so a call landing there still fails.
+    const PORTS = 'server/src/coord/ports.ts';
+    const portsCode = code(read(PORTS));
+    expect((portsCode.match(/\bprojectDelegationCheckpoint(?:Changes)?\b/g) ?? []).length, `${PORTS} names the two methods only as type members`).toBe(2);
+    expect((portsCode.match(/'projectDelegationCheckpoint(?:Changes)?'/g) ?? []).length, 'both occurrences are quoted union members').toBe(2);
     const callers: string[] = [];
     for (const f of FILES) for (const { method, line } of linesWithMethod(f)) {
+      if (f === PORTS) continue;
       if (DEFINITION.test(line)) continue;
       if (OLD.test(line)) callers.push(`${f} ${method} calls ${FULL}`);
       if (NEW.test(line)) callers.push(`${f} ${method} calls ${DELTA}`);

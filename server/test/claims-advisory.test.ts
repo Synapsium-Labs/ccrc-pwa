@@ -68,6 +68,13 @@ describe('claims are advisory (D12)', () => {
       'depsShed.ts',         // D-7278: the arm's L1 verdict names the field in a docstring and
                              // only reads the boolean the pass hands it (`claim` → hold). It
                              // carries no call, which the pin below holds at zero.
+      'coord/ports.ts',      // D-7579: the watcher's store port names the member once, as a
+                             // string-literal member of the type-only `WatcherCoordMember` union
+                             // that `WatcherCoordPort` Picks from `CoordStore`. tsc emits nothing
+                             // for the file, so naming it there reads no claim and enforces
+                             // nothing; the port only narrows what the watcher (already allowed
+                             // above, count-pinned) may call. The pin below holds that single
+                             // quoted occurrence, so a call landing here still fails.
     ]);
     const holders = walk(srcRoot)
       .filter((f) => f.endsWith('.ts'))
@@ -90,6 +97,10 @@ describe('claims are advisory (D12)', () => {
     // place a claim can become enforcement (the "just skip claimed rows in a
     // sweep" mutant lands exactly here), so it must be argued and re-pinned,
     // never absorbed.
+    // The store port's exception (D-7579), held by SHAPE: exactly one occurrence, and it is the quoted union member.
+    const portsSrc = readFileSync(path.join(srcRoot, 'coord', 'ports.ts'), 'utf8');
+    expect(portsSrc.split('activeClaims').length - 1, 'coord/ports.ts names activeClaims once, as a type member').toBe(1);
+    expect(portsSrc.split("'activeClaims'").length - 1, 'that one occurrence is the quoted union member').toBe(1);
     const watchSrc = readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
     expect(watchSrc.split('activeClaims').length - 1,
       'watch.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
