@@ -28,9 +28,33 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (rich-docs spec 2026-10-12) | — | after W5 (operator, 2026-10-13) |
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
-| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | — | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, under the operator's review); **W8b**, the version menu and "changes since", after W5b; W7 last |
+| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last |
 
 ## Decisions & deviations
+- **2026-11-01: W8a is accepted after three review rounds, and its residue goes to W8b (coordinator).**
+  - **What shipped.** Run 1315 shipped Tasks 1-12 as PR #2061.
+  - **Round 1.** Review run 1316 read tip `9c9435ca9` and found 6 important findings and 8 advisory notes. Fix round 1:
+    - ledgered three departures: the supply-chain deadlines Task 11 added, the reader's theme following the palette's mode, and the copy-failed sheet;
+    - re-measured a mutation row that went red on a ReferenceError instead of on its own assertion;
+    - bounded the Mermaid asset wait in `mountReader` by the reader's watchdog.
+  - **Round 2.** Review run 1317 read tip `bad17ff56` and found 2 important findings. Fix round 2:
+    - decodes a percent-encoded fragment before it seeds the frame;
+    - measures the shell's `frame-src 'none'` wall in Chrome, with Chrome's local-network checks off;
+    - narrows M7.9's specifier exception to import positions;
+    - re-measured the whole mutation table at one tip (115 rows, all red).
+  - **Round 3.** Review run 1318 read tip `4d62121a7` and found 5 important findings and 13 advisory notes, none of them on the walls or the supply chain. The review cap is three rounds, so the coordinator ruled on round 3 without a fourth round: all five are narrow, and they go to W8b (Carried constraints, "W8a residue").
+  - **Why accept now.** Every wall the spec lists is measured. The full suite and the browser leg are green on the exact tip. Each round-3 finding is either a test gap or a narrow case the user can see, and in those cases the plain view still works.
+  - **Cost if wrong.** Until W8b lands, a same-page link spelled with its file name does not scroll the reader, and a heading deep link is lost when the frame falls back after it has mounted.
+  - **Rulings on round 1.**
+    - F1, F2 and A2 were ledgered as deviations 7704, 7705 and 7707.
+    - F4 was fixed as deviation 7706: the Mermaid wait ends at `readerWatchdogMs(bytes)`, and no new number is declared.
+    - F3 was fixed.
+    - F5 was carried: the copy check flags exactly the spec's §4.4 set, which is the library's set.
+    - F6 was accepted as the plan's disclosed ring bend, for W6.
+  - **Rulings on round 2.** Both findings were fixed without a number. A1 and A7 were carried.
+  - **Deviations.** Block 7691 to 7707. Every number is defined in the W8a plan's `## Deviations found`.
+  - **Operator question (open).** Should the copy check also flag U+200E, U+200F, U+061C and the tag characters U+E0000-E007F? That would change spec §4.4 and the library, in a 1.0.x release. Until then, W8a ships the spec's set.
+  - **CI note.** The `browser (pwa)` job took 18 min 55 s of its 20-minute limit on one run, and 15 min 50 s on the final run. If the merge queue ever times it out, the fix is a CI change of its own, not part of W8a.
 - **2026-10-31: the W8 split and W8a's defaults (operator).** Asked six questions about the coordinator's proposal (the entry below), the operator answered "defaults":
   - **(1) Order.** W8 splits. W8a, the frame core, runs now, in parallel with W5h-a and Share. W8b (G5, G6's version menu, `at=<sha>`) follows W5b. W7 moves last, so the README is written once.
   - **(2) Frame code.** The library's own `./host` (`mountDocFrame`) is used, unless the plan finds it conflicts with ccrc's architecture rules. The W8a plan found no conflict: it mounts through one ccrc adapter, `docs/reader/bridge.ts`, and records the spec rows that this amends.
@@ -232,6 +256,26 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 
 ## Carried constraints (reviewers get these)
 
+- **W8a residue, for W8b** (from review run 1318 and the W8a plan's "Carried, not fixed"):
+  - **The pending fragment is spent too early.** It is spent when the mount resolves, which is before `ready`. A fallback raised after the mount then loses a heading deep link. Spend it on `ready`, and add a case that falls back after the mount has resolved.
+  - **A same-page link spelled with its file name does not scroll the reader.** A link such as `this.md#sec` routes to `hash` and only rewrites the address bar. Fixing it needs either an in-frame `#id` re-issue or a scroll op on the host, plus a test of what actually moves.
+  - **An overlong image `src` drops the whole doc to the plain view.** That happens when the `src` passes the library's 2048-code-unit seed limit. Leave such a ref out, in W8b or in W6 with the planner.
+  - **The copy check never runs against the real library for U+202E and U+200B.** Add one case through the real mount, or a browser copy tap.
+  - **One browser sub-case cannot fail.** The `hash` sub-case of the `M8.B5 parent.postMessage` row cannot fail. Assert `location.hash`, and add a positive case through the port.
+  - **The browser battery's control gaps:**
+    - the meta-only row measures 26 channels against the frame's own policy;
+    - in the default browser, the second-load row credits the shell meta with a block that Chrome's local-network checks also make;
+    - in the navigated-child control, the wrong-nonce `ready` comes last;
+    - the `parent.postMessage` navigate case has no control.
+  - **Smaller items:**
+    - the render job's budget also covers the first lazy import of the renderer chunk;
+    - the `window` and `globalThis` owners of the window-message scan have no planted control;
+    - M7.9's position check is a line-prefix scan, so JSX text passes it;
+    - some header comments still say "two sheets";
+    - the comment in `assets.ts` overstates what the guard covers;
+    - `ci.yml` and the plan word the need for `attestations: read` differently;
+    - `policy.ts` imports a type from `DocLink.tsx`, and `docLinkTarget` through a hook module;
+    - `images.ts` (L3) imports `DocImage.tsx` (L4), which W6's planner replaces.
 - **W3's accepted residue, from its plan:**
   - The fetch lane's generation map grows by one short entry per distinct project refreshed. It is session-gated and cannot be pruned safely.
   - `policy.ts`'s `lowerAscii` duplicates a private L0 helper. It is pinned by a parity case and goes to W7.
@@ -279,6 +323,8 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
 ## Next-wave brief (W5h-a and Share), after W5 part 1 merges
+
+W8a is accepted (2026-11-01, #2061). W8b follows W5b, and starts from the W8a residue in Carried constraints.
 
 Part 1 merged on 2026-10-19 (#627), so this brief is now the next dispatch. Two runs dispatch in parallel: W5h-a and Share (the operator ruled W5h and Share in parallel on 2026-10-15; W5h-a is the coordinator's split of W5h). Export follows W5h-a and Share, and W5h-b follows the phone measurement.
 
