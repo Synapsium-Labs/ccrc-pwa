@@ -8706,8 +8706,8 @@ export class FleetWatcher {
     // `mail-disabled` is read off the listing. An unlistable registry cannot say, and spec §3.8 still owes a live episode
     // its one stuck mail then (the bound is the one thing this lane keeps doing without a listing), so null holds nothing.
     const mailHeld = listing !== null && listing.includes(MAIL_DISABLED_MARKER);
-    type Owed = { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean };
-    let runs: ReturnType<CoordStore['mergingRuns']>;
+    type Owed = { run: ReturnType<WatcherCoordPort['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean };
+    let runs: ReturnType<WatcherCoordPort['mergingRuns']>;
     try { runs = coord.mergingRuns(); } catch (err) {
       console.warn(`ccrc-server: landing checks read failed (${err instanceof Error ? err.message : String(err)})`);
       return;
@@ -8816,7 +8816,7 @@ export class FleetWatcher {
   }
 
   /** The bound alone (`stuckOnly`) for an owed episode this pass does not read. */
-  private checksStuckOnly(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+  private checksStuckOnly(coord: WatcherCoordPort, m: { run: ReturnType<WatcherCoordPort['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
     cause: StuckCause, nowMs: number, mailHeld: boolean): void {
     try {
       const tail = `unread:${cause}`;
@@ -8831,7 +8831,7 @@ export class FleetWatcher {
 
   /** One read member: the line's act (`landingLineAct`), then the edge fold, the end row or the bound. Answers whether
    *  the episode wants the fast cadence. */
-  private checksOne(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+  private checksOne(coord: WatcherCoordPort, m: { run: ReturnType<WatcherCoordPort['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
     line: PrLandingLine | null, nowMs: number, mailHeld: boolean): boolean {
     const act = landingLineAct({ pr: m.ep.pr, head: m.ep.head }, line);
     if (act.act === 'moved' || act.act === 'left') {
@@ -8856,12 +8856,12 @@ export class FleetWatcher {
 
   /** The row and the mail of a `moved` or `left` act, once per episode. A merged PR writes the row and no mail
    *  (`sweepLanding`'s `merged:` is the wake). */
-  private checksEnd(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+  private checksEnd(coord: WatcherCoordPort, m: { run: ReturnType<WatcherCoordPort['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
     act: { act: 'moved'; head: string } | { act: 'left'; phase: LeftPhase }, mailHeld: boolean): void {
     const detail = checksEndDetail(m.ep.e, act.act, !m.live);
     const when = { kind: 'episode', episode: m.ep.e } as const;
     const nowAt = Date.now();
-    let answer: ReturnType<CoordStore['recordObservation']> | LandingNoticeQueued;
+    let answer: ReturnType<WatcherCoordPort['recordObservation']> | LandingNoticeQueued;
     if (!m.live || (act.act === 'left' && act.phase === 'merged')) {
       answer = coord.recordObservation(m.run.id, detail, nowAt, when);
     } else {
@@ -8884,7 +8884,7 @@ export class FleetWatcher {
   /** Writes a fold's rows (the unmailed ones first, the mailed one last, through `queueLandingNotice`) and latches its
    *  answer. A mail `mail-disabled` holds (or that has no recipient) keeps no row and latches nothing. Answers whether
    *  the episode wants the fast cadence (unsettled, red, or held). */
-  private checksDeliver(coord: CoordStore, m: { run: ReturnType<CoordStore['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
+  private checksDeliver(coord: WatcherCoordPort, m: { run: ReturnType<WatcherCoordPort['mergingRuns']>[number]; ep: LaneEpisode; key: string; live: boolean },
     rows: readonly ChecksRow[], fold: ChecksFold, tail: string, failing: ReadonlyArray<{ name: string; runId: number | null }> | null,
     mailHeld: boolean): boolean {
     const e = m.ep.e;
