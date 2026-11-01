@@ -18,15 +18,18 @@
 //   - The battery: 27 channels aimed at origins A and B (`harness.ts`), run in the frame through Playwright's frame
 //     evaluation. A channel counts as REACHED when an origin logs a request for its path. The same battery against a
 //     hand-built frame with no CSP is the control that proves it can reach them.
-//   - Every property has a control that goes the other way, run in the same Chrome. The mutation rows for this file
-//     are planted in the installed library's `dist` (W8A-T10-M1 to M8) and recorded in the SDD ledger.
+//   - Every wall has a control that goes the other way, run in the same Chrome (B3's is a same-origin frame in which
+//     every store works, and a planted frame error that the error listener sees). The mutation rows for this file
+//     are planted in the installed library's `dist` (W8A-T10-M1 to M9) and recorded in the SDD ledger.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config
 // vitest.browser.config.ts browser/reader-frame.browser.test.ts )`, through `ccrc test`.
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { crc32 } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Frame, type Page, type Request } from 'playwright-core';
+import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
 import { REFINED } from '@ccrc/ui';
 import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
 import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_RESPONSE_HEADERS, sniffRaster } from '../../shared/docs';
@@ -61,18 +64,34 @@ const hostileLinks = (o: Origins): string => fence(
   '%%{init: {"securityLevel": "loose", "flowchart": {"htmlLabels": true}}}%%\n'
   + `flowchart LR\n  L1["<img src='${o.a}/battery/hostile-img'>"] --> L2[Link]\n  click L2 "${o.b}/battery/hostile-click"`);
 
-/** Names a library global or a heading slug the reader's own page might hold. Read from the installed bootstrap's
- *  global list and the seed's element (which has no id: the bootstrap finds it by its place before its own script). */
 /** Figures in flow.md: a flowchart, a sequence, a gantt and two hostile ones. */
 const FIGURES = 5;
 
-const CLOBBER_NAMES = ['location', 'document', 'parent', 'origin', 'instance', 'next', 'seed', 'bootstrap', 'window'];
+/** The global names the installed frame bootstrap guards against clobbering: the first array literal of
+ *  `assets/frame/bootstrap.js` (`var O=[...]`), read from the installed file so a library change moves the fixture. Some are
+ *  natives no element id can shadow (`location`, `window`); the rest, Mermaid's and cytoscape's among them
+ *  (`instance`, `next`, `update`, `processed`, `cytoscape`, `mermaidCaptureSizes`, `__mermaidProfiler`), a named
+ *  access could. The seed element has no id (the bootstrap finds it by its place before its own script), so there is no
+ *  seed name to plant. */
+const BOOTSTRAP_GLOBALS: readonly string[] = ((): string[] => {
+  const text = readFileSync(path.join(import.meta.dirname, '..', 'node_modules/@synapsium-labs/docserver/assets/frame/bootstrap.js'), 'utf8');
+  const m = /var O=(\[[^\]]*\])/.exec(text);
+  if (m === null) throw new Error('the installed bootstrap holds no global list in the expected place');
+  const names = JSON.parse(m[1] ?? '[]') as string[];
+  if (names.length < 100 || new Set(names).size !== names.length) throw new Error('the bootstrap global list is not the list this fixture reads');
+  return names;
+})();
+/** Planted as `## <name>` headings (their slug is the name); every other global is planted as a `<!-- id:name -->`
+ *  anchor, so each name is an id exactly once. */
+const HEADING_GLOBALS = ['instance', 'next', 'update', 'processed', 'pred1'] as const;
 
 function m88Doc(): string {
-  const heads = CLOBBER_NAMES.slice(0, 5).map((n) => `## ${n}\n\nSection ${n}.\n\n`).join('');
-  const anchors = CLOBBER_NAMES.slice(4).map((n) => `<!-- id:${n} -->\nAnchored ${n}.\n\n`).join('');
+  for (const n of HEADING_GLOBALS) if (!BOOTSTRAP_GLOBALS.includes(n)) throw new Error(`${n} is not in the bootstrap's list`);
+  const heads = HEADING_GLOBALS.map((n) => `## ${n}\n\nSection ${n}.\n\n`).join('');
+  const anchors = BOOTSTRAP_GLOBALS.filter((n) => !(HEADING_GLOBALS as readonly string[]).includes(n))
+    .map((n) => `<!-- id:${n} -->\nAnchored ${n}.\n\n`).join('');
   return `---\nowner: ${SCRIPT_CLOSE}${LS}fm\n---\n# Title ${SCRIPT_CLOSE}${LS}h\n\nBody ${SCRIPT_CLOSE}${LS} text, `
-    + `[the other page](./other.md).\n\n${heads}${anchors}`;
+    + `[the other page](./other.md).\n\n${fence('flowchart LR\n  Q1[Quiet] --> Q2[Page]')}${heads}${anchors}`;
 }
 
 /** A PNG of exactly `size` bytes: a real 1x1 image with a `tEXt` chunk padding it out (it decodes as any PNG does). */
@@ -151,8 +170,8 @@ interface HookConfig {
    *  library's first `load` handler finds. */
   readonly delayLoadMs?: number;
   /** Parent realm: messages posted on the frame's end of the port just before it is handed to the frame, so they are
-   *  on the wire ahead of anything the frame says (the Playwright init script reaches a srcdoc frame only after its
-   *  scripts have run, so a frame-realm hook cannot speak first). */
+   *  on the wire ahead of anything the frame says (the Playwright init script reaches a srcdoc frame before its
+   *  scripts in some loads and after them in others, so a frame-realm hook cannot be relied on to speak first). */
   readonly earlyOps?: readonly unknown[];
   /** Frame realm: messages posted on the port the moment it is captured (a navigated child's, which has no scripts
    *  of the library's to be ahead of). */
@@ -345,8 +364,6 @@ interface ApiHit {
   readonly path: string;
   readonly method: string;
   readonly cookie: string | null;
-  readonly marker: string | null;
-  readonly origin: string | null;
 }
 
 interface SessionOptions {
@@ -362,9 +379,6 @@ interface Session {
   readonly page: Page;
   readonly apiHits: ApiHit[];
   readonly logs: string[];
-  readonly requests: string[];
-  /** Requests Chrome refused before sending, by URL (the `requestfailed` event's error text). */
-  readonly failed: Map<string, string>;
   /** URLs that got a response: a request Chrome really sent. */
   readonly responses: string[];
   goto(path: string): Promise<void>;
@@ -388,19 +402,14 @@ async function openSession(opts: SessionOptions = {}, using: Browser = browser):
   await ctx.addInitScript(hookScript(opts.hook ?? {}));
   const apiHits: ApiHit[] = [];
   const logs: string[] = [];
-  const requests: string[] = [];
-  const failed = new Map<string, string>();
   const responses: string[] = [];
   page.on('response', (r) => { responses.push(r.url()); });
-  page.on('requestfailed', (r: Request) => { failed.set(r.url(), r.failure()?.errorText ?? ''); });
   page.on('console', (m) => { logs.push(`${m.type()} ${m.text()}`); });
-  page.on('request', (r: Request) => { requests.push(r.url()); });
   await ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
     const req = route.request();
     const url = new URL(req.url());
     const h = await req.allHeaders();
-    apiHits.push({ path: url.pathname + url.search, method: req.method(), cookie: h['cookie'] ?? null, marker: h['x-ccrc-docs'] ?? null,
-      origin: h['origin'] ?? null });
+    apiHits.push({ path: url.pathname + url.search, method: req.method(), cookie: h['cookie'] ?? null });
     if (req.method() !== 'GET') {
       await route.fulfill({ status: 204 });
       return;
@@ -422,7 +431,7 @@ async function openSession(opts: SessionOptions = {}, using: Browser = browser):
       await route.fulfill({ response: res, body: changed });
     });
   }
-  return { app, page, apiHits, logs, requests, failed, responses, goto: async (path) => { await page.goto(server.origin + path, { waitUntil: 'load' }); } };
+  return { app, page, apiHits, logs, responses, goto: async (path) => { await page.goto(server.origin + path, { waitUntil: 'load' }); } };
 }
 
 interface Answer { readonly status: number; readonly headers: Record<string, string>; readonly body: Uint8Array }
@@ -730,7 +739,7 @@ describe('W8a reader frame in Chrome', () => {
   it('M8.B3: storage, IndexedDB, cookie and caches throw or are empty, with zero uncaught errors', async () => {
     const s = await openInserted('small.md');
     const frame = await readerFrame(s.page);
-    const got = (await frame.evaluate(`(async () => {
+    const probe = `(async () => {
       const out = {};
       const tries = {
         localStorage: () => localStorage.length,
@@ -743,7 +752,8 @@ describe('W8a reader frame in Chrome', () => {
         try { const v = await f(); out[k] = 'returned ' + (v === '' ? 'empty' : typeof v); } catch (e) { out[k] = e && e.name; }
       }
       return out;
-    })()`)) as Record<string, string>;
+    })()`;
+    const got = (await frame.evaluate(probe)) as Record<string, string>;
     expect(got, 'each ambient store throws in the opaque origin').toEqual({
       localStorage: 'SecurityError', sessionStorage: 'SecurityError', cookie: 'SecurityError',
       indexedDB: 'SecurityError', caches: 'SecurityError',
@@ -751,9 +761,23 @@ describe('W8a reader frame in Chrome', () => {
     expect(await settle(s.page), 'the library boots').toBe('ready');
     expect(s.app.errors, 'the library booted with zero uncaught errors').toEqual([]);
     expect(s.logs.filter((l) => l.startsWith('error ')), 'and logged no console error').toEqual([]);
+
+    // Control 1, the other way: the same probe in a frame with allow-same-origin finds every store working, so a
+    // SecurityError above is the sandbox's doing and the probe is not blind.
+    const same = await mountControl(s.page, 'allow-scripts allow-same-origin');
+    const open = (await same.evaluate(probe)) as Record<string, string>;
+    expect(Object.values(open).filter((v) => !v.startsWith('returned')), `with allow-same-origin nothing throws (${JSON.stringify(open)})`).toEqual([]);
+    await s.page.evaluate(() => document.getElementById('control')?.remove());
+
+    // Control 2: an uncaught error thrown in a sandboxed frame's realm reaches the listener the zero above was read
+    // from (`pageerror`, filled by openApp), so "zero" is not a channel that cannot see a frame.
+    const bare = await mountControl(s.page, 'allow-scripts');
+    await bare.evaluate(`setTimeout(() => { throw new Error('ccrc-planted-frame-error'); }, 0)`);
+    await expect.poll(() => s.app.errors.some((e) => e.includes('ccrc-planted-frame-error')), { timeout: 5_000 },
+    ).toBe(true);
   }, 120_000);
 
-  it('M8.B4: window.open returns null, top.location= throws, and _blank is inert', async () => {
+  it('M8.B4: window.open returns null, top.location= throws, and _blank is inert (a planted target=_blank link, and the author link)', async () => {
     const { s, outcome } = await open('small.md');
     expect(outcome).toBe('ready');
     const frame = await readerFrame(s.page);
@@ -767,12 +791,25 @@ describe('W8a reader frame in Chrome', () => {
       return out;
     })()`)) as { open: string; topRead: string; topWrite: string };
     console.log(`T10-FIGURES b4 ${JSON.stringify(opened)}`);
-    expect(opened.open, 'window.open returns null').toBe('null');
-    expect(opened.topRead, 'reading top.location throws').toBe('SecurityError');
+    expect.soft(opened.open, 'window.open returns null').toBe('null');
+    expect.soft(opened.topRead, 'reading top.location throws').toBe('SecurityError');
+    expect.soft(opened.topWrite, 'writing top.location throws').toBe('SecurityError');
     const topUrl = s.page.url();
     await sleep(800);
     expect(s.page.url(), 'a top.location write moved nothing').toBe(topUrl);
-    // _blank: a real click on the author's link to A. The guard routes it to the console's sheet; no window opens.
+    // _blank: the library emits no target=_blank link (raw HTML is off), so one is planted in the frame and clicked for
+    // real. Whether the click guard sends it to the console's sheet or it reaches the browser, no window opens.
+    await frame.evaluate(`(() => {
+      const a = document.createElement('a');
+      a.id = 'planted-blank'; a.target = '_blank'; a.href = ${JSON.stringify(origins.a + '/popup-blank')}; a.textContent = 'planted blank link';
+      document.body.prepend(a);
+    })()`);
+    await frame.locator('#planted-blank').click();
+    await sleep(1000);
+    expect(s.app.ctx.pages().length, 'the planted _blank link opened no window').toBe(1);
+    expect(origins.hits.slice(from).filter((h) => h.path.startsWith('/popup-blank')).map((h) => h.path), 'and nothing reached A').toEqual([]);
+    if (await s.page.getByText('Open this link?').count() > 0) await s.page.getByRole('button', { name: 'Cancel' }).click();
+    // And the author's own external link: a real click, which the guard routes to the console's sheet.
     await frame.getByRole('link', { name: 'popup link' }).click();
     await s.page.getByText('Open this link?').waitFor({ timeout: 10_000 });
     await sleep(800);
@@ -837,6 +874,8 @@ describe('W8a reader frame in Chrome', () => {
     expect(await s.page.locator('.doc-plain-note').first().textContent()).toBe(READER_FALLBACK_NOTE);
     expect(await s.page.locator('.docs-reader').count(), 'the frame is gone').toBe(0);
     expect(await s.page.getByRole('heading', { name: 'Small page' }).count(), 'the plain view shows the document').toBeGreaterThan(0);
+    expect(s.logs.some((l) => l.includes('ccrc: reader fell back (navigated)')), 'the reason went to the console').toBe(true);
+    expect(await s.page.evaluate(() => document.body.outerHTML.includes('navigated')), 'and appears nowhere in the DOM (M8.11)').toBe(false);
     await sleep(800);
     expect((await framesSeen(s.page)).length, 'the body does not mount again (M8.11)').toBe(1);
     expect(origins.hits.slice(from).filter((h) => h.path.startsWith('/nav')), 'the shell meta blocked the navigation').toEqual([]);
@@ -917,6 +956,8 @@ describe('W8a reader frame in Chrome', () => {
     expect(await settle(s.page, 30_000), 'the shell\'s script-src reaches the srcdoc child and its inline scripts do not run').toBe('fallback');
     expect(await s.page.locator('.doc-plain-note').first().textContent()).toBe(READER_FALLBACK_NOTE);
     expect(await s.page.getByRole('heading', { name: 'Small page' }).count(), 'the fallback renders the document').toBeGreaterThan(0);
+    expect(s.logs.some((l) => l.includes('ccrc: reader fell back (timeout)')), 'the reason (the watchdog) went to the console').toBe(true);
+    expect(await s.page.evaluate(() => document.body.outerHTML.includes('timeout')), 'and appears nowhere in the DOM (M8.11)').toBe(false);
   }, 120_000);
 
   it("M8.1 live: the iframe's attributes, the csp attribute equal to the srcdoc meta, and focus on mount", async () => {
@@ -1034,7 +1075,7 @@ describe('W8a reader frame in Chrome', () => {
     expect(await s.page.getByText('U+001B').count(), 'the sheet names the hidden character').toBeGreaterThan(0);
   }, 120_000);
 
-  it('M8.8: a seed value with </script><script> and U+2028 round-trips inert, and ids named like the seed or a library global change nothing', async () => {
+  it('M8.8: a seed value with </script><script> and U+2028 round-trips inert, and ids named like every bootstrap global change nothing', async () => {
     const s = await openInserted('m88.md');
     const summary = await summariseSrcdoc(s.page, 0);
     const seedText = summary.seed ?? '';
@@ -1046,15 +1087,22 @@ describe('W8a reader frame in Chrome', () => {
     // The frame holds exactly the scripts the prefix carries, and the hostile text is text.
     expect(await settle(s.page), 'the document reaches ready').toBe('ready');
     const frame = await readerFrame(s.page);
-    const live = await frame.evaluate(() => ({
+    // Mermaid has run while every bootstrap global is also an id in the document.
+    await frame.locator('.fig-render-btn').click();
+    await frame.waitForFunction(() => document.querySelector('figure.mermaid-figure')?.getAttribute('data-docreader-draw') === 'drawn', undefined, { timeout: 90_000 });
+    const live = await frame.evaluate((names) => ({
       scripts: document.querySelectorAll('script').length,
       text: document.body.textContent ?? '',
-      ids: ['location', 'instance', 'origin', 'document'].map((n) => document.getElementById(n)?.tagName ?? null),
-    }));
-    expect(live.scripts, 'guard, seed, bootstrap and enhance, and nothing planted').toBe(4);
+      missing: names.filter((n) => document.getElementById(n) === null),
+      duplicated: names.filter((n) => document.querySelectorAll(`[id="${n}"]`).length !== 1),
+      drawn: document.querySelectorAll('figure.mermaid-figure svg').length,
+    }), [...BOOTSTRAP_GLOBALS]);
+    expect(live.scripts, 'guard, seed, bootstrap, enhance and Mermaid, and nothing planted').toBe(5);
     expect(live.text.includes(`Body ${SCRIPT_CLOSE}${LS} text`), 'the body text holds the hostile run and U+2028 exactly').toBe(true);
-    expect(live.ids.filter((t) => t === null), 'the headings and the anchors render with their ids').toEqual([]);
-    expect(await frame.evaluate('typeof window.location + typeof window.document'), 'and the frame\'s globals are its own').toBe('objectobject');
+    expect(live.missing, `every one of the ${BOOTSTRAP_GLOBALS.length} bootstrap globals renders as an id`).toEqual([]);
+    expect(live.duplicated, 'each exactly once').toEqual([]);
+    expect(live.drawn, 'and the figure drew').toBe(1);
+    expect(await frame.evaluate('typeof window.location + typeof window.document'), 'and the frame\'s own globals are its own').toBe('objectobject');
     // The frame still behaves.
     await frame.getByRole('link', { name: 'the other page' }).click();
     await s.page.waitForFunction(() => location.pathname.endsWith('/other.md'), undefined, { timeout: 10_000 });
@@ -1135,6 +1183,7 @@ describe('W8a reader frame in Chrome', () => {
       elements: document.querySelectorAll('*').length,
     }));
     console.log(`T10-FIGURES worst ${JSON.stringify({ ...m, wallMs: wall, budget: READER_IMAGE_BUDGET_BYTES, seedImages: imageCount, painted })}`);
+    expect(summary.head.filter((h) => h.sha256 === FRAME_MANIFEST.mermaid.sha256).length, 'the Mermaid text is inlined once (the gate passed)').toBe(1);
     expect(m.srcdocChars).toBeGreaterThan(FRAME_MANIFEST.mermaid.chars);
     expect(imageCount, 'all 30 images are in the seed').toBe(DOCS_MAX_IMAGES_PER_PAGE);
     expect(painted.decoded, 'and all 30 decode in the frame').toBe(DOCS_MAX_IMAGES_PER_PAGE);
