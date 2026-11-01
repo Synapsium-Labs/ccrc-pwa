@@ -38,8 +38,14 @@ export type LinearKeyRead =
   | { kind: 'unreadable'; code: string };
 
 /** Never rejects: every outcome is a `LinearKeyRead`. */
-export async function readLinearKey(ccrcDir: string): Promise<LinearKeyRead> {
-  const r = await readValueFile(linearKeyPath(ccrcDir));
+export function readLinearKey(ccrcDir: string): Promise<LinearKeyRead> {
+  return readLinearKeyFile(linearKeyPath(ccrcDir));
+}
+
+/** `readLinearKey`'s rule for any key file: the legacy `linear.key`, or a slot's `<id>.key` (`store.ts`). The one
+ *  key reader is `readValueFile`, and every kind it answers survives. Never rejects. */
+export async function readLinearKeyFile(p: string): Promise<LinearKeyRead> {
+  const r = await readValueFile(p);
   switch (r.kind) {
     case 'value': return { kind: 'key', key: r.value };
     case 'absent': return { kind: 'absent' };
@@ -87,20 +93,63 @@ export function parseLinearDetails(raw: string): LinearDetails | null {
   };
 }
 
+// ---------------------------------------------------------------------------
+// ONE SET OF RULES FOR EVERY KEY AND ITS RECORD (#1444). A target is one key file and the display record beside
+// it: the legacy pair (`legacyPairTarget`, the two files above), or one slot under `linear/` (`store.ts`, a
+// version 2 record). The read, write, remove, check and verdict helpers below take a target, so the slot store
+// keeps the pair's order and race rules by calling them and never grows a second copy of them.
+// ---------------------------------------------------------------------------
+
+/** What every record holds, whatever its version: the digest of the key it describes and the last check. */
+export interface LinearRecordCore {
+  keyDigest: string;
+  checkedAt: number;
+  outcome: LinearCheckOutcome;
+}
+
+/** The measured read of a record file: absent, unreadable and malformed are three answers, never one `null`. */
+export type LinearRecordRead<R> =
+  | { kind: 'details'; details: R }
+  | { kind: 'absent' }
+  | { kind: 'unreadable'; code: string }
+  | { kind: 'malformed' };
+
+export interface LinearRecordTarget<R extends LinearRecordCore> {
+  keyPath: string;
+  recordPath: string;
+  /** Null when the text is not exactly the shape this build writes for the target. */
+  parse: (raw: string) => R | null;
+  /** The file's bytes for a record. */
+  text: (r: R) => string;
+}
+
+const detailsText = (d: LinearDetails): string => `${JSON.stringify({ v: 1, ...d })}\n`;
+
+/** The legacy pair, `linear.key` and its v1 `linear.json`. */
+export function legacyPairTarget(ccrcDir: string): LinearRecordTarget<LinearDetails> {
+  return { keyPath: linearKeyPath(ccrcDir), recordPath: linearDetailsPath(ccrcDir), parse: parseLinearDetails, text: detailsText };
+}
+
 /** Never rejects. */
-export async function readLinearDetails(ccrcDir: string): Promise<LinearDetailsRead> {
+export async function readLinearRecord<R extends LinearRecordCore>(t: LinearRecordTarget<R>): Promise<LinearRecordRead<R>> {
   let raw: string;
   try {
-    raw = await fsp.readFile(linearDetailsPath(ccrcDir), 'utf8');
+    raw = await fsp.readFile(t.recordPath, 'utf8');
   } catch (e) {
     return errnoOf(e) === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable', code: errnoOf(e) };
   }
-  const details = parseLinearDetails(raw);
+  const details = t.parse(raw);
   return details === null ? { kind: 'malformed' } : { kind: 'details', details };
 }
 
+/** Never rejects. */
+export function readLinearDetails(ccrcDir: string): Promise<LinearDetailsRead> {
+  return readLinearRecord(legacyPairTarget(ccrcDir));
+}
+
 /**
- * Every writer of either file goes through `withConnectionLock`. The lock is a promise chain per directory,
+ * Every writer of either file, and of the slot store's directory (`linear/`, `store.ts`), goes through
+ * `withConnectionLock`: ONE lock per ccrc dir for the pair and every slot. The lock is a promise chain per directory,
  * held for file work only: never across a call to Linear, so a slow Linear cannot hold up the 401 marker or a
  * Disconnect. An act that verified a key BEFORE taking the lock re-reads the stored key inside it and drops its
  * result when the key has since changed (`recordLinearCheck`).
@@ -115,56 +164,99 @@ export function withConnectionLock<T>(ccrcDir: string, fn: () => Promise<T>): Pr
   return run;
 }
 
-const detailsText = (d: LinearDetails): string => `${JSON.stringify({ v: 1, ...d })}\n`;
-
 /** The key's last four characters. */
 export const keyTailOf = (key: string): string => key.slice(-4);
 
+/** The key FIRST, then its record, both through `writeValueFileAtomic` (0600 from birth, fsynced). A crash between
+ *  the two leaves a key with no record (`details-unknown`), never a record of a key that is not there. Call inside
+ *  the lock. */
+export async function writeLinearKeyAndRecord<R extends LinearRecordCore>(t: LinearRecordTarget<R>, key: string, r: R): Promise<void> {
+  await writeValueFileAtomic(t.keyPath, `${key}\n`);
+  await writeValueFileAtomic(t.recordPath, t.text(r));
+}
+
+/** The record only, the key untouched. Call inside the lock. */
+export async function writeLinearRecord<R extends LinearRecordCore>(t: LinearRecordTarget<R>, r: R): Promise<void> {
+  await writeValueFileAtomic(t.recordPath, t.text(r));
+}
+
+/** The key FIRST, then the record, so a crash between the two leaves a record with no key (shown nowhere, and
+ *  finished by the next removal), never a key whose description is gone. Call inside the lock. */
+export async function removeLinearKeyAndRecord<R extends LinearRecordCore>(t: LinearRecordTarget<R>): Promise<void> {
+  await fsp.rm(t.keyPath, { force: true });
+  await fsp.rm(t.recordPath, { force: true });
+}
+
 /**
- * Connect: the key FIRST, then its details, both through `writeValueFileAtomic` (0600 from birth, fsynced). A
- * crash between the two leaves a key with no details, which the section shows as `details-unknown`, and never a
- * description of a key that is not there. Call inside the lock.
+ * The digest rule, for any target: write the record `build` makes ONLY if the stored key's digest still equals
+ * `digest`, so a result for a key replaced meanwhile can never describe, or condemn, the new one. `build` is handed
+ * the stored key (for its tail) and the previous record when it describes this same key, else null. Answers whether
+ * it wrote. Call inside the lock.
  */
-export async function writeLinearConnection(ccrcDir: string, key: string, details: LinearDetails): Promise<void> {
-  await writeValueFileAtomic(linearKeyPath(ccrcDir), `${key}\n`);
-  await writeValueFileAtomic(linearDetailsPath(ccrcDir), detailsText(details));
+export async function recordLinearCheckAt<R extends LinearRecordCore>(
+  t: LinearRecordTarget<R>, digest: string, build: (key: string, same: R | null) => R,
+): Promise<boolean> {
+  const k = await readLinearKeyFile(t.keyPath);
+  if (k.kind !== 'key' || valueDigestHex(k.key) !== digest) return false;
+  const prev = await readLinearRecord(t);
+  const same = prev.kind === 'details' && prev.details.keyDigest === digest ? prev.details : null;
+  await writeLinearRecord(t, build(k.key, same));
+  return true;
+}
+
+/**
+ * The verdict clearing, for any target: only if the stored key still has `usedDigest` AND its record describes that
+ * key with a `rejected` or `forbidden` outcome; the rest of the record is kept. Answers whether it wrote. Call inside
+ * the lock.
+ */
+export async function clearLinearVerdictAt<R extends LinearRecordCore>(
+  t: LinearRecordTarget<R>, usedDigest: string, now: number,
+): Promise<boolean> {
+  const k = await readLinearKeyFile(t.keyPath);
+  if (k.kind !== 'key' || valueDigestHex(k.key) !== usedDigest) return false;
+  const prev = await readLinearRecord(t);
+  if (prev.kind !== 'details' || prev.details.keyDigest !== usedDigest) return false;
+  if (prev.details.outcome !== 'rejected' && prev.details.outcome !== 'forbidden') return false;
+  await writeLinearRecord(t, { ...prev.details, checkedAt: now, outcome: 'ok' });
+  return true;
+}
+
+/**
+ * Connect: the key FIRST, then its details (`writeLinearKeyAndRecord`). A crash between the two leaves a key with no
+ * details, which the section shows as `details-unknown`, and never a description of a key that is not there. Call
+ * inside the lock.
+ */
+export function writeLinearConnection(ccrcDir: string, key: string, details: LinearDetails): Promise<void> {
+  return writeLinearKeyAndRecord(legacyPairTarget(ccrcDir), key, details);
 }
 
 /** Check again: the details only, the key untouched. Call inside the lock. */
-export async function writeLinearDetails(ccrcDir: string, details: LinearDetails): Promise<void> {
-  await writeValueFileAtomic(linearDetailsPath(ccrcDir), detailsText(details));
+export function writeLinearDetails(ccrcDir: string, details: LinearDetails): Promise<void> {
+  return writeLinearRecord(legacyPairTarget(ccrcDir), details);
 }
 
 /** Disconnect: the key FIRST, then the details, so a crash between the two leaves details with no key (shown as
  *  not connected, and finished by the next Disconnect), never a key whose description is gone. Call inside the lock. */
-export async function removeLinearConnection(ccrcDir: string): Promise<void> {
-  await fsp.rm(linearKeyPath(ccrcDir), { force: true });
-  await fsp.rm(linearDetailsPath(ccrcDir), { force: true });
+export function removeLinearConnection(ccrcDir: string): Promise<void> {
+  return removeLinearKeyAndRecord(legacyPairTarget(ccrcDir));
 }
 
 /**
  * Record what a check of the key whose digest is `digest` found: THE ONE PLACE `linear.json` is written for a
  * check, by Check again and by the 401 marker alike. It writes ONLY if the stored key's digest still equals
- * `digest`, so a result for a key the operator has just replaced (a check in flight across a Connect) can never
- * describe, or condemn, the new one. Answers whether it wrote.
+ * `digest` (`recordLinearCheckAt`), so a result for a key the operator has just replaced (a check in flight across a
+ * Connect) can never describe, or condemn, the new one. Answers whether it wrote.
  *
  * `names` is what an `ok` check learned; any other outcome keeps the previous record's names when that record
  * describes this same key, so the section still says which organisation a rejected key belonged to.
  */
-export async function recordLinearCheck(
+export function recordLinearCheck(
   ccrcDir: string, digest: string, outcome: LinearCheckOutcome, names: { org: string; user: string } | null, now: number,
 ): Promise<boolean> {
-  return withConnectionLock(ccrcDir, async () => {
-    const k = await readLinearKey(ccrcDir);
-    if (k.kind !== 'key' || valueDigestHex(k.key) !== digest) return false;
-    const prev = await readLinearDetails(ccrcDir);
-    const same = prev.kind === 'details' && prev.details.keyDigest === digest ? prev.details : null;
-    await writeLinearDetails(ccrcDir, {
-      org: names?.org ?? same?.org ?? null, user: names?.user ?? same?.user ?? null,
-      keyTail: keyTailOf(k.key), keyDigest: digest, checkedAt: now, outcome,
-    });
-    return true;
-  });
+  return withConnectionLock(ccrcDir, () => recordLinearCheckAt(legacyPairTarget(ccrcDir), digest, (key, same) => ({
+    org: names?.org ?? same?.org ?? null, user: names?.user ?? same?.user ?? null,
+    keyTail: keyTailOf(key), keyDigest: digest, checkedAt: now, outcome,
+  })));
 }
 
 /**
@@ -186,13 +278,5 @@ export function markLinearRejected(ccrcDir: string, usedDigest: string, now: num
  * per lookup). The names the record already holds are kept. Answers whether it wrote.
  */
 export function clearLinearVerdict(ccrcDir: string, usedDigest: string, now: number): Promise<boolean> {
-  return withConnectionLock(ccrcDir, async () => {
-    const k = await readLinearKey(ccrcDir);
-    if (k.kind !== 'key' || valueDigestHex(k.key) !== usedDigest) return false;
-    const prev = await readLinearDetails(ccrcDir);
-    if (prev.kind !== 'details' || prev.details.keyDigest !== usedDigest) return false;
-    if (prev.details.outcome !== 'rejected' && prev.details.outcome !== 'forbidden') return false;
-    await writeLinearDetails(ccrcDir, { ...prev.details, checkedAt: now, outcome: 'ok' });
-    return true;
-  });
+  return withConnectionLock(ccrcDir, () => clearLinearVerdictAt(legacyPairTarget(ccrcDir), usedDigest, now));
 }
