@@ -10,10 +10,11 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (123, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
+/** The members reached through the whole store (122, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
  *  before D-7580, WP3, whose lanes' units read 11 through the port; 155 before D-7581, WP4, whose mail helpers and mail,
- *  landing-checks and tmp-sweep units take the port; 132 before D-7582, WP5, whose stall lane takes the port; and 129
- *  before D-7583, WP6, whose child-reclaim chain and lane take the port). Sorted. */
+ *  landing-checks and tmp-sweep units take the port; 132 before D-7582, WP5, whose stall lane takes the port; 129
+ *  before D-7583, WP6, whose child-reclaim chain and lane take the port; and 123 before D-7584, WP7, whose archive
+ *  chain, beats and lane take the port). Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById', 'bindingRunsOf', 'bindingsOf',
   'checksRows', 'childReclaimCoordinatorClaims',
@@ -33,7 +34,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'outstandingMailFor', 'poolEpoch', 'programOpenRunCount', 'projectDelegationCheckpoint',
   'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions', 'raiseLedgerFloor',
   'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap', 'recordRejection', 'recordRunEvent',
-  'recordShadowVerdict', 'refusalsFor', 'refuseRelease', 'rekeyNode', 'releaseAsk',
+  'refusalsFor', 'refuseRelease', 'rekeyNode', 'releaseAsk',
   'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk', 'retireGeneration',
   'rollSettings', 'run',
   'runEvents', 'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
@@ -42,11 +43,8 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'updateEpoch', 'upsertNodeMeasurement',
 ];
 
-/** Each whole hand-off key (20) with its call-site count (21 in all), sorted by key. */
+/** Each whole hand-off key (16) with its call-site count (17 in all), sorted by key. */
 export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
-  'watch.ts#FleetWatcher.archivedExpiryPass -> coord/expireArchived.ts#expireArchived': 1,
-  'watch.ts#FleetWatcher.archivedExpiryPass -> coord/expireArchived.ts#recordExpireFeed': 1,
-  'watch.ts#FleetWatcher.archivedExpiryStoreRead -> coord/expireArchived.ts#childEverCoordinated': 1,
   'watch.ts#FleetWatcher.constructor -> coord/questions.ts#createQuestions': 1,
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#endDeadCoordinator': 1,
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#readDeadCoordinatorJournalTrust': 1,
@@ -61,7 +59,6 @@ export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.mirrorFor -> coord/mirror.ts#JournalMirror': 1,
   'watch.ts#FleetWatcher.noteDeadCoordinatorSeed -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreakerSeed': 1,
   'watch.ts#FleetWatcher.orphanBeat -> orphanTreeBeat.ts#OrphanTreeBeat': 1,
-  'watch.ts#FleetWatcher.recordChildShadow -> coord/expireArchived.ts#recordExpireFeed': 1,
   'watch.ts#FleetWatcher.staleArchive -> staleArchiveBeat.ts#StaleArchiveBeat': 1,
   'watch.ts#FleetWatcher.tick -> fleet.ts#assembleFleet': 1,
 };
