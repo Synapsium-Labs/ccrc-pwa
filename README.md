@@ -2300,7 +2300,16 @@ else `unrecognised`) and those it does not know, the upstream request id of its 
 values of the last reply, kept only in the numeric shape the usage poll reads. It never holds a request or reply body,
 a token, any message content, or any other header value (the reply's media type is counted as a name,
 `content-type:<type>`). The store holds the upstream's encrypted reasoning items under
-hashed keys, nothing else, for 14 days and at most 256 MB, the oldest evicted first. `ccrc codex status <id> --json`
+hashed keys, nothing else, for 14 days and at most 256 MB, the oldest evicted first. At each start the bridge runs
+sqlite's `integrity_check` on the store: a damaged one is renamed `reasoning.sqlite.damaged-<UTC stamp>`, its `-wal`
+and `-shm` beside it, only the newest such copy is kept, and a fresh store is made, so only the model's earlier
+reasoning is lost. A store that cannot be used otherwise (a failure while the bridge runs, or a locked file at the
+start) is switched off for the rest of that process: every request is answered without earlier reasoning replayed,
+until the next start checks it again. The stats file's `store` entry says which, for the process that wrote it: `ok`,
+`set-aside` or `disabled`, with the reason and time (a file with no entry is from a bridge that predates it, never
+`ok`). On a `direct` lane doctor's `codex` check WARNs on `disabled` until a restart (`ccrc codex stop <id>`, then
+`start`) writes a fresh entry, and on `set-aside` while the copy is still in the lane directory, until you delete it
+with its `-wal` and `-shm`. `ccrc codex status <id> --json`
 adds `mode`, `upstream`, `tiers.bridge` and `bridge` (the stats file's time, last upstream request id, refusals,
 outcomes and unknown names; `null` when there is none). Doctor's `codex` check reads the lane by its mode: on a
 `direct` lane the bridge tier's running, stale (a WARN, cured by `ccrc update` (`--force` on a box already converged),
