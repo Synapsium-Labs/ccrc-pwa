@@ -80,6 +80,17 @@ describe('routeReaderLink', () => {
     });
   });
 
+  it('a mailto with no host (empty, or recipients only in ?to=) still opens a sheet, and its warning never reads "goes to ."', () => {
+    for (const url of ['mailto:', 'mailto:?to=x@c.a.example']) {
+      const r = routeReaderLink(ctx(), external(url, '', 'mailto'), 'b.a.example');
+      expect(r).toEqual({ kind: 'sheet', url, scheme: 'mailto', host: '', foreign: true });
+      const warning = READER_SHEET_TEXT.linkForeign('');
+      expect(warning).not.toMatch(/goes to\s*\./);
+      expect(warning).toContain('mail');
+    }
+    expect(READER_SHEET_TEXT.linkForeign('c.a.example'), 'a named host is still named').toContain('goes to c.a.example.');
+  });
+
   it('an external link whose URL does not parse, or whose scheme is outside the allowlist, is inert', () => {
     expect(routeReaderLink(ctx(), external('not a url', 'x'), 'b.a.example')).toEqual({ kind: 'inert' });
     // The classifier said https; the URL says otherwise: the URL rules.

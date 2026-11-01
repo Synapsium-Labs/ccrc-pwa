@@ -6,7 +6,9 @@
 //
 // A `relative` link goes through `docLinkTarget`, the one decision for a Markdown link on a Docs page, so the reader
 // cannot route a link the plain view would refuse; an `external` link is re-derived from its URL (the scheme and host
-// the classifier reported are not trusted). Each `null` here has one meaning, stated at the function.
+// the classifier reported are not trusted), except the host of a `mailto`, which has no hostname to re-derive and keeps
+// the host the classifier reported (empty when the first address names none; the sheet words that case without a host).
+// Each `null` here has one meaning, stated at the function.
 import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
 import { utf8ByteLength } from '../../lib/markdownGuard';
 import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS } from '../../lib/readerLimits';

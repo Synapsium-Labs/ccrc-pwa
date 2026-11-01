@@ -19,7 +19,9 @@ export const READER_SHEET_TEXT = {
   linkTitle: 'Open this link?',
   /** The warning shown for a host other than the console's own (refinement (h): any other host). */
   linkForeign: (host: string): string =>
-    `This link leaves this console and goes to ${host}. Check the address before you open it.`,
+    host === ''
+      ? 'This link opens your mail app. Check the address before you open it.' // a mailto with no host to name
+      : `This link leaves this console and goes to ${host}. Check the address before you open it.`,
   linkOpen: 'Open',
   linkCancel: 'Cancel',
   copyTitle: 'Copy with hidden characters?',
