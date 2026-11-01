@@ -2251,6 +2251,8 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
   // detail — a `failed` here would halt the fleet and the server would never follow a box that DID move.
   itLinux('a detached console update whose doctor fails ends its report on `done`, the "the box moved" detail, from pwa — the follow-through\'s input (D-7679, D-3114)', async () => {
     const home = gateBox('ccrc-update-detach-doctor-', 'fleet', 1);
+    // A console move always names its tag (`--to`), which fetches download/<tag>, not latest/download.
+    packRelease(home, stubTree(home, { version: 'v2.0.0', installExit: 1 }), { tag: 'v2.0.0', latest: false });
     writeFileSync(join(home, 'fixture-stub-installed'), 'yes\n');
     writeFileSync(join(home, 'fixture-systemd-run-exec'), '');
     writeFileSync(join(home, '.local', 'bin', 'ccrc'),
