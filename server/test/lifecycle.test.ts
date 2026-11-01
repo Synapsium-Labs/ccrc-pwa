@@ -1027,9 +1027,15 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   // nothing writes any more. Counted exit: graph classes 5 -> 6.
   it('declares the six graphify classes of spec §10, and none of the four retired ones', () => {
     const graph = LIFECYCLE.filter((c) => c.name.startsWith('graph-') || c.name.endsWith('-graph-store'));
-    expect(graph.map((c) => [c.name, c.pattern])).toEqual([
-      ['graph-repo-build', 'E'], ['graph-repo-checkout', 'O'], ['graph-repo-memory', 'O'],
-      ['graph-staging', 'E'], ['graph-tree-link', 'W'], ['graph-sweep-census', 'R'],
+    // The root is pinned too, so each declaration is held to the layout ccd-graph-sweep writes (the checkout sits
+    // under <key>/checkout/, D-7664).
+    expect(graph.map((c) => [c.name, c.pattern, c.root])).toEqual([
+      ['graph-repo-build', 'E', '<store>/<repo-key>/builds/'],
+      ['graph-repo-checkout', 'O', '<store>/<repo-key>/checkout/<repo-name>/'],
+      ['graph-repo-memory', 'O', '<store>/<repo-key>/memory/'],
+      ['graph-staging', 'E', '<store>/<repo-key>/staging/'],
+      ['graph-tree-link', 'W', '<tree>/graphify-out (a symlink to <store>/<repo-key>/current)'],
+      ['graph-sweep-census', 'R', '~/.ccrc/graph-sweep.json'],
     ]);
     for (const c of graph) {
       expect(c.collector, `${c.name} is collected`).toBeTruthy();

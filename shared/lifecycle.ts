@@ -21,7 +21,9 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'graph-repo-build', root: '<store>/<repo-key>/builds/', pattern: 'E',
     creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (pass end: beyond CCRC_GRAPH_KEEP_BUILDS and older than CCRC_GRAPH_BUILD_GRACE_SECS)',
     bound: 'CCRC_GRAPH_KEEP_BUILDS published builds per repository', tier: 'one AST graph per build', ruling: null },
-  { name: 'graph-repo-checkout', root: '<store>/<repo-key>/<repo-name>/', pattern: 'O',
+  // The checkout sits under <key>/checkout/, never <key>/<name>, so a repository named builds, memory or staging
+  // cannot collide with its siblings (D-7664; ccd-graph-sweep writes this layout).
+  { name: 'graph-repo-checkout', root: '<store>/<repo-key>/checkout/<repo-name>/', pattern: 'O',
     creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep, when the repository is gone or excluded (after CCRC_GRAPH_BUILD_GRACE_SECS)',
     bound: 'one per repository', tier: 'one checkout of the main line per repository', ruling: null },
   { name: 'graph-repo-memory', root: '<store>/<repo-key>/memory/', pattern: 'O',
