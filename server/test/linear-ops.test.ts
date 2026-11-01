@@ -787,12 +787,12 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     expect(before).toBeNull();
     const v = callRow('update').variables(valid('update', { ref: 'AAA-12', body: { state: 'Todo' } }), ctxOf({ directory: before }));
     expect(v).toEqual({ ok: false, word: 'name-unknown', field: 'state' });
-    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     expect(LINEAR_MISS_RETRY_AFTER_S).toBe(10);
     // Answered at once: nothing reached the fake inside the request.
     expect(b.sent).toHaveLength(0);
     // A second miss while it is queued queues nothing new.
-    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
     expect(b.sent.map((s) => s.query)).toEqual(LINEAR_DIRECTORY_COLLECTIONS.map((c) => LINEAR_DIRECTORY_DOCUMENTS[c]));
     // The retry after the refresh resolves the name, cleaned, from the directory the refresher filled.
@@ -812,17 +812,110 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     const b = box();
     await put(b, KEY_1);
     expect(LINEAR_DIRECTORY_REFRESH_MS).toBe(10 * MIN);
-    b.fx.refresher.nameMiss(SLOT);
+    b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(4);
     b.clock.now = T + 10 * MIN - 1;
-    expect(b.fx.refresher.nameMiss(SLOT)).toBe('unknown');
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(4);
     b.clock.now = T + 10 * MIN;
-    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(8);
+  });
+
+  it('the window is the fill\'s, for the key the request read: a replaced key inside it answers refreshing, and the next pages carry the new key', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    b.fx.refresher.nameMiss(SLOT, D1);
+    await b.fx.refresher.idle();
+    expect(b.fx.refresher.directory.get(SLOT, D1)).not.toBeNull();
+    b.clock.now = T + MIN;
+    await put(b, KEY_2);
+    const d2 = valueDigestHex(KEY_2);
+    expect(b.fx.refresher.directory.get(SLOT, d2)).toBeNull();
+    expect(b.fx.refresher.nameMiss(SLOT, d2)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent.slice(4).map((s) => s.auth)).toEqual([KEY_2, KEY_2, KEY_2, KEY_2]);
+    expect(b.fx.refresher.directory.get(SLOT, d2)).not.toBeNull();
+    expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+    // Filled for the new key now, so the window holds for it.
+    b.clock.now = T + 2 * MIN;
+    expect(b.fx.refresher.nameMiss(SLOT, d2)).toBe('unknown');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(8);
+  });
+
+  it('a refresh that failed fills nothing, so the next miss answers refreshing and queues again', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    b.answer = async (s) => (s.query === LINEAR_DOCUMENTS.directoryUsers
+      ? linearAnswer({ ok: false, status: 500, json: async () => ({}) }) : ok(pageFor(s)));
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+    b.clock.now = T + MIN;
+    b.answer = async (s) => ok(pageFor(s));
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(8);
+    expect(b.fx.refresher.directory.get(SLOT, D1)).not.toBeNull();
+  });
+
+  it('a first refresh refused by a spent floor fills nothing, so a miss a minute later answers refreshing', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    while (b.fx.rate.take({ lane: 'floor', slot: SLOT, calls: 1 }).ok) { /* spend the floor */ }
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(0);
+    b.clock.now = T + MIN;
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+  });
+
+  it('an add, a replace and a Check again queue the directory past the window (queueDirectory), once while one is queued', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    b.fx.refresher.nameMiss(SLOT, D1);
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(4);
+    b.clock.now = T + MIN;
+    b.fx.refresher.queueDirectory(SLOT);
+    b.fx.refresher.queueDirectory(SLOT);
+    // While it is queued a miss says so, whatever the window.
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
+    expect(b.sent).toHaveLength(4);
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(8);
+    // Its window is counted from this fill, not the first one.
+    b.clock.now = T + MIN + 10 * MIN - 1;
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
+    b.clock.now = T + MIN + 10 * MIN;
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(12);
+  });
+
+  it('a replace while a refresh runs queues another: the running one stops and records nothing, the next fills for the new key', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    let replaced = false;
+    b.answer = async (s) => {
+      if (!replaced && s.query === LINEAR_DOCUMENTS.directoryLabels) {
+        replaced = true;
+        await put(b, KEY_2);
+        b.fx.refresher.queueDirectory(SLOT);
+      }
+      return ok(pageFor(s));
+    };
+    b.fx.refresher.nameMiss(SLOT, D1);
+    await b.fx.refresher.idle();
+    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1, KEY_1, KEY_2, KEY_2, KEY_2, KEY_2]);
+    expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+    expect(b.fx.refresher.directory.get(SLOT, valueDigestHex(KEY_2))).not.toBeNull();
   });
 
   it('pages 250 a page, up to 4 pages a collection, with the cursor; a fifth page is never asked', async () => {
@@ -831,7 +924,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     b.answer = async (s) => (s.query === LINEAR_DOCUMENTS.directoryProjects
       ? ok({ data: { projects: conn([{ id: PROJECT_X, name: `P ${String(s.variables['after'])}` }], `c${Number(String(s.variables['after'] ?? 'c0').slice(1)) + 1}`) } })
       : ok(pageFor(s)));
-    b.fx.refresher.nameMiss(SLOT);
+    b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
     const projectPages = b.sent.filter((s) => s.query === LINEAR_DOCUMENTS.directoryProjects);
     expect(projectPages.map((s) => s.variables['after'])).toEqual([null, 'c1', 'c2', 'c3']);
@@ -845,7 +938,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
       if (s.query === LINEAR_DOCUMENTS.directoryLabels) await put(b, KEY_2);
       return ok(pageFor(s));
     };
-    b.fx.refresher.nameMiss(SLOT);
+    b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
     expect(b.sent.map((s) => s.auth)).toEqual([KEY_1, KEY_1]);
     expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
@@ -857,7 +950,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     await put(b, KEY_1);
     b.answer = async (s) => (s.query === LINEAR_DOCUMENTS.directoryUsers
       ? linearAnswer({ ok: false, status: 500, json: async () => ({}) }) : ok(pageFor(s)));
-    b.fx.refresher.nameMiss(SLOT);
+    b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(4);
     expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
@@ -867,7 +960,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     const b = box();
     await put(b, KEY_1);
     while (b.fx.rate.take({ lane: 'floor', slot: SLOT, calls: 1 }).ok) { /* spend the floor */ }
-    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(0);
     expect(b.fx.rate.take({ lane: 'request', slot: SLOT, calls: 25 }).ok).toBe(true);
@@ -877,7 +970,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
   it('a team miss and a name miss are two jobs of the one queue, one slot at a time', async () => {
     const b = box();
     await put(b, KEY_1);
-    b.fx.refresher.nameMiss(SLOT);
+    b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
     // A name miss inside its window does not stop a team refresh, and the other way about.
     const listed = await readLinearStore(b.dir);
@@ -888,7 +981,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
         teams: { nodes: [{ ...TEAM_A, name: 'Team A' }], pageInfo: { hasNextPage: false, endCursor: null } } } })
       : ok(pageFor(s)));
     expect(b.fx.refresher.miss(listed)).toBe('refreshing');
-    expect(b.fx.refresher.nameMiss(SLOT)).toBe('unknown');
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
     await b.fx.refresher.idle();
     expect(b.sent.slice(4).map((s) => s.query.split(' ')[1])).toEqual(['KeyCheck($after:']);
   });

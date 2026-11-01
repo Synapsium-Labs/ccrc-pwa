@@ -7,8 +7,9 @@
  * of the key that filled it, so a replaced key drops it: a lookup with another digest finds nothing.
  *
  * FILLED IN THE BACKGROUND ONLY. Nothing here calls Linear, and no request fills it: a name the directory does not
- * hold is answered `name-unknown` at once, and the miss queues the refresher (`LinearRefresher#nameMiss`), at most once
- * in ten minutes a slot. Lookups are the operation table's (`ops.ts#lookupLinearName`), over what `get` answers.
+ * hold is answered `name-unknown` at once, and the miss queues the refresher (`LinearRefresher#nameMiss`) unless the
+ * slot was filled for the same key inside ten minutes (`filledAt`). Lookups are the operation table's
+ * (`ops.ts#lookupLinearName`), over what `get` answers.
  */
 import type { LinearDirectoryEntries } from './ops.js';
 import type { LinearSlotRef } from './store.js';

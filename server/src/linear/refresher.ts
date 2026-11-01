@@ -13,9 +13,10 @@
  * Its calls are charged to the slot's `floor` in the rate service (§6.7), never to a session or a request.
  *
  * THE DIRECTORY TOO (spec §4.4, R5). The same queue fills each slot's directory of states, labels, projects and
- * active users (`directory.ts`), which it alone constructs and writes: a name the directory lacks queues it through
- * `nameMiss`, at most once in ten minutes a slot, 250 entries a page up to 4 pages a collection, each page charged to
- * the slot's `floor`. No request ever fills it.
+ * active users (`directory.ts`), which it alone constructs and writes: a name the directory lacks for the request's key
+ * queues it through `nameMiss`, and an add, a replace or a Check again through `queueDirectory`, 250 entries a page up
+ * to 4 pages a collection, each page charged to the slot's `floor`. A directory filled for that key inside ten minutes
+ * is not refreshed again on a miss. No request ever fills it.
  *
  * NO KEY IS HELD. The queue holds slot references and times; each page of each refresh reads the key from its file
  * (`readLinearSlotKey`), so a key removed or replaced mid-refresh stops it at its next page, and it records nothing.
@@ -108,7 +109,8 @@ const jobKeyOf = (kind: JobKind, ref: LinearSlotRef): string => `${kind}|${slotK
 
 export class LinearRefresher {
   private readonly queued = new Map<string, Job>();
-  /** When each job's last run (or a slot's Check again) started: its window is counted from here. */
+  /** When each teams job's last run (or a slot's Check again) started: its five-minute window is counted from here.
+   *  A directory's window is the directory's own fill time (`LinearDirectory#filledAt`), never this. */
   private readonly lastRun = new Map<string, number>();
   /** The one directory (spec §4.4): this refresher is its only writer. */
   private readonly names = new LinearDirectory();
@@ -157,19 +159,30 @@ export class LinearRefresher {
   }
 
   /**
-   * A name the slot's directory does not hold (or a directory not yet filled), spec §4.4. Queues the slot's directory
-   * refresh unless one is queued or running, or one started inside the ten-minute window, and answers at once, before
-   * it runs: never a promise, never a Linear call. `refreshing` when a refresh that could cure the miss is queued or
-   * running (retry after `LINEAR_MISS_RETRY_AFTER_S`); `unknown` when the directory was refreshed inside the window.
-   * An add, a replace and a Check again queue the slot's directory the same way.
+   * A name the slot's directory does not hold for `keyDigest`, the digest of the key the request read (or a directory
+   * not yet filled for it), spec §4.4. Answers at once, before anything runs: never a promise, never a Linear call.
+   * `refreshing` (retry after `LINEAR_MISS_RETRY_AFTER_S`) when the slot's directory refresh is queued or running, or
+   * when this miss queues one. `unknown` only when the directory was FILLED for this digest inside the ten-minute
+   * window: the window is counted from a refresh that succeeded, for this key. So a replaced key (whose digest finds no
+   * fill) and a refresh that failed or was refused (which fills nothing) both answer `refreshing` and queue.
    */
-  nameMiss(ref: LinearSlotRef): LinearMissDetail {
+  nameMiss(ref: LinearSlotRef, keyDigest: string): LinearMissDetail {
     const key = jobKeyOf('directory', ref);
     if (this.queued.has(key) || this.running === key) return 'refreshing';
-    const last = this.lastRun.get(key);
-    if (last !== undefined && this.now() - last < LINEAR_DIRECTORY_REFRESH_MS) return 'unknown';
+    const filledAt = this.names.filledAt(ref, keyDigest);
+    if (filledAt !== null && this.now() - filledAt < LINEAR_DIRECTORY_REFRESH_MS) return 'unknown';
     this.enqueue({ kind: 'directory', ref });
     return 'refreshing';
+  }
+
+  /**
+   * An add, a replace or a Check again of `ref`'s key (spec §4.4): queues the slot's directory refresh past the
+   * ten-minute window, once while one is queued. A refresh already running is not enough (it may be reading the key
+   * that was just replaced, and it stops at its next page, recording nothing), so the one queued here runs after it.
+   */
+  queueDirectory(ref: LinearSlotRef): void {
+    if (this.queued.has(jobKeyOf('directory', ref))) return;
+    this.enqueue({ kind: 'directory', ref });
   }
 
   /** Resolves once the queue is empty. For tests and an orderly shutdown; nothing in a request waits on it. */
@@ -209,7 +222,7 @@ export class LinearRefresher {
       const [key, job] = next.value;
       this.queued.delete(key);
       this.running = key;
-      this.lastRun.set(key, this.now());
+      if (job.kind === 'teams') this.lastRun.set(key, this.now());
       try {
         if (job.kind === 'teams') await this.refresh(job.ref);
         else await this.refreshDirectory(job.ref);
