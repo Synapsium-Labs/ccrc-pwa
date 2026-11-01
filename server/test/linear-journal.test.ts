@@ -58,7 +58,7 @@ describe('linear_events: one new migration that seeds nothing (#1444, D-7671)', 
     expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => /linear_events/.test(m))).toBe(false);
   });
 
-  it('the entry alone adds the table and its index on result; openCoordDb reaches a database one version before it', () => {
+  it('the entry alone adds the table and its index on result', () => {
     expect(SLOT, 'no MIGRATIONS entry creates linear_events').toBeGreaterThanOrEqual(36);
     const p = path.join(mkTmp('ccrc-mig-linear-events-'), '.ccrc', 'coord.db');
     mkdirSync(path.dirname(p), { recursive: true });
@@ -70,12 +70,26 @@ describe('linear_events: one new migration that seeds nothing (#1444, D-7671)', 
     const names = (): string[] => (raw.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'")
       .all() as { name: string }[]).map((r) => r.name);
     const had = names();
+    // THIS ENTRY ALONE: the old case reached the current version through `openCoordDb`, which also runs every later
+    // migration, so it assumed none came after 36. Only this entry's own objects are compared here.
+    raw.exec(MIGRATIONS[SLOT - 1]!);
+    expect(names().filter((n) => !had.includes(n)).sort()).toEqual(['linear_events', 'linear_events_by_result']);
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM linear_events').get()).toEqual({ n: 0 });
+    raw.close();
+  });
+
+  it('openCoordDb reaches a database one version before it, and the table is empty', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates linear_events').toBeGreaterThanOrEqual(36);
+    const p = path.join(mkTmp('ccrc-mig-linear-events-open-'), '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+    });
     raw.close();
     const db = openCoordDb(p);
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
-    const now = (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'")
-      .all() as { name: string }[]).map((r) => r.name);
-    expect(now.filter((n) => !had.includes(n)).sort()).toEqual(['linear_events', 'linear_events_by_result']);
     expect(db.prepare('SELECT COUNT(*) AS n FROM linear_events').get()).toEqual({ n: 0 });
     db.close();
   });

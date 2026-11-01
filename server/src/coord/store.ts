@@ -3,6 +3,10 @@ import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readCheck
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
+import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import * as ledgers from './ledgersStore.js';
+import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
+export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
 import type { LandingAdvance, LandingWrite } from './landingEntry.js';
 import type { LandingEntry, LandingEntryState } from '../../../shared/landingLine.js';
@@ -9824,6 +9828,54 @@ export class CoordStore {
     if (done.kind !== 'appended') return done;
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
       after: this.collectLaneRow(), journalAfter: journal.read() };
+  }
+
+  // ── programme ledgers (plan PL2) ────────────────────────────────────────────────────────────────────────────────────
+  //
+  // The SQL lives in `ledgersStore.ts` (ARCH-01: this file takes delegates, not the god-file's next 150 lines). The moves are
+  // decided by `nextItemState` and written by that module's `moveItemInTx`, the only writer of `operator_items.state`.
+
+  /** The coordinator raises an item (open, with its `raise` event). Returns the new id. */
+  raiseItem(input: RaiseItemInput, now: number): number { return ledgers.raiseItem(this.db, input, now); }
+  itemById(id: number): ItemRow | null { return ledgers.itemById(this.db, id); }
+  /** The items still waiting and those cleared inside the 7-day window; `program === null` means every programme. */
+  itemsFor(program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } { return ledgers.itemsFor(this.db, program, now); }
+  /** One move of one item, atomic with its event; the decider is `nextItemState`. */
+  moveItem(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }): ItemMoveResult { return ledgers.moveItem(this.db, id, act, actor, fields, now, ctx); }
+  /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back, and `queue` must open no transaction (`tx` does not nest). */
+  tickWithMail<T>(id: number, answer: string | null, now: number, queue: (item: ItemRow) => T) { return ledgers.tickWithMail(this.db, id, answer, now, queue); }
+  setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
+  itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now); }
+  addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
+  goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
+
+  /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
+   *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */
+  programmeHasOpenRun(program: string): boolean {
+    return this.programOpenRunCount(program) > 0;
+  }
+
+  /** The `claimedBy` of the programme's lowest-id run that is not `done` or `failed` and was claimed by someone, or
+   *  null when it has none. A run no one claimed (`reconstruct` writes those) names no coordinator, as `openRun`'s own
+   *  arbitration also skips it. */
+  programmeCoordinator(program: string): string | null {
+    const r = this.db.prepare(
+      `SELECT claimedBy FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND claimedBy IS NOT NULL ORDER BY id LIMIT 1`,
+    ).get(program) as { claimedBy: string } | undefined;
+    return r?.claimedBy ?? null;
+  }
+
+  /** True iff a non-terminal run of the programme is claimed by `sessionId`: the coordinator's right to write the
+   *  programme's items, pin and modifications (spec §3.4). A session that claims only a closed run has none. It asks
+   *  the binding's one view (`bindingsOf(...).claimant()`, ARCH-42/62) rather than reading `claimedBy` a
+   *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
+   *  a coordinator with a row this box cannot represent is never told "not your programme". */
+  claimsProgramme(sessionId: string, program: string): boolean {
+    const open = this.bindingsOf(sessionId).claimant();
+    if (!open.ok) throw new Error(`claimsProgramme: ${open.detail}`);
+    return open.siblings.some((r) => r.program === program);
   }
 }
 

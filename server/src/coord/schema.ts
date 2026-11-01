@@ -1984,6 +1984,85 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX linear_events_by_result ON linear_events(result);
   `,
+  // ── 37: user_version 36 -> 37 ─────────────────────────────────────────────
+  // Programme ledgers (plan PL2, spec 2026-10-31 §3-§4): the operator's items, the history of each, the spec
+  // modifications, and the spec pin on the programme row. Everything is keyed on the programme's SLUG (spec §3.4), not
+  // on a run, so a programme with no open run still has its items (shown as ended, dismissable) and they are live again
+  // exactly as they were if a run opens under the same slug.
+  //
+  // `operator_items`: one row per item. Its ONE writer is `CoordStore` (`raiseItem` inserts; `moveItem` is the only
+  // writer of `state`, `tickedAt`, `closedAt`, `answer` and the return `note`, and it decides only through
+  // `nextItemState` in `shared/ledgers.ts`; `setBlocking` is the only other writer, of `neededBy`). Its readers are
+  // `itemById`, `itemsFor` and the routes and frames built on them. `how` and `options` are JSON `string[]` text
+  // (`options` NULL = the kind takes none); `soonLabel` is NULL unless the item was raised `soon`; `secretSlot` is the
+  // slot NAME for a `secret` item and never a value (spec §5); `answer` is the operator's answer and never a secret;
+  // `note` is the coordinator's latest sent-back note; `tickedAt` and `closedAt` are NULL until those moves happen.
+  // `state`, `kind`, `neededBy` carry no SQL CHECK: the vocabulary is `shared/ledgers.ts`'s, and a SQL list would be a
+  // second copy of it.
+  //
+  // `operator_item_events`: append-only, one row per move, written in the SAME transaction as the move. `act` is an
+  // `ItemAct` or `raise`, `block`, `unblock`; `actor` is `operator` or `coordinator`; `note` is the move's note (a
+  // `block` row keeps the needed-by it replaced, which is what `unblock` restores). Its one writer is `CoordStore`;
+  // its reader is `itemHistory`.
+  //
+  // `programme_modifications`: the dated "Changed since approval" list. Its one writer is `CoordStore`
+  // (`addModification` inserts, `markModificationsMerged` sets `mergedAt` once); its reader is `goalsFor`. `mergedAt`
+  // NULL = the spec PR has not merged ("spec update pending"); `itemId` and `pr` are NULL when the change came from no
+  // item or has no PR yet.
+  //
+  // `programs.specPath`, `programs.inShort`, `programs.inShortAt`: the spec pin. NULL until the coordinator pins a spec
+  // (`setSpecPin` is the one writer, `goalsFor` the reader); a programme that already existed reads NULL, which is
+  // "no pin", and nothing is guessed into them.
+  //
+  // NEW TABLES, ONE INDEX AND THREE NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 37`
+  // takes rule 3 (it warns, reads as-is and migrates nothing) and never names them. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 36 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE operator_items (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    program    TEXT    NOT NULL,
+    runId      INTEGER,
+    raisedBy   TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    title      TEXT    NOT NULL,
+    why        TEXT    NOT NULL,
+    how        TEXT    NOT NULL,
+    options    TEXT,
+    neededBy   TEXT    NOT NULL,
+    soonLabel  TEXT,
+    secretSlot TEXT,
+    state      TEXT    NOT NULL,
+    answer     TEXT,
+    note       TEXT,
+    raisedAt   INTEGER NOT NULL,
+    tickedAt   INTEGER,
+    closedAt   INTEGER
+  );
+  CREATE INDEX operator_items_by_program ON operator_items(program, state);
+  CREATE TABLE operator_item_events (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    itemId INTEGER NOT NULL,
+    at     INTEGER NOT NULL,
+    act    TEXT    NOT NULL,
+    actor  TEXT    NOT NULL,
+    note   TEXT
+  );
+  CREATE TABLE programme_modifications (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    program  TEXT    NOT NULL,
+    at       INTEGER NOT NULL,
+    text     TEXT    NOT NULL,
+    ruling   TEXT,
+    itemId   INTEGER,
+    pr       INTEGER,
+    mergedAt INTEGER
+  );
+  ALTER TABLE programs ADD COLUMN specPath TEXT;
+  ALTER TABLE programs ADD COLUMN inShort TEXT;
+  ALTER TABLE programs ADD COLUMN inShortAt INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

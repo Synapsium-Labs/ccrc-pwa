@@ -688,9 +688,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // (feed_events.dedupe_key, D-5860, consolidation W1a Task C1f) and MIGRATIONS[29] (review_cap, D-6795), and
     // MIGRATIONS[32] (dispatch_abandon_settings, D-7319), and MIGRATIONS[33] (roll_settings, D-7453), and
     // MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e), and MIGRATIONS[35]
-    // (linear_events, D-7671, #1444).
-    expect(COORD_SCHEMA_VERSION).toBe(36);
-    expect(MIGRATIONS.length).toBe(36);
+    // (linear_events, D-7671, #1444), and MIGRATIONS[36] (operator_items, operator_item_events,
+    // programme_modifications and the spec pin on programs, programme ledgers PL2).
+    expect(COORD_SCHEMA_VERSION).toBe(37);
+    expect(MIGRATIONS.length).toBe(37);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -755,8 +756,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected), MIGRATIONS[25]
     // (account_events), MIGRATIONS[26] (the mail_deliveries park columns), MIGRATIONS[27] (secret_fingerprints) and
     // MIGRATIONS[28] (feed_events.dedupe_key), up to MIGRATIONS[33] (roll_settings, D-7453) and MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e) and MIGRATIONS[35]
-    // (linear_events, D-7671); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(36);
+    // (linear_events, D-7671) and MIGRATIONS[36] (the programme ledgers' three tables and the spec pin on programs);
+    // the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(37);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

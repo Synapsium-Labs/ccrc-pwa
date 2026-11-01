@@ -54,9 +54,20 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
   dismiss: { actor: 'operator', from: ['open', 'checking'], to: 'dismissed' },
 };
 
+/** Why a move of one item is refused (the decider's three, and `unknown-item` for an id the store holds no row for).
+ *  Declared once here so the store's answers and, in PL3 and PL4, the routes' typed refusals read the same words. */
+export type ItemMoveRefusal = 'unknown-item' | 'wrong-actor' | 'not-open' | 'programme-live';
+const ITEM_MOVE_REFUSAL_MAP: Record<ItemMoveRefusal, true> = {
+  'unknown-item': true, 'wrong-actor': true, 'not-open': true, 'programme-live': true,
+};
+export const ITEM_MOVE_REFUSALS = Object.keys(ITEM_MOVE_REFUSAL_MAP) as readonly ItemMoveRefusal[];
+export function isItemMoveRefusal(v: unknown): v is ItemMoveRefusal {
+  return typeof v === 'string' && (ITEM_MOVE_REFUSALS as readonly string[]).includes(v);
+}
+
 export type ItemMove =
   | { ok: true; to: ItemState }
-  | { ok: false; why: 'wrong-actor' | 'not-open' | 'programme-live' };
+  | { ok: false; why: Exclude<ItemMoveRefusal, 'unknown-item'> };
 
 /**
  * The decider. Order of refusals: a state the act does not leave is `not-open` whoever asks, then a
