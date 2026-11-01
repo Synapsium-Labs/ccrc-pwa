@@ -1,6 +1,6 @@
 # Programme ledgers: Goals and Waiting on you
 
-**Spec** · 2026-10-31 · Status: Draft · Owner: the operator · Linear: none · Related: `docs/superpowers/specs/2026-10-29-programme-boxes-design.md`, `docs/superpowers/plans/2026-10-22-desktop-polish.md`, prototype `docs/superpowers/specs/2026-10-31-programme-ledgers-prototype.html` (branch `brainstorm/programme-ledgers`)
+**Spec** · 2026-10-31 · Status: Approved 2026-11-01 · Owner: the operator · Linear: none · Related: `docs/superpowers/specs/2026-10-29-programme-boxes-design.md`, `docs/superpowers/plans/2026-10-22-desktop-polish.md`, prototype `docs/superpowers/specs/2026-10-31-programme-ledgers-prototype.html` (branch `brainstorm/programme-ledgers`)
 
 ## In short
 
@@ -171,7 +171,7 @@ sequenceDiagram
 ```
 *Figure 5. Signing in with Linear. The token goes from Linear to the server and is written straight to the connection; the console only ever sees the answer.*
 
-- **Both methods, one connection.** Settings' Linear section offers "Paste a key" and "Sign in with Linear". Either one writes the same connection under the existing connection lock (`server/src/linear/connection.ts`), now recording its method. Connecting by one method replaces a connection made by the other. The Linear client already tells the two apart, sending an OAuth token with `Bearer` and a pasted key without it (`server/src/linear/client.ts:114`).
+- **Both methods, one connection.** Settings' Linear section offers "Paste a key" and "Sign in with Linear". Either one writes the same connection, now recording its method. The Linear central-key plan (`docs/superpowers/plans/2026-10-31-linear-central-key.md`) is reshaping that connection into per-workspace slots and a new Settings card, so sign-in is built on those once they land. Connecting by one method replaces a connection made by the other. The Linear client sends every credential bare today (`callLinear`, `server/src/linear/client.ts`, whose comment already notes that only an OAuth token takes `Bearer`); it learns the method and sends an OAuth token as `Bearer`.
 - **One-time setup.** Signing in needs a Linear OAuth app registered by the operator, with the console's public address plus the callback path as its return address. Its client id is an ordinary value and its client secret is a secret, so the setup is done on the Linear section's own setup panel, or as items on the list when a coordinator needs Linear and sign-in is not yet set up. Sign-in needs the console's sign-in armed and its public origin set, the same conditions as the step-up. Without them the button is disabled, with a line saying why.
 - **The state is single-use and bound.** The start route mints a random state bound to the operator's console session and a short expiry. The callback refuses an unknown, expired, reused or foreign state before it calls Linear, and every refusal is a fixed word. The code, the token and any refresh token never appear in a response, a log line, mail or the feed, and the token's fingerprint is recorded with the masker like any stored secret.
 - **Expiry and refresh.** If Linear issues a refresh token with an expiring access token, the server stores both and refreshes before use. If refreshing fails, the connection reads "needs signing in again", and a coordinator that needs Linear raises an item for it. The builder confirms against Linear's current documentation whether its tokens expire and which scopes the console's existing Linear use needs, and the console asks for no more than those.
@@ -230,7 +230,7 @@ flowchart TB
 
 ## 8. Decisions
 
-The operator's rulings are marked Agreed. The coordinator's own calls are marked Proposed, for the operator to check.
+Every decision is Agreed: the operator's own rulings, and the coordinator's calls the operator approved with the spec on 2026-11-01. D3 is marked Changed, as it reverses the 2026-10-31 choice.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -244,18 +244,18 @@ The operator's rulings are marked Agreed. The coordinator's own calls are marked
 | D8 | Ticked items | Vanish at once; stay until verified | Stay, marked checking, until the coordinator confirms | Agreed |
 | D9 | Session questions | Separate; on the list | On the list, marked urgent, answered in the session | Agreed |
 | D10 | Values the operator pastes | Free text only; text and secrets | Both; secrets go to a protected store, never through a coordinator | Agreed |
-| D11 | Where items are stored | Repo ledger file; console database | Console database: the repo is public and items may name private things | Proposed |
+| D11 | Where items are stored | Repo ledger file; console database | Console database: the repo is public and items may name private things | Agreed |
 | D12 | Secrets in the first release | Ship the store with no reader yet; secrets as Do items only, store later | Ship the store and the paste field now; readers come with the features that need them | Agreed |
-| D13 | "Recently cleared" trail | None; seven days | Seven days, so a vanished item is never a mystery | Proposed |
-| D14 | Push notifications | Every item; blocking only | Blocking items and session questions only; the rest change the count | Proposed |
-| D15 | Items of an ended programme | Delete; mark orphaned in the store; show as ended while no run is open | Shown as ended while no run is open, dismissable then, live again if a run reopens | Proposed |
-| D16 | Seeding from a spec | Parse specs continuously; seed once at approval | Seed once at approval; the list is the source of truth afterwards | Proposed |
-| D17 | "In short" source | Parse the spec; a copy stored at approval and at each rewrite | A copy stored at approval and at each rewrite, so Goals shows it at once | Proposed |
+| D13 | "Recently cleared" trail | None; seven days | Seven days, so a vanished item is never a mystery | Agreed |
+| D14 | Push notifications | Every item; blocking only | Blocking items and session questions only; the rest change the count | Agreed |
+| D15 | Items of an ended programme | Delete; mark orphaned in the store; show as ended while no run is open | Shown as ended while no run is open, dismissable then, live again if a run reopens | Agreed |
+| D16 | Seeding from a spec | Parse specs continuously; seed once at approval | Seed once at approval; the list is the source of truth afterwards | Agreed |
+| D17 | "In short" source | Parse the spec; a copy stored at approval and at each rewrite | A copy stored at approval and at each rewrite, so Goals shows it at once | Agreed |
 | D21 | Ways to give a credential | Paste only; paste or sign in | Both: paste, or sign in on the service's page; Linear is the first sign-in service | Agreed |
-| D22 | Where Linear's OAuth app is set up | Hard-coded app; operator registers one | Operator registers one; its id and secret go in through the Linear section or list items | Proposed |
-| D18 | Which session questions join | Asks only; every question model; including held ones | Asks, permission prompts and dialogs, once they have reached the operator | Proposed |
-| D19 | A tick nobody picks up | Push the operator; label only | A label computed on read; no push, no new stall arm | Proposed |
-| D20 | Clause 19 (questions in closing text) | Replace with items; keep and add items | Keep clause 19; clause 20 adds an item for each such question | Proposed |
+| D22 | Where Linear's OAuth app is set up | Hard-coded app; operator registers one | Operator registers one; its id and secret go in through the Linear section or list items | Agreed |
+| D18 | Which session questions join | Asks only; every question model; including held ones | Asks, permission prompts and dialogs, once they have reached the operator | Agreed |
+| D19 | A tick nobody picks up | Push the operator; label only | A label computed on read; no push, no new stall arm | Agreed |
+| D20 | Clause 19 (questions in closing text) | Replace with items; keep and add items | Keep clause 19; clause 20 adds an item for each such question | Agreed |
 
 ## 9. Testing and proof
 
@@ -283,8 +283,7 @@ This section names how each promise will be shown to hold.
 
 ### Waiting on you
 
-- Check the coordinator's calls D11, D13 to D20 and D22 in §8.
-- Approve this spec. The plan and the programme's next run start from it.
+- Nothing. The operator approved this spec with its rulings on 2026-11-01 ("Approved with the rulings"), including the coordinator's calls D11, D13 to D20 and D22.
 
 ### Later
 
