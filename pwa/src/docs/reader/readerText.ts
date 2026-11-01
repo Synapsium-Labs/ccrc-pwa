@@ -27,6 +27,10 @@ export const READER_SHEET_TEXT = {
   /** One hidden character as the sheet writes it: the bracketed code point and name. */
   copyMarker: (h: ReaderHiddenChar): string =>
     `⟦U+${h.codePoint.toString(16).toUpperCase().padStart(4, '0')} ${h.name}⟧`,
+  /** A hidden character past the sheet's cap of named markers: marked in place, with no name. */
+  copyMarkerUnnamed: '⟦hidden⟧',
+  /** The line saying how many hidden characters past the cap are marked without a name. */
+  copyUnnamed: (n: number): string => `${n} more hidden characters are marked ⟦hidden⟧ without a name.`,
   copyAnyway: 'Copy anyway',
   copyCancel: 'Cancel',
   /** Shown in either copy sheet when the clipboard refused the write (it stays open). */
@@ -37,3 +41,31 @@ export const READER_SHEET_TEXT = {
   copyTryAgain: 'Try again',
   copyFailedClose: 'Close',
 } as const;
+
+/** The text the copy sheet shows: `text` with each hidden character replaced in place by its marker, so the reader sees
+ *  where it sits and no hidden character is left in what is shown. The first `namedMax` (in text order) get
+ *  `READER_SHEET_TEXT.copyMarker`; the rest get `copyMarkerUnnamed`, and `unnamed` counts them. An entry that does not
+ *  point at its own character in `text` is skipped (the host's list is trusted for nothing more than a position). */
+export function markHiddenText(
+  text: string, hidden: readonly ReaderHiddenChar[], namedMax: number,
+): { readonly text: string; readonly unnamed: number } {
+  const marks = [...hidden].sort((a, b) => a.index - b.index);
+  let out = '';
+  let at = 0;
+  let named = 0;
+  let unnamed = 0;
+  for (const h of marks) {
+    const width = h.codePoint > 0xffff ? 2 : 1;
+    if (h.index < at || h.index + width > text.length || text.codePointAt(h.index) !== h.codePoint) continue;
+    out += text.slice(at, h.index);
+    if (named < namedMax) {
+      out += READER_SHEET_TEXT.copyMarker(h);
+      named += 1;
+    } else {
+      out += READER_SHEET_TEXT.copyMarkerUnnamed;
+      unnamed += 1;
+    }
+    at = h.index + width;
+  }
+  return { text: out + text.slice(at), unnamed };
+}

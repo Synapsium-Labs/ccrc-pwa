@@ -16,6 +16,7 @@ import { ReaderFrame, lazyMountReader, type ReaderDeps } from '../src/docs/Reade
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderLink } from '../src/docs/reader/policy';
 import { READER_FALLBACK_NOTE, READER_SHEET_TEXT } from '../src/docs/reader/readerText';
+import { READER_COPY_SHEET_MARKERS_MAX } from '../src/lib/readerLimits';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import { copyText } from '../src/docs/share';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
@@ -119,6 +120,11 @@ function frame(h: Harness, over: { text?: string; bodyKey?: string; pending?: st
       />
     </DocsAssetContext>
   );
+}
+
+/** The text the open copy sheet shows (the `pre` of its marked text), or '' when there is none. */
+function sheetText(): string {
+  return document.querySelector('.docs-reader-sheet-text')?.textContent ?? '';
 }
 
 async function ready(h: Harness): Promise<ReaderMountInput> {
@@ -349,7 +355,10 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     act(() => { input.copy(text, hidden); });
     expect(await screen.findByText(READER_SHEET_TEXT.copyTitle)).toBeInTheDocument();
     expect(copyText).not.toHaveBeenCalled();
-    for (const m of hidden) expect(screen.getByText(READER_SHEET_TEXT.copyMarker(m))).toBeInTheDocument();
+    // §4.4: a sheet shows the text, with each hidden character replaced in place by its visible marker.
+    expect(sheetText()).toBe(`a${READER_SHEET_TEXT.copyMarker(hidden[0] as never)}b${READER_SHEET_TEXT.copyMarker(hidden[1] as never)}c`);
+    expect(document.body.textContent).not.toContain(String.fromCharCode(0x202e));
+    expect(document.body.textContent).not.toContain(String.fromCharCode(27));
     fireEvent.click(screen.getByRole('button', { name: READER_SHEET_TEXT.copyAnyway }));
     expect(copyText).toHaveBeenCalledTimes(1);
     expect(copyText).toHaveBeenCalledWith(text);
@@ -367,7 +376,27 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     fireEvent.click(await screen.findByRole('button', { name: READER_SHEET_TEXT.copyAnyway }));
     expect(await screen.findByText(READER_SHEET_TEXT.copyFailed)).toBeInTheDocument();
     expect(screen.getByText(READER_SHEET_TEXT.copyTitle)).toBeInTheDocument();
-    expect(screen.getByText(READER_SHEET_TEXT.copyMarker(hidden[0] as never))).toBeInTheDocument();
+    // The refused state keeps the marked text on the sheet, to copy by hand, and says how.
+    expect(sheetText()).toBe(`a${READER_SHEET_TEXT.copyMarker(hidden[0] as never)}b`);
+    expect(screen.getByText(READER_SHEET_TEXT.copyByHand)).toBeInTheDocument();
+  });
+
+  it('a copy with more hidden characters than the cap names the first ones, marks the rest without a name, and says how many', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    const total = READER_COPY_SHEET_MARKERS_MAX + 7;
+    const zws = String.fromCharCode(0x200b);
+    const hidden = Array.from({ length: total }, (_, i) => ({ index: 2 * i + 1, codePoint: 0x200b, name: 'ZERO WIDTH SPACE' }));
+    act(() => { input.copy(`x${zws}`.repeat(total), hidden); });
+    await screen.findByText(READER_SHEET_TEXT.copyTitle);
+    const shown = sheetText();
+    expect(shown.split(READER_SHEET_TEXT.copyMarker(hidden[0] as never)).length - 1, 'the named markers stop at the cap').toBe(READER_COPY_SHEET_MARKERS_MAX);
+    expect(shown.split(READER_SHEET_TEXT.copyMarkerUnnamed).length - 1, 'the rest are marked, unnamed').toBe(7);
+    expect(shown.includes(zws), 'no raw hidden character is left in the sheet').toBe(false);
+    expect(screen.getByText(READER_SHEET_TEXT.copyUnnamed(7))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: READER_SHEET_TEXT.copyAnyway }));
+    expect(copyText).toHaveBeenCalledWith(`x${zws}`.repeat(total));
   });
 
   it('clean text calls copyText directly; a rejected write opens the copy sheet', async () => {

@@ -2,8 +2,8 @@
 // section 4.3's "Rendered HTML" row, refinement (m)). Ring L1: this file imports nothing, so the render job in the
 // parse worker's lazy chunk and the main thread's reader files can both read it.
 // The caps: `READER_HTML_MAX_BYTES`, `READER_IMAGE_BUDGET_BYTES`, `READER_STORE_PREFIX`, `READER_COPY_WRITE_MAX_BYTES`
-// (M8.19: the most text the reader writes to the clipboard without asking) and `READER_DOC_KEY_MAX_UNITS` (A15/G7:
-// the longest per-doc key).
+// (M8.19: the most text the reader writes to the clipboard without asking), `READER_DOC_KEY_MAX_UNITS` (A15/G7:
+// the longest per-doc key) and `READER_COPY_SHEET_MARKERS_MAX` (the most hidden characters the copy sheet names).
 // `READER_IMAGE_BUDGET_BYTES` equals the shared Markdown library's own image budget and section 4.3's 5 MiB; Task 10
 // may lower it by measurement. Nothing else restates these values.
 
@@ -25,3 +25,9 @@ export const READER_COPY_WRITE_MAX_BYTES = 65536;
 
 /** The most UTF-16 code units a per-doc key (`project:section:path`) may have (A15/G7); a longer one has no per-doc state. */
 export const READER_DOC_KEY_MAX_UNITS = 1024;
+
+/** The most hidden characters the copy sheet names in the text it shows (§4.4). A hidden character past it is still
+ *  replaced in place, by a marker with no name, and the sheet says how many there are: the text is never shown with a
+ *  raw hidden character in it, and the sheet's size does not grow with a hostile page's count (65 536 bytes can hold
+ *  that many). */
+export const READER_COPY_SHEET_MARKERS_MAX = 64;

@@ -1,12 +1,14 @@
 // The reader frame's two sheets (native Docs reader, W8a Task 8; the 2026-10-31 reader-frame spec's M8.7 and M8.19).
 // Ring L4 delivery over @ccrc/ui's `Sheet`: they show what `ReaderFrame` hands them and report the reader's choice,
 // and they decide nothing. Their words are `readerText.ts`'s. The external-link sheet names the address and, for a host
-// that is not the console's own, the foreign warning; the copy sheet marks each hidden character the host's scan found.
+// that is not the console's own, the foreign warning; the copy sheet shows the selected text with each hidden character
+// the host's scan found replaced in place by its visible marker.
 // A third sheet says that the clipboard refused clean text and shows the text, selectable, so it can be copied by hand.
 // None acts on its own: `window.open` and the clipboard write belong to `ReaderFrame`, run from the buttons here.
 import type { ReactNode } from 'react';
 import { Button, QC_ACTIONS, Sheet } from '@ccrc/ui';
-import { READER_SHEET_TEXT, type ReaderHiddenChar } from './reader/readerText';
+import { READER_COPY_SHEET_MARKERS_MAX } from '../lib/readerLimits';
+import { markHiddenText, READER_SHEET_TEXT, type ReaderHiddenChar } from './reader/readerText';
 
 /** What the external-link sheet asks about: the address as the document wrote it, its host, and whether that host is
  *  foreign to the console (`routeReaderLink`'s answer, shown and not recomputed here). */
@@ -62,6 +64,7 @@ export function ReaderCopySheet(p: {
 }): ReactNode {
   const { ask } = p;
   if (ask === null) return null;
+  const marked = markHiddenText(ask.text, ask.hidden, READER_COPY_SHEET_MARKERS_MAX);
   return (
     <Sheet
       open
@@ -77,11 +80,9 @@ export function ReaderCopySheet(p: {
       <div className="docs-reader-sheet">
         <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyWarning}</p>
         {ask.failed && <p className="docs-reader-sheet-note" role="alert">{READER_SHEET_TEXT.copyFailed}</p>}
-        {ask.hidden.length > 0 && (
-          <ul className="docs-reader-sheet-marks">
-            {ask.hidden.map((h) => <li key={h.index}>{READER_SHEET_TEXT.copyMarker(h)}</li>)}
-          </ul>
-        )}
+        {ask.failed && <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyByHand}</p>}
+        <pre className="docs-reader-sheet-text">{marked.text}</pre>
+        {marked.unnamed > 0 && <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyUnnamed(marked.unnamed)}</p>}
       </div>
     </Sheet>
   );
