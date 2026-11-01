@@ -7,7 +7,7 @@
 // character references and needs a `tree` that decoded them. At the base of this fix the chunk carried
 // `decode-named-character-reference`'s `browser` entry, whose `document.createElement` at module load threw before
 // `onmessage` was assigned.
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -141,4 +141,84 @@ describe('the built markdownWorker chunk draws a raw <br> as a br element in the
     expect(chat.load).toBe('ok');
     expect(chat.replies).toEqual([{ id: 7, outcome: paragraph({ type: 'text', value: '<br>' }) }]);
   }, 120_000);
+});
+
+// Docs W8a Task 4 (A6, M8.21): the reader's render job is its own lazily loaded chunk. Only the built output shows it:
+// the shared Markdown library's renderer (markdown-it, named by the string it puts in an error message) is in exactly
+// one emitted file, `readerRenderJob-*.js`, never in the worker entry, which reaches that file through one dynamic
+// import; and both load, and answer a render job, in a plain node child with no DOM globals.
+const RENDER_LOADER = `
+import { pathToFileURL } from 'node:url';
+const [chunk, mode, src] = process.argv.slice(1);
+const replies = [];
+globalThis.self = { postMessage: (r) => replies.push(r) };
+const report = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+try {
+  const m = await import(pathToFileURL(chunk).href);
+  if (mode === 'chunk') {
+    m.answerRenderJob({ id: 9, kind: 'render', src }, (r) => replies.push(r));
+  } else {
+    if (typeof self.onmessage !== 'function') { report({ load: 'no-onmessage' }); process.exit(0); }
+    self.onmessage({ data: { id: 9, kind: 'render', src } });
+    await new Promise((r) => setTimeout(r, 200));
+  }
+} catch (e) {
+  report({ load: 'threw', name: e?.name, message: String(e?.message).slice(0, 200), document: typeof document });
+  process.exit(0);
+}
+report({ load: 'ok', document: typeof document, window: typeof window, replies });
+`;
+
+describe('the built render job is its own lazily loaded worker chunk (W8a Task 4)', () => {
+  const SRC = '# T\n\nsome text\n\n![a](a.png)\n';
+  const assets = (): string => path.join(out, 'assets');
+  const marker = (): string =>
+    (JSON.parse(readFileSync(path.join(PWA, 'node_modules', 'markdown-it', 'package.json'), 'utf8')) as { name: string }).name;
+  const answer = (chunkFile: string, mode: 'chunk' | 'worker') => {
+    const stdout = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', RENDER_LOADER, path.join(assets(), chunkFile), mode, SRC],
+      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '' }, timeout: 60_000 },
+    );
+    return JSON.parse(stdout.trim().split('\n').at(-1)!) as {
+      load: string; document?: string; window?: string; name?: string; message?: string;
+      replies?: { id: number; outcome: { kind: string; images?: string[]; result?: { html: string; meta: { title: string | null } } } }[];
+    };
+  };
+
+  it('exactly one emitted chunk holds the renderer, it is not the worker entry, and the entry imports it lazily', () => {
+    const files = readdirSync(assets()).filter((n) => n.endsWith('.js'));
+    const holders = files.filter((n) => readFileSync(path.join(assets(), n), 'utf8').includes(marker()));
+    expect(holders).toHaveLength(1);
+    expect(holders[0]).toMatch(/^readerRenderJob-[\w-]+\.js$/);
+    const entry = files.find((n) => /^markdownWorker-[\w-]+\.js$/.test(n));
+    expect(entry).toBeDefined();
+    const entryText = readFileSync(path.join(assets(), entry!), 'utf8');
+    expect(entryText).not.toContain(marker());
+    expect(entryText).toMatch(/import\(\s*[`'"]\.\/readerRenderJob-[\w-]+\.js[`'"]\s*\)/);
+    expect(entryText).not.toMatch(/\bfrom\s*[`'"]\.\/readerRenderJob-/);
+  });
+
+  it('the render chunk imports with no DOM and answers a render job rendered', () => {
+    const chunk = readdirSync(assets()).find((n) => /^readerRenderJob-[\w-]+\.js$/.test(n));
+    expect(chunk).toBeDefined();
+    const result = answer(chunk!, 'chunk');
+    expect(result).toMatchObject({ load: 'ok', document: 'undefined', window: 'undefined' });
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies![0]!.id).toBe(9);
+    expect(result.replies![0]!.outcome.kind).toBe('rendered');
+    expect(result.replies![0]!.outcome.result?.html).toContain('data-line=');
+    expect(result.replies![0]!.outcome.result?.meta.title).toBe('T');
+    expect(result.replies![0]!.outcome.images).toEqual(['a.png']);
+  }, 90_000);
+
+  it('the worker entry answers a render message by loading the chunk, with no DOM', () => {
+    const entry = readdirSync(assets()).find((n) => /^markdownWorker-[\w-]+\.js$/.test(n));
+    expect(entry).toBeDefined();
+    const result = answer(entry!, 'worker');
+    expect(result).toMatchObject({ load: 'ok', document: 'undefined', window: 'undefined' });
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies![0]!.id).toBe(9);
+    expect(result.replies![0]!.outcome.kind).toBe('rendered');
+  }, 90_000);
 });

@@ -29,9 +29,10 @@ const PWA = path.join(import.meta.dirname, '..');
 const LIB = path.join(PWA, 'src', 'lib');
 const ROOTS: readonly string[] = [
   'markdownLimits.ts', 'markdownGuard.ts', 'remarkAlerts.ts', 'markdownParse.ts', 'markdownWorker.ts',
+  'readerRenderJob.ts', 'readerLimits.ts',
 ];
 const ALLOWED_PACKAGES: ReadonlySet<string> = new Set([
-  'unified', 'remark-parse', 'remark-gfm', 'remark-rehype', 'hast', 'mdast',
+  'unified', 'remark-parse', 'remark-gfm', 'remark-rehype', 'hast', 'mdast', '@synapsium-labs/docserver/render',
 ]);
 
 /** The file a relative specifier names, or `undefined` when no `.ts`/`.tsx` file answers it. */
@@ -253,5 +254,33 @@ describe('T11 review 1-3: an import() or require() that cannot be proved pure, a
     expect(here).toHaveLength(2);
     expect(here[0]).toMatch(/^src\/lib\/markdownGuard\.ts:\d+:\d+: import\.meta\.glob$/);
     expect(here[1]).toMatch(/^src\/lib\/markdownGuard\.ts:\d+:\d+: import\(\) with an argument that is not a string literal$/);
+  });
+});
+
+// Docs W8a Task 4 (A6, M8.21): the reader's render job is a lazily loaded chunk. The worker entry reaches it through
+// ONE literal `import('./readerRenderJob')` and names its reply type as the type query
+// `import('./readerRenderJob').ReaderRenderReply`, so the parse's chunk carries none of the renderer.
+describe('W8a Task 4: the reader\'s render job is a lazily loaded chunk', () => {
+  it('the worker entry holds no static import of readerRenderJob', () => {
+    const file = path.join(LIB, 'markdownWorker.ts');
+    const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+    const isJob = (spec: string): boolean => /(^|\/)readerRenderJob(\.ts)?$/.test(spec);
+    const staticImports: string[] = [];
+    const dynamicCalls: (string | undefined)[] = [];
+    const visit = (node: ts.Node): void => {
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined
+        && ts.isStringLiteral(node.moduleSpecifier) && isJob(node.moduleSpecifier.text)) {
+        staticImports.push(node.moduleSpecifier.text);
+      }
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const arg = node.arguments.length === 1 ? node.arguments[0] : undefined;
+        dynamicCalls.push(arg !== undefined && ts.isStringLiteral(arg) ? arg.text : undefined);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect(staticImports).toEqual([]);
+    expect(dynamicCalls.filter((c) => c === './readerRenderJob')).toHaveLength(1);
+    expect(dynamicCalls).toEqual(['./readerRenderJob']);
   });
 });
