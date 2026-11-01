@@ -511,11 +511,35 @@ const M79_DIR = ['claude', 'docs' + '-preview'].join('-');
 const M79_NAME = ['doc', 'server'].join('');
 /**
  * The one exception to the name (rich-docs spec A21, M8.18): in pwa/src only, the shared Markdown library's four
- * import specifiers, as the quoted string right after `from` or `import(` (quotes matching): `/render`, `/frame`,
- * `/host`, and `/assets/<path>?raw`. The bare package and every other subpath stay hits. The W8a plan's refinement (i): the PWA's
- * vite.config.ts keeps the unmodified check.
+ * import specifiers, as the quoted string right after `from` or `import(` (quotes matching) AT AN IMPORT POSITION: what
+ * stands before the `from` or `import(` on its line is code, not a comment and not a string (`m79InCode`). The four are
+ * `/render`, `/frame`, `/host`, and `/assets/<path>?raw` (a path with a `..` segment is no specifier). The bare package and
+ * every other subpath stay hits. The W8a plan's refinement (i): the PWA's vite.config.ts keeps the unmodified check.
+ * NOT EXHAUSTIVE: the scan is line by line, so a line inside a multi-line template literal or inside a block comment
+ * that does not start with `*` is read as code.
  */
-const M79_LIBRARY_SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*)(['"])@synapsium-labs\/docserver\/(?:render|frame|host|assets\/[A-Za-z0-9._\/-]+\?raw)\2/g;
+const M79_LIBRARY_SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*)(['"])@synapsium-labs\/docserver\/(?:render|frame|host|assets\/(?!(?:[A-Za-z0-9._-]+\/)*\.\.[\/?])[A-Za-z0-9._\/-]+\?raw)\2/g;
+
+/** True iff the end of `prefix` (the text of a line before a match) is code: not inside a string, a template, a block
+ *  comment or a line comment, and not on a line that continues a block comment (`*` first). */
+function m79InCode(prefix: string): boolean {
+  if (prefix.trimStart().startsWith('*')) return false;
+  let quote = '';
+  for (let i = 0; i < prefix.length; i++) {
+    const c = prefix[i] ?? '';
+    const two = prefix.slice(i, i + 2);
+    if (quote !== '') {
+      if (c === '\\') i++;
+      else if (c === quote) quote = '';
+    } else if (two === '//') return false;
+    else if (two === '/*') {
+      const end = prefix.indexOf('*/', i + 2);
+      if (end === -1) return false;
+      i = end + 1;
+    } else if (c === "'" || c === '"' || c === '`') quote = c;
+  }
+  return quote === '';
+}
 /** The two ruling comments: file -> the anchor sentence that locates the paragraph. */
 const M79_RULINGS: ReadonlyMap<string, string> = new Map([
   ['ccd/ccrc', 'A named `.' + M79_DIR + '` skip used to sit here.'],
@@ -550,7 +574,9 @@ function m79Scan(files: ReadonlyArray<readonly [string, string]>): string[] {
       if (line.includes(M79_DIR) && !allowed.has(i)) {
         out.push(`${name}:${i + 1}: the directory name outside the two ruling comments`);
       }
-      const checked = name.startsWith('pwa/src/') ? line.replace(M79_LIBRARY_SPECIFIER, '$1$2$2') : line;
+      const checked = name.startsWith('pwa/src/')
+        ? line.replace(M79_LIBRARY_SPECIFIER, (hit, lead: string, quote: string, at: number) => (m79InCode(line.slice(0, at)) ? lead + quote + quote : hit))
+        : line;
       if (pwa && checked.toLowerCase().includes(M79_NAME)) {
         out.push(`${name}:${i + 1}: the standalone server's name in the PWA`);
       }
@@ -669,6 +695,21 @@ m79Vitest.describe('M7.9: the tree does not know a standalone docs server', () =
 
   m79Vitest.it('M8.18: the specifier in a string that is not an import is a hit', () => {
     m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nconst s = '@synapsium-labs/docserver/frame';")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: a comment that quotes a full specifier is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\n// copied from '@synapsium-labs/docserver/frame' by hand")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: a string that is not an import and holds a full specifier is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nconst s = \"built from '@synapsium-labs/docserver/host'\";")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: an /assets specifier with a .. segment is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nconst g = await import('@synapsium-labs/docserver/assets/../x?raw');")))
       .toEqual([hitLine(SRC_FILE)]);
   });
 
