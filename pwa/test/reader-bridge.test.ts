@@ -153,6 +153,48 @@ describe('the Mermaid gate (A15/M8.20, the W8a plan\'s refinement (c))', () => {
     expect(bad.options().adapters.assets.mermaid).toBeUndefined();
   });
 
+  it('a Mermaid import that never settles mounts without scan once the watchdog passes, and a late chunk changes nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      const scan = { mermaid: mermaidCounts(2, 100, 200) };
+      let late!: (text: string) => void;
+      const r = rig({ document: docOf({ scan }), mermaid: () => new Promise<string>((res) => { late = res; }) });
+      const mounted = r.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(r.mermaid).toHaveBeenCalledTimes(1);
+      expect(r.mount).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(readerWatchdogMs(100) - 1);
+      expect(r.mount).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(r.mount).toHaveBeenCalledTimes(1);
+      await mounted;
+      expect(r.options().document.scan).toBeUndefined();
+      expect(r.options().adapters.assets.mermaid).toBeUndefined();
+
+      late('MERMAID');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(r.mount).toHaveBeenCalledTimes(1);
+      expect(r.options().document.scan).toBeUndefined();
+      expect(r.options().adapters.assets.mermaid).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a Mermaid import that settles in time leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig({ document: docOf({ scan: { mermaid: mermaidCounts(2, 100, 200) } }) });
+      await r.run();
+      expect(r.options().adapters.assets.mermaid).toBe('MERMAID');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a document with no scan loads no Mermaid text', async () => {
     const r = rig();
     await r.run();

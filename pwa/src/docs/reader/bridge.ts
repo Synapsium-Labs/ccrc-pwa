@@ -99,20 +99,30 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     return INERT;
   }
 
+  const watchdogMs = readerWatchdogMs(input.bytes);
   let document = withServedVersion(input.document);
   if (document.scan !== undefined && mermaidGate(document.scan.mermaid).inline) {
+    // The wait ends at the frame's own watchdog: an import that never settles drops the scan exactly as a rejected one
+    // does, and a chunk that arrives after that is ignored (the race has already answered). The timer's handle is a
+    // local of this call, cleared the moment the wait settles either way.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      assets = { ...assets, mermaid: await (deps.mermaid ?? loadMermaidAsset)() };
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('the Mermaid asset wait passed the watchdog')), watchdogMs);
+      });
+      assets = { ...assets, mermaid: await Promise.race([(deps.mermaid ?? loadMermaidAsset)(), deadline]) };
     } catch {
       const { scan: _dropped, ...withoutScan } = document;
       document = withoutScan;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   const port = (deps.store ?? enumerablePageStorage)();
   const adapters: HostAdapters = {
     assets,
-    watchdogMs: readerWatchdogMs(input.bytes),
+    watchdogMs,
     ...(port === null ? {} : { store: port }),
     storePrefix: READER_STORE_PREFIX,
     ...(input.docKey === null ? {} : { docKey: input.docKey }),
