@@ -32,7 +32,7 @@
  */
 import { isLinearTeamKey, isLinearUrlKey, isLinearUuid } from '../../../shared/linear.js';
 import { LINEAR_NAME_MAX_CHARS, cleanName, stripLine, stripMultiline } from '../../../shared/unprintable.js';
-import { redactLinearText } from '../coord/redact.js';
+import { redactShapedCount } from '../coord/redact.js';
 import type { LinearRouteAsk } from './route.js';
 
 // ── the verbs ──
@@ -550,7 +550,7 @@ export function linearOutbound(input: LinearOpInput): { input: LinearOpInput; ma
   for (const k of ['text', 'title', 'description', 'body'] as const) {
     const v = f[k];
     if (typeof v !== 'string') continue;
-    const r = redactLinearText(v);
+    const r = redactShapedCount('linear-egress', v);
     f[k] = r.text;
     masked += r.masked;
   }
