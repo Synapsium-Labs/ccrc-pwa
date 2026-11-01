@@ -5,6 +5,7 @@
 import type { FleetIO } from '../io.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { CoordStore } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 import { changeLatch, type ChangeLatch } from '../changeLatch.js';
 import { notify } from '../notice.js';
 import { CHILD_RECLAIM_DISABLED_MARKER, readSwitches } from '../../../shared/switches.js';
@@ -40,7 +41,7 @@ const latches = new WeakMap<object, ChangeLatch<MarkerState>>();
 /** Says so on the feed once per standing (`changeLatch`), re-armed when the switch reads anything but set. Returns
  *  whether child reclaim is stopped. A listing that did not measure neither says nor re-arms, and stops nothing here
  *  (`reclaim-paused`'s own read already refuses on an unlisted registry). */
-export function childReclaimDisabledStops(deps: { coord?: CoordStore; notifyLog?: NotifyLog }, state: MarkerState): boolean {
+export function childReclaimDisabledStops(deps: { coord?: WatcherCoordPort; notifyLog?: NotifyLog }, state: MarkerState): boolean {
   if (state === 'unmeasurable') return false;
   const key = deps.coord ?? deps;
   let latch = latches.get(key);

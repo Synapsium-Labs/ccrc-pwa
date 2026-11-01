@@ -102,11 +102,13 @@ export interface LinearConnectionAnswer { ok: true; connection: LinearConnection
  * key (a 401, the ONLY answer that marks the stored key rejected), `forbidden` Linear refusing this request (a 403: a
  * scope or a team the key lacks, which says nothing against the key and never marks it), `not-found` a ticket that
  * does not exist, `timeout` is worth retrying,
- * `malformed` is an answer that was not the shape asked for, and `unreachable` is everything else the service or the
- * network did (a 5xx, a 429, a refused connection, a GraphQL errors array).
+ * `malformed` is an answer that was not the shape asked for, `rate-limited` is Linear refusing over its rate limit (a
+ * 429, or a `RATELIMITED` code on any status) or ccrc's own rate service refusing before any call (spec §6.7), and
+ * `unreachable` is everything else the service or the network did (a 5xx, a refused connection, a GraphQL errors
+ * array).
  */
 export const LINEAR_FAILURES = [
-  'not-configured', 'unauthorised', 'forbidden', 'not-found', 'timeout', 'malformed', 'unreachable',
+  'not-configured', 'unauthorised', 'forbidden', 'not-found', 'timeout', 'malformed', 'unreachable', 'rate-limited',
 ] as const;
 export type LinearFailure = (typeof LINEAR_FAILURES)[number];
 

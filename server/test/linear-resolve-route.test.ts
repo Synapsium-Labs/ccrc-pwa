@@ -15,6 +15,8 @@ import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import type { AccountGate } from '../src/accounts/gate.js';
 import { refuseRoute } from '../src/refuse.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { linearAnswer } from './linearFetchFake.js';
+import { linearServicesFake } from './linearServicesFake.js';
 
 removeTmpFixturesEachTest();
 
@@ -29,7 +31,7 @@ const fetchAnswering = (answer: Awaited<ReturnType<FetchLike>>): { f: FetchLike;
   return { f, calls };
 };
 const linearOk = (identifier: string, title: string): Awaited<ReturnType<FetchLike>> =>
-  ({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }) });
+  linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }) });
 
 /** The resolve read never reaches the account gate (the connection's two writes do, in linear-connection-routes.test.ts):
  *  a gate that refuses everything proves it. */
@@ -42,7 +44,8 @@ async function boot(opts: { fetch?: FetchLike; timeoutMs?: number; key?: string 
   const dir = mkTmp('ccrc-linear-route-');
   if (opts.key !== null) writeFileSync(path.join(dir, LINEAR_KEY_FILE), `${opts.key ?? KEY}\n`, { mode: 0o600 });
   const a = Fastify();
-  registerLinearRoutes(a, { ccrcDir: dir, gate: refusingGate, fetch: opts.fetch, timeoutMs: opts.timeoutMs });
+  const fx = linearServicesFake();
+  registerLinearRoutes(a, { ccrcDir: dir, gate: refusingGate, rate: fx.rate, refresher: fx.refresher, fetch: opts.fetch, timeoutMs: opts.timeoutMs });
   await a.ready();
   app = a;
   return { app: a, dir };
@@ -152,11 +155,11 @@ describe('GET /api/linear/resolve', () => {
 
   it('degrades every other failure arm to the offline title with its own word', async () => {
     const cases: [Awaited<ReturnType<FetchLike>>, string][] = [
-      [{ ok: false, status: 401, json: async () => ({}) }, 'unauthorised'],
-      [{ ok: false, status: 403, json: async () => ({}) }, 'forbidden'],
-      [{ ok: true, status: 200, json: async () => ({ data: { issue: null } }) }, 'not-found'],
-      [{ ok: true, status: 200, json: async () => ({ nope: 1 }) }, 'malformed'],
-      [{ ok: false, status: 502, json: async () => ({}) }, 'unreachable'],
+      [linearAnswer({ ok: false, status: 401, json: async () => ({}) }), 'unauthorised'],
+      [linearAnswer({ ok: false, status: 403, json: async () => ({}) }), 'forbidden'],
+      [linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: null } }) }), 'not-found'],
+      [linearAnswer({ ok: true, status: 200, json: async () => ({ nope: 1 }) }), 'malformed'],
+      [linearAnswer({ ok: false, status: 502, json: async () => ({}) }), 'unreachable'],
     ];
     for (const [ans, word] of cases) {
       const { f } = fetchAnswering(ans);
@@ -170,7 +173,7 @@ describe('GET /api/linear/resolve', () => {
   });
 
   it('a pasted URL falls back to the parsed title when Linear gives none', async () => {
-    const { f } = fetchAnswering({ ok: true, status: 200, json: async () => ({ data: { issue: null } }) });
+    const { f } = fetchAnswering(linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: null } }) }));
     const { app: a } = await boot({ fetch: f });
     const res = await get(a, LINK);
     expect(answer(res)).toEqual({
@@ -206,9 +209,9 @@ describe('GET /api/linear/resolve', () => {
   it('never carries the key or what Linear said, on any arm', async () => {
     const LEAK = 'LINEAR-RESPONSE-TEXT-THAT-MUST-NOT-ECHO';
     const bodies: Awaited<ReturnType<FetchLike>>[] = [
-      { ok: false, status: 401, json: async () => ({ message: LEAK, key: KEY }) },
-      { ok: true, status: 200, json: async () => ({ data: { issue: null }, errors: [{ message: LEAK }] }) },
-      { ok: true, status: 200, json: async () => ({ data: { issue: { title: 7, note: LEAK } } }) },
+      linearAnswer({ ok: false, status: 401, json: async () => ({ message: LEAK, key: KEY }) }),
+      linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: null }, errors: [{ message: LEAK }] }) }),
+      linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: { title: 7, note: LEAK } } }) }),
     ];
     for (const b of bodies) {
       const { f } = fetchAnswering(b);
@@ -222,7 +225,7 @@ describe('GET /api/linear/resolve', () => {
   });
 
   it('on a 401 it writes the rejection record and nothing else: the key file is never touched', async () => {
-    const { f } = fetchAnswering({ ok: false, status: 401, json: async () => ({}) });
+    const { f } = fetchAnswering(linearAnswer({ ok: false, status: 401, json: async () => ({}) }));
     const { app: a, dir } = await boot({ fetch: f });
     const stat = statSync(path.join(dir, LINEAR_KEY_FILE));
     const text = readFileSync(path.join(dir, LINEAR_KEY_FILE), 'utf8');
@@ -234,8 +237,8 @@ describe('GET /api/linear/resolve', () => {
 
   it('writes nothing on a failure that is not a 401', async () => {
     for (const ans of [
-      { ok: false, status: 502, json: async () => ({}) },
-      { ok: true, status: 200, json: async () => ({ data: { issue: null } }) },
+      linearAnswer({ ok: false, status: 502, json: async () => ({}) }),
+      linearAnswer({ ok: true, status: 200, json: async () => ({ data: { issue: null } }) }),
     ]) {
       const { f } = fetchAnswering(ans);
       const { app: a, dir } = await boot({ fetch: f });

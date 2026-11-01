@@ -182,11 +182,12 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
     },
     request: (body) => app.inject({ method: 'POST', url: '/api/approvals', headers: TOK, payload: body }),
     rule: (id, from, verdict, extra = {}) => app.inject({
-      method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK,
-      payload: { fromId: from, fromUuid: uuidOf(from), verdict, reason: `${verdict} by the fixture`, ...extra },
+      method: 'POST', url: `/api/questions/approval-${id}/rule`, headers: TOK,
+      payload: { kind: 'approval', fromId: from, fromUuid: uuidOf(from), verdict, reason: `${verdict} by the fixture`, ...extra },
     }),
     release: (id, from) => app.inject({
-      method: 'POST', url: `/api/approvals/${id}/release`, headers: TOK, payload: { fromId: from, fromUuid: uuidOf(from) },
+      method: 'POST', url: `/api/questions/approval-${id}/release`, headers: TOK,
+      payload: { kind: 'approval', fromId: from, fromUuid: uuidOf(from) },
     }),
     ruling: (id, nonce) => app.inject({ method: 'GET', url: `/api/approvals/${id}/ruling?nonce=${nonce}`, headers: TOK }),
     close: async () => { await app.close(); },

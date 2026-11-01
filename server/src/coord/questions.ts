@@ -460,13 +460,13 @@ export interface Questions {
   lapseApprovals(input: ApprovalLapseInput): void;
   /** The approval half's daily retention (spec §6.7): approval inputs, then the asks' question text. */
   prune(now: number): void;
-  /** `POST /api/asks/:id/release`'s door in: the held ask's snapshot to push now, or null. */
+  /** `POST /api/questions/ask-<n>/release`'s door in: the held ask's snapshot to push now, or null. */
   released(childId: string): QuestionPush | null;
-  /** D-5289: `POST /api/asks/:id/answer` settled row `askId` late; the push that replaces its lapse, or null. */
+  /** D-5289: `POST /api/questions/ask-<n>/rule` settled row `askId` late; the push that replaces its lapse, or null. */
   answeredLate(childId: string, askId: number, parent: string): QuestionPush | null;
-  /** D-5440: `POST /api/approvals/:id/release`'s door in, with the dialog the pane shows: the deferred push, or null. */
+  /** D-5440: `POST /api/questions/approval-<n>/release`'s door in, with the dialog the pane shows: the deferred push, or null. */
   approvalReleased(childId: string, paintedDialogId: string | undefined): QuestionPush | null;
-  /** `POST /api/approvals/:id/rule`'s door in: the push replacing an earlier prompt notification, or null. */
+  /** `POST /api/questions/approval-<n>/rule`'s door in: the push replacing an earlier prompt notification, or null. */
   approvalRuled(childId: string, agentId: string, parent: string, verdict: 'allow' | 'deny', painted: boolean, projectOf: () => string): QuestionPush | null;
   /** The stall lane's read (`watch.ts#stallWorkerFor`): the child's newest asks row, the store's answer unchanged. */
   currentAskOf(childId: string): AskReadResult;
@@ -1230,7 +1230,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    *    the request abandoned, a restart mid-call — strand the question forever, silently. Past `ASK_ANSWERING_MAX_MS`
    *    since first observed `'answering'`, this degrades exactly like the missing-row arm below: push, drop.
    *  - `'answered'` | `'released'` | `'declined'` | `'stale'` — somebody already resolved it (an answer landed, an
-   *    explicit `POST /api/asks/:id/release`, which is `'declined'` since D-5289, or the orphan-settle). Drop the
+   *    explicit `POST /api/questions/ask-<n>/release`, which is `'declined'` since D-5289, or the orphan-settle). Drop the
    *    entry, no push — the question is already closed.
    *  - `'held'` — the CAS above just failed against this exact state, so under ordinary single-threaded execution this
    *    is unreachable; the only way to see it is a genuine race with another writer between the `releaseAsk` attempt
@@ -1386,7 +1386,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   // ── the door-ins: each answers what to push; the caller pushes ─────────────────────────────────────────────────
 
   /**
-   * `POST /api/asks/:id/release` (Task 10, the decline route): a parent has DECLINED to rule on its child's question,
+   * `POST /api/questions/ask-<n>/release` (Task 10, the decline route): a parent has DECLINED to rule on its child's question,
    * so the grace window ends NOW rather than at `held.until` — the verb that makes the window a CEILING rather than a
    * flat tax on every ask the parent cannot rule on. The route has already CAS'd the store row before its door-in
    * calls this — this member's whole job is the in-memory half the ask half would otherwise wait up to `ASK_SWEEP_MS`
@@ -1403,7 +1403,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   };
 
   /**
-   * D-5289, late answer wins: `POST /api/asks/:id/answer` settled a row it took from `'released'`, so the lapse already
+   * D-5289, late answer wins: `POST /api/questions/ask-<n>/rule` settled a row it took from `'released'`, so the lapse already
    * notified the operator. Replace that notification under the same tag (`pushOne`'s default `${kind}-${sessionId}`,
    * the lapse's own) with `answeredByBody(parent)`, and no actions: the question is answered, so the lock-screen buttons
    * must go. Only for the lapse this instance snapshotted for THIS row (`askId`), and once: a restart, a cleared dialog
@@ -1421,7 +1421,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return { ...lapsed[1].ev, body: answeredByBody(parent), actions: undefined };
   };
 
-  /** `POST /api/approvals/:id/release`'s door in (D-5440): the claimant handed the prompt over, so the deferred push
+  /** `POST /api/questions/approval-<n>/release`'s door in (D-5440): the claimant handed the prompt over, so the deferred push
    *  fires now, while the dialog is painted. A child with no deferred push (a background subagent's prompt, whose menu
    *  paints only after its hook returns) raises on its first sighting instead. */
   const approvalReleased = (childId: string, paintedDialogId: string | undefined): QuestionPush | null => {
@@ -1436,7 +1436,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return paintedDialogId === entry.dialogId ? entry.ev : null;
   };
 
-  /** `POST /api/approvals/:id/rule`'s door in: a deferred push stays deferred (the hook prints the ruling and the
+  /** `POST /api/questions/approval-<n>/rule`'s door in: a deferred push stays deferred (the hook prints the ruling and the
    *  dialog clears; the approval half pushes if it does not). A prompt the operator was already pushed about (its menu
    *  was sighted before the row was minted: `painted`, with no held prompt) has that notification replaced, same tag,
    *  by who ruled. */
@@ -1460,7 +1460,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   // Moved, in today's order, out of the six deciding handlers (`POST /api/asks/:id/answer`, `/api/asks/:id/release`,
   // `/api/approvals/:id/rule`, `/api/approvals/:id/release` in `coord/routes.ts`; `POST /api/sessions/:id/ask` and
   // `/dialog` in `server.ts`; `/dialog/text` and `/dialog/multi` press with no store read and move with them). Every
-  // status and body is the handler's own, byte for byte. A door-in is called on the instance object (`questions.<m>`),
+  // status and body is the handler's own, byte for byte. Those handlers are retired now (W7 C7p, D-7194; K5 Q3l,
+  // D-7324); the family's doors call these cores. A door-in is called on the instance object (`questions.<m>`),
   // as the watcher's forwards called it, and its answer pushed through the watcher's doors sink; with no sink (a server
   // with no watcher) none is called, as `watcher?.` called none.
 
@@ -1471,7 +1472,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   const sent = (status: number, body: unknown): QuestionDoorAnswer => ({ status, body });
   const pushDoorIn = (ev: QuestionPush | null): void => { if (ev !== null) rules?.doors?.push(ev); };
 
-  /** `POST /api/asks/:id/answer`'s ladder after its id parse: the parent presses the digit into its child's live menu.
+  /** `POST /api/questions/ask-<n>/rule`'s ladder after its id parse (once `/api/asks/:id/answer`'s): the parent presses the digit into its child's live menu.
    *  The CAS precedes the keystroke (`takeAskForAnswer`, re-proving the instance with `freshAskAt`, D-2170); a refused
    *  press rolls back with `untakeAsk`, NOT `releaseAsk` (a held row only exists for a single-select ask, D-2173, so a
    *  refused press pressed nothing; see `untakeAsk`'s docstring). */
@@ -1530,7 +1531,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return sent(200, { ok: true });
   };
 
-  /** `POST /api/approvals/:id/rule`'s ladder after its id parse (spec §6.3 server steps 5 and 6, amended by D-5441 and
+  /** `POST /api/questions/approval-<n>/rule`'s ladder after its id parse (spec §6.3 server steps 5 and 6, amended by D-5441 and
    *  D-5530): the row; the kill switches and the single-box gate (nothing is signed under either); the stored parent
    *  (`403 not-parent`, wherever the caller sits); a row minted released (`approval-released`); the row's state
    *  (`declined`, `already-ruled`, `hook-gone`) and window (`hook-gone` at or after `notifyAt`); the child's mark and the
@@ -1611,7 +1612,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   const rule = (q: ClaimantRule, d: ClaimantDoorDeps): Promise<QuestionDoorAnswer> =>
     q.kind === 'ask' ? ruleAsk(q, d) : ruleApproval(q, d);
 
-  /** `POST /api/asks/:id/release` and `/api/approvals/:id/release`'s ladders after their id parse: the parent DECLINES
+  /** `POST /api/questions/<ask|approval>-<n>/release`'s ladders after their id parse: the parent DECLINES
    *  to rule (Task 10, RULING F12) or hands the prompt over (D-5440). The decline CAS is the row acting as its own mutex
    *  (`declineAsk`, `declineApproval`: their source state is `'held'`, so a decline that finds nothing held refuses
    *  `not-held` rather than pretending to succeed); the door-in's push fires AFTER it, never before. */

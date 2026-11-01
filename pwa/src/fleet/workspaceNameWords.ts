@@ -27,7 +27,9 @@ type ClientNote = 'unrecognised' | 'call-failed';
  * `pointer` is set where the remedy is in Settings: the field then offers the way there.
  */
 export const LOOKUP_NOTE = {
-  'not-configured': { hint: "Linear isn't connected, so the title is what you entered.", pointer: 'Connect Linear in Settings' },
+  // Titles route through the Linear keys in Settings by the ticket's team (#1444, spec §6.10): none reaches this one, or
+  // none is saved at all. Either way the remedy is a key in Settings.
+  'not-configured': { hint: "No Linear key in Settings reaches this ticket's team.", pointer: 'Connect Linear in Settings' },
   'unauthorised': { hint: 'Linear rejected the saved key, so the title is what you entered.', pointer: 'Replace the key in Settings' },
   // A 403 is Linear refusing THIS request (a scope, or a team the key cannot see), not a verdict on the key, so the
   // note is quiet: no pointer to replace a key nobody called bad.
@@ -36,6 +38,7 @@ export const LOOKUP_NOTE = {
   'timeout': { hint: 'Linear took too long to answer, so the title is what you entered.', pointer: null },
   'unreachable': { hint: "Couldn't reach Linear, so the title is what you entered.", pointer: null },
   'malformed': { hint: "Linear's answer wasn't usable, so the title is what you entered.", pointer: null },
+  'rate-limited': { hint: 'Too many Linear lookups just now, so the title is what you entered.', pointer: null },
   'unrecognised': { hint: "Linear's lookup said something this app doesn't know, so the title is what you entered.", pointer: null },
   'call-failed': { hint: "Couldn't check Linear just now, so the title is what you entered. The server asks again when you add it.", pointer: null },
 } as const satisfies Record<LinearFailure | ClientNote, { hint: string; pointer: string | null }>;

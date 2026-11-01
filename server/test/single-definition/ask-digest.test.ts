@@ -527,12 +527,13 @@ describe('one eligibility rule and one answer body for the parent and the operat
   });
 
   // W7 C7p (D-7194): the operator's ask answer is the family's `POST /api/questions/:id/answer` since
-  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler.
+  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler. K5 Q3l: the parent's answer is the
+  // family's `POST /api/questions/:id/rule` before `/api/asks/:id/answer` is retired, so the parent side reads that one.
   it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
     const operator = between('POST /api/questions/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
       "app.post('/api/questions/:id/answer'", "app.post('/api/questions/:id/rule'");
-    const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
-      "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
+    const parent = between('POST /api/questions/:id/rule', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/questions/:id/rule'", "app.post('/api/questions/:id/release'");
     for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
       expect(code, name).toMatch(/\breadAskAnswer\(/);
       expect(code, name).not.toMatch(INDEX_CHECK);
@@ -1634,11 +1635,16 @@ describe('the question doors: one reader, one core per principal, the old doors 
   /** The aliases (eight at W3 Q3f; W7 C7p, D-7194, retires the four operator ones one per commit), each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
    *  404), and the reader that must come before its core call when it reads an ask's answer. */
   const ALIASES: ReadonlyArray<readonly [file: string, route: string, words: readonly string[], reader: string | null]> = [
-    ['server/src/coord/routes.ts', '/api/asks/:id/answer', ['bad-request'], 'readAskAnswer('],
-    ['server/src/coord/routes.ts', '/api/asks/:id/release', ['bad-request'], null],
-    ['server/src/coord/routes.ts', '/api/approvals/:id/rule', ['bad-request'], null],
-    ['server/src/coord/routes.ts', '/api/approvals/:id/release', ['bad-request'], null],
+    // K5 Q3l (D-7324) retired the four claimant aliases one per commit; none is left.
   ];
+
+  it('the eight old answer doors are retired: none is registered (W7 C7p, D-7194; K5 Q3l, D-7324)', () => {
+    const OLD = ['/api/sessions/:id/ask', '/api/sessions/:id/dialog', '/api/sessions/:id/dialog/text', '/api/sessions/:id/dialog/multi',
+      '/api/asks/:id/answer', '/api/asks/:id/release', '/api/approvals/:id/rule', '/api/approvals/:id/release'];
+    const code = ['server/src/coord/routes.ts', 'server/src/server.ts'].map((f) => stallCode(path.join(ccrcRoot, f))).join('\n');
+    expect(code, 'the files were read').toMatch(/app\.post\('\/api\/questions\/:id\/rule'/);
+    expect(OLD.filter((r) => code.includes(`app.post('${r}'`)), 'an old answer door still registered').toEqual([]);
+  });
 
   it.each(ALIASES.map((a) => [`POST ${a[1]}`, a] as const))('%s is an alias: its front ladder, then one call into a core', async (_n, [file, route, words, reader]) => {
     const { QUESTION_STORE_METHODS } = await import('../census-w3/questions.js');

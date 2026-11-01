@@ -25,7 +25,8 @@ export type KeyMeasure =
 /**
  * What a failed key check means for the STORED outcome: Linear's 401 says the key is bad (`rejected`) and its 403 is
  * its own outcome (`forbidden`: refused, which is not a verdict on the key); every other arm (a timeout, a 5xx, a
- * refused connection, an answer of the wrong shape) decided nothing about the key, so it is `unreachable`. The wire
+ * refused connection, an answer of the wrong shape, Linear's rate limit) decided nothing about the key, so it is
+ * `unreachable`, which keeps the v1 and v2 records to their four outcome words (spec §6.7). The wire
  * to the caller keeps the arm word (`timeout`, `malformed`); only the stored outcome folds, because the section's
  * table has one state for "could not check".
  */
@@ -33,7 +34,7 @@ export function checkOutcomeOf(reason: LinearVerifyFailure): LinearCheckOutcome 
   switch (reason) {
     case 'unauthorised': return 'rejected';
     case 'forbidden': return 'forbidden';
-    case 'timeout': case 'malformed': case 'unreachable': return 'unreachable';
+    case 'timeout': case 'malformed': case 'unreachable': case 'rate-limited': return 'unreachable';
   }
 }
 

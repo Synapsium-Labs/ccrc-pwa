@@ -13,6 +13,7 @@ import { REGIONS } from '../../../shared/hook-helpers.mjs';
 import {
   capReaderCalls, capReaderDefinitions, clientClaimantRows, clientOldOnlyRows, OLD_CLAIMANT_DOORS, serverClaimantDoors,
 } from './claimant.js';
+import { questionDoors } from './questions.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
@@ -103,7 +104,7 @@ describe('the claimant client census (D-7320)', () => {
     ]);
   });
 
-  it('FIXTURE: a call before the family test is unguarded; the definition inside the region and a comment are not calls', () => {
+  it('FIXTURE: a call before the claimant test is unguarded; the definition inside the region and a comment are not calls', () => {
     const t = tree({
       'ccd/ccrc-api': [
         '#!/usr/bin/env bash',
@@ -113,8 +114,8 @@ describe('the claimant client census (D-7320)', () => {
         '}',
         REGION!.end,
         '# _api_server_cap questions-v1 is read only for a claimant row',
-        'if [[ -n "$family" ]] && _api_server_cap questions-v1; then path="$family"; fi',
-        'if _api_server_cap questions-v1 && [[ -n "$family" ]]; then :; fi',
+        'if [[ -n "$claimant" ]] && _api_server_cap questions-v1; then path="$claimant"; fi',
+        'if _api_server_cap questions-v1 && [[ -n "$claimant" ]]; then :; fi',
         'if _api_server_cap questions-v1; then :; fi',
         '',
       ].join('\n'),
@@ -140,7 +141,7 @@ describe('the claimant client census (D-7320)', () => {
     // reader is the one hand-written copy, no cap-reader call is unguarded, every claimant door is a POST.
     for (const r of claimant) expect(['asks.answer', 'asks.release', 'approvals.rule', 'approvals.release'], r.key).toContain(r.key);
     expect(defs.filter((s) => s.kind === 'hand').map((s) => `${s.file}#${s.name}`), 'the hand-written cap reader').toEqual(['ccd/session-hook.sh#_hook_server_cap']);
-    expect(calls.filter((s) => !s.guarded), 'a cap-reader call no $family test guards').toEqual([]);
+    expect(calls.filter((s) => !s.guarded), 'a cap-reader call no $claimant test guards').toEqual([]);
     for (const d of server) expect(d.route, 'a claimant door').toMatch(/^POST \/api\//);
   });
 
@@ -149,9 +150,24 @@ describe('the claimant client census (D-7320)', () => {
   it('REAL, pinned since Q3j: client rows whose only door is the old one: exactly 0 (D-7322)', () => {
     expect(clientOldOnlyRows().map((r) => r.key)).toEqual([]);
   });
-  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 1, guarded by the $family test before it (D-7322)', () => {
+  // Q3l's behaviour commit gives the four claimant rows the family's template as their path (D-7324).
+  it('REAL, pinned since Q3l: client rows on an old claimant door: exactly 0 (D-7324)', () => {
+    expect(clientClaimantRows().map((r) => r.key)).toEqual([]);
+  });
+  // Q3l's last alias deletion leaves the family's two: 6 -> 2 (D-7324). A door-shaped POST whose tag row Q3l removed
+  // reads `untagged`, not `claimant`, so the row also counts every door that is not the operator's or navigation: an
+  // alias left registered is a third door here, whatever its tag.
+  it('REAL, pinned since Q3l: claimant doors: exactly 2, the family\'s rule and release (D-7324)', () => {
+    const FAMILY = ['POST /api/questions/:id/rule', 'POST /api/questions/:id/release'];
+    expect(serverClaimantDoors().map((d) => d.route)).toEqual(FAMILY);
+    expect(questionDoors().filter((d) => d.tag !== 'operator' && d.tag !== 'navigation').map((d) => `${d.route} ${d.tag}`))
+      .toEqual(FAMILY.map((r) => `${r} claimant`));
+  });
+  // Q3l re-pointed the guard from `$family` (the fifth field it removed) to `$claimant`, the row test it wrote (D-7324;
+  // named exception): still one call, for the four claimant rows only.
+  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 1, guarded by the $claimant test before it (D-7322, D-7324)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
-      [true, 'if [[ -n "$family" ]] && _api_server_cap questions-v1; then'],
+      [true, 'if [[ -n "$claimant" ]] && _api_server_cap "$want"; then'],
     ]);
   });
 });

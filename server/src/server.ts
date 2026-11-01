@@ -300,11 +300,13 @@ function findPwaRoot(): string | null {
 }
 
 /**
- * `FleetHealth.builds`, derived from the inventory rows (design 2026-09-20
- * §14): each live row's role and its five `current*` columns as one
- * `BuildInfo` (`buildInfoOfRow`, update/inventory.ts), paired by
- * `derivedBuilds`. Composition only — which row is which side is decided
- * there.
+ * The `{own, fleet}` pair of stamps `buildAgreement` decides `FleetHealth.build`
+ * from, derived from the inventory rows (design 2026-09-20 §14): each live
+ * row's role and its five `current*` columns as one `BuildInfo`
+ * (`buildInfoOfRow`, update/inventory.ts), paired by `derivedBuilds`. The pair
+ * is only this input now — the `FleetHealth.builds` wire field that once
+ * carried it was retired in wave 33. Composition only — which row is which
+ * side is decided there.
  *
  * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
  * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
@@ -312,8 +314,8 @@ function findPwaRoot(): string | null {
  * route must not gain a new way to 500. It deliberately does NOT fall back to
  * `fleetState.build` — spec §8: the handshake sample is never read as the
  * current build where an inventory is wired. The fold of "unreadable" into
- * "no rows yet" is honest for this field's readers, which render both as a
- * dash; `GET /api/updates` is where the distinction is shown.
+ * "no rows yet" is honest for the one word decided from it (`unknown`);
+ * `GET /api/updates` is where the distinction is shown.
  */
 function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null } {
   let rows: NodeRow[];
@@ -1283,7 +1285,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // fleet host said on its last `ready` (`fleetState.build`). `?? null`
       // because `Deps.build` is optional for such callers — an absent stamp
       // and a null one are the same condition, exactly as `/health` treats
-      // them. `buildAgreement` decides from whichever pair this is.
+      // them. `buildAgreement` decides from whichever pair this is; the pair
+      // itself is not on the wire (`FleetHealth.builds` retired in wave 33).
       const builds = deps.coord
         ? inventoryBuilds(deps.coord)
         : { own: deps.build ?? null, fleet: deps.fleetState.build ?? null };
@@ -1293,7 +1296,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         downSince: deps.fleetState.downSince,
         roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp()),
         build: buildAgreement(builds.fleet, builds.own),
-        builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),
@@ -1810,7 +1812,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` are built HERE, ahead of `registerCoordRoutes`
   // below, rather than beside the `/api/sessions/:id/{prompt,dialog,ask}`
   // routes further down this file (where they used to live) — Task 9's
-  // `POST /api/asks/:id/answer` (`coord/routes.ts`) must serialize through
+  // `POST /api/questions/ask-<n>/rule` (`coord/routes.ts`, the parent's answer) must serialize through
   // this SAME `askDeps`/`queue`, not a second one it builds for itself, so
   // both routes agree on the one per-session lock. `knownId` stays where it
   // was: nothing here depends on it.
@@ -1830,7 +1832,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
         // non-registry id on `POST /api/questions/session-<id>/answer` (the
         // operator's ask, since W7 C7p retired `/api/sessions/:id/ask`), and on
-        // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
+        // `POST /api/questions/ask-<n>/rule` `freshAskAt`'s own `bad-id` answers
         // `child-unmeasurable` before `answerAsk` reaches this read. `null`,
         // the safe word, all the same.
         case 'bad-id': return null;
@@ -1870,7 +1872,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `authStore` lives (the class began with `GET /api/runs`, D-149).
   //
   // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
-  // reached from `POST /api/asks/:id/answer` serializes through the exact
+  // reached from `POST /api/questions/ask-<n>/rule` serializes through the exact
   // same `KeyedQueue` as `/api/sessions/:id/{prompt,dialog,ask}` below —
   // independent queues would let a parent's pre-emption race a child's own
   // in-flight prompt against the identical tmux pane.
@@ -1931,7 +1933,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const accountGate = createAccountGate({
     enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
   });
-  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir, gate: accountGate, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs });
+  // The one Linear rate service (spec §6.7) and the one background refresher (spec §4.3) are passed through as they
+  // are, possibly absent: never a default built here.
+  registerLinearRoutes(app, {
+    ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
   // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
@@ -2859,7 +2866,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // goes on (M5). It is sanitised inside `resolveTitle`, so ccd's control-character and byte-cap refusals cannot turn a
     // lookup into a 502. The id is ccd's `$project-$slug` (`cmd_ws_add`).
     const { title } = await resolveTitle(plan.name, plan.ask.ticket, {
-      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+      ccrcDir: deps.cfg.ccrcDir, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     });
     const slug = plan.ask.slug;
     const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
@@ -3810,7 +3817,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // title otherwise (never a failure), and sanitised inside `resolveTitle`, so ccd's text refusals are not reachable
     // through a lookup.
     const title = plan.kind === 'clear' ? null : (await resolveTitle(plan.name, plan.ticket, {
-      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+      ccrcDir: deps.cfg.ccrcDir, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     })).title;
     const argv = CCD_ARGV.wsTitle(id, title === null ? { clear: true } : { title });
     // Through the per-session queue, like the reap and the forget, so a rename cannot interleave with another write to

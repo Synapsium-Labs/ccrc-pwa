@@ -19,7 +19,7 @@ import type { AttributionRead } from './openRun.js';
  *
  * `uuidField` (Task 9 fix round 1) names the body field THIS CALLER's
  * request actually carries — `'byUuid'` for the claim lanes, `'fromUuid'`
- * for `POST /api/asks/:id/answer` — so the `stale-uuid` detail can tell a
+ * for `POST /api/questions/ask-<n>/rule` — so the `stale-uuid` detail can tell a
  * caller which of ITS OWN fields to re-read. Before this, the prose was a
  * literal `'byUuid does not match...'` no matter who called it: an ask
  * caller, whose body has no `byUuid` field at all, was told to fix a field

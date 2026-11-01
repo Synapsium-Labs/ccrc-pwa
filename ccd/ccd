@@ -1769,6 +1769,28 @@ die() { echo "ccd: $*" >&2; exit 1; }
 # (`-e` is false for a DANGLING symlink, so that case reports as missing —
 # which is what it is: the roster the link names is not there.)
 CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+# ── THE NAMES `accounts.sh` DEFINES, ONCE (D-7717) ──────────────────────────
+# Every variable and function shared/generate.mjs emits. `_roster_reread_check`
+# unsets exactly these, in its validating subshell and then in this shell, so a
+# projection that no longer defines one of them cannot leave the old value
+# standing ("UNSET IS NOT EMPTY", `_wrapper_rostered_now`'s "UNSET FIRST").
+# `server/test/ccd-supervise-roster-reread.test.ts` holds both lists equal to
+# what the generator writes, so a field added there reds here until it is named.
+_CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM)
+_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_secrets_file _ccrc_auth_dir)
+# The fingerprint is the file's BYTES, read with builtins: no `stat`, no hash,
+# so the check `cmd_supervise` makes every loop costs no fork (the tick budget,
+# ccd-tick-budget.test.ts, is exact). The file is a few KB. `-f` first, as the
+# ladder below does, because `read` opens by name and blocks forever on a FIFO.
+# rc 1 when there is nothing to read (absent, not a regular file, unreadable,
+# empty): every one of those is a roster `_roster_reread_check` refuses anyway.
+# A NUL ends the read early; the generator never writes one.
+_roster_fp_to() {   # var -> var = the bytes of accounts.sh; rc 1 when there are none to read
+  local __rf_v=""
+  [[ -f "$CCRC_ACCOUNTS_SH" && -r "$CCRC_ACCOUNTS_SH" ]] || return 1
+  { IFS= read -r -d '' __rf_v < "$CCRC_ACCOUNTS_SH"; } 2>/dev/null || :
+  [[ -n "$__rf_v" ]] && printf -v "$1" '%s' "$__rf_v"
+}
 [[ -e "$CCRC_ACCOUNTS_SH" ]] \
   || die "no account roster at $CCRC_ACCOUNTS_SH — generate it from ~/.ccrc/accounts.json (deploy/deploy.sh, or \`ccrc install\`)"
 # D-2377: `-e` and `-r` are not enough on their own — neither is false for a
@@ -1806,6 +1828,15 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # convention to copy. source=/dev/null is shellcheck's own idiom for a path it
 # cannot follow: this one is generated at deploy time and has no in-repo
 # counterpart to check against (shared/generate.mjs emits it).
+#
+# THE BYTES ARE READ BEFORE THE `source`, NEVER AFTER IT (D-7717). They are the
+# fingerprint `_roster_reread_check` compares against, once per `cmd_supervise`
+# loop. Read first, a write that lands between the read and the `source` leaves
+# a fingerprint OLDER than what was sourced, so the next loop sees a change and
+# re-reads: one harmless extra re-read. Read after, the same write would leave
+# a fingerprint that matches a file this process never sourced, and the change
+# would be missed for the life of the supervisor.
+_roster_fp_to _CCD_ROSTER_FP || _CCD_ROSTER_FP=""
 # shellcheck source=/dev/null
 source "$CCRC_ACCOUNTS_SH" \
   || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
@@ -26343,6 +26374,75 @@ _route_pending_word() { local __w; _route_pending_word_to __w "$@"; printf '%s' 
 # D-4963 (tick-diet spec §6.4): the printing form of the home read, renamed in place as its out-var form above (D-5270: raw stdout drops the fallback's newline).
 _home_measured() { local __hmw_v __hmw_rc; _home_measured_to __hmw_v "$@"; __hmw_rc=$?; printf '%s' "$__hmw_v"; return "$__hmw_rc"; }
 
+# ── A RUNNING SUPERVISOR PICKS UP A NEW OR REMOVED LANE (D-7717) ───────────
+# `accounts.sh` is sourced once, at module top level, and `cmd_supervise` lives
+# for weeks. Before this, a lane `ccrc account add` rostered joined swap
+# rotation only when each supervisor next restarted, and a removed lane stayed
+# a rotation candidate in every running one. Restarting them is not the answer:
+# a restart is an actor on every unit, and this change adds none.
+#
+# THIS IS A DEPARTURE, and a bounded one. `_wrapper_rostered_now`'s rule is "A
+# SUBSHELL, NEVER A RE-SOURCE INTO THIS SHELL" and "UNSET FIRST". Both of its
+# reasons are kept:
+#   - "sourcing it mid-run would let a generator change redefine a function
+#     this verb is in the middle of using": the re-source happens only at the
+#     LOOP BOUNDARY, before the probe and before any tick helper runs, so no
+#     roster function is mid-use when it is replaced.
+#   - "an inherited CCRC_ACCOUNTS survives a projection that no longer defines
+#     it": the new bytes are VALIDATED FIRST, in a subshell that unsets every
+#     name the generator defines (`_CCD_ROSTER_VARS`, `_CCD_ROSTER_FNS`) before
+#     it evaluates them. They must evaluate with rc 0 and leave a non-empty
+#     indexed `CCRC_ACCOUNTS`, an indexed `CCRC_HOME_ABLE` (which `_is_home_able`
+#     reads bare under `set -u`) and the functions `_ccrc_cfg_dir`,
+#     `_ccrc_label` and `_ccrc_hue`. Only then are the same names unset in THIS
+#     shell and the same bytes evaluated here.
+#
+# THE BYTES VALIDATED ARE THE BYTES APPLIED. Both evaluations take the
+# fingerprint string, not the file, so a write that lands between the
+# validation and the re-source cannot put an unvalidated roster into the
+# supervisor. Both run inside `_roster_eval`, at the same function depth, so a
+# hand-edited file that says `declare -a CCRC_ACCOUNTS=(…)` — a LOCAL at that
+# depth, gone on return — fails the validation exactly as it would have emptied
+# the roster here.
+#
+# A REFUSED FILE KEEPS THE OLD ROSTER and warns ONCE per distinct content
+# (`_CCD_ROSTER_REFUSED`), not once a loop: a broken projection under 60
+# supervisors would otherwise write 12 lines a second into the journal. A later
+# good file is applied as usual. The roster is never emptied.
+#
+# `_cfg_dir_to`'s per-process memo assumed "the roster is sourced once"; it is
+# dropped on every re-source, or a removed lane would keep answering its old
+# config directory.
+#
+# No `systemctl`, no `launchctl`, no `tmux`: nothing here restarts a unit or
+# touches a pane. Only `cmd_supervise` calls this; every other verb is short
+# and keeps its one startup snapshot (and `_wrapper_rostered_now` for the
+# writes that must re-ask).
+_CCD_ROSTER_REFUSED=""   # "x" + the bytes last refused ("x" alone: nothing could be read); "" = none refused
+_roster_eval() { eval "$1"; }   # bytes -> their rc, evaluated in THIS shell one function deep (see above)
+_roster_reread_check() {   # [id] -> re-reads accounts.sh into this shell iff its bytes changed and pass validation
+  local fp="" who="${1:+$1: }"
+  _roster_fp_to fp || fp=""   # "" (nothing readable) is never evaluated from the file: it fails validation below
+  [[ ( -n "$fp" && "$fp" == "$_CCD_ROSTER_FP" ) || "x$fp" == "$_CCD_ROSTER_REFUSED" ]] && return 0
+  if ! (
+    unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
+    { _roster_eval "$fp"; } >/dev/null 2>&1 || exit 1
+    declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
+    (( ${#CCRC_ACCOUNTS[@]} > 0 )) || exit 1
+    declare -p CCRC_HOME_ABLE 2>/dev/null | grep -q '^declare -a ' || exit 1
+    declare -F _ccrc_cfg_dir _ccrc_label _ccrc_hue >/dev/null 2>&1 || exit 1
+  ); then
+    _CCD_ROSTER_REFUSED="x$fp"
+    echo "ccd: warn: ${who}account roster $CCRC_ACCOUNTS_SH changed and is refused: it must be a readable regular file that sources cleanly to a non-empty CCRC_ACCOUNTS, a CCRC_HOME_ABLE and _ccrc_cfg_dir/_ccrc_label/_ccrc_hue — keeping the roster this supervisor holds (${CCRC_ACCOUNTS[*]}); regenerate it: ccrc install" >&2
+    return 0
+  fi
+  unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
+  { _roster_eval "$fp"; } >/dev/null 2>&1 \
+    || echo "ccd: warn: ${who}account roster re-read returned non-zero in this shell after it validated" >&2
+  _CCD_CFG_DIR_MEMO=(); _CCD_ROSTER_FP=$fp; _CCD_ROSTER_REFUSED=""
+  echo "ccd: ${who}account roster re-read — lanes now: ${CCRC_ACCOUNTS[*]}" >&2
+}
+
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
   # ── THE START LIMIT, ON A MANAGER THAT HAS NONE ────────────────────────
@@ -26531,6 +26631,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   local CCD_TICK_CTX=1   # the tick context: dynamically scoped like CCD_IN_UNIT, never exported, never argv; cmd_ensure never sees it (spec §6.2)
   while :; do
     _now_s_to t0   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
+    _roster_reread_check "$id"   # D-7717: the loop boundary — no roster function is mid-use here; fork-free when unchanged
     _session_probe "$id"
     case "$PROBE_VERDICT" in
       gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-310)

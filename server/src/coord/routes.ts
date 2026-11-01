@@ -554,7 +554,7 @@ export function registerCoordRoutes(
    */
   sessionAuth: (req: FastifyRequest) => GateDecision = () => NO_SESSION,
   /**
-   * Task 9's `POST /api/asks/:id/answer` presses a digit through `answerAsk`,
+   * Task 9's parent answer (`POST /api/questions/ask-<n>/rule`) presses a digit through `answerAsk`,
    * which is serialized per-session through `askDeps.queue` — the SAME
    * `KeyedQueue` `server.ts` hands `/api/sessions/:id/{prompt,dialog,ask}`,
    * threaded in here rather than rebuilt, so a parent's pre-emption and a
@@ -564,7 +564,7 @@ export function registerCoordRoutes(
    */
   askDeps: AskDeps,
   /**
-   * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
+   * Task 10's decline (`POST /api/questions/ask-<n>/release`) drops the
    * in-memory hold and fires the deferred push immediately — since W3 Q3f
    * (D-7030) through the watcher's `Questions` instance (`questions` below,
    * the watcher's own) and the doors sink the watcher gave it, so this file
@@ -3784,155 +3784,6 @@ export function registerCoordRoutes(
   // cores. See `registry.ts`'s own doc comment on it for the full reasoning.
 
   /**
-   * `POST /api/asks/:id/answer` — the parent presses the digit into its
-   * child's live menu. The most safety-sensitive route in the lane: unlike
-   * every other coordination write, this one ends in a KEYSTROKE into
-   * another session's pane, so every gate below runs BEFORE `answerAsk` is
-   * ever called, in the order the risk falls.
-   *
-   * Box token (`requireMailToken`) proves only "a process on this box" — one
-   * shared secret, identical for every session on the fleet host. It can
-   * never prove WHICH session is calling, so `requireAttribution` layers the
-   * registry pair on top, exactly as the claims lanes and the mail ingress
-   * already do. Then, and only then, `ask.parentId === fromId`: only this
-   * child's OWN derived parent may pre-empt its question — attribution alone
-   * would let any live session on the box answer any other session's ask.
-   *
-   * The CAS precedes the keystroke: `takeAskForAnswer` is the row acting as
-   * its own mutex, re-proving the INSTANCE (`freshAskAt`, D-2170) and taking
-   * exclusive ownership of the row (`not-held`, D-2171) before `answerAsk`
-   * ever touches the pane. A refused press (`answerAsk` returning
-   * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: a refusal
-   * here means no digit was pressed and the question is still live and
-   * still pre-emptible — not because every one of `answerAsk`'s thirteen
-   * pre-send guards (D-5048 added the multiSelect refusal) plus its
-   * post-send `sendKey` check (D-2177) precedes the loop, but because a row
-   * here only ever exists for a SINGLE-SELECT ask (`askActions` returns null
-   * on `multiSelect`, the sole eligibility gate `hold` checks before minting
-   * one — D-2173), which
-   * makes exactly one `sendKey` call and no Enter — see `untakeAsk`'s own
-   * docstring (`store.ts`) for the full argument. `releaseAsk`'s CAS source
-   * is `'held'`, and this row sits in `'answering'`, so it cannot even
-   * reach it (it would silently strand the row forever, `changes: 0` and
-   * all). `untakeAsk` is the exact CAS built for this rollback.
-   *
-   * Since W3 Q3f (D-7030) this door keeps its front ladder (the box token, the body, attribution, the id parse) and
-   * delegates the rest, the ladder above in this order, to `coord/questions.ts#createQuestions`'s `rule`.
-   */
-  app.post('/api/asks/:id/answer', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid } = body;
-    // `optionIndexes`, never a singular `optionIndex`: under `answerableAsk`
-    // eligibility (D-5293, read through `askActions`) only single-select asks
-    // are ever held, so this array carries one element today — and that is
-    // the point. A singular field is what re-opens the multi-select commit
-    // hazard, silently, on the day someone widens eligibility. The wire shape
-    // must not be the thing to remember. D-5293: the answer half of this body
-    // is the operator route's, read by the one reader both routes import
-    // (`readAskAnswer`), never respelled here.
-    const answerBody = readAskAnswer(body);
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || answerBody === null) {
-      return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
-    }
-
-    // The box token proves "a process on this box", one shared secret
-    // identical for every session on the fleet host — it cannot prove "this
-    // ask's parent". The registry pair is what attributes the specific
-    // session, exactly as the mail ingress and the claims lanes do.
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-
-    // Resource ids accept one positive-safe decimal spelling, before any
-    // sqlite read can collapse a different textual name onto this ask.
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    // W3 Q3f (D-7030): an ALIAS from here on. Everything after the id parse (the row, the stored parent, the CAS, the
-    // press, the rollback, the record, the settle and the late answer) is the claimant's core, `questions.rule`, which
-    // `POST /api/questions/ask-<n>/rule` calls too.
-    return sendAnswer(reply, await questions.rule({
-      kind: 'ask', id, fromId, optionIndexes: answerBody.optionIndexes, askKey: answerBody.askKey,
-    }, claimantDeps!));
-  });
-
-  /**
-   * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
-   * child's question. This is the verb that makes the grace window a
-   * CEILING rather than a flat tax on every ask the parent cannot answer
-   * (Task 10, this lane's own reason for existing): a decline fires the
-   * operator's push NOW instead of making them wait out the rest of
-   * `ASK_GRACE_MS` for a question nobody upstream is going to rule on.
-   *
-   * Unlike `/answer` above, this route never touches the pane — no
-   * `answerAsk`, no CAS-then-press-then-rollback dance — so its gate ladder
-   * is the plain box-token + attribution + ownership shape the claims lanes
-   * already use, run in the order the risk falls: box token, then body
-   * shape, then attribution, then `unknown-ask`, then
-   * `ask.parentId === fromId`. Only this child's derived parent may decline
-   * its question — attribution alone would let any live session on the box
-   * decline any other session's ask, exactly the reason `/answer` layers the
-   * same check on top of the box token.
-   *
-   * `declineAsk`'s CAS is the row acting as its own mutex, the same shape
-   * `/answer`'s `takeAskForAnswer` uses: its source state is `'held'`, so a
-   * decline of a row that is already `'answering'`/`'answered'`/`'released'`/
-   * `'declined'`/`'stale'` refuses `not-held` rather than pretending to
-   * succeed — a decline that finds nothing held must not lie about what it
-   * did. It moves the row to `'declined'`, NOT the lapse's `'released'`
-   * (D-5289): a parent that handed the question over may not answer it later
-   * (`/answer` refuses `409 declined`), where a lapsed row stays answerable.
-   *
-   * The `Questions` instance's `released` door-in is the ONLY way this route
-   * touches the in-memory hold (F12's own argument; since W3 Q3f, D-7030, the
-   * claimant's core calls it and pushes through the watcher's doors sink): the
-   * hold is the instance's state, so this route names the child id and nothing
-   * about its shape. It runs AFTER the CAS
-   * succeeds, never before — the store row is the fact, the in-memory hold
-   * is only ever a cache of the push `sweepAsks` would otherwise send later.
-   * A `watcher === undefined` server (every non-test `buildServer` caller
-   * always supplies one today, `src/index.ts`'s only construction) still
-   * releases the row and answers `{ok:true}` — that part is genuinely true —
-   * but has no hold to drop and no snapshotted push to fire, so it warns
-   * instead of silently dropping the operator's notification on the floor
-   * (fix round 1, item 1).
-   *
-   * Since W3 Q3f (D-7030) this door keeps its front ladder (the box token, the body, attribution, the id parse) and
-   * delegates the rest, in this order, to `coord/questions.ts#createQuestions`'s `release`; the watcher's in-memory
-   * hold is reached through that instance's `released` door-in and the watcher's doors sink.
-   */
-  app.post('/api/asks/:id/release', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    // Literally inline, not through a wrapper: the census derives lanes by
-    // regex-slicing this file between route registrations, so a gate call it
-    // cannot see is a lane it will not count.
-    if (!requireMailToken(req, reply, 'POST /api/asks/:id/release')) return;
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid } = body;
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
-      return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'fromId/fromUuid strings' });
-    }
-
-    // The box token proves "a process on this box", one shared secret
-    // identical for every session on the fleet host — it cannot prove "this
-    // ask's parent". The registry pair is what attributes the specific
-    // session, exactly as `/answer` and the mail ingress do.
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-
-    // Resource ids accept one positive-safe decimal spelling, before any
-    // sqlite read can collapse a different textual name onto this ask.
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    // W3 Q3f (D-7030): an ALIAS from here on. The row, the stored parent, the decline CAS and the push now (or, with
-    // no watcher, the warning) are the claimant's core, `questions.release`, which `POST /api/questions/ask-<n>/release`
-    // calls too.
-    return sendAnswer(reply, await questions.release({ kind: 'ask', id, fromId }, claimantDeps!));
-  });
-
-  /**
    * `GET /api/asks?parent=<id>&state=<AskState>` — Task 11, the READ side of
    * the ask pre-emption lane. Two callers, two credentials: a fleet PARENT
    * reading its own children's open asks (so it can see whether two children
@@ -4049,7 +3900,7 @@ export function registerCoordRoutes(
   //
   // A dispatched child's PermissionRequest hook asks (`POST /api/approvals`), the server mints a row held for the
   // child's run's attributed claimant (D-5530, D-5531: wherever it sits, no project compared) and mails it, the
-  // claimant rules (`POST /api/approvals/:id/rule`), the server signs the ruling with a key that never leaves this box,
+  // claimant rules (`POST /api/questions/approval-<n>/rule`), the server signs the ruling with a key that never leaves this box,
   // and the hook fetches it (`GET /api/approvals/:id/ruling?nonce=`) and verifies it with the pinned public key. Every
   // refusal answers through `refuseRoute` (D-5381): the hook prints nothing on any of them, so the prompt stays the
   // operator's (spec §12 invariant 4).
@@ -4213,60 +4064,6 @@ export function registerCoordRoutes(
     return reply.code(200).send(answer);
   });
 
-  /**
-   * `POST /api/approvals/:id/rule` — the held-for claimant rules (spec §6.3 server steps 5 and 6, amended by D-5441
-   * and D-5530). Box token; `{fromId, fromUuid, verdict, reason}` and nothing that could widen a ruling (`permanent`,
-   * `updatedPermissions`, `mode` are 400); attribution; the row; the kill switches and the single-box gate (nothing is
-   * signed under either); the caller is the row's stored parent (`403 not-parent` for anyone else, wherever they sit:
-   * no project is compared, D-5530); a row minted released is the operator's (`approval-released`); the row's own
-   * state (`declined`, `already-ruled`, `hook-gone`); the window (`hook-gone` at or after `notifyAt`, D-5441); the
-   * child's mark still names the row's run (`not-a-child`) and the claimant rule still holds the row for the caller
-   * (`parent-changed`); the guard again for an allow (`guard-forbidden`, `guard-escalate`); then the signature, and
-   * the CAS that stores it. Since W3 Q3f (D-7030) the door keeps its front ladder (the box token, the widening fields,
-   * the body, attribution, the id parse) and the rest, from the row on and in this order, is
-   * `coord/questions.ts#createQuestions`'s `rule`, with `signerFor` passed in as the raise's is.
-   */
-  app.post('/api/approvals/:id/rule', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'POST /api/approvals/:id/rule')) return;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    for (const k of ['permanent', 'updatedPermissions', 'mode']) {
-      if (Object.prototype.hasOwnProperty.call(body, k)) {
-        return refuseRoute(reply, 'bad-request', { detail: `a ruling allows once only; ${k} is never accepted` });
-      }
-    }
-    const { fromId, fromUuid, verdict, reason } = body;
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || (verdict !== 'allow' && verdict !== 'deny')
-        || typeof reason !== 'string' || reason.trim() === '' || reason.length > APPROVAL_REASON_MAX_CHARS) {
-      return refuseRoute(reply, 'bad-request', { detail: `fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to ${APPROVAL_REASON_MAX_CHARS} characters` });
-    }
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return refuseRoute(reply, 'bad-request');
-    // W3 Q3f (D-7030): an ALIAS from here on. The row and everything after it, the signing unchanged, are the
-    // claimant's core, `questions.rule`, which `POST /api/questions/approval-<n>/rule` calls too.
-    return sendAnswer(reply, await questions.rule({ kind: 'approval', id, fromId, verdict, reason }, claimantDeps!));
-  });
-
-  /** `POST /api/approvals/:id/release` — the held-for claimant hands the prompt over (`held -> declined`, D-5440): the
-   *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent.
-   *  Since W3 Q3f (D-7030) the door keeps its front ladder and delegates from the row on to `questions.release`. */
-  app.post('/api/approvals/:id/release', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'POST /api/approvals/:id/release')) return;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid } = body;
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
-      return refuseRoute(reply, 'bad-request', { detail: 'fromId/fromUuid strings' });
-    }
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return refuseRoute(reply, 'bad-request');
-    // W3 Q3f (D-7030): an ALIAS from here on. The row, the stored parent, the decline, the input forgotten and the push
-    // now are the claimant's core, `questions.release`, which `POST /api/questions/approval-<n>/release` calls too.
-    return sendAnswer(reply, await questions.release({ kind: 'approval', id, fromId }, claimantDeps!));
-  });
-
   /** `GET /api/approvals/:id?fromId=&fromUuid=` — one row, redacted, for the claimant it was held for (spec §6.7:
    *  "the full input is on the row"). Box token and attribution, as `GET /api/asks` scopes a box-token caller: a
    *  session reads only a row held for it (`403` otherwise, and a row minted released was held for nobody). */
@@ -4302,8 +4099,8 @@ export function registerCoordRoutes(
   // `/api/questions/:id/*`, here behind this file's one gate (spec §2.5): the PATH picks the principal, never a body
   // field or a header. `:id` is `parseQuestionId`'s (`ask-<n>`, `approval-<n>`, `session-<id>`), and an id or a body of
   // the other principal's kind is `400 kind-mismatch`. Each door runs its own front ladder, then the shared core the old
-  // door it replaces now calls too (`coord/questions.ts`), so a new path answers what its old door answers, byte for
-  // byte. `/api/sessions/:id/dialog/tab` answers nothing and stays a session door.
+  // door it replaced called too (`coord/questions.ts`), so a new path answers what its old door answered, byte for
+  // byte; the old claimant doors were retired in K5 Q3l (D-7324), the operator's in W7 C7p (D-7194). `/api/sessions/:id/dialog/tab` answers nothing and stays a session door.
 
   /**
    * `POST /api/questions/session-<id>/answer` — THE OPERATOR'S. Session-gated and origin-checked like every PWA write:
@@ -4345,10 +4142,10 @@ export function registerCoordRoutes(
   /**
    * `POST /api/questions/<ask|approval>-<n>/rule` — THE CLAIMANT'S. The box token, then the body by its `kind` (an ask:
    * `fromId`/`fromUuid` and `readAskAnswer`'s answer; an approval: the widening-field refusal, then `fromId`/`fromUuid`,
-   * `verdict` and `reason`, exactly as `/api/approvals/:id/rule` reads them), attribution against the registry, the id
+   * `verdict` and `reason`, exactly as the retired `/api/approvals/:id/rule` read them), attribution against the registry, the id
    * (`parseQuestionId`, `bad-request`), and a body kind that disagrees with the id's is `kind-mismatch`. Then the
    * claimant's core: the stored parent and everything after it, the signing unchanged. EXEMPT from the session gate,
-   * like the two doors it replaces (`/api/asks/:id/answer`, `/api/approvals/:id/rule`).
+   * as the two doors it replaced were (`/api/asks/:id/answer`, `/api/approvals/:id/rule`, retired in K5 Q3l, D-7324).
    */
   app.post('/api/questions/:id/rule', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -4389,8 +4186,8 @@ export function registerCoordRoutes(
   /**
    * `POST /api/questions/<ask|approval>-<n>/release` — THE CLAIMANT'S hand-over. The box token, the body
    * (`{kind, fromId, fromUuid}`), attribution, the id, the kind check, then the claimant's core: the stored parent, the
-   * decline, and the operator's push now. EXEMPT from the session gate, like the two doors it replaces
-   * (`/api/asks/:id/release`, `/api/approvals/:id/release`).
+   * decline, and the operator's push now. EXEMPT from the session gate, as the two doors it replaced
+   * were (`/api/asks/:id/release`, `/api/approvals/:id/release`, retired in K5 Q3l, D-7324).
    */
   app.post('/api/questions/:id/release', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);

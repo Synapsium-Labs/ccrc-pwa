@@ -182,8 +182,9 @@ describe('the closed route table', () => {
     // The landing line's read (landing order wave 5e, D-7625).
     [['landing', 'show'], 'GET', '/api/landing'],
     [['asks', 'list'], 'GET', '/api/asks'],
-    [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer', '/api/questions/ask-7/rule'],
-    [['asks', 'release', '7'], 'POST', '/api/asks/7/release', '/api/questions/ask-7/release'],
+    // The claimant's two ask rows: the question door family's path since the old doors retired (K5 Q3l, D-7324).
+    [['asks', 'answer', '7'], 'POST', '/api/questions/ask-7/rule'],
+    [['asks', 'release', '7'], 'POST', '/api/questions/ask-7/release'],
     // The durable feed, filterable by programme (cross-repo programmes §4). A
     // NEW ROW rather than a `--program` on some existing one: the table is the
     // client's own contract and grows by a row, never by a URL argument.
@@ -196,8 +197,8 @@ describe('the closed route table', () => {
     [['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], 'GET', '/api/approvals/41/ruling'],
     [['approvals', 'key'], 'GET', '/api/approvals/key'],
     // The claimant's three rows (coordinator-first routing, plan Task 16, D-5298).
-    [['approvals', 'rule', '41'], 'POST', '/api/approvals/41/rule', '/api/questions/approval-41/rule'],
-    [['approvals', 'release', '41'], 'POST', '/api/approvals/41/release', '/api/questions/approval-41/release'],
+    [['approvals', 'rule', '41'], 'POST', '/api/questions/approval-41/rule'],
+    [['approvals', 'release', '41'], 'POST', '/api/questions/approval-41/release'],
     [['approvals', 'show', '41'], 'GET', '/api/approvals/41'],
     // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
     [['testbox', 'status'], 'GET', '/api/testbox'],
@@ -215,7 +216,7 @@ describe('the closed route table', () => {
     // is the table's, so compare the path half exactly.
     expect(seen[0]!.url.split('?')[0]).toBe(url);
     // The row's fifth field, read through the one reader of the table (D-7320): the family's template on the four
-    // claimant rows, none on every other row.
+    // claimant rows from Q3j; none on any row since Q3l (D-7324), whose path is the family's own.
     const row = clientRoutes().find((r) => r.key === `${args[0]}.${args[1]}`)!;
     expect(row.family === null ? null : row.family.replace('{id}', args[2]!)).toBe(family ?? null);
   });
@@ -285,7 +286,7 @@ describe('the closed route table', () => {
   });
 });
 
-describe('the four claimant rows send the question door family while the server advertises questions-v1 (D-7322)', () => {
+describe('the four claimant rows send the question door family, and refuse locally only a current cap file without questions-v1 (D-7322, D-7324, D-7328)', () => {
   // `~/.ccrc/server-caps`, as `ccd-update-sync` writes it on a fleet node: `at`, the words, `end`. Only the four
   // claimant rows read it, through the one guarded call `census-w3/claimant.ts#capReaderCalls()` counts; no row here
   // puts a FIFO or any other blocking file at the path, because the reader's `<` open blocks on one (D-7339).
@@ -301,11 +302,12 @@ describe('the four claimant rows send the question door family while the server 
     ['approvals', 'release', '/api/questions/approval-7/release', 'approval', '{"fromId":"parent","fromUuid":"u"}'],
   ];
 
-  it('the family rows are exactly the four claimant rows, read through clientRoutes()', () => {
-    expect(clientRoutes().filter((r) => r.family !== null).map((r) => [r.key, r.family])).toEqual([
+  it('the family rows are exactly the four claimant rows, read through clientRoutes(), the family their only path', () => {
+    expect(clientRoutes().filter((r) => r.path.startsWith('/api/questions/')).map((r) => [r.key, r.path])).toEqual([
       ['asks.answer', '/api/questions/ask-{id}/rule'], ['asks.release', '/api/questions/ask-{id}/release'],
       ['approvals.rule', '/api/questions/approval-{id}/rule'], ['approvals.release', '/api/questions/approval-{id}/release'],
     ]);
+    expect(clientRoutes().filter((r) => r.family !== null).map((r) => r.key), 'no row carries a second template').toEqual([]);
   });
 
   it.each(CLAIMANT)('%s %s, with a current cap file listing questions-v1, sends POST %s with the row\'s kind (%s) spliced first', async (group, verb, url, kind, body) => {
@@ -351,23 +353,39 @@ describe('the four claimant rows send the question door family while the server 
     expect(seen).toEqual([]);
   });
 
-  it('an absent cap file sends the old door, the body unchanged', async () => {
+  // D-7328: the old doors are gone (K5 Q3l), so the fail direction is inverted on purpose. An absent, stale, torn or
+  // future cap file sends the family, the only door left; only a current, well-formed file that omits questions-v1
+  // is refused here, `no-questions-door`, and nothing is sent.
+  it('an absent cap file sends the family, the kind spliced', async () => {
     const body = '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}';
     await run(['asks', 'answer', '7', '--json', '-'], body);
-    expect(seen).toEqual([{ method: 'POST', url: '/api/asks/7/answer', auth: TOKEN, body }]);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/questions/ask-7/rule', auth: TOKEN, body: `{"kind":"ask",${body.slice(1)}` }]);
   });
 
-  it('a cap file 181 s old sends the old door, the body unchanged', async () => {
+  it('a cap file 181 s old sends the family, the kind spliced', async () => {
     writeCaps(SERVER_CAPS, nowS() - 181);
     const body = '{"fromId":"parent","fromUuid":"u","verdict":"allow","reason":"r"}';
     await run(['approvals', 'rule', '7', '--json', '-'], body);
-    expect(seen).toEqual([{ method: 'POST', url: '/api/approvals/7/rule', auth: TOKEN, body }]);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/questions/approval-7/rule', auth: TOKEN, body: `{"kind":"approval",${body.slice(1)}` }]);
   });
 
-  it('a current cap file that omits questions-v1 sends the old door, and a non-object body goes to the server as today', async () => {
+  it('a server that lists words without questions-v1 is refused locally, nothing sent', async () => {
     writeCaps(SERVER_CAPS.filter((w) => w !== 'questions-v1'));
-    await run(['approvals', 'release', '7', '--json', '-'], '[]');
-    expect(seen).toEqual([{ method: 'POST', url: '/api/approvals/7/release', auth: TOKEN, body: '[]' }]);
+    for (const [g, v, , , body] of CLAIMANT) {
+      for (const b of [body, '[]']) {
+        const r = await run([g, v, '7', '--json', '-'], b);
+        expect([r.status, JSON.parse(r.stdout)], `${g} ${v} ${b}`).toEqual([2, { ok: false, error: 'no-questions-door',
+          detail: 'the server this box talks to does not answer the question door family; update it before answering' }]);
+      }
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file listing no words, as a server older than the caps answer is recorded, is refused locally too', async () => {
+    writeCaps([]);
+    const r = await run(['asks', 'release', '7', '--json', '-'], '{"fromId":"parent","fromUuid":"u"}');
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'no-questions-door']);
+    expect(seen).toEqual([]);
   });
 
   it('with that same current file, every non-claimant row sends a request byte-identical to its no-file request', async () => {
@@ -619,9 +637,10 @@ describe('the token never rides curl\'s argv (R16)', () => {
     // (`claimedByUuid`, D-5298), and this case measures a body sent as written.
     ['a POST whose body is a --json file', ['claims', 'take', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
     // THE COLLISION CASE: stdin is the body (read by `body=$(cat)`) AND curl's
-    // config (the printf pipe). The mail envelope's own ack line is this shape.
+    // config (the printf pipe). The mail envelope's own ack line is this shape. Since K5 Q3l (D-7324) the claimant row
+    // always sends the family, so the body arrives with the row's kind spliced first.
     ['a POST whose body is --json - (stdin twice: the body, then curl\'s config)', ['asks', 'answer', '7', '--json', '-'],
-      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"kind":"ask","fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
   ])('%s: argv holds neither the token nor its header, stdin carries the config, and both arrive', async (_what, args, input, body) => {
     plantRecorder();
     if (args.includes('BODYFILE')) fs.writeFileSync(path.join(home, 'body.json'), body);
@@ -646,7 +665,7 @@ describe('the token never rides curl\'s argv (R16)', () => {
     expect([a.status, b.status], `${a.stderr}\n${b.stderr}`).toEqual([0, 0]);
     expect(fs.existsSync(path.join(home, 'curl-poison')), 'the front refused a call the client makes').toBe(false);
     expect(seen.map((x) => [x.method, x.url, x.auth, x.body])).toEqual([
-      ['POST', '/api/asks/7/answer', TOKEN, body],
+      ['POST', '/api/questions/ask-7/rule', TOKEN, `{"kind":"ask",${body.slice(1)}`],
       ['GET', '/api/runs', TOKEN, ''],
     ]);
   });
@@ -996,15 +1015,15 @@ describe('the body comes from --json, and only from there', () => {
   });
 
   it.each([
-    ['answer', '/api/asks/7/answer'],
-    ['release', '/api/asks/7/release'],
-  ])('carries only the declared ask %s id and JSON body', async (verb, url) => {
+    ['answer', '/api/questions/ask-7/rule'],
+    ['release', '/api/questions/ask-7/release'],
+  ])('carries only the declared ask %s id and JSON body (the row\'s kind spliced first)', async (verb, url) => {
     const body = verb === 'answer'
       ? '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'
       : '{"fromId":"parent","fromUuid":"u"}';
     await run(['asks', verb, '7', '--json', '-'], body);
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ method: 'POST', url, body });
+    expect(seen[0]).toMatchObject({ method: 'POST', url, body: `{"kind":"ask",${body.slice(1)}` });
   });
 });
 

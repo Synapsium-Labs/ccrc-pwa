@@ -28,7 +28,9 @@
  * scanner (`topology-clean.test.ts`) refuses a host and a path written joined,
  * in any tracked file or any blob the branch adds.
  */
-import type { LinearFailure } from '../../../shared/linear.js';
+import {
+  LINEAR_TEAMS_MAX, isLinearTeamKey, isLinearUrlKey, isLinearUuid, parseLinearTeams, type LinearFailure, type LinearTeam,
+} from '../../../shared/linear.js';
 import { sanitizeTitle } from '../../../shared/slug.js';
 // The name cleaner lives in L0 beside the unprintable set (#1444), so a pure caller imports it without this L3 file.
 import { cleanName } from '../../../shared/unprintable.js';
@@ -64,16 +66,21 @@ export interface LinearTicket { key: string; num: string }
 export type LinearLookup =
   | { ok: true; identifier: string; title: string; keyDigest: string }
   | { ok: false; reason: 'not-configured'; key: Exclude<LinearKeyRead['kind'], 'key'> }
-  | { ok: false; reason: Exclude<LinearFailure, 'not-configured'>; keyDigest: string };
+  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'rate-limited'>; keyDigest: string }
+  | { ok: false; reason: 'rate-limited'; keyDigest: string; retryAfterS: number };
 
-/** Injectable so tests never reach the network. Matches `fetch`'s shape. */
+/**
+ * Injectable so tests never reach the network. Matches `fetch`'s shape. The answer's `headers` is the one method of
+ * `fetch`'s own `Headers` this file reads (spec §6.7: the wait of a rate-limited answer); every test fake gains it
+ * through `server/test/linearFetchFake.ts`.
+ */
 export type FetchLike = (url: string, init: {
   method: string;
   headers: Record<string, string>;
   body: string;
   signal: AbortSignal;
   redirect?: 'error';
-}) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+}) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; json: () => Promise<unknown> }>;
 
 /**
  * `issue(id:)` accepts the human identifier (`ENG-1234`) as well as the UUID,
@@ -88,21 +95,51 @@ const IDENTIFIER = /^[A-Za-z][A-Za-z0-9]*-[0-9]+$/;
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** The bounds `Retry-After` is held to, and the wait when Linear sent none (spec §6.7), in seconds. */
+export const LINEAR_RETRY_AFTER_MIN_S = 1;
+export const LINEAR_RETRY_AFTER_MAX_S = 3_600;
+export const LINEAR_RATE_LIMITED_FALLBACK_S = 60;
+
+/** A header read as a non-negative integer, or not at all: a date, a fraction, a sign or an exponent is not one. */
+const headerCount = (headers: { get(name: string): string | null }, name: string): number | null => {
+  const raw = headers.get(name)?.trim() ?? '';
+  return /^[0-9]+$/.test(raw) ? Number(raw) : null;
+};
+
+/**
+ * How long a rate-limited answer says to wait: `Retry-After`, held to 1 to 3,600 seconds, else sixty seconds.
+ * `X-RateLimit-Requests-Reset` is NOT read yet: whether it is a wait or a reset time, and in which unit, is recorded
+ * from a fixture first (spec §6.7; the plan's build note for this task), so until then a missing `Retry-After` is the
+ * fallback, never a guess at that header's unit.
+ */
+const waitOf = (headers: { get(name: string): string | null }): number => {
+  const after = headerCount(headers, 'retry-after');
+  return after === null ? LINEAR_RATE_LIMITED_FALLBACK_S
+    : Math.min(LINEAR_RETRY_AFTER_MAX_S, Math.max(LINEAR_RETRY_AFTER_MIN_S, after));
+};
+
+/** Linear's refusal of a request over its limit: an `errors` entry whose `extensions.code` is `RATELIMITED`. */
+const isRateLimitedBody = (body: unknown): boolean =>
+  isRecord(body) && Array.isArray(body['errors'])
+  && body['errors'].some((e) => isRecord(e) && isRecord(e['extensions']) && e['extensions']['code'] === 'RATELIMITED');
+
 /**
  * What one call to Linear produced, before anything reads its body for a meaning: the parsed JSON, or the
  * fixed word for why there is none. THE ONE FETCH PATH in this file (the lookup and the key check both go
- * through it), so the deadline, the header and the failure arms exist once.
+ * through it), so the deadline, the header and the failure arms exist once. Exported with this type for the
+ * callers that ask the one rate service before each call and settle with its outcome (spec §6.7).
  */
-type Call =
+export type LinearCall =
   | { ok: true; body: unknown }
-  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found'> };
+  | { ok: false; reason: 'rate-limited'; retryAfterS: number }
+  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found' | 'rate-limited'> };
 
-async function callLinear(
+export async function callLinear(
   token: string,
   query: string,
   variables: Record<string, unknown>,
   deps: { fetch?: FetchLike; timeoutMs?: number },
-): Promise<Call> {
+): Promise<LinearCall> {
   const doFetch: FetchLike = deps.fetch ?? ((url, init) => fetch(url, init));
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), deps.timeoutMs ?? LINEAR_TIMEOUT_MS);
@@ -123,22 +160,32 @@ async function callLinear(
       redirect: 'error',
     });
 
+    // RATE-LIMITED (spec §6.7): a 429, or an `errors` entry with the `RATELIMITED` code whatever the status (Linear
+    // refuses over its limit on a 200 and a 400 too). Its own arm, carrying the wait, so the caller can close the
+    // slot until then; it is not a credential fault, and a title still degrades to the offline one.
+    const limited = (): LinearCall => ({ ok: false, reason: 'rate-limited', retryAfterS: waitOf(res.headers) });
+    if (res.status === 429) return limited();
+
+    let body: unknown;
+    let read = true;
+    try {
+      body = await res.json();
+    } catch {
+      read = false;
+    }
+    if (read && isRateLimitedBody(body)) return limited();
+
     if (!res.ok) {
       // ONLY a 401 says the key is bad (spec 5.1). A 403 is Linear refusing this
       // request (a scope, a team the key cannot see): its own arm, which no caller
-      // may treat as a verdict on the key. Everything else is the service. 429
-      // lands in `unreachable` deliberately: it is not a credential fault and the
-      // caller's answer (use the offline title) is the same as for a 500.
+      // may treat as a verdict on the key. Everything else is the service. The
+      // body of a refusal is read only for the rate-limit code above, never kept.
       return { ok: false, reason: res.status === 401 ? 'unauthorised' : res.status === 403 ? 'forbidden' : 'unreachable' };
     }
-
-    try {
-      return { ok: true, body: await res.json() };
-    } catch {
-      // The deadline can fire while the body is still arriving; that is a
-      // timeout, not a shape fault.
-      return { ok: false, reason: ac.signal.aborted ? 'timeout' : 'malformed' };
-    }
+    // The deadline can fire while the body is still arriving; that is a
+    // timeout, not a shape fault.
+    if (!read) return { ok: false, reason: ac.signal.aborted ? 'timeout' : 'malformed' };
+    return { ok: true, body };
   } catch {
     // An abort is the deadline, and it is worth telling apart from a DNS
     // failure: one is worth retrying on the same input, the other means the
@@ -166,11 +213,15 @@ export async function lookupLinearIssue(
 
   const keyDigest = valueDigestHex(key.key);
   const asked = `${ref.key.toUpperCase()}-${ref.num}`;
-  const fail = (reason: Exclude<LinearFailure, 'not-configured'>): LinearLookup =>
+  const fail = (reason: Exclude<LinearFailure, 'not-configured' | 'rate-limited'>): LinearLookup =>
     ({ ok: false, reason, keyDigest });
 
   const call = await callLinear(key.key, QUERY, { id: asked }, deps);
-  if (!call.ok) return fail(call.reason);
+  // `rate-limited` is read as `unreachable` is: a failure the caller degrades to the offline title, with its wait.
+  if (!call.ok) {
+    return call.reason === 'rate-limited'
+      ? { ok: false, reason: 'rate-limited', keyDigest, retryAfterS: call.retryAfterS } : fail(call.reason);
+  }
   const body = call.body;
 
   if (!isRecord(body)) return fail('malformed');
@@ -206,8 +257,18 @@ export async function lookupLinearIssue(
   };
 }
 
-/** The key check's query: who the key is and which organisation it reads. Two names and nothing else. */
-const VIEWER_QUERY = 'query Viewer { viewer { name } organization { name } }';
+/** The most teams one page of the key check asks for (spec §4.1). The FX capture records this page's `X-Complexity`, and
+ *  the spec's rule is that it stays under `LINEAR_QUOTA.maxQueryComplexity`: a page that would not is lowered HERE, in
+ *  this constant, never at run time. */
+export const LINEAR_TEAM_PAGE_SIZE = 250;
+
+/**
+ * The key check (spec §4.1): ONE document, who the key is, which workspace it reaches, and one page of the teams its
+ * user can reach. The same document asks the second page, with the first page's cursor; the viewer and the
+ * organization come back on both, which is how a second page that names another workspace is told from this one's.
+ */
+const KEY_CHECK_QUERY = 'query KeyCheck($after: String) { viewer { name } organization { id name urlKey } '
+  + `teams(first: ${LINEAR_TEAM_PAGE_SIZE}, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }`;
 
 /** The failures a key check can end in. `not-configured` makes no call and `not-found` has no meaning here. */
 export type LinearVerifyFailure = Exclude<LinearFailure, 'not-configured' | 'not-found'>;
@@ -218,32 +279,142 @@ export type LinearVerifyFailure = Exclude<LinearFailure, 'not-configured' | 'not
  */
 export type LinearVerify =
   | { ok: true; org: string; user: string; keyDigest: string }
-  | { ok: false; reason: LinearVerifyFailure; keyDigest: string };
+  | { ok: false; reason: Exclude<LinearVerifyFailure, 'rate-limited'>; keyDigest: string }
+  | { ok: false; reason: 'rate-limited'; keyDigest: string; retryAfterS: number };
+
+/** What a key check learned of the workspace, whole: its id, its name and URL key, and every team the key's user
+ *  reaches up to the record's cap (`more` says Linear holds teams past it, a known limit). Names are cleaned. */
+export interface LinearLearnedWorkspace {
+  id: string;
+  name: string;
+  urlKey: string;
+  teams: LinearTeam[];
+  more: boolean;
+}
 
 /**
- * Ask Linear who `key` is. The Settings route's Connect and Check again: a key is stored only once this
- * answered `ok`. The same fetch path, header and deadline as the lookup (`callLinear`); the names are Linear's
- * text and are cleaned here, and nothing else of the answer is kept.
+ * A key check's answer. `pagesSent` is how many pages went to Linear (0, 1 or 2), so the caller can settle the rate
+ * service with what was spent. `workspace` is null whenever the check could not learn it WHOLE (an answer out of its
+ * grammar, a second page not granted or not asked): a partial team list could route a team to the wrong workspace,
+ * so it is never kept. `key-changed`: the key was gone, or had changed, when a page was due, so nothing it learned
+ * describes the key now in the file and the caller records nothing.
+ */
+export type LinearKeyCheck =
+  | { ok: true; org: string; user: string; keyDigest: string; workspace: LinearLearnedWorkspace | null; pagesSent: number }
+  | { ok: false; reason: Exclude<LinearVerifyFailure, 'rate-limited'>; keyDigest: string; pagesSent: number }
+  | { ok: false; reason: 'rate-limited'; keyDigest: string; retryAfterS: number; pagesSent: number }
+  | { ok: false; reason: 'key-changed'; keyDigest: string | null; pagesSent: number };
+
+/** One page of the key check, read. */
+type KeyPage =
+  | { ok: false; reason: Exclude<LinearVerifyFailure, 'rate-limited'> }
+  | { ok: false; reason: 'rate-limited'; retryAfterS: number }
+  | {
+      ok: true; org: string; user: string;
+      /** The workspace's id, name and URL key, or null when any is out of its grammar. */
+      ws: { id: string; name: string; urlKey: string } | null;
+      /** This page's teams, or null when the page, or any team on it, is out of its grammar. */
+      teams: LinearTeam[] | null;
+      /** The cursor of the next page, or null when Linear says there is none. */
+      next: string | null;
+    };
+
+/** The longest cursor taken back to Linear; anything longer, or not a string, is no cursor. */
+const CURSOR_MAX_CHARS = 512;
+
+const readTeams = (v: unknown): { teams: LinearTeam[]; next: string | null } | null => {
+  if (!isRecord(v) || !Array.isArray(v['nodes']) || !isRecord(v['pageInfo'])) return null;
+  const nodes = v['nodes'];
+  if (nodes.length > LINEAR_TEAM_PAGE_SIZE) return null;
+  const teams: LinearTeam[] = [];
+  for (const n of nodes) {
+    if (!isRecord(n)) return null;
+    const name = cleanName(n['name']);
+    if (!isLinearUuid(n['id']) || !isLinearTeamKey(n['key']) || name === null) return null;
+    teams.push({ id: n['id'], key: n['key'], name });
+  }
+  const more = v['pageInfo']['hasNextPage'];
+  const cursor = v['pageInfo']['endCursor'];
+  if (more === false) return { teams, next: null };
+  if (more !== true || typeof cursor !== 'string' || cursor.length === 0 || cursor.length > CURSOR_MAX_CHARS) return null;
+  return { teams, next: cursor };
+};
+
+async function askKeyPage(key: string, after: string | null, deps: { fetch?: FetchLike; timeoutMs?: number }): Promise<KeyPage> {
+  const call = await callLinear(key, KEY_CHECK_QUERY, { after }, deps);
+  if (!call.ok) return call;
+  const body = call.body;
+  if (!isRecord(body)) return { ok: false, reason: 'malformed' };
+  const data = body['data'];
+  if (!isRecord(data)) {
+    // A GraphQL `errors` array with no data is the service refusing the query, not a shape fault.
+    const errors = body['errors'];
+    return { ok: false, reason: Array.isArray(errors) && errors.length > 0 ? 'unreachable' : 'malformed' };
+  }
+  const viewer = data['viewer'];
+  const organization = data['organization'];
+  const user = isRecord(viewer) ? cleanName(viewer['name']) : null;
+  const org = isRecord(organization) ? cleanName(organization['name']) : null;
+  if (user === null || org === null) return { ok: false, reason: 'malformed' };
+  // The names are what the v1 record has always shown; what the workspace adds is read on its own grammar, so an
+  // answer that names the user and the organisation keeps the check's answer even when the rest cannot be learned.
+  const ws = isRecord(organization) && isLinearUuid(organization['id']) && isLinearUrlKey(organization['urlKey'])
+    ? { id: organization['id'], name: org, urlKey: organization['urlKey'] } : null;
+  const page = readTeams(data['teams']);
+  return { ok: true, org, user, ws, teams: page?.teams ?? null, next: page?.next ?? null };
+}
+
+/**
+ * The key check (spec §4.1), for a STORED key: `readKey` reads it from its file, and is called again before each page,
+ * so a key removed or replaced between two pages stops the check at its next page. At most two pages, so at most
+ * `LINEAR_TEAMS_MAX` (500) teams, the record's cap; the second only when Linear says there is one and `mayAskMore`
+ * grants it (the caller's rate service, asked for that one call).
+ * Nothing here keeps the key past the call it is read for. The same fetch path, header and deadline as the lookup.
+ */
+export async function checkLinearKey(
+  readKey: () => Promise<LinearKeyRead>,
+  deps: { fetch?: FetchLike; timeoutMs?: number; mayAskMore?: () => boolean } = {},
+): Promise<LinearKeyCheck> {
+  const net = { fetch: deps.fetch, timeoutMs: deps.timeoutMs };
+  const k1 = await readKey();
+  if (k1.kind !== 'key') return { ok: false, reason: 'key-changed', keyDigest: null, pagesSent: 0 };
+  const keyDigest = valueDigestHex(k1.key);
+  const p1 = await askKeyPage(k1.key, null, net);
+  if (!p1.ok) return { ...p1, keyDigest, pagesSent: 1 };
+  const answer = (workspace: LinearLearnedWorkspace | null, pagesSent: number): LinearKeyCheck =>
+    ({ ok: true, org: p1.org, user: p1.user, keyDigest, workspace, pagesSent });
+  if (p1.ws === null || p1.teams === null) return answer(null, 1);
+  if (p1.next === null) {
+    // The record's own grammar, duplicates included: a workspace whose two teams share a key is not routed at all.
+    const teams = parseLinearTeams(p1.teams);
+    return answer(teams === null ? null : { ...p1.ws, teams, more: false }, 1);
+  }
+  if (deps.mayAskMore === undefined) return answer(null, 1);
+
+  // The key again, from its file, before the second page: gone or changed means this check describes nothing stored.
+  const k2 = await readKey();
+  if (k2.kind !== 'key' || valueDigestHex(k2.key) !== keyDigest) return { ok: false, reason: 'key-changed', keyDigest, pagesSent: 1 };
+  if (!deps.mayAskMore()) return answer(null, 1);
+  const p2 = await askKeyPage(k2.key, p1.next, net);
+  if (!p2.ok) return { ...p2, keyDigest, pagesSent: 2 };
+  if (p2.ws === null || p2.ws.id !== p1.ws.id || p2.teams === null) return answer(null, 2);
+  const all = [...p1.teams, ...p2.teams];
+  const teams = parseLinearTeams(all.slice(0, LINEAR_TEAMS_MAX));
+  if (teams === null) return answer(null, 2);
+  return answer({ ...p1.ws, teams, more: p2.next !== null || all.length > LINEAR_TEAMS_MAX }, 2);
+}
+
+/**
+ * Ask Linear who a PASTED key is (the legacy Connect: a key is stored only once this answered `ok`). The first page of
+ * the key check (§4.1); its answer is the two names and the digest, as it always was, and nothing else is kept. The
+ * names are Linear's text and are cleaned.
  */
 export async function verifyLinearKey(
   key: string,
   deps: { fetch?: FetchLike; timeoutMs?: number } = {},
 ): Promise<LinearVerify> {
   const keyDigest = valueDigestHex(key);
-  const call = await callLinear(key, VIEWER_QUERY, {}, deps);
-  if (!call.ok) return { ok: false, reason: call.reason, keyDigest };
-  const body = call.body;
-  if (!isRecord(body)) return { ok: false, reason: 'malformed', keyDigest };
-  const data = body['data'];
-  if (!isRecord(data)) {
-    // A GraphQL `errors` array with no data is the service refusing the query, not a shape fault.
-    const errors = body['errors'];
-    return { ok: false, reason: Array.isArray(errors) && errors.length > 0 ? 'unreachable' : 'malformed', keyDigest };
-  }
-  const viewer = data['viewer'];
-  const organization = data['organization'];
-  const user = isRecord(viewer) ? cleanName(viewer['name']) : null;
-  const org = isRecord(organization) ? cleanName(organization['name']) : null;
-  if (user === null || org === null) return { ok: false, reason: 'malformed', keyDigest };
-  return { ok: true, org, user, keyDigest };
+  const p = await askKeyPage(key, null, deps);
+  if (!p.ok) return { ...p, keyDigest };
+  return { ok: true, org: p.org, user: p.user, keyDigest };
 }

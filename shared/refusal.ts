@@ -94,6 +94,8 @@ export const GENERIC_REFUSALS = [
   'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported', 'unsupported-type',
   // The Linear routes (named workspaces S4 and S4b): the preview read's two and the connection routes' six.
   'bad-ref', 'ref-too-long', 'bad-key', 'key-rejected', 'key-forbidden', 'not-connected', 'unreachable', 'timeout', 'malformed',
+  // The Linear routes with no rate service to ask (#1444, D-7684): nothing calls Linear.
+  'linear-unavailable',
   // The named workspace create (named workspaces S5): ccd's three refusals, mapped by the route.
   'slug-taken', 'bad-slug', 'account-refused',
 ] as const;
@@ -174,6 +176,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'bad-ref': 400, 'ref-too-long': 400, 'bad-key': 400, 'key-rejected': 400, 'key-forbidden': 400,
   'not-connected': 409,
   'unreachable': 503, 'timeout': 503, 'malformed': 503,
+  // The Linear routes with no rate service (#1444, D-7684): CHOSEN — 503, the box's composition is missing a service
+  // it needs, which is the box's fault and not the caller's, the status `unavailable` answers.
+  'linear-unavailable': 503,
   // The named workspace create (named workspaces S5): CHOSEN — 400 for a name, project or wrapper the operator can
   // retype, 409 for a slug already in use and an account ccd will not place this workspace on (the request was
   // well-formed; the box's state refused it). A missing ccd cap answers the existing `unsupported` (501).

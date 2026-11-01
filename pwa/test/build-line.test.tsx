@@ -206,16 +206,11 @@ describe('BuildLine', () => {
     expect(line()!.textContent).toBe('fleet v0.0.7 → v0.0.9 · server v0.0.7');
   });
 
-  it("reads the inventory, never the health route's stamp pair (§14)", () => {
-    // A decoy pair on the health answer, disagreeing with the rows: the line
-    // must say what the rows say. And a health answer carrying NO pair — the
-    // shape that used to hide the line — renders from the rows all the same.
-    const decoy = { fleet: stamp(SHA_B, 'v9.9.9'), own: stamp(SHA_B, 'v9.9.9') };
+  it("reads the inventory alone — the health answer carries no stamp pair (§14, wave 33)", () => {
+    // The health answer carries only the agreement word (`FleetHealth.builds`
+    // was retired in wave 33), and the line renders from the rows all the same.
     const rows = [node('fleet', stamp(SHA_A, 'v0.0.7')), node('server', stamp(SHA_A, 'v0.0.7'))];
-    const { rerender } = render(<BuildLine health={remote({ build: 'agreed', builds: decoy })} nodes={rows} />);
-    expect(line()!.textContent).toBe('fleet v0.0.7 · server v0.0.7');
-    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
-    rerender(<BuildLine health={remote({ build: 'agreed' })} nodes={rows} />);
+    render(<BuildLine health={remote({ build: 'agreed' })} nodes={rows} />);
     expect(line()!.textContent).toBe('fleet v0.0.7 · server v0.0.7');
   });
 
@@ -231,10 +226,9 @@ describe('BuildLine', () => {
     // Before /api/updates answers, and for as long as it cannot be read (a
     // 5xx, the network, a malformed body): hiding the line would take "what
     // each box runs" off the phone exactly when the update plane is unreadable.
-    // A dash claims no version — neither current nor behind (§18). And the
-    // health answer's stamp pair is NOT a fallback: that is the old reader.
-    const decoy = { fleet: stamp(SHA_B, 'v9.9.9'), own: stamp(SHA_B, 'v9.9.9') };
-    const { rerender } = render(<BuildLine health={remote({ build: 'agreed', builds: decoy })} nodes={null} />);
+    // A dash claims no version — neither current nor behind (§18). The health
+    // answer carries no stamp pair to fall back on (retired in wave 33).
+    const { rerender } = render(<BuildLine health={remote({ build: 'agreed' })} nodes={null} />);
     expect(line()!.textContent).toBe('fleet — · server —');
     expect(screen.getByText('fleet —')).toHaveClass('build-line-side--warn');
     expect(screen.getByText('server —')).toHaveClass('build-line-side--warn');

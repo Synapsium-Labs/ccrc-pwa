@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { actorOf } from '../src/accounts/audit.js';
 import { verifyLinearKey, type FetchLike } from '../src/linear/client.js';
+import { linearAnswer } from './linearFetchFake.js';
 import { redact } from '../../shared/redact.js';
 import { credentialMaskSource } from '../../shared/api.js';
 
@@ -49,7 +50,7 @@ describe('actorOf: the account audit label, as main writes it', () => {
 
 describe('the Linear key check cleans a name as main does', () => {
   const nameOf = async (name: string): Promise<string> => {
-    const f: FetchLike = async () => ({
+    const f: FetchLike = async () => linearAnswer({
       ok: true, status: 200, json: async () => ({ data: { viewer: { name }, organization: { name: 'org-a' } } }),
     });
     const r = await verifyLinearKey(KEY, { fetch: f });

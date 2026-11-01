@@ -74,10 +74,6 @@ const postureOf = async (url: string, cred: Credential): Promise<Posture> => {
 
 /** The old doors, each with a concrete url its router matches. */
 const OLD_DOORS: Readonly<Record<string, string>> = {
-  'POST /api/asks/:id/answer': '/api/asks/1/answer',
-  'POST /api/asks/:id/release': '/api/asks/1/release',
-  'POST /api/approvals/:id/rule': '/api/approvals/1/rule',
-  'POST /api/approvals/:id/release': '/api/approvals/1/release',
   'POST /api/sessions/:id/dialog/tab': '/api/sessions/project-a-quiet-basin/dialog/tab',
 };
 
@@ -103,10 +99,12 @@ const OPERATOR: Readonly<Record<Credential, Posture>> = {
   'token, foreign origin': { status: 403, gate: false, error: 'foreign-origin' },
 };
 
-/** What a RETIRED operator door answers (W7 C7p, D-7194): the gate still refuses no credential and the box token alike,
- *  and a foreign origin, exactly as it did; a live session now reaches no door at all (fastify's own 404, `Not Found`,
- *  never the door's `unknown-session`), so nothing past the gate runs. Its operator rows above moved to
- *  `POST /api/questions/:id/answer` (`NEW_DOORS`), which keeps the `OPERATOR` posture. */
+/** What a RETIRED door answers (W7 C7p, D-7194, the operator's; K5 Q3l, D-7324, the claimant's): the gate refuses no
+ *  credential and the box token alike, and a foreign origin; a live session reaches no door at all (fastify's own 404,
+ *  `Not Found`, never a door's word), so nothing past the gate runs. A retired operator door's rows moved to
+ *  `POST /api/questions/:id/answer` (`NEW_DOORS`), which keeps the `OPERATOR` posture; a retired claimant door's to the
+ *  family's `/rule` or `/release`, which keep the `CLAIMANT` posture (a claimant alias leaves `EXEMPT` with its
+ *  registration, so the gate now refuses its no-credential and box-token callers, as for any route it does not name). */
 const RETIRED: Readonly<Record<Credential, Posture>> = {
   none: { status: 401, gate: true, error: 'unauthenticated' },
   session: { status: 404, gate: false, error: 'Not Found' },
@@ -115,8 +113,12 @@ const RETIRED: Readonly<Record<Credential, Posture>> = {
   'token, foreign origin': { status: 403, gate: false, error: 'foreign-origin' },
 };
 
-/** The operator doors W7 C7p retired, each with the url its router matched. */
+/** The doors W7 C7p (the operator's) and K5 Q3l (the claimant's) retired, each with the url its router matched. */
 const RETIRED_DOORS: Readonly<Record<string, string>> = {
+  'POST /api/asks/:id/answer': '/api/asks/1/answer',
+  'POST /api/asks/:id/release': '/api/asks/1/release',
+  'POST /api/approvals/:id/rule': '/api/approvals/1/rule',
+  'POST /api/approvals/:id/release': '/api/approvals/1/release',
   'POST /api/sessions/:id/ask': '/api/sessions/project-a-quiet-basin/ask',
   'POST /api/sessions/:id/dialog/multi': '/api/sessions/project-a-quiet-basin/dialog/multi',
   'POST /api/sessions/:id/dialog/text': '/api/sessions/project-a-quiet-basin/dialog/text',
@@ -124,10 +126,6 @@ const RETIRED_DOORS: Readonly<Record<string, string>> = {
 };
 
 const EXPECTED: Readonly<Record<string, Readonly<Record<Credential, Posture>>>> = {
-  'POST /api/asks/:id/answer': CLAIMANT,
-  'POST /api/asks/:id/release': CLAIMANT,
-  'POST /api/approvals/:id/rule': CLAIMANT,
-  'POST /api/approvals/:id/release': CLAIMANT,
   'POST /api/sessions/:id/dialog/tab': OPERATOR,
 };
 
@@ -141,7 +139,7 @@ describe('question-doors posture: each old door through an armed gate (W3 Q3f, D
       expect(await postureOf(url, cred)).toEqual(EXPECTED[door]![cred]);
     });
 
-  it.each(Object.entries(RETIRED_DOORS).flatMap(([door, url]) => CREDENTIALS.map((c) => [`${door} (retired, W7 C7p) | ${c}`, url, c] as const)))(
+  it.each(Object.entries(RETIRED_DOORS).flatMap(([door, url]) => CREDENTIALS.map((c) => [`${door} (retired) | ${c}`, url, c] as const)))(
     '%s', async (_name, url, cred) => {
       expect(await postureOf(url, cred)).toEqual(RETIRED[cred]);
     });
@@ -152,6 +150,9 @@ describe('question-doors posture: each old door through an armed gate (W3 Q3f, D
     ['POST /api/questions/:id/answer', '/api/questions/session-project-a-quiet-basin/answer', OPERATOR],
     ['POST /api/questions/:id/rule', '/api/questions/ask-1/rule', CLAIMANT],
     ['POST /api/questions/:id/release', '/api/questions/ask-1/release', CLAIMANT],
+    // K5 Q3l (D-7324): a retired approval alias's CLAIMANT posture, held on the family's approval id.
+    ['POST /api/questions/:id/rule', '/api/questions/approval-1/rule', CLAIMANT],
+    ['POST /api/questions/:id/release', '/api/questions/approval-1/release', CLAIMANT],
   ];
   it.each(NEW_DOORS.flatMap(([door, url, want]) => CREDENTIALS.map((c) => [`${door} | ${c}`, url, want, c] as const)))(
     '%s', async (_name, url, want, cred) => {

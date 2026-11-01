@@ -2120,7 +2120,7 @@ export function isReadyVerdict(v: unknown): v is ReadyVerdict {
  *              answer wins, D-5289): `takeAskForAnswer` and `heldAskFor` take
  *              `held` or `released`, under the same `askAt` instance guard.
  *  `declined`  the parent released the question itself (`POST
- *              /api/asks/:id/release`): it handed the question over, the push
+ *              /api/questions/ask-<n>/release`): it handed the question over, the push
  *              fired at once, and the parent's later answer is refused
  *              `declined` (D-5289). Terminal. An older build reads this token
  *              as `unknown` through `isAskState`.
@@ -3700,16 +3700,12 @@ export interface FleetHealth {
    * server's response omits it, and absent reads as `'unknown'`.
    */
   build?: BuildAgreement;
-  /**
-   * The EVIDENCE beside the decision (release/rollout design §6): what THIS
-   * box's stamp and the fleet host's say, per the node inventory (design
-   * 2026-09-20 §14, `derivedBuilds`); `null` = no readable stamp. `build`
-   * above still decides — a reader renders `skewed`/`agreed`/`unknown`
-   * from it and uses these only to SAY which versions are involved
-   * (`version` is optional per `BuildInfo`; a deploy.sh stamp has none).
-   * Remote mode only, optional so an older server's response still parses.
+  /*
+   * There is no `builds` here. The `{own, fleet}` pair of stamps this field once carried beside `build` was derived
+   * from the node inventory (design 2026-09-20 §14) and read by no shipped reader once the console moved onto
+   * `NodeWire[]`; wave 33 retired it from the wire. `build` above stays the decision, and the inventory
+   * (`GET /api/updates`) is where a reader finds which versions are involved.
    */
-  builds?: { own: BuildInfo | null; fleet: BuildInfo | null };
   /**
    * Whether the fleet host's deployed `ccd` HONOURS project pools — the verb
    * `ccd project-pool` present in its `caps` list (account pools, spec §5.11).
@@ -5270,7 +5266,7 @@ export type QuestionIdKind = 'ask' | 'approval' | 'session';
 export const QUESTION_ID_KINDS: Readonly<Record<QuestionIdKind, true>> = { ask: true, approval: true, session: true };
 
 /** A parsed question id: `ask-<n>` and `approval-<n>`, `<n>` in `parseCanonicalPositiveSafeInteger`'s one spelling, so
- *  `ask-01`, `ask-+1` and `ask-1.0` are refused exactly as `/api/asks/01/answer` is; and `session-<id>`, `<id>` in the
+ *  `ask-01`, `ask-+1` and `ask-1.0` are refused exactly as `/api/asks/01/answer` was; and `session-<id>`, `<id>` in the
  *  registry's session id grammar (`isRegistryId`) and nothing else. */
 export type QuestionId =
   | { readonly kind: 'ask'; readonly id: number }
@@ -5322,13 +5318,14 @@ export type QuestionAnswerBody =
   | { readonly kind: 'dialog'; readonly dialogId: string; readonly optionIndexes: number[]; readonly multi: true };
 
 /** `POST /api/questions/<ask|approval>-<n>/rule`'s body, the claimant's: an ask by option index (replacing
- *  `/api/asks/:id/answer`) or a permission ruling (replacing `/api/approvals/:id/rule`, the signing unchanged). */
+ *  `/api/asks/:id/answer`, retired in K5 Q3l) or a permission ruling (replacing `/api/approvals/:id/rule`, likewise; the
+ *  signing unchanged). */
 export type QuestionRuleBody =
   | { readonly kind: 'ask'; readonly fromId: string; readonly fromUuid: string; readonly optionIndexes: number[]; readonly askKey?: string }
   | { readonly kind: 'approval'; readonly fromId: string; readonly fromUuid: string; readonly verdict: 'allow' | 'deny'; readonly reason: string };
 
 /** `POST /api/questions/<ask|approval>-<n>/release`'s body, the claimant's hand-over (replacing `/api/asks/:id/release`
- *  and `/api/approvals/:id/release`). */
+ *  and `/api/approvals/:id/release`, retired in K5 Q3l). */
 export interface QuestionReleaseBody { readonly kind: 'ask' | 'approval'; readonly fromId: string; readonly fromUuid: string }
 
 /** The dialog arms of `QuestionAnswerBody`, read off a request body: the multiSelect set when `multi` is `true`, the
@@ -11266,9 +11263,10 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  `coord/routes.ts`, behind its one gate: `POST /api/questions/session-<id>/answer` for the operator (an ask by option
    *  index, a dialog's row, its free-text row or a multiSelect set; session-gated, origin-checked, the session id gated
    *  by `knownId`), and `POST /api/questions/<ask|approval>-<n>/rule` and `/release` for the claimant (box token,
-   *  attribution, the stored parent; the signing unchanged), each answering what the old door it replaces answers, byte
-   *  for byte, with `400 kind-mismatch` for an id or body of the other principal's kind. The old doors stay, as aliases
-   *  into the same cores. W7 gates its client on this word before it calls a door of the family. Added by the change
+   *  attribution, the stored parent; the signing unchanged), each answering what the old door it replaced answered, byte
+   *  for byte, with `400 kind-mismatch` for an id or body of the other principal's kind. The old doors stayed, as
+   *  aliases into the same cores, until W7 C7p (D-7194) retired the operator's and K5 Q3l (D-7324) the claimant's;
+   *  since Q3l `ccrc-api` refuses a server whose current cap file omits this word (`no-questions-door`, D-7328). W7 gates its client on this word before it calls a door of the family. Added by the change
    *  that builds the family, cut after its routes, cores and aliases. */
   'questions-v1': true,
 };
@@ -12095,7 +12093,7 @@ export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; rea
  *  `held`      minted for the run's attributed claimant, inside its window (`notifyAt`); the operator's push waits.
  *  `allowed`   the held-for claimant allowed it, and the server signed the ruling (an `ordinary` row only).
  *  `denied`    the held-for claimant denied it, signed the same way.
- *  `declined`  the claimant handed it over (`POST /api/approvals/:id/release`): the operator's push fires at once,
+ *  `declined`  the claimant handed it over (`POST /api/questions/approval-<n>/release`): the operator's push fires at once,
  *              and the hook stops (D-5440). Terminal.
  *  `released`  minted released (a `releaseReason`: forbidden, truncated, unparseable, or no claimant to hold it for,
  *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
@@ -12171,7 +12169,8 @@ export function isApprovalRefusal(v: unknown): v is ApprovalRefusal {
   return typeof v === 'string' && (APPROVAL_REFUSALS as readonly string[]).includes(v);
 }
 
-/** `POST /api/approvals/:id/rule`'s body: the attribution pair, the verdict and a reason (at most
+/** The approval ruling's body (the retired `POST /api/approvals/:id/rule`'s; the family's approval arm reads the same
+ *  fields): the attribution pair, the verdict and a reason (at most
  *  `APPROVAL_REASON_MAX_CHARS`, one line). Nothing else: `permanent`, `updatedPermissions` and `mode` are refused
  *  `400`, because a ruling allows once only (spec §6.5 procedure rules). */
 export interface ApprovalRuleBody {
@@ -12550,11 +12549,11 @@ export const ACCOUNT_CLI_ONLY_VERBS: Readonly<Record<string, string>> = Object.f
 export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
-/** The account paths the guard covers (spec §3.1), as `~`-anchored spellings: Read (and Bash) of the first four,
- *  writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log` and
- *  `~/.cc-sessions/<id>.wrapper`, and a read of `.accounts/<id>.json` is not refused (spec §3.1 lists writes only). */
+/** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675), `~`-anchored: Read (and
+ *  Bash) of the first six, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
-  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env'];
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 
 /** The `permissions.deny` list of `~/.cc-sessions/account-deny.settings.json` (D-6202), which `ccd` passes to EVERY

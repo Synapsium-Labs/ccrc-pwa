@@ -134,8 +134,9 @@ real values: `deploy/reference-fleet.md` (gitignored).
   coordinator or child — runs the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`,
   `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
   included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
-  `~/.ccrc/codex/*/runtime.env` or `~/.ccrc/agent.env`; writes under `~/.cc-sessions/.auth/` or
-  `~/.cc-sessions/.accounts/`; or prints the whole environment (bare `env`, `printenv`). They are the operator's, from
+  `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/` or the legacy
+  `~/.ccrc/linear.key` (D-7675); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  whole environment (bare `env`, `printenv`). They are the operator's, from
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
@@ -351,7 +352,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
   The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
   resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
-  `/api/fleet/health`'s `builds` is a view of it. The PWA's one tap (`POST /api/updates/apply` or
+  `/api/fleet/health`'s `build` word is decided from it (the `builds` pair was retired in wave 33). The PWA's one tap (`POST /api/updates/apply` or
   `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
   node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
   locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and
@@ -486,13 +487,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   proceeds). `coord-pause-route.test.ts`'s `UNGATED` set pins all four in both directions, and with `CCRC_AUTH`
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
-  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/asks/:id/answer`, `POST /api/asks/:id/release`, the question door family's claimant pair `POST
+  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): the
+  question door family's claimant pair `POST
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
   `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
-  six (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`, `POST /api/approvals/:id/rule`,
-  `POST /api/approvals/:id/release` and `GET /api/approvals/:id`, coordinator-first routing D-5298) all call
+  four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
+  `GET /api/approvals/:id`, coordinator-first routing D-5298) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`

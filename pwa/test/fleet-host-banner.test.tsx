@@ -41,13 +41,6 @@ const inventoryNode = (role: 'fleet' | 'server' | 'both', current: BuildInfo | n
 });
 const FLEET_V7: BuildInfo = { sha: 'bd2bf57a8733883085b3c118911fc983dc441299', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.7' };
 const SERVER_V9: BuildInfo = { sha: '2985b9d1000000000000000000000000000000000', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.9' };
-/** A stamp pair on the HEALTH answer that disagrees with every inventory row:
- *  whatever renders from it is the old reader, not the new one. */
-const DECOY_BUILDS = {
-  fleet: { sha: '9'.repeat(40), ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v9.9.9' },
-  own: { sha: '9'.repeat(40), ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v9.9.9' },
-};
-
 describe('FleetHostBanner', () => {
   it('keeps the newest issued poll authoritative when an older request resolves last', async () => {
     vi.useFakeTimers();
@@ -228,12 +221,11 @@ describe('FleetHostBanner', () => {
 
   it('warns when the boxes run DIFFERENT builds, naming both nodes\' versions from the inventory and the verb (spec §6, §14)', () => {
     render(<FleetHostBanner
-      health={health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed', builds: DECOY_BUILDS })}
+      health={health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed' })}
       nodes={[inventoryNode('fleet', FLEET_V7), inventoryNode('server', SERVER_V9)]} />);
     expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
     expect(screen.getByText(/fleet v0\.0\.7 \(bd2bf57a\)/)).toBeInTheDocument();
     expect(screen.getByText(/server v0\.0\.9 \(2985b9d1\)/)).toBeInTheDocument();
-    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
     expect(screen.getByText(/ccrc rollout/)).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
@@ -257,18 +249,16 @@ describe('FleetHostBanner', () => {
     expect(screen.getByText(/fleet unversioned \(bd2bf57a\)/)).toBeInTheDocument();
   });
 
-  it('skewed with no inventory answer still warns, without versions — never from the health route\'s pair', () => {
+  it('skewed with no inventory answer still warns, without versions — the health route carries no pair to name', () => {
     // `nodes` absent (the standalone shape) and `nodes: null` (FleetScreen
-    // before /api/updates answers) both omit the clause; the decoy pair on the
-    // health answer is NOT a fallback — reading it would be the old reader.
-    const skewed = health({ connected: true, downSince: null, build: 'skewed', builds: DECOY_BUILDS });
+    // before /api/updates answers) both omit the clause; the health answer
+    // carries only the word (`FleetHealth.builds` retired in wave 33).
+    const skewed = health({ connected: true, downSince: null, build: 'skewed' });
     const { rerender } = render(<FleetHostBanner health={skewed} />);
     expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
-    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
     expect(screen.queryByText(/fleet —/)).not.toBeInTheDocument();
     rerender(<FleetHostBanner health={skewed} nodes={null} />);
     expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
-    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
   });
 
   it('the trigger is still the server\'s agreement word — disagreeing rows under an agreed health are silent', () => {
