@@ -847,23 +847,31 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     expect(b.sent).toHaveLength(8);
   });
 
-  it('a refresh that failed fills nothing, so the next miss answers refreshing and queues again', async () => {
+  it('a refresh that failed fills nothing and still counts: inside its ten minutes a miss answers unknown and queues nothing, after them it queues again', async () => {
     const b = box();
     await put(b, KEY_1);
     b.answer = async (s) => (s.query === LINEAR_DOCUMENTS.directoryUsers
       ? linearAnswer({ ok: false, status: 500, json: async () => ({}) }) : ok(pageFor(s)));
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(4);
     expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
-    b.clock.now = T + MIN;
     b.answer = async (s) => ok(pageFor(s));
+    // The window is counted from when the run started, whatever it filled.
+    b.clock.now = T + MIN;
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
+    b.clock.now = T + 10 * MIN - 1;
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(4);
+    b.clock.now = T + 10 * MIN;
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(8);
     expect(b.fx.refresher.directory.get(SLOT, D1)).not.toBeNull();
   });
 
-  it('a first refresh refused by a spent floor fills nothing, so a miss a minute later answers refreshing', async () => {
+  it('a first refresh refused by a spent floor counts too: a miss a minute later queues nothing, while a replaced key and queueDirectory still queue at once', async () => {
     const b = box();
     await put(b, KEY_1);
     while (b.fx.rate.take({ lane: 'floor', slot: SLOT, calls: 1 }).ok) { /* spend the floor */ }
@@ -871,9 +879,40 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(0);
     b.clock.now = T + MIN;
-    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
+    expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
     await b.fx.refresher.idle();
     expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+    // A replaced key has a new digest, with no run attempted for it: its miss queues at once.
+    b.clock.now = T + 2 * MIN;
+    await put(b, KEY_2);
+    const d2 = valueDigestHex(KEY_2);
+    expect(b.fx.refresher.nameMiss(SLOT, d2)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.fx.refresher.nameMiss(SLOT, d2)).toBe('unknown');
+    // queueDirectory (an add, a replace, a Check again) is the explicit way past the window.
+    b.fx.refresher.queueDirectory(SLOT);
+    expect(b.fx.refresher.nameMiss(SLOT, d2)).toBe('refreshing');
+    await b.fx.refresher.idle();
+  });
+
+  it('an unfillable directory and a miss every 10 s for an hour make at most one run in ten minutes, and the floor still grants a key act', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    // A label whose name cleanName reduces to nothing makes its page malformed, so the whole directory never fills.
+    const unfillable = { data: { issueLabels: conn([{ id: LABEL_BUG, name: '\u202E', team: null }]) } };
+    expect(readLinearDirectoryPage('labels', unfillable)).toEqual({ ok: false, word: 'malformed' });
+    b.answer = async (s) => ok(s.query === LINEAR_DOCUMENTS.directoryLabels ? unfillable : pageFor(s));
+    for (let at = T; at < T + 60 * MIN; at += LINEAR_MISS_RETRY_AFTER_S * 1000) {
+      b.clock.now = at;
+      b.fx.refresher.nameMiss(SLOT, D1);
+      await b.fx.refresher.idle();
+    }
+    expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+    const runs = b.sent.filter((s) => s.query === LINEAR_DOCUMENTS.directoryStates).length;
+    expect(runs).toBeLessThanOrEqual(Math.ceil(60 / 10));
+    expect(b.sent.length).toBeLessThanOrEqual(2 * Math.ceil(60 / 10));
+    // The operator's key acts and the teams refresh share the floor, and the session's misses did not spend it.
+    expect(b.fx.rate.take({ lane: 'floor', slot: SLOT, calls: 1 }).ok).toBe(true);
   });
 
   it('an add, a replace and a Check again queue the directory past the window (queueDirectory), once while one is queued', async () => {

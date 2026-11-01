@@ -15,8 +15,10 @@
  * THE DIRECTORY TOO (spec §4.4, R5). The same queue fills each slot's directory of states, labels, projects and
  * active users (`directory.ts`), which it alone constructs and writes: a name the directory lacks for the request's key
  * queues it through `nameMiss`, and an add, a replace or a Check again through `queueDirectory`, 250 entries a page up
- * to 4 pages a collection, each page charged to the slot's `floor`. A directory filled for that key inside ten minutes
- * is not refreshed again on a miss. No request ever fills it.
+ * to 4 pages a collection, each page charged to the slot's `floor`. A miss queues nothing when a run was attempted for
+ * that key inside ten minutes, counted from when the run started, whether it filled the directory, failed or was
+ * refused: so the misses of an unfillable directory make at most one run in ten minutes, and session traffic cannot
+ * spend the floor that the teams refresh and the operator's key acts share. No request ever fills it.
  *
  * NO KEY IS HELD. The queue holds slot references and times; each page of each refresh reads the key from its file
  * (`readLinearSlotKey`), so a key removed or replaced mid-refresh stops it at its next page, and it records nothing.
@@ -110,8 +112,11 @@ const jobKeyOf = (kind: JobKind, ref: LinearSlotRef): string => `${kind}|${slotK
 export class LinearRefresher {
   private readonly queued = new Map<string, Job>();
   /** When each teams job's last run (or a slot's Check again) started: its five-minute window is counted from here.
-   *  A directory's window is the directory's own fill time (`LinearDirectory#filledAt`), never this. */
+   *  A directory's window is `attempted`'s, keyed by the key's digest, never this. */
   private readonly lastRun = new Map<string, number>();
+  /** Each slot's last directory run: the digest of the key it read first and when it started, whatever it then filled.
+   *  A name miss's ten-minute window is counted from here (spec §4.4). It holds a digest, never a key. */
+  private readonly attempted = new Map<string, { keyDigest: string; at: number }>();
   /** The one directory (spec §4.4): this refresher is its only writer. */
   private readonly names = new LinearDirectory();
   private running: string | null = null;
@@ -162,15 +167,20 @@ export class LinearRefresher {
    * A name the slot's directory does not hold for `keyDigest`, the digest of the key the request read (or a directory
    * not yet filled for it), spec §4.4. Answers at once, before anything runs: never a promise, never a Linear call.
    * `refreshing` (retry after `LINEAR_MISS_RETRY_AFTER_S`) when the slot's directory refresh is queued or running, or
-   * when this miss queues one. `unknown` only when the directory was FILLED for this digest inside the ten-minute
-   * window: the window is counted from a refresh that succeeded, for this key. So a replaced key (whose digest finds no
-   * fill) and a refresh that failed or was refused (which fills nothing) both answer `refreshing` and queue.
+   * when this miss queues one. `unknown`, queueing nothing, when a run was attempted for this digest inside the
+   * ten-minute window (counted from when it started), or the directory was filled for it inside the window: at most
+   * one run in ten minutes, whatever the number of misses, and a run that failed or was refused counts (an unfillable
+   * directory would otherwise queue a run on every retry and spend the slot's floor). A replaced key has a new digest,
+   * with no run attempted for it, so its miss queues at once; `queueDirectory` is the explicit way past the window.
    */
   nameMiss(ref: LinearSlotRef, keyDigest: string): LinearMissDetail {
     const key = jobKeyOf('directory', ref);
     if (this.queued.has(key) || this.running === key) return 'refreshing';
+    const at = this.now();
+    const tried = this.attempted.get(slotKeyOf(ref));
+    if (tried !== undefined && tried.keyDigest === keyDigest && at - tried.at < LINEAR_DIRECTORY_REFRESH_MS) return 'unknown';
     const filledAt = this.names.filledAt(ref, keyDigest);
-    if (filledAt !== null && this.now() - filledAt < LINEAR_DIRECTORY_REFRESH_MS) return 'unknown';
+    if (filledAt !== null && at - filledAt < LINEAR_DIRECTORY_REFRESH_MS) return 'unknown';
     this.enqueue({ kind: 'directory', ref });
     return 'refreshing';
   }
@@ -282,14 +292,18 @@ export class LinearRefresher {
       users: LinearDirectoryEntries['users'][number][];
     } = { viewerId: null, states: [], labels: [], projects: [], users: [] };
     let digest: string | null = null;
+    const startedAt = this.now();
     for (const kind of LINEAR_DIRECTORY_COLLECTIONS) {
       let after: string | null = null;
       for (let page = 0; page < LINEAR_DIRECTORY_MAX_PAGES; page += 1) {
         const k = await readLinearSlotKey(ccrcDir, ref);
         if (k.kind !== 'key') return;
         const d = valueDigestHex(k.key);
-        if (digest === null) digest = d;
-        else if (d !== digest) return;
+        if (digest === null) {
+          digest = d;
+          // The attempt counts from the run's start, before the floor is asked: a refused run counts too.
+          this.attempted.set(slotKeyOf(ref), { keyDigest: d, at: startedAt });
+        } else if (d !== digest) return;
         const t = rate.take({ lane: 'floor', slot: ref, calls: 1 });
         if (!t.ok) return;
         const call = await callLinear(k.key, LINEAR_DIRECTORY_DOCUMENTS[kind], { after }, { fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs });
