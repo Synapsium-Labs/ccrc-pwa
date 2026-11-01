@@ -799,7 +799,8 @@ describe('the coordinator skill: linkage', () => {
       // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
       // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
       // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the
-      // approval lane of `wave-lifecycle.md` name them beside the old pair, which stay as aliases and stay named.
+      // approval lane of `wave-lifecycle.md` name them. The old pair they replaced was retired in K5 Q3l (D-7324), and
+      // clause 11 names the client's verbs instead.
       // The OPERATOR's answer: session-gated, never a coordinator's door, for `POST /api/coord/pause`'s reason: naming it
       // would be an invitation to answer the operator's question in the operator's name.
       'POST /api/questions/:id/answer',

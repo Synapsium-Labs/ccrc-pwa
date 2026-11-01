@@ -3435,11 +3435,11 @@ edge pushes as before. Delegated background work keeps its push for the moment t
   single-question, single-select `AskUserQuestion`, the server does not push to you at once: it records the ask,
   mails the run's coordinator (the newest open run's `claimedBy`) an `ask:<id>` nudge through the ordinary
   idle-gated lane, and holds **only your notification** for up to 180 s (`ASK_GRACE_MS`, `server/src/askwindow.ts`).
-  The coordinator may answer from what it can read — `POST /api/asks/:id/answer`, box token plus registry
-  attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
+  The coordinator may answer from what it can read — `POST /api/questions/ask-<n>/rule`, the question door
+  family's claimant door (`ccrc-api asks answer`), box token plus registry attribution, accepted only from that worker's own parent, which re-proves the question is still the live one
   before it presses one digit; its body is the operator's own (`readAskAnswer`, D-5293), so an `askKey` it sends must
   be the row's (`409 ask-mismatch`, D-5368), and what it may hold is what your route answers (`answerableAsk`) — or decline anything that would be a new decision with
-  `POST /api/asks/:id/release`, which fires your push at once (coordinator clause 11). Your own answer from the
+  `POST /api/questions/ask-<n>/release` (`ccrc-api asks release`), which fires your push at once (coordinator clause 11). Your own answer from the
   lock screen takes the same ask row, so the record names whoever ruled. A multi-select or multi-question ask, a
   session with no parent, a run this box could not read, or `$REG/asks-disabled` (touched by hand on the fleet
   host; an unlistable registry counts as present, and an ask already held still waits out its window) means the
