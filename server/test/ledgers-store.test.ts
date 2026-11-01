@@ -5,7 +5,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type ItemRow } from '../src/coord/store.js';
-import { CLEARED_WINDOW_MS, ITEM_STATES, type ItemState } from '../../shared/ledgers.js';
+import { CLEARED_WINDOW_MS, ITEM_MOVE_REFUSALS, ITEM_STATES, type ItemState } from '../../shared/ledgers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -112,6 +112,19 @@ describe('moving an item (plan PL2)', () => {
       }
     }
     expect(ITEM_STATES).toContain('done');
+  });
+
+  it('every refusal word the store answers is a declared ItemMoveRefusal', () => {
+    const s = mk();
+    const id = raise(s);
+    const words = [
+      s.moveItem(id, 'confirm', 'coordinator', {}, NOW, live), s.moveItem(id, 'tick', 'coordinator', {}, NOW, live),
+      s.moveItem(id, 'dismiss', 'operator', {}, NOW, { programmeHasOpenRun: true }), s.moveItem(404, 'tick', 'operator', {}, NOW, live),
+      s.setBlocking(404, true, NOW),
+    ].map((r) => (r.ok ? null : r.why));
+    expect(words).toEqual(['not-open', 'wrong-actor', 'programme-live', 'unknown-item', 'unknown-item']);
+    for (const w of words) expect(ITEM_MOVE_REFUSALS).toContain(w);
+    expect([...ITEM_MOVE_REFUSALS].sort()).toEqual(['not-open', 'programme-live', 'unknown-item', 'wrong-actor']);
   });
 
   it('the only writer of operator_items.state is moveItem (a source scan of the store)', async () => {

@@ -5,7 +5,7 @@ import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState,
-  type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemState, type NeededBy,
+  type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
 import type { LandingAdvance, LandingWrite } from './landingEntry.js';
@@ -9951,7 +9951,7 @@ export class CoordStore {
    *  replaced as the `block` event's note; lowering restores that level, and an item that was RAISED blocking (no
    *  earlier level on record) falls back to `soon` when it carries a label and `later` when it does not. A repeat of the
    *  level it already has writes nothing. It writes `neededBy` and an event and never `state`. */
-  setBlocking(id: number, blocking: boolean, now: number): { ok: true } | { ok: false; why: 'unknown-item' | 'not-open' } {
+  setBlocking(id: number, blocking: boolean, now: number): { ok: true } | { ok: false; why: Extract<ItemMoveRefusal, 'unknown-item' | 'not-open'> } {
     return tx(this.db, () => {
       const row = this.itemById(id);
       if (row === null) return { ok: false, why: 'unknown-item' } as const;
@@ -10053,7 +10053,7 @@ export interface ItemEventRow {
 /** `moveItem`'s answer: the moved item, or the decider's word (`nextItemState`'s three) or `unknown-item`. */
 export type ItemMoveResult =
   | { ok: true; item: ItemRow }
-  | { ok: false; why: 'unknown-item' | 'wrong-actor' | 'not-open' | 'programme-live' };
+  | { ok: false; why: ItemMoveRefusal };
 /** The table's row before the JSON columns are parsed. Module-private. */
 type ItemRowRaw = Omit<ItemRow, 'how' | 'options'> & { how: string; options: string | null };
 
