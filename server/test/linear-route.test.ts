@@ -12,9 +12,9 @@ import type { LinearStoreRecord } from '../../shared/linear.js';
 import { LINEAR_TEAM_PAGE_SIZE, checkLinearKey, verifyLinearKey, type FetchLike } from '../src/linear/client.js';
 import { keyTailOf, type LinearKeyRead } from '../src/linear/connection.js';
 import type { LinearRateService } from '../src/linear/rate.js';
-import { checkLinearSlot } from '../src/linear/refresher.js';
+import { LINEAR_MISS_RETRY_AFTER_S, checkLinearSlot } from '../src/linear/refresher.js';
 import { routableSlots, routeLinear, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
-import { putLinearSlot, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef, type LinearStoreRead } from '../src/linear/store.js';
+import { putLinearSlot, readLinearStore, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef, type LinearStoreRead } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
 import { linearServicesFake } from './linearServicesFake.js';
@@ -350,5 +350,179 @@ describe('checkLinearSlot: the key check through the one rate service', () => {
     expect(await checkLinearSlot({ ccrcDir: d, slot: SLOT_A, lane: 'floor', rate: fresh, fetch: limited.f }))
       .toMatchObject({ kind: 'checked', check: { ok: false, reason: 'rate-limited', retryAfterS: 120 } });
     expect(fresh.take({ lane: 'proxy', slot: SLOT_A, calls: 1 })).toMatchObject({ ok: false, detail: 'linear' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The background refresher (spec §4.3): a miss answers at once and queues; the queue runs after, a slot at a time,
+// each slot at most once in five minutes, on the slot's floor.
+// ---------------------------------------------------------------------------
+
+describe('the background refresher (spec §4.3)', () => {
+  const T = 1_800_000_000_000;
+  const MIN = 60_000;
+  const TEAM_AAA: PageTeam = { id: 'aaaaaaaa-1111-4000-8000-000000000001', key: 'AAA', name: 'Team A' };
+  const TEAM_BBB: PageTeam = { id: 'bbbbbbbb-1111-4000-8000-000000000002', key: 'BBB', name: 'Team B' };
+  const ORG_B = { id: WS_B, name: 'Workspace B', urlKey: 'ws-b' };
+
+  interface Box {
+    dir: string;
+    clock: { now: number };
+    fx: ReturnType<typeof linearServicesFake>;
+    sent: Sent[];
+    /** What Linear answers next, by the key it was asked with. */
+    answers: Map<string, () => Promise<LinearAnswer>>;
+  }
+  const box = (): Box => {
+    const dir = path.join(mkTmp('ccrc-linear-refresh-'), '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    const clock = { now: T };
+    const sent: Sent[] = [];
+    const answers = new Map<string, () => Promise<LinearAnswer>>();
+    const f: FetchLike = async (_u, init) => {
+      const b = JSON.parse(init.body) as { query: string; variables: Record<string, unknown> };
+      const auth = init.headers['authorization'] ?? '';
+      sent.push({ auth, query: b.query, variables: b.variables });
+      const a = answers.get(auth);
+      if (a === undefined) throw new Error('box: no answer for that key');
+      return a();
+    };
+    return { dir, clock, sent, answers, fx: linearServicesFake({ clock: () => clock.now, ccrcDir: dir, fetch: f }) };
+  };
+  const slotRecord = (id: string, key: string, over: Partial<LinearStoreRecord> = {}): LinearStoreRecord => ({
+    workspaceId: id, name: 'Workspace', urlKey: id === WS_A ? 'ws-a' : 'ws-b', user: 'user-a', teams: [], teamsAt: null,
+    keyTail: keyTailOf(key), keyDigest: valueDigestHex(key), checkedAt: T, outcome: 'ok', ...over,
+  });
+  const put = (b: Box, id: string, key: string, over: Partial<LinearStoreRecord> = {}): Promise<unknown> =>
+    putLinearSlot(b.dir, key, slotRecord(id, key, over), { replace: true });
+  const store = async (b: Box): Promise<Extract<LinearStoreRead, { kind: 'listed' }>> => {
+    const r = await readLinearStore(b.dir);
+    if (r.kind !== 'listed') throw new Error('store not listed');
+    return r;
+  };
+  const routes = async (b: Box, ask: LinearRouteAsk): Promise<string> => routedTo(routeLinear(routableSlots(await store(b)), ask));
+  const recordOf = async (b: Box, id: string): Promise<LinearStoreRecord | null> => {
+    const s = (await store(b)).slots.find((x) => x.id === id);
+    return s?.record.kind === 'details' ? s.record.details : null;
+  };
+
+  it('a miss answers at once with no Linear call, queues the stale slot, and the retry after the refresh routes', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    b.answers.set(KEY_1, async () => keyPage([TEAM_AAA]));
+    expect(await routes(b, issue('AAA'))).toBe('refused:team-unknown');
+    const d = b.fx.refresher.miss(await store(b));
+    expect(d).toBe('refreshing');
+    expect(LINEAR_MISS_RETRY_AFTER_S).toBe(10);
+    expect(b.sent).toHaveLength(0);
+    await b.fx.refresher.idle();
+    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1]);
+    expect(await recordOf(b, WS_A)).toMatchObject({ teams: [TEAM_AAA], teamsAt: T, outcome: 'ok', urlKey: 'ws-a' });
+    expect(await routes(b, issue('AAA'))).toBe(WS_A);
+  });
+
+  it('answers before the refresh it queued has finished: a hung Linear never holds the miss', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    b.answers.set(KEY_1, () => new Promise<LinearAnswer>(() => {}));
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+  });
+
+  it('one refresh per slot whatever the number of misses; inside the window a miss is unknown', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    b.answers.set(KEY_1, async () => keyPage([TEAM_AAA]));
+    for (let i = 0; i < 5; i += 1) expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(1);
+    // Refreshed, and still no team ZZZ: a retry will not help until the window passes or a key is added.
+    b.clock.now = T + 4 * MIN;
+    expect(await routes(b, issue('ZZZ'))).toBe('refused:team-unknown');
+    expect(b.fx.refresher.miss(await store(b))).toBe('unknown');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(1);
+  });
+
+  it('a slot whose teams are under five minutes old is not refreshed', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1, { teams: [TEAM_AAA], teamsAt: T - 4 * MIN });
+    expect(b.fx.refresher.miss(await store(b))).toBe('unknown');
+    b.clock.now = T + MIN + 1;
+    b.answers.set(KEY_1, async () => keyPage([TEAM_AAA]));
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(1);
+  });
+
+  it('a refresh that failed is not tried again inside five minutes, and is after', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    b.answers.set(KEY_1, async () => linearAnswer({ ok: false, status: 500, json: async () => ({}) }));
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(await recordOf(b, WS_A)).toMatchObject({ outcome: 'unreachable', teamsAt: null });
+    b.clock.now = T + 5 * MIN - 1;
+    expect(b.fx.refresher.miss(await store(b))).toBe('unknown');
+    b.clock.now = T + 5 * MIN;
+    b.answers.set(KEY_1, async () => keyPage([TEAM_AAA]));
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(2);
+    expect(await routes(b, issue('AAA'))).toBe(WS_A);
+  });
+
+  it('runs one slot at a time', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    await put(b, WS_B, KEY_2);
+    let release!: () => void;
+    b.answers.set(KEY_1, () => new Promise<LinearAnswer>((r) => { release = () => r(keyPage([TEAM_AAA])); }));
+    b.answers.set(KEY_2, async () => keyPage([TEAM_BBB], null, ORG_B));
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    for (let i = 0; i < 20 && b.sent.length === 0; i += 1) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1]);
+    // A miss while the first runs: both are already queued or running, so it queues nothing new.
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    release();
+    await b.fx.refresher.idle();
+    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1, KEY_2]);
+    expect(await routes(b, byTeam('BBB'))).toBe(WS_B);
+  });
+
+  it('is charged to the slot\'s floor: a spent floor refuses it with no call, and leaves the other lanes whole', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    const SLOT: LinearSlotRef = { source: 'file', id: WS_A };
+    while (b.fx.rate.take({ lane: 'floor', slot: SLOT, calls: 1 }).ok) { /* spend the floor */ }
+    expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(0);
+    expect(b.fx.rate.take({ lane: 'request', slot: SLOT, calls: 25 }).ok).toBe(true);
+    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 425 }).ok).toBe(true);
+  });
+
+  it('reads the slot\'s key before each of its two pages, and stops when it changed, recording nothing', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    b.answers.set(KEY_1, async () => { await put(b, WS_A, KEY_2, { name: 'Replaced' }); return keyPage([TEAM_AAA], 'cursor-1'); });
+    b.fx.refresher.miss(await store(b));
+    await b.fx.refresher.idle();
+    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1]);
+    expect(await recordOf(b, WS_A)).toEqual(slotRecord(WS_A, KEY_2, { name: 'Replaced' }));
+  });
+
+  it('a 401 marks that slot rejected and no other; an answer naming another workspace records nothing', async () => {
+    const b = box();
+    await put(b, WS_A, KEY_1);
+    await put(b, WS_B, KEY_2);
+    b.answers.set(KEY_1, async () => linearAnswer({ ok: false, status: 401, json: async () => ({}) }));
+    b.answers.set(KEY_2, async () => keyPage([TEAM_BBB]));
+    b.fx.refresher.miss(await store(b));
+    await b.fx.refresher.idle();
+    expect(await recordOf(b, WS_A)).toMatchObject({ outcome: 'rejected', keyDigest: valueDigestHex(KEY_1) });
+    // KEY_2's answer named workspace A, not B: B's record is as it was.
+    expect(await recordOf(b, WS_B)).toEqual(slotRecord(WS_B, KEY_2));
   });
 });

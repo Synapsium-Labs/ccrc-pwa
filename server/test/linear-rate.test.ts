@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { registerLinearRoutes } from '../src/linear/routes.js';
 import { resolveTitle } from '../src/linear/resolve.js';
 import { LEGACY_SLOT, type LinearSlotRef } from '../src/linear/store.js';
+import type { LinearRefresher } from '../src/linear/refresher.js';
 import { LINEAR_KEY_FILE } from '../src/linear/connection.js';
 import type { FetchLike } from '../src/linear/client.js';
 import {
@@ -45,9 +46,10 @@ const viewerOk = (): LinearAnswer =>
   linearAnswer({ ok: true, status: 200, json: async () => ({ data: { viewer: { name: 'user-a' }, organization: { name: 'team-a' } } }) });
 
 /** A service on a clock the test moves. */
-const clocked = (): { rate: LinearRateService; clock: { now: number } } => {
+const clocked = (): { rate: LinearRateService; refresher: LinearRefresher; clock: { now: number } } => {
   const clock = { now: T0 };
-  return { rate: linearServicesFake({ clock: () => clock.now }).rate, clock };
+  const fx = linearServicesFake({ clock: () => clock.now });
+  return { rate: fx.rate, refresher: fx.refresher, clock };
 };
 
 /** Takes `ask` until the service refuses (or a bound no budget reaches), never settling: how many it granted, and the
@@ -219,16 +221,17 @@ const passingGate: AccountGate = () => ({ pass: true, actor: actorOf('a test pho
 let open: FastifyInstance | null = null;
 afterEach(async () => { await open?.close(); open = null; });
 
-async function rig(o: { rate?: 'absent'; gate?: AccountGate; key?: boolean } = {}): Promise<Rig> {
+async function rig(o: { rate?: 'absent'; refresher?: 'absent'; gate?: AccountGate; key?: boolean } = {}): Promise<Rig> {
   const dir = mkTmp('ccrc-linear-rate-');
   if (o.key !== false) writeFileSync(path.join(dir, LINEAR_KEY_FILE), `${KEY}\n`, { mode: 0o600 });
-  const { rate, clock } = clocked();
+  const { rate, refresher, clock } = clocked();
   const calls = { n: 0 };
   let next: LinearAnswer = issueOk();
   const f: FetchLike = async () => { calls.n += 1; return next; };
   const app = Fastify({ logger: false });
   registerLinearRoutes(app, {
-    ccrcDir: dir, gate: o.gate ?? refusingGate, rate: o.rate === 'absent' ? null : rate, fetch: f, now: () => clock.now,
+    ccrcDir: dir, gate: o.gate ?? refusingGate, rate: o.rate === 'absent' ? null : rate,
+    refresher: o.refresher === 'absent' ? null : refresher, fetch: f, now: () => clock.now,
   });
   await app.ready();
   open = app;
@@ -381,6 +384,16 @@ describe('an absent rate service calls Linear for nothing (D-7684)', () => {
     // The two routes that never call Linear are unchanged.
     expect((await r.app.inject({ method: 'GET', url: '/api/linear/connection' })).statusCode).toBe(200);
     expect(r.calls.n).toBe(0);
+  });
+
+  it('an absent refresher: Check again answers linear-unavailable with no call; the preview and the Connect are unchanged', async () => {
+    const r = await rig({ refresher: 'absent', gate: passingGate });
+    const c = await check(r);
+    expect(c.statusCode).toBe(503);
+    expect(body(c)).toEqual({ ok: false, error: 'linear-unavailable' });
+    expect(r.calls.n).toBe(0);
+    expect(body(await resolve(r))).toMatchObject({ source: 'linear' });
+    expect(r.calls.n).toBe(1);
   });
 
   it('resolveTitle with no service answers the offline title and makes no call', async () => {

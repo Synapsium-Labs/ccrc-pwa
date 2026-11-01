@@ -412,3 +412,58 @@ describe('the legacy Check again learns its workspace (row 2)', () => {
     });
   });
 });
+
+// Row 2's refresher half (plan task LK3): the legacy slot's background refresh writes only `legacy-teams.json`.
+
+describe('the background refresh of the legacy slot writes only legacy-teams.json (row 2)', () => {
+  const MIN = 60_000;
+  const refresherBox = async (answer: () => Promise<LinearAnswer>): Promise<{ dir: string; fx: ReturnType<typeof linearServicesFake>; calls: () => number }> => {
+    const dir = ccrc();
+    let n = 0;
+    const fx = linearServicesFake({ clock: () => NOW, ccrcDir: dir, fetch: async () => { n += 1; return answer(); } });
+    return { dir, fx, calls: () => n };
+  };
+  const listedStore = async (dir: string): Promise<Extract<LinearStoreRead, { kind: 'listed' }>> => {
+    const r = await readLinearStore(dir);
+    if (r.kind !== 'listed') throw new Error('not listed');
+    return r;
+  };
+  const TEAM_B: LinearTeam = { id: 'bbbbbbbb-1111-4000-8000-000000000002', key: 'BBB', name: 'Team B' };
+
+  it('refreshes a learned legacy slot\'s teams, leaving the pair\'s bytes and mtimes as they were', async () => {
+    const b = await refresherBox(async () => keyCheckOk(undefined, [TEAM_A, TEAM_B]));
+    await connect(b.dir);
+    await writeLegacyTeams(b.dir, valueDigestHex(LEGACY_KEY), learned({ teamsAt: NOW - 10 * MIN }));
+    const before = pairState(b.dir);
+    expect(b.fx.refresher.miss(await listedStore(b.dir))).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.calls()).toBe(1);
+    expect(legacyOf(await readLinearStore(b.dir))).toMatchObject({ teamsFile: 'matched', workspace: { teams: [TEAM_A, TEAM_B], teamsAt: NOW } });
+    expect(pairState(b.dir)).toEqual(before);
+  });
+
+  it('a 401 on the legacy slot\'s refresh writes nothing: the pair is the legacy routes\' alone', async () => {
+    const b = await refresherBox(async () => linearAnswer({ ok: false, status: 401, json: async () => ({}) }));
+    await connect(b.dir);
+    await writeLegacyTeams(b.dir, valueDigestHex(LEGACY_KEY), learned({ teamsAt: NOW - 10 * MIN }));
+    const before = pairState(b.dir);
+    const teamsBefore = readFileSync(teamsPath(b.dir), 'utf8');
+    b.fx.refresher.miss(await listedStore(b.dir));
+    await b.fx.refresher.idle();
+    expect(b.calls()).toBe(1);
+    expect(pairState(b.dir)).toEqual(before);
+    expect(readFileSync(teamsPath(b.dir), 'utf8')).toBe(teamsBefore);
+  });
+
+  it('an unlearned or superseded legacy slot is never refreshed', async () => {
+    const b = await refresherBox(async () => keyCheckOk());
+    await connect(b.dir);
+    expect(b.fx.refresher.miss(await listedStore(b.dir))).toBe('unknown');
+    await writeLegacyTeams(b.dir, valueDigestHex(LEGACY_KEY), learned({ teamsAt: NOW - 10 * MIN }));
+    await putLinearSlot(b.dir, SLOT_KEY, slotRec(WS_A, SLOT_KEY), { replace: false });
+    // Only the file slot (fresh) is a candidate: the superseded legacy slot cures nothing.
+    expect(b.fx.refresher.miss(await listedStore(b.dir))).toBe('unknown');
+    await b.fx.refresher.idle();
+    expect(b.calls()).toBe(0);
+  });
+});

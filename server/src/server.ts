@@ -1931,9 +1931,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const accountGate = createAccountGate({
     enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
   });
-  // The one Linear rate service (spec §6.7) is passed through as it is, possibly absent: never a default built here.
+  // The one Linear rate service (spec §6.7) and the one background refresher (spec §4.3) are passed through as they
+  // are, possibly absent: never a default built here.
   registerLinearRoutes(app, {
-    ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
   });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated

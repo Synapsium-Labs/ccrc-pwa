@@ -10,7 +10,7 @@ import {
   withConnectionLock, writeLinearConnection, type LinearKeyRead,
 } from './connection.js';
 import { oneCallOutcome, type LinearRateRefusal, type LinearRateService } from './rate.js';
-import { checkLinearSlot } from './refresher.js';
+import { checkLinearSlot, type LinearRefresher } from './refresher.js';
 import { resolveName } from './resolve.js';
 import { LEGACY_SLOT, writeLegacyTeams } from './store.js';
 import { checkOutcomeOf, linearConnectionView, type KeyMeasure } from './view.js';
@@ -33,6 +33,13 @@ export interface LinearRouteOpts {
    * and are unchanged.
    */
   rate: LinearRateService | null;
+  /**
+   * The ONE background refresher (D-7668, spec §4.3), built by the composition root and passed through by `server.ts`.
+   * REQUIRED as the refresher or `null`, as `rate` is. The Check again's key check counts as its slot's refresh, so a
+   * miss straight after it does not ask Linear again. Null: the Check again answers `linear-unavailable` before any
+   * Linear call (D-7684); no other route here needs it.
+   */
+  refresher: LinearRefresher | null;
   /** Test seams: the network, the deadline and the clock. Absent in production. */
   fetch?: FetchLike;
   timeoutMs?: number;
@@ -158,9 +165,9 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
   });
 
   app.post('/api/linear/connection/check', noStore, async (_req, reply) => {
-    // No rate service, no Linear call: before any other work (D-7684).
-    const rate = opts.rate;
-    if (rate === null) return refuseRoute(reply, 'linear-unavailable');
+    // No rate service or no refresher, no Linear call: before any other work (D-7684).
+    const { rate, refresher } = opts;
+    if (rate === null || refresher === null) return refuseRoute(reply, 'linear-unavailable');
     const key = await readLinearKey(opts.ccrcDir);
     // Nothing to check, and the view says which kind of nothing (not connected, or unreadable, or unusable).
     if (key.kind !== 'key') return refuseRoute(reply, 'not-connected', { connection: await currentView() });
@@ -171,6 +178,8 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
     const checked = await checkLinearSlot({ ccrcDir: opts.ccrcDir, slot: LEGACY_SLOT, lane: 'request', rate, ...net });
     if (checked.kind === 'refused') return refuseRate(reply, checked.detail, checked.retryAfterS);
     const v = checked.check;
+    // A check that reached Linear is this slot's refresh: its window starts again (spec §4.3).
+    if (v.pagesSent > 0) refresher.checked(LEGACY_SLOT);
     // The key was gone, or replaced, when a page was due: nothing the check found describes the key now stored, so
     // nothing is recorded, and the answer is the pair as it now is (a Connect that landed meanwhile wins).
     if (!v.ok && v.reason === 'key-changed') return answer(await currentView());
