@@ -3,11 +3,24 @@
 // The router (`linear/route.ts`, L1, pure): every row of spec §4.2's table, team keys compared uppercased, and never
 // the first of two matches. Its input is what the store read (`readLinearStore`) makes routable: every file slot, and
 // the legacy slot only once its Check again has learned its workspace and no file slot holds that workspace (§3.4).
-// Nothing here reaches the network.
+// Below it, the key check (§4.1): one document, at most two pages, the key read again before each page. Nothing here
+// reaches the network: every Linear answer is a stub in the shape the §4.1 document asks for.
 import { describe, expect, it } from 'vitest';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
 import type { LinearStoreRecord } from '../../shared/linear.js';
+import { LINEAR_TEAM_PAGE_SIZE, checkLinearKey, verifyLinearKey, type FetchLike } from '../src/linear/client.js';
+import { keyTailOf, type LinearKeyRead } from '../src/linear/connection.js';
+import type { LinearRateService } from '../src/linear/rate.js';
+import { checkLinearSlot } from '../src/linear/refresher.js';
 import { routableSlots, routeLinear, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
-import type { LinearFileSlot, LinearLegacySlot, LinearStoreRead } from '../src/linear/store.js';
+import { putLinearSlot, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef, type LinearStoreRead } from '../src/linear/store.js';
+import { valueDigestHex } from '../src/token/files.js';
+import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
+import { linearServicesFake } from './linearServicesFake.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+
+removeTmpFixturesEachTest();
 
 const WS_A = 'aaaaaaaa-0000-4000-8000-000000000001';
 const WS_B = 'bbbbbbbb-0000-4000-8000-000000000002';
@@ -147,5 +160,195 @@ describe('routableSlots: what the store read can route', () => {
     expect(routeLinear(slots, issue('BBB'))).toMatchObject({ kind: 'slot', slot: { ref: { source: 'legacy' } } });
     expect(routeLinear(slots, issue('AAA'))).toMatchObject({ kind: 'slot', slot: { ref: { source: 'file', id: WS_A } } });
     expect(routeLinear(slots, byWorkspace(null))).toEqual({ kind: 'refused', word: 'workspace-required' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The key check (spec §4.1): one query, at most two pages, the key read again from its file before each page.
+// ---------------------------------------------------------------------------
+
+const KEY_1 = 'lin_api_fixture_route_key_0001';
+const KEY_2 = 'lin_api_fixture_route_key_0002';
+interface Sent { auth: string; query: string; variables: Record<string, unknown> }
+type PageTeam = { id: string; key: string; name: string };
+const ORG_A = { id: WS_A, name: 'Workspace A', urlKey: 'ws-a' };
+
+/** A key-check answer in the shape the §4.1 document asks for: the viewer, the organization and one page of teams. */
+const keyPage = (teams: PageTeam[], next: string | null = null, org: Record<string, unknown> = ORG_A): LinearAnswer =>
+  linearAnswer({
+    ok: true, status: 200,
+    json: async () => ({ data: { viewer: { name: 'user-a' }, organization: org, teams: { nodes: teams, pageInfo: { hasNextPage: next !== null, endCursor: next } } } }),
+  });
+const teamsOf = (from: number, n: number): PageTeam[] => Array.from({ length: n }, (_v, i) => {
+  const k = from + i;
+  return { id: `eeeeeeee-0000-4000-8000-${String(k).padStart(12, '0')}`, key: `T${k}`, name: `Team ${k}` };
+});
+
+/** A Linear stand-in answering `answers` in order, recording what each call sent. */
+const scripted = (answers: Array<LinearAnswer | (() => Promise<LinearAnswer>)>): { f: FetchLike; sent: Sent[] } => {
+  const sent: Sent[] = [];
+  const f: FetchLike = async (_u, init) => {
+    const b = JSON.parse(init.body) as { query: string; variables: Record<string, unknown> };
+    sent.push({ auth: init.headers['authorization'] ?? '', query: b.query, variables: b.variables });
+    const a = answers[sent.length - 1];
+    if (a === undefined) throw new Error('scripted: no answer left');
+    return typeof a === 'function' ? a() : a;
+  };
+  return { f, sent };
+};
+/** A key "file" the test can change between pages, and how often the check read it. */
+const keyHolder = (k: LinearKeyRead = { kind: 'key', key: KEY_1 }): { read: () => Promise<LinearKeyRead>; set: (k: LinearKeyRead) => void; reads: () => number } => {
+  let cur = k;
+  let n = 0;
+  return { read: async () => { n += 1; return cur; }, set: (next) => { cur = next; }, reads: () => n };
+};
+
+describe('the key check (spec §4.1)', () => {
+  it('is one document: the viewer, the organization\'s id, name and URL key, and one page of teams', async () => {
+    expect(LINEAR_TEAM_PAGE_SIZE).toBe(250);
+    const { f, sent } = scripted([keyPage(teamsOf(1, 2))]);
+    const k = keyHolder();
+    const r = await checkLinearKey(k.read, { fetch: f, mayAskMore: () => true });
+    expect(sent).toHaveLength(1);
+    const q = sent[0]!.query.replace(/\s+/g, ' ');
+    expect(q).toContain('viewer { name }');
+    expect(q).toContain('organization { id name urlKey }');
+    expect(q).toContain(`teams(first: ${LINEAR_TEAM_PAGE_SIZE}, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } }`);
+    expect(sent[0]!.variables).toEqual({ after: null });
+    expect(sent[0]!.auth).toBe(KEY_1);
+    expect(r).toEqual({
+      ok: true, org: 'Workspace A', user: 'user-a', keyDigest: valueDigestHex(KEY_1), pagesSent: 1,
+      workspace: { id: WS_A, name: 'Workspace A', urlKey: 'ws-a', teams: teamsOf(1, 2), more: false },
+    });
+  });
+
+  it('asks one more page, with the cursor, when Linear says there is one, and keeps both pages\' teams', async () => {
+    const { f, sent } = scripted([keyPage(teamsOf(1, 250), 'cursor-1'), keyPage(teamsOf(251, 3))]);
+    const r = await checkLinearKey(keyHolder().read, { fetch: f, mayAskMore: () => true });
+    expect(sent.map((s) => s.variables)).toEqual([{ after: null }, { after: 'cursor-1' }]);
+    expect(r).toMatchObject({ ok: true, pagesSent: 2, workspace: { teams: teamsOf(1, 253), more: false } });
+  });
+
+  it('never asks a third page: past two pages the first 500 are kept and more is said', async () => {
+    const { f, sent } = scripted([keyPage(teamsOf(1, 250), 'cursor-1'), keyPage(teamsOf(251, 250), 'cursor-2')]);
+    const r = await checkLinearKey(keyHolder().read, { fetch: f, mayAskMore: () => true });
+    expect(sent).toHaveLength(2);
+    expect(r).toMatchObject({ ok: true, pagesSent: 2, workspace: { more: true } });
+    expect(r.ok && r.workspace?.teams.length).toBe(500);
+  });
+
+  it('reads the key again before each page, and stops when it is gone or its digest changed', async () => {
+    for (const after of [{ kind: 'absent' } as const, { kind: 'key', key: KEY_2 } as const]) {
+      const k = keyHolder();
+      const { f, sent } = scripted([async () => { k.set(after); return keyPage(teamsOf(1, 250), 'cursor-1'); }, keyPage(teamsOf(251, 1))]);
+      const r = await checkLinearKey(k.read, { fetch: f, mayAskMore: () => true });
+      expect(sent, after.kind).toHaveLength(1);
+      expect(k.reads()).toBe(2);
+      expect(r).toEqual({ ok: false, reason: 'key-changed', keyDigest: valueDigestHex(KEY_1), pagesSent: 1 });
+    }
+    const gone = keyHolder({ kind: 'absent' });
+    const none = scripted([]);
+    expect(await checkLinearKey(gone.read, { fetch: none.f })).toEqual({ ok: false, reason: 'key-changed', keyDigest: null, pagesSent: 0 });
+    expect(none.sent).toHaveLength(0);
+  });
+
+  it('learns nothing it cannot have whole: a second page not granted, or a team out of its grammar, keeps the names only', async () => {
+    const one = scripted([keyPage(teamsOf(1, 250), 'cursor-1')]);
+    expect(await checkLinearKey(keyHolder().read, { fetch: one.f, mayAskMore: () => false }))
+      .toMatchObject({ ok: true, org: 'Workspace A', workspace: null, pagesSent: 1 });
+    expect(one.sent).toHaveLength(1);
+    // With no way to ask for more (a pasted key's verify), the first page alone is never taken for the whole.
+    const solo = scripted([keyPage(teamsOf(1, 250), 'cursor-1')]);
+    expect(await checkLinearKey(keyHolder().read, { fetch: solo.f })).toMatchObject({ ok: true, workspace: null, pagesSent: 1 });
+    const bad: PageTeam[][] = [
+      [{ id: 'not-a-uuid', key: 'AAA', name: 'Team A' }], [{ ...teamsOf(1, 1)[0]!, key: '1A' }], [{ ...teamsOf(1, 1)[0]!, name: '\u0001' }],
+      [teamsOf(1, 1)[0]!, { ...teamsOf(2, 1)[0]!, key: 'T1' }],
+    ];
+    for (const teams of bad) {
+      const s = scripted([keyPage(teams)]);
+      expect(await checkLinearKey(keyHolder().read, { fetch: s.f }), JSON.stringify(teams)).toMatchObject({ ok: true, workspace: null });
+    }
+    for (const org of [{ ...ORG_A, id: 'x' }, { ...ORG_A, urlKey: 'WS A' }, { name: 'Workspace A' }]) {
+      const s = scripted([keyPage(teamsOf(1, 1), null, org)]);
+      expect(await checkLinearKey(keyHolder().read, { fetch: s.f }), JSON.stringify(org)).toMatchObject({ ok: true, org: 'Workspace A', workspace: null });
+    }
+    // A second page that names another organization is not this workspace's.
+    const moved = scripted([keyPage(teamsOf(1, 250), 'cursor-1'), keyPage(teamsOf(251, 1), null, { ...ORG_A, id: WS_B })]);
+    expect(await checkLinearKey(keyHolder().read, { fetch: moved.f, mayAskMore: () => true })).toMatchObject({ ok: true, workspace: null, pagesSent: 2 });
+  });
+
+  it('a failed page is the check\'s failure, with the key\'s digest and the pages it sent', async () => {
+    const first = scripted([linearAnswer({ ok: false, status: 401, json: async () => ({}) })]);
+    expect(await checkLinearKey(keyHolder().read, { fetch: first.f }))
+      .toEqual({ ok: false, reason: 'unauthorised', keyDigest: valueDigestHex(KEY_1), pagesSent: 1 });
+    const second = scripted([keyPage(teamsOf(1, 250), 'cursor-1'), linearAnswer({ ok: false, status: 429, headers: { 'retry-after': '30' }, json: async () => ({}) })]);
+    expect(await checkLinearKey(keyHolder().read, { fetch: second.f, mayAskMore: () => true }))
+      .toEqual({ ok: false, reason: 'rate-limited', retryAfterS: 30, keyDigest: valueDigestHex(KEY_1), pagesSent: 2 });
+  });
+
+  it('verifyLinearKey, the pasted key\'s check, keeps its answer and asks one page', async () => {
+    const { f, sent } = scripted([keyPage(teamsOf(1, 250), 'cursor-1')]);
+    expect(await verifyLinearKey(KEY_1, { fetch: f })).toEqual({ ok: true, org: 'Workspace A', user: 'user-a', keyDigest: valueDigestHex(KEY_1) });
+    expect(sent).toHaveLength(1);
+  });
+
+  it.todo('the key check page\'s recorded X-Complexity is under LINEAR_QUOTA.maxQueryComplexity (the FX capture records it; slug linear-fx-key-check-fixture)');
+});
+
+describe('checkLinearSlot: the key check through the one rate service', () => {
+  const dir = (): string => {
+    const d = path.join(mkTmp('ccrc-linear-route-'), '.ccrc');
+    mkdirSync(d, { recursive: true });
+    return d;
+  };
+  const putSlot = async (d: string, key: string): Promise<void> => {
+    await putLinearSlot(d, key, {
+      workspaceId: WS_A, name: 'Workspace A', urlKey: 'ws-a', user: 'user-a', teams: [], teamsAt: null,
+      keyTail: keyTailOf(key), keyDigest: valueDigestHex(key), checkedAt: 1, outcome: 'ok',
+    }, { replace: true });
+  };
+  const SLOT_A: LinearSlotRef = { source: 'file', id: WS_A };
+  const lane = (rate: LinearRateService): number => {
+    let n = 0;
+    while (rate.take({ lane: 'floor', slot: SLOT_A, calls: 1 }).ok) n += 1;
+    return n;
+  };
+
+  it('takes one call a page from the caller\'s lane, and gives back the page it did not need', async () => {
+    const d = dir();
+    await putSlot(d, KEY_1);
+    const rate = linearServicesFake({ clock: () => 1 }).rate;
+    const { f, sent } = scripted([keyPage(teamsOf(1, 2))]);
+    const r = await checkLinearSlot({ ccrcDir: d, slot: SLOT_A, lane: 'floor', rate, fetch: f });
+    expect(r).toMatchObject({ kind: 'checked', check: { ok: true, pagesSent: 1, workspace: { id: WS_A } } });
+    expect(sent.map((s) => s.auth)).toEqual([KEY_1]);
+    expect(lane(rate)).toBe(49);
+  });
+
+  it('reads the slot\'s key before each page: a replace between the pages stops the check', async () => {
+    const d = dir();
+    await putSlot(d, KEY_1);
+    const rate = linearServicesFake({ clock: () => 1 }).rate;
+    const { f, sent } = scripted([async () => { await putSlot(d, KEY_2); return keyPage(teamsOf(1, 250), 'cursor-1'); }]);
+    const r = await checkLinearSlot({ ccrcDir: d, slot: SLOT_A, lane: 'floor', rate, fetch: f });
+    expect(r).toEqual({ kind: 'checked', check: { ok: false, reason: 'key-changed', keyDigest: valueDigestHex(KEY_1), pagesSent: 1 } });
+    expect(sent).toHaveLength(1);
+    expect(lane(rate)).toBe(49);
+  });
+
+  it('a spent lane is refused before any call, and Linear\'s own rate limit closes the slot', async () => {
+    const d = dir();
+    await putSlot(d, KEY_1);
+    const rate = linearServicesFake({ clock: () => 1 }).rate;
+    lane(rate);
+    const none = scripted([]);
+    expect(await checkLinearSlot({ ccrcDir: d, slot: SLOT_A, lane: 'floor', rate, fetch: none.f }))
+      .toMatchObject({ kind: 'refused', detail: 'workspace' });
+    expect(none.sent).toHaveLength(0);
+    const fresh = linearServicesFake({ clock: () => 1 }).rate;
+    const limited = scripted([linearAnswer({ ok: false, status: 429, headers: { 'retry-after': '120' }, json: async () => ({}) })]);
+    expect(await checkLinearSlot({ ccrcDir: d, slot: SLOT_A, lane: 'floor', rate: fresh, fetch: limited.f }))
+      .toMatchObject({ kind: 'checked', check: { ok: false, reason: 'rate-limited', retryAfterS: 120 } });
+    expect(fresh.take({ lane: 'proxy', slot: SLOT_A, calls: 1 })).toMatchObject({ ok: false, detail: 'linear' });
   });
 });

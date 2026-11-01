@@ -348,3 +348,67 @@ describe('characterization: the legacy Check again', () => {
     expect(r.calls).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Row 2 (plan task LK3): the legacy Check again learns its workspace. Its query is the §4.1 key check, and what that
+// learns beyond the v1 record goes to `legacy-teams.json` under the lock, by the digest rule; the pair keeps its v1
+// write and nothing more.
+// ---------------------------------------------------------------------------
+
+const keyCheckOk = (org: Record<string, unknown> = { id: WS_A, name: 'Workspace A', urlKey: 'ws-a' }, teams: LinearTeam[] = [TEAM_A]): LinearAnswer =>
+  linearAnswer({
+    ok: true, status: 200,
+    json: async () => ({ data: { viewer: { name: 'user-a' }, organization: org, teams: { nodes: teams, pageInfo: { hasNextPage: false, endCursor: null } } } }),
+  });
+
+describe('the legacy Check again learns its workspace (row 2)', () => {
+  it('writes legacy-teams.json for the key it checked, so the store reads the legacy slot as learned', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(keyCheckOk());
+    const got = await checkAgain(r);
+    expect(got.body).toMatchObject({ ok: true, connection: { state: 'connected', org: 'Workspace A' } });
+    expect(parseLegacyTeams(readFileSync(teamsPath(r.dir), 'utf8'))).toEqual({
+      keyDigest: valueDigestHex(LEGACY_KEY), workspaceId: WS_A, name: 'Workspace A', urlKey: 'ws-a', teams: [TEAM_A], teamsAt: expect.any(Number) as number,
+    });
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({ teamsFile: 'matched', workspace: { workspaceId: WS_A }, superseded: false });
+    // The pair holds what it held on `main`: the key, and the v1 record the check wrote.
+    expect(readFileSync(path.join(r.dir, LINEAR_KEY_FILE), 'utf8')).toBe(`${LEGACY_KEY}\n`);
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY, { checkedAt: expect.any(Number) as number }));
+    expect(readFileSync(path.join(r.dir, LINEAR_DETAILS_FILE), 'utf8')).not.toContain(WS_A);
+    expect(r.calls).toBe(1);
+  });
+
+  it('a key replaced while Linear is asked: nothing is learned for the new key, and the old one\'s file is ignored', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(async () => { await connect(r.dir, LEGACY_KEY2); return keyCheckOk(); });
+    await checkAgain(r);
+    expect(existsSync(teamsPath(r.dir))).toBe(false);
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({ workspace: null });
+  });
+
+  it('a check that learns no workspace (a 401, or an answer out of its grammar) writes no legacy-teams.json', async () => {
+    for (const a of [linearAnswer({ ok: false, status: 401, json: async () => ({}) }), keyCheckOk({ name: 'Workspace A' })]) {
+      const r = await checkRig();
+      await connect(r.dir);
+      r.answer(a);
+      expect((await checkAgain(r)).status).toBe(200);
+      expect(existsSync(teamsPath(r.dir))).toBe(false);
+    }
+  });
+
+  it('the next Check again overwrites what an earlier key\'s check left', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(keyCheckOk());
+    await checkAgain(r);
+    await connect(r.dir, LEGACY_KEY2);
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({ teamsFile: 'stale', workspace: null });
+    r.answer(keyCheckOk({ id: WS_B, name: 'Workspace B', urlKey: 'ws-b' }));
+    await checkAgain(r);
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({
+      teamsFile: 'matched', workspace: { keyDigest: valueDigestHex(LEGACY_KEY2), workspaceId: WS_B, urlKey: 'ws-b' },
+    });
+  });
+});
