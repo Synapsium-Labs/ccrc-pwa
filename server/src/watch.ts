@@ -8796,7 +8796,7 @@ export class FleetWatcher {
   }
 
   /** One owed episode's rows as the fold reads them: the live or the shadow form, per the episode's mode. */
-  private checksRowsOf(coord: CoordStore, m: { run: { id: number }; ep: LaneEpisode; live: boolean }): ChecksRow[] {
+  private checksRowsOf(coord: WatcherCoordPort, m: { run: { id: number }; ep: LaneEpisode; live: boolean }): ChecksRow[] {
     const out: ChecksRow[] = [];
     for (const r of coord.checksRows(m.run.id, m.ep.e)) {
       if (r.row.shadow === m.live || r.row.gen === null) continue;
