@@ -1976,7 +1976,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates check credential declare disable enable remove roster"
+ACCT_SUBS="add candidates check credential declare disable enable remove roster seed"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -8219,12 +8219,51 @@ _acct_marker_lock() {   # <what-still-stands> -> lock held on ACCT_MARKER_LOCK_F
     || _acct_refuse 1 marker-lock "cannot lock $lock, so the account placement floor was left unchanged. $stands"
 }
 
-_acct_enable() {   # [--id X]
-  local marker="" rc=0
-  _acct_one_id enable "$@"
+# ── the first-run seed (accounts plan Task A13; spec §6.2 step 9, G1; D-5518, D-7731) ──
+# `deploy/account-op.mjs`'s `seed` op states what it writes, verifies and
+# records (`seedVerifiedAt`). Inside `check` it follows the probe turn: OA1a
+# measured that a sign-in lane's `.claude.json` exists before the first check
+# and that the probe does not add `hasCompletedOnboarding`, so there is no
+# headless first run before it. The run is recorded first (`lastRunAt`), so a
+# seed that then refuses leaves the lane "not verified after its last run". A
+# refusal is the answer's `seed.error`, its sentence the op's stderr line; the
+# check's verdict stands, and `enable` stays not-ready.
+_acct_check_seed() {   # <id> -> ACCT_SEED_OUT, the seed op's answer
+  _acct_lane_state "$1" --last-run-at now
+  ACCT_SEED_OUT="$(_acct_node seed --file "$(_acct_roster_path)" --id "$1")"
+}
+
+# `ccrc account seed --id X` (spec §13.3, G1): the same step on its own, a CLI
+# verb and never an agent sub. It runs no Claude Code.
+_acct_seed() {   # [--id X]
+  _acct_one_id seed "$@"
   _acct_id_or_refuse "$ACCT_ONE_ID"
   _acct_known_or_refuse "$ACCT_ONE_ID"
   _acct_lane_lock "$ACCT_ONE_ID" "Nothing was written."
+  _acct_read_op "The lane's .claude.json is as it was, or seeded and not recorded." \
+    seed --file "$(_acct_roster_path)" --id "$ACCT_ONE_ID"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+_acct_enable() {   # [--id X] [--force]
+  local marker="" rc=0 force=0 a=""
+  # `--force` IS THE CLI'S ALONE (spec §10, G19): the agent's argv builder
+  # (`shared/account-argv.ts`) has no field that becomes it, so no route sends
+  # it. It skips the readiness question and nothing else.
+  local -a rest=()
+  for a in "$@"; do
+    if [ "$a" = --force ]; then force=1; else rest+=("$a"); fi
+  done
+  _acct_one_id enable ${rest[@]+"${rest[@]}"}
+  _acct_id_or_refuse "$ACCT_ONE_ID"
+  _acct_known_or_refuse "$ACCT_ONE_ID"
+  _acct_lane_lock "$ACCT_ONE_ID" "Nothing was written."
+  # READINESS UNDER THE LANE'S LOCK, BEFORE THE PLACEMENT LOCK: a `check` on
+  # this lane cannot rewrite the lane state between the question and the flip.
+  # The `ready` op reads the lane state, and the credential where the roster
+  # says the lane keeps it (spec §10, G19); a refusal is its envelope, at 1.
+  [ "$force" -eq 1 ] \
+    || _acct_read_op "Nothing was written." ready --file "$(_acct_roster_path)" --id "$ACCT_ONE_ID"
   _acct_marker_lock "Nothing was written."
   # Membership may have changed while this process waited for a removal.
   _acct_known_or_refuse "$ACCT_ONE_ID"
@@ -9926,9 +9965,12 @@ _acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> o
 ACCT_WHY_AUTH="The verdict below is the probe's."
 ACCT_WHY_PROBE="There is nothing below it to ask: the probe is the LAST question about this account, so the unknown verdict beside this note is what a question nobody could put leaves behind rather than anything measured about the lane."
 
-_acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to ACCT_NOTES
+_acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; ACCT_AUTH_BODY; may append to ACCT_NOTES
   local id="$1" out="" rc=0 row="" crc=0 before="" after=""
   ACCT_HEALTH=""
+  # THE BODY, KEPT FOR THE IDENTITY (accounts plan Task A13; spec §3.4): `check` reads the signed-in account out of
+  # it. Never kept from a run the deadline killed, whose body is whatever it had flushed.
+  ACCT_AUTH_BODY=""
   _acct_auth_deadline
   # THE CHEAP QUESTION IS BRACKETED TOO (D-2273). This line runs the LANE'S OWN
   # launcher with the lane's own config dir - the identical mechanism the probe
@@ -9944,6 +9986,7 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
   out="$(_plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
   after="$(_acct_limits_stamp "$id")"
   [ "$before" = "$after" ] || ACCT_LIMITS_TOUCHED=true
+  [ "$rc" -eq 124 ] || ACCT_AUTH_BODY="$out"
   if [ "$rc" -eq 124 ]; then
     # rc 124 is `_plat_timeout`'s own report of expiry (:406-411), and it is a
     # THIRD thing again: neither an answer nor a parse failure. The body is
@@ -10332,9 +10375,12 @@ _acct_check() {
   # it, and it told them not to make the repair. Both paths now end in a helper
   # that asks the flag, and neither asserts what the other measured.
   local stands=""
+  ACCT_SEED_OUT=""
   if [ -z "$ACCT_HEALTH" ]; then
     _acct_probe "$id"
     stands="$(_acct_probe_stands)"
+    # THE SEED STEP, IN-VERB AND AFTER THE PROBE TURN (accounts plan Task A13).
+    _acct_check_seed "$id"
   else
     stands="$(_acct_quick_stands)"
   fi
@@ -10349,7 +10395,17 @@ _acct_check() {
   if [ -n "$verdict" ] && [ -n "$at" ]; then
     _acct_lane_state "$id" --check-verdict "$verdict" --check-at "$at"
   fi
+  # THE IDENTITY, READ OFF THE LANE'S OWN `auth status` (accounts plan Task A13;
+  # spec §3.4): a sign-in lane only, the Anthropic lane whose roster entry names
+  # no secrets file. A token lane's `auth status` cannot name the account the
+  # token was approved as, so nothing is recorded for it. Its own write, so an
+  # identity the writer refuses costs only itself.
+  local email=""
+  [ "$ACCT_PROVIDER" != anthropic ] || [ -n "$ACCT_SECRETS" ] \
+    || email="$(jq -r 'select(.loggedIn == true) | .email | strings' <<<"$ACCT_AUTH_BODY" 2>/dev/null)" || email=""
+  [ -z "$email" ] || _acct_lane_state "$id" --identity "$email" --identity-source measured
   local -a args=(--id "$id" --row "$ACCT_HEALTH" --limits-touched "$ACCT_LIMITS_TOUCHED")
+  [ -z "$ACCT_SEED_OUT" ] || args+=(--seed-answer "$ACCT_SEED_OUT")
   local n=""
   for n in ${ACCT_NOTES[@]+"${ACCT_NOTES[@]}"}; do args+=(--note "$(_acct_note_cap "$n")"); done
   # `_acct_read_op`, NOT `_acct_answer` AND NOT BARE `_acct_node` (D-2210,
@@ -10449,6 +10505,12 @@ cmd_account() {
     enable)
       _acct_enable "$@"
       return 0
+      ;;
+    seed)
+      # `check` runs the same step after its probe turn; this is the CLI verb
+      # `ccrc install` and `ccrc update` share with it (spec §13.3, G1). Every
+      # path inside `_acct_seed` exits.
+      _acct_seed "$@"
       ;;
     disable)
       _acct_disable "$@"
@@ -19303,6 +19365,20 @@ _inst_lane_state() {
   [ "$busy" -eq 0 ] || tail=", $busy left to the account verb acting on it"
   [ "$failed" -eq 0 ] || tail="$tail, $failed not written"
   echo "install: lane-state: wrote $wrote, kept $kept$tail"
+  # THE FIRST-RUN SEED FOR LANES THAT MISS IT (accounts plan Task A13; G1,
+  # D-7731): a lane whose `.claude.json` exists without the onboarding flag is
+  # seeded under its lock (`seed --when unseeded`); one with no file has never
+  # run and its first check seeds it, and a seeded one is left byte for byte.
+  # Advisory, as above; silent when nothing was seeded.
+  local -a lk=() seeded=()
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    ! command -v flock >/dev/null 2>&1 || lk=(flock -n -E 75 "$locks/$id.lock")
+    case "$(${lk[@]+"${lk[@]}"} node "$op" seed --file "$HOME/.ccrc/accounts.json" --id "$id" --when unseeded)" in
+      *'"verifiedAt"'*) seeded+=("$id") ;;
+    esac
+  done <<<"$listed"
+  [ "${#seeded[@]}" -eq 0 ] || echo "install: lane-seed: seeded ${#seeded[@]}"
 }
 
 # ── _inst_installed — the completed-install record, the spine's LAST write ─

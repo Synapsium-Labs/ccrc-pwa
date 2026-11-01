@@ -156,6 +156,17 @@ export function writeLaneState(home: string, args: string[]): Result {
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
+/** A lane the lane state records as ready to enable (accounts plan Task A13): a last check of `ok`, a run, and a seed
+ *  verified after it; and, for a sign-in lane, an identity read off the provider. Written through the one writer. */
+export function markReady(home: string, id: string, opts: { signIn?: boolean } = {}): void {
+  const r = writeLaneState(home, [
+    '--id', id, '--check-verdict', 'ok', '--check-at', '2026-11-01T00:00:00Z',
+    '--last-run-at', '2026-11-01T00:00:00.000Z', '--seed-verified-at', '2026-11-01T00:00:00.001Z',
+    ...(opts.signIn === true ? ['--identity', 'someone@example.invalid', '--identity-source', 'measured'] : []),
+  ]);
+  if (r.code !== 0) throw new Error(`markReady: the lane-state writer refused: ${r.stdout}${r.stderr}`);
+}
+
 /** Every secret temp under `~/.cc-secrets` for one lane. */
 export function secretTemps(home: string, id: string): string[] {
   const d = join(home, '.cc-secrets');

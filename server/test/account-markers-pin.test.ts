@@ -18,6 +18,9 @@
 // `account-health.test.ts` builds one (a stubbed `curl` first on PATH; the endpoint is never reached); the account
 // verbs in `laneStateFixture.ts`'s `laneBox`, as `ccrc-account-kill.test.ts` and `ccrc-account-lock.test.ts` drive
 // them. Nothing here runs ccd, `ccrc account …` or `ccd-account-health` against the live `$HOME`.
+//
+// EVERY `enable` HERE CARRIES `--force` (accounts plan Task A13, D-7731): the marker is this file's subject, and
+// `enable`'s readiness question, which `--force` skips and nothing else, is `ccrc-account-enable-ready.test.ts`'s.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -594,7 +597,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` removes a regular marker and answers its `switched` report', () => {
     const home = box('ccrc-markers-enable-');
     fs.writeFileSync(sw(home), '');
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code, r.stderr).toBe(0);
     expect(report(home, r)).toBe('{"ok":true,"id":"lane-a","disabled":false}\n');
     expect(fs.existsSync(sw(home))).toBe(false);
@@ -605,7 +608,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     const target = path.join(home, 'outside-the-registry');
     fs.writeFileSync(target, 'untouched');
     fs.symlinkSync(target, sw(home));
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code, r.stderr).toBe(0);
     expect(fs.readdirSync(reg(home))).not.toContain('lane-a-disabled');
     expect(fs.readFileSync(target, 'utf8')).toBe('untouched');
@@ -617,7 +620,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` refuses a directory at the marker path (`marker-conflict`) and leaves it', () => {
     const home = box('ccrc-markers-enable-dir-');
     fs.mkdirSync(sw(home));
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(ENABLE_CONFLICT);
     expect(fs.lstatSync(sw(home)).isDirectory()).toBe(true);
@@ -636,7 +639,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` refuses a FIFO at the marker path (`marker-conflict`) and leaves it', () => {
     const home = box('ccrc-markers-enable-fifo-');
     fifo(home);
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(ENABLE_CONFLICT);
     expect(fs.lstatSync(sw(home)).isFIFO()).toBe(true);
@@ -645,7 +648,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` refuses a socket at the marker path (`marker-conflict`) and leaves it, where the box can make one', (ctx) => {
     const home = box('ccrc-markers-enable-sock-');
     if (!socket(home)) ctx.skip();
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(ENABLE_CONFLICT);
     expect(fs.lstatSync(sw(home)).isSocket()).toBe(true);
@@ -655,7 +658,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     const home = box('ccrc-markers-enable-rmfail-');
     fs.writeFileSync(sw(home), '');
     onSwitch(home, 'rm', 'exit 1');
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(refusal('marker-write',
       'could not remove $HOME/.cc-sessions/lane-a-disabled, so the account\'s switch state was left unchanged. Nothing was written.'));
@@ -666,7 +669,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     const home = box('ccrc-markers-enable-rmnoop-');
     fs.writeFileSync(sw(home), '');
     onSwitch(home, 'rm', 'exit 0');
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(refusal('marker-write',
       '$HOME/.cc-sessions/lane-a-disabled remains after removal, so the account\'s switch state was left unchanged. Nothing was written.'));
@@ -751,7 +754,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
       ['add', ADD_C, `${CANARY}\n`],
       ['declare', ['account', 'declare', '--id', 'lane-d', '--provider', 'openai', '--label', 'lane·d', '--hue', 'violet'], ''],
       ['disable', ['account', 'disable', '--id', 'lane-a'], ''],
-      ['enable', ['account', 'enable', '--id', 'lane-a'], ''],
+      ['enable', ['account', 'enable', '--id', 'lane-a', '--force'], ''],
       ['remove', ['account', 'remove', '--id', 'lane-c'], ''],
     ] as const) {
       const r = run(home, [...args], stdin);
@@ -960,7 +963,7 @@ describe('the disabled switch is never projected from the roster (D-7048)', () =
     expect(JSON.parse(set.stdout)).toMatchObject({ ok: false, error: 'unknown-subcommand' });
     expect(run(['account', 'check', '--id', 'lane-b']).code).toBe(0);
     expect(run(['account', 'disable', '--id', 'lane-b']).code).toBe(0);
-    expect(run(['account', 'enable', '--id', 'lane-b']).code).toBe(0);
+    expect(run(['account', 'enable', '--id', 'lane-b', '--force']).code).toBe(0);
     // `add` regenerates `accounts.sh` and converges the wrappers (`install: accounts.sh: generated …`).
     const add = run(['account', 'add', '--id', 'lane-d', '--provider', 'compatible', '--label', 'lane-d·x', '--hue', 'amber',
       '--base-url', 'https://orchard-api/v1', '--credential', '-'], `${CANARY}\n`);
