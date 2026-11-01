@@ -135,7 +135,9 @@ const EXPECTED_SITES: readonly string[] = [
   'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
   'coord/routes.ts | POST /api/mail | readRegistryMeasured | refuses',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistryMeasured | refuses',
-  'coord/routes.ts | attributionVerdict | readRegistryMeasured | refuses',
+  // #1444 (spec §6.2): `attributionVerdict` moved whole out of `registerCoordRoutes` into its own module, the same
+  // reader and the same word; only the file changes.
+  'coord/attribution.ts | attributionVerdict | readRegistryMeasured | refuses',
   'coord/questions.ts | raiseApproval | readRegistry | refuses',
   // W3 Q3f (D-7030; named exception 3): the rule handler's read moved into the claimant's core with its ladder, the
   // same reader and the same word; only the file and the enclosing symbol change.
@@ -409,8 +411,10 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(words('fleet.ts'), 'assembleFleet’s fallback is reached by tests alone').toEqual(['tests-only']);
     expect(words('lifecycle.ts'), 'listProjects reports registry').toEqual(['reports']);
     expect(words('server.ts'), 'GET /api/fleet, then the ws cold start').toEqual(['stale', 'stale']);
-    expect(words('coord/routes.ts'), 'attribution, POST /api/mail and its ack (D-5863), then GET /api/peers and the claims conflict')
-      .toEqual(['refuses', 'refuses', 'refuses', 'reports', 'reports']);
+    // #1444 (spec §6.2): the attribution site moved with `attributionVerdict` into its own module, the same word.
+    expect(words('coord/attribution.ts'), 'attribution (D-5863)').toEqual(['refuses']);
+    expect(words('coord/routes.ts'), 'POST /api/mail and its ack (D-5863), then GET /api/peers and the claims conflict')
+      .toEqual(['refuses', 'refuses', 'reports', 'reports']);
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('server.ts', 'readRegistry').map(where), 'prTasks reads one row (D-6434)').toEqual([]);
