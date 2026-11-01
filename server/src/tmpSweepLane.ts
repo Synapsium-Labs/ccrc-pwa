@@ -8,9 +8,8 @@
 // delivery state) is what makes a restart re-send nothing.
 import path from 'node:path';
 import type { DiskHolder } from '../../shared/disk.js';
-import type { Deps } from './deps.js';
+import type { WatcherDeps } from './deps.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
-import type { CoordStore } from './coord/store.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import { queueSystemMail } from './coord/rundefsTx.js';
 import { survivorOf } from './coord/rundefs.js';
@@ -26,7 +25,7 @@ export interface TmpSweepLaneDeps {
   readonly io: FleetIO;
   readonly ccrcDir: string;
   /** Absent in a coord-less server: the holders are still read, nothing is mailed. */
-  readonly coord: CoordStore | undefined;
+  readonly coord: WatcherCoordPort | undefined;
 }
 
 /** What the lane remembers between passes. Nothing here is the proof a mail was sent (the coord store is). */
@@ -48,7 +47,7 @@ const warnOnce = (state: TmpSweepLaneState, key: string, msg: string): void => {
 };
 
 /** Queue one mail unless this exact (sender, recipient, subject) was ever queued. Throws what the store throws. */
-function mailOnce(coord: CoordStore, toId: string, subject: string, body: string): void {
+function mailOnce(coord: WatcherCoordPort, toId: string, subject: string, body: string): void {
   if (coord.hasMailWithSubject('operator', null, toId, subject)) return;
   queueSystemMail(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body });
 }
@@ -134,7 +133,7 @@ export class TmpCensusBeat {
   private readonly state = newTmpSweepLaneState();
   private named: DiskHolder[] = [];
 
-  constructor(private readonly deps: () => Pick<Deps, 'io' | 'cfg' | 'coord'>) {}
+  constructor(private readonly deps: () => Pick<WatcherDeps, 'io' | 'cfg' | 'coord'>) {}
 
   /** The five largest sessions as the last pass named them: `disk.holders`. Empty until a census reads. */
   holders(): readonly DiskHolder[] { return this.named; }
