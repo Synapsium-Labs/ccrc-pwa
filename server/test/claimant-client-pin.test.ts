@@ -6,10 +6,13 @@
 //
 //   (a) A RECORDING SERVER: for each verb, each state of `~/.ccrc/server-caps` in the fixture HOME, and each body,
 //       what the client sent (method, path, content-type, whether the box token rode, the body bytes). On Q3h's base
-//       every state sent the old door and the caller's body unchanged; since Q3j's behaviour commit the state
-//       "current, lists questions-v1", and only that state, sends the family's door with the row's `kind` spliced
+//       every state sent the old door and the caller's body unchanged; from Q3j's behaviour commit the state
+//       "current, lists questions-v1", and only that state, sent the family's door with the row's `kind` spliced
 //       first (a body naming `"kind":` left alone, no body sent as the kind alone, a non-object body refused by the
-//       client and nothing sent). The bodies are the server's mailed commands, RUN as
+//       client and nothing sent). Since Q3l's behaviour commit (D-7324, D-7328) the old doors are gone and the fail
+//       direction is inverted: EVERY state sends the family that way, but a current, well-formed file that omits
+//       `questions-v1` (it lists the other words, or none, as a server older than the family writes it), which the
+//       client refuses locally, `no-questions-door`, sending nothing. The bodies are the server's mailed commands, RUN as
 //       mailed (the briefs `renderAskBrief` and `renderApprovalBrief` print, read off the mail a real server sends),
 //       `{}`, no `--json` at all, each verb's mailed body with the contrary top-level `kind`, an approval-shaped body
 //       on `asks answer`, and a non-object body. No FIFO at the path: the cap reader blocks on one (D-7339).
@@ -49,15 +52,8 @@ import {
   type Verb, VERBS, withKind,
 } from './claimantClientFixture.js';
 
-/** The old door each verb sends whenever `questions-v1` is not advertised, current and listed. */
-const OLD_DOOR: Record<Verb, (id: string) => string> = {
-  'asks answer': (id) => `/api/asks/${id}/answer`,
-  'asks release': (id) => `/api/asks/${id}/release`,
-  'approvals rule': (id) => `/api/approvals/${id}/rule`,
-  'approvals release': (id) => `/api/approvals/${id}/release`,
-};
-/** The question door family's door each verb sends while it is (D-7322), and the kind the row splices: the row's,
- *  from the template's prefix, never the caller's. */
+/** The question door family's door each verb sends (D-7322; since Q3l, D-7324, the only door), and the kind the row
+ *  splices: the row's, from the template's prefix, never the caller's. */
 const FAMILY_DOOR: Record<Verb, (id: string) => string> = {
   'asks answer': (id) => `/api/questions/ask-${id}/rule`,
   'asks release': (id) => `/api/questions/ask-${id}/release`,
@@ -125,12 +121,14 @@ const DRIVER = '#!/usr/bin/env bash\nset -u\nAPI="$1"; id="$2"; uuid="$3"\n. "$4
 interface Sent { method: string; path: string; contentType: string | null; token: boolean; body: string }
 
 /** Each state the fixture HOME's `~/.ccrc/server-caps` is put in. Never a FIFO (D-7339). */
-type CapState = 'absent' | 'current, lists questions-v1' | 'current, omits questions-v1' | 'stale by 181 s'
-  | '`at` in the future' | 'torn to two lines' | 'a directory';
-/** The one state the family is sent in (D-7326). */
-const ADVERTISED: CapState = 'current, lists questions-v1';
-const CAP_STATES: readonly CapState[] = ['absent', 'current, lists questions-v1', 'current, omits questions-v1', 'stale by 181 s',
-  '`at` in the future', 'torn to two lines', 'a directory'];
+type CapState = 'absent' | 'current, lists questions-v1' | 'current, omits questions-v1' | 'current, lists no words'
+  | 'stale by 181 s' | '`at` in the future' | 'torn to two lines' | 'a directory';
+/** The states the client refuses locally, `no-questions-door`, sending nothing (D-7328): a current, well-formed file
+ *  without `questions-v1`, the other words listed or none (a server older than the caps answer is written as none).
+ *  Every other state sends the family. */
+const REFUSED: ReadonlySet<CapState> = new Set<CapState>(['current, omits questions-v1', 'current, lists no words']);
+const CAP_STATES: readonly CapState[] = ['absent', 'current, lists questions-v1', 'current, omits questions-v1', 'current, lists no words',
+  'stale by 181 s', '`at` in the future', 'torn to two lines', 'a directory'];
 const capFile = (home: string): string => path.join(home, '.ccrc', 'server-caps');
 const putCaps = (home: string, state: CapState): void => {
   const p = capFile(home);
@@ -141,6 +139,7 @@ const putCaps = (home: string, state: CapState): void => {
     case 'absent': return;
     case 'current, lists questions-v1': fs.writeFileSync(p, renderServerCaps(SERVER_CAPS, nowS)); return;
     case 'current, omits questions-v1': fs.writeFileSync(p, renderServerCaps(others, nowS)); return;
+    case 'current, lists no words': fs.writeFileSync(p, renderServerCaps([], nowS)); return;
     case 'stale by 181 s': fs.writeFileSync(p, renderServerCaps(SERVER_CAPS, nowS - 181)); return;
     case '`at` in the future': fs.writeFileSync(p, renderServerCaps(SERVER_CAPS, nowS + 60)); return;
     case 'torn to two lines': fs.writeFileSync(p, renderServerCaps(SERVER_CAPS, nowS).split('\n').slice(0, 2).join('\n') + '\n'); return;
@@ -161,7 +160,7 @@ const bodiesFor = (verb: Verb): ReadonlyArray<readonly [string, string | null]> 
   ['a non-object body', '[]'],
 ];
 
-describe('(a) what the four verbs send, per cap-file state (the old door and the body unchanged, but while questions-v1 is advertised)', () => {
+describe('(a) what the four verbs send, per cap-file state (the family with the kind spliced, but a current file without questions-v1 is refused locally)', () => {
   let home = '';
   let scratch = '';
   let server: Server;
@@ -204,12 +203,11 @@ describe('(a) what the four verbs send, per cap-file state (the old door and the
     seen = [];
     return s;
   };
-  const sentAs = (verb: Verb, id: string, body: string | null, state: CapState): Sent => state === ADVERTISED
-    ? { method: 'POST', path: FAMILY_DOOR[verb](id), contentType: 'application/json', token: true, body: spliced(verb, body) }
-    : { method: 'POST', path: OLD_DOOR[verb](id), contentType: body === null ? null : 'application/json', token: true, body: body ?? '' };
-  /** A run the client refused before sending: `bad-body`, exit 2, no request. */
-  const refusedHere = (r: Run, what: string): void => {
-    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], `${what}: ${r.stdout}${r.stderr}`).toEqual([2, 'bad-body']);
+  const sentAs = (verb: Verb, id: string, body: string | null): Sent =>
+    ({ method: 'POST', path: FAMILY_DOOR[verb](id), contentType: 'application/json', token: true, body: spliced(verb, body) });
+  /** A run the client refused before sending: `code` (`bad-body` or `no-questions-door`), exit 2, no request. */
+  const refusedHere = (r: Run, what: string, code: string): void => {
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], `${what}: ${r.stdout}${r.stderr}`).toEqual([2, code]);
     expect(seen, `${what}: nothing sent`).toEqual([]);
   };
 
@@ -219,7 +217,7 @@ describe('(a) what the four verbs send, per cap-file state (the old door and the
     ]);
   });
 
-  it('each mailed body reaches the server byte for byte, in every cap state', async () => {
+  it('each mailed body reaches the family byte for byte, the kind spliced, in every cap state but the refused ones, which send nothing', async () => {
     const driver = path.join(scratch, 'driver');
     for (const state of CAP_STATES) {
       putCaps(home, state);
@@ -227,26 +225,29 @@ describe('(a) what the four verbs send, per cap-file state (the old door and the
       for (const [i, m] of mailed.entries()) {
         const block = path.join(scratch, `block-${i}`);
         fs.writeFileSync(block, `${m.block}\n`);
-        const s = one(await runClient(home, [CCRC_API, PARENT, uuidOf(PARENT), block], undefined, undefined, driver), `${state} | ${m.verb}`);
+        const r = await runClient(home, [CCRC_API, PARENT, uuidOf(PARENT), block], undefined, undefined, driver);
+        if (REFUSED.has(state)) { refusedHere(r, `${state} | ${m.verb}`, 'no-questions-door'); continue; }
+        const s = one(r, `${state} | ${m.verb}`);
         (seenBodies[m.verb] ??= []).push(s.body);
-        expect(s, `${state} | ${m.verb}`).toEqual(sentAs(m.verb, m.id, s.body, state));
+        expect(s, `${state} | ${m.verb}`).toEqual(sentAs(m.verb, m.id, s.body));
       }
-      expect(seenBodies, state).toEqual(state === ADVERTISED
-        ? Object.fromEntries(Object.entries(MAILED_BODIES).map(([v, bs]) => [v, bs.map((b) => spliced(v as Verb, b))]))
-        : MAILED_BODIES);
+      expect(seenBodies, state).toEqual(REFUSED.has(state)
+        ? {}
+        : Object.fromEntries(Object.entries(MAILED_BODIES).map(([v, bs]) => [v, bs.map((b) => spliced(v as Verb, b))])));
     }
   });
 
-  it.each(VERBS.map((v) => [v, OLD_DOOR[v]('<n>'), FAMILY_DOOR[v]('<n>')] as const))(
-    '%s sends POST %s in every cap state but one, and POST %s while questions-v1 is advertised', async (verb) => {
+  it.each(VERBS.map((v) => [v, FAMILY_DOOR[v]('<n>')] as const))(
+    '%s sends POST %s in every cap state but a current file without questions-v1, which is refused locally', async (verb) => {
       const [group, name] = verb.split(' ') as [string, string];
       for (const state of CAP_STATES) {
         putCaps(home, state);
         for (const [label, body] of [...MAILED_BODIES[verb].map((b, i) => [`mailed body ${i}`, b] as const), ...bodiesFor(verb)]) {
           const args = body === null ? [group, name, '7'] : [group, name, '7', '--json', '-'];
           const r = await runClient(home, args, body ?? undefined);
-          if (state === ADVERTISED && body === '[]') { refusedHere(r, `${state} | ${label}`); continue; }
-          expect(one(r, `${state} | ${label}`), `${state} | ${label}`).toEqual(sentAs(verb, '7', body, state));
+          if (REFUSED.has(state)) { refusedHere(r, `${state} | ${label}`, 'no-questions-door'); continue; }
+          if (body === '[]') { refusedHere(r, `${state} | ${label}`, 'bad-body'); continue; }
+          expect(one(r, `${state} | ${label}`), `${state} | ${label}`).toEqual(sentAs(verb, '7', body));
         }
       }
     });
@@ -327,14 +328,14 @@ describe('(c) the signed ruling, end to end', () => {
     const answer = JSON.parse(got.stdout) as { state: string; ruling: { record: ApprovalRulingRecord; sig: string } };
     expect([approvalRulingBytes(answer.ruling.record), answer.ruling.sig]).toEqual([RULING_RECORD_BYTES, RULING_SIG]);
   });
-  it('approvals rule through the old door, the cap file absent, signs the fixture ruling: the same record bytes and signature (D-7326)', async () => {
+  it('approvals rule with the cap file absent rules through the family, the only door left: the same record bytes and signature (D-7324, D-7328)', async () => {
     const r = await realServer();
-    // No cap file: questions-v1 is not advertised, so the client sends the old door, every non-advertised state's
-    // fallback until the old doors retire.
+    // No cap file: until Q3l the client sent the old door here (D-7326); since the old doors retired, an absent file
+    // sends the family (D-7328's inverted fail direction), and the ruling it signs is the same bytes.
     fs.rmSync(path.join(r.home, '.ccrc', SERVER_CAPS_FILE));
     const doors0 = r.doors().length;
     const ruled = await r.client('approvals rule', [String(r.approval)], json({ ...P, verdict: 'allow', reason: PADDED_REASON }));
-    expect(r.doors().slice(doors0), 'the door the ruling reached').toEqual([`POST /api/approvals/${r.approval}/rule`]);
+    expect(r.doors().slice(doors0), 'the door the ruling reached').toEqual([`POST /api/questions/approval-${r.approval}/rule`]);
     expect([statusOf(ruled), bodyOf(ruled.stdout)]).toEqual([200, '{"ok":true,"state":"allowed"}']);
     const got = await runClient(r.home, ['approvals', 'ruling', String(r.approval), '--nonce', NONCE]);
     const answer = JSON.parse(got.stdout) as { state: string; ruling: { record: ApprovalRulingRecord; sig: string } };
