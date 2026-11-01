@@ -35,7 +35,8 @@ that the design over-reached and cut it back. Where an earlier revision paragrap
   posture on `main`.
 - **R4, one rate service (§6.7).** `server/src/linear/rate.ts` is built once at the composition root and injected into
   the proxy routes, the Settings routes and `resolveTitle`. It owns the per-slot and per-session buckets, the reserve
-  for ccrc's own calls, and the closing of a slot until `Retry-After`. Local complexity budgeting is dropped and
+  for ccrc's own calls (split into a capped request lane and a floor no request can spend), and the closing of a slot
+  until `Retry-After`. Local complexity budgeting is dropped and
   recorded as a known limit. The per-query 10,000-point check stays in the census.
 - **R5, names (§4.4).** A name the directory does not hold answers `name-unknown` with the detail `refreshing` and a
   `Retry-After`, and it queues the background refresher, the same way teams do. The two-call limit has no exceptions.
@@ -334,8 +335,8 @@ asks the one **background refresher** to refresh every slot whose `teamsAt` is m
 refresher is a single queue per server: one slot at a time, each slot at most once in five minutes whatever the number
 of misses, each refresh the §4.1 check (at most two pages), run outside the lock and recorded under it by the digest
 rule. The legacy slot is refreshed the same way once its workspace is learned (§3.4), and its refresh writes only
-`legacy-teams.json`. Its calls are charged to the rate service's reserve for ccrc's own calls (§6.7), never to a
-session.
+`legacy-teams.json`. Its calls are charged to the slot's floor in the rate service (§6.7), never to a session or to
+a request.
 
 The answer tells the session what to do. When the miss started a refresh, or one is already queued or running for a
 slot that could cure it, the detail is `refreshing` and the answer carries `Retry-After: 10`. When every slot was
@@ -357,7 +358,7 @@ in this design.
   hold, or a directory not yet filled, answers `name-unknown` (404) at once with the detail `refreshing` and
   `Retry-After: 10`, and it queues the one background refresher (§4.3), the same way a team miss does. The refresher
   refreshes a slot's directory at most once in ten minutes, whatever the number of misses, and it charges the calls to
-  the reserve for ccrc's own calls (§6.7). When the directory was refreshed inside that window and still lacks the
+  the slot's floor (§6.7). When the directory was refreshed inside that window and still lacks the
   name, the detail is `unknown`. An add, a replace and a Check again also queue a directory refresh. So the two-call
   limit of §6.6 has no exceptions: no directory work happens inside a request.
 - **Pages and the cap.** Each of the four collections is read 250 entries a page, up to 4 pages, so at most 1,000
@@ -629,17 +630,30 @@ The unit is **a Linear call**, not a route: a route takes its worst case (two ca
 from every bucket before its first call and gives back what it did not spend.
 
 - **Per slot: 2,000 calls an hour**, refilled evenly, so 500 of Linear's 2,500 are left to the user's own use of Linear
-  outside ccrc. After a restart a slot's bucket starts at 500, not full, so a crash loop cannot spend an hour's quota in
+  outside ccrc. The 2,000 are three lanes, each its own bucket refilled evenly, and **no lane borrows from another**:
+  the proxy's 1,700 and the 300 reserved for ccrc's own calls, split in two below. After a restart each lane starts at
+  a quarter of its size (425, 25 and 50, so 500 for the slot), not full, so a crash loop cannot spend an hour's quota in
   a minute.
-- **The reserve for ccrc's own calls: 300 of the 2,000.** Ticket titles (§6.10), key checks, and background team and
-  directory refreshes (§4.3, §4.4) are ccrc's own. A proxy call is refused when fewer than 300 remain, so no amount of
-  session traffic takes titles or Check again away. ccrc's own calls may use the whole bucket.
+- **The reserve for ccrc's own calls: 300 of the 2,000, split by who can start the call.** The routes that start a
+  title lookup or the legacy Check again are cookie-gated, and on a box whose sign-in gate is unarmed (`main`'s default)
+  any local caller reaches them with no token (§6.9), so they cannot share a lane with the calls ccrc must always be
+  able to make.
+  - **The request lane: 100 an hour a slot.** The calls a request starts through a cookie-gated route: the title
+    lookups of `GET /api/linear/resolve`, of the workspace create and of the rename (§6.10), and the legacy
+    `POST /api/linear/connection/check`. When it is empty a title is the offline one and the legacy Check again answers
+    `rate-limited` `workspace` with `Retry-After`.
+  - **The floor: 200 an hour a slot.** Background team and directory refreshes (§4.3, §4.4; at most 120 calls an hour
+    a slot inside their windows) and the account-gated key acts of §10.1 (add, replace, check), which the gate refuses
+    while it is unarmed. No cookie-only request and no proxy call can spend it.
+
+  So no amount of proxy traffic takes titles or Check again away, and no amount of tokenless traffic to the cookie
+  routes takes the proxy's 1,700 or the floor away.
 - **Per session: 150 calls an hour** (7.5% of a slot's bucket), with at most 20 in any minute and at most 50 writes an
   hour. It is keyed by the attributed session id and counts calls into every slot. One runaway or prompt-injected
   session therefore spends at most 150 of a user's 2,500 in an hour. A session that holds the box token can present a
   neighbour's id (§1.5) and spend that neighbour's budget too, so the per-session bucket is fairness, not a wall (§6.9).
-  The wall is the slot bucket: however many ids a caller presents, proxy calls into one slot stop at 1,700 an hour, and
-  the reserve and the 500 left outside ccrc are never reachable from a session.
+  The wall is the slot's proxy lane: however many ids a caller presents, proxy calls into one slot stop at 1,700 an
+  hour, and the request lane, the floor and the 500 left outside ccrc are never reachable through the proxy.
 - **Closed until `Retry-After`.** Linear answers a request over its limit with 429 and the `RATELIMITED` code in
   `errors`. `callLinear` gains a `rate-limited` arm, taken for an HTTP 429 and for any `errors` entry whose code is
   `RATELIMITED`, whatever the status. It carries the wait: `Retry-After` when Linear sent one (held to 1 to 3,600
@@ -661,8 +675,9 @@ anything else that user does, Linear itself refuses with 429 or `RATELIMITED`, a
 **Who uses it.** `client.ts` exports what the callers need from it: `callLinear` (unexported today), its outcome type
 with the `rate-limited` arm and its wait, and `FetchLike` with headers. `rate.ts` never calls Linear itself. Each
 caller asks the service before each call (`take`), reports the outcome after it (`settle`, which gives back unspent
-calls and closes the slot on `rate-limited`), and refuses with the service's answer. `resolveTitle` asks as a ccrc call
-and degrades to the offline title when refused. `view.ts#checkOutcomeOf` maps the new `rate-limited` failure to the
+calls and closes the slot on `rate-limited`), and refuses with the service's answer. Each caller names its lane: the
+proxy routes `proxy`, `resolveTitle` and the legacy Check again `request`, the refresher and the account-gated Settings
+routes `floor`. `resolveTitle` degrades to the offline title when refused. `view.ts#checkOutcomeOf` maps the new `rate-limited` failure to the
 `unreachable` outcome, beside `timeout` and `malformed`, so the v1 and v2 records keep their four outcome words.
 
 **The outer limiter.** The existing `@fastify/rate-limit` registration is global and constant-keyed by design
@@ -713,6 +728,14 @@ recorded fixtures during the build, to `rate-limited` (`RATELIMITED`, on any sta
   §1.5's standing, unchanged by this design. Naming neighbours also spends their per-session budgets (§6.7), so that
   budget is fairness between honest sessions, not a bound on a hostile one. The bound on Linear's side is the slot
   bucket, which no number of presented ids can pass, and Linear's own refusal, which closes the slot.
+- **An unarmed box's cookie routes answer any local caller, now across every slot.** With `cfg.authEnabled` false,
+  `main`'s default, `auth/gate.ts` passes every session-gated route, so a local caller with no token and no attribution
+  reaches `GET /api/linear/resolve`, `GET /api/linear/workspaces`, the workspace create, the rename and the legacy
+  Check again. Through them it can read ticket titles in every configured workspace (§6.10; on `main` only the legacy
+  key's workspace) and every slot's names, users, teams and key tail, never a key. It can also empty a slot's request
+  lane (§6.7), so titles go offline and the legacy Check again answers `rate-limited` for up to an hour. It cannot reach
+  the proxy's 1,700 or the floor, so proxy calls, background refreshes and the gated key acts are untouched. The remedy
+  is to arm the sign-in gate; the account-gated Settings routes refuse while it is unarmed.
 - **No local complexity budget.** The rate service counts calls, not complexity points, and does not read Linear's
   remaining-quota headers (§6.7). A burst of expensive reads could reach the user's hourly 3,000,000 points before the
   call bucket runs out, and so could the user's own use of Linear outside ccrc. Linear then refuses with 429 or
@@ -743,7 +766,7 @@ Ticket titles are the card's own purpose (§10.2), so they move to the slots wit
 1. reads the store (`readLinearStore`), the legacy adapter's slot included (§3.4), and routes the ticket's prefix with
    `route.ts` against the recorded teams. It does not refresh on a miss, so a workspace create never waits on extra
    Linear calls;
-2. asks the rate service as a ccrc call, and answers the offline title when it is refused;
+2. asks the rate service in the slot's request lane (§6.7), and answers the offline title when it is refused;
 3. reads the routed slot's key with `readLinearSlotKey` and looks the ticket up with it;
 4. aims the 401 marker (`markLinearRejected`'s rule) and the verdict clearing (`clearLinearVerdict`'s rule) at the
    routed slot, by its id and the digest it used, and for the legacy slot makes today's legacy verdict calls;
@@ -888,7 +911,7 @@ legacy slot's controls (§3.4). `GET /api/linear/resolve` stays.
   the gate without one. Each writes a `linear_events` row (`key-add`, `key-replace`, `key-remove`, `key-check`) with the
   actor the gate minted when it passed (§7). A journal that cannot take the row refuses the act with
   `journal-unavailable`, before any file is touched or Linear is called. Each Linear call they make goes through the
-  rate service as a ccrc call (§6.7), and its pages read the key again (§3.2).
+  rate service in the slot's floor (§6.7), and its pages read the key again (§3.2).
 - **The legacy routes keep `main`'s posture.** `GET`, `PUT`, `POST …/check` and `DELETE` on `/api/linear/connection`
   keep their gates and their answers, and they write no journal row. The only change behind them is the Check again
   query, which also records `legacy-teams.json` (§3.4).
@@ -1092,7 +1115,7 @@ Each row starts red: written before the code, it fails on `main`, and a mutation
 | 5 | `linear-proxy-auth.test.ts` | run twice, with `cfg.authEnabled` false and with it true: each of the twelve routes refuses without the token, with a wrong one, with an unknown sender and with a stale uuid, before any Linear call (the fetch seam records none); a valid session cookie and no token is refused the same way; the token and identity checks run in `onRequest` on all twelve, the four POSTs included, reading identity from the query; a POST with no identity in its query and a valid-looking `byId` in its body is `bad-request`; a repeated `byId` query key is `bad-request`; 1201 tokenless calls to one route, then a tokened call still succeeds | drop the token check on one route; move the token check into the handler; read `byId` from the body; wrap the check in `authEnabled`; accept a cookie in place of the token |
 | 6 | `linear-proxy-routes.test.ts` | each verb's happy path against recorded fixtures; failure words and statuses (§6.8) | map a Linear 401 to `not-found` |
 | 7 | `linear-proxy-deadline.test.ts` | eight seconds a call, twenty a route; no second call when less than eight seconds remain, answered `timeout` `not-sent` with a `refused` row; a write timeout after sending answers `unknown` in the journal. **Refresh, then write:** on a box with three slots whose teams are stale, an `update` whose prefix misses answers `team-unknown` `refreshing` in under a second with no Linear call and no journal row, while the slow fake (eight seconds a page) refreshes in the background; the retry after the refresh lands routes, makes at most two Linear calls and answers inside twenty seconds. The same holds for a name miss on a cold directory | raise the route budget past thirty; run the refresh inside the call; fill the directory inside the resolve |
-| 8 | `linear-rate.test.ts` | the budgets against `LINEAR_QUOTA`: the slot bucket (2,000 an hour) is below the 2,500 requests Linear gives a user, with at least 500 left over; the reserve (300) is below the bucket; the per-session bucket (150 an hour, 20 a minute, 50 writes) is under a tenth of the slot bucket; a route takes its worst case and returns the rest. A session at its limit gets `rate-limited` `session`; twenty sessions together cannot take a slot below its reserve, so a title lookup and a Check again still run; ids of ten neighbours give at most the slot's 1,700 proxy calls. A Linear 429, and a `RATELIMITED` code on a 200 and on a 400, close the slot until `Retry-After` (then the reset header, then sixty seconds), and no call reaches the fake until then, a title lookup and a Check again included; a restart starts the slot at 500. **One instance:** a census finds exactly one construction of the service, in `index.ts`, and the proxy routes, the Settings routes, the legacy Check again route, the refresher and `resolveTitle` all receive it, so a call through any of them spends the same slot bucket | share one bucket across sessions; size the slot bucket at 600 a minute; map `RATELIMITED` to `unreachable`; keep calling a closed slot; build a second service for `resolveTitle` |
+| 8 | `linear-rate.test.ts` | the budgets against `LINEAR_QUOTA`: the slot bucket (2,000 an hour) is below the 2,500 requests Linear gives a user, with at least 500 left over; the proxy lane (1,700), the request lane (100) and the floor (200) sum to the slot bucket and none borrows from another; the per-session bucket (150 an hour, 20 a minute, 50 writes) is under a tenth of the slot bucket; a route takes its worst case and returns the rest. A session at its limit gets `rate-limited` `session`; twenty sessions together cannot spend the request lane or the floor, so a title lookup and a Check again still run. **Tokenless callers:** on an `authEnabled=false` box, 150 tokenless, cookieless `GET /api/linear/resolve` calls for one slot's tickets, then 10 legacy `POST /api/linear/connection/check` calls, spend only the request lane (past 100 the title is offline and the check answers `rate-limited`), while a background refresh still runs from the floor and the slot's proxy lane still holds its 1,700; ids of ten neighbours give at most the slot's 1,700 proxy calls. A Linear 429, and a `RATELIMITED` code on a 200 and on a 400, close the slot until `Retry-After` (then the reset header, then sixty seconds), and no call reaches the fake until then, a title lookup and a Check again included; a restart starts the slot at 500 (425, 25 and 50). **One instance:** a census finds exactly one construction of the service, in `index.ts`, and the proxy routes, the Settings routes, the legacy Check again route, the refresher and `resolveTitle` all receive it, so a call through any of them spends the same slot bucket | share one bucket across sessions; size the slot bucket at 600 a minute; map `RATELIMITED` to `unreachable`; keep calling a closed slot; build a second service for `resolveTitle`; charge a preview title to the floor; let the request lane borrow from the proxy lane |
 | 9 | `linear-journal.test.ts` | pending, then outcome; a journal failure refuses with no Linear call; denial and refusal rows; no free-text column; `result` holds a created issue's identifier and a created comment's id and nothing else; a read marks a journaled issue and comment `viaFleet: true` and others `false`; each slot key act writes its row with the gate's actor, and a journal failure refuses the act with no file touched and no Linear call; the legacy routes write no row; the 365-day sweep | call Linear before the insert; write the key before the row; drop the comment id from `result` |
 | 10 | `linear-policy.test.ts` | allow-all default; deny gives 403 and a row; throw, timeout or a bad shape give 503 and a row; reads skip it. **Moved issue:** `update AAA-12` where Linear answers the issue in team `BBB` answers `issue-moved` with the current identifier, asks no policy and sends no mutation; the retry with that identifier asks with `teamKey: BBB` and the journal row says `BBB`. **Cross-team parent:** `create` in team `AAA` with a parent in `BBB` asks with `parentTeamKey: BBB`; a recording policy that denies it gives 403 and no mutation. The resolve and the operation stay within two Linear calls | fail open on throw; build `teamKey` from the prefix; drop `parentTeamKey` |
 | 11 | `linear-remove-stops.test.ts` | a delete, then the next call answers `not-configured`; no other slot is chosen; a replace takes effect on the next call; a remove during a key check or a refresh stops it at its next page and records nothing. With the legacy key serving W and a file slot for W: the file slot is used; after the file slot is removed, the legacy slot serves W again; after the legacy row's Disconnect, the next call answers `not-configured` | cache the key for one call; read the key once per check |
@@ -1114,9 +1137,11 @@ Each row starts red: written before the code, it fails on `main`, and a mutation
   lanes" to fifty and from "All forty-one" to fifty-three. `box-token-census.test.ts` reads `linear/proxyRoutes.ts` as a
   lane source.
 - `auth-gate.test.ts`: the files that register routes become seven (`linear/proxyRoutes.ts` joins). `linear/routes.ts`
-  stays five routes, with new names. The total route count rises by twelve, and the set is checked both ways.
-- `secret-mask.test.ts`: entries for `/api/linear/workspaces` and the twelve proxy routes; the `/api/linear/connection`
-  entry is removed.
+  goes from five routes to nine: the four `/api/linear/workspaces` routes join `GET /api/linear/resolve` and the four
+  `/api/linear/connection` routes, which keep their names (§10.1). The total route count rises by sixteen (the twelve
+  proxy routes and the four Settings routes), and the set is checked both ways.
+- `secret-mask.test.ts`: entries for `/api/linear/workspaces` and the twelve proxy routes are added; the
+  `/api/linear/connection` entry stays unchanged, because those routes still answer the legacy view.
 - `refusal-status.test.ts`: the new words (§6.8), `issue-moved` among them, and `workspace-exists`.
 - The redactor's profile census: `PROFILES` has three entries, and `linear-egress` is listed wherever the profiles are
   counted.

@@ -104,7 +104,11 @@ argues it is named in each entry. Measured on `origin/main` `46da405e2`.
   `server/src/linear/rate.ts`, built once by the composition root and injected into the proxy routes, the Settings
   routes and `resolveTitle`. It owns the per-slot and per-session buckets, the reserve for ccrc's own calls and the
   closing of a slot until `Retry-After`. The local complexity budget and the refusals on Linear's reported remaining
-  quota are dropped and recorded as a known limit; the per-query 10,000-point cap stays in the census.
+  quota are dropped and recorded as a known limit; the per-query 10,000-point cap stays in the census. Closing fix
+  (spec §6.7, §6.9): the 300 reserved for ccrc's own calls split into a request lane of 100 an hour a slot, for the
+  title lookups and the legacy Check again that cookie-gated routes start, and a floor of 200 that only background
+  refreshes and the account-gated key acts spend, so tokenless callers on an unarmed box cannot reach the proxy's
+  1,700 or the floor; that such callers read titles and slot views across every slot is a known limit.
 - **D-7671 (2026-10-31)** — `linear-write-journal`: every proxy write and every key act is journaled in a new coord.db
   table, `linear_events`, which has one writer (`server/src/linear/journal.ts`, modelled on `AccountAudit`) (spec §7).
   A write's row is inserted as `pending` before Linear is called. Its outcome (`ok`, `refused`, `denied`, `failed` or
