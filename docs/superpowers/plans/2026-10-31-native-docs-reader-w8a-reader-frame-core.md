@@ -1886,7 +1886,7 @@ Task 11 (the held-out review's fixes):
 
 ### Named, without a number
 
-These were judged fills of a silence or choices of measurement, not departures from a spec sentence: the vitest `css` include line for `.css?raw` imports (Task 7); `w7-storage-keys`' red at Task 7 was a whole-file import failure, not the plan's predicted case (the rows carry the red); Task 10's pre-ready navigate clause is driven from the parent's end of the port (W8A-T10-M9), because a Playwright init script reaches the srcdoc frame early in some loads and late in others.
+These were judged fills of a silence or choices of measurement, not departures from a spec sentence: the vitest `css` include line for `.css?raw` imports (Task 7); `w7-storage-keys`' red at Task 7 was a whole-file import failure, not the plan's predicted case (the rows carry the red); Task 10's pre-ready navigate clause is driven from the parent's end of the port (W8A-T10-M9), because a Playwright init script reaches the srcdoc frame early in some loads and late in others; and `pageStorage` is retyped to return the enumerable port, with `enumerablePageStorage` delegating to it (Task 11's one guard body): the same store, no behaviour change.
 
 ### Carried, not fixed
 
@@ -1901,6 +1901,8 @@ These were judged fills of a silence or choices of measurement, not departures f
 - The frame's click net cannot see a non-composed click inside a shadow root; only library code can make one (raw HTML is off), and the sandbox is the wall (W8A-T10-M8).
 - Only Chromium is measured; the phone steps E17 and E18 follow rollout.
 - Fixed waits before "nothing happened" checks in the jsdom and browser tests; one jsdom case matches vitest's own mocking error text.
+- `docs/reader/policy.ts` (L1) imports a type from `DocLink.tsx` and `docLinkTarget` from `docsLinks.ts`, which reaches a hook module; the fix needs those two files, outside this wave's edit list. The adapter-import scan lets any file under `docs/reader/` import `/frame`.
+- Browser-battery control gaps, for W8b beside E17 and E18: no row reds the M8.B1 meta-only assertion itself (the planted rows red through the boot gate); the `parent.postMessage` navigate case has no control; and the battery's `iframe` channel cannot tell the frame's policy from the shell's inherited `frame-src 'none'`.
 
 ## Where things stand
 
