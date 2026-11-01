@@ -13,6 +13,7 @@ import { REGIONS } from '../../../shared/hook-helpers.mjs';
 import {
   capReaderCalls, capReaderDefinitions, clientClaimantRows, clientOldOnlyRows, OLD_CLAIMANT_DOORS, serverClaimantDoors,
 } from './claimant.js';
+import { questionDoors } from './questions.js';
 
 const show = (name: string, sites: readonly CensusSite[]): void => {
   console.log(`census ${name}: ${sites.length}\n${sites.map((s) => `  ${s.file}:${s.line}  ${s.text.trim()}`).join('\n')}`);
@@ -153,9 +154,14 @@ describe('the claimant client census (D-7320)', () => {
   it('REAL, pinned since Q3l: client rows on an old claimant door: exactly 0 (D-7324)', () => {
     expect(clientClaimantRows().map((r) => r.key)).toEqual([]);
   });
-  // Q3l's last alias deletion leaves the family's two: 6 -> 2 (D-7324).
+  // Q3l's last alias deletion leaves the family's two: 6 -> 2 (D-7324). A door-shaped POST whose tag row Q3l removed
+  // reads `untagged`, not `claimant`, so the row also counts every door that is not the operator's or navigation: an
+  // alias left registered is a third door here, whatever its tag.
   it('REAL, pinned since Q3l: claimant doors: exactly 2, the family\'s rule and release (D-7324)', () => {
-    expect(serverClaimantDoors().map((d) => d.route)).toEqual(['POST /api/questions/:id/rule', 'POST /api/questions/:id/release']);
+    const FAMILY = ['POST /api/questions/:id/rule', 'POST /api/questions/:id/release'];
+    expect(serverClaimantDoors().map((d) => d.route)).toEqual(FAMILY);
+    expect(questionDoors().filter((d) => d.tag !== 'operator' && d.tag !== 'navigation').map((d) => `${d.route} ${d.tag}`))
+      .toEqual(FAMILY.map((r) => `${r} claimant`));
   });
   // Q3l re-pointed the guard from `$family` (the fifth field it removed) to `$claimant`, the row test it wrote (D-7324;
   // named exception): still one call, for the four claimant rows only.
