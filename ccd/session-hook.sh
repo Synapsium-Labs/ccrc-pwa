@@ -422,17 +422,17 @@ _hook_graph_card() {
     # its census carries one — a session that knows the tree was REFUSED does
     # not go hunting for a graph that is never going to appear. The census is
     # `{passes:[…]}`, last 10, newest LAST.
-    # A pass holding `repos[]` (graph revision 2 spec §7, D-7351) is read by the
+    # The pass's `repos[]` (graph revision 2 spec §7, D-7351) is read by the
     # repository: the row whose `source` is the realpath of this tree's common
-    # dir, so every worktree and the main checkout share it. A pass of the old
-    # shape, which the sweep writes until its rewrite (GR4), is still read by
-    # path, so a tree the old sweep refused keeps its reason meanwhile.
+    # dir, so every worktree and the main checkout share it. A last pass with
+    # no `repos[]` (one the sweep stopped before any repository, or none at
+    # all) says nothing about this tree, so it gives no line (GR7, D-7353: the
+    # per-tree arm kept for the sweep's rewrite is retired with it, GR4 being live).
     gcd=$(git -C "$GM_CWD" rev-parse --git-common-dir 2>/dev/null) || gcd=""
     [ -z "$gcd" ] || src=$(cd -- "$GM_CWD" >/dev/null 2>&1 && cd -- "$gcd" >/dev/null 2>&1 && pwd -P) || src=""
-    row=$(jq -r --arg p "$GM_CWD" --arg s "$src" \
+    row=$(jq -r --arg s "$src" \
       '(.passes // []) | last | (. // {})
-       | if has("repos") then [(.repos // [])[] | select($s != "" and .source == $s)]
-         else (.trees // []) | map(select(.path == $p)) end
+       | [(.repos // [])[] | select($s != "" and .source == $s)]
        | map(select((.reason // "") != ""))
        | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
       "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""

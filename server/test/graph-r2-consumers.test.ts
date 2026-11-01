@@ -66,12 +66,10 @@ const censusReaders = (files: Map<string, string>): ReaderRow[] => {
  *  empties this object, and the row then reads "absent everywhere" (the test
  *  below asserts no file reads `trees` at all once this is `{}`). */
 const TREES_CEILING: Record<string, number> = {
-  // GR4 (D-7350): the sweep writes repos[] and no per-tree array (1 -> 0, so it moved to NAMES_ONLY), and the per-tree
-  // sweep's test file is gone (22 -> 0); session-hook.test.ts's sweep-writer fixture reads the repository rows now
-  // (2 -> 1: its hand-written old-shape pass, which the hook still reads, stays).
-  // GR7 (D-7353): the doctor's fixtures are repository rows (12 -> 0 and 1 -> 0) and `_check_graphify` reads
-  // `.passes[-1].repos[]` (5 -> 0), so all three moved to NAMES_ONLY.
-  'ccd/session-hook.sh': 1,
+  // GR4 (D-7350) took the sweep (1 -> 0) and its per-tree test file (22 -> 0); GR7 (D-7353) took the doctor (5 -> 0)
+  // and its two fixture files (12 -> 0, 1 -> 0) and retired the hook's old-shape arm (1 -> 0). No code reads trees[].
+  // The one row left is a NEGATIVE fixture, not a reader: session-hook.test.ts seeds a retired per-tree row for the
+  // session's own path and asserts the card prints nothing from it, the retirement's red-first proof (1 -> 1).
   'server/test/session-hook.test.ts': 1,
 };
 /** Files that name the census and read no per-tree row: documentation of the
@@ -83,6 +81,7 @@ const TREES_CEILING: Record<string, number> = {
 const NAMES_ONLY = [
   'ccd/ccd-graph-sweep',                            // the writer (GR4: repos[] only)
   'ccd/ccrc-doctor-checks',                         // _check_graphify reads .passes[-1].repos[] (GR7, D-7353)
+  'ccd/session-hook.sh',                            // the card's census line reads repos[] alone (GR7)
   'README.md',
   'server/test/ccrc-doctor-graphify.test.ts',       // GR7's rows are repos[] fixtures (D-7353)
   'server/test/ccrc-doctorFixture.ts',              // healthy()'s census is a repos[] pass (GR7)
