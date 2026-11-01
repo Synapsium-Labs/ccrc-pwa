@@ -83,6 +83,17 @@ type Ask =
 
 const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0 };
 
+/** The pending fragment as the frame's `initialHash`: the address bar holds it percent-encoded, and the frame matches
+ *  decoded ids. A malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
+function decodedFragment(fragment: string | null): string | null {
+  if (fragment === null) return null;
+  try {
+    return decodeURIComponent(fragment);
+  } catch {
+    return fragment;
+  }
+}
+
 /** What was thrown, for the console only: an error's name and message, else its type. */
 function reasonOf(e: unknown): string {
   return e instanceof Error ? `${e.name}: ${e.message}` : typeof e;
@@ -258,7 +269,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           result: outcome.result,
           scan: { mermaid: outcome.mermaid },
           images: images.urls,
-          initialHash: cur.props.pendingFragment,
+          initialHash: decodedFragment(cur.props.pendingFragment),
           // The W8a plan's refinement (k): the commit a committed doc was read at, or the head a draft was read over with its flag.
           // The adapter keeps this only for a full hex sha (`withServedVersion`).
           version: cur.props.show.source === 'draft'

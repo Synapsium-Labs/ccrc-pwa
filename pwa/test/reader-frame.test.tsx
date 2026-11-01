@@ -263,6 +263,16 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     await waitFor(() => expect(h.consumed).toHaveBeenCalledTimes(1));
   });
 
+  it('F1: a percent-encoded fragment is decoded before the frame is seeded; a malformed escape stays raw', async () => {
+    const h1 = harness();
+    render(frame(h1, { pending: 'caf%C3%A9' }));
+    expect((await ready(h1)).document.initialHash).toBe('café');
+    cleanup();
+    const h2 = harness();
+    render(frame(h2, { pending: '%E0%A4%A' }));
+    expect((await ready(h2)).document.initialHash).toBe('%E0%A4%A');
+  });
+
   it('refinement (k): a committed doc reaches the mount with its commit and no draft flag, a draft with its head and the flag', async () => {
     const commit = 'a'.repeat(40);
     const head = 'b'.repeat(40);
