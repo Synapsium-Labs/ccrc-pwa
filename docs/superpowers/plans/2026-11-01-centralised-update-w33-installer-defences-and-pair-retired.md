@@ -11,7 +11,7 @@ The third gap is out of this wave, along with two related items:
 - **The `stable` ruleset.** It lacks "Require linear history". The operator ruled on 2026-11-01 that the narrower rule stands (Reading 2).
 - **R48's two related gaps** go to the programme's follow-up issue (Reading 3).
 
-The deviation block is D-7719 to D-7726. Every citation below is `path:line` at `origin/main` `19bfcd704`, read with `git show 19bfcd704:<path>` (the audit read `6ad9d0f60`; every cited file is unchanged between the two except `server/src/server.ts`, whose cited lines did not move). The worker re-reads each one in the landed text before the task that edits it.
+The deviation block is the numbers 7719 to 7726. Every citation below is `path:line` at `origin/main` `19bfcd704`, read with `git show 19bfcd704:<path>` (the audit read `6ad9d0f60`; every cited file is unchanged between the two except `server/src/server.ts`, whose cited lines did not move). The worker re-reads each one in the landed text before the task that edits it.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking. The dispatched worker runs it under the `ccrc-worker` skill.
 
@@ -118,7 +118,7 @@ Waves 2 and 3 made `builds` a view derived from the inventory rows and moved the
 
 ## Deviations found
 
-Block D-7719 to D-7726, issued 2026-11-01 for this wave. Define a number only where this plan's text is departed from, and only from this block.
+Block 7719 to 7726, issued 2026-11-01 for this wave. Define a number only where this plan's text is departed from, and only from this block.
 
 ## As built
 
@@ -182,4 +182,4 @@ Two first choices were weak and were replaced: row 17 first survived because the
 
 ### Deviations
 
-None of the block D-7719 to D-7726 was used.
+None of the block 7719 to 7726 was used. Its three mentions in this plan are written without the `D-` prefix (the operator's answer to a structured ask, 2026-11-01): `server/test/deviation-refs.test.ts` reds on any D-ref above the highest defined entry, and this wave defines none.
