@@ -10,28 +10,27 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (162, with #1614's `delegationRunStamps`): on `main` every reach is
+/** The members reached through the whole store (159, with #1614's `delegationRunStamps`): on `main` every reach is
  *  whole. Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'absorbParkEscalation', 'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById',
   'autoContinueHeldUntil', 'backOff', 'baselineParkBox', 'bindingRunsOf', 'bindingsOf', 'bumpReplayCount',
   'cancelDeliveriesTo', 'checksRows', 'childReclaimCoordinatorClaims', 'childReclaimSessionIds', 'childStaleActivity',
-  'claimDigestDay', 'closeRun', 'commitDeadCoordinatorBreakerState', 'coordPlacementStamps', 'currentAskFor',
-  'currentAsksFor', 'currentEpisode', 'db', 'deadAnchors', 'deadCoordinatorBreakerHeldLatest',
-  'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows', 'declineApproval', 'declineAsk',
-  'delegationEventStats', 'delegationRunStamps', 'deliveredUnacked', 'delivery', 'digestApprovals', 'digestAsks',
-  'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
-  'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows',
-  'dueDeliveries', 'firstMailIdWithPrefix', 'foldPrLineage', 'hasMailWithSubject', 'hasNotice', 'hasOutstandingMail',
-  'heldApprovalRowsByChild', 'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'holdParked', 'ingestJournal',
-  'insertApproval', 'insertAsk', 'insertDelegationEvents', 'insertMail', 'insertObservation',
-  'insertStallObservation', 'intentFor', 'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
-  'laterReviewClosedFor', 'ledgerFloor', 'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor',
-  'lifecycleGapGens', 'lifecycleLeafEndsFor', 'lifecycleReclaimRowsSince', 'lifecycleStats', 'mailOrigin',
-  'mailQueuedSince', 'markApprovalOperator', 'markApprovalOperatorRows', 'markDeadCoordinatorBreakerDirty',
-  'markDelivered', 'markDriftPushed', 'markDriftShadowed', 'markIngested', 'markLanded', 'markParkEscalated',
-  'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns', 'node',
-  'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteGate', 'noteLeaseDetail', 'openAllocations',
+  'claimDigestDay', 'closeRun', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode', 'db',
+  'deadAnchors', 'deadCoordinatorBreakerHeldLatest', 'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows',
+  'declineApproval', 'declineAsk', 'delegationEventStats', 'delegationRunStamps', 'deliveredUnacked', 'delivery',
+  'digestApprovals', 'digestAsks', 'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview',
+  'driftFindingRows', 'driftFindingsOpenAt', 'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries',
+  'driftPushesOnDay', 'driftStallToldRows', 'dueDeliveries', 'firstMailIdWithPrefix', 'foldPrLineage',
+  'hasMailWithSubject', 'hasNotice', 'hasOutstandingMail', 'heldApprovalRowsByChild', 'heldApprovalsFor',
+  'heldAskFor', 'heldQuestionRows', 'holdParked', 'ingestJournal', 'insertApproval', 'insertAsk',
+  'insertDelegationEvents', 'insertMail', 'insertObservation', 'insertStallObservation', 'intentFor',
+  'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession', 'laterReviewClosedFor', 'ledgerFloor',
+  'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor', 'lifecycleGapGens', 'lifecycleLeafEndsFor',
+  'lifecycleReclaimRowsSince', 'lifecycleStats', 'mailOrigin', 'mailQueuedSince', 'markApprovalOperator',
+  'markApprovalOperatorRows', 'markDelivered', 'markDriftPushed', 'markDriftShadowed', 'markIngested', 'markLanded',
+  'markParkEscalated', 'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns',
+  'node', 'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteGate', 'noteLeaseDetail', 'openAllocations',
   'openCoordinatorIds', 'outstandingMailFor', 'parkDelivery', 'parkedDeliveries', 'poolEpoch', 'programOpenRunCount',
   'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions',
   'queueDelivery', 'raiseLedgerFloor', 'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap',
@@ -41,8 +40,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
   'setDeliveryEnvelope', 'setSession', 'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
   'stallCandidates', 'stallMailFor', 'stallSettings', 'stalledDispatchRunIds', 'strandedClear', 'takeApprovalForRule',
-  'takeAskForAnswer', 'unlandedBriefs', 'unsealDeadCoordinatorBreakerState', 'untakeAsk', 'updateEpoch',
-  'upsertNodeMeasurement', 'wakeParked',
+  'takeAskForAnswer', 'unlandedBriefs', 'untakeAsk', 'updateEpoch', 'upsertNodeMeasurement', 'wakeParked',
 ];
 
 /** Each whole hand-off key (38) with its call-site count (42 in all), sorted by key. */

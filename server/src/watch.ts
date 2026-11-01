@@ -5796,7 +5796,7 @@ export class FleetWatcher {
   /** The sealed start's first act (D-4916, R1.5): write `clean` back over the same snapshot, generation-checked, BEFORE any
    *  step of the pass can change state or act. Retried each pass until it lands; a failure is said once. A write of this
    *  process has landed when it does. */
-  private unsealDeadCoordinatorBreaker(coord: CoordStore): void {
+  private unsealDeadCoordinatorBreaker(coord: WatcherCoordPort): void {
     const gen = this.deadCoordinatorBreakerGeneration;
     const w = gen === null ? null : coord.unsealDeadCoordinatorBreakerState(gen);
     if (w?.ok === true) {
@@ -6081,7 +6081,7 @@ export class FleetWatcher {
    *  the lowest open run a member coordinates; for an empty set, the run the last record sits on, else a run any claimant
    *  in the population (the members `before` the change first) coordinates; with none, the table alone carries it. */
   private commitDeadCoordinatorBreaker(
-    coord: CoordStore, next: readonly DeadCoordinatorBreakerMember[], upserts: readonly (readonly [string, DeadAnchor])[],
+    coord: WatcherCoordPort, next: readonly DeadCoordinatorBreakerMember[], upserts: readonly (readonly [string, DeadAnchor])[],
     deletes: readonly string[], ids: readonly string[], before: readonly DeadCoordinatorBreakerMember[],
   ): 'unchanged' | 'unseal-pending' | 'mark-failed' | 'commit-failed' | 'committed' {
     const key = deadCoordinatorBreakerHeldKey(next);
