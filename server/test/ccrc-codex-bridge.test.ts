@@ -385,11 +385,34 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect([st['mode'], st['upstream']]).toEqual(['direct', 'backend']);
     expect(st['bridge']).toEqual({
       statsAt: doc.updatedAt, lastUpstreamRequestId: 'req_fx1', refusals: doc.refusals, outcomes: doc.outcomes,
-      unexplained: doc.unexplained,
+      unexplained: doc.unexplained, store: null,
     });
     expect((st['tiers'] as Record<string, unknown>)['bridge']).toEqual(STOPPED);
     fs.writeFileSync(join(laneDir(home, 'codex-a'), 'bridge.stats.json'), 'not json');
     expect(statusJson(home)['bridge']).toBeNull();
+  }, 60_000);
+
+  it('status --json names the stats file\'s store entry under bridge.store, null when the file has none (D-7677)', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const file = join(laneDir(home, 'codex-a'), 'bridge.stats.json');
+    const store = {
+      state: 'disabled', reason: 'store:DatabaseError', at: '2026-10-24T09:05:00.000Z',
+      setAside: { at: '2026-10-24T09:00:00.000Z', found: 'integrity-check', file: 'reasoning.sqlite.damaged-20261024T090000Z' },
+    };
+    const doc = {
+      version: 1, lane: 'codex-a', since: '2026-10-20T00:00:00.000Z', startedAt: '2026-10-24T09:00:00.000Z',
+      updatedAt: '2026-10-24T10:00:00.000Z', routes: {}, refusals: {}, outcomes: { 'store:DatabaseError': 1 },
+      names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null, store,
+    };
+    fs.writeFileSync(file, JSON.stringify(doc), { mode: 0o600 });
+    expect((statusJson(home)['bridge'] as Record<string, unknown>)['store']).toEqual(store);
+    // No `store` key: a bridge that predates the entry, which reads null, never `ok`.
+    const { store: _dropped, ...older } = doc;
+    fs.writeFileSync(file, JSON.stringify(older), { mode: 0o600 });
+    const bridge = statusJson(home)['bridge'] as Record<string, unknown>;
+    expect(bridge).not.toBeNull();
+    expect(bridge['store']).toBeNull();
+    expect(bridge['statsAt']).toBe(doc.updatedAt);
   }, 60_000);
 
   it('removal reaps the bridge files, the markers and the recordings directory', async () => {
@@ -416,6 +439,28 @@ describe.skipIf(!PY)('ccrc codex: the bridge tier (codex bridge Stage 2, Task 11
     expect(fs.lstatSync(join(d, 'recordings')).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(join(elsewhere, 'keep.sse'), 'utf8')).toBe('event: fixture\n\n');
     expect(fs.existsSync(join(d, 'lane.json'))).toBe(false);
+  }, 60_000);
+
+  // Fix round 3, F1: the store's set-aside copy (D-7676) holds the lane's encrypted reasoning as the store does, so
+  // removal reaps it with its -wal and -shm, keyed on lane.json's store name and store.py's stamp shape. A look-alike
+  // of another name or another stamp is left, as every file the reap does not own is, so the directory stays.
+  it('removal reaps the store\'s set-aside copy with its -wal and -shm, and leaves a look-alike', async () => {
+    const { home } = await bridgeBox({ userManager: false });
+    const d = laneDir(home, 'codex-a');
+    const copy = 'reasoning.sqlite.damaged-20261024T090000Z';
+    for (const f of [copy, `${copy}-wal`, `${copy}-shm`]) fs.writeFileSync(join(d, f), 'fixture\n');
+    const r = lib(home, '_codex_reap_files codex-a; echo "rc=$?"');
+    expect(r.stdout, r.stderr).toBe('rc=0\n');
+    expect(fs.existsSync(d), fs.existsSync(d) ? fs.readdirSync(d).join(' ') : '').toBe(false);
+    const again = lib(home, '_codex_lane_json_ensure codex-a');
+    expect(again.code, again.stderr).toBe(0);
+    const alike = ['bridge.stats.json.damaged-20261024T090000Z', 'other.sqlite.damaged-20261024T090000Z',
+      'reasoning.sqlite.damaged-2026102T090000Z', 'reasoning.sqlite.damaged-20261024T09000Z', `${copy}-x`, `x${copy}`,
+      'reasoning.sqlite.damaged-'];
+    for (const f of alike) fs.writeFileSync(join(d, f), 'fixture\n');
+    const r2 = lib(home, '_codex_reap_files codex-a; echo "rc=$?"');
+    expect(r2.stdout, r2.stderr).toBe('rc=0\n');
+    expect(fs.readdirSync(d).sort()).toEqual([...alike].sort());
   }, 60_000);
 
   // PLATFORM-ONLY: the instrument is systemd-run's argv (the unit's --setenv pairs), and darwin's nohup arm leaves no

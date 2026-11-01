@@ -2314,7 +2314,19 @@ else `unrecognised`) and those it does not know, the upstream request id of its 
 values of the last reply, kept only in the numeric shape the usage poll reads. It never holds a request or reply body,
 a token, any message content, or any other header value (the reply's media type is counted as a name,
 `content-type:<type>`). The store holds the upstream's encrypted reasoning items under
-hashed keys, nothing else, for 14 days and at most 256 MB, the oldest evicted first. `ccrc codex status <id> --json`
+hashed keys, nothing else, for 14 days and at most 256 MB, the oldest evicted first. At each start the bridge runs
+sqlite's `integrity_check` on the store: a damaged one is renamed `reasoning.sqlite.damaged-<UTC stamp>`, its `-wal`
+and `-shm` beside it, only the newest such copy is kept, and a fresh store is made, so only the model's earlier
+reasoning is lost. A store that cannot be used otherwise (a failure while the bridge runs, or a locked file at the
+start) is switched off for the rest of that process: every request is answered without earlier reasoning replayed,
+until the next start checks it again. The stats file's `store` entry says which, for the process that wrote it: `ok`,
+`set-aside` or `disabled`, with the reason and time (a file with no entry is from a bridge that predates it, never
+`ok`); `ccrc codex status <id> --json` shows it under `bridge.store` (`null`: the bridge predates it). On a `direct` lane doctor's `codex` check WARNs on `disabled` until a restart (`ccrc codex stop <id>`, then
+`start`) writes a fresh entry (for `store:newer-version`, a store a newer build wrote, a restart changes nothing: run
+that build, or move the store aside by hand), and on a set-aside copy for as long as it is in the lane directory: the
+WARN is read off the directory, so it survives a restart, until you delete the copy with its `-wal` and `-shm` (it says
+the bridge serves from a fresh store only while the entry is `set-aside` and names that copy; otherwise it only names
+the copy, and under `disabled` the line above it names the repair). `ccrc codex status <id> --json`
 adds `mode`, `upstream`, `tiers.bridge` and `bridge` (the stats file's time, last upstream request id, refusals,
 outcomes and unknown names; `null` when there is none). Doctor's `codex` check reads the lane by its mode: on a
 `direct` lane the bridge tier's running, stale (a WARN, cured by `ccrc update` (`--force` on a box already converged),
@@ -2323,8 +2335,8 @@ only when the same run re-placed the shim, the runtime or the auth library for a
 stopped one), foreign and unmeasured
 rows; a FAIL, `runs a retired refresher`, when the lane's LiteLLM tier or shim runs beside it; a FAIL for the `siwc`
 route; no half-up row and no `litellm.yaml` row. On a lane in either mode, a stats file or store that is not a regular
-file of mode 0600 is a FAIL. Removing the lane reaps both files, the recordings directory and the marker files with the
-rest of its state.
+file of mode 0600 is a FAIL. Removing the lane reaps both files, the store's set-aside copy, the recordings directory and the
+marker files with the rest of its state.
 
 **A restart cuts long streams.** The bridge runs under the shim's unit, so a restart (a rollout's install restarts a
 running bridge whose bytes are stale; a switch stops it) is a stop, then a start. On the stop the bridge closes its

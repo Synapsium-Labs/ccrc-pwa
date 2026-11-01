@@ -13380,25 +13380,25 @@ _codex_tier_stale() {   # <id> <tier>
 
 # The FILE half of `_acct_remove`'s codex arms (Task 8; spec §9's reap, Plan 2b-1 carry-forward
 # 8): removes EXACTLY the lane's generated state under `~/.ccrc/codex/<id>/`:
-# lane.json, runtime.env, litellm.yaml and the `.prev` the litellm op keeps
-# beside it, every tier's `.started`/`.pid` (litellm, shim and bridge, each
-# `<tier>.started` and `<tier>.pid`, through `$CODEX_TIERS`), the bridge's
-# markers, stats file, store and recordings directory (below), `.lock`, the
+# lane.json, runtime.env, litellm.yaml and the `.prev` the litellm op keeps beside it, every tier's
+# `.started`/`.pid` (litellm, shim and bridge, each `<tier>.started` and `<tier>.pid`, through `$CODEX_TIERS`),
+# the bridge's markers, stats file, store and recordings directory (below), `.lock`, the
 # file `_codex_lock` takes its per-lane `flock` on, and any `runtime.env.tmp.*` leftover an interrupted
 # `_codex_runtime_env_ensure` mint left behind (its `mktemp` name is random,
 # so this is a GLOB, not a fixed name — a key-bearing tmp file left by a
 # killed mint must not survive account removal, and its presence must not
-# make the directory's final `rmdir` silently fail). Then it removes the
-# directory, only if that left it empty. It NEVER removes the logs
-# (`~/.ccrc/logs/codex/<id>/`) or the OAuth directory, which is a credential
-# ccrc never obtained, and it leaves any other file in the directory alone.
+# make the directory's final `rmdir` silently fail), and by a GLOB on the same line the store's set-aside copy
+# (D-7676), `<store>.damaged-<8 digits>T<6 digits>Z` (store.py's DAMAGED_STAMP) with `-wal`, `-shm` or neither,
+# keyed on the store's OWN name, only once lane.json named it and it passed the bare-name check, never a bare
+# `*.damaged-*`: it holds the account's encrypted reasoning, as the store does. Then it removes the directory, only if
+# that left it empty. It NEVER removes the logs (`~/.ccrc/logs/codex/<id>/`) or the OAuth directory, which is a
+# credential ccrc never obtained, and it leaves any other file in the directory alone.
 # It needs no roster row, only a well-formed id: account removal reaps a lane
 # whose row may already be gone. It stops nothing: the stop arm runs
 # `_codex_lock` → `_codex_stop_lane` → `_codex_unlock` before the roster drop,
-# and this file half runs AFTER it — a pidfile removed under a live tier is a
-# handle lost for good.
+# and this file half runs AFTER it — a pidfile removed under a live tier is a handle lost for good.
 _codex_reap_files() {   # <id>
-  local id="${1:-}" dir f t rc=0 had_nullglob=0 rec=''
+  local id="${1:-}" dir f t rc=0 had_nullglob=0 rec='' st='' d='[0-9]'
   # The bridge's markers (codex-bridge Stage 2, Task 11), which an operator touches and no ccrc code writes; then
   # liveprobe.count and its tmp, and the stats file's tmp (below), which a killed write_count or stats flush leaves.
   local -a names=(lane.json runtime.env litellm.yaml litellm.yaml.prev .lock
@@ -13429,12 +13429,12 @@ _codex_reap_files() {   # <id>
       [[ "${bf[$t]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[$t]}" != . ] && [ "${bf[$t]}" != .. ] || bf[$t]=''
     done
     [ -z "${bf[0]}" ] || names+=("${bf[0]}" "${bf[0]}.tmp")
-    [ -z "${bf[1]}" ] || names+=("${bf[1]}" "${bf[1]}-wal" "${bf[1]}-shm")
+    [ -z "${bf[1]}" ] || { names+=("${bf[1]}" "${bf[1]}-wal" "${bf[1]}-shm"); st="${bf[1]}"; }
     rec="${bf[2]}"
   fi
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
-  tmps=("$dir"/runtime.env.tmp.*)
+  tmps=("$dir"/runtime.env.tmp.*); [ -z "$st" ] || tmps+=("$dir/$st".damaged-${d}${d}${d}${d}${d}${d}${d}${d}T${d}${d}${d}${d}${d}${d}Z{,-wal,-shm})
   [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
   for f in "${names[@]}"; do
     { [ -e "$dir/$f" ] || [ -L "$dir/$f" ]; } || continue
@@ -14680,13 +14680,13 @@ _codex_cmd_status() {   # <id> <1 = --json>
     fi
     # `bridge` (codex-bridge Stage 2, Task 11): the bridge's non-secret stats
     # file, named by lane.json's `bridgeFiles.stats` — its time, last upstream
-    # request id, refusals, outcomes and unexplained names; null when lane.json
+    # request id, refusals, outcomes, unexplained names and `store` entry (D-7677: null when the file has none, a bridge that predates it, never `ok`); null when lane.json
     # names none, or the file is absent or not one JSON object.
     sf="$(jq -r 'if type == "object" then (.bridgeFiles.stats // empty | strings) else empty end' "$d/lane.json" 2>/dev/null)" || sf=''
     if [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] && [ -f "$d/$sf" ]; then
       stats="$(jq -cs 'if length == 1 and (.[0] | type) == "object" then .[0]
           | {statsAt: (.updatedAt // null), lastUpstreamRequestId: (.lastUpstreamRequestId // null),
-             refusals: (.refusals // null), outcomes: (.outcomes // null), unexplained: (.unexplained // null)}
+             refusals: (.refusals // null), outcomes: (.outcomes // null), unexplained: (.unexplained // null), store: (.store // null)}
           else null end' "$d/$sf" 2>/dev/null)" || stats=null
       [ -n "$stats" ] || stats=null
     fi

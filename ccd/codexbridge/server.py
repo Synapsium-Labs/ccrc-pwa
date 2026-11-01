@@ -42,6 +42,10 @@ after it one `error` event, and it logs one line, `ccgpt-proxy: direct: <class n
 `errors.CODE_RE`, never `str(e)`, an argument or a traceback. The server's own `handle_error` (an exception outside a
 handler) logs the same line. No body, token or header value is logged or counted.
 
+THE START (`serve`). The stats file is loaded, then the reasoning store is opened (its start check, D-7676, reports
+to `Stats.store_event`), then the stats file is flushed, forced, before the port is bound (D-7677), so the file the
+doctor reads describes this process, its `startedAt` and its `store` entry, from its first moment.
+
 THE DRAIN (SIGTERM, D-6429). The signal handler only sets `stopping` and starts a thread that calls
 `httpd.shutdown()`; when `serve_forever` returns on the main thread the listener is closed (new connections are
 refused from then on), the in-flight requests get DRAIN_S to finish, every one still open is cut with `api_error`
@@ -994,7 +998,8 @@ def _refresher(cfg: BridgeConfig, stop: threading.Event, auth: _Flight) -> None:
 def serve(cfg: BridgeConfig, hooks: Hooks) -> int:
     """Serve the lane until SIGTERM, then drain (the module docstring); 0 after a drain."""
     st = stats.Stats(cfg.stats_path, cfg.lane)
-    rs = store.ReasoningStore(cfg.store_path, outcome=st.outcome)
+    rs = store.ReasoningStore(cfg.store_path, outcome=st.store_event)
+    st.flush(force=True)  # D-7677: the file describes this process (its start, its store) before the port is bound
     flight = _Flight()
     auth = _Flight()
     state = _State(cfg, hooks, st, rs, flight, auth, backend.user_agent(cfg.ccrc_version))
