@@ -302,7 +302,7 @@ user can reach, which is exactly what the card should show. The check runs on ad
 legacy row's too, §3.4), and in the background after a routing miss (§4.3), never inside a proxy call. Before each
 page it reads the slot's key again with `readLinearSlotKey`, and it stops when the key is gone or its digest changed.
 `teamsAt` records when it last ran. The page size is set so the query's measured complexity (Linear's `X-Complexity` on
-the recorded fixtures) stays under the 10,000-point cap of §1.2a, and a test row pins it.
+the fixtures the coordinator's capture records, D-7684) stays under the 10,000-point cap of §1.2a, and a test row pins it.
 
 ### 4.2 The routing rule (L1, `server/src/linear/route.ts`, pure)
 The input is what the call names. An issue reference (`AAA-12`) gives its prefix as a **routing hint** only: it picks
@@ -716,7 +716,7 @@ response text.
 | `timeout`, `unreachable`, `malformed` | 503 | as today; `timeout`'s detail `not-sent` says the second call was never started (§6.6) |
 
 When Linear answers with a GraphQL `errors` array, the server maps the error's code, from a closed table built from
-recorded fixtures during the build, to `rate-limited` (`RATELIMITED`, on any status, §6.7), `linear-forbidden`,
+the fixtures recorded once by the coordinator's capture (the plan's FX act, D-7684: a throwaway test-workspace key on a test box, scrubbed to the fixture vocabulary with the real headers kept; no build task calls Linear), to `rate-limited` (`RATELIMITED`, on any status, §6.7), `linear-forbidden`,
 `linear-invalid` or `not-found`. Anything else is
 `unreachable`. Linear's message is never forwarded.
 
@@ -1056,7 +1056,7 @@ sections. No session-hook card changes (D-7682). A third keeps the old path shut
    Linear modules warn with fixed words only. No journal column can hold it.
 2. **The redactor learns its shape.** `lin_api_` joins `KNOWN_TOKEN_PREFIX` in `shared/redact.mjs`, so the
    `known-token` rule masks it in the `egress` profile and in the new `linear-egress` profile (item 4). The `docs`
-   profile gains a row for it, with its python `REDACT_RULES` row (`docs-parity.test.ts` pins the parity). A key a
+   profile gains a row for it. The python helper has no rule table of its own (D-7077): it runs the docs profile through `shared/redact-cli.mjs`, so it follows with no second edit, and `docs-parity.test.ts` holds that it has none. A key a
    session pastes anywhere the redactor runs is masked by its shape and not only by its context. The egress corpus
    (`redact-corpus.json`) holds no `lin_api_` string, so its byte-for-byte output is unchanged; a new corpus row pins
    the prefix.
@@ -1100,7 +1100,11 @@ sections. No session-hook card changes (D-7682). A third keeps the old path shut
    `console` method (`log`, `info`, `warn`, `error`, `debug` and `trace`), every write to `process.stdout` and
    `process.stderr`, every `linear_events` row, every `.json` record and `legacy-teams.json`. It asserts that none
    contains the key, any eight-character run of the key, or the key's digest. The one file allowed to hold the key is
-   the slot's `.key`.
+   the slot's `.key`. The allowed places are exact, because the digest rule needs the digest on disk: the key may
+   appear only in the slot's `.key` file and in the outbound `authorization` header; its digest may appear only as the
+   `keyDigest` field of `<id>.json`, `linear.json` and `legacy-teams.json`. Neither may appear in any response body or
+   header, log line, stream write or `linear_events` row, and the census parses each record to check the digest sits at
+   `keyDigest` and nowhere else in it (D-7684).
 
 ## 14. Tests
 
@@ -1126,7 +1130,7 @@ Each row starts red: written before the code, it fails on `main`, and a mutation
 | 16 | `coord-attribution.test.ts` | characterisation of `attributionVerdict`'s four answers, green on `main` before the move | — (a characterisation) |
 | 17 | `pwa/test/linear-section.test.tsx` (rewritten), `pwa/test/settings-frame.test.tsx` (changed) | list states, the add, replace and remove flows, the field cleared on hide; the legacy row's three states, with Check again and Disconnect calling the `/api/linear/connection` routes and no Replace; the provider's `READS` set and its no-direct-read pattern name `useLinearWorkspaces` | keep the key after Add; offer Replace on the legacy row |
 | 18 | `pwa/browser/linear-workspaces.browser.test.ts` | §10.3's table at four widths, two skins, two themes | a fixed-width chip row |
-| 19 | redactor tests and `docs-parity.test.ts` | `lin_api_` is masked in egress, linear-egress and docs, with python parity. `linear-egress` leaves a 40-hex SHA, a GitHub commit URL, a hyphenated UUID, a dated spec path and a branch of that shape byte for byte, while it masks a `lin_api_` key, a JWT, an `sk-` token, URL userinfo, an `Authorization:` value and a `TOKEN=` value; the egress corpus is unchanged; `redactCount(…).text` equals `redact(…)` on every corpus row, and its `masked` counts the replaced spans | remove the prefix from python only; add `token-segments` to `linear-egress`; run `egress` over a write's text |
+| 19 | redactor tests and `docs-parity.test.ts` | `lin_api_` is masked in egress, linear-egress and docs; the python helper still has no rule table and follows through the CLI. `linear-egress` leaves a 40-hex SHA, a GitHub commit URL, a hyphenated UUID, a dated spec path and a branch of that shape byte for byte, while it masks a `lin_api_` key, a JWT, an `sk-` token, URL userinfo, an `Authorization:` value and a `TOKEN=` value; the egress corpus is unchanged; `redactCount(…).text` equals `redact(…)` on every corpus row, and its `masked` counts the replaced spans | add the prefix to egress but not to docs; add a python rule table; add `token-segments` to `linear-egress`; run `egress` over a write's text |
 | 20 | account deny fixtures, session-hook account-arm cases | `Read(~/.ccrc/linear/x.key)` and `Read(~/.ccrc/linear.key)` are refused by the deny file; the session hook's account arm (`ASEC` and `APSEC` in `ccd/session-hook.sh`) refuses `cat ~/.ccrc/linear/x.key`, its quoted and `$HOME` forms, and a `Read` of `~/.ccrc/linear.key`; CLAUDE.md's SAFETY list names both paths; nothing in must-allow is refused | drop the path from `ACCOUNT_SECRET_PATHS`; drop it from `APSEC` only |
 | 21 | `linear-resolve-slots.test.ts` | §6.10: titles on a box that has only slots and no `linear.key`; after a slot is replaced, the next title uses the new key; after it is removed, the title is offline with `not-configured`; a 401 marks the routed slot and a success clears that slot's verdict; a legacy key whose workspace is not yet learned still gives titles, as on `main`; a refused rate-service ask gives the offline title; all three callers pass the one service | read `readLinearKey` only; mark the legacy pair on a slot's 401; drop the legacy fallback; build a service inside `resolveTitle` |
 | 22 | `install-linear-skill.test.ts`, `account-deny.test.ts`, the session-hook card tests (unchanged) | every rostered home carries `ccrc-linear` after `deploy.sh`, after `ccrc account add` and after doctor converges a home that lost it; the skill's description names Linear issues and tickets; the start card is byte for byte as on `main`; the deny list holds `LINEAR_MCP_DENY`, its bash copy is equal, and nothing in must-allow is refused | install the skill for program roles only; add a Linear line to the card; leave the rule out of the bash copy |

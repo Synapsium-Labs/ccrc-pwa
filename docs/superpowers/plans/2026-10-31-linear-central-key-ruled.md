@@ -163,7 +163,7 @@ argues it is named in each entry. Measured on `origin/main` `46da405e2`.
   `ccrc-linear` skill and the program skills only, and the session hook's card is unchanged.
 - **D-7675 (2026-10-31)** — `linear-key-containment`: the key leaves its file only for the `authorization` header of
   `callLinear` (spec §13). Four mechanisms keep it there. First, the egress redactor (`shared/redact.mjs`
-  `KNOWN_TOKEN_PREFIX`, with its python parity) gains `lin_api_`, so a key pasted anywhere is masked by its shape and
+  `KNOWN_TOKEN_PREFIX`; the python helper follows through `shared/redact-cli.mjs`) gains `lin_api_`, so a key pasted anywhere is masked by its shape and
   not only by its context. Second, `~/.ccrc/linear/**` and `~/.ccrc/linear.key` join `ACCOUNT_SECRET_PATHS`, so every
   session's deny file refuses to read them. Third, the session text sent to Linear (a search term, and a write's
   title, description and comment) goes through the `linear-egress` profile first, and the answer and the journal row
