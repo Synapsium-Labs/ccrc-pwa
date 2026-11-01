@@ -988,9 +988,10 @@ describe('late answer wins; declined (D-5289)', () => {
     (w as unknown as { primed: boolean }).primed = true;
     return { coord, w, id, sent, calls };
   };
+  // K5 Q3l (D-7728): the parent's answer and decline through the question door family, the same claimant core.
   const by = (id: number, verb: 'answer' | 'release', extra: Record<string, unknown> = {}) =>
-    app!.inject({ method: 'POST', url: `/api/asks/${id}/${verb}`, headers: TOK,
-      payload: { fromId: MESA, fromUuid: MESA_UUID, ...extra } });
+    app!.inject({ method: 'POST', url: `/api/questions/ask-${id}/${verb === 'answer' ? 'rule' : 'release'}`, headers: TOK,
+      payload: { kind: 'ask', fromId: MESA, fromUuid: MESA_UUID, ...extra } });
 
   it('the release route leaves the row declined and pushes at once', async () => {
     const { coord, id, sent } = await setup(Date.now());
