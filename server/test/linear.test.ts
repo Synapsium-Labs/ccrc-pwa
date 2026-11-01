@@ -23,6 +23,7 @@ import { LINEAR_FAILURES } from '../../shared/linear.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { RATELIMITED_ERRORS, linearAnswer } from './linearFetchFake.js';
+import { linearServicesFake } from './linearServicesFake.js';
 import { resolveTitle } from '../src/linear/resolve.js';
 
 removeTmpFixturesEachTest();
@@ -221,7 +222,7 @@ describe('lookupLinearIssue', () => {
     writeFileSync(path.join(dir, LINEAR_KEY_FILE), `${KEY}\n`, { mode: 0o600 });
     for (const ans of [bodyOf({}, 429), bodyOf({ data: { issue: null }, ...RATELIMITED_ERRORS })]) {
       const { f, calls } = spyFetch(ans);
-      expect(await resolveTitle('ENG-1234', { ...REF, titleSlug: null }, { ccrcDir: dir, fetch: f }))
+      expect(await resolveTitle('ENG-1234', { ...REF, titleSlug: null }, { ccrcDir: dir, rate: linearServicesFake().rate, fetch: f }))
         .toEqual({ title: 'ENG-1234', source: 'offline', reason: 'rate-limited' });
       expect(calls).toHaveLength(1);
     }

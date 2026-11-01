@@ -16,6 +16,7 @@ import type { AccountGate } from '../src/accounts/gate.js';
 import { refuseRoute } from '../src/refuse.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { linearAnswer } from './linearFetchFake.js';
+import { linearServicesFake } from './linearServicesFake.js';
 
 removeTmpFixturesEachTest();
 
@@ -43,7 +44,7 @@ async function boot(opts: { fetch?: FetchLike; timeoutMs?: number; key?: string 
   const dir = mkTmp('ccrc-linear-route-');
   if (opts.key !== null) writeFileSync(path.join(dir, LINEAR_KEY_FILE), `${opts.key ?? KEY}\n`, { mode: 0o600 });
   const a = Fastify();
-  registerLinearRoutes(a, { ccrcDir: dir, gate: refusingGate, fetch: opts.fetch, timeoutMs: opts.timeoutMs });
+  registerLinearRoutes(a, { ccrcDir: dir, gate: refusingGate, rate: linearServicesFake().rate, fetch: opts.fetch, timeoutMs: opts.timeoutMs });
   await a.ready();
   app = a;
   return { app: a, dir };

@@ -16,6 +16,7 @@ import { testDeps } from './helpers.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { linearAnswer } from './linearFetchFake.js';
+import { linearServicesFake } from './linearServicesFake.js';
 
 removeTmpFixturesEachTest();
 
@@ -49,6 +50,7 @@ async function boot(o: Opts = {}): Promise<Booted> {
       fetch: f === undefined ? undefined : async (u, i) => { fetched.n += 1; return f(u, i); },
       timeoutMs: o.timeoutMs,
     },
+    linearRate: linearServicesFake().rate,
   });
   open = app;
   return { app, calls, fetched, registryDir: deps.cfg.registryDir };

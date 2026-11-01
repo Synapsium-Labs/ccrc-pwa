@@ -33,6 +33,7 @@ import type { AccountOps } from './accounts/ops.js';
 import type { FetchLike } from './linear/client.js';
 import type { LinearJournal } from './linear/journal.js';
 import type { LinearWritePolicy } from './linear/policy.js';
+import type { LinearRateService } from './linear/rate.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -185,6 +186,11 @@ export interface Deps {
    *  route and the workspace create alike so a test reaches neither the network nor an 8 s wait. Absent in
    *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */
   linear?: { fetch?: FetchLike; timeoutMs?: number };
+  /** D-7670, R4 (#1444, spec §6.7): the ONE Linear rate service, built in `index.ts` and passed through by `server.ts`
+   *  to every caller of Linear (today the legacy Check again and Connect, and the title lookups). Absent (a test, a
+   *  script): nothing calls Linear: a title is the offline one and those two routes answer `linear-unavailable`
+   *  (D-7684). `server.ts` never builds a default. */
+  linearRate?: LinearRateService;
 }
 
 /** D-7579 (increment 7, WP2): `Deps` with `coord` narrowed to the watcher's one store port, `WatcherCoordPort`. From

@@ -12,13 +12,21 @@
  */
 import type { LinearFailure, ResolveAnswer } from '../../../shared/linear.js';
 import { deriveWorkspaceSlug, offlineTitle, sanitizeTitle, type LinearRef } from '../../../shared/slug.js';
-import { lookupLinearIssue, type FetchLike } from './client.js';
+import { lookupLinearIssue, type FetchLike, type LinearLookup } from './client.js';
 import { clearLinearVerdict, markLinearRejected, readLinearKey } from './connection.js';
+import { oneCallOutcome, type LinearRateService } from './rate.js';
+import { LEGACY_SLOT } from './store.js';
 import { ticketTitle } from './title.js';
 
 export interface ResolveDeps {
   /** The config's ccrc dir (`cfg.ccrcDir`), where `linear.key` lives. */
   ccrcDir: string;
+  /**
+   * The ONE Linear rate service (D-7670, spec §6.7), asked before the lookup on the `request` lane: all three callers
+   * start it from a cookie-gated request. REQUIRED as the service or `null`, so a caller decides: null (a test, a
+   * script) is the offline title with no Linear call (D-7684), as a refused take is.
+   */
+  rate: LinearRateService | null;
   /** Test seams: the network, the deadline and the clock. Absent in production. */
   fetch?: FetchLike;
   timeoutMs?: number;
@@ -43,7 +51,22 @@ export async function resolveTitle(ref: string, ticket: LinearRef | null, deps: 
   if (ticket === null) return { title: offline, source: 'offline' };
 
   const key = await readLinearKey(deps.ccrcDir);
-  const look = await lookupLinearIssue(ticket, key, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
+  const net = { fetch: deps.fetch, timeoutMs: deps.timeoutMs };
+  let look: LinearLookup;
+  if (key.kind !== 'key') {
+    // No usable key: `not-configured`, answered with no call, so nothing is asked of the rate service.
+    look = await lookupLinearIssue(ticket, key, net);
+  } else {
+    // THE RATE SERVICE FIRST (spec §6.7, §6.10). Absent, or refusing (the request lane is spent, or the slot is closed
+    // after Linear's own rate limit): the offline title, and nothing calls Linear.
+    const rate = deps.rate;
+    if (rate === null) return { title: offline, source: 'offline', reason: 'rate-limited' };
+    const ask = rate.take({ lane: 'request', slot: LEGACY_SLOT, calls: 1 });
+    if (!ask.ok) return { title: offline, source: 'offline', reason: 'rate-limited' };
+    look = await lookupLinearIssue(ticket, key, net);
+    // One call made; Linear's own `rate-limited` closes the slot for the wait it carried.
+    rate.settle(ask.grant, oneCallOutcome(look));
+  }
   if (look.ok) {
     // A success with this key refutes a stale 401/403 mark against it (design §5.1); its failing never changes the answer.
     await clearLinearVerdict(deps.ccrcDir, look.keyDigest, (deps.now ?? Date.now)()).catch(() => {

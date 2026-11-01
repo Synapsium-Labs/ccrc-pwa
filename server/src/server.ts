@@ -1931,7 +1931,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const accountGate = createAccountGate({
     enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
   });
-  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir, gate: accountGate, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs });
+  // The one Linear rate service (spec §6.7) is passed through as it is, possibly absent: never a default built here.
+  registerLinearRoutes(app, {
+    ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
   // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
@@ -2859,7 +2862,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // goes on (M5). It is sanitised inside `resolveTitle`, so ccd's control-character and byte-cap refusals cannot turn a
     // lookup into a 502. The id is ccd's `$project-$slug` (`cmd_ws_add`).
     const { title } = await resolveTitle(plan.name, plan.ask.ticket, {
-      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+      ccrcDir: deps.cfg.ccrcDir, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     });
     const slug = plan.ask.slug;
     const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
@@ -3810,7 +3813,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // title otherwise (never a failure), and sanitised inside `resolveTitle`, so ccd's text refusals are not reachable
     // through a lookup.
     const title = plan.kind === 'clear' ? null : (await resolveTitle(plan.name, plan.ticket, {
-      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+      ccrcDir: deps.cfg.ccrcDir, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     })).title;
     const argv = CCD_ARGV.wsTitle(id, title === null ? { clear: true } : { title });
     // Through the per-session queue, like the reap and the forget, so a rename cannot interleave with another write to
