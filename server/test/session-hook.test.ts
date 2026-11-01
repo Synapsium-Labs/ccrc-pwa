@@ -1231,21 +1231,45 @@ describe('the SessionStart graph card', () => {
     // execFileSync THROWS on a non-zero exit, so a green run is the exit-0
     // assertion — the contract this whole file lives under.
     //
-    // The census row is what makes the `[ -d "$cwd" ]` guard MEASURABLE. With
-    // nothing seeded, deleting that guard is invisible: the no-graph branch is
-    // taken anyway, the census read finds no file, and the card stays silent —
-    // the same green. Seeded with a row FOR THIS PATH, a hook that skipped the
-    // directory check would print the sweep's line about a directory that is
-    // not there, and this assertion goes red.
+    // A census is present, so the no-graph branch has a file to read. Until GR7
+    // (D-7353) this row seeded a per-tree row FOR THIS PATH, which made the
+    // `[ -d "$cwd" ]` guard measurable through the hook's old-shape arm (read by
+    // path). That arm is retired with the sweep's rewrite live (GR4): the hook
+    // reads only repository rows, matched by the realpath of the tree's common
+    // dir, which a directory that is not there cannot have. The guard's own
+    // effect on the census line is therefore no longer observable here; the row
+    // keeps the exit-0-and-silent contract.
     const gone = path.join(home, 'gone');
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
-      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
-        { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
-      ] }],
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', repos: [] }],
     })); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
     expect(readState().state).toBe('done');
+  });
+
+  // GR7 (D-7353): the per-tree arm the hook kept while the sweep still wrote the
+  // old shape (GR4-interim) is retired. A last pass with no `repos[]` says
+  // nothing about this tree, so the card gives no census line: neither one the
+  // sweep ended before any repository (`paused`, `pass-locked`, `failed`) nor a
+  // pass of the retired per-tree shape that names THIS PATH, which the old arm
+  // read by path and printed. That second census is the retirement's proof, and
+  // the one per-tree spelling left in the tree (graph-r2-consumers names it).
+  it('a last pass with no repos[] gives no census line, even an old-shape row for this path', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const census = path.join(home, '.ccrc', 'graph-sweep.json');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'paused' }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a pass ended before any repository').toBe('');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
+        { path: tree, outcome: 'refused', reason: 'no exclude entry', duration_ms: 3 },
+      ] }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a retired per-tree row for this path').toBe('');
   });
 
   it('exits 0 and still prints a card when the tree is not a git repo', () => {
