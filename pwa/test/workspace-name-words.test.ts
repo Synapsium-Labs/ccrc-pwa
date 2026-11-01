@@ -148,6 +148,11 @@ describe('LOOKUP_NOTE', () => {
     expect(pointers.sort()).toEqual(['not-configured', 'unauthorised']);   // a 403 is not the key's fault: no pointer
   });
 
+  it('not-configured says no key in Settings reaches the ticket\'s team: titles route through the slots (#1444, spec §6.10)', () => {
+    expect(LOOKUP_NOTE['not-configured'].hint).toBe("No Linear key in Settings reaches this ticket's team.");
+    expect(LOOKUP_NOTE['not-configured'].pointer).toBe('Connect Linear in Settings');
+  });
+
   it('reads the server\'s words and none of the client\'s own as a server reason', () => {
     // Derived from the one list the server also reads, so a new arm is covered here the day it is added.
     for (const w of LINEAR_FAILURES) expect(isResolveReason(w)).toBe(true);
