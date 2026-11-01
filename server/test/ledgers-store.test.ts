@@ -127,11 +127,13 @@ describe('moving an item (plan PL2)', () => {
     expect([...ITEM_MOVE_REFUSALS].sort()).toEqual(['not-open', 'programme-live', 'unknown-item', 'wrong-actor']);
   });
 
-  it('the only writer of operator_items.state is moveItem (a source scan of the store)', async () => {
+  it('the only writer of operator_items.state is moveItem (a source scan of the ledgers store, and of CoordStore)', async () => {
     const { readFileSync } = await import('node:fs');
-    const src = readFileSync(new URL('../src/coord/store.ts', import.meta.url), 'utf8');
-    const writers = src.split('\n').filter((l) => /UPDATE\s+operator_items\b[^`'"]*\bSET\b[^`'"]*\bstate\s*=/i.test(l));
-    expect(writers.length).toBe(1);
+    const stateWriter = (l: string): boolean => /UPDATE\s+operator_items\b[^`'"]*\bSET\b[^`'"]*\bstate\s*=/i.test(l);
+    const ledgersSrc = readFileSync(new URL('../src/coord/ledgersStore.ts', import.meta.url), 'utf8');
+    const storeSrc = readFileSync(new URL('../src/coord/store.ts', import.meta.url), 'utf8');
+    expect(ledgersSrc.split('\n').filter(stateWriter).length).toBe(1);
+    expect(storeSrc.split('\n').filter(stateWriter).length).toBe(0);
   });
 });
 
