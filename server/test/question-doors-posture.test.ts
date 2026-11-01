@@ -74,7 +74,6 @@ const postureOf = async (url: string, cred: Credential): Promise<Posture> => {
 
 /** The old doors, each with a concrete url its router matches. */
 const OLD_DOORS: Readonly<Record<string, string>> = {
-  'POST /api/approvals/:id/rule': '/api/approvals/1/rule',
   'POST /api/approvals/:id/release': '/api/approvals/1/release',
   'POST /api/sessions/:id/dialog/tab': '/api/sessions/project-a-quiet-basin/dialog/tab',
 };
@@ -119,6 +118,7 @@ const RETIRED: Readonly<Record<Credential, Posture>> = {
 const RETIRED_DOORS: Readonly<Record<string, string>> = {
   'POST /api/asks/:id/answer': '/api/asks/1/answer',
   'POST /api/asks/:id/release': '/api/asks/1/release',
+  'POST /api/approvals/:id/rule': '/api/approvals/1/rule',
   'POST /api/sessions/:id/ask': '/api/sessions/project-a-quiet-basin/ask',
   'POST /api/sessions/:id/dialog/multi': '/api/sessions/project-a-quiet-basin/dialog/multi',
   'POST /api/sessions/:id/dialog/text': '/api/sessions/project-a-quiet-basin/dialog/text',
@@ -126,7 +126,6 @@ const RETIRED_DOORS: Readonly<Record<string, string>> = {
 };
 
 const EXPECTED: Readonly<Record<string, Readonly<Record<Credential, Posture>>>> = {
-  'POST /api/approvals/:id/rule': CLAIMANT,
   'POST /api/approvals/:id/release': CLAIMANT,
   'POST /api/sessions/:id/dialog/tab': OPERATOR,
 };
@@ -152,6 +151,8 @@ describe('question-doors posture: each old door through an armed gate (W3 Q3f, D
     ['POST /api/questions/:id/answer', '/api/questions/session-project-a-quiet-basin/answer', OPERATOR],
     ['POST /api/questions/:id/rule', '/api/questions/ask-1/rule', CLAIMANT],
     ['POST /api/questions/:id/release', '/api/questions/ask-1/release', CLAIMANT],
+    // K5 Q3l (D-7324): a retired approval alias's CLAIMANT posture, held on the family's approval id.
+    ['POST /api/questions/:id/rule', '/api/questions/approval-1/rule', CLAIMANT],
   ];
   it.each(NEW_DOORS.flatMap(([door, url, want]) => CREDENTIALS.map((c) => [`${door} | ${c}`, url, want, c] as const)))(
     '%s', async (_name, url, want, cred) => {

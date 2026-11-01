@@ -492,7 +492,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
   `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
-  six (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`, `POST /api/approvals/:id/rule`,
+  five (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`,
   `POST /api/approvals/:id/release` and `GET /api/approvals/:id`, coordinator-first routing D-5298) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only

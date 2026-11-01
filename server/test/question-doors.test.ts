@@ -202,20 +202,6 @@ const SIZES_OPEN = paneFixture('cc300-ask-multiselect-sizes-open');
 const TEXT = '- only in staging, sampled 10%';
 
 const PAIRS: Pair[] = [
-  // The claimant's approval ruling.
-  ['rule approval | a widening field', approvalSide, ...ruleApproval({ ...RULE, permanent: true })],
-  ['rule approval | a bad body', approvalSide, ...ruleApproval({ ...RULE, verdict: 'maybe' })],
-  ['rule approval | a stale uuid', approvalSide, ...ruleApproval({ ...RULE, fromUuid: 'stale' })],
-  ['rule approval | the store refuses the read', approvalSide, ...ruleApproval(RULE),
-    (s) => { vi.spyOn(s.f.coord, 'approvalById').mockReturnValueOnce({ ok: false, detail: 'fixture: the approvals table is unreadable' } as never); }],
-  ['rule approval | no such approval', approvalSide, ...ruleApproval(RULE, 99)],
-  ['rule approval | the kill switch', approvalSide, ...ruleApproval(RULE),
-    (s) => { writeFileSync(path.join(s.f.home, '.cc-sessions', 'approvals-disabled'), ''); }],
-  ['rule approval | not the stored parent', approvalSide, ...ruleApproval({ ...RULE, fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
-  ['rule approval | declined', approvalSide, ...ruleApproval(RULE), (s) => { s.f.coord.declineApproval(s.id, PARENT, Date.now()); }],
-  ['rule approval | already ruled', approvalSide, ...ruleApproval(RULE), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
-  ['rule approval | allowed: signed, stored, recorded', approvalSide, ...ruleApproval(RULE)],
-  ['rule approval | denied: signed, stored, recorded', approvalSide, ...ruleApproval(DENY)],
   // The claimant's approval hand-over.
   ['release approval | a bad body', approvalSide, ...releaseApproval({ fromId: PARENT })],
   ['release approval | no such approval', approvalSide, ...releaseApproval(P, 99)],
@@ -288,6 +274,20 @@ const RETIRED_PAIRS: Pair[] = [
   ['release ask | not the stored parent', askSide, ...releaseAsk({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
   ['release ask | not held', askSide, ...releaseAsk(P), (s) => { s.f.coord.declineAsk(s.id, Date.now()); }],
   ['release ask | success: declined, the door-in fires', askSide, ...releaseAsk(P)],
+  // The claimant's approval ruling.
+  ['rule approval | a widening field', approvalSide, ...ruleApproval({ ...RULE, permanent: true })],
+  ['rule approval | a bad body', approvalSide, ...ruleApproval({ ...RULE, verdict: 'maybe' })],
+  ['rule approval | a stale uuid', approvalSide, ...ruleApproval({ ...RULE, fromUuid: 'stale' })],
+  ['rule approval | the store refuses the read', approvalSide, ...ruleApproval(RULE),
+    (s) => { vi.spyOn(s.f.coord, 'approvalById').mockReturnValueOnce({ ok: false, detail: 'fixture: the approvals table is unreadable' } as never); }],
+  ['rule approval | no such approval', approvalSide, ...ruleApproval(RULE, 99)],
+  ['rule approval | the kill switch', approvalSide, ...ruleApproval(RULE),
+    (s) => { writeFileSync(path.join(s.f.home, '.cc-sessions', 'approvals-disabled'), ''); }],
+  ['rule approval | not the stored parent', approvalSide, ...ruleApproval({ ...RULE, fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
+  ['rule approval | declined', approvalSide, ...ruleApproval(RULE), (s) => { s.f.coord.declineApproval(s.id, PARENT, Date.now()); }],
+  ['rule approval | already ruled', approvalSide, ...ruleApproval(RULE), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
+  ['rule approval | allowed: signed, stored, recorded', approvalSide, ...ruleApproval(RULE)],
+  ['rule approval | denied: signed, stored, recorded', approvalSide, ...ruleApproval(DENY)],
   // (a row moves here from PAIRS in the commit that retires its door)
 ];
 
@@ -379,6 +379,28 @@ const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
     {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"ask": {"state": "declined", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "release ask | success: declined, the door-in fires":
     {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "declined", "answeredBy": null, "answer": null}, "approval": null, "doorIns": ["released(\"project-a-quiet-basin\")"], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | a widening field":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"a ruling allows once only; permanent is never accepted\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to 1000 characters\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | a stale uuid":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"stale-uuid\",\"detail\":\"fromUuid does not match the registry \u2014 stale sender; re-read your own .uuid\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | the store refuses the read":
+    {"status": 503, "body": "{\"ok\":false,\"error\":\"approval-unreadable\",\"detail\":\"fixture: the approvals table is unreadable\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | no such approval":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-approval\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | the kill switch":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"approvals-disabled\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | not the stored parent":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only the claimant this prompt was held for may rule on it\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | declined":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"declined\"}", "effects": {"ask": null, "approval": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "rule approval | already ruled":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"already-ruled\"}", "effects": {"ask": null, "approval": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "rule approval | allowed: signed, stored, recorded":
+    {"status": 200, "body": "{\"ok\":true,\"state\":\"allowed\"}", "effects": {"ask": null, "approval": {"state": "allowed", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"allow\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "rule approval | denied: signed, stored, recorded":
+    {"status": 200, "body": "{\"ok\":true,\"state\":\"denied\"}", "effects": {"ask": null, "approval": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
   // (each row's old-door outcome, recorded on the base before the commit that retired its door)
 };
 
@@ -444,7 +466,7 @@ describe('with no coordination store', () => {
   // one's now holds the old door gone (fastify's 404) and the new path equal to what the old door answered on the base,
   // recorded (the same bytes as `question-doors-pin`'s `no coordination store` rows): 501 `not-configured`.
   const NOT_CONFIGURED = '{"ok":false,"error":"not-configured"}';
-  const RETIRED_CLAIMANT = new Set<string>(['/api/asks/1/answer', '/api/asks/1/release']);
+  const RETIRED_CLAIMANT = new Set<string>(['/api/asks/1/answer', '/api/asks/1/release', '/api/approvals/1/rule']);
   it('the claimant\'s doors answer not-configured, as the old ones did', async () => {
     const app = await noCoordApp();
     for (const [old, nu, body] of [

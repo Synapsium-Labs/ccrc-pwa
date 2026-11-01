@@ -222,14 +222,16 @@ describe('W3 question census (slug question-census)', () => {
     expect(carriers.filter((s) => s.owner === 'module scope'), 'question state is never module scope').toEqual([]);
     expect(carriers.map((s) => s.name), 'the closure carrier is found').toContain('approvalInputs');
     expect(doors.filter((s) => s.tag === 'untagged').map((s) => s.route), 'a door-shaped POST with no principal').toEqual([]);
-    expect(doors.map((s) => s.route), 'the cited door is found').toContain('POST /api/approvals/:id/rule');
+    // K5 Q3l (D-7324): the cited door is the family's `/rule`, since `POST /api/approvals/:id/rule` was retired.
+    expect(doors.map((s) => s.route), 'the cited door is found').toContain('POST /api/questions/:id/rule');
     // 9 at the base (4 claimant, 4 operator, 1 navigation); 12 since Q3f (D-7030): 9 + the 3 routes of the family.
     // W7 C7p (D-7194) retires the operator aliases one per commit: 11 (4 operator) with `/api/sessions/:id/ask` gone,
     // 10 (3 operator) with `/dialog/multi`, 9 (2 operator) with `/dialog/text`, 8 (1 operator, the family's `/answer`
     // alone) with `/dialog`. K5 Q3l (D-7324) retires the four claimant aliases one per commit: 7 (5 claimant) with
-    // `/api/asks/:id/answer` gone, 6 (4 claimant) with `/api/asks/:id/release`.
+    // `/api/asks/:id/answer` gone, 6 (4 claimant) with `/api/asks/:id/release`, 5 (3 claimant) with
+    // `/api/approvals/:id/rule`.
     const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
-    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([6, 4, 1, 1]);
+    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([5, 3, 1, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
     // W3 Q3f (D-7030; slug q3f-door-in-repoint), at the target, may only shrink: no route calls the watcher for a question, and the four
     // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the

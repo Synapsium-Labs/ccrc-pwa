@@ -4064,41 +4064,6 @@ export function registerCoordRoutes(
     return reply.code(200).send(answer);
   });
 
-  /**
-   * `POST /api/approvals/:id/rule` — the held-for claimant rules (spec §6.3 server steps 5 and 6, amended by D-5441
-   * and D-5530). Box token; `{fromId, fromUuid, verdict, reason}` and nothing that could widen a ruling (`permanent`,
-   * `updatedPermissions`, `mode` are 400); attribution; the row; the kill switches and the single-box gate (nothing is
-   * signed under either); the caller is the row's stored parent (`403 not-parent` for anyone else, wherever they sit:
-   * no project is compared, D-5530); a row minted released is the operator's (`approval-released`); the row's own
-   * state (`declined`, `already-ruled`, `hook-gone`); the window (`hook-gone` at or after `notifyAt`, D-5441); the
-   * child's mark still names the row's run (`not-a-child`) and the claimant rule still holds the row for the caller
-   * (`parent-changed`); the guard again for an allow (`guard-forbidden`, `guard-escalate`); then the signature, and
-   * the CAS that stores it. Since W3 Q3f (D-7030) the door keeps its front ladder (the box token, the widening fields,
-   * the body, attribution, the id parse) and the rest, from the row on and in this order, is
-   * `coord/questions.ts#createQuestions`'s `rule`, with `signerFor` passed in as the raise's is.
-   */
-  app.post('/api/approvals/:id/rule', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'POST /api/approvals/:id/rule')) return;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    for (const k of ['permanent', 'updatedPermissions', 'mode']) {
-      if (Object.prototype.hasOwnProperty.call(body, k)) {
-        return refuseRoute(reply, 'bad-request', { detail: `a ruling allows once only; ${k} is never accepted` });
-      }
-    }
-    const { fromId, fromUuid, verdict, reason } = body;
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || (verdict !== 'allow' && verdict !== 'deny')
-        || typeof reason !== 'string' || reason.trim() === '' || reason.length > APPROVAL_REASON_MAX_CHARS) {
-      return refuseRoute(reply, 'bad-request', { detail: `fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to ${APPROVAL_REASON_MAX_CHARS} characters` });
-    }
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return refuseRoute(reply, 'bad-request');
-    // W3 Q3f (D-7030): an ALIAS from here on. The row and everything after it, the signing unchanged, are the
-    // claimant's core, `questions.rule`, which `POST /api/questions/approval-<n>/rule` calls too.
-    return sendAnswer(reply, await questions.rule({ kind: 'approval', id, fromId, verdict, reason }, claimantDeps!));
-  });
-
   /** `POST /api/approvals/:id/release` — the held-for claimant hands the prompt over (`held -> declined`, D-5440): the
    *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent.
    *  Since W3 Q3f (D-7030) the door keeps its front ladder and delegates from the row on to `questions.release`. */

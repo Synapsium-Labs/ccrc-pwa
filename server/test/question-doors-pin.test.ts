@@ -564,15 +564,16 @@ const minted = async (o: { role?: 'server' | 'both'; input?: Record<string, unkn
   const id = (res.json() as { id: number }).id;
   return { f, doorIns, id, mail0: mailTo(f, PARENT) };
 };
+// K5 Q3l (D-7324): retired, as the ask doors' note above says; the rows run through the family's door with `kind`.
 const rule = (f: Approvals, id: number | string, body: Record<string, unknown>, headers: Record<string, string> = TOK) =>
-  f.app.inject({ method: 'POST', url: `/api/approvals/${id}/rule`, headers, payload: body });
+  f.app.inject({ method: 'POST', url: `/api/questions/approval-${id}/rule`, headers, payload: { kind: 'approval', ...body } });
 const RULE = { ...P, verdict: 'allow', reason: 'a cleanup inside your worktree' };
 const DENY = { ...P, verdict: 'deny', reason: 'not this one' };
 
 const RULE_ROWS: Row[] = [
   ['POST /api/approvals/:id/rule | 1 | no coordination store', async () => {
     const { app } = await noCoordApp();
-    const res = await app.inject({ method: 'POST', url: '/api/approvals/1/rule', headers: TOK, payload: RULE });
+    const res = await app.inject({ method: 'POST', url: '/api/questions/approval-1/rule', headers: TOK, payload: { kind: 'approval', ...RULE } });
     return { status: res.statusCode, body: bodyOf(res), effects: {} };
   }],
   ['POST /api/approvals/:id/rule | 2 | no box token', async () => {
@@ -1182,9 +1183,9 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/approvals/:id/rule | 1 | no coordination store":
     {"status": 501, "body": "{\"ok\":false,\"error\":\"not-configured\"}", "effects": {}},
   "POST /api/approvals/:id/rule | 2 | no box token":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/approvals/:id/rule grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/rule grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/rule | pair 2+3 | no box token and a widening field":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/approvals/:id/rule grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/rule grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/rule | 3 | a widening field (permanent)":
     {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"a ruling allows once only; permanent is never accepted\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/rule | 3 | a widening field (updatedPermissions)":
@@ -1366,7 +1367,6 @@ describe('question-doors pin: each door\'s auth posture', () => {
   // origin check; an operator door is in neither table, so the gate and the origin check both run.
   const POSTURE: Record<string, { exempt: boolean; originCheck: boolean }> = {
     'POST /api/approvals': { exempt: true, originCheck: false },
-    'POST /api/approvals/:id/rule': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/release': { exempt: true, originCheck: false },
     // W7 C7p (D-7194): `POST /api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi` retired; the door that
     // answers their rows above holds their posture.
