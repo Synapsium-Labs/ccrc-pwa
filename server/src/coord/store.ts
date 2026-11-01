@@ -10028,12 +10028,15 @@ export class CoordStore {
     return r?.claimedBy ?? null;
   }
 
-  /** True iff a non-terminal run of the programme has `claimedBy === sessionId`: the coordinator's right to write the
-   *  programme's items, pin and modifications (spec §3.4). A session that claims only a closed run has none. */
+  /** True iff a non-terminal run of the programme is claimed by `sessionId`: the coordinator's right to write the
+   *  programme's items, pin and modifications (spec §3.4). A session that claims only a closed run has none. It asks
+   *  the binding's one open-only claimant reader (`openRunsForSession`, ARCH-62) rather than reading `claimedBy` a
+   *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
+   *  a coordinator with a row this box cannot represent is never told "not your programme". */
   claimsProgramme(sessionId: string, program: string): boolean {
-    return this.db.prepare(
-      `SELECT 1 AS one FROM runs WHERE program = ? AND claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} LIMIT 1`,
-    ).get(program, sessionId) !== undefined;
+    const open = this.openRunsForSession(sessionId, undefined, undefined, 'claimant');
+    if (!open.ok) throw new Error(`claimsProgramme: ${open.detail}`);
+    return open.siblings.some((r) => r.program === program);
   }
 }
 
