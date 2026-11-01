@@ -27024,20 +27024,22 @@ _uninst_cc_sessions() {
     "$reg/account-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rmdir -- "$reg/lib" 2>/dev/null || true   # the transcript reader's directory, empty once its file is gone
-  # The conflict radar's opt-in mirror (landing order wave 3b): `$reg/landing/<project>/enabled`, the one file the probe
-  # writes that a LATER reader trusts (spec 5.4). With the probe gone nothing refreshes it, so it goes with the install.
-  # ONLY a regular file named `enabled`, ONE level under a real (not symlinked) `landing` directory, in a real project
-  # directory: a symlink named `enabled` is not ours to follow, and `probe`, `main-health` and the lineage files are
+  # The conflict radar's two mirrors (landing order wave 3b, and wave 5d's `lander`): `$reg/landing/<project>/enabled` and
+  # `lander`, the two files the probe writes that a LATER reader trusts (spec 5.4, 5.5). With the probe gone nothing
+  # refreshes them, so they go with the install.
+  # ONLY a regular file named `enabled` or `lander`, ONE level under a real (not symlinked) `landing` directory, in a real project
+  # directory: a symlink named `enabled` or `lander` is not ours to follow, and `probe`, `main-health` and the lineage files are
   # measurements the operator may still read, so they stay.
   local land="$reg/landing" ldir lfile
   if [ -d "$land" ] && [ ! -L "$land" ]; then
     for ldir in "$land"/*/; do
       ldir="${ldir%/}"
       { [ -d "$ldir" ] && [ ! -L "$ldir" ]; } || continue
-      lfile="$ldir/enabled"
-      if [ -f "$lfile" ] && [ ! -L "$lfile" ]; then
-        rm -f -- "$lfile" || _ccrc_die "removing the radar's opt-in mirror $lfile failed"
-      fi
+      for lfile in "$ldir/enabled" "$ldir/lander"; do
+        if [ -f "$lfile" ] && [ ! -L "$lfile" ]; then
+          rm -f -- "$lfile" || _ccrc_die "removing the radar's opt-in mirror $lfile failed"
+        fi
+      done
     done
   fi
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \

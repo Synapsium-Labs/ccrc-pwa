@@ -7,7 +7,8 @@
 #   - which open PRs conflict with the base, and with each other (`probe`);
 #   - whether the base tip's required checks are green (`main-health`);
 #   - each workspace branch's lineage of clean base merges (`<id>.lineage`);
-#   - the opt-in mirror stage 4 reads, with its own time (`enabled`).
+#   - the opt-in mirror stage 4 reads, with its own time (`enabled`);
+#   - the landing line's mirror of lander=coordinator, with its own time (`lander`; for stage 5's landing line, which does not read it yet).
 # The files are JSON with "v": 1, written under `$REG/landing/<project>/`. The formats are the interface the next
 # waves read; the plan's Design section is their grammar.
 #
@@ -62,14 +63,16 @@
 #   1. The bash head: the knobs, the global pause (exit 0), the tool check, the lock.
 #   2. SIGTERM and SIGINT are recorded, never raised where they land (the handler kills the child in flight); a
 #      stale scratch of an earlier tick is cleared. The tick ends at the next checkpoint, with 128 plus the signal.
-#   3. THE `enabled` PRE-PASS, before any project is measured: one pass over every conf and every directory under
-#      $REG/landing/ writes `enabled` for a valid conf with lineage=on, an unpaused project and a real main checkout,
-#      and removes it in every other case (an invalid or missing conf, lineage=off, paused, not a checkout, a
-#      directory with no conf at all). Its spacing is the spacing of tick starts, whatever the order or the budgets of
-#      the projects, so stage 4 can bound its freshness. The measuring loop never writes or removes `enabled`.
-#   4. For each conf, sorted, while the tick budget lasts: parse it, skip a paused project, then within the project
-#      budget record store.before, read the open heads, then make the scratch and fetch, measure base x head and the
-#      pairs, write `probe`, `main-health` and each lineage, rewrite `probe` with store.after and the scratch size,
+#   3. THE MIRROR PRE-PASS, before any project is measured: one pass over every conf and every directory under
+#      $REG/landing/ writes `enabled` for a valid conf with lineage=on, and `lander` for a valid conf with
+#      lander=coordinator whatever lineage says, each for an unpaused project and a real main checkout, and removes
+#      each in every other case (an invalid or missing conf, its key not set, paused, not a checkout, a directory
+#      with no conf at all). Its spacing is the spacing of tick starts, whatever the order or the budgets of
+#      the projects, so stage 4 can bound its freshness. The measuring loop never writes or removes `enabled` or `lander`.
+#   4. For each conf, least recently measured first (tick_order: by its probe file's mtime, a project with none first,
+#      ties by name; review 1125 N6), while the tick budget lasts: parse it, skip a paused project, then within the
+#      project budget record store.before, read the open heads, then make the scratch and fetch, measure base x head and
+#      the pairs, write `probe`, `main-health` and each lineage, rewrite `probe` with store.after and the scratch size,
 #      remove the scratch. A route that has no measured base writes the three unmeasured, each file with its own word
 #      (the `fail` tuples in probe_project):
 #        route                                     probe                       main-health    lineage files
@@ -90,7 +93,7 @@
 #   5. Exit 0, or 128 plus the number of a signal recorded or held after the last checkpoint.
 #
 # PATHS
-#   ~/.ccrc/landing/<project>.conf        the operator, by hand: opts <project> in (base=, lineage=on|off)
+#   ~/.ccrc/landing/<project>.conf        the operator, by hand: opts <project> in (base=, lineage=on|off, lander=coordinator|none)
 #   $REG/land-probe-paused                the operator, by hand: global pause, exit 0 before the lock
 #   $REG/landing/<project>/paused         the operator, by hand: this project is not measured
 #   ~/.ccrc/land-probe.lock               this probe: one tick at a time
@@ -98,6 +101,7 @@
 #   $REG/landing/<project>/main-health    this probe: the base tip's required checks
 #   $REG/landing/<project>/<id>.lineage   this probe: one registry row's workspace-branch lineage
 #   $REG/landing/<project>/enabled        this probe: the mirror of lineage=on
+#   $REG/landing/<project>/lander         this probe: the mirror of lander=coordinator
 #   $TMPDIR/ccd-land-probe.<random>/      this probe: the per-tick scratch
 # Nothing in the tree writes the conf or either pause marker; they are the operator's, by hand. $REG is
 # $HOME/.cc-sessions.
@@ -866,10 +870,13 @@ def write_json(dirpath, name, doc):
                 pass
 
 
+MIRRORS = ('enabled', 'lander')   # the pre-pass's own files: written by write_json in reconcile_enabled, removed by remove_own
+
+
 def remove_own(dirpath, name):
-    """Delete a regular file named `enabled` or `*.lineage` in a real, owned directory under a real, owned
+    """Delete a regular file named `enabled`, `lander` or `*.lineage` in a real, owned directory under a real, owned
     $REG/landing/, and nothing else: both directories are lstat-checked, so a symlinked landing directory is left alone."""
-    if '/' in name or not (name == 'enabled' or name.endswith('.lineage')):
+    if '/' in name or not (name in MIRRORS or name.endswith('.lineage')):
         return
     if not real_dir(LANDING) or not real_dir(dirpath):
         return
@@ -947,13 +954,14 @@ def project_rows(project):
     Rows(rows, held): rows are (id, branch), the branch None when the row has no `.branch`; held are the ids of the
     rows that could not be read, or that name no well-formed branch: an unreadable `.project`, a `.project` naming this
     project beside an unreadable `.branch`, or beside a readable `.branch` that starts with `ws/` but is not `ws/`
-    followed by a name WS_NAME_RE fullmatches (review 1158 F2, F6: a NUL byte, `ws/a~0`, `ws/a.lock`; corrupt registry
-    content, a shape git forbids in a ref name). A held row has no branch to report, so it never reaches measure or
-    qualifying, and its id goes straight into the prune's keep set: its old lineage file is neither rewritten nor
-    removed, on any route. A branch outside `ws/` is decided as before, whatever its text. Holding an id that is not
-    this project's is harmless, because the prune reads only this project's directory. Each call that cannot list, that
-    holds a row it could not read, or that holds a row naming no well-formed branch, logs one line of fixed words for
-    each case, with no path and no id: the probe keeps the distinction it received."""
+    followed by a name WS_NAME_RE fullmatches (review 1158 F2, F6: a NUL byte, `ws/a~0`, `ws/a.lock`, corrupt registry
+    content in a shape git forbids in a ref name; and also a name git allows that the grammar does not hold, such as
+    `ws/a+b`, review 1171). A held row has no branch to report, so it never reaches measure or qualifying, and its id
+    goes straight into the prune's keep set: its old lineage file is neither rewritten nor removed, on any route. A
+    branch outside `ws/` is decided as before, whatever its text. Holding an id that is not this project's is harmless,
+    because the prune reads only this project's directory. Each call that cannot list, that holds a row it could not
+    read, or that holds a row naming no well-formed branch, logs one line of fixed words for each case, with no path and
+    no id: the probe keeps the distinction it received."""
     try:
         names = sorted(os.listdir(REG))
     except OSError:
@@ -1002,14 +1010,16 @@ def qualifying(rows):
     row with no `.branch` or a branch outside ws/. Every other answer leaves the row undecided: rc None (a deadline, a
     spent budget, a recorded signal, a spawn failure), a negative rc (a child a signal killed: the handler's own kill,
     or a stop that signalled the child directly), 128 (an unreadable repository), rc 0 with an answer that is not 40
-    hex, or any other value. An undecided row's previous file stays on a measured base; on a failed fetch, and in the
-    before-first-write fallback, it is rewritten unmeasured with tip null. Never pruned: the checkpoint after the read
-    is a no-op in the fallback (CLOSING), so this rule is what keeps a killed read from deciding the row. A HELD row
-    (project_rows: its `.project` or `.branch` could not be read, or its `.branch` names no well-formed `ws/` branch,
-    review 1158 F2, F6) never reaches here: it has no branch to report, so it gets no unmeasured rewrite, and it is held
-    whole, its old file neither rewritten nor removed, not undecided. So every branch read here is a well-formed name,
-    never a revision expression (`ws/a~0`) or a NUL byte that would stop the pass. Carried (review 1158 F6, its DWIM
-    half): a well-formed name the repository lacks can still answer rc 0 here, through a ref named
+    hex, or any other value. An undecided row's previous file stays on a measured base. With an old file it is rewritten
+    unmeasured with tip null on every route that has no measured base: a failed or timed-out fetch (a failure at the
+    scratch's init, its alternates file, the URL's ls-remote, the fetch or the fetched base's rev-parse), one the
+    project budget cut, a slug that is None, and the before-first-write fallback. Never pruned: the checkpoint after the
+    read is a no-op in the fallback (CLOSING), so this rule is what keeps a killed read from deciding the row. A HELD
+    row (project_rows: its `.project` or `.branch` could not be read, or its `.branch` names no well-formed `ws/`
+    branch, review 1158 F2, F6) never reaches here: it has no branch to report, so it gets no unmeasured rewrite, and it
+    is held whole, its old file neither rewritten nor removed, not undecided. So every branch read here is a well-formed
+    name, never a revision expression (`ws/a~0`) or a NUL byte that would stop the pass. Carried (review 1158 F6, its
+    DWIM half): a well-formed name the repository lacks can still answer rc 0 here, through a ref named
     `refs/heads/refs/heads/<branch>` or a tag named `refs/heads/<branch>`; the grammar cannot see that, and wave 4 reads
     the live tip by the full ref name."""
     out = []
@@ -1044,7 +1054,7 @@ def parse_conf(path):
         text = data.decode('utf-8')
     except UnicodeDecodeError:
         return None, 'not-utf8'
-    conf = {'base': 'main', 'lineage': 'off'}
+    conf = {'base': 'main', 'lineage': 'off', 'lander': 'none'}
     seen = set()
     for line in text.split('\n'):
         if line.strip() == '' or line.startswith('#'):
@@ -1052,7 +1062,7 @@ def parse_conf(path):
         key, eq, value = line.partition('=')
         if not eq:
             return None, 'malformed-line'
-        if key not in ('base', 'lineage'):
+        if key not in ('base', 'lineage', 'lander'):
             return None, 'unknown-key'
         if key in seen:
             return None, 'repeated-key'
@@ -1060,7 +1070,10 @@ def parse_conf(path):
         if key == 'base':
             if not BASE_RE.fullmatch(value) or value.startswith('-') or any(k.lower() in value.lower() for k in PINNED_KEYS):
                 return None, 'bad-value'   # the git door would refuse it in the fetch's refspec: refused here, at parse
-        elif value not in ('on', 'off'):
+        elif key == 'lineage':
+            if value not in ('on', 'off'):
+                return None, 'bad-value'
+        elif value not in ('coordinator', 'none'):
             return None, 'bad-value'
         conf[key] = value
     return conf, None
@@ -1509,27 +1522,51 @@ def handle_project(project):
         log('project-error %s: %s' % (project, type(e).__name__))
 
 
+def tick_order(projects):
+    """The measuring loop's order (review 1125 N6, D-7268): least recently measured first, by the mtime of each
+    project's own probe (both directories lstat-checked, the file itself lstat'd, nothing followed or opened; only the
+    order depends on it, and ensure_dir still checks both directories before any write); a project with no regular
+    probe comes first; ties by name. Read-only, and no file of its own: a project the tick budget left unstarted keeps
+    the oldest probe, so the next tick starts with it. The mirror pre-pass (reconcile_enabled) keeps the sorted order."""
+    def last(p):
+        if not (real_dir(LANDING) and real_dir(LANDING + '/' + p)):
+            return -1
+        try:
+            st = os.lstat(LANDING + '/' + p + '/probe')
+        except OSError:
+            return -1
+        return st.st_mtime_ns if stat.S_ISREG(st.st_mode) else -1
+    return sorted(projects, key=lambda p: (last(p), p))
+
+
 def reconcile_enabled(projects):
-    """The opt-in mirror, reconciled in one pass at the start of the tick, before any project is measured: `enabled` is
-    written for each valid conf with lineage=on, an unpaused project and a real main checkout, and removed in every
-    other case (an invalid conf, lineage=off, paused, not a checkout), and for every directory under $REG/landing/
+    """The two mirrors, reconciled in one pass at the start of the tick, before any project is measured: `enabled` is
+    written for each valid conf with lineage=on, and `lander` for each valid conf with lander=coordinator whatever
+    lineage says, each only for an unpaused project with a real main checkout, and each is removed in every other case
+    (an invalid conf, its key not set, paused, not a checkout), and for every directory under $REG/landing/
     with no conf at all. Its time is then the time of the tick's start, whatever the order and the budgets of the
     projects measured after it. Quiet: the measuring names what it skips."""
     for project in projects:
         ldir = LANDING + '/' + project
         conf, _ = parse_conf(CONF_DIR + '/' + project + '.conf')
-        if conf is not None and conf['lineage'] == 'on' and not is_paused(ldir) and is_checkout(project) \
-                and ensure_dir(LANDING, 'landing', True) and ensure_dir(ldir, project, True):
-            write_json(ldir, 'enabled', {'v': 1, 'project': project, 'at': now_iso()})
-        else:
-            remove_own(ldir, 'enabled')
+        live = conf is not None and not is_paused(ldir) and is_checkout(project)
+        at = now_iso()
+        for name, wanted, doc in (
+                ('enabled', live and conf['lineage'] == 'on', {'v': 1, 'project': project, 'at': at}),
+                ('lander', live and conf['lander'] == 'coordinator',
+                 {'v': 1, 'project': project, 'lander': 'coordinator', 'at': at})):
+            if wanted and ensure_dir(LANDING, 'landing', True) and ensure_dir(ldir, project, True):
+                write_json(ldir, name, doc)
+            else:
+                remove_own(ldir, name)
     try:
         names = sorted(os.listdir(LANDING))
     except OSError:
         return
     for n in names:
         if PROJECT_RE.fullmatch(n) and not os.path.lexists(CONF_DIR + '/' + n + '.conf'):
-            remove_own(LANDING + '/' + n, 'enabled')
+            for name in MIRRORS:
+                remove_own(LANDING + '/' + n, name)
 
 
 def main():
@@ -1545,7 +1582,7 @@ def main():
         entries = []
     projects = [e[:-len('.conf')] for e in entries if e.endswith('.conf') and PROJECT_RE.fullmatch(e[:-len('.conf')])]
     reconcile_enabled(projects)
-    for project in projects:
+    for project in tick_order(projects):
         checkpoint()
         handle_project(project)
     # The tick has ended. SIGTERM and SIGINT are held from here (a pending one runs its handler inside the call), so a

@@ -8613,11 +8613,13 @@ _check_scope-sweep() {
 # a signal recorded after the last forge checkpoint but before this tick's main-health write still leaves this tick's
 # verdict, beside a `probe` with the interim figures, because no checkpoint runs between them. A signal recorded before the
 # last checkpoint ahead of the tick's first `probe` write leaves the previous complete record; when there are zero open
-# PRs, or the PR list failed, no checkpoint runs between the base rev-parse and that write, so a signal recorded after the
-# base rev-parse's checkpoint leaves this tick's `probe` with the interim figures, beside the previous main-health. One
-# recorded after the nulling test leaves the measured record whole. That is what it shows during every running tick too,
-# bounded by the next tick and by the stale arm. Telling an interrupted tick from a running one needs an explicit marker, which is a later wave's
-# to add if a reader needs it.
+# PRs, when every open PR is cross-repository (the probe drops those heads), when the PR list failed, or when the
+# project budget is already spent (each merge-tree then answers budget without starting a child), no checkpoint runs
+# between the base rev-parse and that write, so a signal recorded after the base rev-parse's checkpoint leaves this
+# tick's `probe` with the interim figures, beside the previous main-health. One recorded after the nulling test leaves
+# the measured record whole. That is what it shows during every running tick too, bounded by the next tick and by the
+# stale arm. Telling an interrupted tick from a running one needs an explicit marker, which is a later wave's to add if
+# a reader needs it.
 # A red base is likewise a fact about the repository, and the PASS line says "red". The PASS line per project reads
 # `<project>: N heads, M conflicting with <base>, <base> green; store +K objects, scratch S KiB this tick`: the store figure is
 # the change in the project's object count over its last tick (the probe's scratch is meant to keep it at +0, spec 12).
