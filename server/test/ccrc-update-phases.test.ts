@@ -2250,8 +2250,12 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
   // whose spine completed under a failing doctor (exit 3, D-3114) must still end on `done` with the "the box moved"
   // detail — a `failed` here would halt the fleet and the server would never follow a box that DID move.
   itLinux('a detached console update whose doctor fails ends its report on `done`, the "the box moved" detail, from pwa — the follow-through\'s input (D-7679, D-3114)', async () => {
-    const home = gateBox('ccrc-update-detach-doctor-', 'fleet', 1);
-    // A console move always names its tag (`--to`), which fetches download/<tag>, not latest/download.
+    // gateBox's fleet box, packed where a console move fetches: it always names its tag (`--to`), so the run reads
+    // download/<tag>, not latest/download.
+    const home = freshUpdateBox('ccrc-update-detach-doctor-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');
     packRelease(home, stubTree(home, { version: 'v2.0.0', installExit: 1 }), { tag: 'v2.0.0', latest: false });
     writeFileSync(join(home, 'fixture-stub-installed'), 'yes\n');
     writeFileSync(join(home, 'fixture-systemd-run-exec'), '');
