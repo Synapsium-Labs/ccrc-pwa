@@ -4064,25 +4064,6 @@ export function registerCoordRoutes(
     return reply.code(200).send(answer);
   });
 
-  /** `POST /api/approvals/:id/release` — the held-for claimant hands the prompt over (`held -> declined`, D-5440): the
-   *  hook stops on its next poll, and the operator's push fires at once. Box token, attribution, the stored parent.
-   *  Since W3 Q3f (D-7030) the door keeps its front ladder and delegates from the row on to `questions.release`. */
-  app.post('/api/approvals/:id/release', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    if (!requireMailToken(req, reply, 'POST /api/approvals/:id/release')) return;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid } = body;
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
-      return refuseRoute(reply, 'bad-request', { detail: 'fromId/fromUuid strings' });
-    }
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return refuseRoute(reply, 'bad-request');
-    // W3 Q3f (D-7030): an ALIAS from here on. The row, the stored parent, the decline, the input forgotten and the push
-    // now are the claimant's core, `questions.release`, which `POST /api/questions/approval-<n>/release` calls too.
-    return sendAnswer(reply, await questions.release({ kind: 'approval', id, fromId }, claimantDeps!));
-  });
-
   /** `GET /api/approvals/:id?fromId=&fromUuid=` — one row, redacted, for the claimant it was held for (spec §6.7:
    *  "the full input is on the row"). Box token and attribution, as `GET /api/asks` scopes a box-token caller: a
    *  session reads only a row held for it (`403` otherwise, and a row minted released was held for nobody). */

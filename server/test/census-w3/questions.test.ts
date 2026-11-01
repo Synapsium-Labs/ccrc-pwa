@@ -229,9 +229,9 @@ describe('W3 question census (slug question-census)', () => {
     // 10 (3 operator) with `/dialog/multi`, 9 (2 operator) with `/dialog/text`, 8 (1 operator, the family's `/answer`
     // alone) with `/dialog`. K5 Q3l (D-7324) retires the four claimant aliases one per commit: 7 (5 claimant) with
     // `/api/asks/:id/answer` gone, 6 (4 claimant) with `/api/asks/:id/release`, 5 (3 claimant) with
-    // `/api/approvals/:id/rule`.
+    // `/api/approvals/:id/rule`, 4 (2 claimant, the family's `/rule` and `/release` alone) with `/api/approvals/:id/release`.
     const byTag = (t: string): number => doors.filter((s) => s.tag === t).length;
-    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([5, 3, 1, 1]);
+    expect([doors.length, byTag('claimant'), byTag('operator'), byTag('navigation')], 'the question doors, by principal').toEqual([4, 2, 1, 1]);
     for (const d of doorIns) expect(d.callers.length, `${d.method} has a route caller`).toBeGreaterThan(0);
     // W3 Q3f (D-7030; slug q3f-door-in-repoint), at the target, may only shrink: no route calls the watcher for a question, and the four
     // door-in forwards Q3d left (`releaseHeldAsk`, `answeredLate`, `releaseHeldApproval`, `approvalRuled`) are gone; the

@@ -730,13 +730,14 @@ const RULE_ROWS: Row[] = [
   }],
 ];
 
+// K5 Q3l (D-7324): retired, as the ask doors' note above says; the rows run through the family's door with `kind`.
 const release = (f: Approvals, id: number | string, body: Record<string, unknown>, headers: Record<string, string> = TOK) =>
-  f.app.inject({ method: 'POST', url: `/api/approvals/${id}/release`, headers, payload: body });
+  f.app.inject({ method: 'POST', url: `/api/questions/approval-${id}/release`, headers, payload: { kind: 'approval', ...body } });
 
 const RELEASE_ROWS: Row[] = [
   ['POST /api/approvals/:id/release | 1 | no coordination store', async () => {
     const { app } = await noCoordApp();
-    const res = await app.inject({ method: 'POST', url: '/api/approvals/1/release', headers: TOK, payload: P });
+    const res = await app.inject({ method: 'POST', url: '/api/questions/approval-1/release', headers: TOK, payload: { kind: 'approval', ...P } });
     return { status: res.statusCode, body: bodyOf(res), effects: {} };
   }],
   ['POST /api/approvals/:id/release | 2 | no box token', async () => {
@@ -1253,9 +1254,9 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/approvals/:id/release | 1 | no coordination store":
     {"status": 501, "body": "{\"ok\":false,\"error\":\"not-configured\"}", "effects": {}},
   "POST /api/approvals/:id/release | 2 | no box token":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/approvals/:id/release grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/release grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/release | pair 2+3 | no box token and a bad body":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/approvals/:id/release grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/release grants no legacy tolerance\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/release | 3 | a bad body":
     {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"minted": 1, "row": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "mailToParent": 0, "journal": null}},
   "POST /api/approvals/:id/release | 4 | an unknown sender":
@@ -1367,7 +1368,6 @@ describe('question-doors pin: each door\'s auth posture', () => {
   // origin check; an operator door is in neither table, so the gate and the origin check both run.
   const POSTURE: Record<string, { exempt: boolean; originCheck: boolean }> = {
     'POST /api/approvals': { exempt: true, originCheck: false },
-    'POST /api/approvals/:id/release': { exempt: true, originCheck: false },
     // W7 C7p (D-7194): `POST /api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi` retired; the door that
     // answers their rows above holds their posture.
     'POST /api/questions/:id/answer': { exempt: false, originCheck: true },

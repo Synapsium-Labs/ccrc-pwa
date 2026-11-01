@@ -202,12 +202,6 @@ const SIZES_OPEN = paneFixture('cc300-ask-multiselect-sizes-open');
 const TEXT = '- only in staging, sampled 10%';
 
 const PAIRS: Pair[] = [
-  // The claimant's approval hand-over.
-  ['release approval | a bad body', approvalSide, ...releaseApproval({ fromId: PARENT })],
-  ['release approval | no such approval', approvalSide, ...releaseApproval(P, 99)],
-  ['release approval | not the stored parent', approvalSide, ...releaseApproval({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
-  ['release approval | not held', approvalSide, ...releaseApproval(P), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
-  ['release approval | success: declined, the door-in fires', approvalSide, ...releaseApproval(P)],
 ];
 
 /** The pairs whose old door W7 C7p (the operator's) or K5 Q3l (the claimant's, D-7324) retired, each unchanged from its
@@ -288,6 +282,12 @@ const RETIRED_PAIRS: Pair[] = [
   ['rule approval | already ruled', approvalSide, ...ruleApproval(RULE), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
   ['rule approval | allowed: signed, stored, recorded', approvalSide, ...ruleApproval(RULE)],
   ['rule approval | denied: signed, stored, recorded', approvalSide, ...ruleApproval(DENY)],
+  // The claimant's approval hand-over.
+  ['release approval | a bad body', approvalSide, ...releaseApproval({ fromId: PARENT })],
+  ['release approval | no such approval', approvalSide, ...releaseApproval(P, 99)],
+  ['release approval | not the stored parent', approvalSide, ...releaseApproval({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
+  ['release approval | not held', approvalSide, ...releaseApproval(P), async (s) => { await s.f.rule(s.id, PARENT, 'deny'); }],
+  ['release approval | success: declined, the door-in fires', approvalSide, ...releaseApproval(P)],
   // (a row moves here from PAIRS in the commit that retires its door)
 ];
 
@@ -401,6 +401,16 @@ const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
     {"status": 200, "body": "{\"ok\":true,\"state\":\"allowed\"}", "effects": {"ask": null, "approval": {"state": "allowed", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"allow\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
   "rule approval | denied: signed, stored, recorded":
     {"status": 200, "body": "{\"ok\":true,\"state\":\"denied\"}", "effects": {"ask": null, "approval": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "release approval | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release approval | no such approval":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-approval\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release approval | not the stored parent":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only the claimant this prompt was held for may hand it over\"}", "effects": {"ask": null, "approval": {"state": "held", "answeredBy": null, "releaseReason": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release approval | not held":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"ask": null, "approval": {"state": "denied", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalRuled(\"project-a-quiet-basin\",\"\",\"project-a-calm-mesa\",\"deny\")"], "keys": [], "feed": ["permission ruled"], "pushes": []}},
+  "release approval | success: declined, the door-in fires":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": null, "approval": {"state": "declined", "answeredBy": "project-a-calm-mesa", "releaseReason": null}, "doorIns": ["approvalReleased(\"project-a-quiet-basin\")"], "keys": [], "feed": [], "pushes": []}},
   // (each row's old-door outcome, recorded on the base before the commit that retired its door)
 };
 
@@ -410,6 +420,9 @@ const effectsNow = (s: Side): Record<string, unknown> => outcome(s, { statusCode
 describe('the new paths answer the old doors\' rows (W3 Q3f, D-7030)', () => {
   it('the pairs are uniquely named', () => {
     expect(new Set(PAIRS.map(([n]) => n)).size).toBe(PAIRS.length);
+  });
+  it('no pair is left live: every old answer door is retired and its pairs are RETIRED_PAIRS rows (K5 Q3l, D-7324)', () => {
+    expect(PAIRS.map(([n]) => n)).toEqual([]);
   });
   it.each(PAIRS.map((p) => [p[0], p] as const))('%s', async (_n, pair) => {
     const { old, nu } = await runPair(pair);
@@ -466,7 +479,7 @@ describe('with no coordination store', () => {
   // one's now holds the old door gone (fastify's 404) and the new path equal to what the old door answered on the base,
   // recorded (the same bytes as `question-doors-pin`'s `no coordination store` rows): 501 `not-configured`.
   const NOT_CONFIGURED = '{"ok":false,"error":"not-configured"}';
-  const RETIRED_CLAIMANT = new Set<string>(['/api/asks/1/answer', '/api/asks/1/release', '/api/approvals/1/rule']);
+  const RETIRED_CLAIMANT = new Set<string>(['/api/asks/1/answer', '/api/asks/1/release', '/api/approvals/1/rule', '/api/approvals/1/release']);
   it('the claimant\'s doors answer not-configured, as the old ones did', async () => {
     const app = await noCoordApp();
     for (const [old, nu, body] of [
