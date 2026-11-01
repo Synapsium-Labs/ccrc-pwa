@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, KIND_CODES, MINTED_KEY_EXPIRING_MS, MINTED_TOKEN_EXPIRING_MS,
-  MINTED_TOKEN_LIFETIME_MS, SIGNED_IN_WITHIN_MS, LANE_IDENTITY_MAX, kindCodeOf, laneStateOf, stateWordFor,
+  MINTED_TOKEN_LIFETIME_MS, SIGNED_IN_WITHIN_MS, LANE_IDENTITY_MAX, kindCodeOf, laneStateOf, sourceAt, stateWordFor,
   type AccountStateWord, type LaneState, type StateWordInput,
 } from '../../shared/accounts';
 import type { AccountUsage, RosterWire } from '../../shared/api';
@@ -232,6 +232,9 @@ describe('the Accounts card says the one word it was given (D-7718)', () => {
     // The server's answer wins whenever the lane carries one.
     const signedIn = stateWordFor(token(read(okAt(60_000))));
     expect(laneAnswerOf({ state: signedIn, ready: false }, usage(), undefined, NOW)).toBe(signedIn);
+    // Held for an hour, it keeps the server's word and instant, and its age is the screen's (D-7718 (10)).
+    const held = laneAnswerOf({ state: signedIn, ready: false }, usage(), undefined, NOW + 3_600_000);
+    expect(held).toEqual({ word: 'signed-in', source: 'checked 1h ago', at: signedIn.at });
   });
 
   it("every word names its source; the state's age and the usage age are two fields", () => {
@@ -325,5 +328,75 @@ describe('the Accounts card says the one word it was given (D-7718)', () => {
     expect(troubleCopy({
       id: 'lane-a', answer: stateWordFor(token(read(okAt(60_000)))), entry: undefined, lane: undefined, usage: null, sessions: 0, now,
     })).toBeNull();
+  });
+});
+
+// ── A held source, spoken again at the screen's instant (D-7718 (10)) ───────────────────────────────────────────────
+// The server writes its ages into the source at request time; the screen holds the answer, offline for hours, while
+// every other age on the card is its own. `sourceAt` says the sentence again from the measured instant, with
+// `stateWordFor`'s own spelling, so it must equal what `stateWordFor` itself would say at the later instant.
+describe('sourceAt: a held source ages on the screen\'s clock (D-7718 (10))', () => {
+  const nowSec = Math.floor(NOW / 1000);
+  const minted = (ago: number): StateWordInput => token(read({ ...okAt(60_000), mintedAt: NOW - ago }));
+  const mintedKey = (left: number): StateWordInput =>
+    openrouter({ ...okAt(60_000), keySource: 'minted', keyExpiresAt: NOW + left });
+  const CASES: [string, StateWordInput][] = [
+    ['signed out, checked', token(read({ check: { verdict: 'auth-dead', at: NOW - 2 * 3_600_000 } }))],
+    ['signed out, marker only', token(undefined, { authDead: true })],
+    ['5h limit with a reset', token(read(okAt(60_000)), { five: 100, fiveResetAt: nowSec + 72 * 60 })],
+    ['7d limit with a reset', token(read(okAt(60_000)), { seven: 100, sevenResetAt: nowSec + 3 * 3600 + 5 * 60 })],
+    ['7d limit, no reset', token(read(okAt(60_000)), { seven: 100 })],
+    ['credit used up', openrouter({ ...okAt(60_000), credit: { limit: 20, remaining: 0 } })],
+    ['minted token', minted(340 * DAY)],
+    ['credit low', openrouter({ ...okAt(60_000), credit: { limit: 20, remaining: 1.2 } })],
+    ['minted key', mintedKey(9 * DAY)],
+    ['signed in', token(read(okAt(4 * 60_000)))],
+    ['inconclusive, unreached', token(read({ check: { verdict: 'unreachable', at: NOW - 30 * 60_000 } }))],
+    ['inconclusive, unreadable', token({ kind: 'unreadable' })],
+    ['not checked, stale', token(read(okAt(8 * DAY)))],
+    ['not checked, none', token(undefined)],
+    ['off', token(undefined, { disabled: true })],
+  ];
+  const LATER = [0, 30_000, 59 * 60_000, 3_600_000, 3 * 3_600_000 + 7 * 60_000, 2 * DAY, 20 * DAY];
+
+  it('re-spoken at the instant the server spoke it, a source is the server\'s text', () => {
+    for (const [name, i] of CASES) {
+      const a = stateWordFor(i);
+      expect(sourceAt(a, NOW, i), name).toBe(a.source);
+    }
+  });
+
+  it('later, it is what stateWordFor itself says then, whenever the word is still the same', () => {
+    let compared = 0;
+    for (const [name, i] of CASES) {
+      const held = stateWordFor(i);
+      for (const d of LATER) {
+        const then = stateWordFor({ ...i, now: NOW + d });
+        if (then.word !== held.word) continue;
+        expect(sourceAt(held, NOW + d, i), `${name} +${d}ms`).toBe(then.source);
+        compared += 1;
+      }
+    }
+    expect(compared).toBeGreaterThan(CASES.length * 3);
+  });
+
+  it('a countdown past its reset says the limit alone, as "Resets in" under it says nothing', () => {
+    const i = token(read(okAt(60_000)), { five: 100, fiveResetAt: nowSec + 72 * 60 });
+    const held = stateWordFor(i);
+    expect(held.source).toBe('5h limit reached · resets in 1h 12m');
+    expect(sourceAt(held, NOW + 60 * 60_000, i)).toBe('5h limit reached · resets in 12m');
+    expect(sourceAt(held, NOW + 73 * 60_000, i)).toBe('5h limit reached');
+  });
+
+  it('what this build cannot re-speak stands as it came', () => {
+    // A newer server's sentence, an answer with no instant, a countdown with no reset to count to.
+    expect(sourceAt({ word: 'signed-in', source: 'checked by hand', at: NOW - DAY }, NOW)).toBe('checked by hand');
+    expect(sourceAt({ word: 'signed-in', source: 'checked 4m ago' }, NOW + DAY)).toBe('checked 4m ago');
+    expect(sourceAt({ word: 'signed-in', source: 'checked 4m ago', at: Number.NaN }, NOW + DAY)).toBe('checked 4m ago');
+    expect(sourceAt({ word: 'rate-limited', source: '5h limit reached · resets in 1h 12m' }, NOW + DAY))
+      .toBe('5h limit reached · resets in 1h 12m');
+    expect(sourceAt({ word: 'expiring', source: 'key expires soon · set elsewhere', at: NOW }, NOW + DAY))
+      .toBe('key expires soon · set elsewhere');
+    expect(sourceAt({ word: 'off', source: 'Off on the fleet host' }, NOW + DAY)).toBe('Off on the fleet host');
   });
 });

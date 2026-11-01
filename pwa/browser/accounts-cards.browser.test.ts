@@ -11,7 +11,9 @@
 // dialog from 900, its field at 16px. The screen itself has no field.
 //
 // THE OFFLINE ROW (§Acceptance, spec §12.5): one cell per skin at 360 and 1280, dark, each read twice. Warm: the link
-// drops while the screen is open, and the cards keep the last answer (the server's words, their ages, the roll-up).
+// drops while the screen is open, and the cards keep the last answer (the server's words, the roll-up), every age on a
+// card counting on from the page's clock, the source's included (D-7718 (10)): the clock moves an hour, then past a
+// reset.
 // Cold: the app starts with no link, from the offline snapshot (sessions and roster, never `lanes`, G15), and the
 // screen draws no card it cannot read, so nothing says Signed in and no identity or key hint shows.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -300,6 +302,8 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
     it(`warm: the link drops with the screen open, and the cards keep the last answer — ${named(view)}`, async () => {
       const app = await openApp(browser!, view, FIXTURE);
       try {
+        // The page's clock starts at the fixture's instant and runs, so the hours the link stays down can be passed.
+        await app.page.clock.install({ time: now });
         await app.page.goto(server!.origin + '/');
         await go(app.page, '/accounts');
         await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
@@ -323,6 +327,28 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
         expect(m.docOverflow).toBeLessThanOrEqual(0);
         expect(m.fields, 'no secret or code field').toBe(0);
         expect(m.text).not.toMatch(KEY_SHAPE);
+
+        // An hour on with the link still down: every age on a card is the card's own clock's, the source's too
+        // (D-7718 (10)), so no card says "checked 2h ago" beside a trouble line that says 3h.
+        await app.page.clock.fastForward(3_600_000);
+        await app.page.waitForTimeout(1_000);
+        const later = await readOffline(app.page);
+        const sourceOf = (lane: string): string => later.cards.find((c) => c.lane === lane)?.source ?? '';
+        expect(sourceOf('lane-b')).toBe('HTTP 401 · checked 3h ago');
+        expect(await app.page.locator(`${CARDS}[data-lane='lane-b'] .acct-trouble-wrong`).textContent())
+          .toBe("lane-b's token was refused (HTTP 401) 3h ago.");
+        expect(sourceOf('lane-a')).toBe('checked 1h ago');
+        expect(sourceOf('lane-e')).toBe('checked 1h ago');
+        expect(sourceOf('lane-c')).toMatch(/^5h limit reached · resets in 1[01]m$/);
+        expect(sourceOf('lane-d')).toBe('Off on the fleet host');
+        expect(later.cards.map((c) => [c.lane, c.state, c.word]), "the server's words stand")
+          .toEqual(before.cards.map((c) => [c.lane, c.state, c.word]));
+        // Past the reset, the countdown is gone from the source as "Resets in" is gone from the trouble line.
+        await app.page.clock.fastForward(15 * 60_000);
+        await app.page.waitForTimeout(1_000);
+        const past = await readOffline(app.page);
+        expect(past.cards.find((c) => c.lane === 'lane-c')?.source).toBe('5h limit reached');
+        expect(await app.page.locator(`${CARDS}[data-lane='lane-c'] .acct-trouble-effect`).textContent()).not.toMatch(/Resets in/);
         expect(app.errors).toEqual([]);
       } finally {
         await app.ctx.close();

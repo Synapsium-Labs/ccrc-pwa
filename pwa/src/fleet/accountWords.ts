@@ -6,7 +6,7 @@
 // and word, which words lift as trouble cards and in what order, the roll-up subtitle, the two age lines, the identity
 // line, and each trouble card's three sentences and its command.
 import {
-  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, WINDOW_LIMITED_PCT, kindCodeOf, stateWordFor,
+  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, WINDOW_LIMITED_PCT, kindCodeOf, sourceAt, stateWordFor,
   type AccountStateAnswer, type AccountStateWord,
 } from '../../../shared/accounts';
 import type { AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
@@ -70,14 +70,21 @@ export function kindChipWords(entry: Pick<RosterWire, 'provider' | 'kind'> | und
 export const NO_LANE_STATE_SOURCE = 'no lane state on this answer';
 
 /** The lane's one word and its source: the server's (`LaneWire.state`) whenever the answer carries one; otherwise
- *  `stateWordFor` over the telemetry row alone, its "no check recorded" read as "no lane state on this answer". */
+ *  `stateWordFor` over the telemetry row alone, its "no check recorded" read as "no lane state on this answer".
+ *
+ *  The server's source is spoken again at the screen's `now` (`sourceAt`, D-7718 (10)): the server wrote its age at
+ *  request time, and a held answer (the link down, the store keeping its last good read) would otherwise say
+ *  "checked 2h ago" beside a trouble line that, from the same `now`, says 3h. The word and `at` are the server's. */
 export function laneAnswerOf(
   lane: LaneWire | undefined,
   usage: AccountUsage | null,
   entry: Pick<RosterWire, 'provider' | 'kind'> | undefined,
   now: number,
 ): AccountStateAnswer {
-  if (lane?.state !== undefined && (ACCOUNT_STATE_WORDS as readonly string[]).includes(lane.state.word)) return lane.state;
+  if (lane?.state !== undefined && (ACCOUNT_STATE_WORDS as readonly string[]).includes(lane.state.word)) {
+    const source = sourceAt(lane.state, now, usage ?? undefined);
+    return source === lane.state.source ? lane.state : { ...lane.state, source };
+  }
   const a = stateWordFor({
     disabled: usage?.disabled === true, authDead: usage?.authDead === true,
     five: usage?.five ?? null, seven: usage?.seven ?? null,

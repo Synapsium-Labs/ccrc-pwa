@@ -1182,7 +1182,8 @@ describe('the state word, the roster reload and the lanes wire each have one hom
 // D-7718 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A2). APPENDED. The kind chip has one list,
 // `KIND_CODES`, beside the state word in `shared/accounts.ts`; the screen's words (the lamp, the trouble order, the
 // roll-up, the trouble sentences) have one home in `pwa/src/fleet/accountWords.ts`; the lamp and the trouble card one
-// in `pwa/src/fleet/TroubleCard.tsx`. The chip words themselves are spelled once.
+// in `pwa/src/fleet/TroubleCard.tsx`. The chip words themselves are spelled once. `sourceAt`, which speaks a held
+// source again at the screen's instant, lives beside `stateWordFor` and its spellings (D-7718 (10)).
 describe('the kind chip, the lamp and the trouble card each have one home (D-7718)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
   const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
@@ -1191,7 +1192,9 @@ describe('the kind chip, the lamp and the trouble card each have one home (D-771
     expect(decl('KIND_CODES').test('for (const code of Object.values(KIND_CODES))')).toBe(false);
   });
   it('the kind codes are declared once, in shared/accounts.ts, and each chip word is spelled there alone', () => {
-    for (const c of ['KIND_CODES', 'KindCode', 'kindCodeOf']) expect(holders(decl(c)), c).toEqual(['shared/accounts.ts']);
+    for (const c of ['KIND_CODES', 'KindCode', 'kindCodeOf', 'sourceAt', 'SourceResets']) {
+      expect(holders(decl(c)), c).toEqual(['shared/accounts.ts']);
+    }
     for (const w of ["'claude · sign-in'", "'claude · token'", "'chatgpt · codex'", "'openrouter · key'", "'compatible · key'"]) {
       expect(holders(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), w).toEqual(['shared/accounts.ts']);
     }

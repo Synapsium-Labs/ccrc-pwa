@@ -45,19 +45,21 @@ const USAGE: AccountUsage[] = [
   usage('lane-e', { five: null, seven: 40 }),
 ];
 
-/** Each lane's wire as `lanesWire` builds it: the word from `stateWordFor` over the same facts. */
-const LANES: Record<string, LaneWire> = Object.fromEntries(ROSTER.map((r) => {
+/** Each lane's wire as `lanesWire` builds it at the server's instant `at`: the word from `stateWordFor` over the same
+ *  facts, the 401 checked 2 h before it and every other lane 4 m before it. */
+const lanesAt = (at: number): Record<string, LaneWire> => Object.fromEntries(ROSTER.map((r) => {
   const u = USAGE.find((x) => x.wrapper === r.id)!;
-  const check = r.id === 'lane-b' ? { verdict: 'auth-dead', at: now - 2 * 3_600_000 } : { verdict: 'ok', at: now - 4 * 60_000 };
+  const check = r.id === 'lane-b' ? { verdict: 'auth-dead', at: at - 2 * 3_600_000 } : { verdict: 'ok', at: at - 4 * 60_000 };
   const state = stateWordFor({
     disabled: u.disabled === true, authDead: u.authDead === true, five: u.five, seven: u.seven,
     fiveResetAt: u.fiveResetAt, sevenResetAt: u.sevenResetAt, provider: r.provider, kind: r.kind,
-    lane: { kind: 'read', state: { check } }, now,
+    lane: { kind: 'read', state: { check } }, now: at,
   });
   const wire: LaneWire = { state, check, ready: true };
   if (r.id === 'lane-a') wire.identity = 'someone@example.invalid';
   return [r.id, wire];
 }));
+const LANES = lanesAt(now);
 
 const show = (lanes: Record<string, LaneWire> | null = LANES): void => {
   act(() => { useFleetStore.setState({ usage: USAGE, projected: { wrapper: 'lane-a', score: 1 }, roster: ROSTER, lanes }); });
@@ -155,6 +157,25 @@ describe('the Refined Accounts card: one state word per lane (D-7718)', () => {
     const a = card('lane-a');
     expect(a.querySelector('.accounts-state-source')?.textContent).toBe('checked 4m ago');
     expect(a.querySelector('.accounts-fresh')?.textContent).toBe('last reported 2m ago');
+  });
+
+  it("a held answer's source ages on the card's clock, as the card's other ages do (D-7718 (10))", () => {
+    // The answer the server wrote an hour ago, held since (the link down, the store keeping its last good read).
+    const held = lanesAt(now - 3_600_000);
+    expect(held['lane-b']!.state.source).toBe('HTTP 401 · checked 2h ago');
+    expect(held['lane-c']!.state.source).toMatch(/^5h limit reached · resets in 2h 1[12]m$/);
+    show(held);
+    const source = (id: string): string => card(id).querySelector('.accounts-state-source')?.textContent ?? '';
+    // The source and the trouble line say the same age, from the same instant.
+    expect(source('lane-b')).toBe('HTTP 401 · checked 3h ago');
+    expect(within(card('lane-b')).getByText("lane-b's token was refused (HTTP 401) 3h ago.")).toBeInTheDocument();
+    expect(source('lane-a')).toBe('checked 1h ago');
+    // The countdown counts down to the telemetry row's reset, as "Resets in" under it does.
+    expect(source('lane-c')).toMatch(/^5h limit reached · resets in 1h 1[12]m$/);
+    expect(within(card('lane-c')).getByText(/^Resets in 1h 1[12]m\./)).toBeInTheDocument();
+    // A source with no age stands, and the words are the server's.
+    expect(source('lane-d')).toBe('Off on the fleet host');
+    expect(cards().map((c) => c.dataset['state'])).toEqual(['signed-out', 'rate-limited', 'signed-in', 'off', 'signed-in']);
   });
 
   it('a Codex lane says weekly window only', () => {
