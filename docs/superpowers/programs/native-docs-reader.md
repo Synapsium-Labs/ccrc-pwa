@@ -1,7 +1,7 @@
 # Program: native-docs-reader
 
 Spec: `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md` (approved 2026-10-01)
-Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`
+Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`; W8a `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-canyon`   Workspace: a fresh child per wave
 
 **What this program is.** ccrc gains its own session-gated Docs reader for each install's own project docs:
@@ -28,9 +28,18 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (rich-docs spec 2026-10-12) | — | after W5 (operator, 2026-10-13) |
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
-| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | — | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. A split into W8a (the frame core) and W8b (after W5b) is with the operator (see Decisions, 2026-10-31) |
+| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | — | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, under the operator's review); **W8b**, the version menu and "changes since", after W5b; W7 last |
 
 ## Decisions & deviations
+- **2026-10-31: the W8 split and W8a's defaults (operator).** Asked six questions about the coordinator's proposal (the entry below), the operator answered "defaults":
+  - **(1) Order.** W8 splits. W8a, the frame core, runs now, in parallel with W5h-a and Share. W8b (G5, G6's version menu, `at=<sha>`) follows W5b. W7 moves last, so the README is written once.
+  - **(2) Frame code.** The library's own `./host` (`mountDocFrame`) is used, unless the plan finds it conflicts with ccrc's architecture rules. The W8a plan found no conflict: it mounts through one ccrc adapter, `docs/reader/bridge.ts`, and records the spec rows that this amends.
+  - **(3) Images.** W8a carries the images the plain view already shows. Mockups and the asset planner stay in W6.
+  - **(4) Mermaid.** It is inlined only for docs whose fences pass the gate, and drawn on tap (the library's on-request mode). Auto-draw may follow once the operator has measured on the phone.
+  - **(5) Colouring.** The frame's colouring (the library's `render()`) may differ from the plain fallback's for now.
+  - **(6) Done.** "Integrated" means W8a is live in ccrc. Retiring the standalone docs server is a separate, later gate (rich-docs spec §9).
+  - Why: the library is released, and the frame needs only what is on `main`. Cost if wrong: W8b and the retirement gate still wait for W5b, so a wrong order costs one re-plan, not a rewrite.
+  - The rich-docs spec is amended in place by the W8a plan's PR (marked "amended 2026-10-31"); the departures get their numbers from the allocator when W8a's run opens.
 - **2026-10-31: the library is released; W5 part 1's landing recorded; the W8 order goes to the operator (coordinator).**
   - What: `@synapsium-labs/docserver` 1.0.0 is published on npm from a signed tag, with provenance, so W8's "library v1" prerequisite is met. W5 part 1 merged on 2026-10-19 through #627 (`9b18fb0cd`); the waves table said otherwise until now. The coordinator proposes splitting W8: W8a, the frame core (the exact pin, the render job in W4's parse worker, `ReaderFrame` with the hash-only `READER_CSP`, the bridge without `changes` and `version`, the plain pipeline as fallback), to run in parallel with W5h-a and Share; W8b, the version menu and "changes since", after W5b; and W7 last, so the README is written once. The proposal amends the rich-docs spec's agreed order (RD24, the W8 row, Figure 3), not a ruling of the operator's, and W8a's plan comes to the operator for review like every wave's.
   - Why: as written, seven waves stand between the released library and its first use in ccrc, and W5h-b waits on a phone measurement. The frame needs only what is on `main` now (`copyText`, W4's parse worker, part 1's screen).
