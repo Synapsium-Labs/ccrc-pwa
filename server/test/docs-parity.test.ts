@@ -2,6 +2,8 @@
 // value it spells in one place is held to that one place where single-definition.test.ts cannot see it.
 // Docs W1a Task 5 lands M7.3's TS half: one DOCS_PAGE_PREFIX across the four TS roots. Later W1 tasks append the
 // helper's rows below (row 48, row 62, M3.12, helper hygiene); W4 appends M7.3's doctor half. APPEND ONLY.
+// W8a edits M7.9's block in place for the shared Markdown library's import specifiers (rich-docs spec A21, M8.18):
+// the one exception to append-only, recorded in its plan.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -507,6 +509,13 @@ import * as m79Cp from 'node:child_process';
 
 const M79_DIR = ['claude', 'docs' + '-preview'].join('-');
 const M79_NAME = ['doc', 'server'].join('');
+/**
+ * The one exception to the name (rich-docs spec A21, M8.18): in pwa/src only, the shared Markdown library's four
+ * import specifiers, as the quoted string right after `from` or `import(` (quotes matching): `/render`, `/frame`,
+ * `/host`, and `/assets/<path>?raw`. The bare package and every other subpath stay hits. Refinement (i): the PWA's
+ * vite.config.ts keeps the unmodified check.
+ */
+const M79_LIBRARY_SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*)(['"])@synapsium-labs\/docserver\/(?:render|frame|host|assets\/[A-Za-z0-9._\/-]+\?raw)\2/g;
 /** The two ruling comments: file -> the anchor sentence that locates the paragraph. */
 const M79_RULINGS: ReadonlyMap<string, string> = new Map([
   ['ccd/ccrc', 'A named `.' + M79_DIR + '` skip used to sit here.'],
@@ -541,7 +550,8 @@ function m79Scan(files: ReadonlyArray<readonly [string, string]>): string[] {
       if (line.includes(M79_DIR) && !allowed.has(i)) {
         out.push(`${name}:${i + 1}: the directory name outside the two ruling comments`);
       }
-      if (pwa && line.toLowerCase().includes(M79_NAME)) {
+      const checked = name.startsWith('pwa/src/') ? line.replace(M79_LIBRARY_SPECIFIER, '$1$2$2') : line;
+      if (pwa && checked.toLowerCase().includes(M79_NAME)) {
         out.push(`${name}:${i + 1}: the standalone server's name in the PWA`);
       }
     });
@@ -627,6 +637,69 @@ m79Vitest.describe('M7.9: the tree does not know a standalone docs server', () =
     m79Vitest.expect(added(swapped(doctor, textOf(doctor) + '\n# ' + anchor)))
       .toContain(`${doctor}: the ruling comment's anchor sentence appears 2 times, want 1`);
     m79Vitest.expect(added(files.filter(([n]) => n !== doctor))).toEqual([`${doctor}: not scanned`]);
+  });
+
+  // ---- W8a (rich-docs spec A21, M8.18): the shared Markdown library's import specifiers in pwa/src ----
+  const SRC_FILE = 'pwa/src/app.tsx';
+  const hitLine = (file: string): string => {
+    const n = textOf(file).split('\n').length;
+    return `${file}:${n + 1}: the standalone server's name in the PWA`;
+  };
+
+  m79Vitest.it('M8.18: a /frame import specifier in pwa/src is not a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n' +
+      "import { frameCsp } from '@synapsium-labs/docserver/frame';"))).toEqual([]);
+  });
+
+  m79Vitest.it('M8.18: /host and /render import specifiers in pwa/src are not hits', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n' +
+      "import { mountDocFrame } from '@synapsium-labs/docserver/host';\n" +
+      "const r = await import('@synapsium-labs/docserver/render');"))).toEqual([]);
+  });
+
+  m79Vitest.it('M8.18: an /assets ?raw dynamic import specifier in pwa/src is not a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n' +
+      'const g = await import("@synapsium-labs/docserver/assets/frame/guard.js?raw");'))).toEqual([]);
+  });
+
+  m79Vitest.it('M8.18: the word in a pwa/src comment is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + '\n// the ' + M79_NAME + ' mount')))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: the specifier in a string that is not an import is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nconst s = '@synapsium-labs/docserver/frame';")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: another scope is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nimport x from '@other/docserver/frame';")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: a longer name is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nimport x from '@synapsium-labs/docserverx/frame';")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: a trailing comment after an allowed import is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nimport { frameCsp } from '@synapsium-labs/docserver/frame'; // " + M79_NAME)))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: /frame?raw is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nconst f = await import('@synapsium-labs/docserver/frame?raw');")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: the bare package specifier is a hit', () => {
+    m79Vitest.expect(added(swapped(SRC_FILE, textOf(SRC_FILE) + "\nimport * as d from '@synapsium-labs/docserver';")))
+      .toEqual([hitLine(SRC_FILE)]);
+  });
+
+  m79Vitest.it('M8.18: an allowed specifier in pwa/vite.config.ts is still a hit', () => {
+    m79Vitest.expect(added(swapped(M79_PWA_CONFIG, textOf(M79_PWA_CONFIG) + "\nimport { frameCsp } from '@synapsium-labs/docserver/frame';")))
+      .toEqual([hitLine(M79_PWA_CONFIG)]);
   });
 });
 
