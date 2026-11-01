@@ -11,6 +11,7 @@ import type { DiskHolder } from '../../shared/disk.js';
 import type { Deps } from './deps.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { CoordStore } from './coord/store.js';
+import type { WatcherCoordPort } from './coord/ports.js';
 import { queueSystemMail } from './coord/rundefsTx.js';
 import { survivorOf } from './coord/rundefs.js';
 import { readCoordinatorOfRun } from './coord/bindingReads.js';
@@ -56,7 +57,7 @@ function mailOnce(coord: CoordStore, toId: string, subject: string, body: string
  *  no run of its own, the run is ownerless, or the session claims it itself), `ok: false` when the session's runs or the run
  *  row cannot be read. The caller LATCHES the notice on an answer, so an unreadable read must defer, never read as "nobody to
  *  tell" (D-2545; `readCoordinatorOfRun`, not the collapsing `coordinatorOfRun`). */
-function coordinatorOf(coord: CoordStore, sessionId: string): { ok: true; id: string | null } | { ok: false; detail: string } {
+function coordinatorOf(coord: WatcherCoordPort, sessionId: string): { ok: true; id: string | null } | { ok: false; detail: string } {
   const open = coord.bindingsOf(sessionId).worker();
   if (!open.ok) return { ok: false, detail: open.detail };
   const run = survivorOf(open.siblings);
