@@ -102,6 +102,15 @@ describe('the managed account deny file (D-6202)', () => {
     for (const p of writes) expect(anyRule('Edit', { file_path: sample(p) }), p).toMatch(/^Edit\(/);
   });
 
+  it('the list refuses a Read of the Linear slot store and the legacy key (D-7675; #1444 §13.3)', () => {
+    expect(ACCOUNT_SECRET_PATHS).toEqual(expect.arrayContaining(['~/.ccrc/linear/**', '~/.ccrc/linear.key']));
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear/x.key' })).toBe('Read(~/.ccrc/linear/**)');
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear/x.json' })).toBe('Read(~/.ccrc/linear/**)');
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear.key' })).toBe('Read(~/.ccrc/linear.key)');
+    // the legacy details file holds no key, and stays readable
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear.json' })).toBeUndefined();
+  });
+
   it('the list names every verb in ACCOUNT_CLI_ONLY_VERBS by its CLI spelling', () => {
     expect(Object.keys(ACCOUNT_CLI_ONLY_VERBS)).toEqual(expect.arrayContaining(['seed', 'openrouter-management ceiling', 'ccd-account-auth', 'ccd account-pane']));
     for (const [verb, cli] of Object.entries(ACCOUNT_CLI_ONLY_VERBS)) expect(bashDenied(`${cli} --x`), verb).toBeDefined();
@@ -138,6 +147,17 @@ describe('CLAUDE.md\'s SAFETY section (D-6202)', () => {
     ].filter((w) => !s.includes(w));
     expect(missing).toEqual([]);
     expect(s).toMatch(/accident guard/);
+  });
+  it('CLAUDE.md\'s SAFETY section names the Linear slot store and the legacy key among the paths a session never reads (D-7675)', () => {
+    const s = safety();
+    const at = s.indexOf('**Account management is never a session\'s**');
+    expect(at, 'the account-management bullet').toBeGreaterThanOrEqual(0);
+    const bullet = s.slice(at);
+    const end = bullet.indexOf('; writes under');
+    expect(end, 'the bullet\'s list of paths a session never reads').toBeGreaterThan(0);
+    const reads = bullet.slice(0, end);
+    expect(reads).toContain('`~/.ccrc/linear/`');
+    expect(reads).toContain('`~/.ccrc/linear.key`');
   });
   it('CLAUDE.md\'s SAFETY section says that switching accounts and the auto-swap are never refused', () => {
     expect(safety()).toMatch(/[Ss]witching\s+accounts\s+and\s+the\s+auto-swap\s+are\s+never\s+refused/);

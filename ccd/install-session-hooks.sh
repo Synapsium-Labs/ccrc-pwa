@@ -226,7 +226,8 @@ _account_deny_json() {
     rules+=("Bash(ccrc account $w:*)")
   done
   rules+=('Bash(ccd-account-auth:*)' 'Bash(ccd account-pane:*)')
-  for p in '~/.cc-secrets/**' '~/.ccrc/auth-scratch/**' '~/.ccrc/codex/*/runtime.env' '~/.ccrc/agent.env'; do
+  for p in '~/.cc-secrets/**' '~/.ccrc/auth-scratch/**' '~/.ccrc/codex/*/runtime.env' '~/.ccrc/agent.env' \
+           '~/.ccrc/linear/**' '~/.ccrc/linear.key'; do
     rules+=("Read($p)")
   done
   for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done

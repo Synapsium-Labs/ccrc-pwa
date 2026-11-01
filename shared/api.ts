@@ -12550,11 +12550,11 @@ export const ACCOUNT_CLI_ONLY_VERBS: Readonly<Record<string, string>> = Object.f
 export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
-/** The account paths the guard covers (spec §3.1), as `~`-anchored spellings: Read (and Bash) of the first four,
- *  writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log` and
- *  `~/.cc-sessions/<id>.wrapper`, and a read of `.accounts/<id>.json` is not refused (spec §3.1 lists writes only). */
+/** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675), `~`-anchored: Read (and
+ *  Bash) of the first six, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
-  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env'];
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 
 /** The `permissions.deny` list of `~/.cc-sessions/account-deny.settings.json` (D-6202), which `ccd` passes to EVERY

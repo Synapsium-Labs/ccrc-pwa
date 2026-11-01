@@ -4896,7 +4896,8 @@ fi
 # (`ccrc account <ACCTV>` in `fmatch` and, for a `$VAR` program naming `ccrc`, `xmatch`; `ccd account-pane`; the
 # `ccd-account-auth` program, never a file merely named like it), read as written and as bash runs it (`norm`), and
 # `apmatch`: a Bash call naming a secret or scratch path (`~/.cc-secrets`, `~/.ccrc/auth-scratch`,
-# `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`), a write under `~/.cc-sessions/.auth` or `.accounts`, and a
+# `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`, D-7675's Linear slot store `~/.ccrc/linear/` and legacy key
+# `~/.ccrc/linear.key`), a write under `~/.cc-sessions/.auth` or `.accounts`, and a
 # bare `env` or `printenv` (alone, `-0` or `--null`; never with an operand, so `env FOO=1 ccd swap-self …` and
 # `printenv TMUX` pass); and `acctpath` for Read, Grep, Glob and the edit tools. A child's `deny` mode answers the same
 # category beside its own. `class` mode gains only the verb rows (the classifier's `FORBIDDEN_PATTERNS` hold the same).
@@ -5046,7 +5047,7 @@ def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
       elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
-def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
+def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
 def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts)(?![A-Za-z0-9_.-])";
 def ENVP: "(?:[(`{]|\\$\\()";
 def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
@@ -5056,7 +5057,7 @@ def apmatch:
   (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
   (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
   (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
-def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$";
+def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$";
 def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
 def acctpath($t; $i):
   if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD)) | "account\ta write to an account path")
@@ -5108,7 +5109,8 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
-       || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *printenv* \
+       || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's

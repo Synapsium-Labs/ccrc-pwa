@@ -134,8 +134,9 @@ real values: `deploy/reference-fleet.md` (gitignored).
   coordinator or child — runs the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`,
   `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
   included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
-  `~/.ccrc/codex/*/runtime.env` or `~/.ccrc/agent.env`; writes under `~/.cc-sessions/.auth/` or
-  `~/.cc-sessions/.accounts/`; or prints the whole environment (bare `env`, `printenv`). They are the operator's, from
+  `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/` or the legacy
+  `~/.ccrc/linear.key` (D-7675); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  whole environment (bare `env`, `printenv`). They are the operator's, from
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
