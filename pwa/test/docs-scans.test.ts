@@ -172,21 +172,45 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 //   `lib/readerRenderJob.ts`; `/assets/…?raw` in `docs/reader/assets.ts`; `/frame` under `docs/reader/`; the bare
 //   package, `/enhance`, `/highlight`, `/conformance` and every other subpath nowhere.
 //   In `pwa/src/docs`: no `postMessage` call, no `MessageChannel` identifier, no `onmessage` member, no JSX `iframe`
-//   element, no `srcDoc` / `srcdoc` JSX attribute or string, no `default-src 'none'` string; except Export's two
-//   allowances, by exact path (A2b, M8.10): the `iframe` element and `srcDoc` in `docs/export/buildExport.tsx`, and
-//   `default-src 'none'` in `docs/export/policy.ts`. The allowance holds whether or not those files exist yet.
-// NOT EXHAUSTIVE. Known evasions it does not see: a specifier built at run time (`import(name)`, a template with a
-// substitution), `eval` and `new Function`, a re-export through a file outside `pwa/src`, a `message` listener added
-// through a variable holding the event name (`addEventListener(type, …)`) or through an alias of the global scope
-// (`const w = window; w.onmessage = …`), an `iframe` made with `createElement('iframe')` or a computed tag, a
-// `srcdoc` attribute set through `setAttribute` with a built name, and a `default-src` string assembled from
-// pieces. Review lens 4 reads for those; the library's own frame tests and `reader-bridge.test.ts` hold the runtime
-// side.
+//   element or string holding `<iframe`, no `srcdoc` (any case) identifier, property name, JSX attribute or string, no
+//   `default-src 'none'` string (any case); except Export's two allowances, by exact path (A2b, M8.10): the `iframe`
+//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`. The
+//   allowance holds whether or not those files exist yet.
+//   Across `pwa/src`: `addEventListener('message', …)` as a member call or a bare call, and an assignment to
+//   `window.onmessage`, `self.onmessage`, `globalThis.onmessage` or a bare `onmessage`, outside the parse workers'
+//   own entries.
+//   The main bundle (the "Library imports" constraint): `docs/reader/bridge` and `docs/reader/assets` reach it only
+//   through `docs/ReaderFrame.tsx`'s two literal dynamic `import()` calls; any other value import of either, static
+//   or dynamic, is red, save the bridge's own static import of the assets (the bridge loads lazily, so what it imports
+//   is lazy with it). `import type` is allowed anywhere.
+// NOT EXHAUSTIVE. Known evasions it does not see:
+//   - a specifier string outside an import form is not a use: a specifier built at run time (`import(name)`, a
+//     template with a substitution), `require`, `new URL(…, import.meta.url)`, `import.meta.glob`, `declare module`
+//     and `/// <reference types>` are none of them uses; nor are `eval` and `new Function`;
+//   - a re-export through a file outside `pwa/src`, and a relative path into the library's `dist` under
+//     `node_modules` (that one is backstopped by docs-parity's M7.9 name check, which reds on the package's directory
+//     name in `pwa/src`);
+//   - a `message` listener added through a variable holding the event name (`addEventListener(type, …)`), or an
+//     `onmessage` assigned through an alias of the global scope (`const w = window; w.onmessage = …`);
+//   - a `postMessage` reached through `.call`, `.apply`, `.bind` or an alias (`const post = window.postMessage`);
+//   - an `iframe` made with `createElement('iframe')` or a computed tag, a `srcdoc` attribute set through
+//     `setAttribute` with a built name, and a `default-src` string assembled from pieces.
+// Review lens 4 reads for those; the library's own frame tests and `reader-bridge.test.ts` hold the runtime side.
 // ---------------------------------------------------------------------------------------------------------------
 const SRC_DIR = path.join(PWA, 'src');
 const LIBRARY = '@synapsium-labs/docserver';
+/** The two value uses of the adapters that keep them out of the main bundle: ReaderFrame's literal dynamic `import()`s,
+ * and the bridge's own static import of the assets (the bridge is itself loaded only through that dynamic import, so
+ * what it imports is lazy with it). */
+function adapterUseAllowed(file: string, target: string, dynamic: boolean): boolean {
+  return (file === ADAPTER_LOADER && dynamic) || (file === 'src/docs/reader/bridge.ts' && target === 'src/docs/reader/assets');
+}
 /** The worker-side render job, as a base-relative path without its extension. */
 const RENDER_JOB = 'src/lib/readerRenderJob';
+/** The two reader adapters that must stay out of the main bundle, base-relative without an extension. */
+const READER_ADAPTERS: readonly string[] = ['src/docs/reader/bridge', 'src/docs/reader/assets'];
+/** The one file that may load them, and only as a literal dynamic `import()` (the "Library imports" constraint). */
+const ADAPTER_LOADER = 'src/docs/ReaderFrame.tsx';
 
 /** One finding: the file (relative to the scanned base, `/` separators), where, and which rule. */
 interface ReaderHit { file: string; at: string; rule: string }
@@ -212,7 +236,7 @@ function exportAllows(kind: 'iframe' | 'policy', file: string): boolean {
 }
 
 /** A module specifier an import, export or `import()` names; `value` is false for the type-only forms. */
-interface ModuleUse { specifier: string; value: boolean; node: ts.Node }
+interface ModuleUse { specifier: string; value: boolean; dynamic: boolean; node: ts.Node }
 
 const isPlainString = (n: ts.Node): n is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral =>
   ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n);
@@ -221,17 +245,17 @@ function moduleUses(sf: ts.SourceFile): ModuleUse[] {
   const out: ModuleUse[] = [];
   const visit = (n: ts.Node): void => {
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
-      out.push({ specifier: n.moduleSpecifier.text, value: n.importClause?.isTypeOnly !== true, node: n });
+      out.push({ specifier: n.moduleSpecifier.text, value: n.importClause?.isTypeOnly !== true, dynamic: false, node: n });
     } else if (ts.isExportDeclaration(n) && n.moduleSpecifier !== undefined && ts.isStringLiteral(n.moduleSpecifier)) {
-      out.push({ specifier: n.moduleSpecifier.text, value: !n.isTypeOnly, node: n });
+      out.push({ specifier: n.moduleSpecifier.text, value: !n.isTypeOnly, dynamic: false, node: n });
     } else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference)
       && ts.isStringLiteral(n.moduleReference.expression)) {
-      out.push({ specifier: n.moduleReference.expression.text, value: !n.isTypeOnly, node: n });
+      out.push({ specifier: n.moduleReference.expression.text, value: !n.isTypeOnly, dynamic: false, node: n });
     } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword
       && n.arguments[0] !== undefined && isPlainString(n.arguments[0])) {
-      out.push({ specifier: n.arguments[0].text, value: true, node: n });
+      out.push({ specifier: n.arguments[0].text, value: true, dynamic: true, node: n });
     } else if (ts.isImportTypeNode(n) && ts.isLiteralTypeNode(n.argument) && ts.isStringLiteral(n.argument.literal)) {
-      out.push({ specifier: n.argument.literal.text, value: false, node: n });
+      out.push({ specifier: n.argument.literal.text, value: false, dynamic: false, node: n });
     }
     ts.forEachChild(n, visit);
   };
@@ -239,11 +263,11 @@ function moduleUses(sf: ts.SourceFile): ModuleUse[] {
   return out;
 }
 
-/** Whether a relative specifier, written in `file`, names the render job (query and extension set aside). */
-function namesRenderJob(file: string, specifier: string): boolean {
-  if (!specifier.startsWith('.')) return false;
+/** The base-relative path (no extension) a relative specifier written in `file` names; undefined for a bare one. */
+function relativeTarget(file: string, specifier: string): string | undefined {
+  if (!specifier.startsWith('.')) return undefined;
   const bare = specifier.replace(/[?#].*$/, '').replace(/\.(?:[cm]?[jt]sx?)$/, '');
-  return path.posix.normalize(path.posix.join(path.posix.dirname(file), bare)) === RENDER_JOB;
+  return path.posix.normalize(path.posix.join(path.posix.dirname(file), bare));
 }
 
 /** The text of every string-like piece of a node: a string, a template without substitutions, a template part. */
@@ -268,9 +292,15 @@ function scanReaderFile(source: string, file: string): { hits: ReaderHit[]; uses
       const sub = use.specifier.slice(LIBRARY.length);
       const home = LIBRARY_HOMES.find(([isSub]) => isSub(sub));
       if (home === undefined || !home[1](file)) hit(use.node, `library:${sub === '' ? '(bare)' : sub.replace(/^(\/[^/]+).*$/, '$1')}`);
-    } else if (namesRenderJob(file, use.specifier)) {
-      uses.push(`${file} ${use.specifier}`);
-      if (use.value && !renderJobValueHome(file)) hit(use.node, 'render-job:value-import');
+    } else {
+      const target = relativeTarget(file, use.specifier);
+      if (target === RENDER_JOB) {
+        uses.push(`${file} ${use.specifier}`);
+        if (use.value && !renderJobValueHome(file)) hit(use.node, 'render-job:value-import');
+      } else if (target !== undefined && READER_ADAPTERS.includes(target)) {
+        uses.push(`${file} ${use.specifier}`);
+        if (use.value && !adapterUseAllowed(file, target, use.dynamic)) hit(use.node, 'main-bundle:value-import');
+      }
     }
   }
 
@@ -285,25 +315,29 @@ function scanReaderFile(source: string, file: string): { hits: ReaderHit[]; uses
       if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'onmessage') hit(n, 'docs:onmessage');
       if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && ts.isIdentifier(n.tagName) && n.tagName.text === 'iframe'
         && !exportAllows('iframe', file)) hit(n, 'docs:iframe');
-      if (ts.isJsxAttribute(n) && ts.isIdentifier(n.name) && n.name.text.toLowerCase() === 'srcdoc'
-        && !exportAllows('iframe', file)) hit(n, 'docs:srcDoc');
+      // `srcdoc` in any case as a name: a JSX attribute, a member (`el.srcdoc =`), a property (`{ srcDoc: x }`).
+      if (ts.isIdentifier(n) && n.text.toLowerCase() === 'srcdoc' && !exportAllows('iframe', file)) hit(n, 'docs:srcDoc');
       const text = stringText(n);
       if (text !== undefined) {
+        if (/<iframe/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:iframe');
         if (/srcdoc/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:srcDoc');
-        if (/default-src\s+'none'/.test(text) && !exportAllows('policy', file)) hit(n, 'docs:default-src-none');
+        if (/default-src\s+'none'/i.test(text) && !exportAllows('policy', file)) hit(n, 'docs:default-src-none');
       }
     }
     if (inMessageScope(file)) {
-      if (ts.isCallExpression(n) && memberName(unwrap(n.expression)) === 'addEventListener'
-        && n.arguments[0] !== undefined && isPlainString(n.arguments[0]) && n.arguments[0].text === 'message') {
-        hit(n, 'message:addEventListener');
+      if (ts.isCallExpression(n) && n.arguments[0] !== undefined && isPlainString(n.arguments[0]) && n.arguments[0].text === 'message') {
+        const callee = unwrap(n.expression);
+        if ((ts.isIdentifier(callee) && callee.text === 'addEventListener') || memberName(callee) === 'addEventListener') {
+          hit(n, 'message:addEventListener');
+        }
       }
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && !MESSAGE_ASSIGN_HOMES.includes(file)) {
         const target = unwrap(n.left);
-        if (memberName(target) === 'onmessage' && (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target))) {
+        if (ts.isIdentifier(target) && target.text === 'onmessage') {
+          hit(n, 'message:onmessage');
+        } else if ((ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) && memberName(target) === 'onmessage') {
           const owner = unwrap(target.expression);
-          if (ts.isIdentifier(owner) && ['window', 'self', 'globalThis'].includes(owner.text)
-            && !MESSAGE_ASSIGN_HOMES.includes(file)) hit(n, 'message:onmessage');
+          if (ts.isIdentifier(owner) && ['window', 'self', 'globalThis'].includes(owner.text)) hit(n, 'message:onmessage');
         }
       }
     }
@@ -431,5 +465,96 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     const dir = treeCopy();
     plant(dir, 'src/docs/ReaderFrame.tsx', "\nimport { answerRenderJob } from '../lib/readerRenderJob';\nvoid answerRenderJob;\n");
     expect(names(readerScan(dir).hits, 'render-job:')).toEqual(['src/docs/ReaderFrame.tsx render-job:value-import']);
+  });
+
+  /** Plants `text` in one file of a fresh copy and returns every finding, as `<file> <rule>`. */
+  function planted(rel: string, text: string): string[] {
+    const dir = treeCopy();
+    plant(dir, rel, text);
+    return names(readerScan(dir).hits, '');
+  }
+  const LEAF = 'src/docs/DocsLeaf.tsx';
+  const ROUTER = 'src/lib/router.ts';
+
+  it('M8.10 planted: a bare addEventListener message listener in lib/router is red', () => {
+    expect(planted(ROUTER, "\naddEventListener('message', () => undefined);\n")).toEqual([`${ROUTER} message:addEventListener`]);
+  });
+
+  it('M8.10 planted: a self.onmessage assignment in lib/router is red', () => {
+    expect(planted(ROUTER, '\nself.onmessage = () => undefined;\n')).toEqual([`${ROUTER} message:onmessage`]);
+  });
+
+  it('M8.10 planted: a bare onmessage assignment in lib/router is red', () => {
+    expect(planted(ROUTER, '\nonmessage = () => undefined;\n')).toEqual([`${ROUTER} message:onmessage`]);
+  });
+
+  it('M8.10 planted: a JSX iframe in DocsLeaf is red', () => {
+    expect(planted(LEAF, '\nexport const PlantedIframe = () => <iframe />;\n')).toEqual([`${LEAF} docs:iframe`]);
+  });
+
+  it('M8.10 planted: a string holding an iframe tag in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nexport const PLANTED_TAG = '<iframe sandbox>';\n")).toEqual([`${LEAF} docs:iframe`]);
+  });
+
+  it('M8.10 planted: a MessageChannel in DocsLeaf is red', () => {
+    expect(planted(LEAF, '\nexport const planted = () => new MessageChannel();\n')).toEqual([`${LEAF} docs:MessageChannel`]);
+  });
+
+  it('M8.10 planted: an onmessage member in DocsLeaf is red', () => {
+    expect(planted(LEAF, '\nexport const planted = (x: { onmessage: unknown }, f: () => void) => { x.onmessage = f; };\n'))
+      .toEqual([`${LEAF} docs:onmessage`]);
+  });
+
+  it('M8.10 planted: a srcdoc string in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nexport const PLANTED_KEY = 'srcdoc';\n")).toEqual([`${LEAF} docs:srcDoc`]);
+  });
+
+  it('M8.10 planted: srcdoc as a member name and as a property name in DocsLeaf is red', () => {
+    expect(planted(LEAF, '\nexport const planted = (el: { x: string }, v: string) => { Reflect.set(el, "k", { srcDoc: v }); (el as never as { srcdoc: string }).srcdoc = v; };\n'))
+      .toEqual([`${LEAF} docs:srcDoc`, `${LEAF} docs:srcDoc`, `${LEAF} docs:srcDoc`]);
+  });
+
+  it('M8.10 planted: an upper-case default-src none string in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nexport const PLANTED_POLICY = \"DEFAULT-SRC 'NONE'\";\n")).toEqual([`${LEAF} docs:default-src-none`]);
+  });
+
+  it('M8.10 planted: the bare package import in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/docserver';\nvoid planted;\n")).toEqual([`${LEAF} library:(bare)`]);
+  });
+
+  it('M8.10 planted: an /enhance import in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nimport * as planted from '@synapsium-labs/docserver/enhance';\nvoid planted;\n")).toEqual([`${LEAF} library:/enhance`]);
+  });
+
+  it('M8.10 planted: a /frame import in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nimport { frameDocument } from '@synapsium-labs/docserver/frame';\nvoid frameDocument;\n"))
+      .toEqual([`${LEAF} library:/frame`]);
+  });
+
+  it('M8.10 planted: an /assets raw import outside assets.ts is red', () => {
+    expect(planted(LEAF, "\nimport planted from '@synapsium-labs/docserver/assets/frame/guard.js?raw';\nvoid planted;\n"))
+      .toEqual([`${LEAF} library:/assets`]);
+  });
+
+  it("Library imports: the reader adapters reach the main bundle only through ReaderFrame's two dynamic imports", () => {
+    const { hits, uses } = readerScan(PWA);
+    const loader = (spec: string): string[] => uses.filter((u) => u === `src/docs/ReaderFrame.tsx ${spec}`);
+    // The bridge is named twice there (an `import type` and the dynamic import), the assets once (the dynamic import).
+    expect(loader('./reader/bridge')).toHaveLength(2);
+    expect(loader('./reader/assets')).toHaveLength(1);
+    expect(uses.filter((u) => /\/reader\/(?:bridge|assets)$/.test(u))).toHaveLength(3);
+    expect(names(hits, 'main-bundle:')).toEqual([]);
+  });
+
+  it('Library imports planted: a static import of ./reader/bridge in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nimport { mountReader } from './reader/bridge';\nvoid mountReader;\n")).toEqual([`${LEAF} main-bundle:value-import`]);
+  });
+
+  it('Library imports planted: a dynamic import of ./reader/assets in DocsLeaf is red', () => {
+    expect(planted(LEAF, "\nexport const planted = () => import('./reader/assets');\n")).toEqual([`${LEAF} main-bundle:value-import`]);
+  });
+
+  it('Library imports planted: an import type of ./reader/bridge in DocsLeaf is allowed', () => {
+    expect(planted(LEAF, "\nimport type { ReaderMount } from './reader/bridge';\nexport type PlantedMount = ReaderMount;\n")).toEqual([]);
   });
 });

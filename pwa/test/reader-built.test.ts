@@ -4,10 +4,11 @@
 // and markdown-worker-built.test.ts do) and reads the output:
 // - exactly one emitted file is the Mermaid script's chunk, and the generated service worker does not precache it
 //   (`globIgnores` in vite.config.ts; without it the plugin's size ceiling throws and the build fails);
-// - the guard, bootstrap, enhance and reader stylesheet chunks ARE precached, so a client offline can still open a
-//   document in the reader;
+// - the guard, bootstrap, enhance and reader stylesheet chunks, and the render job's chunk, ARE precached, so a client
+//   offline can still open and render a document in the reader;
 // - each of the five frame assets reaches the bundle as exactly one chunk holding its text exactly;
-// - the built shell holds the one Content-Security-Policy meta, `frame-src 'none'`, before any script or style;
+// - the built shell holds the one Content-Security-Policy meta, `frame-src 'none'`, before any script, style,
+//   stylesheet link or module preload;
 // - the Geist pair is still precached.
 // A `?raw` import is emitted as a JS string literal: quotes, newlines and non-ASCII characters are escaped in the
 // chunk, and every frame script opens with `"use strict";` and a newline, so a chunk is never found by matching the
@@ -108,6 +109,13 @@ describe('the built reader and the precache (A9, M8.13, M8.14 as read by refinem
     for (const key of ['guard', 'bootstrap', 'enhance', 'css'] as const) {
       expect(urls, `${key} (${FRAME_MANIFEST[key].path})`).toContain(chunkOf(FRAME_MANIFEST[key].sha256));
     }
+    // And the render job's lazy chunk, so a client offline can still render. Found by its name pattern AND its
+    // content: lib/readerRenderJob.ts's chunk exports `answerRenderJob` (the parse worker's first render job imports it).
+    const assets = path.join(out, 'assets');
+    const job = readdirSync(assets).filter((n) => /^readerRenderJob-.+\.js$/.test(n)
+      && /\banswerRenderJob\b/.test(readFileSync(path.join(assets, n), 'utf8')));
+    expect(job, 'one emitted readerRenderJob chunk that exports answerRenderJob').toHaveLength(1);
+    expect(urls).toContain(`assets/${job[0]}`);
   });
 
   it("the emitted chunks carry each frame asset's text exactly", () => {
@@ -125,9 +133,11 @@ describe('the built reader and the precache (A9, M8.13, M8.14 as read by refinem
       .map((d) => d.split(/[\t\n\f\r ]+/));
     expect(directives).toEqual([['frame-src', "'none'"]]);
     const at = all.indexOf(metas[0]!);
-    const firstScript = all.findIndex((e) => e.tagName === 'SCRIPT' || e.tagName === 'STYLE');
-    expect(firstScript).toBeGreaterThanOrEqual(0);
-    expect(at).toBeLessThan(firstScript);
+    // Every element that can start a load or run code: scripts, styles, stylesheet links and module preloads.
+    const loads = all.filter((e) => e.tagName === 'SCRIPT' || e.tagName === 'STYLE'
+      || (e.tagName === 'LINK' && ['stylesheet', 'modulepreload'].includes((e.getAttribute('rel') ?? '').toLowerCase())));
+    expect(loads.length).toBeGreaterThan(0);
+    for (const el of loads) expect(at, `the meta precedes <${el.tagName.toLowerCase()} ${el.getAttribute('rel') ?? el.getAttribute('src') ?? ''}>`).toBeLessThan(all.indexOf(el));
   });
 
   it("ccrc's own Geist woff2 files are still precached", () => {
