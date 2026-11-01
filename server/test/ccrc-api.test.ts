@@ -203,11 +203,24 @@ describe('the closed route table', () => {
     // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
     [['testbox', 'status'], 'GET', '/api/testbox'],
     [['testbox', 'tools-sync'], 'POST', '/api/testbox/tools-sync'],
+    // The twelve Linear rows (D-7669, #1444): every one derives the pane's identity into its query, so each runs in a pane.
+    [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces'],
+    [['linear', 'teams'], 'GET', '/api/linear/proxy/teams'],
+    [['linear', 'issue', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12'],
+    [['linear', 'search'], 'POST', '/api/linear/proxy/search'],
+    [['linear', 'comments', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12/comments'],
+    [['linear', 'statuses'], 'GET', '/api/linear/proxy/statuses'],
+    [['linear', 'projects'], 'GET', '/api/linear/proxy/projects'],
+    [['linear', 'labels'], 'GET', '/api/linear/proxy/labels'],
+    [['linear', 'users'], 'GET', '/api/linear/proxy/users'],
+    [['linear', 'create'], 'POST', '/api/linear/proxy/issues'],
+    [['linear', 'update', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12'],
+    [['linear', 'comment', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/comments'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
-      || (args[0] === 'approvals' && args[1] === 'show');
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear';
     if (paned) plantPane('demo-ws');
     await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -241,7 +254,8 @@ describe('the closed route table', () => {
     // Thirty-one since the claimant's approvals rows (plan Task 16).
     // Thirty-three since the test box's status and tools-sync rows (test box plan TB9, D-7411).
     // Thirty-four since the landing line's read (landing order wave 5e, D-7625).
-    expect(keys).toHaveLength(34);
+    // Forty-six since the twelve Linear rows (D-7669, #1444).
+    expect(keys).toHaveLength(46);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -251,7 +265,9 @@ describe('the closed route table', () => {
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
       23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
       27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
-      32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four',
+      32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four', 35: 'thirty-five', 36: 'thirty-six',
+      37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
+      43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -399,6 +415,10 @@ describe('the four claimant rows send the question door family, and refuse local
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
       ['testbox', 'status'], ['testbox', 'tools-sync'],
+      ['linear', 'workspaces'], ['linear', 'teams', '--workspace', 'ws-a'], ['linear', 'issue', 'AAA-12'],
+      ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
+      ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
+      ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');
