@@ -122,12 +122,15 @@ Block 7719 to 7726, issued 2026-11-01 for this wave. Define a number only where 
 
 ## As built
 
-Commits on this workspace's branch, in order: the plan copy; Task 2 (W33-b); Task 1 (W33-a) and its fix round; the README lines; this section.
+Commits on this workspace's branch, in order: the plan copy; Task 2 (W33-b); Task 1 (W33-a) and its fix round; this section; the unused block's rewording; the final review's fix wave (the installer's knob validation, a test title, one more compatibility pin); this section's last update.
+
+**README lines carried to the coordinator's close-out docs PR (mail 13684).** Task 2 Step 6's two `README.md` sentences (`:938` and `:3739`) are not in this PR: `README.md` stayed under another programme's live claim for the whole wave, and the coordinator ruled that this PR lands without them and that its close-out docs PR, opened under its own claim once that one is released, changes them with `docs-parity` and the README pins in its gate. The File structure row for `README.md` is deviated by that ruling, with no deviation number. `CLAUDE.md`'s sentence is changed here.
 
 ### Rulings during the wave
 
 - **Ask 280 (Task 1, URL redaction): userinfo only.** Measured on `main`: `_upd_redact` masks a URL's userinfo and this box's home directory, and passes a query (`?token=x`) and a fragment (`#frag`) through whole, as its own OUT OF SCOPE note says. So Step 1's row "no line contains `token=x` or `frag`" contradicted the Global Constraint that `install.sh`'s copy is byte-equal to `_upd_redact`. The operator and the coordinator ruled the same way: the Global Constraint and Review Focus row 3 govern; the query and fragment rows are dropped; the userinfo row stays; no refusal of a base URL carrying `?` or `#` is added. The coordinator carries that gap, and the updater's matching one, to the programme's follow-up issue. No deviation number: the plan's governing text is unchanged.
-- **The redactor copy is held equal by OUTPUT, not by text.** `install.sh --release` runs before the script's macOS bash-3.2 refusal, and bash up to 4.2 keeps the quotes of a quoted `${s/pat/"rep"}` replacement literally (measured with `BASH_COMPAT=42` and `=40`: `https"://"h/r/...`; the userinfo was still removed). The copy's replacements are written as a first-occurrence replace with no pattern substitution (`s="${s%%"$m"*}$r${s#*"$m"}"`), which also avoids bash 5.2's `&` expansion in an unquoted replacement. Three pins hold it to `_upd_redact` byte for byte: under the default bash, under `BASH_COMPAT=42` and under `BASH_COMPAT=40`, each over the eight named shapes and the log-line redaction corpus. No real bash 3.2 binary was run; the compatibility levels stand in for its quoting rule.
+- **The redactor copy is held equal by OUTPUT, not by text.** `install.sh --release` runs before the script's macOS bash-3.2 refusal, and bash up to 4.2 keeps the quotes of a quoted `${s/pat/"rep"}` replacement literally (measured with `BASH_COMPAT=42` and `=40`: `https"://"h/r/...`; the userinfo was still removed). The copy's replacements are written as a first-occurrence replace with no pattern substitution (`s="${s%%"$m"*}$r${s#*"$m"}"`), which also avoids bash 5.2's `&` expansion in an unquoted replacement. Four pins hold it to `_upd_redact` byte for byte: under the default bash, under `BASH_COMPAT=42`, `=40` and `=32`, each over the eight named shapes and the log-line redaction corpus. No real bash 3.2 binary was run; the compatibility levels stand in for its quoting rule.
+- **The five knobs are validated as the updater validates them** (the final review's fix wave). curl reads `0` as no limit for `--max-filesize`, `--max-time`, `--connect-timeout` and `--speed-limit` (measured: `--max-filesize 0` let a 10000-byte file through, exit 0), so honouring the five names without the updater's `_upd_validate_timeout` rule would let a `0` in the operator's environment switch a bound off. `install.sh` now uses a value only when it is a whole number from 1 to that knob's ceiling (3600 for the three time knobs, 100000000 for `CCRC_RELEASE_SPEED_LIMIT`, 1048576 for `CCRC_RELEASE_SUMS_MAX_FILESIZE`); anything else falls back to the default with one `install.sh: WARN:` line. A pin holds its defaults and ceilings equal to the ones `ccd/ccrc`'s `_upd_resolve` passes.
 - **`derivedBuilds` stays.** It is still called by `inventoryBuilds`, whose pair is now only the input `buildAgreement` decides from; its comments no longer call that pair `FleetHealth.builds`.
 - **Task 2, Step 5:** `ccd/ccrc`'s `_box_health` reads `j.build`, never `builds`, so nothing in the shell had to change and `_upd_fleet_warn` still warns on `skewed`.
 - **`server/test/single-definition.test.ts`** is the directory `server/test/single-definition/` on `main`; all of it was run. No allowlist entry was needed for the installer's copies.
@@ -138,8 +141,8 @@ Commits on this workspace's branch, in order: the plan copy; Task 2 (W33-b); Tas
 | Row | Pinned by (`server/test/`) |
 |---|---|
 | 1. A tarball name with `/`, `..`, a control or non-printable byte, or over 128 bytes: refused before any `curl -o`, never printed | `install-sh.test.ts`: the name-rule rows (path separator, traversal, `..`, ESC, non-ASCII, UTF-8 caller locale, 129 bytes refused and 128 bytes installed, not a ccrc tarball, the `*` marker); each asserts exit 1, that the second fetch never ran, and that the raw name is on neither stream |
-| 2. SHA256SUMS over 4096 bytes, or trickled forever: refused within the bounds, URL redacted | `install-sh.test.ts`: the 4097-byte row, the below-the-floor rows (SHA256SUMS and tarball), the above-the-floor trickle row ended by `--max-time`, the flag-set row and the five-defaults pin |
-| 3. A base URL with userinfo: every printed line redacted exactly as `_upd_redact` would | `install-sh.test.ts`: the userinfo rows (a good run, a failed SHA256SUMS fetch, a failed tarball fetch) and the three redactor equality pins |
+| 2. SHA256SUMS over 4096 bytes, or trickled forever: refused within the bounds, URL redacted | `install-sh.test.ts`: the 4097-byte row, the below-the-floor rows (SHA256SUMS and tarball), the above-the-floor trickle row ended by `--max-time`, the flag-set row, the five-defaults pin, the knob-validation rows (`0`, `abc` and the ceiling plus one, per knob) and the ceilings pin |
+| 3. A base URL with userinfo: every printed line redacted exactly as `_upd_redact` would | `install-sh.test.ts`: the userinfo rows (a good run, a failed SHA256SUMS fetch, a failed tarball fetch) and the four redactor equality pins |
 | 4. A base URL with `[`, `]`, `{` or `}`: fetched literally on both fetches | `install-sh.test.ts`: the `[1]` base path row (real curl) and the flag-set row (`-g` on both fetches) |
 | 5. No `builds` key in remote mode; `build` unchanged; `_upd_fleet_warn` still warns on `skewed` | `fleet-health.test.ts` (the remote rows and the new two-rows-skewed row), `fleet-build-skew.test.ts`, `pwa/test/build-line.test.tsx`'s source scan for a `.builds` reader |
 
@@ -172,14 +175,19 @@ Each mutant was applied to a saved, sha-checked copy, run against its covering t
 | 20 | the `*` marker strip removed | marker row |
 | 21 | `CCRC_RELEASE_SPEED_LIMIT` default 1024 to 2048 | defaults pin; flag-set |
 | 22 | `CCRC_RELEASE_SUMS_MAX_FILESIZE` default to 1048576 | defaults pin; 4097-byte row; flag-set |
-| 23 | redactor: trailing-slash HOME strip removed | the three redactor equality pins |
-| 24 | redactor: userinfo rule weakened | the three redactor equality pins; the userinfo rows |
-| 25 | redactor: the cut note reworded | the three redactor equality pins |
-| 26 | redactor: the quoted `${s/…/"…"}` replacement put back (the copy before the fix round) | the `BASH_COMPAT=42` and `=40` equality pins |
+| 23 | redactor: trailing-slash HOME strip removed | the four redactor equality pins |
+| 24 | redactor: userinfo rule weakened | the four redactor equality pins; the userinfo rows |
+| 25 | redactor: the cut note reworded | the four redactor equality pins |
+| 26 | redactor: the quoted `${s/…/"…"}` replacement put back (the copy before the fix round) | the `BASH_COMPAT=42`, `=40` and `=32` equality pins |
 | 27 | `builds` put back into `/api/fleet/health`'s remote answer | `fleet-health.test.ts`: connected, disconnected, unreadable inventory, two-rows-skewed (4 of 51) |
+| 28 | knob validation dropped | every knob-validation row; the ESC-value row |
+| 29 | `CCRC_RELEASE_SUMS_MAX_FILESIZE` ceiling 1048576 to 1048577 | its knob row; the ceilings pin |
+| 30 | `CCRC_RELEASE_SPEED_LIMIT` ceiling 100000000 to 100000001 | its knob row; the ceilings pin |
+| 31 | `CCRC_RELEASE_CONNECT_TIMEOUT` ceiling 3600 to 3601 | its knob row; the ceilings pin |
+| 32 | a refused value is warned about but not replaced by its default | every knob-validation row |
 
 Two first choices were weak and were replaced: row 17 first survived because the fixture's sums file was written in latin1, so its byte was invalid UTF-8 under either locale; it now writes UTF-8. Row 25's first form (`4001` to `4002`) was an equivalent mutant.
 
 ### Deviations
 
-None of the block 7719 to 7726 was used. Its three mentions in this plan are written without the `D-` prefix (the operator's answer to a structured ask, 2026-11-01): `server/test/deviation-refs.test.ts` reds on any D-ref above the highest defined entry, and this wave defines none.
+None of the block 7719 to 7726 was used. Its three mentions in this plan are written without the `D-` prefix (ask 281, answered by the operator and confirmed by the coordinator): `server/test/deviation-refs.test.ts` reds on any D-ref above the highest defined entry, and this wave defines none.
