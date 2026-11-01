@@ -25,12 +25,20 @@
 #      skipped for the budget, then the most commits behind: staging (§3.5 step 1), the corpus guard, `ccrc test
 #      --status` (a refusal is `failed`, `fail: setup`, D-7356), the wrapper through `ccrc test --local --heavy`
 #      with the pass lock's fd 9 CLOSED, the plan's outcome table, the stamp, the publish checks and the publish;
-#   6. per published repository: the exclude lines (`_graph_exclude_common`), then one link per tree whose
-#      graphify-out is absent and ignored (`git check-ignore -q graphify-out`, no slash): the ONLY write this sweep
-#      makes under a tree, besides removing a stray `.graphifyignore` an old sweep generated (ownership-gated; D-7649);
-#   7. collection of superseded builds and leftover staging (§3.5 step 6), the store's settings.json (§5.3), and the
-#      census: one `repos[]` row per repository (§7), each also printed as one `graph-sweep: row {json}` stdout line,
-#      so the journal keeps a week of them where the census keeps 10 passes (D-7357).
+#   6. per published repository: the exclude lines (`_graph_exclude_common`), the migration of each tree's old
+#      per-tree graphify-out directory (`_gs_migrate_one`, spec §9.1 steps 1 to 5: ignored, idle, graphify-shaped,
+#      saved results into the store's memory/, the directory into the store's .trash or removed in place without
+#      crossing a mount; at most CCRC_GRAPH_MIGRATE_BUDGET trees across the pass; D-7352), then one link per tree whose
+#      graphify-out is absent and ignored (`git check-ignore -q graphify-out`, no slash). An excluded repository's
+#      trees are migrated with no link, and a link into the store made before the exclusion is removed (D-7666). These
+#      and the removal of a stray `.graphifyignore` an old sweep generated (ownership-gated; D-7649) are the ONLY
+#      writes this sweep makes under a tree;
+#   7. collection, always at the pass's end and under ionice: superseded builds and leftover staging (§3.5 step 6),
+#      then across the store `.trash/*` and a gone or excluded repository's whole directory, each after
+#      CCRC_GRAPH_BUILD_GRACE_SECS (§9.2); the store's settings.json (§5.3); and the census: one `repos[]` row per
+#      repository (§7) with its `migrate` counts ({done, pending, refused:[{path, reason}]}), each also printed as one
+#      `graph-sweep: row {json}` stdout line, so the journal keeps a week of them where the census keeps 10 passes
+#      (D-7357).
 #
 # EVERY BOUND IS A SETTING. Each size, interval, count and percentage this file obeys is a CCRC_GRAPH_* key read by
 # `_gr_knobs` into GK[…], with its default in ccd/ccrc's `_graph_knobs`; graph-knobs.test.ts scans this file for a
@@ -258,11 +266,9 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
 # gates a build, and the O3 escape hatch that let a build interrupt a working
 # session past a staleness bound is retired with the per-tree build (spec §5.4
 # "Retired"). The gate stays for the one write left that a working session must
-# not have under it: the migration of a tree's old graphify-out (GR6). Its
+# not have under it: the migration of a tree's old graphify-out (`_gs_migrate_one`, GR6). Its
 # freshness bound is CCRC_GRAPH_HOOKSTATE_FRESH_SECS, read by `_gr_knobs`.
-# shellcheck disable=SC2034  # BUSY_REASON is read by the migration's caller (GR6)
 BUSY_REASON=""
-# shellcheck disable=SC2329  # called by the migration (GR6); kept here, without its hatch, as the plan rules
 _gs_busy() {
   local tree="$1" id="" hs pid wrapper cfg sf now age
   # D-1562 — one spelling of "which session lives here", and it compares
@@ -865,22 +871,138 @@ _gs_build() {   # <key>
 
 # ── links (spec §6.1; N1, N16) ────────────────────────────────────────────
 # One absolute link per tree, `<tree>/graphify-out -> <store>/<repo-key>/current`, made only where graphify-out is
-# ABSENT (a real directory waits for migration, GR6), only once `current` resolves to a published build, and only
+# ABSENT (a real directory is `_gs_migrate`'s, which runs first), only once `current` resolves to a published build, and only
 # after `git check-ignore -q graphify-out` (no slash) passes: the slash-only exclude line does not ignore a link.
-GS_LINKED=0 GS_PENDING=0 GS_UNIGNORED=0
+GS_LINKED=0 GS_UNIGNORED=0
 _gs_link() {   # <key> <1: link where due | 0: count only>
   local key="$1" may="$2" tgt="${K_DIR[$1]:-}/current" tree
-  GS_LINKED=0 GS_PENDING=0 GS_UNIGNORED=0
+  GS_LINKED=0 GS_UNIGNORED=0
   while IFS= read -r tree; do
     [ -n "$tree" ] || continue
     if [ -L "$tree/graphify-out" ]; then
       [ "$(readlink "$tree/graphify-out")" != "$tgt" ] || GS_LINKED=$((GS_LINKED+1))
       continue
     fi
-    if [ -e "$tree/graphify-out" ]; then GS_PENDING=$((GS_PENDING+1)); continue; fi
+    [ ! -e "$tree/graphify-out" ] || continue   # a real directory: counted by _gs_migrate
     [ "$may" = 1 ] && [ -d "$tgt" ] || continue
     if ! _gs_git "$tree" check-ignore -q graphify-out 2>/dev/null; then GS_UNIGNORED=$((GS_UNIGNORED+1)); continue; fi
     ln -s -- "$tgt" "$tree/graphify-out" && GS_LINKED=$((GS_LINKED+1))
+  done <<<"${K_TREES[$key]:-}"
+}
+
+# ── migration of a tree's old graphify-out (spec §9.1; N15, N23; D-7352, D-7666) ──
+# A tree whose graphify-out is still the per-tree sweep's real directory is cleaned, at most CCRC_GRAPH_MIGRATE_BUDGET
+# trees across the pass, and only in a repository whose `current` is published (the link must follow at once) or that
+# is excluded (no link follows, so nothing waits for a build; D-7666). Steps 1 to 3 only read, so a refusal touches
+# nothing and spends no budget; the budget gates steps 4 and 5, the only writes. Step 6 is `_gs_link`'s one `ln`,
+# which finds graphify-out absent once step 5 has run.
+#
+# THE TREE KEY (D-7666) names the tree's saved results and its .trash entry: the basename of the tree's realpath, then
+# the first 8 hex of the sha256 of that realpath — the shape of `_gr_repo_key`, asked of the tree.
+_gs_tree_key() {   # <tree> -> <name>-<8 hex>, or rc 1
+  local t name sum
+  t="$(_gs_realpath "$1")" || return 1
+  name="$(printf '%s' "${t##*/}" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+  sum="$(printf '%s' "$t" | _plat_sha256)"; sum="${sum%% *}"
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s-%s\n' "${name:-tree}" "${sum:0:8}"
+}
+_gs_dev() { local x; x="$(_plat_devino "$1" 2>/dev/null)" || return 1; [ -n "$x" ] || return 1; printf '%s' "${x%%:*}"; }
+
+# graphify's own top-level entries (spec §9.1 step 3): the regular files, then the two directories.
+GS_OWN_FILES=" graph.json GRAPH_REPORT.md manifest.json .graphify_labels.json .graphify_engine .graphify_root .graph.tmp.json .rebuild.lock .pending_changes needs_update graph.html "
+GS_OWN_DIRS=" cache memory "
+GS_MIG_LEFT=0      # the pass's budget left, set once before the repositories' turns
+GS_MIG_WHY=""
+# Returns 0 migrated, 1 refused (GS_MIG_WHY), 2 waits (busy, or the budget is spent; counted in pending).
+_gs_migrate_one() {   # <tree> <the repository's store directory>
+  local tree="$1" kd="$2" dd td e n tk ts dest
+  GS_MIG_WHY=""
+  # 1. ignored (no slash: the slash line does not ignore the link that follows)
+  _gs_git "$tree" check-ignore -q graphify-out 2>/dev/null || { GS_MIG_WHY="not ignored"; return 1; }
+  # 2. idle, by the session gate
+  if _gs_busy "$tree"; then GS_MIG_WHY="$BUSY_REASON"; return 2; fi
+  # 3. graphify's: not a mount point, on the tree's filesystem, nothing at the top that graphify does not write
+  if command -v mountpoint >/dev/null 2>&1 && mountpoint -q -- "$tree/graphify-out"; then GS_MIG_WHY="a mount point"; return 1; fi
+  if ! dd="$(_gs_dev "$tree/graphify-out")" || ! td="$(_gs_dev "$tree")"; then GS_MIG_WHY="its filesystem cannot be read"; return 1; fi
+  [ "$dd" = "$td" ] || { GS_MIG_WHY="on another filesystem than its tree"; return 1; }
+  while IFS= read -r -d '' e; do
+    n="${e##*/}"
+    if [ -L "$e" ]; then GS_MIG_WHY="unexpected entry $n"; return 1; fi
+    case "$GS_OWN_FILES" in *" $n "*) [ -f "$e" ] && continue ;; esac
+    case "$GS_OWN_DIRS" in *" $n "*) [ -d "$e" ] && continue ;; esac
+    GS_MIG_WHY="unexpected entry $n"; return 1
+  done < <(find "$tree/graphify-out" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | LC_ALL=C sort -z)
+  [ "$GS_MIG_LEFT" -gt 0 ] || { GS_MIG_WHY="CCRC_GRAPH_MIGRATE_BUDGET=${GK[CCRC_GRAPH_MIGRATE_BUDGET]} reached"; return 2; }
+  tk="$(_gs_tree_key "$tree")" || { GS_MIG_WHY="the tree cannot be keyed"; return 1; }
+  ts="$(date +%s)"
+  # 4. saved results into the repository's memory, under a name of their own
+  if [ -d "$tree/graphify-out/memory" ]; then
+    dest="$kd/memory/migrated-$tk"
+    [ ! -e "$dest" ] && [ ! -L "$dest" ] || dest="$dest.$ts"
+    if ! mkdir -p -- "$kd/memory" || [ -e "$dest" ] || ! mv -- "$tree/graphify-out/memory" "$dest"; then
+      GS_MIG_WHY="cannot move the saved results to the store"; return 1
+    fi
+  fi
+  # 5. the directory itself: into .trash on the store's filesystem, else removed in place without crossing a mount
+  GS_MIG_LEFT=$((GS_MIG_LEFT-1))
+  if [ "$(_gs_dev "$GS_STORE")" = "$dd" ]; then
+    dest="$GS_STORE/.trash/$tk.$ts"
+    if ! mkdir -p -- "$GS_STORE/.trash" || [ -e "$dest" ] || ! mv -- "$tree/graphify-out" "$dest"; then
+      GS_MIG_WHY="cannot move the directory to the store's .trash"; return 1
+    fi
+  else
+    local -a io=()
+    command -v ionice >/dev/null 2>&1 && io=(ionice -c3)
+    if [ "$CCD_OS" = darwin ]; then
+      ${io[@]+"${io[@]}"} rm -rfx -- "$tree/graphify-out"
+    else
+      ${io[@]+"${io[@]}"} rm -rf --one-file-system -- "$tree/graphify-out"
+    fi
+    if [ -e "$tree/graphify-out" ] || [ -L "$tree/graphify-out" ]; then
+      GS_MIG_WHY="the directory could not be removed (does it hold a mount?)"; return 1
+    fi
+  fi
+  return 0
+}
+
+# The excluded arm's one other write: a link into the store, made before the repository was excluded, is removed so
+# its sessions stop reading a graph nothing refreshes. A link anywhere else is not the sweep's.
+_gs_unlink() {   # <tree>
+  local tree="$1"
+  [ -L "$tree/graphify-out" ] || return 0
+  case "$(readlink "$tree/graphify-out")" in "$GS_STORE"/*) rm -f -- "$tree/graphify-out" ;; esac
+}
+
+# The migration over one repository's trees, counted for its row as done, pending and refused. <arm>: `published`
+# migrates (the link follows), `excluded` migrates and unlinks, anything else only counts.
+GS_MDONE=0 GS_MPEND=0 GS_MREFUSED='[]'
+_gs_migrate() {   # <key> <arm>
+  local key="$1" arm="$2" kd tree rc excl=0
+  GS_MDONE=0 GS_MPEND=0 GS_MREFUSED='[]'
+  kd="${K_DIR[$key]:-}"; [ -n "$kd" ] || kd="$GS_STORE/${K_RK[$key]:-}"
+  while IFS= read -r tree; do
+    [ -n "$tree" ] || continue
+    [ "$arm" != excluded ] || _gs_unlink "$tree"
+    [ ! -L "$tree/graphify-out" ] && [ -e "$tree/graphify-out" ] || continue
+    if [ "$arm" != published ] && [ "$arm" != excluded ]; then GS_MPEND=$((GS_MPEND+1)); continue; fi
+    if [ "$arm" = excluded ] && [ "$excl" = 0 ]; then
+      # step 1's exclude writer, which the published arm ran already; and the directory the saved results go to
+      excl=1
+      _graph_exclude_common "${K_COMMON[$key]}" >/dev/null || _gs_note "cannot write the exclude lines in ${K_COMMON[$key]}/info/exclude"
+      if [ ! -f "$kd/source" ] && { ! mkdir -p -- "$kd" || ! printf '%s\n' "${K_COMMON[$key]}" > "$kd/source"; }; then
+        _gs_note "cannot write the store's source file for $key"
+      fi
+    fi
+    if [ ! -d "$tree/graphify-out" ]; then rc=1; GS_MIG_WHY="not a directory"
+    elif [ "$(cat "$kd/source" 2>/dev/null)" != "${K_COMMON[$key]}" ]; then rc=1; GS_MIG_WHY="the store's directory for $key is not this repository's"
+    else _gs_migrate_one "$tree" "$kd" < /dev/null; rc=$?
+    fi
+    case "$rc" in
+      0) GS_MDONE=$((GS_MDONE+1)) ;;
+      2) GS_MPEND=$((GS_MPEND+1)) ;;
+      *) GS_MREFUSED="$(jq -c --arg p "$tree" --arg r "$GS_MIG_WHY" '. + [{path:$p, reason:$r}]' <<<"$GS_MREFUSED")" ;;
+    esac
   done <<<"${K_TREES[$key]:-}"
 }
 
@@ -899,6 +1021,47 @@ _gs_collect() {   # <key>
     _gs_rmtree "$kd/builds/$b"
   done < <(for b in "$kd/builds"/*/; do b="${b%/}"; b="${b##*/}"; [ "$b" != '*' ] && printf '%s %s\n' "${b##*-}" "$b"; done \
            | sort -r | cut -d' ' -f2)
+}
+
+# A .trash entry was a tree's directory, so it is removed as step 5 removes one: under ionice, never across a mount.
+_gs_rm_onefs() {   # <a .trash entry>
+  local doomed="$1"
+  local -a io=()
+  command -v ionice >/dev/null 2>&1 && io=(ionice -c3)
+  if [ "$CCD_OS" = darwin ]; then ${io[@]+"${io[@]}"} rm -rfx -- "$doomed"
+  else ${io[@]+"${io[@]}"} rm -rf --one-file-system -- "$doomed"; fi
+}
+
+# ── collection across the store (spec §9.2), once, after every repository's turn ──
+# `.trash/*` older than CCRC_GRAPH_BUILD_GRACE_SECS, by the epoch its name ends with (step 5 names it; a moved
+# directory keeps its old mtime), and a whole <repo-key>/ (checkout, builds, memory) whose `source` common dir is gone
+# or whose repository is excluded, once it has been so for the grace. The clock is the directory's `collect-since`
+# file (D-7666), written the first pass it is seen gone or excluded and removed the first pass it is not. A directory
+# with no `source` file is not one the sweep made, and is left alone.
+_gs_collect_store() {
+  [ -n "$GS_STORE" ] && [ -d "$GS_STORE" ] || return 0
+  local now e ts kd key src since grace="${GK[CCRC_GRAPH_BUILD_GRACE_SECS]}"
+  now=$(date +%s)
+  for e in "$GS_STORE/.trash"/* "$GS_STORE/.trash"/.[!.]*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    ts="${e##*.}"
+    [[ "$ts" =~ ^[0-9]+$ ]] || ts="$(_plat_mtime "$e" 2>/dev/null)"
+    [[ "$ts" =~ ^[0-9]+$ ]] && [ $(( now - ts )) -ge "$grace" ] || continue
+    _gs_rm_onefs "$e"
+  done
+  for kd in "$GS_STORE"/*/; do
+    kd="${kd%/}"; key="${kd##*/}"
+    [ ! -L "$kd" ] && [ -f "$kd/source" ] || continue
+    src="$(head -n 1 "$kd/source" 2>/dev/null)"
+    case " ${GK[CCRC_GRAPH_REPOS_EXCLUDE]} " in
+      *" $key "*) ;;
+      *) if [ -n "$src" ] && [ -d "$src" ]; then rm -f -- "$kd/collect-since"; continue; fi ;;
+    esac
+    since="$(head -c 32 "$kd/collect-since" 2>/dev/null)"; since="${since%%[!0-9]*}"
+    if [ -z "$since" ]; then printf '%s\n' "$now" > "$kd/collect-since"; continue; fi
+    [ $(( now - since )) -ge "$grace" ] || continue
+    _gs_rmtree "$kd"
+  done
 }
 
 # ── settings.json (spec §5.3): the three read-side settings, as the session hook reads them ──
@@ -935,11 +1098,12 @@ _gs_emit() {   # <key>
     --argjson changed_files "${K_CHANGED[$key]:-0}" --arg reason "$reason" --arg fail "${K_FAIL[$key]:-}" \
     --argjson duration_ms "${K_DUR[$key]:-0}" --argjson peak_mem_kb "${K_PEAK[$key]:-null}" --argjson cpu_ms "${K_CPU[$key]:-null}" \
     --argjson full_failures "$ff" --arg full_failed_at "$ffat" --argjson nodes "$nodes" --argjson edges "$edges" \
-    --argjson nt "$nt" --argjson linked "$GS_LINKED" --argjson pending "$GS_PENDING" \
+    --argjson nt "$nt" --argjson linked "$GS_LINKED" --argjson mdone "$GS_MDONE" --argjson pending "$GS_MPEND" \
+    --argjson refused "$GS_MREFUSED" \
     '{repo_key:$repo_key, source:$source, ref:$ref, tip:$tip, served:$served, outcome:$outcome, kind:$kind,
       changed_files:$changed_files, reason:$reason, fail:$fail, duration_ms:$duration_ms, peak_mem_kb:$peak_mem_kb,
       cpu_ms:$cpu_ms, full_failures:$full_failures, full_failed_at:$full_failed_at, nodes:$nodes, edges:$edges,
-      "trees":$nt, linked:$linked, migrate:{done:0, pending:$pending, refused:[]}}')"
+      "trees":$nt, linked:$linked, migrate:{done:$mdone, pending:$pending, refused:$refused}}')"
 }
 
 # ── the pass ──────────────────────────────────────────────────────────────
@@ -1015,16 +1179,21 @@ for key in ${ORDER[@]+"${ORDER[@]}"}; do
   _gs_drop_staging
 done
 
+GS_MIG_LEFT="${GK[CCRC_GRAPH_MIGRATE_BUDGET]}"
 for key in ${K_ORDER[@]+"${K_ORDER[@]}"}; do
-  CUR="$key"; may=0
+  CUR="$key"; may=0; arm=count
   if [ -n "${K_DIR[$key]:-}" ] && [ -d "${K_DIR[$key]}/current" ] && [ "${K_OUTCOME[$key]}" != excluded ]; then
-    may=1
+    may=1; arm=published
     _graph_exclude_common "${K_COMMON[$key]}" >/dev/null || _gs_note "cannot write the exclude lines in ${K_COMMON[$key]}/info/exclude"
+  elif [ "${K_OUTCOME[$key]}" = excluded ]; then
+    arm=excluded
   fi
+  _gs_migrate "$key" "$arm" < /dev/null
   _gs_link "$key" "$may" < /dev/null
   [ "$GS_UNIGNORED" -eq 0 ] || _gs_note "$GS_UNIGNORED tree(s) not linked: git check-ignore graphify-out fails there"
   _gs_collect "$key"
   _gs_emit "$key"
 done
+_gs_collect_store
 _gs_settings
 _gs_finish ok 0

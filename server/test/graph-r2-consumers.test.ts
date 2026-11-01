@@ -84,6 +84,7 @@ const TREES_CEILING: Record<string, number> = {
 const NAMES_ONLY = [
   'ccd/ccd-graph-sweep',                            // the writer (GR4: repos[] only)
   'README.md',
+  'server/test/graph-migrate.test.ts',              // GR6's rows read repos[] (D-7352)
   'server/test/graph-repo-sweep.test.ts',           // GR4's rows read repos[]
   'server/test/session-hook-graph-pins.test.ts',
   'server/test/session-hook-graph-repo.test.ts',
@@ -262,15 +263,28 @@ const TREE_WRITES_BASE = [
 ];
 /** GR4 (D-7350, D-7649): what the repository sweep writes under a tree, literal — the link (spec §6.1) and the
  *  ownership-gated removal of a stray `.graphifyignore` a per-tree sweep left behind (spec §9.1, "as today"). Counted
- *  exit 12 -> 2; the `.graphifyignore` write-or-remove sites 7 -> 1, that one removal. GR6 adds only
- *  `_gs_migrate_one`'s named moves. */
-const TREE_WRITES = [
+ *  exit 12 -> 2; the `.graphifyignore` write-or-remove sites 7 -> 1, that one removal. */
+const TREE_WRITES_GR4 = [
   '_gs_rm_stray rm "$tree/.graphifyignore"',
   '_gs_link ln "$tree/graphify-out"',
 ];
+/** GR6 (D-7352, D-7666): `_gs_migrate_one`'s named moves of spec §9.1 and nothing else — step 4's `mv` of memory/,
+ *  step 5's `mv` to the store's .trash, and step 5's in-place removal, which is one `rm` per userland (GNU's
+ *  `--one-file-system`, BSD's `-x`, the same flag) — plus the excluded arm's unlink of a link into the store. Each
+ *  names "$tree/graphify-out" or what is in it, and no other path under the tree. Counted exit 2 -> 7. */
+const TREE_WRITES = [
+  ...TREE_WRITES_GR4.slice(0, 2),
+  '_gs_migrate_one mv "$tree/graphify-out/memory"',
+  '_gs_migrate_one mv "$tree/graphify-out"',
+  '_gs_migrate_one rm "$tree/graphify-out"',
+  '_gs_migrate_one rm "$tree/graphify-out"',
+  '_gs_unlink rm "$tree/graphify-out"',
+];
 /** Every other write target of the sweep, literal: the census, the store (the per-repository directory, the
  *  checkout's generated filter and exclude line, staging, the stamp's temp, meta.json, the build's publish, settings.json),
- *  the log, and the pass lock. Harvested on GR4's tip; a write through a NEW variable shows up here. */
+ *  the log, and the pass lock. Harvested on GR4's tip; a write through a NEW variable shows up here. GR6 (D-7352,
+ *  D-7666) adds the migration's store writes (the repository's memory/, the store's .trash, an excluded repository's
+ *  source file) and spec §9.2's collection across the store (a .trash entry's removal, the collect-since clock). */
 const OTHER_WRITES_BASE = [
   "_gs_finish > \"$tmp\"",
   "_gs_finish rm \"$tmp\"",
@@ -334,6 +348,16 @@ const OTHER_WRITES_BASE = [
   "_gs_build chmod \"$kd/builds/$id\"",
   "_gs_build chmod 2>/dev/null",
   "_gs_link ln \"$tgt\"",
+  "_gs_migrate_one mkdir \"$kd/memory\"",
+  "_gs_migrate_one mv \"$dest\"",
+  "_gs_migrate_one mkdir \"$GS_STORE/.trash\"",
+  "_gs_migrate_one mv \"$dest\"",
+  "_gs_migrate > \"$kd/source\"",
+  "_gs_migrate mkdir \"$kd\"",
+  "_gs_rm_onefs rm \"$doomed\"",
+  "_gs_rm_onefs rm \"$doomed\"",
+  "_gs_collect_store rm \"$kd/collect-since\"",
+  "_gs_collect_store > \"$kd/collect-since\"",
   "_gs_settings > \"$GS_STORE/.settings.json.new\"",
   "_gs_settings mv \"$GS_STORE/.settings.json.new\"",
   "_gs_settings mv \"$GS_STORE/settings.json\"",
@@ -343,11 +367,13 @@ const OTHER_WRITES_BASE = [
 describe('treeWriteSites: what the sweep writes under a tree (D-7347)', () => {
   const sweep = fs.readFileSync(path.join(ROOT, SWEEP), 'utf8');
 
-  it('the link and the stray removal, literal (GR4: 12 -> 2)', () => {
+  it('the link, the stray removal and the migration\'s named moves, literal (GR4: 12 -> 2; GR6: 2 -> 7)', () => {
     expect(treeWriteSites(sweep)).toEqual(TREE_WRITES);
+    expect(TREE_WRITES.filter((s) => !TREE_WRITES_GR4.includes(s)).every((s) => /^_gs_(migrate_one|unlink) (mv|rm) "\$tree\/graphify-out(\/memory)?"$/.test(s)),
+      'GR6 adds only moves and removals of the tree\'s graphify-out').toBe(true);
     expect(TREE_WRITES_BASE.filter((s) => s.includes('.graphifyignore')), 'the base\'s seven filter sites').toHaveLength(7);
     expect(TREE_WRITES.filter((s) => s.includes('.graphifyignore')), 'one left: the ownership-gated removal').toEqual(['_gs_rm_stray rm "$tree/.graphifyignore"']);
-    expect([TREE_WRITES_BASE.length, TREE_WRITES.length], 'the counted exit').toEqual([12, 2]);
+    expect([TREE_WRITES_BASE.length, TREE_WRITES_GR4.length, TREE_WRITES.length], 'the counted exits').toEqual([12, 2, 7]);
   });
 
   it('every other write target is a named one outside the tree', () => {

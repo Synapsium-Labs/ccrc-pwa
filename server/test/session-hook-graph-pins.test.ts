@@ -109,12 +109,22 @@ const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): v
     expect(d.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
     return d;
   };
+  // The sweep's own top-level counter initialisers, verbatim (`GS_LINKED=0 …`, `GS_MDONE=0 …`), so a counter
+  // `_gs_emit` reads cannot be renamed or added without this driver following; each one it reads must be among them.
+  const counters = (): string[] => {
+    const c = src.split('\n').filter((l) => /^GS_[A-Z]+=0 /.test(l));
+    const set = new Set(c.flatMap((l) => [...l.matchAll(/(GS_[A-Z]+)=/g)].map((m) => m[1])));
+    for (const v of new Set([...lift('_gs_emit').matchAll(/\$\{?(GS_[A-Z_]+)/g)].map((m) => m[1]))) {
+      expect(set.has(v!), `ccd-graph-sweep no longer initialises ${v} at the top level`).toBe(true);
+    }
+    return c;
+  };
   const driver = path.join(home, 'sweep-pass.sh');
   fs.writeFileSync(driver, [
     'set -uo pipefail',
     'CENSUS="$HOME/.ccrc/graph-sweep.json"',
     'STARTED="2026-10-29T00:00:00Z"', `PIN="${PIN}"`, 'ROWS=()',
-    ...declares(), 'GS_LINKED=0 GS_PENDING=0',
+    ...declares(), ...counters(),
     lift('_gs_row'), lift('_gs_finish'), lift('_gs_emit'),
     'n=0',
     'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
