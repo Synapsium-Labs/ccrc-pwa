@@ -637,9 +637,10 @@ describe('the token never rides curl\'s argv (R16)', () => {
     // (`claimedByUuid`, D-5298), and this case measures a body sent as written.
     ['a POST whose body is a --json file', ['claims', 'take', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
     // THE COLLISION CASE: stdin is the body (read by `body=$(cat)`) AND curl's
-    // config (the printf pipe). The mail envelope's own ack line is this shape.
+    // config (the printf pipe). The mail envelope's own ack line is this shape. Since K5 Q3l (D-7324) the claimant row
+    // always sends the family, so the body arrives with the row's kind spliced first.
     ['a POST whose body is --json - (stdin twice: the body, then curl\'s config)', ['asks', 'answer', '7', '--json', '-'],
-      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"kind":"ask","fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
   ])('%s: argv holds neither the token nor its header, stdin carries the config, and both arrive', async (_what, args, input, body) => {
     plantRecorder();
     if (args.includes('BODYFILE')) fs.writeFileSync(path.join(home, 'body.json'), body);

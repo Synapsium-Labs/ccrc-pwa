@@ -149,6 +149,10 @@ describe('the claimant client census (D-7320)', () => {
   it('REAL, pinned since Q3j: client rows whose only door is the old one: exactly 0 (D-7322)', () => {
     expect(clientOldOnlyRows().map((r) => r.key)).toEqual([]);
   });
+  // Q3l's behaviour commit gives the four claimant rows the family's template as their path (D-7324).
+  it('REAL, pinned since Q3l: client rows on an old claimant door: exactly 0 (D-7324)', () => {
+    expect(clientClaimantRows().map((r) => r.key)).toEqual([]);
+  });
   it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 1, guarded by the $family test before it (D-7322)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
       [true, 'if [[ -n "$family" ]] && _api_server_cap questions-v1; then'],
