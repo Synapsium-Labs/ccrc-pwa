@@ -4241,8 +4241,12 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   reap do not follow reds it. Rows, each restored from a saved copy with sha256 compared: the copy's glob made never to
   fire, the reap case red (the copy and both siblings left); the glob keyed on any prefix, the reap case red (three
   look-alikes reaped). The end-to-end case, with the previous doctor and `ccd/ccrc` swapped in, was red at the reap
-  (the copy left). DAMAGED INDEX OR PAGE pins `quick_check` (not null, not `ok`, the exact row) for the
-  stale index only; for the 0xff page it pins only that `integrity_check` did not answer exactly `ok`.
+  (the copy left). DAMAGED INDEX OR PAGE pins, for the stale index, `integrity_check`'s rows naming
+  `sqlite_autoindex_reasoning_1`; for the 0xff page only that `integrity_check` did not answer exactly `ok`. It no
+  longer pins `quick_check` for either: the pull request's first CI run, on the Linux runner's SQLite, answered `ok`
+  to `quick_check` on the stale index (and on the WAL case's), while `integrity_check` named the index, so whether
+  `quick_check` counts an index's entries depends on the SQLite. That is a second, measured reason for the start
+  check to run `integrity_check`: on that SQLite, `quick_check` would have missed the incident's own shape.
 - **Why:** On 2026-10-28 the fleet box moved to a new machine and each lane's directory was carried over with its
   `reasoning.sqlite`. Both lanes' stores arrived damaged: `PRAGMA quick_check` on them as they stood answered
   `wrong # of entries in index sqlite_autoindex_reasoning_1`, a torn primary-key index, which fits a live sqlite file

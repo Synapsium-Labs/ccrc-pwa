@@ -519,16 +519,18 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     // DATABASE. The page's pin is only that the probe's integrityCheck is not exactly `ok`: a probe that raised at
     // EITHER pragma (quick_check runs first, in the same try) leaves it null and satisfies the pin too, and its
     // quick_check is not pinned (fix round 3, F5); the start check's own integrity_check verdict is pinned by the
-    // set-aside assertions that follow (fix round 4, G2).
+    // set-aside assertions that follow (fix round 4, G2). The stale index's pin is integrity_check's rows, never
+    // quick_check's: whether quick_check counts an index's entries depends on the SQLite (measured: this box's 3.46.1
+    // answers the incident's `wrong # of entries` from quick_check; the CI runner's answers `ok` to quick_check and
+    // names the index only from integrity_check), which is why the start runs integrity_check.
     for (const how of ['stale-index', 'garbage-page'] as const) {
       const { home, dir, db } = lane(`cb-store-start-${how}-`);
       const [planted] = await run(home, [{ op: 'store-damage', path: db, how }]);
       expect(planted.probe.integrityCheck, how).not.toEqual(['ok']);
       if (how === 'stale-index') {
-        expect(planted.probe.quickCheck).not.toEqual(['ok']);
-        expect(planted.probe.quickCheck).not.toBeNull();
         expect(planted.probe.raised).toBeNull();
-        expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
+        expect(planted.probe.integrityCheck).not.toBeNull();
+        expect(planted.probe.integrityCheck.join('\n')).toMatch(/index sqlite_autoindex_reasoning_1/);
       }
       const found: string = planted.probe.raised ?? 'integrity-check';
       const [, open, old, put, got, snap] = await run(home, [
@@ -586,7 +588,7 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
   it.skipIf(OLD_PY)('a damaged store\'s WAL goes with its copy, which still answers its row', async () => {
     const { home, dir, db } = lane('cb-store-start-wal-');
     const [planted] = await run(home, [{ op: 'store-damage', path: db, how: 'stale-index', walCall: 'call_fx_wal' }]);
-    expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
+    expect(planted.probe.integrityCheck.join('\n')).toMatch(/index sqlite_autoindex_reasoning_1/); // not quick_check: see above
     expect(existsSync(db + '-wal')).toBe(true);
     const wal = sha(readFileSync(db + '-wal'));
     const [open, got] = await run(home, [
