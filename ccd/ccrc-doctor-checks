@@ -7566,6 +7566,7 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
   fi
   _dr_cx_bridge_files "$id"
   [ "$mode" != direct ] || _dr_cx_drift "$id"
+  [ "$mode" != direct ] || _dr_cx_store "$id"
   if [ "$models" -ne 1 ]; then DRX_LANE_WORDS+=", model state unread"; return 0; fi
   # The lane's model state, ONLY through models-op's `show`.
   ans="$(_models_node show --file "$roster" --id "$id" 2>/dev/null)"
@@ -7898,6 +7899,62 @@ _dr_cx_bridge_files() {   # <id>
   return 0
 }
 
+# THE STATS FILE'S ONE READER in the doctor (the drift row and the store row,
+# D-7677): lane.json's `bridgeFiles.stats`, read as `_dr_cx_bridge_files` reads
+# it, a bare file name only, and only a regular file is opened (a symlink or
+# another kind of file is that row's FAIL; a FIFO is never opened). rc 1 when
+# there is no such file to read (no lane.json, no name, absent, or not a
+# regular file): no row of either reader. Otherwise rc 0, with DRX_STATS_DIR and
+# DRX_STATS_FILE set, and DRX_STATS_WHY saying why the file could not be read
+# (its size unmeasured, larger than stats.py's READ_MAX, or not readable by this
+# user), or empty when <filter> ran: DRX_STATS_GOT holds jq's lines. The filter
+# reads the file slurped (`-s`), with `$id`, the jq function `line` (a string
+# with no control character, else an empty line, so no value spans two lines)
+# and `$doc`, the one JSON object of version 1 and of THIS lane (`.lane`) the
+# file holds, or null for any other content; [jq args] follow the filter.
+_dr_cx_stats_read() {   # <id> <filter> [jq args...] — sets DRX_STATS_DIR, DRX_STATS_FILE, DRX_STATS_WHY, DRX_STATS_GOT
+  local id="$1" filter="$2" lj sf sz LC_ALL=C
+  local read_max=$(( 16 * 2**20 ))
+  shift 2
+  DRX_STATS_DIR=''; DRX_STATS_FILE=''; DRX_STATS_WHY=''; DRX_STATS_GOT=()
+  DRX_STATS_DIR="$(_codex_lane_dir "$id")"; lj="$DRX_STATS_DIR/lane.json"
+  [ -f "$lj" ] || return 1
+  sf="$(jq -r 'if type == "object" and (.bridgeFiles | type) == "object" and (.bridgeFiles.stats | type) == "string"
+      then .bridgeFiles.stats else "" end' "$lj" 2>/dev/null)" || return 1
+  [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] || return 1
+  DRX_STATS_FILE="$DRX_STATS_DIR/$sf"
+  [ -f "$DRX_STATS_FILE" ] && [ ! -L "$DRX_STATS_FILE" ] || return 1
+  sz="$(_plat_size -- "$DRX_STATS_FILE" 2>/dev/null)" || sz=''
+  if [[ ! "$sz" =~ ^[0-9]+$ ]]; then
+    DRX_STATS_WHY='its size could not be measured'
+  elif [ "$sz" -gt "$read_max" ]; then
+    DRX_STATS_WHY='it is larger than the bridge reads, READ_MAX in ccd/codexbridge/stats.py'
+  elif [ ! -r "$DRX_STATS_FILE" ]; then
+    DRX_STATS_WHY='it could not be opened for reading'
+  else
+    mapfile -t DRX_STATS_GOT < <(jq -rs --arg id "$id" "$@" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
+        (if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id) then .[0] else null end) as $doc
+        | '"$filter" "$DRX_STATS_FILE" 2>/dev/null)
+  fi
+  return 0
+}
+
+# A NAME AS THE DOCTOR PRINTS ONE: each named variable keeps its value when it
+# matches `name_re`, else it becomes `unrecognised`. `name_re` is stats.py's
+# NAME_RE, the bound the bridge writes every name under, in the same pattern
+# text (ccrc-doctor-codex.test.ts pins the two equal), matched under LC_ALL=C
+# so a range never reaches past ASCII (under a UTF-8 locale bash's `[A-Za-z]`
+# accepts letters such as `ë`, measured).
+_dr_cx_bound() {   # <variable name>...
+  local name_re='^[A-Za-z0-9_.:/-]{1,64}$'
+  local LC_ALL=C _dr_v
+  for _dr_v in "$@"; do
+    local -n _dr_b="$_dr_v"
+    [[ "$_dr_b" =~ $name_re ]] || _dr_b=unrecognised
+    unset -n _dr_b
+  done
+}
+
 # THE DRIFT ROW (codex-bridge Stage 2, Task 17; spec §2.9 D3, D-6418), a
 # direct lane's only: a litellm lane runs no bridge, and the stats file a lane
 # switched back keeps is no drift of its. The bridge lists every name
@@ -7905,16 +7962,12 @@ _dr_cx_bridge_files() {   # <id>
 # `unexplained` (Task 5), and drops one a reviewed change explains when it
 # next starts, so the list is the whole question: a name is explained only in
 # code, and this row never asks known.py itself. The file is lane.json's
-# `bridgeFiles.stats`, read as `_dr_cx_bridge_files` reads it, and only a
-# regular file is opened (a symlink or another kind of file is that row's
-# FAIL; a FIFO is never opened). NAMES ONLY, NEVER CONTENT: jq hands over each
-# family and name on a line of its own, or an empty line for a non-string or
-# a string holding a control character (so no name spans two lines), and each
-# is printed only when it matches `name_re`, else `unrecognised`. `name_re` is
-# stats.py's NAME_RE, the bound the bridge writes every name under, in the same
-# pattern text (ccrc-doctor-codex.test.ts pins the two equal), matched under
-# LC_ALL=C so a range never reaches past ASCII (under a UTF-8 locale bash's
-# `[A-Za-z]` accepts letters such as `ë`, measured). The line prints the first
+# `bridgeFiles.stats`, read through `_dr_cx_stats_read`, the stats file's one
+# reader here. NAMES ONLY, NEVER CONTENT: jq hands over each family and name
+# on a line of its own, or an empty line for a non-string or a string holding
+# a control character (the reader's `line`, so no name spans two lines), and
+# each is printed only through `_dr_cx_bound`, stats.py's NAME_RE, else
+# `unrecognised`. The line prints the first
 # `shown` names and counts the rest, so one file cannot make it unbounded.
 # WHAT THIS ROW READS: names only from one JSON document of version 1 and of
 # THIS lane (`.lane`) whose `unexplained` is an object, no larger than
@@ -7945,32 +7998,18 @@ _dr_cx_bridge_files() {   # <id>
 # explained in known.py, and the bridge's restart clears both (stats.py's
 # `_load`, the Stage 2 wave 3 whole-wave fix round's Z1).
 _dr_cx_drift() {   # <id>
-  local id="$1" dir lj sf p i fam name sz list fix why='' LC_ALL=C unrec='' over='' kind
-  local name_re='^[A-Za-z0-9_.:/-]{1,64}$'
-  local read_max=$(( 16 * 2**20 )) names_max=256 families=10 shown=32
+  local id="$1" dir p i fam name list fix why unrec='' over='' kind
+  local names_max=256 families=10 shown=32
   local -a got=() listed=()
   local -A seen=()
-  dir="$(_codex_lane_dir "$id")"; lj="$dir/lane.json"
-  [ -f "$lj" ] || return 0
-  sf="$(jq -r 'if type == "object" and (.bridgeFiles | type) == "object" and (.bridgeFiles.stats | type) == "string"
-      then .bridgeFiles.stats else "" end' "$lj" 2>/dev/null)" || return 0
-  [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] || return 0
-  p="$dir/$sf"
-  [ -f "$p" ] && [ ! -L "$p" ] || return 0
-  sz="$(_plat_size -- "$p" 2>/dev/null)" || sz=''
-  if [[ ! "$sz" =~ ^[0-9]+$ ]]; then
-    why='its size could not be measured'
-  elif [ "$sz" -gt "$read_max" ]; then
-    why='it is larger than the bridge reads, READ_MAX in ccd/codexbridge/stats.py'
-  elif [ ! -r "$p" ]; then
-    why='it could not be opened for reading'
-  else
-    mapfile -t got < <(jq -rs --arg id "$id" --argjson max "$(( families * (names_max + 1) ))" 'def line: if type == "string" and (explode | all(. >= 32 and . != 127)) then . else "" end;
-        if length == 1 and (.[0] | type == "object" and .version == 1 and .lane == $id and (.unexplained | type) == "object")
-        then if ([.[0].unexplained[] | arrays | length] | add // 0) > $max then "many"
-          else "v1", (.[0].unexplained | to_entries[] | (.key | line) as $f
-            | (.value | if type == "array" then .[] else empty end) | $f, line) end
-        else "other" end' "$p" 2>/dev/null)
+  _dr_cx_stats_read "$id" '$doc | if . != null and (.unexplained | type) == "object"
+      then if ([.unexplained[] | arrays | length] | add // 0) > $max then "many"
+        else "v1", (.unexplained | to_entries[] | (.key | line) as $f
+          | (.value | if type == "array" then .[] else empty end) | $f, line) end
+      else "other" end' --argjson max "$(( families * (names_max + 1) ))" || return 0
+  dir="$DRX_STATS_DIR"; p="$DRX_STATS_FILE"; why="$DRX_STATS_WHY"
+  got=(${DRX_STATS_GOT[@]+"${DRX_STATS_GOT[@]}"})
+  if [ -z "$why" ]; then
     case "${got[0]:-}" in
       v1) ;;
       many) why='it lists more names than the bridge writes, NAMES_MAX names and overflow in each of the families of ccd/codexbridge/known.py' ;;
@@ -7990,8 +8029,7 @@ _dr_cx_drift() {   # <id>
   fi
   for (( i = 1; i + 1 < ${#got[@]}; i += 2 )); do
     fam="${got[$i]}"; name="${got[$((i + 1))]}"
-    [[ "$fam" =~ $name_re ]] || fam=unrecognised
-    [[ "$name" =~ $name_re ]] || name=unrecognised
+    _dr_cx_bound fam name
     case "$fam" in
       eventType|itemType|errorCode|incompleteReason) kind=s ;;
       responseHeader) kind=h ;;
@@ -8047,6 +8085,49 @@ _dr_cx_drift_marker() {   # <unrecognised|overflow> <kinds> <lane dir>
     out+="; the bridge's restart clears unrecognised from the list, and it comes back when the bridge meets such a name again; never add unrecognised to known.py"
   fi
   printf '%s' "$out"
+}
+
+# THE STORE ROW (D-7677), a direct lane's only, beside the drift row: the
+# stats file's `store` entry, the reasoning store's state for the process that
+# last wrote the file (stats.py's "THE STORE ENTRY"), read through
+# `_dr_cx_stats_read`. A file of no store entry (a bridge that predates it), or
+# one the reader cannot read as the bridge's (the drift row's unmeasured WARN
+# names that), has no row: an entry never read is never `ok`. `ok` has none.
+# `disabled` is a WARN: the store answers as empty for the rest of that
+# process, so no request has the model's earlier reasoning replayed. The row is
+# asked before `_dr_cx_tiers` measures the bridge, and whether the bridge runs
+# is not known here without asking again, so the WARN names the LAST process,
+# the one that wrote the file, whether or not it still runs; the next start
+# writes a fresh entry before it binds its port (`server.serve`), and the line
+# clears. `set-aside` is a WARN only while the copy it names is still in the
+# lane directory: what was damaged is kept for reading, and deleting it is the
+# operator's. The copy is named only in the shape store.py gives it
+# (`<store>.damaged-<UTC stamp>`, a bare name), so no path from the file is
+# ever checked or printed. Every value printed goes through `_dr_cx_bound`.
+_dr_cx_store() {   # <id>
+  local id="$1" dir state reason at found file copy='' LC_ALL=C
+  local -a got=()
+  _dr_cx_stats_read "$id" '$doc | if . != null and (.store | type) == "object"
+      then .store | "entry", (.state | line), (.reason | line), (.at | line),
+        (.setAside | if type == "object" then "copy", (.found | line), (.file | line) else "none", "", "" end), "END"
+      else "none" end' || return 0
+  [ -z "$DRX_STATS_WHY" ] || return 0
+  got=(${DRX_STATS_GOT[@]+"${DRX_STATS_GOT[@]}"})
+  [ "${#got[@]}" -eq 8 ] && [ "${got[0]}" = entry ] && [ "${got[7]}" = END ] || return 0
+  dir="$DRX_STATS_DIR"; state="${got[1]}"; reason="${got[2]}"; at="${got[3]}"; found="${got[5]}"; file="${got[6]}"
+  _dr_cx_bound reason at found file
+  [[ "$file" =~ ^[A-Za-z0-9._-]+\.damaged-[0-9]{8}T[0-9]{6}Z$ ]] || file=unrecognised
+  case "$state" in
+    disabled)
+      [ "${got[4]}" != copy ] || copy="; at its start it had set its damaged store ($found) aside as $file"
+      _dr_cx_warn "$id: the bridge's reasoning store is switched off for the rest of its last process ($reason, since $at): every request that process answers is answered without the model's earlier reasoning replayed$copy (names only, never content)." \
+        "restart the lane's bridge so its start check runs again: ccrc codex stop $id, then ccrc codex start $id (a bridge that is not running needs the start alone, which every session launch runs too); the stop drains the bridge, so a request in flight gets DRAIN_S (ccd/codexbridge/server.py) to finish and one still open then is cut with an error that Claude Code sends again. At the start a damaged store is set aside and a fresh one made, and this line clears once the new process writes its stats file, before it serves" ;;
+    set-aside)
+      [ "$file" != unrecognised ] && { [ -e "$dir/$file" ] || [ -L "$dir/$file" ]; } || return 0
+      _dr_cx_warn "$id: at its start the bridge found its reasoning store damaged ($found) and set it aside as $file, starting a fresh store; only the model's earlier reasoning was lost." \
+        "nothing to repair: the bridge serves from its fresh store. Read the copy, $dir/$file, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- $dir/$file $dir/$file-wal $dir/$file-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you" ;;
+  esac
+  return 0
 }
 
 # The lane's LIVE sessions: `~/.cc-sessions/<sid>.wrapper` names the account a
