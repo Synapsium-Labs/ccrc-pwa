@@ -87,7 +87,8 @@ async function rig(o: RigOpts = {}): Promise<Rig> {
   };
   const clock = { now: NOW };
   const app = Fastify({ logger: false });
-  registerLinearRoutes(app, { ccrcDir: dir, gate, rate: linearServicesFake().rate, fetch: fetchStub, timeoutMs: o.timeoutMs, now: () => clock.now });
+  const fx = linearServicesFake();
+  registerLinearRoutes(app, { ccrcDir: dir, gate, rate: fx.rate, refresher: fx.refresher, fetch: fetchStub, timeoutMs: o.timeoutMs, now: () => clock.now });
   await app.ready();
   open = app;
   return {

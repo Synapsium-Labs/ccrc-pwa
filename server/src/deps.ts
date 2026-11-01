@@ -34,6 +34,7 @@ import type { FetchLike } from './linear/client.js';
 import type { LinearJournal } from './linear/journal.js';
 import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
+import type { LinearRefresher } from './linear/refresher.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -191,6 +192,11 @@ export interface Deps {
    *  script): nothing calls Linear: a title is the offline one and those two routes answer `linear-unavailable`
    *  (D-7684). `server.ts` never builds a default. */
   linearRate?: LinearRateService;
+  /** D-7668 (#1444, spec §4.3): the ONE background refresher of what each Linear slot knows, built in `index.ts` over
+   *  the one rate service and passed through by `server.ts` to the routes that need it (today the legacy Check again,
+   *  whose check counts as its slot's refresh). Absent (a test, a script): those routes answer `linear-unavailable`
+   *  before any Linear call (D-7684). `server.ts` never builds a default. */
+  linearRefresher?: LinearRefresher;
 }
 
 /** D-7579 (increment 7, WP2): `Deps` with `coord` narrowed to the watcher's one store port, `WatcherCoordPort`. From

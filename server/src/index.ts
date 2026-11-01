@@ -38,6 +38,7 @@ import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
+import { LinearRefresher } from './linear/refresher.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
@@ -281,6 +282,10 @@ deps.tokenDriver = tokenDriver;
 // each call, so nothing else holds a bucket. Its state lives in memory and starts each lane at a quarter on a restart.
 const linearRate = new LinearRateService(Date.now);
 deps.linearRate = linearRate;
+// The ONE background refresher (D-7668; spec §4.3), over the same rate service: it alone asks Linear for a slot's teams
+// after a routing miss, a slot at a time, on each slot's floor, never inside a request.
+const linearRefresher = new LinearRefresher({ ccrcDir: cfg.ccrcDir, rate: linearRate });
+deps.linearRefresher = linearRefresher;
 
 // The account audit (D-5516) over the one coord.db, and the ONE `AccountOps` arm (spec §13.2, G13), chosen by
 // `cfg.fleetMode` ONLY: in remote mode the local spawner is never constructed, so `ccrc account` can never run on

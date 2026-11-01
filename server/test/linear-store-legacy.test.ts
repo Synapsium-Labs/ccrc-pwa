@@ -20,6 +20,12 @@ import {
   type LegacyTeams, type LinearLegacySlot, type LinearStoreRead,
 } from '../src/linear/store.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import type { FastifyInstance } from 'fastify';
+import type { FetchLike } from '../src/linear/client.js';
+import { buildServer } from '../src/server.js';
+import { testDeps } from './helpers.js';
+import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
+import { linearDeps, linearServicesFake } from './linearServicesFake.js';
 
 removeTmpFixturesEachTest();
 afterEach(() => { vi.restoreAllMocks(); });
@@ -267,5 +273,197 @@ describe('legacy-teams.json is written under the one lock', () => {
     vi.restoreAllMocks();
     expect(readdirSync(path.join(dir, LINEAR_STORE_DIR))).toEqual([]);
     expect(pairState(dir)).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CHARACTERIZATION of the legacy Check again (`POST /api/linear/connection/check`), green on the code before its query
+// became the §4.1 key check (plan task LK3): its answer is today's view of the pair, it writes the v1 record by the
+// digest rule, and nothing else. It never changes after it lands. Driven through `buildServer` with the services
+// handed in `Deps`, as `index.ts` hands them; the route stamps the wall clock, so `checkedAt` is any number.
+// ---------------------------------------------------------------------------
+
+interface CheckRig {
+  app: FastifyInstance;
+  dir: string;
+  calls: number;
+  answer: (a: LinearAnswer | (() => Promise<LinearAnswer>)) => void;
+}
+let openApp: FastifyInstance | null = null;
+afterEach(async () => { await openApp?.close(); openApp = null; });
+
+async function checkRig(): Promise<CheckRig> {
+  const deps = testDeps();
+  const dir = deps.cfg.ccrcDir;
+  mkdirSync(dir, { recursive: true });
+  let next: LinearAnswer | (() => Promise<LinearAnswer>) = viewerOk();
+  const rig = { calls: 0 } as CheckRig;
+  const f: FetchLike = async () => { rig.calls += 1; return typeof next === 'function' ? next() : next; };
+  const app = await buildServer({ ...deps, linear: { fetch: f }, ...linearDeps(linearServicesFake({ clock: () => NOW })) });
+  openApp = app;
+  return Object.assign(rig, { app, dir, answer: (a: typeof next) => { next = a; } });
+}
+const viewerOk = (org = 'Workspace A', user = 'user-a'): LinearAnswer =>
+  linearAnswer({ ok: true, status: 200, json: async () => ({ data: { viewer: { name: user }, organization: { name: org } } }) });
+const checkAgain = async (r: CheckRig): Promise<{ status: number; body: unknown }> => {
+  const res = await r.app.inject({ method: 'POST', url: '/api/linear/connection/check' });
+  return { status: res.statusCode, body: JSON.parse(res.body) as unknown };
+};
+const v1Of = (dir: string): LinearDetails | null => parseLinearDetails(readFileSync(path.join(dir, LINEAR_DETAILS_FILE), 'utf8'));
+
+describe('characterization: the legacy Check again', () => {
+  it('answers today\'s view and writes the v1 record of the key it checked', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(viewerOk('Workspace A2', 'user-a2'));
+    const got = await checkAgain(r);
+    expect(got.status).toBe(200);
+    expect(got.body).toEqual({
+      ok: true, connection: { state: 'connected', outcome: 'ok', org: 'Workspace A2', user: 'user-a2', keyTail: keyTailOf(LEGACY_KEY), checkedAt: expect.any(Number) },
+    });
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY, { org: 'Workspace A2', user: 'user-a2', checkedAt: expect.any(Number) as number }));
+    expect(r.calls).toBe(1);
+  });
+
+  it('a 401 records rejected and keeps the names the record had for this key', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(linearAnswer({ ok: false, status: 401, json: async () => ({}) }));
+    expect((await checkAgain(r)).body).toMatchObject({ ok: true, connection: { state: 'key-rejected', org: 'Workspace A' } });
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY, { outcome: 'rejected', checkedAt: expect.any(Number) as number }));
+  });
+
+  it('a key replaced while Linear is asked wins: the check records nothing over it', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(async () => { await connect(r.dir, LEGACY_KEY2); return viewerOk('Workspace X', 'user-x'); });
+    expect((await checkAgain(r)).body).toMatchObject({ ok: true, connection: { state: 'connected', org: 'Workspace A', keyTail: keyTailOf(LEGACY_KEY2) } });
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY2));
+  });
+
+  it('with no key it answers not-connected and asks Linear nothing', async () => {
+    const r = await checkRig();
+    const got = await checkAgain(r);
+    expect(got).toEqual({ status: 409, body: { ok: false, error: 'not-connected', connection: { state: 'not-connected' } } });
+    expect(r.calls).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Row 2 (plan task LK3): the legacy Check again learns its workspace. Its query is the §4.1 key check, and what that
+// learns beyond the v1 record goes to `legacy-teams.json` under the lock, by the digest rule; the pair keeps its v1
+// write and nothing more.
+// ---------------------------------------------------------------------------
+
+const keyCheckOk = (org: Record<string, unknown> = { id: WS_A, name: 'Workspace A', urlKey: 'ws-a' }, teams: LinearTeam[] = [TEAM_A]): LinearAnswer =>
+  linearAnswer({
+    ok: true, status: 200,
+    json: async () => ({ data: { viewer: { name: 'user-a' }, organization: org, teams: { nodes: teams, pageInfo: { hasNextPage: false, endCursor: null } } } }),
+  });
+
+describe('the legacy Check again learns its workspace (row 2)', () => {
+  it('writes legacy-teams.json for the key it checked, so the store reads the legacy slot as learned', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(keyCheckOk());
+    const got = await checkAgain(r);
+    expect(got.body).toMatchObject({ ok: true, connection: { state: 'connected', org: 'Workspace A' } });
+    expect(parseLegacyTeams(readFileSync(teamsPath(r.dir), 'utf8'))).toEqual({
+      keyDigest: valueDigestHex(LEGACY_KEY), workspaceId: WS_A, name: 'Workspace A', urlKey: 'ws-a', teams: [TEAM_A], teamsAt: expect.any(Number) as number,
+    });
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({ teamsFile: 'matched', workspace: { workspaceId: WS_A }, superseded: false });
+    // The pair holds what it held on `main`: the key, and the v1 record the check wrote.
+    expect(readFileSync(path.join(r.dir, LINEAR_KEY_FILE), 'utf8')).toBe(`${LEGACY_KEY}\n`);
+    expect(v1Of(r.dir)).toEqual(details(LEGACY_KEY, { checkedAt: expect.any(Number) as number }));
+    expect(readFileSync(path.join(r.dir, LINEAR_DETAILS_FILE), 'utf8')).not.toContain(WS_A);
+    expect(r.calls).toBe(1);
+  });
+
+  it('a key replaced while Linear is asked: nothing is learned for the new key, and the old one\'s file is ignored', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(async () => { await connect(r.dir, LEGACY_KEY2); return keyCheckOk(); });
+    await checkAgain(r);
+    expect(existsSync(teamsPath(r.dir))).toBe(false);
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({ workspace: null });
+  });
+
+  it('a check that learns no workspace (a 401, or an answer out of its grammar) writes no legacy-teams.json', async () => {
+    for (const a of [linearAnswer({ ok: false, status: 401, json: async () => ({}) }), keyCheckOk({ name: 'Workspace A' })]) {
+      const r = await checkRig();
+      await connect(r.dir);
+      r.answer(a);
+      expect((await checkAgain(r)).status).toBe(200);
+      expect(existsSync(teamsPath(r.dir))).toBe(false);
+    }
+  });
+
+  it('the next Check again overwrites what an earlier key\'s check left', async () => {
+    const r = await checkRig();
+    await connect(r.dir);
+    r.answer(keyCheckOk());
+    await checkAgain(r);
+    await connect(r.dir, LEGACY_KEY2);
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({ teamsFile: 'stale', workspace: null });
+    r.answer(keyCheckOk({ id: WS_B, name: 'Workspace B', urlKey: 'ws-b' }));
+    await checkAgain(r);
+    expect(legacyOf(await readLinearStore(r.dir))).toMatchObject({
+      teamsFile: 'matched', workspace: { keyDigest: valueDigestHex(LEGACY_KEY2), workspaceId: WS_B, urlKey: 'ws-b' },
+    });
+  });
+});
+
+// Row 2's refresher half (plan task LK3): the legacy slot's background refresh writes only `legacy-teams.json`.
+
+describe('the background refresh of the legacy slot writes only legacy-teams.json (row 2)', () => {
+  const MIN = 60_000;
+  const refresherBox = async (answer: () => Promise<LinearAnswer>): Promise<{ dir: string; fx: ReturnType<typeof linearServicesFake>; calls: () => number }> => {
+    const dir = ccrc();
+    let n = 0;
+    const fx = linearServicesFake({ clock: () => NOW, ccrcDir: dir, fetch: async () => { n += 1; return answer(); } });
+    return { dir, fx, calls: () => n };
+  };
+  const listedStore = async (dir: string): Promise<Extract<LinearStoreRead, { kind: 'listed' }>> => {
+    const r = await readLinearStore(dir);
+    if (r.kind !== 'listed') throw new Error('not listed');
+    return r;
+  };
+  const TEAM_B: LinearTeam = { id: 'bbbbbbbb-1111-4000-8000-000000000002', key: 'BBB', name: 'Team B' };
+
+  it('refreshes a learned legacy slot\'s teams, leaving the pair\'s bytes and mtimes as they were', async () => {
+    const b = await refresherBox(async () => keyCheckOk(undefined, [TEAM_A, TEAM_B]));
+    await connect(b.dir);
+    await writeLegacyTeams(b.dir, valueDigestHex(LEGACY_KEY), learned({ teamsAt: NOW - 10 * MIN }));
+    const before = pairState(b.dir);
+    expect(b.fx.refresher.miss(await listedStore(b.dir))).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.calls()).toBe(1);
+    expect(legacyOf(await readLinearStore(b.dir))).toMatchObject({ teamsFile: 'matched', workspace: { teams: [TEAM_A, TEAM_B], teamsAt: NOW } });
+    expect(pairState(b.dir)).toEqual(before);
+  });
+
+  it('a 401 on the legacy slot\'s refresh writes nothing: the pair is the legacy routes\' alone', async () => {
+    const b = await refresherBox(async () => linearAnswer({ ok: false, status: 401, json: async () => ({}) }));
+    await connect(b.dir);
+    await writeLegacyTeams(b.dir, valueDigestHex(LEGACY_KEY), learned({ teamsAt: NOW - 10 * MIN }));
+    const before = pairState(b.dir);
+    const teamsBefore = readFileSync(teamsPath(b.dir), 'utf8');
+    b.fx.refresher.miss(await listedStore(b.dir));
+    await b.fx.refresher.idle();
+    expect(b.calls()).toBe(1);
+    expect(pairState(b.dir)).toEqual(before);
+    expect(readFileSync(teamsPath(b.dir), 'utf8')).toBe(teamsBefore);
+  });
+
+  it('an unlearned or superseded legacy slot is never refreshed', async () => {
+    const b = await refresherBox(async () => keyCheckOk());
+    await connect(b.dir);
+    expect(b.fx.refresher.miss(await listedStore(b.dir))).toBe('unknown');
+    await writeLegacyTeams(b.dir, valueDigestHex(LEGACY_KEY), learned({ teamsAt: NOW - 10 * MIN }));
+    await putLinearSlot(b.dir, SLOT_KEY, slotRec(WS_A, SLOT_KEY), { replace: false });
+    // Only the file slot (fresh) is a candidate: the superseded legacy slot cures nothing.
+    expect(b.fx.refresher.miss(await listedStore(b.dir))).toBe('unknown');
+    await b.fx.refresher.idle();
+    expect(b.calls()).toBe(0);
   });
 });

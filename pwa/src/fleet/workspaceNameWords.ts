@@ -27,7 +27,9 @@ type ClientNote = 'unrecognised' | 'call-failed';
  * `pointer` is set where the remedy is in Settings: the field then offers the way there.
  */
 export const LOOKUP_NOTE = {
-  'not-configured': { hint: "Linear isn't connected, so the title is what you entered.", pointer: 'Connect Linear in Settings' },
+  // Titles route through the Linear keys in Settings by the ticket's team (#1444, spec §6.10): none reaches this one, or
+  // none is saved at all. Either way the remedy is a key in Settings.
+  'not-configured': { hint: "No Linear key in Settings reaches this ticket's team.", pointer: 'Connect Linear in Settings' },
   'unauthorised': { hint: 'Linear rejected the saved key, so the title is what you entered.', pointer: 'Replace the key in Settings' },
   // A 403 is Linear refusing THIS request (a scope, or a team the key cannot see), not a verdict on the key, so the
   // note is quiet: no pointer to replace a key nobody called bad.
