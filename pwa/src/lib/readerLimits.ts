@@ -17,8 +17,10 @@ export const READER_IMAGE_BUDGET_BYTES = 5242880;
 /** The prefix of every storage key the reader frame owns. */
 export const READER_STORE_PREFIX = 'ccrc:reader:v1:';
 
-/** The most UTF-8 bytes of text the reader writes to the clipboard without asking (64 KiB, M8.19); more goes to the
- *  copy sheet. */
+/** The most UTF-8 bytes of text the reader writes to the clipboard without asking (64 KiB, M8.19). It is the shared
+ *  Markdown library's own copy cap (`BRIDGE_LIMITS.copyMaxBytes`, pinned equal by `reader-policy.test.ts`), and the
+ *  library refuses an over-cap copy before the adapter is asked, so ccrc's arm for more (the copy sheet) is a backstop
+ *  and not a path a live frame takes. */
 export const READER_COPY_WRITE_MAX_BYTES = 65536;
 
 /** The most UTF-16 code units a per-doc key (`project:section:path`) may have (A15/G7); a longer one has no per-doc state. */

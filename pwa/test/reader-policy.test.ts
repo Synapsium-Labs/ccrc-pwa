@@ -2,8 +2,10 @@
 // in `lib/storage.ts` and `replaceFragment` in `lib/router.ts`. Every page is a placeholder (`demo`, `a/b.md`,
 // `example-org/example-repo`); control characters are built with `String.fromCharCode`, never written raw.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
 import { DOC_SECTION_SLUGS } from '../../shared/docs';
 import { DOCS_PARSE_BUDGET_MS } from '../src/lib/markdownLimits';
+import { READER_COPY_WRITE_MAX_BYTES } from '../src/lib/readerLimits';
 import { enumerablePageStorage } from '../src/lib/storage';
 import { replaceFragment } from '../src/lib/router';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
@@ -133,7 +135,11 @@ describe('copyDecision', () => {
     expect(d.hidden.map((h) => h.index)).toEqual([1, 3, 5]);
   });
 
-  it('text over 64 KiB goes to the sheet', () => {
+  it('the write cap is the library\'s own copy cap, so the library refuses an over-cap copy first and this is its backstop', () => {
+    expect(READER_COPY_WRITE_MAX_BYTES).toBe(BRIDGE_LIMITS.copyMaxBytes);
+  });
+
+  it('text over the cap goes to the sheet (a backstop: the library refuses an over-cap copy before the adapter is asked)', () => {
     expect(copyDecision('a'.repeat(65536), []).kind).toBe('write');
     expect(copyDecision('a'.repeat(65537), []).kind).toBe('sheet');
     // Bytes, not code units: 32 769 two-byte characters are 65 538 bytes.

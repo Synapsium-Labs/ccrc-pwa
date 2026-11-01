@@ -245,6 +245,31 @@ describe('W8a: the reader\'s keys stay under its own prefix (M8.15)', () => {
     expect(spy.data).toEqual(before);
   });
 
+  it('the doc-key rule agrees with the library\'s store: 1024 units are accepted by both, 1025 and a C1 or DEL character are refused by both', async () => {
+    const create = await createHostStore();
+    const fits = 1024 - 'demo:sec:'.length;
+    const cases: [string, string, boolean][] = [
+      ['1024 units', 'a'.repeat(fits), true],
+      ['1025 units', 'a'.repeat(fits + 1), false],
+      ['a C1 character', `a${String.fromCharCode(0x85)}b`, false],
+      ['DEL', `a${String.fromCharCode(0x7f)}b`, false],
+      ['a C0 character', `a${String.fromCharCode(0x1f)}b`, false],
+      ['U+00A0, the first code point past C1', `a${String.fromCharCode(0xa0)}b`, true],
+    ];
+    for (const [name, path, accepted] of cases) {
+      const key = readerDocKey('demo', 'sec', path);
+      expect(key !== null, `readerDocKey: ${name}`).toBe(accepted);
+      let libraryAccepts = true;
+      try {
+        create(spyStorage().port, READER_STORE_PREFIX, `demo:sec:${path}`);
+      } catch (e) {
+        expect(e, name).toBeInstanceOf(RangeError);
+        libraryAccepts = false;
+      }
+      expect(libraryAccepts, `the library's store: ${name}`).toBe(accepted);
+    }
+  });
+
   it('a value over 64 KiB is refused', async () => {
     const create = await createHostStore();
     const spy = spyStorage();
