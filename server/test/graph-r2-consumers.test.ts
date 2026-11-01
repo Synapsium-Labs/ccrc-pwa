@@ -69,9 +69,9 @@ const TREES_CEILING: Record<string, number> = {
   // GR4 (D-7350): the sweep writes repos[] and no per-tree array (1 -> 0, so it moved to NAMES_ONLY), and the per-tree
   // sweep's test file is gone (22 -> 0); session-hook.test.ts's sweep-writer fixture reads the repository rows now
   // (2 -> 1: its hand-written old-shape pass, which the hook still reads, stays).
-  // GR7 (D-7353): the doctor's fixtures are repository rows (12 -> 0 and 1 -> 0, so both moved to NAMES_ONLY).
+  // GR7 (D-7353): the doctor's fixtures are repository rows (12 -> 0 and 1 -> 0) and `_check_graphify` reads
+  // `.passes[-1].repos[]` (5 -> 0), so all three moved to NAMES_ONLY.
   'ccd/session-hook.sh': 1,
-  'ccd/ccrc-doctor-checks': 5,
   'server/test/session-hook.test.ts': 1,
 };
 /** Files that name the census and read no per-tree row: documentation of the
@@ -82,6 +82,7 @@ const TREES_CEILING: Record<string, number> = {
  *  lists in the PR that adds it, so a reviewer sees it. */
 const NAMES_ONLY = [
   'ccd/ccd-graph-sweep',                            // the writer (GR4: repos[] only)
+  'ccd/ccrc-doctor-checks',                         // _check_graphify reads .passes[-1].repos[] (GR7, D-7353)
   'README.md',
   'server/test/ccrc-doctor-graphify.test.ts',       // GR7's rows are repos[] fixtures (D-7353)
   'server/test/ccrc-doctorFixture.ts',              // healthy()'s census is a repos[] pass (GR7)

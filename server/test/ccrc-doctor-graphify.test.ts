@@ -300,6 +300,11 @@ function healthy(prefix: string): string {
   // `_plat_mtime` (the census-staleness probe) shells `stat` — real-linked for
   // `date`'s reason: its parsing is not this suite's subject.
   linkReal(home, 'stat');
+  // `awk` is how ccrc's one settings reader scans ccrc.env (`_ccrc_knob`), and the graph settings are read through it
+  // (GR7, D-7353): a row that writes a setting there is measured only with it on PATH, as on every box.
+  linkReal(home, 'awk');
+  // …and `env`, which the resolver's every git call goes through (`_gr_git`, with the caller's GIT_* removed).
+  linkReal(home, 'env');
   stubDf(home);
   seedGraphifyAccountsSh(home);
   return home;
