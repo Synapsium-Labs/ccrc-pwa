@@ -272,7 +272,6 @@ describe('canonical coordination id route census', () => {
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },
-      { method: 'POST', routePath: '/api/asks/:id/release' },
       // coordinator-first routing, plan Task 16 (D-5298): the approvals lane's four id routes.
       { method: 'GET', routePath: '/api/approvals/:id/ruling' },
       { method: 'POST', routePath: '/api/approvals/:id/rule' },

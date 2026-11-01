@@ -165,7 +165,7 @@ type Row = readonly [name: string, run: () => Promise<Outcome>];
 const askAnswer = (f: Approvals, id: number | string, body: Record<string, unknown>, headers: Record<string, string> = TOK) =>
   f.app.inject({ method: 'POST', url: `/api/questions/ask-${id}/rule`, headers, payload: { kind: 'ask', ...body } });
 const askRelease = (f: Approvals, id: number | string, body: Record<string, unknown>, headers: Record<string, string> = TOK) =>
-  f.app.inject({ method: 'POST', url: `/api/asks/${id}/release`, headers, payload: body });
+  f.app.inject({ method: 'POST', url: `/api/questions/ask-${id}/release`, headers, payload: { kind: 'ask', ...body } });
 const P = { fromId: PARENT, fromUuid: uuidOf(PARENT) };
 
 /** One claimant ask-door row: the response, the row after, the door-ins called, new feed rows and pushes. */
@@ -293,7 +293,7 @@ const ASK_ANSWER_ROWS: Row[] = [
 const ASK_RELEASE_ROWS: Row[] = [
   ['POST /api/asks/:id/release | 1 | no coordination store', async () => {
     const { app } = await noCoordApp();
-    const res = await app.inject({ method: 'POST', url: '/api/asks/1/release', headers: TOK, payload: P });
+    const res = await app.inject({ method: 'POST', url: '/api/questions/ask-1/release', headers: TOK, payload: { kind: 'ask', ...P } });
     return { status: res.statusCode, body: bodyOf(res), effects: {} };
   }],
   ['POST /api/asks/:id/release | 2 | no box token', async () => {
@@ -1088,9 +1088,9 @@ const EXPECTED: Record<string, Outcome> = {
   "POST /api/asks/:id/release | 1 | no coordination store":
     {"status": 501, "body": "{\"ok\":false,\"error\":\"not-configured\"}", "effects": {}},
   "POST /api/asks/:id/release | 2 | no box token":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/asks/:id/release grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/release grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/release | pair 2+3 | no box token and a bad body":
-    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/asks/:id/release grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+    {"status": 401, "body": "{\"ok\":false,\"error\":\"unauthenticated\",\"detail\":\"no box token presented — POST /api/questions/:id/release grants no legacy tolerance\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/release | 3 | a bad body":
     {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"row": {"state": "held", "answeredBy": null, "answer": null}, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
   "POST /api/asks/:id/release | 4 | an unknown sender":
@@ -1365,7 +1365,6 @@ describe('question-doors pin: each door\'s auth posture', () => {
   // and the origin check are the operator's. A claimant door is exempt from the session gate BY NAME and skips the
   // origin check; an operator door is in neither table, so the gate and the origin check both run.
   const POSTURE: Record<string, { exempt: boolean; originCheck: boolean }> = {
-    'POST /api/asks/:id/release': { exempt: true, originCheck: false },
     'POST /api/approvals': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/rule': { exempt: true, originCheck: false },
     'POST /api/approvals/:id/release': { exempt: true, originCheck: false },
@@ -1374,6 +1373,7 @@ describe('question-doors pin: each door\'s auth posture', () => {
     'POST /api/questions/:id/answer': { exempt: false, originCheck: true },
     // K5 Q3l (D-7324): the four claimant aliases retired; the family's two claimant doors hold their posture.
     'POST /api/questions/:id/rule': { exempt: true, originCheck: false },
+    'POST /api/questions/:id/release': { exempt: true, originCheck: false },
     'POST /api/sessions/:id/dialog/tab': { exempt: false, originCheck: true },
   };
   it.each(Object.entries(POSTURE))('%s', (route, want) => {

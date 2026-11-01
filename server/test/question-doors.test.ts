@@ -202,14 +202,6 @@ const SIZES_OPEN = paneFixture('cc300-ask-multiselect-sizes-open');
 const TEXT = '- only in staging, sampled 10%';
 
 const PAIRS: Pair[] = [
-  // The claimant's ask hand-over.
-  ['release ask | a bad body', askSide, ...releaseAsk({ fromId: PARENT })],
-  ['release ask | the store refuses the read', askSide, ...releaseAsk(P),
-    (s) => { vi.spyOn(s.f.coord, 'askById').mockReturnValueOnce({ ok: false, detail: 'fixture: the asks table is unreadable' } as never); }],
-  ['release ask | no such ask', askSide, ...releaseAsk(P, 99)],
-  ['release ask | not the stored parent', askSide, ...releaseAsk({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
-  ['release ask | not held', askSide, ...releaseAsk(P), (s) => { s.f.coord.declineAsk(s.id, Date.now()); }],
-  ['release ask | success: declined, the door-in fires', askSide, ...releaseAsk(P)],
   // The claimant's approval ruling.
   ['rule approval | a widening field', approvalSide, ...ruleApproval({ ...RULE, permanent: true })],
   ['rule approval | a bad body', approvalSide, ...ruleApproval({ ...RULE, verdict: 'maybe' })],
@@ -288,6 +280,14 @@ const RETIRED_PAIRS: Pair[] = [
   ['rule ask | success: pressed, recorded, settled', askSide, ...ruleAsk({ ...P, optionIndexes: [1], askKey: ASK_KEY })],
   ['rule ask | success after the lapse: the late answer', askSide, ...ruleAsk({ ...P, optionIndexes: [0] }),
     (s) => { expect(s.f.coord.releaseAsk(s.id, Date.now())).toBe(true); }],
+  // The claimant's ask hand-over.
+  ['release ask | a bad body', askSide, ...releaseAsk({ fromId: PARENT })],
+  ['release ask | the store refuses the read', askSide, ...releaseAsk(P),
+    (s) => { vi.spyOn(s.f.coord, 'askById').mockReturnValueOnce({ ok: false, detail: 'fixture: the asks table is unreadable' } as never); }],
+  ['release ask | no such ask', askSide, ...releaseAsk(P, 99)],
+  ['release ask | not the stored parent', askSide, ...releaseAsk({ fromId: CHILD2, fromUuid: uuidOf(CHILD2) })],
+  ['release ask | not held', askSide, ...releaseAsk(P), (s) => { s.f.coord.declineAsk(s.id, Date.now()); }],
+  ['release ask | success: declined, the door-in fires', askSide, ...releaseAsk(P)],
   // (a row moves here from PAIRS in the commit that retires its door)
 ];
 
@@ -367,6 +367,18 @@ const RETIRED_OUTCOMES: Readonly<Record<string, Outcome>> = {
     {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Blue"}, "approval": null, "doorIns": [], "keys": ["project-a-quiet-basin 2"], "feed": ["question answered"], "pushes": []}},
   "rule ask | success after the lapse: the late answer":
     {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "answered", "answeredBy": "project-a-calm-mesa", "answer": "Red"}, "approval": null, "doorIns": ["answeredLate(\"project-a-quiet-basin\",1,\"project-a-calm-mesa\")"], "keys": ["project-a-quiet-basin 1"], "feed": ["question answered"], "pushes": []}},
+  "release ask | a bad body":
+    {"status": 400, "body": "{\"ok\":false,\"error\":\"bad-request\",\"detail\":\"fromId/fromUuid strings\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | the store refuses the read":
+    {"status": 503, "body": "{\"ok\":false,\"error\":\"ask-unreadable\",\"detail\":\"fixture: the asks table is unreadable\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | no such ask":
+    {"status": 404, "body": "{\"ok\":false,\"error\":\"unknown-ask\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | not the stored parent":
+    {"status": 403, "body": "{\"ok\":false,\"error\":\"not-parent\",\"detail\":\"only this child's derived parent may decline its question\"}", "effects": {"ask": {"state": "held", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | not held":
+    {"status": 409, "body": "{\"ok\":false,\"error\":\"not-held\"}", "effects": {"ask": {"state": "declined", "answeredBy": null, "answer": null}, "approval": null, "doorIns": [], "keys": [], "feed": [], "pushes": []}},
+  "release ask | success: declined, the door-in fires":
+    {"status": 200, "body": "{\"ok\":true}", "effects": {"ask": {"state": "declined", "answeredBy": null, "answer": null}, "approval": null, "doorIns": ["released(\"project-a-quiet-basin\")"], "keys": [], "feed": [], "pushes": []}},
   // (each row's old-door outcome, recorded on the base before the commit that retired its door)
 };
 
@@ -432,7 +444,7 @@ describe('with no coordination store', () => {
   // one's now holds the old door gone (fastify's 404) and the new path equal to what the old door answered on the base,
   // recorded (the same bytes as `question-doors-pin`'s `no coordination store` rows): 501 `not-configured`.
   const NOT_CONFIGURED = '{"ok":false,"error":"not-configured"}';
-  const RETIRED_CLAIMANT = new Set<string>(['/api/asks/1/answer']);
+  const RETIRED_CLAIMANT = new Set<string>(['/api/asks/1/answer', '/api/asks/1/release']);
   it('the claimant\'s doors answer not-configured, as the old ones did', async () => {
     const app = await noCoordApp();
     for (const [old, nu, body] of [

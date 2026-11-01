@@ -74,7 +74,6 @@ const postureOf = async (url: string, cred: Credential): Promise<Posture> => {
 
 /** The old doors, each with a concrete url its router matches. */
 const OLD_DOORS: Readonly<Record<string, string>> = {
-  'POST /api/asks/:id/release': '/api/asks/1/release',
   'POST /api/approvals/:id/rule': '/api/approvals/1/rule',
   'POST /api/approvals/:id/release': '/api/approvals/1/release',
   'POST /api/sessions/:id/dialog/tab': '/api/sessions/project-a-quiet-basin/dialog/tab',
@@ -119,6 +118,7 @@ const RETIRED: Readonly<Record<Credential, Posture>> = {
 /** The doors W7 C7p (the operator's) and K5 Q3l (the claimant's) retired, each with the url its router matched. */
 const RETIRED_DOORS: Readonly<Record<string, string>> = {
   'POST /api/asks/:id/answer': '/api/asks/1/answer',
+  'POST /api/asks/:id/release': '/api/asks/1/release',
   'POST /api/sessions/:id/ask': '/api/sessions/project-a-quiet-basin/ask',
   'POST /api/sessions/:id/dialog/multi': '/api/sessions/project-a-quiet-basin/dialog/multi',
   'POST /api/sessions/:id/dialog/text': '/api/sessions/project-a-quiet-basin/dialog/text',
@@ -126,7 +126,6 @@ const RETIRED_DOORS: Readonly<Record<string, string>> = {
 };
 
 const EXPECTED: Readonly<Record<string, Readonly<Record<Credential, Posture>>>> = {
-  'POST /api/asks/:id/release': CLAIMANT,
   'POST /api/approvals/:id/rule': CLAIMANT,
   'POST /api/approvals/:id/release': CLAIMANT,
   'POST /api/sessions/:id/dialog/tab': OPERATOR,
