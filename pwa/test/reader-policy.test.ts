@@ -14,7 +14,7 @@ import {
   type ReaderBodyState, type ReaderLink,
 } from '../src/docs/reader/policy';
 import { THEMES } from '@ccrc/ui';
-import { READER_FALLBACK_NOTE, READER_SHEET_TEXT } from '../src/docs/reader/readerText';
+import { markHiddenText, READER_FALLBACK_NOTE, READER_SHEET_TEXT } from '../src/docs/reader/readerText';
 import { entry, treeOk } from './docsFixtures';
 
 const SECTION = DOC_SECTION_SLUGS[0]!;
@@ -294,5 +294,42 @@ describe('replaceFragment', () => {
     expect(location.hash).toBe('#h');
     expect(location.pathname).toBe('/docs/demo');
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('markHiddenText', () => {
+  const zws = String.fromCharCode(0x200b);
+  const esc = String.fromCharCode(27);
+  const z = (index: number) => ({ index, codePoint: 0x200b, name: 'ZERO WIDTH SPACE' });
+  const e = (index: number) => ({ index, codePoint: 27, name: 'ESCAPE' });
+  const mz = READER_SHEET_TEXT.copyMarker(z(0));
+  const me = READER_SHEET_TEXT.copyMarker(e(0));
+
+  it('replaces each listed character in place and leaves the text around it', () => {
+    expect(markHiddenText(`a${zws}b${esc}c`, [z(1), e(3)], 64)).toEqual({ text: `a${mz}b${me}c`, unnamed: 0 });
+  });
+
+  it('takes an unsorted list in text order', () => {
+    expect(markHiddenText(`a${zws}b${esc}c`, [e(3), z(1)], 64)).toEqual({ text: `a${mz}b${me}c`, unnamed: 0 });
+    expect(markHiddenText(`${zws}${zws}${zws}`, [z(2), z(0), z(1)], 1)).toEqual({ text: `${mz}${READER_SHEET_TEXT.copyMarkerUnnamed}${READER_SHEET_TEXT.copyMarkerUnnamed}`, unnamed: 2 });
+  });
+
+  it('marks a duplicate index once', () => {
+    expect(markHiddenText(`a${zws}b`, [z(1), z(1)], 64)).toEqual({ text: `a${mz}b`, unnamed: 0 });
+  });
+
+  it('takes a two-unit character whole, with no stray surrogate left', () => {
+    const astral = String.fromCodePoint(0xe0001);
+    const m = READER_SHEET_TEXT.copyMarker({ index: 1, codePoint: 0xe0001, name: 'LANGUAGE TAG' });
+    const r = markHiddenText(`a${astral}b`, [{ index: 1, codePoint: 0xe0001, name: 'LANGUAGE TAG' }], 64);
+    expect(r).toEqual({ text: `a${m}b`, unnamed: 0 });
+    expect(/[\ud800-\udfff]/.test(r.text)).toBe(false);
+  });
+
+  it('skips an entry out of range or naming another character, and that character stays as it is', () => {
+    expect(markHiddenText(`a${zws}b`, [z(9)], 64)).toEqual({ text: `a${zws}b`, unnamed: 0 });
+    expect(markHiddenText(`a${zws}b`, [e(1)], 64)).toEqual({ text: `a${zws}b`, unnamed: 0 });
+    expect(markHiddenText(`a${zws}b`, [z(-1)], 64)).toEqual({ text: `a${zws}b`, unnamed: 0 });
+    expect(markHiddenText(`a${zws}b${esc}`, [e(1), z(1), e(3)], 64)).toEqual({ text: `a${mz}b${me}`, unnamed: 0 });
   });
 });

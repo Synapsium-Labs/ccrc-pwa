@@ -44,10 +44,12 @@ export const READER_SHEET_TEXT = {
   copyFailedClose: 'Close',
 } as const;
 
-/** The text the copy sheet shows: `text` with each hidden character replaced in place by its marker, so the reader sees
- *  where it sits and no hidden character is left in what is shown. The first `namedMax` (in text order) get
- *  `READER_SHEET_TEXT.copyMarker`; the rest get `copyMarkerUnnamed`, and `unnamed` counts them. An entry that does not
- *  point at its own character in `text` is skipped (the host's list is trusted for nothing more than a position). */
+/** The text the copy sheet shows: `text` with each LISTED hidden character replaced in place by its marker, so the
+ *  reader sees where it sits. The first `namedMax` (in text order, whatever the list's order) get
+ *  `READER_SHEET_TEXT.copyMarker`; the rest get `copyMarkerUnnamed`, and `unnamed` counts them. The host's list is
+ *  trusted for a position and nothing more: an entry whose index is out of range, repeats an index already marked or
+ *  does not name the character at that index is skipped, and what it pointed at stays as it is in the text. A hidden
+ *  character the list leaves out stays as it is too; the list is the host's own scan of this text. */
 export function markHiddenText(
   text: string, hidden: readonly ReaderHiddenChar[], namedMax: number,
 ): { readonly text: string; readonly unnamed: number } {
