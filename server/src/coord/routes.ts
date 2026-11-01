@@ -554,7 +554,7 @@ export function registerCoordRoutes(
    */
   sessionAuth: (req: FastifyRequest) => GateDecision = () => NO_SESSION,
   /**
-   * Task 9's `POST /api/asks/:id/answer` presses a digit through `answerAsk`,
+   * Task 9's parent answer (`POST /api/questions/ask-<n>/rule`) presses a digit through `answerAsk`,
    * which is serialized per-session through `askDeps.queue` — the SAME
    * `KeyedQueue` `server.ts` hands `/api/sessions/:id/{prompt,dialog,ask}`,
    * threaded in here rather than rebuilt, so a parent's pre-emption and a
@@ -564,7 +564,7 @@ export function registerCoordRoutes(
    */
   askDeps: AskDeps,
   /**
-   * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
+   * Task 10's decline (`POST /api/questions/ask-<n>/release`) drops the
    * in-memory hold and fires the deferred push immediately — since W3 Q3f
    * (D-7030) through the watcher's `Questions` instance (`questions` below,
    * the watcher's own) and the doors sink the watcher gave it, so this file
@@ -3900,7 +3900,7 @@ export function registerCoordRoutes(
   //
   // A dispatched child's PermissionRequest hook asks (`POST /api/approvals`), the server mints a row held for the
   // child's run's attributed claimant (D-5530, D-5531: wherever it sits, no project compared) and mails it, the
-  // claimant rules (`POST /api/approvals/:id/rule`), the server signs the ruling with a key that never leaves this box,
+  // claimant rules (`POST /api/questions/approval-<n>/rule`), the server signs the ruling with a key that never leaves this box,
   // and the hook fetches it (`GET /api/approvals/:id/ruling?nonce=`) and verifies it with the pinned public key. Every
   // refusal answers through `refuseRoute` (D-5381): the hook prints nothing on any of them, so the prompt stays the
   // operator's (spec §12 invariant 4).
@@ -4099,8 +4099,8 @@ export function registerCoordRoutes(
   // `/api/questions/:id/*`, here behind this file's one gate (spec §2.5): the PATH picks the principal, never a body
   // field or a header. `:id` is `parseQuestionId`'s (`ask-<n>`, `approval-<n>`, `session-<id>`), and an id or a body of
   // the other principal's kind is `400 kind-mismatch`. Each door runs its own front ladder, then the shared core the old
-  // door it replaces now calls too (`coord/questions.ts`), so a new path answers what its old door answers, byte for
-  // byte. `/api/sessions/:id/dialog/tab` answers nothing and stays a session door.
+  // door it replaced called too (`coord/questions.ts`), so a new path answers what its old door answered, byte for
+  // byte; the old claimant doors were retired in K5 Q3l (D-7324), the operator's in W7 C7p (D-7194). `/api/sessions/:id/dialog/tab` answers nothing and stays a session door.
 
   /**
    * `POST /api/questions/session-<id>/answer` — THE OPERATOR'S. Session-gated and origin-checked like every PWA write:
@@ -4142,10 +4142,10 @@ export function registerCoordRoutes(
   /**
    * `POST /api/questions/<ask|approval>-<n>/rule` — THE CLAIMANT'S. The box token, then the body by its `kind` (an ask:
    * `fromId`/`fromUuid` and `readAskAnswer`'s answer; an approval: the widening-field refusal, then `fromId`/`fromUuid`,
-   * `verdict` and `reason`, exactly as `/api/approvals/:id/rule` reads them), attribution against the registry, the id
+   * `verdict` and `reason`, exactly as the retired `/api/approvals/:id/rule` read them), attribution against the registry, the id
    * (`parseQuestionId`, `bad-request`), and a body kind that disagrees with the id's is `kind-mismatch`. Then the
    * claimant's core: the stored parent and everything after it, the signing unchanged. EXEMPT from the session gate,
-   * like the two doors it replaces (`/api/asks/:id/answer`, `/api/approvals/:id/rule`).
+   * as the two doors it replaced were (`/api/asks/:id/answer`, `/api/approvals/:id/rule`, retired in K5 Q3l, D-7324).
    */
   app.post('/api/questions/:id/rule', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -4186,8 +4186,8 @@ export function registerCoordRoutes(
   /**
    * `POST /api/questions/<ask|approval>-<n>/release` — THE CLAIMANT'S hand-over. The box token, the body
    * (`{kind, fromId, fromUuid}`), attribution, the id, the kind check, then the claimant's core: the stored parent, the
-   * decline, and the operator's push now. EXEMPT from the session gate, like the two doors it replaces
-   * (`/api/asks/:id/release`, `/api/approvals/:id/release`).
+   * decline, and the operator's push now. EXEMPT from the session gate, as the two doors it replaced
+   * were (`/api/asks/:id/release`, `/api/approvals/:id/release`, retired in K5 Q3l, D-7324).
    */
   app.post('/api/questions/:id/release', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);

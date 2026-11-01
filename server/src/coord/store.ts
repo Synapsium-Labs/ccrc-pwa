@@ -8220,7 +8220,7 @@ export class CoordStore {
   }
 
   /** held -> declined, CAS (D-5289). The parent's OWN release (`POST
-   *  /api/asks/:id/release`), and a different fact from the lapse
+   *  /api/questions/ask-<n>/release`), and a different fact from the lapse
    *  (`releaseAsk` above, the sweep's): the parent handed the question over,
    *  so the row is terminal and its later answer is refused `declined`, where
    *  a lapsed row stays answerable until a principal acts. Same "did THIS call
@@ -8488,7 +8488,7 @@ export class CoordStore {
     });
   }
 
-  /** The claimant's hand-over (`POST /api/approvals/:id/release`): `held` -> `declined` (D-5289's word, D-5440). */
+  /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
     const res = this.db.prepare(
       "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",

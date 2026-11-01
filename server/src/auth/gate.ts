@@ -363,8 +363,8 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /api/approvals/:id',
     "the claimant reads one row it holds, redacted — box-token gated, attributed by `?fromId=`/`?fromUuid=`, " +
     'and refused for a row held for anyone else'],
-  // The question door family's claimant pair (W3 Q3f, D-7030; OA-C7 (a)). Each shares its core with the old doors above
-  // it replaces, and keeps their posture: its caller is a fleet-host session through `ccrc-api` with no cookie jar, so
+  // The question door family's claimant pair (W3 Q3f, D-7030; OA-C7 (a)). Each kept the posture of the old doors it
+  // replaced, which shared its core and were retired in K5 Q3l (D-7324): its caller is a fleet-host session through `ccrc-api` with no cookie jar, so
   // the route is dead the moment the flag arms unless exempted. The family's third door, the operator's
   // `POST /api/questions/:id/answer`, is DELIBERATELY NOT here: it is a cookie-bearing PWA write, session-gated and
   // origin-checked, and consults no box token.

@@ -1810,7 +1810,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` are built HERE, ahead of `registerCoordRoutes`
   // below, rather than beside the `/api/sessions/:id/{prompt,dialog,ask}`
   // routes further down this file (where they used to live) — Task 9's
-  // `POST /api/asks/:id/answer` (`coord/routes.ts`) must serialize through
+  // `POST /api/questions/ask-<n>/rule` (`coord/routes.ts`, the parent's answer) must serialize through
   // this SAME `askDeps`/`queue`, not a second one it builds for itself, so
   // both routes agree on the one per-session lock. `knownId` stays where it
   // was: nothing here depends on it.
@@ -1830,7 +1830,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
         // non-registry id on `POST /api/questions/session-<id>/answer` (the
         // operator's ask, since W7 C7p retired `/api/sessions/:id/ask`), and on
-        // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
+        // `POST /api/questions/ask-<n>/rule` `freshAskAt`'s own `bad-id` answers
         // `child-unmeasurable` before `answerAsk` reaches this read. `null`,
         // the safe word, all the same.
         case 'bad-id': return null;
@@ -1870,7 +1870,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `authStore` lives (the class began with `GET /api/runs`, D-149).
   //
   // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
-  // reached from `POST /api/asks/:id/answer` serializes through the exact
+  // reached from `POST /api/questions/ask-<n>/rule` serializes through the exact
   // same `KeyedQueue` as `/api/sessions/:id/{prompt,dialog,ask}` below —
   // independent queues would let a parent's pre-emption race a child's own
   // in-flight prompt against the identical tmux pane.
