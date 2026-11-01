@@ -1,0 +1,145 @@
+// The reader frame's decisions (native Docs reader, W8a Task 5; the 2026-10-31 reader-frame spec's M8.7, M8.11, M8.19,
+// A15/G7 and section 4.4's `navigate`, `copy` and `hash` rows; refinements (h), (l) and (n)). Ring L1 policy: pure
+// deciders over plain values, no I/O, no timer, no DOM, and no import of a `.tsx`, a store, `lib/api.ts` or the
+// shared Markdown library (`ReaderLink` mirrors the library's host-link shape instead of importing it). Delivery
+// (`ReaderFrame.tsx`) asks these and acts on the answer: it decides nothing.
+//
+// Every link kind goes through `docLinkTarget`, the one decision for a Markdown link on a Docs page, so the reader
+// cannot route a link the plain view would refuse. Each `null` here has one meaning, stated at the function.
+import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
+import { utf8ByteLength } from '../../lib/markdownGuard';
+import { docLinkTarget } from '../docsLinks';
+import type { DocLinkContextValue } from '../DocLink';
+import type { ReaderHiddenChar } from './readerText';
+
+/** A link the frame reports to the host (mirrors the library's host-link shape; nothing is imported from it). */
+export type ReaderLink =
+  | { kind: 'fragment'; id: string }
+  | { kind: 'relative'; path: string; fragment: string | null }
+  | { kind: 'external'; url: string; scheme: 'http' | 'https' | 'mailto'; host: string };
+
+/** What the host does with a link. `in-app`: navigate to a Docs page (`fragment` is the link's, for the visit to
+ *  scroll to once that page renders). `hash`: move to an anchor in this page. `sheet`: ask before opening a URL
+ *  (`foreign`: its host is not the console's own). `inert`: nothing. */
+export type ReaderRoute =
+  | { kind: 'in-app'; href: string; fragment: string | null }
+  | { kind: 'hash'; id: string }
+  | { kind: 'sheet'; url: string; scheme: string; host: string; foreign: boolean }
+  | { kind: 'inert' };
+
+/** The sheet for a URL. A host is foreign when it is not exactly the console's own, both lower-cased (refinement (h):
+ *  `pwa/src` has no public-suffix data, so the stricter exact comparison stands in for "registrable name"). */
+function sheetFor(url: string, scheme: string, hostRaw: string, ownHostRaw: string): ReaderRoute {
+  const host = hostRaw.toLowerCase();
+  const ownHost = ownHostRaw.toLowerCase();
+  return { kind: 'sheet', url, scheme, host, foreign: host !== ownHost };
+}
+
+/** The route of one link reported by the frame. A `relative` link is rebuilt as its path plus `#fragment` and goes
+ *  through `docLinkTarget`, so a root-relative link, a climb above the repository and every refused spelling are
+ *  inert exactly as in the plain view; an external or GitHub resolution is a sheet. */
+export function routeReaderLink(ctx: DocLinkContextValue, link: ReaderLink, ownHost: string): ReaderRoute {
+  switch (link.kind) {
+    case 'fragment':
+      return { kind: 'hash', id: link.id };
+    case 'external':
+      return sheetFor(link.url, link.scheme, link.host, ownHost);
+    case 'relative': {
+      const target = docLinkTarget(ctx, link.fragment === null ? link.path : `${link.path}#${link.fragment}`);
+      switch (target.kind) {
+        case 'in-app':
+          return { kind: 'in-app', href: target.href, fragment: target.fragment };
+        case 'fragment':
+          return { kind: 'hash', id: target.fragment };
+        case 'inert':
+          return { kind: 'inert' };
+        case 'external':
+        case 'github': {
+          let u: URL;
+          try {
+            u = new URL(target.href);
+          } catch {
+            return { kind: 'inert' };
+          }
+          return sheetFor(target.href, u.protocol.slice(0, -1), u.hostname, ownHost);
+        }
+      }
+    }
+  }
+}
+
+/** The most UTF-8 bytes the reader writes to the clipboard without asking (64 KiB). */
+export const READER_COPY_WRITE_MAX_BYTES = 65536;
+
+/** What the host does with a copy request. `write`: put `text` on the clipboard. `sheet`: ask first, naming each
+ *  hidden character (`hidden` is the list the frame's own scan produced). */
+export type CopyDecision =
+  | { kind: 'write'; text: string }
+  | { kind: 'sheet'; text: string; hidden: readonly ReaderHiddenChar[] };
+
+/** Write only text with no hidden character and at most `READER_COPY_WRITE_MAX_BYTES` UTF-8 bytes; anything else asks. */
+export function copyDecision(text: string, hidden: readonly ReaderHiddenChar[]): CopyDecision {
+  if (hidden.length === 0 && utf8ByteLength(text) <= READER_COPY_WRITE_MAX_BYTES) return { kind: 'write', text };
+  return { kind: 'sheet', text, hidden };
+}
+
+/** The most UTF-16 code units a doc key may have. */
+const DOC_KEY_MAX_UNITS = 1024;
+
+/** The key of a document's per-doc state: `project:section:path`. `null` has one meaning, "no per-doc state for this
+ *  doc": the key is over 1024 code units or holds a control character (C0, DEL or C1). */
+export function readerDocKey(project: string, section: string, path: string): string | null {
+  const key = `${project}:${section}:${path}`;
+  if (key.length > DOC_KEY_MAX_UNITS) return null;
+  for (let i = 0; i < key.length; i += 1) {
+    const c = key.charCodeAt(i);
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) return null;
+  }
+  return key;
+}
+
+/** The frame's theme preference for the console's theme choice: `system` and anything unknown follow the device. */
+export function readerPrefsOf(themeChoice: string): { theme: 'light' | 'dark' | 'auto' } {
+  if (themeChoice === 'light') return { theme: 'light' };
+  if (themeChoice === 'dark') return { theme: 'dark' };
+  return { theme: 'auto' };
+}
+
+/** The frame's start watchdog for a document of `bytes` UTF-8 bytes: the Docs parse budget, with no allowance for
+ *  Mermaid (refinement (c): `ready` does not wait for it in on-request mode). */
+export function readerWatchdogMs(bytes: number): number {
+  return DOCS_PARSE_BUDGET_MS(bytes);
+}
+
+/** Where one body (one `bodyKey`) is. `fallback` and `plain` are terminal for the key: the body stays there until its
+ *  key changes, so there is no remount loop (M8.11). `reason` and `why` go to the console, never to the page. */
+export type ReaderBodyState =
+  | { s: 'rendering' }
+  | { s: 'mounting' }
+  | { s: 'ready' }
+  | { s: 'fallback'; reason: string }
+  | { s: 'plain'; why: string };
+
+/** What happens to a body: `mount` (the render answered and the frame is being mounted), `ready` (the frame said so),
+ *  `fallback` (the frame or its start failed) and `plain` (the plain view was chosen before any mount). */
+export type ReaderBodyEvent =
+  | { e: 'mount' }
+  | { e: 'ready' }
+  | { e: 'fallback'; reason: string }
+  | { e: 'plain'; why: string };
+
+/** The next state of a body. A terminal state answers itself (the same object); `ready` is only reached from
+ *  `mounting`, and a failure from any live state is a fallback. */
+export function readerBodyReducer(state: ReaderBodyState, ev: ReaderBodyEvent): ReaderBodyState {
+  if (state.s === 'fallback' || state.s === 'plain') return state;
+  switch (ev.e) {
+    case 'fallback':
+      return { s: 'fallback', reason: ev.reason };
+    case 'plain':
+      return { s: 'plain', why: ev.why };
+    case 'mount':
+      return state.s === 'rendering' ? { s: 'mounting' } : state;
+    case 'ready':
+      return state.s === 'mounting' ? { s: 'ready' } : state;
+  }
+}
