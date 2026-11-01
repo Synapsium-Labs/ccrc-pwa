@@ -681,6 +681,40 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     });
   }
 
+  // D-7690 (closing fix): a NEWER request already queued beside a running fleet lease survives a later Update all for that lease's
+  // own target. Overwritten, `settleNode` would clear the same-tag request and the newer move would be lost.
+  for (const named of [true, false]) {
+    it(`D-7690: Update all for the running lease's own tag (${named ? 'named' : 'no tag, desiredTag'}) leaves a newer queued request standing — the settle keeps it`, async () => {
+      const f = await open();
+      catalogue(f.coord);
+      plant(f.coord, fleetNode());
+      plant(f.coord, serverNode());
+      hold(f.coord, FLEET_ID);   // the fleet's v0.0.10 move, still running
+      const first = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.11' });
+      expect(first.statusCode, first.body).toBe(202);
+      expect(f.coord.node(FLEET_ID)).toMatchObject({ updateTarget: 'v0.0.10', requestedTag: 'v0.0.11', requestedKind: 'update' });
+      const queuedAt = f.coord.node(FLEET_ID)!.requestedAt;
+      if (!named) {
+        desire(f.coord, FLEET_ID, 'v0.0.10');
+        desire(f.coord, SERVER_ID, 'v0.0.10');
+      }
+      const r = await post(f.app, '/api/updates/apply', named ? { all: true, tag: 'v0.0.10' } : { all: true });
+      expect(r.statusCode, r.body).toBe(202);
+      expect(r.json()).toEqual({
+        ok: true, requested: [FLEET_ID], queued: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+      } satisfies MoveRequestAnswer);
+      // Nothing was written: the newer request still stands, with its own stamp.
+      expect(f.coord.node(FLEET_ID)).toMatchObject({
+        updateState: 'pending', updateTarget: 'v0.0.10', requestedTag: 'v0.0.11', requestedKind: 'update', requestedAt: queuedAt,
+      });
+      expect(f.coord.node(SERVER_ID)!.requestedTag).toBeNull();
+      // The running move settles: the v0.0.11 request it did not serve survives it.
+      plant(f.coord, fleetNode({ currentVersion: 'v0.0.10', highestVersion: 'v0.0.10' }));
+      expect(f.coord.settleNode(FLEET_ID, 'done: v0.0.10', 5)).toMatchObject({ ok: true, keptRequest: true });
+      expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.11', requestedKind: 'update' });
+    });
+  }
+
   it('a single named node with its own busy lease still answers 409 busy and writes nothing (D-3386 kept, D-7678)', async () => {
     const f = await open();
     catalogue(f.coord);

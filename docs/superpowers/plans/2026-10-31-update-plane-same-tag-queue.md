@@ -26,3 +26,21 @@ split. Before D-7688 the same tap wrote v0.0.11 beside the lease (`queued`) and 
 - `server/test/update-rollout-follow.test.ts` — through the real apply route, the real sweep with the follow-through
   wired, and the real dispatcher: the fleet's done-settle requests v0.0.11 on the server, with the server's auto off,
   and the next plan moves the server to v0.0.11.
+
+**Closing fix (D-7690):** a fleet row held a lease to v0.0.10 with a v0.0.11 update request queued beside it. A later
+Update all for v0.0.10 (named, or as the desired tag) passed the "not strictly older" rule and `requestNode` overwrote
+the v0.0.11 request with v0.0.10. `settleNode` then cleared that as served, and the v0.0.11 move was lost. Now, when
+the tag equals a busy row's lease target and the row already holds an update request strictly newer than that target,
+`requestAll` writes nothing and lists the row in `requested` and `queued`. The settle keeps the newer request. Red
+first in `server/test/update-apply-routes.test.ts` (hold the fleet; Update all v0.0.11; Update all v0.0.10, named and
+with the desired tag; expect `requestedTag` v0.0.11 before and after the settle).
+
+## Known limits (review cap reached)
+
+The review cap was reached on this change, and the closing fix above was the last change. These are recorded rather
+than fixed:
+
+- `followSteps` skips a server row that holds an older standing request or is busy. It does not move that row to the
+  fleet's tag. The skew banner (D-7680) offers the move to the operator instead.
+- A fleet request cleared through the dispatcher's met-settle (the row already runs the tag) gets no follow-through.
+  Only the inventory sweep's done-settle drives `followSteps`.

@@ -10332,7 +10332,9 @@ export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
  *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
  *  `request: {tag, kind, at}` until convergence or `ack` clears it. `queued` (D-7678; present only when non-empty,
  *  so an older reader's shape is unchanged) names the requested nodes whose OWN lease was still running when the
- *  request was written: theirs waits beside that move and runs after it settles (`settleNode` keeps it). */
+ *  request was written: theirs waits beside that move and runs after it settles (`settleNode` keeps it). A row
+ *  tapped for its running lease's own target that already holds a newer update request is listed in both too, and
+ *  nothing is written: the newer request stands (D-7690). */
 export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[]; queued?: string[] }
 
 /** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict

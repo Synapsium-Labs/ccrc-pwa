@@ -431,7 +431,10 @@ function installableTag(coord: CoordStore, tag: string): boolean {
  * busy gets its request BESIDE that lease and is listed in `queued` (D-7678, replacing D-3406's `busy` skip) when
  * the tag is not older than that lease's target — strictly older, it is skipped `not-newer` (D-7688). The lease's
  * own target is queued too (D-7690): settled, that request is the one `landedMoveOf` reads so the server follows,
- * and `settleNode` clears it. `settleNode` keeps a request written after the lease started only for an update
+ * and `settleNode` clears it. A row that already holds an update request strictly newer than that target, queued
+ * beside the lease, keeps it: nothing is written and the row is listed in `requested` and `queued`, since an
+ * overwrite with the lease's own target would be cleared at the settle and the newer move lost (D-7690's closing
+ * fix). `settleNode` keeps a request written after the lease started only for an update
  * strictly newer than the lease's target, so the operator's newer tap waits
  * its turn instead of being dropped — the drop that left a server row with no request after its own lease
  * settled, so the fleet moved and the server never followed. The single-node route still answers `409 busy` for
@@ -525,6 +528,18 @@ function requestAll(coord: CoordStore, tag: string | null, now: number): MoveReq
           throw new Error(`update: noteDispatchRefusal refused live node ${row.nodeId} (${noted.why}) in the same synchronous read`);
         }
       }
+      continue;
+    }
+    // D-7690 (closing fix): the tap names the running lease's OWN target, and the row already holds an update
+    // request strictly NEWER than it, queued beside the lease. `requestNode` would overwrite it with the lease's
+    // target, which `settleNode` then clears as served, so the newer move would be lost. That request already
+    // carries the row past the tag, so it is left alone: nothing is written and the row is listed as queued.
+    if (
+      busyRow && row.updateTarget === target && row.requestedKind === 'update'
+      && isReleaseTag(row.requestedTag) && isNewerTag(row.requestedTag, target)
+    ) {
+      requested.push(row.nodeId);
+      queued.push(row.nodeId);
       continue;
     }
     const written = coord.requestNode(row.nodeId, target, 'update', now);
