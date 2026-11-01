@@ -33,4 +33,12 @@ describe('the Linear operation table has one home (D-7669)', () => {
   it('the provenance line\'s words are written once', () => {
     expect(holders(/written by a ccrc fleet session/)).toEqual(['server/src/linear/ops.ts']);
   });
+
+  it('the directory is declared once, and constructed by the refresher alone', () => {
+    for (const c of ['LinearDirectory', 'LinearDirectoryRead']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/linear/directory.ts']);
+    }
+    expect(holders(/\bnew LinearDirectory\(/)).toEqual(['server/src/linear/refresher.ts']);
+    expect(holders(decl('LINEAR_DIRECTORY_REFRESH_MS'))).toEqual(['server/src/linear/refresher.ts']);
+  });
 });

@@ -4,7 +4,7 @@
 // `linear/ops.ts` (L1, pure): the closed allow-list of documents the key can run, each verb's closed body validator,
 // its variables (names through the directory, the mutations on resolved UUIDs) and its shaper (Linear's text fenced
 // under `untrusted`, the two strips, `cleanName`, `url` built here, the provenance line). `linear/directory.ts` and the
-// refresher's directory pass (L3, the next commit): names filled in the background only. Nothing here reaches the network: every Linear
+// refresher's directory pass (L3): names filled in the background only. Nothing here reaches the network: every Linear
 // answer is a stub in the shape the table's own document asks for, and every Linear call goes through a fetch seam
 // that records it.
 //
@@ -18,6 +18,7 @@ import type { LinearStoreRecord } from '../../shared/linear.js';
 import { stripLine, stripMultiline } from '../../shared/unprintable.js';
 import type { FetchLike } from '../src/linear/client.js';
 import { keyTailOf } from '../src/linear/connection.js';
+import { LinearDirectory } from '../src/linear/directory.js';
 import {
   LINEAR_DESCRIPTION_MAX_BYTES, LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES,
   LINEAR_DIRECTORY_PAGE_SIZE, LINEAR_DOCUMENTS, LINEAR_ERROR_CODES, LINEAR_OPS, LINEAR_PROVENANCE_LINE, LINEAR_STRIPS,
@@ -26,6 +27,7 @@ import {
   validateLinearCall, withLinearProvenance, type LinearCallRow, type LinearDirectoryEntries, type LinearOpContext,
   type LinearOpInput, type LinearResolved, type LinearShapeContext, type LinearVerb,
 } from '../src/linear/ops.js';
+import { LINEAR_DIRECTORY_REFRESH_MS, LINEAR_MISS_RETRY_AFTER_S } from '../src/linear/refresher.js';
 import { putLinearSlot, readLinearStore, type LinearSlotRef } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { RATELIMITED_ERRORS, linearAnswer, type LinearAnswer } from './linearFetchFake.js';
@@ -723,5 +725,191 @@ describe('provenance and the linear-egress pass (spec §5.4, R7, §13.4)', () =>
     const p = linearOutbound(valid('comment', { ref: 'AAA-12', body: { body: prose } }));
     expect(p.masked).toBe(0);
     expect(p.input.fields.body).toBe(`${prose}\n\n${LINEAR_PROVENANCE_LINE}`);
+  });
+});
+
+// ── the directory, filled in the background only ──
+
+describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', () => {
+  interface Sent { auth: string; query: string; variables: Record<string, unknown> }
+  interface Box {
+    dir: string;
+    clock: { now: number };
+    fx: ReturnType<typeof linearServicesFake>;
+    sent: Sent[];
+    answer: (s: Sent) => Promise<LinearAnswer>;
+  }
+  const SLOT: LinearSlotRef = { source: 'file', id: WS_A };
+  const ok = (body: unknown): LinearAnswer => linearAnswer({ ok: true, status: 200, json: async () => body });
+  const conn = (nodes: unknown[], endCursor: string | null = null): Record<string, unknown> =>
+    ({ nodes, pageInfo: { hasNextPage: endCursor !== null, endCursor } });
+  /** One page of each collection, as the four directory documents ask. */
+  const pageFor = (s: Sent): unknown => {
+    if (s.query === LINEAR_DOCUMENTS.directoryStates) {
+      return { data: { workflowStates: conn([{ id: STATE_TODO_A, name: 'Todo\u202E', type: 'unstarted', team: { key: 'AAA' } }]) } };
+    }
+    if (s.query === LINEAR_DOCUMENTS.directoryLabels) return { data: { issueLabels: conn([{ id: LABEL_BUG, name: 'Bug', team: null }]) } };
+    if (s.query === LINEAR_DOCUMENTS.directoryProjects) return { data: { projects: conn([{ id: PROJECT_X, name: 'Project X' }]) } };
+    if (s.query === LINEAR_DOCUMENTS.directoryUsers) {
+      return { data: { viewer: { id: VIEWER }, users: conn([
+        { id: USER_A, name: 'user-a', displayName: 'User A', active: true },
+        { id: USER_B, name: 'user-b', displayName: null, active: false },
+      ]) } };
+    }
+    throw new Error('box: not a directory document');
+  };
+  const box = (): Box => {
+    const dir = path.join(mkTmp('ccrc-linear-ops-'), '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    const clock = { now: T };
+    const sent: Sent[] = [];
+    const b: Box = { dir, clock, sent, answer: async (s) => ok(pageFor(s)), fx: undefined as unknown as Box['fx'] };
+    const f: FetchLike = async (_u, init) => {
+      const parsed = JSON.parse(init.body) as { query: string; variables: Record<string, unknown> };
+      const s = { auth: init.headers['authorization'] ?? '', query: parsed.query, variables: parsed.variables };
+      sent.push(s);
+      return b.answer(s);
+    };
+    b.fx = linearServicesFake({ clock: () => clock.now, ccrcDir: dir, fetch: f });
+    return b;
+  };
+  const record = (key: string): LinearStoreRecord => ({
+    workspaceId: WS_A, name: 'Workspace', urlKey: 'ws-a', user: 'user-a', teams: [{ ...TEAM_A, name: 'Team A' }], teamsAt: T,
+    keyTail: keyTailOf(key), keyDigest: valueDigestHex(key), checkedAt: T, outcome: 'ok',
+  });
+  const put = (b: Box, key: string): Promise<unknown> => putLinearSlot(b.dir, key, record(key), { replace: true });
+  const D1 = valueDigestHex(KEY_1);
+
+  it('a name the directory lacks answers name-unknown refreshing with Retry-After, queues one refresh, and makes no Linear call in the request', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    const before = b.fx.refresher.directory.get(SLOT, D1);
+    expect(before).toBeNull();
+    const v = callRow('update').variables(valid('update', { ref: 'AAA-12', body: { state: 'Todo' } }), ctxOf({ directory: before }));
+    expect(v).toEqual({ ok: false, word: 'name-unknown', field: 'state' });
+    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    expect(LINEAR_MISS_RETRY_AFTER_S).toBe(10);
+    // Answered at once: nothing reached the fake inside the request.
+    expect(b.sent).toHaveLength(0);
+    // A second miss while it is queued queues nothing new.
+    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent.map((s) => s.query)).toEqual(LINEAR_DIRECTORY_COLLECTIONS.map((c) => LINEAR_DIRECTORY_DOCUMENTS[c]));
+    // The retry after the refresh resolves the name, cleaned, from the directory the refresher filled.
+    const filled = b.fx.refresher.directory.get(SLOT, D1);
+    expect(filled).toEqual({
+      viewerId: VIEWER,
+      states: [{ id: STATE_TODO_A, name: 'Todo', type: 'unstarted', teamKey: 'AAA' }],
+      labels: [{ id: LABEL_BUG, name: 'Bug', teamKey: null }],
+      projects: [{ id: PROJECT_X, name: 'Project X' }],
+      users: [{ id: USER_A, name: 'user-a', displayName: 'User A' }],
+    });
+    expect(varsOf('update', valid('update', { ref: 'AAA-12', body: { state: 'todo', assignee: 'me' } }), ctxOf({ directory: filled })))
+      .toEqual({ id: ISSUE_ID, input: { stateId: STATE_TODO_A, assigneeId: VIEWER } });
+  });
+
+  it('at most once in ten minutes a slot: inside the window a miss is unknown, and after it refreshes again', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    expect(LINEAR_DIRECTORY_REFRESH_MS).toBe(10 * MIN);
+    b.fx.refresher.nameMiss(SLOT);
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(4);
+    b.clock.now = T + 10 * MIN - 1;
+    expect(b.fx.refresher.nameMiss(SLOT)).toBe('unknown');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(4);
+    b.clock.now = T + 10 * MIN;
+    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(8);
+  });
+
+  it('pages 250 a page, up to 4 pages a collection, with the cursor; a fifth page is never asked', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    b.answer = async (s) => (s.query === LINEAR_DOCUMENTS.directoryProjects
+      ? ok({ data: { projects: conn([{ id: PROJECT_X, name: `P ${String(s.variables['after'])}` }], `c${Number(String(s.variables['after'] ?? 'c0').slice(1)) + 1}`) } })
+      : ok(pageFor(s)));
+    b.fx.refresher.nameMiss(SLOT);
+    await b.fx.refresher.idle();
+    const projectPages = b.sent.filter((s) => s.query === LINEAR_DOCUMENTS.directoryProjects);
+    expect(projectPages.map((s) => s.variables['after'])).toEqual([null, 'c1', 'c2', 'c3']);
+    expect(b.fx.refresher.directory.get(SLOT, D1)?.projects).toHaveLength(4);
+  });
+
+  it('reads the slot\'s key before each page, and a key replaced mid-refresh stops it, recording nothing', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    b.answer = async (s) => {
+      if (s.query === LINEAR_DOCUMENTS.directoryLabels) await put(b, KEY_2);
+      return ok(pageFor(s));
+    };
+    b.fx.refresher.nameMiss(SLOT);
+    await b.fx.refresher.idle();
+    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1, KEY_1]);
+    expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+    expect(b.fx.refresher.directory.get(SLOT, valueDigestHex(KEY_2))).toBeNull();
+  });
+
+  it('is kept only whole: a failed page leaves the directory as it was', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    b.answer = async (s) => (s.query === LINEAR_DOCUMENTS.directoryUsers
+      ? linearAnswer({ ok: false, status: 500, json: async () => ({}) }) : ok(pageFor(s)));
+    b.fx.refresher.nameMiss(SLOT);
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(4);
+    expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
+  });
+
+  it('is charged to the slot\'s floor: a spent floor refuses it with no call, and leaves the other lanes whole', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    while (b.fx.rate.take({ lane: 'floor', slot: SLOT, calls: 1 }).ok) { /* spend the floor */ }
+    expect(b.fx.refresher.nameMiss(SLOT)).toBe('refreshing');
+    await b.fx.refresher.idle();
+    expect(b.sent).toHaveLength(0);
+    expect(b.fx.rate.take({ lane: 'request', slot: SLOT, calls: 25 }).ok).toBe(true);
+    expect(b.fx.rate.take({ lane: 'proxy', slot: SLOT, calls: 425 }).ok).toBe(true);
+  });
+
+  it('a team miss and a name miss are two jobs of the one queue, one slot at a time', async () => {
+    const b = box();
+    await put(b, KEY_1);
+    b.fx.refresher.nameMiss(SLOT);
+    await b.fx.refresher.idle();
+    // A name miss inside its window does not stop a team refresh, and the other way about.
+    const listed = await readLinearStore(b.dir);
+    if (listed.kind !== 'listed') throw new Error('not listed');
+    b.clock.now = T + 6 * MIN;
+    b.answer = async (s) => (s.query.startsWith('query KeyCheck')
+      ? ok({ data: { viewer: { name: 'user-a' }, organization: { id: WS_A, name: 'Workspace', urlKey: 'ws-a' },
+        teams: { nodes: [{ ...TEAM_A, name: 'Team A' }], pageInfo: { hasNextPage: false, endCursor: null } } } })
+      : ok(pageFor(s)));
+    expect(b.fx.refresher.miss(listed)).toBe('refreshing');
+    expect(b.fx.refresher.nameMiss(SLOT)).toBe('unknown');
+    await b.fx.refresher.idle();
+    expect(b.sent.slice(4).map((s) => s.query.split(' ')[1])).toEqual(['KeyCheck($after:']);
+  });
+
+  it('keyed by slot and key digest: another key\'s lookup finds nothing', () => {
+    const d = new LinearDirectory();
+    d.put(SLOT, D1, DIR, T);
+    expect(d.get(SLOT, D1)).toEqual(DIR);
+    expect(d.get(SLOT, valueDigestHex(KEY_2))).toBeNull();
+    expect(d.get({ source: 'legacy' }, D1)).toBeNull();
+    expect(d.filledAt(SLOT, D1)).toBe(T);
+  });
+
+  it('a directory page out of its grammar is malformed; inactive users are not held', () => {
+    expect(readLinearDirectoryPage('states', { data: { workflowStates: conn([{ id: 'x', name: 'n', type: 't', team: { key: 'AAA' } }]) } }))
+      .toEqual({ ok: false, word: 'malformed' });
+    expect(readLinearDirectoryPage('users', { data: { users: conn([]) } })).toEqual({ ok: false, word: 'malformed' });
+    expect(readLinearDirectoryPage('labels', RATELIMITED_ERRORS)).toEqual({ ok: false, word: 'rate-limited' });
+    const big = Array.from({ length: 251 }, () => ({ id: PROJECT_X, name: 'p' }));
+    expect(readLinearDirectoryPage('projects', { data: { projects: conn(big) } })).toEqual({ ok: false, word: 'malformed' });
+    const users = readLinearDirectoryPage('users', pageFor({ auth: '', query: LINEAR_DOCUMENTS.directoryUsers, variables: {} }));
+    expect(users).toMatchObject({ ok: true, viewerId: VIEWER, users: [{ id: USER_A }] });
   });
 });
