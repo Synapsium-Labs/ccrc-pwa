@@ -139,8 +139,7 @@ This section covers what Goals shows and where each part comes from.
 
 This section covers the one kind of item whose value must never reach a coordinator, a mail, a ledger or a transcript.
 
-> [!IMPORTANT]
-> One question here is the operator's (D12): nothing in ccrc today would read a secret the console stored, so the first release must either ship the store with no reader yet, or leave secrets to Do items for now. The rest of this section is the design if the store ships.
+The first release ships pasting secrets into the console (operator, 2026-11-01: "Ship pasting secrets into console, we need this"). Nothing in ccrc reads a stored slot yet. Each later feature that needs a secret reads its own slot through the store's reader on the server box, and a reader on the fleet box needs its own agent-link frame, designed with that feature.
 
 - **Pasting goes straight to the store.** The Give a secret item shows a password field, and saving it asks the operator to confirm it is them (the account gate's step-up, as the Linear key does). The value is sent to its own route, never to the tick route. The server writes it with `writeValueFileAtomic` to a 0600 file in a new operator-secrets directory on the server box. The answer carries only set, the time and the last four characters.
 - **Needs sign-in armed.** The step-up refuses while the console's sign-in is not armed, so a box without it shows the item with its field disabled and a line saying why. It never falls back to an unconfirmed save.
@@ -218,7 +217,7 @@ The operator's rulings are marked Agreed. The coordinator's own calls are marked
 | D9 | Session questions | Separate; on the list | On the list, marked urgent, answered in the session | Agreed |
 | D10 | Values the operator pastes | Free text only; text and secrets | Both; secrets go to a protected store, never through a coordinator | Agreed |
 | D11 | Where items are stored | Repo ledger file; console database | Console database: the repo is public and items may name private things | Proposed |
-| D12 | Secrets in the first release | Ship the store with no reader yet; secrets as Do items only, store later | Waiting on the operator: nothing in ccrc reads a stored secret today | Open |
+| D12 | Secrets in the first release | Ship the store with no reader yet; secrets as Do items only, store later | Ship the store and the paste field now; readers come with the features that need them | Agreed |
 | D13 | "Recently cleared" trail | None; seven days | Seven days, so a vanished item is never a mystery | Proposed |
 | D14 | Push notifications | Every item; blocking only | Blocking items and session questions only; the rest change the count | Proposed |
 | D15 | Items of an ended programme | Delete; mark orphaned in the store; show as ended while no run is open | Shown as ended while no run is open, dismissable then, live again if a run reopens | Proposed |
@@ -245,12 +244,12 @@ This section names how each promise will be shown to hold.
 ### Agreed
 
 - Both ledgers, the item kinds, the tick-and-verify loop, the combined list, session questions on the list, and secrets kept away from coordinators (operator, 2026-10-31, D1 to D10).
+- Pasting secrets into the console ships in the first release (operator, 2026-11-01, D12).
 - The prototype's three views as the shape of the screens ("pretty great overall", operator, 2026-10-31).
 - The Docs reader coordinator's guidance on linking, amendments and the spec's own box (2026-10-31).
 
 ### Waiting on you
 
-- D12: whether the first release ships the secret store with no reader yet, or leaves secrets to Do items for now (§5).
 - Check the coordinator's calls D11 and D13 to D20 in §8.
 - Approve this spec. The plan and the programme's next run start from it.
 
