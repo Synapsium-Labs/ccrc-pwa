@@ -117,6 +117,10 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
         case 'timeout': return refuseRoute(reply, 'timeout');
         case 'malformed': return refuseRoute(reply, 'malformed');
         case 'unreachable': return refuseRoute(reply, 'unreachable');
+        // Linear's own refusal over its limit (spec §6.7, §6.8): `rate-limited` `linear`, with the wait it gave.
+        case 'rate-limited':
+          reply.header('retry-after', String(v.retryAfterS));
+          return refuseRoute(reply, 'rate-limited', { detail: 'linear', retryAfterS: v.retryAfterS });
       }
     }
 

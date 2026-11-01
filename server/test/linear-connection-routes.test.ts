@@ -21,7 +21,7 @@ import { LINEAR_DETAILS_FILE, LINEAR_KEY_FILE, parseLinearDetails } from '../src
 import { registerLinearRoutes } from '../src/linear/routes.js';
 import type { FetchLike } from '../src/linear/client.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { linearAnswer } from './linearFetchFake.js';
+import { RATELIMITED_ERRORS, linearAnswer } from './linearFetchFake.js';
 
 removeTmpFixturesEachTest();
 
@@ -396,7 +396,6 @@ describe('PUT /api/linear/connection', () => {
     await r.stamp();
     const cases: [Parameters<Rig['answer']>[0], string][] = [
       [status(500), 'unreachable'],
-      [status(429), 'unreachable'],
       [async () => { throw new Error(`connect ECONNREFUSED ${LEAK}`); }, 'unreachable'],
       [linearAnswer({ ok: true, status: 200, json: async () => ({ nope: LEAK }) }), 'malformed'],
       [linearAnswer({ ok: true, status: 200, json: async () => ({ data: { viewer: {}, organization: {} } }) }), 'malformed'],
@@ -416,6 +415,27 @@ describe('PUT /api/linear/connection', () => {
     expect(hung.statusCode).toBe(503);
     expect(json(hung)).toEqual({ ok: false, error: 'timeout' });
     expect(files(r)).toEqual([]);
+  });
+
+  // Row 13 (spec §6.7, §6.8): the 429 row left the 503 table above for its own word.
+  it('a Linear 429, or its RATELIMITED code on a 200, is rate-limited linear with Retry-After, and NOTHING is written', async () => {
+    const cases: Answer[] = [
+      linearAnswer({ ok: false, status: 429, headers: { 'retry-after': '45' }, json: async () => ({ errors: [{ message: LEAK }] }) }),
+      linearAnswer({ ok: true, status: 200, headers: { 'retry-after': '45' }, json: async () => RATELIMITED_ERRORS }),
+    ];
+    for (const ans of cases) {
+      const r = await rig();
+      await r.stamp();
+      r.answer(ans);
+      const res = await put(r, KEY);
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['retry-after']).toBe('45');
+      expect(json(res)).toEqual({ ok: false, error: 'rate-limited', detail: 'linear', retryAfterS: 45 });
+      expect(res.body).not.toContain(LEAK);
+      expect(files(r)).toEqual([]);
+      await r.app.close();
+      open = null;
+    }
   });
 
   it('a good key asks Linear with the bare key and the viewer query, then writes both files at 0600', async () => {
@@ -547,6 +567,16 @@ describe('POST /api/linear/connection/check', () => {
     expect(view(rejected)).toMatchObject({ state: 'key-rejected', org: 'team-a', user: 'user-a' });
     r.answer(async () => { throw new Error('down'); });
     expect(view(await check(r))).toMatchObject({ state: 'unreachable', org: 'team-a', user: 'user-a' });
+  });
+
+  it('a check Linear refuses over its rate limit is stored as unreachable: the v1 record keeps its four outcome words', async () => {
+    const r = await rig();
+    await connect(r);
+    r.answer(status(429));
+    const res = await check(r);
+    expect(res.statusCode).toBe(200);
+    expect(view(res)).toMatchObject({ state: 'unreachable', outcome: 'unreachable', org: 'team-a', user: 'user-a' });
+    expect(JSON.parse(readFileSync(detailsPath(r), 'utf8'))).toMatchObject({ v: 1, outcome: 'unreachable' });
   });
 
   it('a key with no details is checked into a full record (the details-unknown cure)', async () => {

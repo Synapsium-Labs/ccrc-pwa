@@ -36,6 +36,7 @@ export const LOOKUP_NOTE = {
   'timeout': { hint: 'Linear took too long to answer, so the title is what you entered.', pointer: null },
   'unreachable': { hint: "Couldn't reach Linear, so the title is what you entered.", pointer: null },
   'malformed': { hint: "Linear's answer wasn't usable, so the title is what you entered.", pointer: null },
+  'rate-limited': { hint: 'Too many Linear lookups just now, so the title is what you entered.', pointer: null },
   'unrecognised': { hint: "Linear's lookup said something this app doesn't know, so the title is what you entered.", pointer: null },
   'call-failed': { hint: "Couldn't check Linear just now, so the title is what you entered. The server asks again when you add it.", pointer: null },
 } as const satisfies Record<LinearFailure | ClientNote, { hint: string; pointer: string | null }>;

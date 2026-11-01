@@ -20,3 +20,13 @@ export const linearHeaders = (sent: Readonly<Record<string, string>> = {}): Line
 export const linearAnswer = (
   a: Omit<LinearAnswer, 'headers'> & { headers?: Readonly<Record<string, string>> },
 ): LinearAnswer => ({ ok: a.ok, status: a.status, json: a.json, headers: linearHeaders(a.headers) });
+
+/**
+ * Linear's refusal of a request over its limit, as the `errors` half of a body: CONSTRUCTED, never recorded. No
+ * test provokes a rate limit (the plan's FX act records none), so this is built from Linear's published
+ * rate-limiting page, which says such a request is refused with the `RATELIMITED` code in its `errors` array, the
+ * code carried in the error's `extensions` (spec §1.2a, §6.7).
+ */
+export const RATELIMITED_ERRORS = {
+  errors: [{ message: 'constructed: over the rate limit', extensions: { code: 'RATELIMITED' } }],
+} as const;

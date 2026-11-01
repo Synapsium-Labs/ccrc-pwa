@@ -22,7 +22,8 @@ import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 import { LINEAR_FAILURES } from '../../shared/linear.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { linearAnswer } from './linearFetchFake.js';
+import { RATELIMITED_ERRORS, linearAnswer } from './linearFetchFake.js';
+import { resolveTitle } from '../src/linear/resolve.js';
 
 removeTmpFixturesEachTest();
 afterEach(() => { vi.useRealTimers(); });
@@ -157,8 +158,9 @@ describe('lookupLinearIssue', () => {
     }
   });
 
-  it('answers unreachable for a 500, a 429, a rejected connection and a GraphQL errors array', async () => {
-    for (const status of [500, 429, 503]) {
+  // Row 13 (spec §6.7, §14): a 429 left this row for its own arm, `rate-limited`, in the rows below.
+  it('answers unreachable for a 500, a 503, a rejected connection and a GraphQL errors array', async () => {
+    for (const status of [500, 503]) {
       const { f } = spyFetch(bodyOf({}, status));
       expect(failureOf(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f })), String(status)).toBe('unreachable');
     }
@@ -168,12 +170,73 @@ describe('lookupLinearIssue', () => {
     expect(failureOf(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f }))).toBe('unreachable');
   });
 
+  // ── RATE-LIMITED (spec §6.7, §14 row 13) ──
+  it('answers rate-limited for a 429, with the digest and the wait, never unreachable', async () => {
+    const { f } = spyFetch(bodyOf({}, 429));
+    expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f }))
+      .toEqual({ ok: false, reason: 'rate-limited', keyDigest: valueDigestHex(KEY), retryAfterS: 60 });
+  });
+
+  it('answers rate-limited for a RATELIMITED code in errors, whatever the status: on a 200 and on a 400', async () => {
+    for (const status of [200, 400]) {
+      const { f } = spyFetch(bodyOf({ data: { issue: null }, ...RATELIMITED_ERRORS }, status));
+      expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f }), String(status))
+        .toEqual({ ok: false, reason: 'rate-limited', keyDigest: valueDigestHex(KEY), retryAfterS: 60 });
+    }
+    // On a 200 whose data is there too: the code wins over the shape, so a refusal is never read as a title.
+    const { f } = spyFetch(bodyOf({ data: { issue: { identifier: 'ENG-1234', title: 'T' } }, ...RATELIMITED_ERRORS }));
+    expect(failureOf(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f }))).toBe('rate-limited');
+  });
+
+  it('reads the wait from Retry-After as a non-negative integer held to 1 to 3,600 seconds, else sixty', async () => {
+    const cases: [string | null, number][] = [
+      ['120', 120], [' 30 ', 30], ['3600', 3600], ['99999', 3600], ['0', 1],
+      [null, 60], ['', 60], ['1.5', 60], ['-3', 60], ['2e3', 60], ['Wed, 21 Oct 2026 07:28:00 GMT', 60],
+    ];
+    for (const [sent, wait] of cases) {
+      const headers: Record<string, string> = sent === null ? {} : { 'Retry-After': sent };
+      const { f } = spyFetch(linearAnswer({ ok: false, status: 429, headers, json: async () => ({}) }));
+      expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f }), JSON.stringify(sent)).toMatchObject({ reason: 'rate-limited', retryAfterS: wait });
+    }
+  });
+
+  it('does not read the reset header until its unit is recorded from a fixture (plan build note, LK2)', async () => {
+    // A millisecond epoch read as seconds would be held to 3,600; until the reset header's unit is recorded, the wait
+    // with no Retry-After is the sixty-second fallback.
+    for (const reset of ['1800000000000', '1800000000', '42']) {
+      const { f } = spyFetch(linearAnswer({ ok: false, status: 429, headers: { 'X-RateLimit-Requests-Reset': reset }, json: async () => ({}) }));
+      expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f }), reset).toMatchObject({ reason: 'rate-limited', retryAfterS: 60 });
+    }
+  });
+
+  it('a GraphQL errors array with another code, or none, is still unreachable', async () => {
+    for (const errors of [[{ message: 'x', extensions: { code: 'INTERNAL' } }], [{ message: 'x', code: 'RATELIMITED' }], [{ extensions: 'RATELIMITED' }]]) {
+      const { f } = spyFetch(bodyOf({ data: { issue: null }, errors }));
+      expect(failureOf(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f })), JSON.stringify(errors)).toBe('unreachable');
+    }
+  });
+
+  it('the title lookup reads rate-limited as it reads unreachable: the offline title, with its word', async () => {
+    const dir = mkTmp('ccrc-linear-');
+    writeFileSync(path.join(dir, LINEAR_KEY_FILE), `${KEY}\n`, { mode: 0o600 });
+    for (const ans of [bodyOf({}, 429), bodyOf({ data: { issue: null }, ...RATELIMITED_ERRORS })]) {
+      const { f, calls } = spyFetch(ans);
+      expect(await resolveTitle('ENG-1234', { ...REF, titleSlug: null }, { ccrcDir: dir, fetch: f }))
+        .toEqual({ title: 'ENG-1234', source: 'offline', reason: 'rate-limited' });
+      expect(calls).toHaveLength(1);
+    }
+    // Nothing was marked: a rate limit says nothing about the key.
+    expect(readdirSync(dir)).toEqual([LINEAR_KEY_FILE]);
+  });
+
   it('puts no response text in any failure it reports', async () => {
     const LEAK = 'LINEAR-SAYS-SECRET-TEXT';
     const bodies = [
       bodyOf({ data: { issue: null }, errors: [{ message: LEAK }] }),
       bodyOf({ message: LEAK }, 401),
       bodyOf({ message: LEAK }, 500),
+      bodyOf({ message: LEAK }, 429),
+      bodyOf({ errors: [{ message: LEAK, extensions: { code: 'RATELIMITED' } }] }),
       bodyOf({ data: { issue: { title: 42, note: LEAK } } }),
     ];
     for (const b of bodies) {
@@ -249,7 +312,7 @@ describe('lookupLinearIssue', () => {
   it('the failure list is the type, not a second copy, and names every arm', () => {
     expect(new Set(LINEAR_FAILURES).size).toBe(LINEAR_FAILURES.length);
     expect([...LINEAR_FAILURES].sort())
-      .toEqual(['forbidden', 'malformed', 'not-configured', 'not-found', 'timeout', 'unauthorised', 'unreachable']);
+      .toEqual(['forbidden', 'malformed', 'not-configured', 'not-found', 'rate-limited', 'timeout', 'unauthorised', 'unreachable']);
   });
 });
 
@@ -331,7 +394,6 @@ describe('verifyLinearKey', () => {
       [bodyOf({}, 401), 'unauthorised'],
       [bodyOf({}, 403), 'forbidden'],
       [bodyOf({}, 500), 'unreachable'],
-      [bodyOf({}, 429), 'unreachable'],
       [async () => { throw new Error('ECONNREFUSED'); }, 'unreachable'],
       [viewer({ errors: [{ message: 'x' }] }), 'unreachable'],
       [viewer('nope'), 'malformed'],
@@ -343,6 +405,19 @@ describe('verifyLinearKey', () => {
     for (const [ans, word] of cases) {
       const f: FetchLike = async () => (typeof ans === 'function' ? ans() : ans);
       expect(await verifyLinearKey(KEY, { fetch: f }), word).toEqual({ ok: false, reason: word, keyDigest: valueDigestHex(KEY) });
+    }
+  });
+
+  it('a 429, or a RATELIMITED code on a 200 or a 400, is rate-limited with its wait (row 13)', async () => {
+    const cases: Answer[] = [
+      linearAnswer({ ok: false, status: 429, headers: { 'retry-after': '90' }, json: async () => ({}) }),
+      linearAnswer({ ok: true, status: 200, headers: { 'retry-after': '90' }, json: async () => RATELIMITED_ERRORS }),
+      linearAnswer({ ok: false, status: 400, headers: { 'retry-after': '90' }, json: async () => RATELIMITED_ERRORS }),
+    ];
+    for (const ans of cases) {
+      const { f } = spyFetch(ans);
+      expect(await verifyLinearKey(KEY, { fetch: f }), String(ans.status))
+        .toEqual({ ok: false, reason: 'rate-limited', keyDigest: valueDigestHex(KEY), retryAfterS: 90 });
     }
   });
 
