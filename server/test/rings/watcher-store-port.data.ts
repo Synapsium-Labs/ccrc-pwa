@@ -10,7 +10,7 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (166, with #1614's `delegationRunStamps`): on `main` every reach is
+/** The members reached through the whole store (164, with #1614's `delegationRunStamps`): on `main` every reach is
  *  whole. Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'absorbParkEscalation', 'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById',
@@ -27,22 +27,22 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'insertApproval', 'insertAsk', 'insertDelegationEvents', 'insertMail', 'insertObservation',
   'insertStallObservation', 'intentFor', 'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
   'laterReviewClosedFor', 'ledgerFloor', 'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor',
-  'lifecycleCreatesFor', 'lifecycleFor', 'lifecycleGapGens', 'lifecycleLeafEndsFor', 'lifecycleReclaimRowsSince',
-  'lifecycleStats', 'mailOrigin', 'mailQueuedSince', 'markApprovalOperator', 'markApprovalOperatorRows',
-  'markDeadCoordinatorBreakerDirty', 'markDelivered', 'markDriftPushed', 'markDriftShadowed', 'markIngested',
-  'markLanded', 'markParkEscalated', 'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId',
-  'mergingRuns', 'node', 'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteGate', 'noteLeaseDetail',
-  'openAllocations', 'openCoordinatorIds', 'outstandingMailFor', 'parkDelivery', 'parkedDeliveries', 'poolEpoch',
-  'programOpenRunCount', 'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'pruneApprovalInputs',
-  'pruneAskQuestions', 'queueDelivery', 'raiseLedgerFloor', 'recentProvenance', 'recordDriftPass', 'recordFeedEvent',
-  'recordGap', 'recordObservation', 'recordRejection', 'recordRunEvent', 'recordShadowVerdict',
-  'recordStallObservation', 'refusalsFor', 'refuseRelease', 'rejectDelivery', 'rekeyNode', 'releaseAsk',
-  'releaseLease', 'releases', 'renewClaimRow', 'resolveNode', 'restampAsk', 'retireGeneration', 'rollSettings', 'run',
-  'runEvents', 'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
-  'setCollectLane', 'setDeliveryEnvelope', 'setSession', 'settleAsk', 'settleNode', 'staleAllocations',
-  'staleApproval', 'staleAsk', 'stallCandidates', 'stallMailFor', 'stallSettings', 'stalledDispatchRunIds',
-  'strandedClear', 'takeApprovalForRule', 'takeAskForAnswer', 'unlandedBriefs', 'unsealDeadCoordinatorBreakerState',
-  'untakeAsk', 'updateEpoch', 'upsertNodeMeasurement', 'wakeParked',
+  'lifecycleGapGens', 'lifecycleLeafEndsFor', 'lifecycleReclaimRowsSince', 'lifecycleStats', 'mailOrigin',
+  'mailQueuedSince', 'markApprovalOperator', 'markApprovalOperatorRows', 'markDeadCoordinatorBreakerDirty',
+  'markDelivered', 'markDriftPushed', 'markDriftShadowed', 'markIngested', 'markLanded', 'markParkEscalated',
+  'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns', 'node',
+  'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteGate', 'noteLeaseDetail', 'openAllocations',
+  'openCoordinatorIds', 'outstandingMailFor', 'parkDelivery', 'parkedDeliveries', 'poolEpoch', 'programOpenRunCount',
+  'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions',
+  'queueDelivery', 'raiseLedgerFloor', 'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap',
+  'recordObservation', 'recordRejection', 'recordRunEvent', 'recordShadowVerdict', 'recordStallObservation',
+  'refusalsFor', 'refuseRelease', 'rejectDelivery', 'rekeyNode', 'releaseAsk', 'releaseLease', 'releases',
+  'renewClaimRow', 'resolveNode', 'restampAsk', 'retireGeneration', 'rollSettings', 'run', 'runEvents',
+  'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState', 'setCollectLane',
+  'setDeliveryEnvelope', 'setSession', 'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
+  'stallCandidates', 'stallMailFor', 'stallSettings', 'stalledDispatchRunIds', 'strandedClear', 'takeApprovalForRule',
+  'takeAskForAnswer', 'unlandedBriefs', 'unsealDeadCoordinatorBreakerState', 'untakeAsk', 'updateEpoch',
+  'upsertNodeMeasurement', 'wakeParked',
 ];
 
 /** Each whole hand-off key (38) with its call-site count (42 in all), sorted by key. */

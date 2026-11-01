@@ -11,7 +11,7 @@ import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
 } from './pools.js';
-import type { CcdResult } from './coord/ports.js';
+import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -4780,7 +4780,7 @@ export class FleetWatcher {
   /** The stale arm's hold reads for this pass, concurrently, for the rows `staleHoldWanted` picks (D-6639). A read that
    *  throws answers nothing, which keeps the child. */
   private async childReclaimGatherStaleHolds(
-    coord: CoordStore, records: readonly SessionRecord[],
+    coord: WatcherCoordPort, records: readonly SessionRecord[],
   ): Promise<ReadonlyMap<string, StaleHoldRead>> {
     const nowMs = Date.now();
     const wanted = records.filter((r) => staleHoldWanted(coord, r, this.deps.fleetState, nowMs));
@@ -4837,9 +4837,9 @@ export class FleetWatcher {
    *  which PROTECTS — never a throw that discards the per-child reads
    *  around it. */
   private childReclaimHoldCandidatesRead(
-    coord: CoordStore, sessionId: string, mintingRunId: number, mintingRunFull: RunRow | null,
+    coord: WatcherCoordPort, sessionId: string, mintingRunId: number, mintingRunFull: RunRow | null,
   ): ChildReclaimHoldCandidatesRead {
-    let naming: ReturnType<CoordStore['runsNamingSession']>;
+    let naming: ReturnType<WatcherCoordPort['runsNamingSession']>;
     try {
       naming = coord.runsNamingSession(sessionId);
     } catch (err) {
@@ -4862,7 +4862,7 @@ export class FleetWatcher {
    *  own try — called LAZILY by `childReclaimHoldRead`, only once a hold's
    *  text has PROVEN to match one of this child's own runs, so a programme
    *  whose hold does not match spends nothing here. */
-  private childReclaimOpenOf(coord: CoordStore, program: string): ChildReclaimHoldOpenRead {
+  private childReclaimOpenOf(coord: WatcherCoordPort, program: string): ChildReclaimHoldOpenRead {
     try {
       return { ok: true, count: coord.programOpenRunCount(program) };
     } catch (err) {
@@ -4887,7 +4887,7 @@ export class FleetWatcher {
    *  nothing: a duplicate boundary answers the same boundary. The birth
    *  (above, in the per-child loop) does NOT use this: it reads
    *  `lifecycleBirthEventsFor` through `childReclaimBornAt`. */
-  private childReclaimAttentionGenerationRows(coord: CoordStore, sessionId: string): MirroredLifecycleEvent[] {
+  private childReclaimAttentionGenerationRows(coord: WatcherCoordPort, sessionId: string): MirroredLifecycleEvent[] {
     const window = coord.lifecycleFor({ sessionId });
     const creates = coord.lifecycleCreatesFor(sessionId);
     if (creates.length === 0) return window;
