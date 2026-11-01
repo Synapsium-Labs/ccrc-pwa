@@ -10,20 +10,21 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (122, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
+/** The members reached through the whole store (118, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
  *  before D-7580, WP3, whose lanes' units read 11 through the port; 155 before D-7581, WP4, whose mail helpers and mail,
  *  landing-checks and tmp-sweep units take the port; 132 before D-7582, WP5, whose stall lane takes the port; 129
- *  before D-7583, WP6, whose child-reclaim chain and lane take the port; and 123 before D-7584, WP7, whose archive
- *  chain, beats and lane take the port). Sorted. */
+ *  before D-7583, WP6, whose child-reclaim chain and lane take the port; 123 before D-7584, WP7, whose archive
+ *  chain, beats and lane take the port; and 122 before D-7585, WP8, whose close path, dead-coordinator, dead-dispatch
+ *  and mirror chains and lane take the port). Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById', 'bindingRunsOf', 'bindingsOf',
   'checksRows', 'childReclaimCoordinatorClaims',
-  'claimDigestDay', 'closeRun', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode',
+  'claimDigestDay', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode',
   'deadAnchors', 'deadCoordinatorBreakerHeldLatest', 'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows',
   'declineApproval', 'declineAsk', 'delegationEventStats', 'delegationRunStamps', 'digestApprovals', 'digestAsks',
   'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
   'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows',
-  'firstMailIdWithPrefix', 'foldPrLineage', 'hasMailWithSubject', 'hasNotice', 'heldApprovalRowsByChild',
+  'firstMailIdWithPrefix', 'hasMailWithSubject', 'hasNotice', 'heldApprovalRowsByChild',
   'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'ingestJournal', 'insertApproval', 'insertAsk',
   'insertDelegationEvents', 'intentFor', 'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
   'ledgerFloor', 'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor',
@@ -31,9 +32,9 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'markApprovalOperator', 'markApprovalOperatorRows', 'markDriftPushed', 'markDriftShadowed', 'markLanded',
   'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns', 'node',
   'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteLeaseDetail', 'openAllocations', 'openCoordinatorIds',
-  'outstandingMailFor', 'poolEpoch', 'programOpenRunCount', 'projectDelegationCheckpoint',
+  'outstandingMailFor', 'poolEpoch', 'projectDelegationCheckpoint',
   'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions', 'raiseLedgerFloor',
-  'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap', 'recordRejection', 'recordRunEvent',
+  'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap', 'recordRunEvent',
   'refusalsFor', 'refuseRelease', 'rekeyNode', 'releaseAsk',
   'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk', 'retireGeneration',
   'rollSettings', 'run',
@@ -43,7 +44,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'updateEpoch', 'upsertNodeMeasurement',
 ];
 
-/** Each whole hand-off key (14) with its call-site count (15 in all), sorted by key. */
+/** Each whole hand-off key (13) with its call-site count (14 in all), sorted by key. */
 export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.constructor -> coord/questions.ts#createQuestions': 1,
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#endDeadCoordinator': 1,
@@ -51,7 +52,6 @@ export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#recordDeadCoordinatorFeed': 2,
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#recordDeadCoordinatorThrew': 1,
   'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#rereadDeadCoordinatorJournalTrust': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/routes.ts#CoordRoutesHandle.withSweepAbandon': 1,
   'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#readDeadCoordinatorJournalTrust': 1,
   'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreaker': 1,
   'watch.ts#FleetWatcher.deadDispatchStep -> coord/abandonDeadDispatch.ts#abandonDeadDispatches': 1,
