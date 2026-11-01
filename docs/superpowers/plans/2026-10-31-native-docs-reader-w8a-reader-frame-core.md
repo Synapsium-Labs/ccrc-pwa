@@ -778,7 +778,7 @@ The whole browser leg, run once at Task 10, passed 41 of 42 files locally; `sess
 
 ### The mutation table
 
-111 rows, the last occurrence of each id, run at the end state in the workspace, one at a time, each bounded by `timeout -k 10 600` and `ulimit -u 4096`, each restored from a saved copy with its sha256 checked, `git status --porcelain` empty after every row. All 111 are red (W8A-T7-M16 added and measured in fix round 1). W8A-T9-M1 reds the whole file (its build refuses the Mermaid chunk), which is the guard's own clause. Rows planted in the installed library were also checked against the pinned 1.0.0 tarball after restore, and at the end all 394 installed files equal the tarball's. Seven rows were re-spelt at this step because later tasks changed their text or the earlier row described the edit in prose (W8A-T2-M1, T2-M3, T2-M4, T3-M2, T3-M3, T4-M2, T7-M4), and W8A-T6-M1's `new` reds on its assertion rather than a ReferenceError.
+111 rows, the last occurrence of each id, run at the end state in the workspace, one at a time, each bounded by `timeout -k 10 600` and `ulimit -u 4096`, each restored from a saved copy with its sha256 checked, `git status --porcelain` empty after every row. All 111 are red (W8A-T7-M16 added and measured in fix round 1). W8A-T9-M1 reds the whole file (its build refuses the Mermaid chunk), which is the guard's own clause. Rows planted in the installed library were also checked against the pinned 1.0.0 tarball after restore, and at the end all 394 installed files equal the tarball's. Seven rows were re-spelt at this step because later tasks changed their text or the earlier row described the edit in prose (W8A-T2-M1, T2-M3, T2-M4, T3-M2, T3-M3, T4-M2, T7-M4), and W8A-T6-M1 was re-spelt in fix round 1: its earlier `new` named a function `images.ts` does not import, so it went red on a ReferenceError and proved nothing; its `new` is now a `blob:` literal in place of the data URL, which reds the named case alone on its assertion.
 
 Task 1:
 
@@ -1104,9 +1104,9 @@ Task 6:
   "pkg": "pwa",
   "file": "src/docs/reader/images.ts",
   "old": "rasterDataUrl(f.bytes, f.mime)",
-  "new": "rasterObjectUrl(f.bytes, f.mime)",
+  "new": "'blob:' + rasterDataUrl(f.bytes, f.mime)",
   "tests": "test/reader-images.test.ts",
-  "red": "Tests  8 failed | 3 passed (11) | first failing: × a raster becomes a data:image/png;base64 URL in the library's image grammar 5ms"
+  "red": "Tests  1 failed | 10 passed (11) | first failing: × a raster becomes a data:image/png;base64 URL in the library's image grammar | AssertionError: expected 'blob:data:image/png;base64,iVBORw0KGg…' to match the image grammar; no ReferenceError in the output"
  },
  {
   "id": "W8A-T6-M2",
