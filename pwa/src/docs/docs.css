@@ -293,9 +293,11 @@
 .shell-detail > .docs-screen:has(.docs-reader) { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; }
 .docs-screen:has(.docs-reader) > * { flex: none; }
 .docs-screen:has(.docs-reader) > .docs-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-block-size: 0; gap: var(--sp-2); }
-.docs-leaf > .doc-formatting { flex: none; }
-.docs-reader { flex: 1 1 auto; inline-size: 100%; min-block-size: 20rem; }
-.docs-reader iframe { border: 0; inline-size: 100%; block-size: 100%; }
+.docs-leaf:has(.docs-reader) > .doc-formatting { flex: none; }
+/* The frame fills its host by position, and the host takes the room by `flex-basis: 0`, so neither a percentage height
+   nor an auto flex basis has to resolve: the same in every engine. */
+.docs-reader { position: relative; flex: 1 1 0; inline-size: 100%; min-block-size: 20rem; }
+.docs-reader iframe { position: absolute; inset: 0; border: 0; inline-size: 100%; block-size: 100%; }
 .docs-reader-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
 .docs-reader-sheet-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
 .docs-reader-sheet-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }

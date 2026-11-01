@@ -1156,14 +1156,27 @@ describe('W8a reader frame in Chrome', () => {
             scrollers.push({ tag: n.tagName, cls: String(n.className), scrollHeight: n.scrollHeight, clientHeight: n.clientHeight });
           }
         }
+        // The lower bound: the reader reaches the bottom of what its screen holds, and the screen reaches the pane's.
+        const screen = reader.closest('.docs-screen');
+        const pane = reader.closest('.shell-detail');
+        const frameBox = reader.querySelector('iframe')?.getBoundingClientRect() ?? null;
+        const screenBottom = screen?.getBoundingClientRect().bottom ?? NaN;
         return {
-          innerHeight: window.innerHeight, readerTop: Math.round(r.top), readerBottom: r.bottom,
+          innerHeight: window.innerHeight, readerTop: Math.round(r.top), readerBottom: r.bottom, readerHeight: r.height,
           docScrollHeight: se.scrollHeight, docClientHeight: se.clientHeight, scrollers,
+          paneBottom: pane?.getBoundingClientRect().bottom ?? NaN, screenBottom,
+          screenPadBottom: screen === null ? NaN : parseFloat(getComputedStyle(screen).paddingBottom),
+          frameHeight: frameBox?.height ?? NaN,
         };
       });
       expect(m, `${w}x${h}: the reader is in the page`).not.toBeNull();
       const got = m as NonNullable<typeof m>;
       if (got.readerBottom > got.innerHeight + 1) problems.push(`${w}x${h}: the reader's bottom is below the viewport ${JSON.stringify(got)}`);
+      const room = got.screenBottom - got.screenPadBottom;
+      if (Math.abs(room - got.readerBottom) > 2) problems.push(`${w}x${h}: the reader does not fill the screen: its bottom ${got.readerBottom} against the screen's content bottom ${room} ${JSON.stringify(got)}`);
+      if (got.paneBottom - got.readerBottom > got.screenPadBottom + 2) problems.push(`${w}x${h}: the reader stops short of the pane's bottom (${got.paneBottom - got.readerBottom}px, the screen pads ${got.screenPadBottom}px) ${JSON.stringify(got)}`);
+      if (Math.abs(got.paneBottom - got.screenBottom) > 2) problems.push(`${w}x${h}: the screen does not reach the pane's bottom ${JSON.stringify(got)}`);
+      if (Math.abs(got.frameHeight - got.readerHeight) > 1) problems.push(`${w}x${h}: the iframe is not the reader's height ${JSON.stringify(got)}`);
       if (got.docScrollHeight > got.docClientHeight + 1) problems.push(`${w}x${h}: the document scrolls ${JSON.stringify(got)}`);
       if (got.scrollers.length > 0) problems.push(`${w}x${h}: an ancestor of the reader scrolls ${JSON.stringify(got.scrollers)}`);
       const frame = await readerFrame(s.page);
