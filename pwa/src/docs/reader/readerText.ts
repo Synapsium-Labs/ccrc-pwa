@@ -29,4 +29,11 @@ export const READER_SHEET_TEXT = {
     `⟦U+${h.codePoint.toString(16).toUpperCase().padStart(4, '0')} ${h.name}⟧`,
   copyAnyway: 'Copy anyway',
   copyCancel: 'Cancel',
+  /** Shown in either copy sheet when the clipboard refused the write (it stays open). */
+  copyFailed: 'The clipboard did not accept the text.',
+  /** The sheet for clean text the clipboard refused: the text is shown so it can be copied by hand. */
+  copyFailedTitle: 'The text was not copied',
+  copyByHand: 'Select the text below and copy it yourself.',
+  copyTryAgain: 'Try again',
+  copyFailedClose: 'Close',
 } as const;

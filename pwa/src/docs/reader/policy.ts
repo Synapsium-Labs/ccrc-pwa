@@ -110,11 +110,21 @@ export function readerDocKey(project: string, section: string, path: string): st
   return key;
 }
 
-/** The frame's theme preference for the console's theme choice: `system` and anything unknown follow the device. */
-export function readerPrefsOf(themeChoice: string): { theme: 'light' | 'dark' | 'auto' } {
-  if (themeChoice === 'light') return { theme: 'light' };
-  if (themeChoice === 'dark') return { theme: 'dark' };
-  return { theme: 'auto' };
+/** A palette as the reader reads it: the console's theme id and which way it reads. (Mirrors the design system's
+ *  theme row; nothing is imported from it, the caller hands the rows in.) */
+export interface ReaderPalette {
+  readonly id: string;
+  readonly mode: 'light' | 'dark';
+}
+
+/** The frame's theme preference for the console's theme choice: a palette in `palettes` gives its own mode, so a pinned
+ *  dark palette reads dark; `system`, and an id no palette has, follow the device. */
+export function readerPrefsOf(
+  themeChoice: string, palettes: readonly ReaderPalette[],
+): { theme: 'light' | 'dark' | 'auto' } {
+  if (themeChoice === 'system') return { theme: 'auto' };
+  const palette = palettes.find((x) => x.id === themeChoice);
+  return palette === undefined ? { theme: 'auto' } : { theme: palette.mode };
 }
 
 /** The frame's start watchdog for a document of `bytes` UTF-8 bytes: the Docs parse budget, with no allowance for
@@ -124,13 +134,15 @@ export function readerWatchdogMs(bytes: number): number {
 }
 
 /** Where one body (one `bodyKey`) is. `fallback` and `plain` are terminal for the key: the body stays there until its
- *  key changes, so there is no remount loop (M8.11). `reason` and `why` go to the console, never to the page. */
+ *  key changes, so there is no remount loop (M8.11). `reason` and `why` go to the console, never to the page.
+ *  `budgetMs` on `plain` is present exactly when the render timed out: the plain text with the timeout note, no second
+ *  parse. Absent, the plain view formats the body itself. */
 export type ReaderBodyState =
   | { s: 'rendering' }
   | { s: 'mounting' }
   | { s: 'ready' }
   | { s: 'fallback'; reason: string }
-  | { s: 'plain'; why: string };
+  | { s: 'plain'; why: string; budgetMs?: number };
 
 /** What happens to a body: `mount` (the render answered and the frame is being mounted), `ready` (the frame said so),
  *  `fallback` (the frame or its start failed) and `plain` (the plain view was chosen, which is decided before a
@@ -139,7 +151,7 @@ export type ReaderBodyEvent =
   | { e: 'mount' }
   | { e: 'ready' }
   | { e: 'fallback'; reason: string }
-  | { e: 'plain'; why: string };
+  | { e: 'plain'; why: string; budgetMs?: number };
 
 /** The next state of a body. A terminal state answers itself (the same object); `ready` is only reached from
  *  `mounting`, `plain` only from `rendering`, and a failure from any live state is a fallback. */
@@ -149,7 +161,8 @@ export function readerBodyReducer(state: ReaderBodyState, ev: ReaderBodyEvent): 
     case 'fallback':
       return { s: 'fallback', reason: ev.reason };
     case 'plain':
-      return state.s === 'rendering' ? { s: 'plain', why: ev.why } : state;
+      if (state.s !== 'rendering') return state;
+      return ev.budgetMs === undefined ? { s: 'plain', why: ev.why } : { s: 'plain', why: ev.why, budgetMs: ev.budgetMs };
     case 'mount':
       return state.s === 'rendering' ? { s: 'mounting' } : state;
     case 'ready':

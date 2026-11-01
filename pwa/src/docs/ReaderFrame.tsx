@@ -1,8 +1,8 @@
 // A Markdown leaf's rich reader (native Docs reader, W8a Task 8; the 2026-10-31 reader-frame spec's section 4.1 (host,
 // focus, remount) and section 4.6 (every trigger, the fixed note), M8.7, M8.11, M8.17, M8.19 and refinement (g)).
 // Ring L4 delivery: it runs the render, the images and the mount under one `AbortController` and acts on what the
-// policy owners answer (`routeReaderLink`, `copyDecision`, `readerDocKey`, `readerPrefsOf`, `readerWatchdogMs`,
-// `readerBodyReducer`); it decides none of it.
+// policy owners answer (`routeReaderLink`, `copyDecision`, `readerDocKey`, `readerPrefsOf`, `readerBodyReducer`); it
+// decides none of it. (The frame's start watchdog is the adapter's, `mountReader`'s, from the same policy.)
 //
 // Where a body lands, in the order of section 4.6 (the architecture's R6):
 //   G1  no reader (`MarkdownBody` does not mount this component at all): the plain view as today;
@@ -18,6 +18,7 @@
 //
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
+import { THEMES } from '@ccrc/ui';
 import { useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import type { DocsShowOk } from '../../../shared/docs';
 import { utf8ByteLength } from '../lib/markdownGuard';
@@ -29,9 +30,12 @@ import { useThemeChoice } from '../lib/theme';
 import { DocsAssetContext } from './DocImage';
 import type { DocLinkContextValue } from './DocLink';
 import { DocMarkdown, DocPlain, docMarkdownSource, docsPlainNote, DOC_FORMATTING } from './DocMarkdown';
-import { ReaderCopySheet, ReaderLinkSheet, type ReaderCopyAsk, type ReaderLinkAsk } from './ReaderSheets';
+import {
+  ReaderCopyFailedSheet, ReaderCopySheet, ReaderLinkSheet,
+  type ReaderCopyAsk, type ReaderCopyFailedAsk, type ReaderLinkAsk,
+} from './ReaderSheets';
 import type { ReaderImages, loadReaderImages } from './reader/images';
-import type { ReaderMount, ReaderMountInput } from './reader/bridge';
+import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
 import {
   copyDecision, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink, type ReaderBodyState, type ReaderLink,
 } from './reader/policy';
@@ -72,13 +76,16 @@ export interface ReaderFrameProps {
 }
 
 /** What is asked of the reader in a sheet. */
-type Ask = { readonly kind: 'link'; readonly ask: ReaderLinkAsk } | { readonly kind: 'copy'; readonly ask: ReaderCopyAsk };
+type Ask =
+  | { readonly kind: 'link'; readonly ask: ReaderLinkAsk }
+  | { readonly kind: 'copy'; readonly ask: ReaderCopyAsk }
+  | { readonly kind: 'copy-failed'; readonly ask: ReaderCopyFailedAsk };
 
 const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0 };
 
-/** The name of whatever was thrown, for the console only. */
-function thrownName(e: unknown): string {
-  return e instanceof Error ? e.name : typeof e;
+/** What was thrown, for the console only: an error's name and message, else its type. */
+function reasonOf(e: unknown): string {
+  return e instanceof Error ? `${e.name}: ${e.message}` : typeof e;
 }
 
 /** A Markdown body in the rich reader. `MarkdownBody` answers the two byte kinds that are not Markdown before it mounts
@@ -94,30 +101,30 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
   const bytes = useMemo(() => utf8ByteLength(text), [text]);
   const overGate = bytes > DOCS_RENDER_GATE_BYTES;
   const assets = useContext(DocsAssetContext);
-  const theme = useThemeChoice();
+  const prefs = readerPrefsOf(useThemeChoice(), THEMES).theme;
   const link = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: new WeakMap() }), [p.link]);
   const [state, dispatch] = useReducer(
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
   );
-  const [timeoutMs, setTimeoutMs] = useState<number | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mountRef = useRef<ReaderMount | null>(null);
-  /** The theme the frame was last given: the mount's seed, then each `setPrefs`. */
-  const seededTheme = useRef<string | null>(null);
+  /** The frame theme the frame was last given: the mount's seed, then each `setPrefs`. */
+  const seededPrefs = useRef<ReaderThemePref['theme'] | null>(null);
   /** The latest props, for the callbacks the frame holds for its whole life. */
-  const live = useRef({ props: p, link, assets, theme });
+  const live = useRef({ props: p, link, assets, prefs });
   useEffect(() => {
-    live.current = { props: p, link, assets, theme };
+    live.current = { props: p, link, assets, prefs };
   });
 
-  // A later theme change reaches the frame as its `prefs` operation: no remount, so the reading position survives.
+  // A later change of the DERIVED theme reaches the frame as its `prefs` operation: no remount, so the reading position
+  // survives, and a switch between two palettes of one mode sends nothing.
   useEffect(() => {
     const m = mountRef.current;
-    if (m === null || seededTheme.current === theme) return;
-    seededTheme.current = theme;
-    m.setPrefs(readerPrefsOf(theme));
-  }, [theme]);
+    if (m === null || seededPrefs.current === prefs) return;
+    seededPrefs.current = prefs;
+    m.setPrefs({ theme: prefs });
+  }, [prefs]);
 
   useEffect(() => {
     if (overGate) return undefined;
@@ -132,19 +139,25 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       mount = null;
       mountRef.current = null;
     };
+    /** The drafts this body counted go back once: a fallback hands the page to the plain view, which counts its own. */
+    const giveBack = (): void => {
+      if (counted !== 0 && uncount !== null) uncount(-counted);
+      counted = 0;
+    };
     /** G3 and G6: the mount, if any, goes; the fixed note shows; the reason stays in the console. */
     const fallBack = (reason: string): void => {
       if (ac.signal.aborted || landed) return;
       landed = true;
       console.warn(`ccrc: reader fell back (${reason})`);
       drop();
+      giveBack();
       dispatch({ e: 'fallback', reason });
     };
     /** G4 and G5: the plain view, decided before any mount. */
-    const goPlain = (why: string): void => {
+    const goPlain = (why: string, budgetMs?: number): void => {
       if (ac.signal.aborted || landed) return;
       landed = true;
-      dispatch({ e: 'plain', why });
+      dispatch(budgetMs === undefined ? { e: 'plain', why } : { e: 'plain', why, budgetMs });
     };
 
     const onLink = (l: ReaderLink): void => {
@@ -168,10 +181,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
     const onCopy = (t: string, hidden: readonly ReaderHiddenChar[]): void => {
       const d = copyDecision(t, hidden);
       if (d.kind === 'sheet') {
-        setAsk({ kind: 'copy', ask: { text: d.text, hidden: d.hidden } });
+        setAsk({ kind: 'copy', ask: { text: d.text, hidden: d.hidden, failed: false } });
         return;
       }
-      copyText(d.text).catch(() => setAsk({ kind: 'copy', ask: { text: d.text, hidden: [] } }));
+      copyText(d.text).catch(() => setAsk({ kind: 'copy-failed', ask: { text: d.text } }));
     };
 
     void (async () => {
@@ -181,14 +194,13 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         outcome = await first.props.reader.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: ac.signal });
       } catch (e) {
         if (ac.signal.aborted) return;
-        console.warn(`ccrc: reader render rejected (${thrownName(e)})`);
+        console.warn(`ccrc: reader render rejected (${reasonOf(e)})`);
         goPlain('render-rejected');
         return;
       }
       if (ac.signal.aborted) return;
       if (outcome.kind === 'timeout') {
-        setTimeoutMs(outcome.budgetMs);
-        goPlain('timeout');
+        goPlain('timeout', outcome.budgetMs);
         return;
       }
       if (outcome.kind !== 'rendered') {
@@ -205,7 +217,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           : await second.props.reader.images(outcome.images, second.link, second.assets, ac.signal);
       } catch (e) {
         if (ac.signal.aborted) return;
-        fallBack(`images ${thrownName(e)}`);
+        fallBack(`images ${reasonOf(e)}`);
         return;
       }
       if (ac.signal.aborted || landed) return;
@@ -222,7 +234,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         return;
       }
       dispatch({ e: 'mount' });
-      seededTheme.current = cur.theme;
+      seededPrefs.current = cur.prefs;
       const input: ReaderMountInput = {
         document: {
           result: outcome.result,
@@ -233,7 +245,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         bytes,
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
         title: leafName(cur.props.show.path),
-        prefs: readerPrefsOf(cur.theme),
+        prefs: { theme: cur.prefs },
         onLink,
         onHash: replaceFragment,
         copy: onCopy,
@@ -245,11 +257,9 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       performance.mark('ccrc-reader-mount-start');
       let m: ReaderMount;
       try {
-        const pending = cur.props.reader.mount(el, input);
-        if (cur.props.pendingFragment !== null) cur.props.onFragmentConsumed();
-        m = await pending;
+        m = await cur.props.reader.mount(el, input);
       } catch (e) {
-        fallBack(`mount ${thrownName(e)}`);
+        fallBack(`mount ${reasonOf(e)}`);
         return;
       } finally {
         performance.mark('ccrc-reader-mount-end');
@@ -260,19 +270,26 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       }
       mount = m;
       mountRef.current = m;
-      const latest = live.current.theme;
-      if (latest !== seededTheme.current) {
-        seededTheme.current = latest;
-        m.setPrefs(readerPrefsOf(latest));
+      // The fragment is spent only once the frame is up: a fallback before this keeps it for the plain view's scroll.
+      if (cur.props.pendingFragment !== null) cur.props.onFragmentConsumed();
+      const latest = live.current.prefs;
+      if (latest !== seededPrefs.current) {
+        seededPrefs.current = latest;
+        m.setPrefs({ theme: latest });
       }
     })();
 
     return () => {
       ac.abort();
       drop();
-      if (counted !== 0 && uncount !== null) uncount(-counted);
+      giveBack();
     };
   }, [overGate, text, bytes]);
+
+  /** A write from a sheet's own button: the sheet closes when it lands and stays, saying so, when the clipboard refuses. */
+  const writeFromSheet = (text: string, onRefused: () => void): void => {
+    copyText(text).then(() => setAsk(null), onRefused);
+  };
 
   const sheets = (
     <>
@@ -287,10 +304,12 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       <ReaderCopySheet
         ask={ask?.kind === 'copy' ? ask.ask : null}
         onCancel={() => setAsk(null)}
-        onCopy={(a) => {
-          setAsk(null);
-          copyText(a.text).catch(() => {});
-        }}
+        onCopy={(a) => writeFromSheet(a.text, () => setAsk({ kind: 'copy', ask: { ...a, failed: true } }))}
+      />
+      <ReaderCopyFailedSheet
+        ask={ask?.kind === 'copy-failed' ? ask.ask : null}
+        onClose={() => setAsk(null)}
+        onRetry={(a) => writeFromSheet(a.text, () => setAsk({ kind: 'copy-failed', ask: a }))}
       />
     </>
   );
@@ -304,9 +323,9 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         </>
       );
     case 'plain':
-      return timeoutMs === null
+      return state.budgetMs === undefined
         ? <DocMarkdown text={text} pinKey={p.bodyKey} parser={p.parser} link={p.link} />
-        : <DocPlain text={text} note={docsPlainNote({ kind: 'timeout', budgetMs: timeoutMs })} />;
+        : <DocPlain text={text} note={docsPlainNote({ kind: 'timeout', budgetMs: state.budgetMs })} />;
     default:
       return (
         <>

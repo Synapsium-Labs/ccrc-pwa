@@ -2,7 +2,8 @@
 // Ring L4 delivery over @ccrc/ui's `Sheet`: they show what `ReaderFrame` hands them and report the reader's choice,
 // and they decide nothing. Their words are `readerText.ts`'s. The external-link sheet names the address and, for a host
 // that is not the console's own, the foreign warning; the copy sheet marks each hidden character the host's scan found.
-// Neither acts on its own: `window.open` and the clipboard write belong to `ReaderFrame`, run from the buttons here.
+// A third sheet says that the clipboard refused clean text and shows the text, selectable, so it can be copied by hand.
+// None acts on its own: `window.open` and the clipboard write belong to `ReaderFrame`, run from the buttons here.
 import type { ReactNode } from 'react';
 import { Button, QC_ACTIONS, Sheet } from '@ccrc/ui';
 import { READER_SHEET_TEXT, type ReaderHiddenChar } from './reader/readerText';
@@ -19,6 +20,13 @@ export interface ReaderLinkAsk {
 export interface ReaderCopyAsk {
   readonly text: string;
   readonly hidden: readonly ReaderHiddenChar[];
+  /** The clipboard refused a write from this sheet's own button: the sheet stays open and says so. */
+  readonly failed: boolean;
+}
+
+/** What the copy-failed sheet shows: the text the clipboard refused. */
+export interface ReaderCopyFailedAsk {
+  readonly text: string;
 }
 
 /** The ask before a link out of the document opens (M8.7). Nothing is open for `ask === null`. */
@@ -68,11 +76,41 @@ export function ReaderCopySheet(p: {
     >
       <div className="docs-reader-sheet">
         <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyWarning}</p>
+        {ask.failed && <p className="docs-reader-sheet-note" role="alert">{READER_SHEET_TEXT.copyFailed}</p>}
         {ask.hidden.length > 0 && (
           <ul className="docs-reader-sheet-marks">
             {ask.hidden.map((h) => <li key={h.index}>{READER_SHEET_TEXT.copyMarker(h)}</li>)}
           </ul>
         )}
+      </div>
+    </Sheet>
+  );
+}
+
+/** The clipboard refused text with nothing hidden in it: the sentence, and the text itself to select and copy by hand.
+ *  Try again asks the clipboard once more from this button; a refusal leaves the sheet as it is. Nothing is open for
+ *  `ask === null`. */
+export function ReaderCopyFailedSheet(p: {
+  readonly ask: ReaderCopyFailedAsk | null; readonly onRetry: (ask: ReaderCopyFailedAsk) => void; readonly onClose: () => void;
+}): ReactNode {
+  const { ask } = p;
+  if (ask === null) return null;
+  return (
+    <Sheet
+      open
+      onClose={p.onClose}
+      title={READER_SHEET_TEXT.copyFailedTitle}
+      footer={
+        <div className={QC_ACTIONS}>
+          <Button variant="primary" onClick={() => p.onRetry(ask)}>{READER_SHEET_TEXT.copyTryAgain}</Button>
+          <Button variant="ghost" onClick={p.onClose}>{READER_SHEET_TEXT.copyFailedClose}</Button>
+        </div>
+      }
+    >
+      <div className="docs-reader-sheet">
+        <p className="docs-reader-sheet-note" role="alert">{READER_SHEET_TEXT.copyFailed}</p>
+        <p className="docs-reader-sheet-note">{READER_SHEET_TEXT.copyByHand}</p>
+        <pre className="docs-reader-sheet-text">{ask.text}</pre>
       </div>
     </Sheet>
   );

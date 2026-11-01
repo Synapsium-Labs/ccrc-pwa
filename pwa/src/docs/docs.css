@@ -285,6 +285,10 @@
 .docs-reader-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
 .docs-reader-sheet-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
 .docs-reader-sheet-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+.docs-reader-sheet-text {
+  margin: 0; max-block-size: 40dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+}
 .docs-reader-sheet-marks {
   margin: 0; padding-inline-start: var(--sp-4); display: grid; gap: var(--sp-1);
   font: var(--weight-regular) var(--text-xs) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere;

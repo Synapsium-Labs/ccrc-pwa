@@ -11,6 +11,7 @@ import {
   copyDecision, readerBodyReducer, readerDocKey, readerPrefsOf, readerWatchdogMs, routeReaderLink,
   type ReaderBodyState, type ReaderLink,
 } from '../src/docs/reader/policy';
+import { THEMES } from '@ccrc/ui';
 import { READER_FALLBACK_NOTE, READER_SHEET_TEXT } from '../src/docs/reader/readerText';
 import { entry, treeOk } from './docsFixtures';
 
@@ -160,14 +161,20 @@ describe('readerDocKey', () => {
 });
 
 describe('readerPrefsOf', () => {
-  it('system maps to auto', () => {
-    expect(readerPrefsOf('system')).toEqual({ theme: 'auto' });
-    expect(readerPrefsOf('something-else')).toEqual({ theme: 'auto' });
+  it('system and an unknown id map to auto', () => {
+    expect(readerPrefsOf('system', THEMES)).toEqual({ theme: 'auto' });
+    expect(readerPrefsOf('something-else', THEMES)).toEqual({ theme: 'auto' });
+    expect(readerPrefsOf('', THEMES)).toEqual({ theme: 'auto' });
+    // `system` follows the device even when a palette list carries that id.
+    expect(readerPrefsOf('system', [{ id: 'system', mode: 'dark' }])).toEqual({ theme: 'auto' });
   });
 
-  it('light and dark pass through', () => {
-    expect(readerPrefsOf('light')).toEqual({ theme: 'light' });
-    expect(readerPrefsOf('dark')).toEqual({ theme: 'dark' });
+  it.each(THEMES.map((t) => [t.id, t.mode] as const))('the palette %s reads %s', (id, mode) => {
+    expect(readerPrefsOf(id, THEMES)).toEqual({ theme: mode });
+  });
+
+  it('a palette not in the list the caller hands in is unknown', () => {
+    expect(readerPrefsOf('nord', [{ id: 'light', mode: 'light' }])).toEqual({ theme: 'auto' });
   });
 });
 
@@ -198,6 +205,14 @@ describe('readerBodyReducer', () => {
     const ready: ReaderBodyState = { s: 'ready' };
     expect(readerBodyReducer(mounting, { e: 'plain', why: 'gate' })).toBe(mounting);
     expect(readerBodyReducer(ready, { e: 'plain', why: 'gate' })).toBe(ready);
+  });
+
+  it('plain carries the render budget of a timeout, and only then', () => {
+    expect(readerBodyReducer({ s: 'rendering' }, { e: 'plain', why: 'timeout', budgetMs: 4000 }))
+      .toEqual({ s: 'plain', why: 'timeout', budgetMs: 4000 });
+    expect(readerBodyReducer({ s: 'rendering' }, { e: 'plain', why: 'refused' })).not.toHaveProperty('budgetMs');
+    const mounting: ReaderBodyState = { s: 'mounting' };
+    expect(readerBodyReducer(mounting, { e: 'plain', why: 'timeout', budgetMs: 4000 })).toBe(mounting);
   });
 
   it('rendering mounts, mounting becomes ready, and a failure falls back', () => {

@@ -36,7 +36,7 @@ vi.mock('../src/lib/router', async (importOriginal) => ({
   navigate: vi.fn(),
   replaceFragment: vi.fn(),
 }));
-/** The theme choice, as a store a case can move: the real one holds palette ids, and the reader maps `light` and `dark`. */
+/** The theme choice, as a store a case can move: it holds the console's real palette ids (`system`, `phosphor`, `light`, ...). */
 const themeChoice = vi.hoisted(() => ({ value: 'light', subs: new Set<() => void>() }));
 vi.mock('../src/lib/theme', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/lib/theme')>();
@@ -173,7 +173,7 @@ describe('the triggers that land on the plain view (spec 4.6)', () => {
     ['threw', { kind: 'threw', error: 'Boom' } as const],
     ['worker-failed', { kind: 'worker-failed', error: 'error' } as const],
     ['worker-unavailable', { kind: 'worker-unavailable' } as const],
-  ])('a %s render shows DocMarkdown`s own note, mounts nothing and keeps the reason off the page', async (_name, outcome) => {
+  ])('a %s render shows the plain view, mounts nothing, and keeps the reason in the console', async (_name, outcome) => {
     const h = harness({ outcome });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { container } = render(frame(h));
@@ -181,7 +181,7 @@ describe('the triggers that land on the plain view (spec 4.6)', () => {
     expect(h.parser).toHaveBeenCalled();
     expect(h.mountFn).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain(READER_FALLBACK_NOTE);
-    expect(warn.mock.calls.some((c) => String(c[0]).startsWith('ccrc: reader '))).toBe(true);
+    expect(warn.mock.calls.some((c) => String(c[0]).startsWith('ccrc: reader ') && String(c[0]).includes(outcome.kind))).toBe(true);
   });
 
   it('a refused render shows DocMarkdown`s own refusal note', async () => {
@@ -217,7 +217,7 @@ describe('the triggers that land on the plain view (spec 4.6)', () => {
     const { container } = render(frame({ ...h, reader: { ...h.reader, mount: lazyMountReader } }));
     expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
     expect(container.textContent).not.toContain('did not load');
-    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('mocking a module'))).toBe(true); // the bridge module's evaluation threw, so its `import()` rejected
     expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
   });
 
@@ -251,7 +251,27 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(input.document.initialHash).toBe('part');
     expect(input.document.result.html).toBe('<p>x</p>');
     expect(input.prefs).toEqual({ theme: 'light' });
-    expect(h.consumed).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(h.consumed).toHaveBeenCalledTimes(1));
+  });
+
+  it('a fallback before the mount lands keeps the fragment for the plain view', async () => {
+    const h = harness({ mount: async (_el, input) => {
+      input.onFallback('timeout');
+      return { destroy: vi.fn(), setPrefs: vi.fn() } as ReaderMount;
+    } });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h, { pending: 'part' }));
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a mount that rejects keeps the fragment for the plain view', async () => {
+    const h = harness({ mount: async () => { throw new RangeError('x'); } });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h, { pending: 'part' }));
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    expect(h.consumed).not.toHaveBeenCalled();
   });
 
   it('M8.7: an external link opens the sheet, and window.open runs only on Open, with _blank and noopener,noreferrer', async () => {
@@ -318,6 +338,21 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     fireEvent.click(screen.getByRole('button', { name: READER_SHEET_TEXT.copyAnyway }));
     expect(copyText).toHaveBeenCalledTimes(1);
     expect(copyText).toHaveBeenCalledWith(text);
+    await waitFor(() => expect(screen.queryByText(READER_SHEET_TEXT.copyTitle)).toBeNull());
+  });
+
+  it('a Copy anyway that the clipboard refuses keeps the sheet open and says so', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    const hidden = [{ index: 1, codePoint: 27, name: 'ESCAPE' }];
+    act(() => { input.copy(`a${String.fromCharCode(27)}b`, hidden); });
+    vi.mocked(copyText).mockRejectedValueOnce(new Error('denied'));
+    expect(screen.queryByText(READER_SHEET_TEXT.copyFailed)).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: READER_SHEET_TEXT.copyAnyway }));
+    expect(await screen.findByText(READER_SHEET_TEXT.copyFailed)).toBeInTheDocument();
+    expect(screen.getByText(READER_SHEET_TEXT.copyTitle)).toBeInTheDocument();
+    expect(screen.getByText(READER_SHEET_TEXT.copyMarker(hidden[0] as never))).toBeInTheDocument();
   });
 
   it('clean text calls copyText directly; a rejected write opens the copy sheet', async () => {
@@ -330,8 +365,30 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(screen.queryByText(READER_SHEET_TEXT.copyTitle)).toBeNull();
     vi.mocked(copyText).mockRejectedValueOnce(new Error('denied'));
     act(() => { input.copy('more words', []); });
-    expect(await screen.findByText(READER_SHEET_TEXT.copyTitle)).toBeInTheDocument();
+    expect(await screen.findByText(READER_SHEET_TEXT.copyFailedTitle)).toBeInTheDocument();
     expect(copyText).toHaveBeenCalledTimes(2);
+    // Never the hidden-characters sheet; the text is there to select, and the sentence says what happened.
+    expect(screen.queryByText(READER_SHEET_TEXT.copyTitle)).toBeNull();
+    expect(screen.queryByText(READER_SHEET_TEXT.copyWarning)).toBeNull();
+    expect(screen.getByText(READER_SHEET_TEXT.copyFailed)).toBeInTheDocument();
+    expect(screen.getByText(READER_SHEET_TEXT.copyByHand)).toBeInTheDocument();
+    expect(screen.getByText('more words')).toBeInTheDocument();
+  });
+
+  it('Try again on the copy-failed sheet: a second refusal keeps it open, a write closes it', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    vi.mocked(copyText).mockRejectedValueOnce(new Error('denied')).mockRejectedValueOnce(new Error('denied'));
+    act(() => { input.copy('more words', []); });
+    fireEvent.click(await screen.findByRole('button', { name: READER_SHEET_TEXT.copyTryAgain }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(READER_SHEET_TEXT.copyFailedTitle)).toBeInTheDocument();
+    expect(screen.getByText(READER_SHEET_TEXT.copyFailed)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: READER_SHEET_TEXT.copyTryAgain }));
+    await waitFor(() => expect(screen.queryByText(READER_SHEET_TEXT.copyFailedTitle)).toBeNull());
+    expect(copyText).toHaveBeenCalledTimes(3);
+    expect(copyText).toHaveBeenLastCalledWith('more words');
   });
 
   it('onHash calls replaceFragment', async () => {
@@ -399,11 +456,41 @@ describe('the lifetime of a mount (spec 4.1)', () => {
     render(frame(h));
     await ready(h);
     await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
-    act(() => { chooseTheme('dark'); });
+    act(() => { chooseTheme('phosphor'); });
     await waitFor(() => expect(h.handle.setPrefs).toHaveBeenCalledTimes(1));
     expect(h.handle.setPrefs).toHaveBeenCalledWith({ theme: 'dark' });
     expect(h.mountFn).toHaveBeenCalledTimes(1);
     expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  it('the palette decides the frame theme: dark seeds dark, system is auto, and a switch within a mode sends nothing', async () => {
+    themeChoice.value = 'phosphor';
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    expect(input.prefs).toEqual({ theme: 'dark' });
+    await waitFor(() => expect(h.consumed.mock.calls.length + h.mountFn.mock.calls.length).toBeGreaterThan(0));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    act(() => { chooseTheme('nord'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.handle.setPrefs).not.toHaveBeenCalled();
+    act(() => { chooseTheme('system'); });
+    await waitFor(() => expect(h.handle.setPrefs).toHaveBeenCalledTimes(1));
+    expect(h.handle.setPrefs).toHaveBeenLastCalledWith({ theme: 'auto' });
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a theme change while the mount is pending reaches the frame once it lands', async () => {
+    const h = harness();
+    let resolveMount: (m: ReaderMount) => void = () => {};
+    h.mountFn.mockImplementation(() => new Promise<ReaderMount>((r) => { resolveMount = r; }));
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    act(() => { chooseTheme('phosphor'); });
+    expect(h.handle.setPrefs).not.toHaveBeenCalled();
+    await act(async () => { resolveMount(h.handle as ReaderMount); await Promise.resolve(); });
+    expect(h.handle.setPrefs).toHaveBeenCalledTimes(1);
+    expect(h.handle.setPrefs).toHaveBeenCalledWith({ theme: 'dark' });
   });
 
   it('loaded draft images are counted once and taken back on unmount', async () => {
@@ -411,6 +498,18 @@ describe('the lifetime of a mount (spec 4.1)', () => {
     const { unmount } = render(frame(h));
     await ready(h);
     expect(h.onDraftAsset.mock.calls).toEqual([[2]]);
+    unmount();
+    expect(h.onDraftAsset.mock.calls).toEqual([[2], [-2]]);
+  });
+
+  it('a fallback takes the drafts back once, and the unmount takes back nothing more', async () => {
+    const h = harness({ drafts: 2 });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { unmount } = render(frame(h));
+    const input = await ready(h);
+    act(() => { input.onFallback('timeout'); });
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    expect(h.onDraftAsset.mock.calls).toEqual([[2], [-2]]);
     unmount();
     expect(h.onDraftAsset.mock.calls).toEqual([[2], [-2]]);
   });
