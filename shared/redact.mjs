@@ -6,24 +6,33 @@
 // table, because `shared/docs.ts` imports it and the PWA bundles `shared/docs.ts`. A CLI form for ccd's halves lives in
 // its own file (W5), never here. `docs-shared.test.ts` runs the L0 refusal patterns over this file's every byte.
 //
-// A RULE is an id and a step: `make(shapes)` returns `(text) => text`. A rule that is one pattern and one replacement
-// is built by `sub`; the three that need a loop (`secret-assigns`, `program-flags`, `token-segments`) are written as
-// steps of their own. Rule ids are unique. A PROFILE is a plain frozen list of rule ids, in the order they run, and it
-// lists every id it runs: no profile inherits another's rules, so reading one list tells what that profile does.
+// A RULE is an id and a step: `make(shapes)` returns `(text, tally) => text`, and the step adds to `tally.masked` one
+// for each span it replaced with a different text (`redactCount`; a span a pattern matches and gives back unchanged,
+// such as an already masked value, is not counted). A rule that is one pattern and one replacement is built by `sub`;
+// the three that need a loop (`secret-assigns`, `program-flags`, `token-segments`) are written as steps of their own.
+// Rule ids are unique. A PROFILE is a plain frozen list of rule ids, in the order they run, and it lists every id it
+// runs: no profile inherits another's rules, so reading one list tells what that profile does. `linear-egress` lists
+// rules `egress` also lists; that is two lists naming one rule, not one profile inheriting another.
 //
 //   - `egress`: the command redactor for untrusted child input (D-5299, D-5360; coordinator-first routing spec
 //     2026-10-17 section 6.7). Every mask is `[REDACTED]`. It is a security boundary: its output over the 196-row
 //     corpus (`server/test/fixtures/approvals/redact-corpus.json`) is byte for byte what it was before this table.
 //   - `docs`: the native Docs reader's redactor (docs W1, design 2026-10-01 section 2 (b)). Every mask is `***`. ccd's
 //     python `REDACT_RULES` is a parity copy of its rows (`docs-parity.test.ts`).
+//   - `linear-egress`: the redactor for prose a session sends to Linear (#1444): a title, a description, a comment body,
+//     a search term. It lists only the credential-shape rules of `egress` (`jwt`, `header`, `bearer`, the two
+//     URL-userinfo rules, `secret-assigns`, `known-token`), and leaves out `token-segments`, the flag rules,
+//     `json-pair`, `yaml-secret`, `secret-word` and the program-scoped rules: those were built for command lines, and
+//     over a ticket they would mask a commit SHA, a UUID or a dated spec path, or read prose as argv. Every mask is
+//     `[REDACTED]`, and it takes the caller's `shapes` as `egress` does.
 //
 // The URL-userinfo rule differs between the two (the egress rule masks to the LAST `@` before the host, because a
 // password may hold an `@`; the docs rule stops at the FIRST), so it is two rules with two ids and no profile shares
 // it. No rule is unified across profiles.
 //
-// The egress profile reads two credential shapes, the generic `sk-` token and the JWT, from its caller as `shapes`
-// (`{ genericSk, jwt }`): their one home is `CREDENTIAL_MASKS` in `shared/api.ts` (D-5513), and this file imports
-// nothing. A caller that runs the egress profile passes them; the docs profile needs none.
+// The egress and linear-egress profiles read two credential shapes, the generic `sk-` token and the JWT, from their
+// caller as `shapes` (`{ genericSk, jwt }`): their one home is `CREDENTIAL_MASKS` in `shared/api.ts` (D-5513), and this
+// file imports nothing. A caller that runs either profile passes them; the docs profile needs none.
 //
 // THE EGRESS SHAPES. A child's tool input is untrusted text, and it can carry a secret the child pasted into a command.
 // Before any input is stored on an approval row, mailed to a coordinator, put in a digest or shown on a surface, the
@@ -196,9 +205,19 @@ const YAML_SECRET = /(?<![\w-])((?:[A-Za-z0-9]+_)*(?:token|password|passwd|secre
 const JSON_PAIR = /"([A-Za-z0-9_-]+)"(\s*:\s*)"(?:[^"\\\n]|\\.)*"/g;
 const JSON_SECRET_KEY = /password|passwd|passphrase|pass|pwd|credential|auth(?!or)|secret|token|api_?key|private_?key/i;
 
+/** `text.replace(re, fn)`, adding to `tally.masked` one for each match whose replacement differs from it. A string
+ *  replacement is given as a function, so no `$` pattern in it is read. */
+function replaceCounted(text, re, fn, tally) {
+  return text.replace(re, (...args) => {
+    const out = fn(...args);
+    if (out !== args[0]) tally.masked += 1;
+    return out;
+  });
+}
+
 /** Masks the value of every assignment to a secret name. One left-to-right pass: a name that is not secret is skipped
  *  past its `=` only, so a secret assignment inside its value (`x=a,TOKEN=b`) is still seen. Linear. */
-function maskSecretAssigns(text) {
+function maskSecretAssigns(text, tally) {
   let out = ''; let from = 0;
   ASSIGN_HEAD.lastIndex = 0;
   for (let m = ASSIGN_HEAD.exec(text); m !== null; m = ASSIGN_HEAD.exec(text)) {
@@ -208,6 +227,7 @@ function maskSecretAssigns(text) {
     const v = ASSIGN_VALUE.exec(text);
     if (v === null) continue;
     out += `${text.slice(from, at)}${R}`;
+    if (v[0] !== R) tally.masked += 1;
     from = at + v[0].length;
     ASSIGN_HEAD.lastIndex = from;
   }
@@ -215,14 +235,16 @@ function maskSecretAssigns(text) {
 }
 
 /** The program-scoped word masks, judged per command segment (split on `;`, `&`, `|` and newlines). */
-function maskProgramFlags(text) {
+function maskProgramFlags(text, tally) {
   return text.replace(/[^;&|\n]+/g, (seg) => {
     let out = seg;
-    if (P_WORD_PROGRAMS.test(out)) out = out.replace(P_WORD, (_m, lead, gap) => `${lead}-p${gap}${R}`);
-    if (W_WORD_PROGRAMS.test(out)) out = out.replace(W_WORD, (_m, lead, gap) => `${lead}-w${gap}${R}`);
-    if (CURL_PROGRAMS.test(out)) out = out.replace(CURL_E_PASS, (_m, lead, flag, gap, q, file) => `${lead}${flag}${gap}${q}${file}:${R}`);
-    if (A_WORD_PROGRAMS.test(out)) out = out.replace(A_WORD, (_m, lead, gap) => `${lead}-a${gap}${R}`);
-    if (GH_SECRET_SET.test(out)) out = out.replace(BODY_WORD, (_m, lead, flag, gap) => `${lead}${flag}${gap}${R}`);
+    if (P_WORD_PROGRAMS.test(out)) out = replaceCounted(out, P_WORD, (_m, lead, gap) => `${lead}-p${gap}${R}`, tally);
+    if (W_WORD_PROGRAMS.test(out)) out = replaceCounted(out, W_WORD, (_m, lead, gap) => `${lead}-w${gap}${R}`, tally);
+    if (CURL_PROGRAMS.test(out)) {
+      out = replaceCounted(out, CURL_E_PASS, (_m, lead, flag, gap, q, file) => `${lead}${flag}${gap}${q}${file}:${R}`, tally);
+    }
+    if (A_WORD_PROGRAMS.test(out)) out = replaceCounted(out, A_WORD, (_m, lead, gap) => `${lead}-a${gap}${R}`, tally);
+    if (GH_SECRET_SET.test(out)) out = replaceCounted(out, BODY_WORD, (_m, lead, flag, gap) => `${lead}${flag}${gap}${R}`, tally);
     return out;
   });
 }
@@ -241,32 +263,41 @@ const DOCS_ROWS = {
 
 // ---- the rule table ---------------------------------------------------------------------------------------------
 
-/** A rule of one pattern and one replacement. */
-const sub = (id, re, replacement) => ({ id, make: () => (text) => text.replace(re, replacement) });
+/** A rule of one pattern and one replacement (a string, or a function of the match). */
+const sub = (id, re, replacement) => {
+  const fn = typeof replacement === 'string' ? () => replacement : replacement;
+  return { id, make: () => (text, tally) => replaceCounted(text, re, fn, tally) };
+};
 /** A docs row: group 1 (when the pattern has one) followed by the suffix. */
 const docsRule = (id) => {
   const [pattern, suffix] = DOCS_ROWS[id];
   const re = new RegExp(pattern, 'gu');
   return {
     id,
-    make: () => (text) => text.replace(re, (_match, ...rest) => {
+    make: () => (text, tally) => replaceCounted(text, re, (_match, ...rest) => {
       // With a capture group, the callback's second argument is group 1; without one, it is the match offset (a
       // number), so only a string is kept.
       const group1 = rest[0];
       return (typeof group1 === 'string' ? group1 : '') + suffix;
-    }),
+    }, tally),
   };
 };
-/** The egress profile's two shape rules take their source from the caller's `shapes`. */
+/** The two shape rules (in the egress and linear-egress profiles) take their source from the caller's `shapes`. */
 const needShape = (shapes, id) => {
-  if (shapes === undefined || typeof shapes[id] !== 'string') throw new Error(`redact: the egress profile needs shapes.${id}`);
+  if (shapes === undefined || typeof shapes[id] !== 'string') throw new Error(`redact: this profile needs shapes.${id}`);
   return shapes[id];
 };
 
 const RULES = Object.freeze([
   sub('json-pair', JSON_PAIR, (m, key, sep) => (JSON_SECRET_KEY.test(key) ? `"${key}"${sep}"${R}"` : m)),
   sub('yaml-secret', YAML_SECRET, (_m, name, sep) => `${name}${sep}${R}`),
-  { id: 'jwt', make: (shapes) => { const re = new RegExp(String.raw`(?<![A-Za-z0-9_-])` + needShape(shapes, 'jwt'), 'g'); return (text) => text.replace(re, R); } },
+  {
+    id: 'jwt',
+    make: (shapes) => {
+      const re = new RegExp(String.raw`(?<![A-Za-z0-9_-])` + needShape(shapes, 'jwt'), 'g');
+      return (text, tally) => replaceCounted(text, re, () => R, tally);
+    },
+  },
   { id: 'secret-assigns', make: () => maskSecretAssigns },
   { id: 'program-flags', make: () => maskProgramFlags },
   sub('header', HEADER, (_m, name, sep) => `${name}${sep}${R}`),
@@ -293,10 +324,18 @@ const RULES = Object.freeze([
     id: 'known-token',
     make: (shapes) => {
       const re = new RegExp(KNOWN_TOKEN_PREFIX + needShape(shapes, 'genericSk') + ')', 'g');
-      return (text) => text.replace(re, R);
+      return (text, tally) => replaceCounted(text, re, () => R, tally);
     },
   },
-  sub('token-segments', TOKEN_RUN, (run) => run.split('/').map((seg) => (TOKEN_SEGMENT.test(seg) ? R : seg)).join('/')),
+  {
+    // Each masked segment is a span of its own: a run of three secret segments counts three.
+    id: 'token-segments',
+    make: () => (text, tally) => text.replace(TOKEN_RUN, (run) => run.split('/').map((seg) => {
+      if (!TOKEN_SEGMENT.test(seg)) return seg;
+      tally.masked += 1;
+      return R;
+    }).join('/')),
+  },
   ...Object.keys(DOCS_ROWS).map(docsRule),
 ]);
 
@@ -311,17 +350,27 @@ export const PROFILES = Object.freeze({
     'user-empty-pass', 'p-flag', 'p-quoted', 'secret-flag', 'single-dash-secret', 'camel-secret-flag', 'rdp-pass',
     'pass-arg', 'slack-hook', 'telegram-bot', 'known-token', 'token-segments',
   ]),
-  docs: Object.freeze(['docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-linear-key', 'docs-authorization']),
+  docs: Object.freeze([
+    'docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-linear-key', 'docs-authorization',
+  ]),
+  'linear-egress': Object.freeze([
+    'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
+  ]),
 });
 
 const BY_ID = new Map(RULES.map((r) => [r.id, r]));
 const compiled = new Map();
 
-/** The steps of `profile`, built once per profile (and per pair of caller shapes). */
+/** The profiles that read the caller's two credential shapes. */
+const SHAPED = new Set(['egress', 'linear-egress']);
+
+/** The steps of `profile`, built once per profile and pair of caller shapes. */
 function stepsOf(profile, shapes) {
   if (!Object.hasOwn(PROFILES, profile)) throw new Error(`redact: unknown profile ${String(profile)}`);
   const ids = PROFILES[profile];
-  const key = profile === 'egress' ? `egress\0${needShape(shapes, 'genericSk')}\0${needShape(shapes, 'jwt')}` : profile;
+  const key = SHAPED.has(profile)
+    ? `${profile}\0${needShape(shapes, 'genericSk')}\0${needShape(shapes, 'jwt')}`
+    : profile;
   let steps = compiled.get(key);
   if (steps === undefined) {
     steps = ids.map((id) => BY_ID.get(id).make(shapes));
@@ -330,12 +379,20 @@ function stepsOf(profile, shapes) {
   return steps;
 }
 
-/** `text` with every rule of `profile` applied, in the profile's order. The egress profile takes `shapes`
- *  (`{ genericSk, jwt }`, from `CREDENTIAL_MASKS`); the docs profile takes none. Idempotent per profile. */
-export function redact(profile, text, shapes) {
+/** `text` with every rule of `profile` applied, in the profile's order, and `masked`, the number of spans the steps
+ *  replaced with a different text (#1444: the Linear proxy answers it and journals it). The egress and linear-egress
+ *  profiles take `shapes` (`{ genericSk, jwt }`, from `CREDENTIAL_MASKS`); the docs profile takes none. */
+export function redactCount(profile, text, shapes) {
+  const tally = { masked: 0 };
   let out = text;
-  for (const step of stepsOf(profile, shapes)) out = step(out);
-  return out;
+  for (const step of stepsOf(profile, shapes)) out = step(out, tally);
+  return { text: out, masked: tally.masked };
+}
+
+/** `text` with every rule of `profile` applied: `redactCount`'s text, so the two cannot disagree. Idempotent per
+ *  profile. */
+export function redact(profile, text, shapes) {
+  return redactCount(profile, text, shapes).text;
 }
 
 /** The docs profile's rows as `[pattern, suffix]`, in profile order: what `DOCS_REDACT_RULES` is. */

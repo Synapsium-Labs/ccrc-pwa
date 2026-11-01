@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { parseFile } from './scan/parse.js';
 import { DOCS_REDACT_RULES } from '../../shared/docs.js';
 import { credentialMaskSource } from '../../shared/api.js';
-import { PROFILES, RULE_IDS, docsRuleRows, redact } from '../../shared/redact.js';
+import { PROFILES, RULE_IDS, docsRuleRows, redact, redactCount } from '../../shared/redact.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MODULE = path.resolve(here, '..', '..', 'shared', 'redact.mjs');
@@ -33,6 +33,20 @@ describe('shared/redact.mjs: profiles list their rule ids explicitly (D-5867)', 
     expect([...PROFILES.docs]).toEqual([
       'docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-linear-key', 'docs-authorization',
     ]);
+  });
+  it('the linear-egress profile is these rule ids, in this order: the credential shapes only (#1444)', () => {
+    expect([...PROFILES['linear-egress']]).toEqual([
+      'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
+    ]);
+  });
+  it('there are three profiles: egress, docs and linear-egress (#1444)', () => {
+    expect(Object.keys(PROFILES).sort()).toEqual(['docs', 'egress', 'linear-egress']);
+  });
+  it('linear-egress runs no command-line rule: no token-segments, no flag rule, no program-scoped rule (#1444)', () => {
+    const prose = new Set(PROFILES['linear-egress']);
+    for (const id of ['token-segments', 'program-flags', 'p-flag', 'p-quoted', 'secret-flag', 'single-dash-secret',
+      'camel-secret-flag', 'user-flag', 'json-pair', 'yaml-secret', 'secret-word']) expect(prose.has(id), id).toBe(false);
+    expect(PROFILES['linear-egress'].every((id) => PROFILES.egress.includes(id)), 'every id is an egress rule').toBe(true);
   });
   it('a profile is a plain list: it inherits nothing', () => {
     for (const ids of Object.values(PROFILES)) {
@@ -69,6 +83,8 @@ describe('redact(profile, text): the entry point (D-5867)', () => {
   });
   it('the egress profile reads the generic sk- and JWT shapes from the caller (their one home is shared/api.ts)', () => {
     expect(() => redact('egress', 'x')).toThrow(/shapes/);
+    expect(() => redact('linear-egress', 'x')).toThrow(/shapes/);
+    expect(() => redactCount('linear-egress', 'x')).toThrow(/shapes/);
     expect(redact('docs', 'x')).toBe('x');
   });
   it('an unknown profile throws', () => {
@@ -93,6 +109,30 @@ describe('shared/redact.mjs is browser-safe: the PWA bundles shared/docs.ts, whi
   });
   it('the redactor is browser-safe: importing it runs nothing but the table', async () => {
     const mod = await import('../../shared/redact.mjs');
-    expect(Object.keys(mod).sort()).toEqual(['EGRESS_MASK', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'redact']);
+    expect(Object.keys(mod).sort()).toEqual(['EGRESS_MASK', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'redact', 'redactCount']);
+  });
+});
+
+describe('redactCount(profile, text): the same steps as redact, and the number of spans they replaced (#1444)', () => {
+  const inputs = (): string[] => [...CORPUS.map((r) => r.input), ...FIXTURE.docs.map(([, input]) => input)];
+  it('its text is redact\'s, on every corpus row, in every profile', () => {
+    for (const profile of Object.keys(PROFILES) as (keyof typeof PROFILES)[]) {
+      const shapes = profile === 'docs' ? undefined : SHAPES;
+      const differ = inputs().filter((s) => redactCount(profile, s, shapes).text !== redact(profile, s, shapes));
+      expect(differ, profile).toEqual([]);
+    }
+  });
+  it('masked is zero exactly when nothing was replaced, on every corpus row, in every profile', () => {
+    for (const profile of Object.keys(PROFILES) as (keyof typeof PROFILES)[]) {
+      const shapes = profile === 'docs' ? undefined : SHAPES;
+      for (const s of inputs()) {
+        const r = redactCount(profile, s, shapes);
+        expect(r.masked === 0, `${profile}: ${s}`).toBe(r.text === s);
+      }
+    }
+  });
+  it('re-redacting a redacted text replaces nothing: a span that matches but is not changed is not counted', () => {
+    for (const r of CORPUS) expect(redactCount('egress', r.output, SHAPES).masked, r.input).toBe(0);
+    for (const [, , output] of FIXTURE.docs) expect(redactCount('docs', output).masked, output).toBe(0);
   });
 });
