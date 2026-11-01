@@ -178,20 +178,47 @@ describe('readerDocKey', () => {
 });
 
 describe('readerPrefsOf', () => {
-  it('system and an unknown id map to auto', () => {
+  it('the choice system gives auto', () => {
     expect(readerPrefsOf('system', THEMES)).toEqual({ theme: 'auto' });
-    expect(readerPrefsOf('something-else', THEMES)).toEqual({ theme: 'auto' });
-    expect(readerPrefsOf('', THEMES)).toEqual({ theme: 'auto' });
+  });
+
+  it('the choice system gives auto even when a palette carries that id', () => {
     // `system` follows the device even when a palette list carries that id.
     expect(readerPrefsOf('system', [{ id: 'system', mode: 'dark' }])).toEqual({ theme: 'auto' });
   });
 
-  it.each(THEMES.map((t) => [t.id, t.mode] as const))('the palette %s reads %s', (id, mode) => {
-    expect(readerPrefsOf(id, THEMES)).toEqual({ theme: mode });
+  it('the choice light passes through as light', () => {
+    expect(readerPrefsOf('light', THEMES)).toEqual({ theme: 'light' });
   });
 
-  it('a palette not in the list the caller hands in is unknown', () => {
+  it('the choice dark passes through as dark', () => {
+    expect(readerPrefsOf('dark', [{ id: 'dark', mode: 'dark' }])).toEqual({ theme: 'dark' });
+  });
+
+  it('a named dark palette gives dark', () => {
+    expect(readerPrefsOf('nord', THEMES)).toEqual({ theme: 'dark' });
+    expect(readerPrefsOf('dracula', THEMES)).toEqual({ theme: 'dark' });
+  });
+
+  it('a named light palette gives light', () => {
+    expect(readerPrefsOf('github-light', THEMES)).toEqual({ theme: 'light' });
+    expect(readerPrefsOf('catppuccin-latte', THEMES)).toEqual({ theme: 'light' });
+  });
+
+  it('an unknown id gives auto', () => {
+    expect(readerPrefsOf('something-else', THEMES)).toEqual({ theme: 'auto' });
+  });
+
+  it('the empty id gives auto', () => {
+    expect(readerPrefsOf('', THEMES)).toEqual({ theme: 'auto' });
+  });
+
+  it('a palette not in the list the caller hands in is unknown, so it gives auto', () => {
     expect(readerPrefsOf('nord', [{ id: 'light', mode: 'light' }])).toEqual({ theme: 'auto' });
+  });
+
+  it.each(THEMES.map((t) => [t.id, t.mode] as const))('every shipped palette: %s reads %s', (id, mode) => {
+    expect(readerPrefsOf(id, THEMES)).toEqual({ theme: mode });
   });
 });
 
