@@ -85,6 +85,24 @@ const THREADS: ReadonlyArray<[string, Record<string, unknown>]> = [['main thread
 const bash = (command: string, extra: Record<string, unknown> = {}, envExtra: Record<string, string> = {}): string | null =>
   fire('Bash', { command }, extra, envExtra);
 
+/** At most this many real hook runs in one test, under a clock of RUN_BUDGET_MS a run. A run is about 50 ms on a loaded
+ *  dev Mac (the first one in a fresh fixture HOME about 200 ms) and at least four times that on a shared GitHub macOS
+ *  runner, where one test of 420 runs lost to its 90 s clock. A loop over a list that grows must not grow one test's
+ *  wall time with it, so a list is cut into batches of this size, each its own test. Not one test per run: every test
+ *  pays the fresh HOME's first, slow run, so a batch amortises it. */
+const RUNS_PER_TEST = 30;
+const RUN_BUDGET_MS = 2_000;
+const BATCH_TIMEOUT_MS = RUNS_PER_TEST * RUN_BUDGET_MS;
+const TOP: ReadonlyArray<[string, Record<string, unknown>]> = [['main thread', {}]];
+/** `cases` cut into batches of at most RUNS_PER_TEST, for each thread: `$thread` and `$part` name the test. */
+const batches = <T>(cases: readonly T[], threads: ReadonlyArray<[string, Record<string, unknown>]> = THREADS):
+  Array<{ thread: string; extra: Record<string, unknown>; cs: T[]; part: string }> => {
+  const n = Math.ceil(cases.length / RUNS_PER_TEST);
+  return threads.flatMap(([thread, extra]) => Array.from({ length: n }, (_, i) => ({
+    thread, extra, cs: cases.slice(i * RUNS_PER_TEST, (i + 1) * RUNS_PER_TEST), part: `batch ${i + 1} of ${n}`,
+  })));
+};
+
 describe('the hook\'s forbidden match is held equal to approvalClass over Task 12\'s corpus', () => {
   interface Row { tool: string; input: Record<string, unknown>; class: ApprovalClass; why: string; ctx: { cwd: string | null } }
   const rows: Row[] = JSON.parse(fs.readFileSync(CORPUS_FILE, 'utf8'));
@@ -140,14 +158,10 @@ describe('the approval-surface deny: a child cannot reach the approval surface (
       'jq -nc --arg id "$id" --arg uuid "$uuid" --arg reason "$reason" \'{fromId:$id,fromUuid:$uuid,verdict:"allow",reason:$reason}\' |\n' +
       '  "$API" approvals rule 1 --json -\n',
   ];
-  it.each(THREADS)('%s: every invocation form is denied, naming the approval surface', (_t, extra) => {
-    for (const c of surface) {
-      const why = bash(c, extra);
-      expect(why, c).not.toBeNull();
-      expect(why, c).toMatch(/^ccrc: /);
-      expect(why, c).toContain('approval');
-    }
-  });
+  it.each(batches(surface))('$thread: every invocation form is denied, naming the approval surface ($part)', ({ extra, cs }) => {
+    const missed = cs.filter((c) => { const why = bash(c, extra); return why === null || !why.startsWith('ccrc: ') || !why.includes('approval'); });
+    expect(missed).toEqual([]);
+  }, BATCH_TIMEOUT_MS);
   it.each(THREADS)('%s: a Write or an Edit of a key or the verifier is denied', (_t, extra) => {
     for (const [tool, input] of [
       ['Write', { file_path: `${home}/.ccrc/approval-signing.pub`, content: 'x' }],
@@ -217,14 +231,15 @@ describe('the forbidden-verb deny: a child never runs a SAFETY verb or ccrc upda
       `bash -c "${prog} ${rest.map((w) => `\\"${w}\\"`).join(' ')} y"`,
     ];
   };
-  it.each(THREADS)('%s: every verb in every form is denied through the deny printer', (_t, extra) => {
-    const missed: string[] = [];
-    for (const v of verbs) for (const c of forms(v)) {
-      const why = bash(c, extra);
-      if (why === null || !why.startsWith('ccrc: ')) missed.push(c);
-    }
+  // One test per thread and verb, each running that verb's every form. It was one test per thread of every verb in
+  // every form, 420 runs: about 23 s on a loaded dev Mac, and past its 90 s clock on a shared GitHub macOS runner.
+  const perVerb = THREADS.flatMap(([thread, extra]) => verbs.map((v) => ({ thread, extra, v })));
+  it.each(perVerb)('$thread: $v in every form is denied through the deny printer', ({ extra, v }) => {
+    const all = forms(v);
+    expect(all.length, 'one verb\'s forms fit one test\'s budget').toBeLessThanOrEqual(RUNS_PER_TEST);
+    const missed = all.filter((c) => { const why = bash(c, extra); return why === null || !why.startsWith('ccrc: '); });
     expect(missed).toEqual([]);
-  }, 90_000);  // every verb times every form is a real hook run each: ~14 s on a laptop, past the 20 s Linux default on CI
+  }, BATCH_TIMEOUT_MS);
   it.each(THREADS)('%s: ws-gc with a quoted or escaped --prune is denied', (_t, extra) => {
     for (const c of ["ccd ws-gc '--prune'", 'ccd ws-gc "--prune"', 'ccd ws-gc \\--prune', 'P=ccd; $P ws-gc --prune']) {
       expect(bash(c, extra), c).toContain('ccd ws-gc --prune');
@@ -234,10 +249,10 @@ describe('the forbidden-verb deny: a child never runs a SAFETY verb or ccrc upda
     expect(bash('ccd ws-rm x')).toContain('ccd ws-rm');
     expect(bash('ccrc rollback')).toContain('ccrc update or rollback');
   });
-  it('a top-level session is not denied any of them', () => {
+  it.each(batches(verbs))('a top-level session is not denied any of them ($thread, $part)', ({ extra, cs }) => {
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
-    for (const [, extra] of THREADS) for (const v of verbs) expect(bash(`${v} x`, extra), v).toBeNull();
-  });
+    expect(cs.filter((v) => bash(`${v} x`, extra) !== null)).toEqual([]);
+  }, BATCH_TIMEOUT_MS);
   it('ccd ws-list and echo ws-rm from a child are not denied', () => {
     for (const [, extra] of THREADS) {
       expect(bash('ccd ws-list', extra)).toBeNull();
@@ -273,33 +288,31 @@ describe('the build deny: a child never writes a Claude Code build or the launch
     '$(which claude) update', '"$(command -v claude)" install 2.1.302', 'P=claude; $P update',
     '~/.local/bin/upstream-a update', '/home/u/.local/bin/upstream-a install 2.1.302',
   ];
-  it.each(THREADS)('%s: every write and every install or update form is denied, naming the build', (_t, extra) => {
-    const missed = denied.filter((c) => { const why = bash(c, extra); return why === null || !why.includes('Claude Code build'); });
+  it.each(batches(denied))('$thread: every write and every install or update form is denied, naming the build ($part)', ({ extra, cs }) => {
+    const missed = cs.filter((c) => { const why = bash(c, extra); return why === null || !why.includes('Claude Code build'); });
     expect(missed).toEqual([]);
-  }, 60_000);
+  }, BATCH_TIMEOUT_MS);
   it.each(THREADS)('%s: an edit tool writing into the build directory or onto the launcher is denied', (_t, extra) => {
     for (const fp of [`${home}/.local/share/claude/versions/2.1.302`, `${home}/.local/bin/claude`]) {
       expect(fire('Write', { file_path: fp, content: 'x' }, extra), fp).toContain('Claude Code build');
       expect(fire('Edit', { file_path: fp, old_string: 'a', new_string: 'b' }, extra), fp).toContain('Claude Code build');
     }
   });
-  it('reads, ordinary installs and look-alike paths are not denied', () => {
-    for (const [, extra] of THREADS) {
-      for (const c of [
-        'ls ~/.local/share/claude/versions', 'claude --version', 'claude mcp list', 'npm install', 'npm update',
-        'pip install -r requirements.txt', 'cat ~/.local/bin/claude', 'cp /tmp/x ~/.local/bin/claude.bak',
-        'cp /tmp/x ~/.local/share/claude/versions-old/2.1.302', 'cp /tmp/x ~/.local/bin/claude-a',
-        'git log --oneline -- docs/update-claude.md', '"$PIP" install x', 'ls ~/.claude && npm install',
-        'claude -p "update the changelog"', 'claude --resume x',
-      ]) expect(bash(c, extra), c).toBeNull();
-      expect(fire('Write', { file_path: `${home}/.local/share/claude/versions-old/x`, content: 'x' }, extra)).toBeNull();
-    }
-  });
-  it('a top-level session is not denied any of them', () => {
+  it.each(batches([
+    'ls ~/.local/share/claude/versions', 'claude --version', 'claude mcp list', 'npm install', 'npm update',
+    'pip install -r requirements.txt', 'cat ~/.local/bin/claude', 'cp /tmp/x ~/.local/bin/claude.bak',
+    'cp /tmp/x ~/.local/share/claude/versions-old/2.1.302', 'cp /tmp/x ~/.local/bin/claude-a',
+    'git log --oneline -- docs/update-claude.md', '"$PIP" install x', 'ls ~/.claude && npm install',
+    'claude -p "update the changelog"', 'claude --resume x',
+  ]))('$thread: reads, ordinary installs and look-alike paths are not denied ($part)', ({ extra, cs }) => {
+    expect(cs.filter((c) => bash(c, extra) !== null)).toEqual([]);
+    expect(fire('Write', { file_path: `${home}/.local/share/claude/versions-old/x`, content: 'x' }, extra)).toBeNull();
+  }, BATCH_TIMEOUT_MS);
+  it.each(batches(denied, TOP))('a top-level session is not denied any of them ($part)', ({ cs }) => {
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
-    for (const c of denied) expect(bash(c), c).toBeNull();
+    expect(cs.filter((c) => bash(c) !== null)).toEqual([]);
     expect(fire('Write', { file_path: `${home}/.local/bin/claude`, content: 'x' })).toBeNull();
-  });
+  }, BATCH_TIMEOUT_MS);
 });
 
 // Build guard, #878's follow-up (plan 2026-10-20-build-guard-878-follow-up.md). Each pin below drives the real hook in
@@ -353,10 +366,10 @@ describe('build guard D-6063: the CLI arm denies a flag before the verb, upgrade
   it('a subagent thread is denied the same', () => {
     for (const c of ['claude --verbose update', 'claude upgrade', '"$CLAUDE_CODE_EXECPATH" update']) expect(bash(c, SUB), c).toContain(BUILD_WHY);
   });
-  it('a top-level session (no .child) is not denied any of them', () => {
+  it.each(batches(denied, TOP))('a top-level session (no .child) is not denied any of them ($part)', ({ cs }) => {
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
-    for (const c of denied) expect(bash(c), c).toBeNull();
-  }, 60_000);
+    expect(cs.filter((c) => bash(c) !== null)).toEqual([]);
+  }, BATCH_TIMEOUT_MS);
   // Every flag repetition is bounded ({0,8}): unbounded, a 40 KB run of flags with no verb backtracks for seconds.
   it('timing: a 40 KB run of `claude -a ` with no verb is judged in under 1 s, and jq exits 0', () => {
     expect(denyJqMs(`${'claude -a '.repeat(4000)}x`)).toBeLessThan(1000);
@@ -472,11 +485,14 @@ describe('build guard D-6064: a write to the build directory or the launcher, in
     expect(bash('cp /tmp/x ~/.local//bin/claude', SUB)).toContain(BUILD_WHY);
     expect(fire('Write', { file_path: '/home/u/.local/share//claude/versions/2.1.400', content: 'x' }, SUB)).toContain(BUILD_WHY);
   });
-  it('a top-level session (no .child) is not denied any of them', () => {
+  it.each(batches(denied, TOP))('a top-level session (no .child) is not denied any of them ($part)', ({ cs }) => {
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
-    for (const c of denied) expect(bash(c), c).toBeNull();
-    for (const [tool, input] of editDenied) expect(fire(tool, input), tool).toBeNull();
-  }, 60_000);
+    expect(cs.filter((c) => bash(c) !== null)).toEqual([]);
+  }, BATCH_TIMEOUT_MS);
+  it('a top-level session (no .child) is not denied any of the edit tools\' writes', () => {
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    expect(editDenied.filter(([tool, input]) => fire(tool, input) !== null).map(([tool]) => tool)).toEqual([]);
+  });
   // Every separator repetition is bounded ({0,8}): an unbounded one made jq abort ("retry-limit-in-match over"), and
   // an empty answer is the deny arm FAILING OPEN.
   it('timing: `~/.local/share/` then 40 KB of `./` is judged in under 1 s, and jq exits 0', () => {
@@ -527,8 +543,8 @@ describe('build guard D-6065: a write to a file the launcher, the roll or the gu
   it('a subagent thread is denied the same; a top-level session is not', () => {
     expect(bash('echo 2.1.999 >> ~/.ccrc/claude-smoked', SUB)).toContain(TRUST_WHY);
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
-    for (const c of denied) expect(bash(c), c).toBeNull();
-  }, 60_000);
+    expect(denied.filter((c) => bash(c) !== null)).toEqual([]);
+  }, BATCH_TIMEOUT_MS);
 });
 
 describe('build guard D-6066: the upstream id, read from the deny file the installer writes', () => {
@@ -663,12 +679,12 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
         if (setup === 'mode 000') fs.chmodSync(DENY(), 0o644);
       }
     }
-  }, 60_000);
-  it('a top-level session is not denied any of them', () => {
+  }, BATCH_TIMEOUT_MS);
+  it.each(batches(denied, TOP))('a top-level session is not denied any of them ($part)', ({ cs }) => {
     useDenyFile('upstream-a');
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
-    for (const c of denied) expect(bash(c), c).toBeNull();
-  }, 60_000);
+    expect(cs.filter((c) => bash(c) !== null)).toEqual([]);
+  }, BATCH_TIMEOUT_MS);
   it('timing: a 40 KB run of `upstream-a -a ` with no verb, reading the deny file, is judged in under 1 s', () => {
     useDenyFile('upstream-a');
     expect(denyJqMs(`${'upstream-a -a '.repeat(2900)}x`, DENY())).toBeLessThan(1000);
