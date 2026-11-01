@@ -10,7 +10,7 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (131, with #1614's `delegationRunStamps`; 166 before D-7580, WP3,
+/** The members reached through the whole store (132, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166 before D-7580, WP3,
  *  whose lanes' units read 11 through the port, and 155 before D-7581, WP4, whose mail helpers and mail, landing-checks and tmp-sweep units take the port). Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById', 'bindingRunsOf', 'bindingsOf',
@@ -32,7 +32,8 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions', 'raiseLedgerFloor',
   'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap', 'recordRejection', 'recordRunEvent',
   'recordShadowVerdict', 'recordStallObservation', 'refusalsFor', 'refuseRelease', 'rekeyNode', 'releaseAsk',
-  'releaseLease', 'releases', 'renewClaimRow', 'resolveNode', 'restampAsk', 'retireGeneration', 'rollSettings', 'run',
+  'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk', 'retireGeneration',
+  'rollSettings', 'run',
   'runEvents', 'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
   'setSession', 'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk', 'stallCandidates',
   'stallMailFor', 'stallSettings', 'stalledDispatchRunIds', 'takeApprovalForRule', 'takeAskForAnswer', 'untakeAsk',
