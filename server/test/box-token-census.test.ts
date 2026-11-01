@@ -78,6 +78,12 @@ const UPDATE_SRC = read('server/src/update/routes.ts');
  *  reason — a box-token call there would BE a lane — and so that "neither route
  *  consults the box token" is a measured zero over a file this census reads. */
 const TOKEN_SRC = read('server/src/token/routes.ts');
+/** The FIFTH file that registers routes (programme ledgers PL3): the coordinator's nine item and goals routes. Their
+ *  handlers sit in a lane file of their own rather than in `coord/routes.ts` (ARCH-01, `growth-check`: that file does not take
+ *  another 400 lines), and `registerCoordRoutes` registers them with its own `requireMailToken` and `requireAttribution`.
+ *  Read here as a lane source so that "nine box-token lanes" is a measured count over the file that holds them and not a
+ *  claim: a scan of `coord/routes.ts` alone would see none of them. */
+const LEDGER_SRC = read('server/src/coord/ledgersRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -185,7 +191,8 @@ const lanesIn = (src: string): string[] => {
 const COORD_LANES = lanesIn(COORD_SRC);
 const UPDATE_LANES = lanesIn(UPDATE_SRC);
 const TOKEN_LANES = lanesIn(TOKEN_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES];
+const LEDGER_LANES = lanesIn(LEDGER_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LEDGER_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -264,7 +271,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Test box plan TB9 (D-7554): forty with the test box's read and its tools sync, which take a session or the token.
   'thirty-nine', 'forty',
   // Landing order wave 5e: forty-one with GET /api/landing, a plain requireMailToken lane.
-  'forty-one'];
+  'forty-one',
+  // Programme ledgers PL3: forty-six with the coordinator's item and goals lanes, read from `coord/ledgersRoutes.ts`.
+  'forty-two', 'forty-three', 'forty-four', 'forty-five', 'forty-six'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -403,7 +412,14 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // THREE since update-management W2: `server.ts`'s pair plus the update
     // projection read, the one handler in `update/routes.ts` that consults the
     // box token (design 2026-09-20 §12, decision 15).
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3);
+    // …and the programme ledgers' nine (plan PL3), every one of the nine routes in `coord/ledgersRoutes.ts` a lane, by name.
+    expect(LEDGER_LANES.slice().sort(), 'the ledgers file lost a box-token lane, or gained one with no census row').toEqual([
+      'GET /api/programmes/:slug/items', 'POST /api/items/:id/blocking', 'POST /api/items/:id/confirm',
+      'POST /api/items/:id/return', 'POST /api/items/:id/withdraw', 'POST /api/programmes/:slug/items',
+      'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
+      'POST /api/programmes/:slug/spec',
+    ]);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LEDGER_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 

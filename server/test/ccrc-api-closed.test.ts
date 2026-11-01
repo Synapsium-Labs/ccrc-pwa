@@ -326,6 +326,7 @@ describe('the client stays closed', () => {
     // and `show` derives its query from the pane as `asks list` does — a query, not a body fill.
     // The test box's two (test box plan TB9, D-7411) took it to thirty-three; neither takes a body or fills one.
     // The landing line's read (landing order wave 5e, D-7625) took it to thirty-four; it takes no body and fills none.
+    // The programme ledgers' nine (plan PL3) took it to forty-three; each takes the caller's own body, and none fills one.
     // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
     // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
     // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
@@ -334,7 +335,7 @@ describe('the client stays closed', () => {
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(34);
+    expect(routeKeys().size).toBe(43);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

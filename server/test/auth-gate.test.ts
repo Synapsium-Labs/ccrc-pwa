@@ -97,7 +97,8 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** SIX files register routes since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
+/** SEVEN files register routes since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
+ *  `registerCoordRoutes` but written in a file of their own); SIX files register routes since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
  *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its four on the docs
  *  plugin's own instance, whose parameter is named `app` so this literal scan
  *  reads them like any other. FOUR since the box-token lifecycle (spec 4.6):
@@ -111,6 +112,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('token/routes.ts'),
   ...scanRoutes('docs/routes.ts'),
   ...scanRoutes('linear/routes.ts'),
+  ...scanRoutes('coord/ledgersRoutes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -223,7 +225,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found all six files, and EXACTLY the route count the surface has', () => {
+  it('found all seven files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
@@ -332,6 +334,9 @@ describe('the scanner is looking at something', () => {
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
     // session-gated and NOT EXEMPT, no box token; the PUT and DELETE also take the account gate with a step-up.
     expect(scanRoutes('linear/routes.ts').length).toBe(5);
+    // 9 in `coord/ledgersRoutes.ts` (programme ledgers PL3): the coordinator's item and goals routes, each registered from
+    // `registerCoordRoutes` and each EXEMPT-BUT-AUTHENTICATED (box token and attribution). They add nine to the exempt-HTTP count.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(9);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -470,7 +475,9 @@ describe('the scanner is looking at something', () => {
     // the gated count stays 82, the exempt-HTTP count 45 -> 44.
     // 128 since K5 Q3l (D-7324) retired `POST /api/approvals/:id/release` (a box-token lane IN EXEMPT): the HTTP half 126 -> 125,
     // the gated count stays 82, the exempt-HTTP count 44 -> 43.
-    expect(ROUTES.length).toBe(128);
+    // 137 since the programme ledgers' PL3: nine box-token lanes in a seventh file, `coord/ledgersRoutes.ts`, each IN EXEMPT; the
+    // other six files' counts are unchanged, the total 128 -> 137, the HTTP half 128 -> 137, the gated count stays 82, the exempt-HTTP count 43 -> 52.
+    expect(ROUTES.length).toBe(137);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -523,6 +530,11 @@ describe('the scanner is looking at something', () => {
       'POST /api/docs/:project/refresh',
       // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
       'GET /api/linear/resolve',
+      // The seventh file's nine (programme ledgers PL3): a scanner that stopped reading `coord/ledgersRoutes.ts` would lose them all.
+      'POST /api/programmes/:slug/items', 'GET /api/programmes/:slug/items', 'POST /api/items/:id/confirm',
+      'POST /api/items/:id/return', 'POST /api/items/:id/withdraw', 'POST /api/items/:id/blocking',
+      'POST /api/programmes/:slug/spec', 'POST /api/programmes/:slug/modifications',
+      'POST /api/programmes/:slug/modifications/merged',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -620,7 +632,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 128 scanned + the static wildcard when the bundle is built.
+    // 137 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -720,6 +732,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail/inbox',
       'GET /api/peers',
       'GET /api/pools/epoch',
+      'GET /api/programmes/:slug/items',
       'GET /api/runs',
       'GET /api/runs/:id',
       'GET /api/runs/:id/items',
@@ -734,10 +747,18 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/claims',
       'POST /api/claims/:id/release',
       'POST /api/coordinators/:session/intent',
+      'POST /api/items/:id/blocking',
+      'POST /api/items/:id/confirm',
+      'POST /api/items/:id/return',
+      'POST /api/items/:id/withdraw',
       'POST /api/ledger/deviations',
       'POST /api/mail',
       'POST /api/mail/:id/ack',
       'POST /api/notify',
+      'POST /api/programmes/:slug/items',
+      'POST /api/programmes/:slug/modifications',
+      'POST /api/programmes/:slug/modifications/merged',
+      'POST /api/programmes/:slug/spec',
       'POST /api/questions/:id/release',
       'POST /api/questions/:id/rule',
       'POST /api/runs',
@@ -775,7 +796,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-four box-token lanes in EXEMPT are those coord routes, and thirty-seven with notify, pools/epoch and updates/intent', () => {
+  it('the thirty-four box-token lanes in EXEMPT are those coord routes, and forty-six with notify, pools/epoch, updates/intent and the ledgers lanes', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1199,7 +1220,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 125 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 134 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1263,7 +1284,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 125 HTTP routes, not the 43 exempt.
+          //    is not itself flag-aware — the assertion that covers all 134 HTTP routes, not the 52 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, thirty-four rows, and nothing else; the
+#   * The route comes from ROUTES below, forty-three rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328).
@@ -87,7 +87,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Thirty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Forty-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -186,6 +186,20 @@ declare -A ROUTES=(
   # arming remote runs is the operator's act, from the Settings card.
   [testbox.status]='GET|/api/testbox|no|-'
   [testbox.tools-sync]='POST|/api/testbox/tools-sync|no|-'
+  # The programme ledgers (plan PL3): the coordinator's side of the Waiting-on-you list and the Goals pin. All nine
+  # are box-token gated and attribution-checked, and a coordinator may act only on its own programme's items and pin. The
+  # `{id}` of the first, second and last four is the programme's slug (a `SAFE_RE` shape); of the item rows, the item's id.
+  # `items list` is a read that names its caller in the query, as `asks list` does elsewhere: `byId` and `byUuid` are the
+  # caller's own, supplied as flags.
+  [items.raise]='POST|/api/programmes/{id}/items|yes|-'
+  [items.list]='GET|/api/programmes/{id}/items|yes|byId,byUuid'
+  [items.confirm]='POST|/api/items/{id}/confirm|yes|-'
+  [items.return]='POST|/api/items/{id}/return|yes|-'
+  [items.withdraw]='POST|/api/items/{id}/withdraw|yes|-'
+  [items.block]='POST|/api/items/{id}/blocking|yes|-'
+  [goals.pin]='POST|/api/programmes/{id}/spec|yes|-'
+  [goals.modify]='POST|/api/programmes/{id}/modifications|yes|-'
+  [goals.merged]='POST|/api/programmes/{id}/modifications/merged|yes|-'
 )
 
 # ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──

@@ -45,6 +45,7 @@ import type { ClaimRefusal } from './box-token.js';
 import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
+import type { ItemMoveRefusal } from './ledgers.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -98,6 +99,9 @@ export const GENERIC_REFUSALS = [
   'linear-unavailable',
   // The named workspace create (named workspaces S5): ccd's three refusals, mapped by the route.
   'slug-taken', 'bad-slug', 'account-refused',
+  // The programme ledgers' coordinator routes (plan PL3): a coordinator outside the programme, a spec pin the Docs
+  // reader could not safely link, and an In short outside its bounds.
+  'not-your-programme', 'bad-spec-path', 'bad-in-short',
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
@@ -110,7 +114,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The question door family (W3 Q3f, D-7030): its one word of its own, `kind-mismatch`.
   | QuestionDoorRefusal
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
-  | DispatchAbandonRefusal;
+  | DispatchAbandonRefusal
+  // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
+  | ItemMoveRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -203,6 +209,12 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The dead-dispatch switch door (D-7319): CHOSEN, not measured — a new word. 503, the status the other `-unreadable`
   // words answer: the switch's one row could not be read, which is the box's fault and not the operator's.
   'state-unreadable': 503,
+  // The programme ledgers' coordinator routes (plan PL3): CHOSEN, not measured — new words. 403 for a coordinator acting
+  // outside its programme (the family of `not-owner` and `not-parent`), 400 for what the caller sent (the spec path and
+  // the In short copy), and an item move's four words from `shared/ledgers.ts`: 404 for an item that is not there, 409 for
+  // an item that is not in a state the move starts from, for the wrong actor and for a programme still running.
+  'not-your-programme': 403, 'bad-spec-path': 400, 'bad-in-short': 400,
+  'unknown-item': 404, 'not-open': 409, 'wrong-actor': 409, 'programme-live': 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
