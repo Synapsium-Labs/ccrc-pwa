@@ -1,6 +1,6 @@
 // Docs W8a Task 7: the shared Markdown library's frame assets as ccrc loads them (`docs/reader/assets.ts`) and the
-// numbers the frame's policy and bridge carry (M8.2, M8.12, the spec's section 4.4 and 4.6 constants). These cases pin
-// the INSTALLED library's own values against the spec's literals, which is the point of them: a library bump that
+// numbers the frame's policy and bridge carry (M8.2, M8.12, the rich-docs spec's (amended 2026-10-31) section 4.4 and 4.6 constants). These cases pin
+// the INSTALLED library's own values against the rich-docs spec's literals, which is the point of them: a library bump that
 // moves one reds here, not in a browser.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';

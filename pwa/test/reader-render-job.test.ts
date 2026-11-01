@@ -1,4 +1,4 @@
-// The reader's render job, as the worker answers it (native Docs reader, W8a Task 4; the spec's A6 and M8.21). The
+// The reader's render job, as the worker answers it (native Docs reader, W8a Task 4; the rich-docs spec's (amended 2026-10-31) A6 and M8.21). The
 // cases call `answerRenderJob` directly and collect its posts, as `markdown-parse.test.ts` does for
 // `answerMarkdownJob`; the lazy chunk and the runner's side are `markdown-purity`, `markdown-runner` and
 // `markdown-worker-built`. The library's own outcome words are asserted here as the job reports them.

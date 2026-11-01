@@ -166,7 +166,7 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],
         // The reader frame's Mermaid script is far over workbox's 2 MiB precache ceiling, which makes the build throw.
         // It is not precached: it loads on demand, only for a document the Mermaid gate lets in (A9, M8.14; the
-        // precache exclusion is refinement (i)).
+        // precache exclusion is the W8a plan's refinement (i)).
         globIgnores: ['**/mermaid.frame-*.js'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),

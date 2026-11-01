@@ -72,10 +72,11 @@ name: ci
 # provenance step checks the shared Markdown library's attestation (M8.16;
 # section 3.6 of docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md,
 # amended 2026-10-31) before it installs the library, and the library's repository
-# is public, so that lookup needs no grant. `gh` needs only a token to run, and
-# `contents: read` gives it one. The grant is kept as the job's declared floor for
-# the step, not as the lookup's permission. No job reads check runs, and none asks
-# for any write.
+# is public, so the lookup does not need the grant: an unauthenticated read of the
+# library's attestations answered, and `contents: read` already gives `gh` a token.
+# The grant is kept only until the pull request's own run measures the step
+# without it; it is not a minimum the step is known to need. No job reads check
+# runs, and none asks for any write.
 permissions:
   contents: read
 
