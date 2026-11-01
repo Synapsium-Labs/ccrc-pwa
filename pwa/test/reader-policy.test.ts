@@ -58,7 +58,7 @@ describe('routeReaderLink', () => {
   });
 
   it('an external https link opens the sheet, foreign, with its host', () => {
-    // The two hosts share their last two labels, so only the exact comparison of refinement (h) calls it foreign.
+    // The two hosts share their last two labels, so only the exact comparison of the W8a plan's refinement (h) calls it foreign.
     expect(routeReaderLink(ctx(), external('https://c.a.example/p', 'c.a.example'), 'b.a.example')).toEqual({
       kind: 'sheet', url: 'https://c.a.example/p', scheme: 'https', host: 'c.a.example', foreign: true,
     });

@@ -67,9 +67,15 @@ name: ci
 # durations: GitHub checks a called job's permissions even when it would skip), and `map-build`
 # (its check, just before a refresh publishes, that the map it was built on
 # is still the newest trusted one). The sixth, `build-pwa`, asks for
-# `contents: read` plus `attestations: read` instead (not `actions: read`): it
-# verifies the shared Markdown library's GitHub attestation before it installs
-# the library (M8.16). No job reads check runs, and none asks for any write.
+# `contents: read` plus `attestations: read` instead (not `actions: read`). That
+# grant covers THIS repository's attestations, which the job never reads: the
+# provenance step checks the shared Markdown library's attestation (M8.16;
+# section 3.6 of docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md,
+# amended 2026-10-31) before it installs the library, and the library's repository
+# is public, so that lookup needs no grant. `gh` needs only a token to run, and
+# `contents: read` gives it one. The grant is kept as the job's declared floor for
+# the step, not as the lookup's permission. No job reads check runs, and none asks
+# for any write.
 permissions:
   contents: read
 
@@ -1150,7 +1156,8 @@ jobs:
     runs-on: ubuntu-latest
     # Under a minute in practice; 15 is headroom for a cold npm cache.
     timeout-minutes: 15
-    # attestations: read, for the provenance step alone (M8.16); see the census at the top of this file.
+    # attestations: read, declared for the provenance step alone (M8.16); the census at the top of this file says what it
+    # does and does not grant.
     permissions:
       contents: read
       attestations: read
@@ -1179,8 +1186,8 @@ jobs:
           cache-dependency-path: |
             pwa/package-lock.json
             ui/package-lock.json
-      # THE SHARED MARKDOWN LIBRARY'S PROVENANCE, BEFORE ANY INSTALL (M8.16,
-      # spec 2026-10-01-native-docs-reader §3.6, W8a). `npm ci` runs every
+      # THE SHARED MARKDOWN LIBRARY'S PROVENANCE, BEFORE ANY INSTALL (M8.16 and
+      # section 3.6 of the rich-docs spec, amended 2026-10-31; W8a). `npm ci` runs every
       # installed package's lifecycle scripts, and a tarball published outside
       # the library's release workflow could use them to plant the `gh` and
       # `openssl` this check runs, so the check comes first and needs only node,

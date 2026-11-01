@@ -545,7 +545,7 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     expect(comment, 'the least-privilege comment is gone').not.toBe('');
     for (const id of own) {
       expect(comment, `the comment does not name ${id}`).toContain(`\`${id}\``);
-      // build-pwa asks for attestations: read instead (M8.16): it verifies the shared Markdown library's attestation.
+      // build-pwa asks for attestations: read instead (M8.16); the grant covers this repository's attestations, not the library's (see the census at the top of ci.yml).
       const block = id === 'build-pwa'
         ? /^ {4}permissions:\n {6}contents: read\n {6}attestations: read\n(?! {6}[a-z-]+:)/m
         : /^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m;

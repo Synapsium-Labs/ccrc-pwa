@@ -138,7 +138,7 @@ describe('the adapters', () => {
   });
 });
 
-describe('the Mermaid gate (A15/M8.20, refinement (c))', () => {
+describe('the Mermaid gate (A15/M8.20, the W8a plan\'s refinement (c))', () => {
   it('a gated Mermaid doc carries the Mermaid text; a rejected Mermaid import drops scan and mounts', async () => {
     const scan = { mermaid: mermaidCounts(2, 100, 200) };
     const r = rig({ document: docOf({ scan }) });
@@ -191,7 +191,7 @@ describe('the Mermaid gate (A15/M8.20, refinement (c))', () => {
   });
 });
 
-describe('the version (refinement (k))', () => {
+describe('the version (the W8a plan\'s refinement (k))', () => {
   it('version carries sha and draft only for a full-hex commit, and never commits or only', async () => {
     const commits = [{ sha: SHA40, subject: 's', date: '2026-01-01T00:00:00Z', parents: [] }];
     const full = rig({ document: docOf({ version: { sha: SHA40, draft: true, commits, only: SHA40 } }) });

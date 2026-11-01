@@ -1,4 +1,4 @@
-// Every sentence the reader frame shows itself (native Docs reader, W8a Task 5; the 2026-10-31 reader-frame spec's
+// Every sentence the reader frame shows itself (native Docs reader, W8a Task 5; the rich-docs spec's (amended 2026-10-31)
 // section 4.6 and M8.7, M8.19): the fixed fallback note and the words of the two sheets. Ring L1: strings and pure
 // formatters, no I/O and no import. The library's own page chrome is the library's; only what ccrc's host shows
 // lives here.
@@ -17,7 +17,7 @@ export interface ReaderHiddenChar {
 /** The words of the external-link sheet (M8.7) and the copy sheet (M8.19). */
 export const READER_SHEET_TEXT = {
   linkTitle: 'Open this link?',
-  /** The warning shown for a host other than the console's own (refinement (h): any other host). */
+  /** The warning shown for a host other than the console's own (the W8a plan's refinement (h): any other host). */
   linkForeign: (host: string): string =>
     host === ''
       ? 'This link opens your mail app. Check the address before you open it.' // a mailto with no host to name

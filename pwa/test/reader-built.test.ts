@@ -1,5 +1,5 @@
 // The BUILT reader keeps the frame's assets out of the shell's precache (native Docs reader, wave 8a; spec rows A9,
-// M8.13, M8.14 as read by refinement (i)). Nothing in the source tree shows what the bundler and the PWA plugin emit,
+// M8.13, M8.14 as read by the W8a plan's refinement (i)). Nothing in the source tree shows what the bundler and the PWA plugin emit,
 // so this file runs the app's own `vite build` (its own config, into a temporary directory, as fonts-built.test.ts
 // and markdown-worker-built.test.ts do) and reads the output:
 // - exactly one emitted file is the Mermaid script's chunk, and the generated service worker does not precache it
@@ -89,7 +89,7 @@ const chunkOf = (sha256: string): string => {
   return hits[0]!;
 };
 
-describe('the built reader and the precache (A9, M8.13, M8.14 as read by refinement (i))', () => {
+describe('the built reader and the precache (A9, M8.13, M8.14 as read by the W8a plan\'s refinement (i))', () => {
   it('exactly one emitted file matches mermaid.frame-*.js', () => {
     const hits = readdirSync(path.join(out, 'assets')).filter((n) => /^mermaid\.frame-.+\.js$/.test(n));
     expect(hits).toHaveLength(1);

@@ -1,5 +1,5 @@
-// Docs W8a Task 8: ReaderFrame, the two sheets and the leaf wiring (the 2026-10-31 reader-frame spec's section 4.1,
-// section 4.6, M8.7, M8.11, M8.17, M8.19 and refinement (g)). Every case injects `render`, `mount`, `images` and the
+// Docs W8a Task 8: ReaderFrame, the two sheets and the leaf wiring (the rich-docs spec's (amended 2026-10-31) section 4.1,
+// section 4.6, M8.7, M8.11, M8.17, M8.19 and the W8a plan's refinement (g)). Every case injects `render`, `mount`, `images` and the
 // `parser`; none reaches a worker, the library's host or a server. The router's `navigate` and `replaceFragment` and
 // the clipboard writer are module mocks, so a case can see what the frame asked of them. Every address is a
 // placeholder (`demo`, `https://a.example`), and control characters are built with `String.fromCharCode`.

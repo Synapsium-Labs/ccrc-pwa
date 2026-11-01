@@ -1,4 +1,4 @@
-// The reader's render job, worker side (native Docs reader, W8a Task 4; the 2026-10-31 reader-frame spec's A6 and
+// The reader's render job, worker side (native Docs reader, W8a Task 4; the rich-docs spec's (amended 2026-10-31) A6 and
 // M8.21, base design section 4.10's worker and timeout outcome). Ring L1: it makes no I/O, and it imports only
 // `readerLimits`, `markdownLimits`, `markdownGuard`, types from `markdownParse`, and the shared Markdown library's
 // renderer entry (the one import of that library in `pwa/src/lib`). It is the worker's LAZY chunk: `markdownWorker.ts`

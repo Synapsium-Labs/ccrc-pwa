@@ -1,4 +1,4 @@
-// The reader frame's two sheets (native Docs reader, W8a Task 8; the 2026-10-31 reader-frame spec's M8.7 and M8.19).
+// The reader frame's two sheets (native Docs reader, W8a Task 8; the rich-docs spec's (amended 2026-10-31) M8.7 and M8.19).
 // Ring L4 delivery over @ccrc/ui's `Sheet`: they show what `ReaderFrame` hands them and report the reader's choice,
 // and they decide nothing. Their words are `readerText.ts`'s. The external-link sheet names the address and, for a host
 // that is not the console's own, the foreign warning; the copy sheet shows the selected text with each hidden character

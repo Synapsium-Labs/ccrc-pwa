@@ -1,5 +1,5 @@
 // The reader's one adapter over the shared Markdown library's host mount (native Docs reader, W8a Task 7; the
-// 2026-10-31 reader-frame spec's M8.1, M8.15, M8.20 and section 4.4, refinements (b), (c) and (k)). Ring L3: it is
+// rich-docs spec's (amended 2026-10-31) M8.1, M8.15, M8.20 and section 4.4, the W8a plan's refinements (b), (c) and (k)). Ring L3: it is
 // the one file that imports the library's host entry. What it hands the library is the whole of ccrc's control over
 // the frame, so the adapter set is exactly fourteen keys: `assets`, `watchdogMs`, `store`, `storePrefix`, `docKey`,
 // `prefs`, `mermaidDraw`, `title`, `focus` and the five callbacks. It never passes `changes`, `openVersion`,
@@ -8,9 +8,9 @@
 //
 // It decides nothing a policy file decides: the watchdog, the doc key and the prefs arrive already measured. It
 // does three things of its own. It unwraps the library's callback shapes into ccrc's (the copy check's `hidden`
-// list, the host link's fields). It keeps the version to what a full commit names (refinement (k)). And it loads the
+// list, the host link's fields). It keeps the version to what a full commit names (the W8a plan's refinement (k)). And it loads the
 // Mermaid text only for a document the library's gate lets in; a Mermaid chunk that does not load drops the scan,
-// so the figures show their source and the page still mounts (refinement (c)).
+// so the figures show their source and the page still mounts (the W8a plan's refinement (c)).
 //
 // `mountReader` never remounts: the library's `update` is not called, and a theme change is the library's `setPrefs`.
 import {
@@ -79,7 +79,7 @@ function readerLinkOf(l: HostLink): ReaderLink {
 }
 
 /** The document with its version cut to `{sha, draft}` for a full commit, and with no version otherwise: the commit
- *  list and `only` are never passed (refinement (k)). */
+ *  list and `only` are never passed (the W8a plan's refinement (k)). */
 function withServedVersion(d: RenderInput): RenderInput {
   const { version, ...rest } = d;
   const sha = version?.sha;

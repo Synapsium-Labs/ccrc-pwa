@@ -1,5 +1,5 @@
-// The reader frame's caps, declared once (native Docs reader, W8a Task 4; the 2026-10-31 reader-frame spec's A6 and
-// section 4.3's "Rendered HTML" row, refinement (m)). Ring L1: this file imports nothing, so the render job in the
+// The reader frame's caps, declared once (native Docs reader, W8a Task 4; the rich-docs spec's (amended 2026-10-31) A6 and
+// section 4.3's "Rendered HTML" row, the W8a plan's refinement (m)). Ring L1: this file imports nothing, so the render job in the
 // parse worker's lazy chunk and the main thread's reader files can both read it.
 // The caps: `READER_HTML_MAX_BYTES`, `READER_IMAGE_BUDGET_BYTES`, `READER_STORE_PREFIX`, `READER_COPY_WRITE_MAX_BYTES`
 // (M8.19: the most text the reader writes to the clipboard without asking), `READER_DOC_KEY_MAX_UNITS` (A15/G7:

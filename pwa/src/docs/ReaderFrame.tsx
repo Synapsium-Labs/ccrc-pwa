@@ -1,5 +1,5 @@
-// A Markdown leaf's rich reader (native Docs reader, W8a Task 8; the 2026-10-31 reader-frame spec's section 4.1 (host,
-// focus, remount) and section 4.6 (every trigger, the fixed note), M8.7, M8.11, M8.17, M8.19 and refinement (g)).
+// A Markdown leaf's rich reader (native Docs reader, W8a Task 8; the rich-docs spec's (docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md, amended 2026-10-31)
+// section 4.1 (host, focus, remount) and section 4.6 (every trigger, the fixed note), M8.7, M8.11, M8.17, M8.19 and the W8a plan's refinement (g)).
 // Ring L4 delivery: it runs the render, the images and the mount under one `AbortController` and acts on what the
 // policy owners answer (`routeReaderLink`, `copyDecision`, `readerDocKey`, `readerPrefsOf`, `readerBodyReducer`); it
 // decides none of it. (The frame's start watchdog is the adapter's, `mountReader`'s, from the same policy.)
@@ -259,7 +259,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           scan: { mermaid: outcome.mermaid },
           images: images.urls,
           initialHash: cur.props.pendingFragment,
-          // Refinement (k): the commit a committed doc was read at, or the head a draft was read over with its flag.
+          // The W8a plan's refinement (k): the commit a committed doc was read at, or the head a draft was read over with its flag.
           // The adapter keeps this only for a full hex sha (`withServedVersion`).
           version: cur.props.show.source === 'draft'
             ? { sha: cur.props.show.head ?? null, draft: true }

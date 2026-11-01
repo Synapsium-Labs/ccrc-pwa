@@ -1,4 +1,4 @@
-// The reader frame's images (native Docs reader, W8a Task 6; the 2026-10-31 reader-frame spec's A7 as refined by (d),
+// The reader frame's images (native Docs reader, W8a Task 6; the rich-docs spec's (amended 2026-10-31) A7 as refined by the W8a plan's (d),
 // section 4.3's Images row, base 4.11). Ring L3: it loads bytes through the page's queue and loaders and decides
 // nothing of its own: which images the page may show is `planImageRef`, the plain view's one pin rule, and how one is
 // loaded is `fetchImage`, the plain view's own loader path with its raster checks. The reader's frame cannot hold a
@@ -31,7 +31,7 @@ function decodedSize(dataUrl: string): number {
  *  them, so no ref repeats and nothing here dedupes again). Index `i` is a ref's place in that list, NOT the plain view's
  *  count, which numbers every `img` element: on a page whose repeats push a new src past the plain view's 30th element,
  *  the reader may load an image the plain view defers. The bound of `DOCS_MAX_IMAGES_PER_PAGE` loads holds either way
- *  (refinement (d)). Only a pinned plan before that index loads; the page's byte budget stops further adds; a failed load is
+ *  (the W8a plan's refinement (d)). Only a pinned plan before that index loads; the page's byte budget stops further adds; a failed load is
  *  left out; an aborted `signal` ends the walk with what had loaded. The loads are launched together and run through
  *  the screen's queue (its concurrency bounds them), and are read back in ref order, so the budget is order-stable. */
 export async function loadReaderImages(

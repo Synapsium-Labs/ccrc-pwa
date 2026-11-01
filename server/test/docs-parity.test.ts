@@ -512,7 +512,7 @@ const M79_NAME = ['doc', 'server'].join('');
 /**
  * The one exception to the name (rich-docs spec A21, M8.18): in pwa/src only, the shared Markdown library's four
  * import specifiers, as the quoted string right after `from` or `import(` (quotes matching): `/render`, `/frame`,
- * `/host`, and `/assets/<path>?raw`. The bare package and every other subpath stay hits. Refinement (i): the PWA's
+ * `/host`, and `/assets/<path>?raw`. The bare package and every other subpath stay hits. The W8a plan's refinement (i): the PWA's
  * vite.config.ts keeps the unmodified check.
  */
 const M79_LIBRARY_SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*)(['"])@synapsium-labs\/docserver\/(?:render|frame|host|assets\/[A-Za-z0-9._\/-]+\?raw)\2/g;

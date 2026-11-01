@@ -71,7 +71,7 @@ export function usePath(): string { return useLocation().path; }
 
 /** Rewrite the current entry's fragment to `#id` without leaving the page: `history.replaceState` keeps the entry's
  *  `history.state` and its path and search, and the router is NOT notified, so the screen does not remount and the
- *  reader keeps its place (refinement (n)). `id` is the frame's own anchor id, joined after `#` as it is. */
+ *  reader keeps its place (the W8a plan's refinement (n)). `id` is the frame's own anchor id, joined after `#` as it is. */
 export function replaceFragment(id: string): void {
   history.replaceState(history.state, '', '#' + id);
 }

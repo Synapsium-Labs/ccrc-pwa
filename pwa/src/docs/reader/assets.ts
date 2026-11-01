@@ -1,5 +1,5 @@
-// The shared Markdown library's frame assets as inert strings (native Docs reader, W8a Task 7; the 2026-10-31
-// reader-frame spec's M8.2 and M8.12, refinement (b)). Ring L3 adapter: it reads texts and runs nothing. The library's
+// The shared Markdown library's frame assets as inert strings (native Docs reader, W8a Task 7; the rich-docs spec's
+// (amended 2026-10-31) M8.2 and M8.12, the W8a plan's refinement (b)). Ring L3 adapter: it reads texts and runs nothing. The library's
 // host mount takes the exact texts of the shipped frame files from its caller and never fetches them; the build
 // bundles each one as a string through Vite's `?raw`, and the mount verifies every text against the library's own
 // manifest before it inlines anything.

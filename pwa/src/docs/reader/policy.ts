@@ -1,5 +1,5 @@
-// The reader frame's decisions (native Docs reader, W8a Task 5; the 2026-10-31 reader-frame spec's M8.7, M8.11, M8.19,
-// A15/G7 and section 4.4's `navigate`, `copy` and `hash` rows; refinements (h), (l) and (n)). Ring L1 policy: pure
+// The reader frame's decisions (native Docs reader, W8a Task 5; the rich-docs spec's (amended 2026-10-31) M8.7, M8.11, M8.19,
+// A15/G7 and section 4.4's `navigate`, `copy` and `hash` rows; the W8a plan's refinements (h), (l) and (n)). Ring L1 policy: pure
 // deciders over plain values, no I/O, no timer, no DOM, and no import of a `.tsx`, a store, `lib/api.ts` or the
 // shared Markdown library (`ReaderLink` mirrors the library's host-link shape instead of importing it). Delivery
 // (`ReaderFrame.tsx`) asks these and acts on the answer: it decides nothing.
@@ -36,7 +36,7 @@ export type ReaderRoute =
 const SHEET_SCHEMES: readonly string[] = ['http', 'https', 'mailto'];
 
 /** The sheet for a URL, or `inert` when `scheme` is not http, https or mailto. A host is foreign when it is not
- *  exactly the console's own, both lower-cased (refinement (h): `pwa/src` has no public-suffix data, so the stricter
+ *  exactly the console's own, both lower-cased (the W8a plan's refinement (h): `pwa/src` has no public-suffix data, so the stricter
  *  exact comparison stands in for "registrable name"). `hostRaw` and `ownHostRaw` are hostnames, with no port. */
 function sheetFor(url: string, scheme: string, hostRaw: string, ownHostRaw: string): ReaderRoute {
   if (!SHEET_SCHEMES.includes(scheme)) return { kind: 'inert' };
@@ -130,7 +130,7 @@ export function readerPrefsOf(
 }
 
 /** The frame's start watchdog for a document of `bytes` UTF-8 bytes: the Docs parse budget, with no allowance for
- *  Mermaid (refinement (c): `ready` does not wait for it in on-request mode). */
+ *  Mermaid (the W8a plan's refinement (c): `ready` does not wait for it in on-request mode). */
 export function readerWatchdogMs(bytes: number): number {
   return DOCS_PARSE_BUDGET_MS(bytes);
 }

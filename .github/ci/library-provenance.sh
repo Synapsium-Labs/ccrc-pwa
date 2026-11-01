@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The shared Markdown library's provenance, checked BEFORE it is installed
-# (native Docs reader spec M8.16, section 3.6; wave 8a).
+# (M8.16 and section 3.6 of docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md,
+# amended 2026-10-31; wave 8a).
 #
 # A registry signature proves a package came from the registry; it does not
 # prove WHOSE repository built it. This script closes that gap for the one

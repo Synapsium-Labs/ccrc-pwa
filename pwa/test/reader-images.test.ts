@@ -1,4 +1,4 @@
-// Docs W8a Task 6 (refinement (d); spec A7, section 4.3's Images row; base 4.11): the reader frame's images are
+// Docs W8a Task 6 (the W8a plan's refinement (d); the rich-docs spec's A7, section 4.3's Images row; base 4.11): the reader frame's images are
 // `data:` URLs. `loadReaderImages` plans each `scanRefs` string with the plain view's own pin rule (`planImageRef`),
 // loads the pinned, non-deferred ones through the plain view's own `fetchImage` and the screen's queue, and stops at
 // the page's byte budget. Loaders and queue are injected; every page is a placeholder (`demo`, `https://a.example`).
@@ -73,7 +73,7 @@ function rig(raster?: DocsLoaders['raster'], concurrency?: number): Rig {
 const run = (refs: readonly string[], ctx: DocLinkContextValue, a: Rig, signal = new AbortController().signal) =>
   loadReaderImages(refs, ctx, a.assets, signal);
 
-describe('loadReaderImages: the reader frame\'s images as data: URLs (refinement (d))', () => {
+describe('loadReaderImages: the reader frame\'s images as data: URLs (the W8a plan\'s refinement (d))', () => {
   it('a raster becomes a data:image/png;base64 URL in the library\'s image grammar', async () => {
     const a = rig();
     const { urls } = await run(['i.png'], withImages(['i.png']), a);
