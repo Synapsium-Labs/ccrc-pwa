@@ -930,6 +930,43 @@ describe.skipIf(!PY)('an undecidable catalogue is the bridge\'s fault, not the c
   }
 });
 
+describe.skipIf(!PY)('the stats file describes this process before its first request (D-7677)', () => {
+  /** A version-1 stats file an earlier process of the lane left: an old start, a count, and no `store` entry. */
+  const plantEarlier = (lane: BridgeLane): void => writeFileSync(lane.stats, JSON.stringify({
+    version: 1, lane: LANE, since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z', outcomes: { '2xx': 4 },
+  }), { mode: 0o600 });
+
+  it('a healthy start: the file carries this process\'s startedAt and an ok store entry, before any request', async () => {
+    await withBridge([], async ({ lane, up }) => {
+      const doc = readStats(lane);
+      expect(doc.startedAt).not.toBe('2026-01-01T00:00:00.000Z');
+      expect(Date.parse(doc.startedAt)).toBeGreaterThan(Date.parse('2026-10-01T00:00:00.000Z'));
+      expect(doc.since).toBe('2026-01-01T00:00:00.000Z');
+      expect(doc.store).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
+      expect(doc.outcomes).toEqual({ '2xx': 4 });
+      expect(up.requests).toHaveLength(0);
+    }, { beforeSpawn: (_home, lane) => plantEarlier(lane) });
+  });
+
+  it('a damaged store at the start: the set-aside is in the file before any request', async () => {
+    await withBridge([], async ({ lane, up }) => {
+      const doc = readStats(lane);
+      expect(doc.store.state).toBe('set-aside');
+      expect(doc.store.setAside).toMatchObject({ found: 'DatabaseError' });
+      expect(doc.store.setAside.file).toMatch(/^reasoning\.sqlite\.damaged-\d{8}T\d{6}Z$/);
+      expect(existsSync(join(lane.laneDir, doc.store.setAside.file))).toBe(true);
+      expect(doc.outcomes).toEqual({ '2xx': 4, 'store:set-aside': 1 });
+      expect(up.requests).toHaveLength(0);
+    }, {
+      beforeSpawn: (_home, lane) => {
+        plantEarlier(lane);
+        writeFileSync(lane.store, 'this file is not an sqlite database\n'.repeat(40), { mode: 0o600 });
+      },
+    });
+  });
+});
+
 describe.skipIf(!PY)('a lane.json nested too deep to decode refuses the start', () => {
   it('the start exits with its one ccgpt-proxy: direct: line, never a traceback', async () => {
     const home = mkTmp('cb-server-');
