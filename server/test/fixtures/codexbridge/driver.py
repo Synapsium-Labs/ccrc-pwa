@@ -115,8 +115,9 @@ THE COUNT ESTIMATOR, THE KNOWN NAMES AND THE STATS FILE (Task 5): one Stats per 
                    joined for at most waitS ("duringFinished": whether it ended inside the write); after the flush it
                    is joined for at most 10 s ("duringAlive": still running then)
   stats-snapshot   -> {"doc"}: the in-memory document, as the next flush would write it (but `updatedAt`)
-  stats-fault      {call, errno, times} -> {}: the next `times` calls of os.<call> raise OSError(<errno>), then the
-                   original is restored (a full disk at fsync, for example)
+  stats-fault      {call, errno, times, skip?} -> {}: after `skip` calls (default 0) pass through, the next `times`
+                   calls of os.<call> raise OSError(<errno>), then the original is restored (a full disk at fsync, for
+                   example; the second os.open of a store's start, its fresh store's)
   stats-file       {path} -> {"exists", "mode", "ino", "dir": the sorted listing of its directory}: never its content
   sleep            {s} -> {}: time.sleep(s)
 THE BACKEND ADAPTER (Task 7). A request is built from an Anthropic body through inbound.from_anthropic (a ListSink,
@@ -541,12 +542,16 @@ def _count_op(op, cb):
 
 
 def _fault(op):
-    """The next `times` calls of os.<call> raise OSError(<errno>); then os.<call> is the original again."""
-    name, left = op["call"], [int(op["times"])]
+    """After `skip` calls pass through, the next `times` calls of os.<call> raise OSError(<errno>); then os.<call> is
+    the original again."""
+    name, skip, left = op["call"], [int(op.get("skip", 0))], [int(op["times"])]
     original = getattr(os, name)
     code = getattr(errno, op["errno"])
 
     def faulty(*args, **kwargs):
+        if skip[0] > 0:
+            skip[0] -= 1
+            return original(*args, **kwargs)
         if left[0] > 0:
             left[0] -= 1
             if left[0] == 0:

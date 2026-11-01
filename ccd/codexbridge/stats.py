@@ -22,7 +22,8 @@ THE STORE ENTRY (D-7677) is the reasoning store's state for THIS process only: r
 never carried from a loaded file (the store's `outcomes` counts are, as every count is). `set-aside` says D-7676's
 start check set a damaged store aside and made a fresh one (`setAside` says when, what it found and the copy's
 basename); `disabled` says the store answers as empty for the rest of the process, `reason` the outcome that did it,
-and outranks `set-aside` when both happened (a fresh store that later failed: `setAside` keeps its record). One
+and outranks `set-aside` when both happened (a fresh store that later failed: `setAside` keeps its record); a
+set-aside that failed after its renames is `disabled` as `store:set-aside-failed` with `setAside` naming the copy. One
 writer, `store_event`, the store's callback. A file written before the entry existed has no `store` key: that means
 the bridge predates it, never `ok`. The constructor's state is flushed before the server binds its port
 (`server.serve`), so the file describes this process from its first moment.
@@ -315,16 +316,18 @@ class Stats:
                     now: Optional[float] = None) -> None:
         """The reasoning store's callback (D-7677): count `reason` as `outcome` does, and set this process's store
         entry. `store.SET_ASIDE` records `found` and `file` (each bounded by NAME_RE, `file` a basename, never a path)
-        in `setAside`, and sets `state` unless the store is already disabled; any other reason disables. `now` is
+        in `setAside`, and sets `state` unless the store is already disabled; any other reason disables, and records
+        `setAside` too when it names a `file` (`store.SET_ASIDE_FAILED` after its renames). `now` is
         optional, the wall clock."""
         with self._lock:
             self._count(reason)
             self._retry = True  # the next flush writes at once, whatever FLUSH_S says (the module docstring)
             entry = self._doc["store"]
             at = _stamp(now)
-            if reason == store.SET_ASIDE:
+            if reason == store.SET_ASIDE or file is not None:  # a set-aside, or a failed one that named its copy
                 name = file if isinstance(file, str) and "/" not in file else None  # a basename, never a path
                 entry["setAside"] = {"at": at, "found": _bounded(found), "file": _bounded(name)}
+            if reason == store.SET_ASIDE:
                 if entry["state"] == "disabled":
                     return
                 entry["state"] = "set-aside"

@@ -657,4 +657,30 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     expect(snap.doc.store).toMatchObject({ state: 'disabled', reason: 'store:set-aside-failed', setAside: null });
     expect(snap.doc.outcomes).toEqual({ 'store:set-aside-failed': 1 });
   });
+
+  it('SET-ASIDE FAILS AFTER ITS RENAMES: the fresh store failing names the copy and what was found', async () => {
+    const { home, dir, db } = lane('cb-store-start-fail-fresh-');
+    await run(home, [{ op: 'store-damage', path: db, how: 'not-a-database' }]);
+    const bytes = sha(readFileSync(db));
+    // The start's first os.open is the damaged file's own `_create`; the second is the fresh store's, which fails.
+    const [, , open, put, got, snap] = await run(home, [
+      { op: 'stats-open', path: statsPath(dir), lane: 'lane-a' },
+      { op: 'stats-fault', call: 'open', errno: 'EACCES', times: 1, skip: 1 },
+      { op: 'store-open', path: db, stats: true },
+      { op: 'store-put', call: 'call_fx1', turn },
+      { op: 'store-get', call: 'call_fx1' },
+      { op: 'stats-snapshot' },
+    ]);
+    expect(open.disabled).toBe('store:set-aside-failed');
+    expect(put.disabled).toBe('store:set-aside-failed');
+    expect(got.turn).toBeNull();
+    const copies = damaged(dir);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatch(COPY_RE);
+    expect(sha(readFileSync(path.join(dir, copies[0])))).toBe(bytes);
+    expect(existsSync(db)).toBe(false);
+    expect(snap.doc.store).toMatchObject({ state: 'disabled', reason: 'store:set-aside-failed' });
+    expect(snap.doc.store.setAside).toEqual({ at: snap.doc.store.at, found: 'DatabaseError', file: copies[0] });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside-failed': 1 });
+  });
 });

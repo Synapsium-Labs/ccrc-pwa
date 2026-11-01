@@ -42,8 +42,9 @@ Only then is ONE copy kept: every other name of that shape in the directory (an 
 a failed removal ignored. The fresh store is made as a first start makes one (`_create`, then `_conn`), and the callback
 is told `store:set-aside` once, with what was found (`integrity-check` or the exception's class name) and the copy's
 basename, never a path. A set-aside that cannot finish (a rename's `OSError`, the fresh store failing) disables the
-store as `store:set-aside-failed`. Nothing raises, and nothing else changes: a failure after the start still disables
-the store for the process, and the next start's check is what repairs a store damaged while it ran.
+store as `store:set-aside-failed`, told with what was found and the copy's basename when the file had already been
+renamed. Nothing raises, and nothing else changes: a failure after the start still disables the store for the process,
+and the next start's check is what repairs a store damaged while it ran.
 
 ONE CONNECTION PER THREAD. The server is a ThreadingHTTPServer and sqlite3's default `check_same_thread=True` makes a
 shared connection raise `ProgrammingError` on the first handler thread; each thread opens its own on first use, after
@@ -93,11 +94,13 @@ _SCHEMA = ("CREATE TABLE IF NOT EXISTS reasoning(key TEXT PRIMARY KEY, items TEX
 
 
 class _Disabled(Exception):
-    """A condition that disables the store with a reason of its own (not an exception class name)."""
+    """A condition that disables the store with a reason of its own (not an exception class name), and the names the
+    callback is told with it (`store:set-aside-failed`'s `found` and `file`, when its renames had succeeded)."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, **detail: str) -> None:
         Exception.__init__(self, reason)
         self.reason = reason
+        self.detail = detail
 
 
 def _close_unchecked(conn: sqlite3.Connection) -> None:
@@ -177,17 +180,17 @@ class ReasoningStore:
         try:
             return fn(*args)
         except _Disabled as e:
-            self._disable(e.reason)
+            self._disable(e.reason, **e.detail)
         except Exception as e:  # any failure disables the store; a request never fails because of it
             self._disable("store:" + type(e).__name__)
         return None
 
-    def _disable(self, reason: str) -> None:
+    def _disable(self, reason: str, **detail: str) -> None:
         with self._lock:
             if self.disabled is not None:
                 return
             self.disabled = reason
-        self._tell(reason)
+        self._tell(reason, **detail)
 
     def _tell(self, reason: str, **detail: str) -> None:
         if self._outcome is not None:
@@ -208,23 +211,27 @@ class ReasoningStore:
             found = type(e).__name__
         if found is None:
             return
+        moved = []  # type: List[str]  (the copy's path, once the file is renamed to it)
         try:
-            copy = self._set_aside()
+            self._set_aside(moved)
             self._create()
             self._conn()
-        except Exception:  # never raised: the store is disabled with the set-aside's own reason
-            raise _Disabled(SET_ASIDE_FAILED)
-        self._tell(SET_ASIDE, found=found, file=os.path.basename(copy))
+        except Exception:  # never raised: the store is disabled with the set-aside's own reason, naming any copy made
+            detail = {"found": found, "file": os.path.basename(moved[0])} if moved else {}
+            raise _Disabled(SET_ASIDE_FAILED, **detail)
+        self._tell(SET_ASIDE, found=found, file=os.path.basename(moved[0]))
 
-    def _set_aside(self) -> str:
-        """Close this thread's connection without a checkpoint, rename the file and its WAL files to the copy's name,
-        then keep only that copy; the copy's path. Raises when a rename fails."""
+    def _set_aside(self, moved: List[str]) -> None:
+        """Close this thread's connection without a checkpoint, rename the file and its WAL files to the copy's name
+        (appending the copy's path to `moved` once the file itself is renamed), then keep only that copy. Raises when a
+        rename fails."""
         conn = getattr(self._local, "conn", None)
         self._local.conn = None
         if conn is not None:
             _close_unchecked(conn)
         copy = self.path + ".damaged-" + time.strftime(DAMAGED_STAMP, time.gmtime())
         os.rename(self.path, copy)
+        moved.append(copy)
         kept = {os.path.basename(copy)}
         for suffix in ("-wal", "-shm"):
             if os.path.lexists(self.path + suffix):
@@ -232,7 +239,6 @@ class ReasoningStore:
                 kept.add(os.path.basename(copy + suffix))
         self._identity = None
         _keep_one(self.path, kept)
-        return copy
 
     # ── the file and the connections ──
     def _create(self) -> None:

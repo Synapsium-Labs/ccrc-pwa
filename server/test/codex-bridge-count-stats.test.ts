@@ -846,6 +846,20 @@ describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this pro
     }
   });
 
+  it('a set-aside that failed after its renames records the copy, and the store is disabled', async () => {
+    const { home, file } = lane('cb-stats-store-aside-failed-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside-failed', 'integrity-check', COPY], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store).toEqual({
+      state: 'disabled', reason: 'store:set-aside-failed', at: '2023-11-14T22:13:20.000Z',
+      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'integrity-check', file: COPY },
+    });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside-failed': 1 });
+  });
+
   it('a found or file outside NAME_RE is unrecognised, never written as given', async () => {
     const { home, file } = lane('cb-stats-store-bound-');
     const [, , snap] = await run(home, [
