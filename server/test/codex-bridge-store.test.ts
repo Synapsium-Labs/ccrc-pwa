@@ -516,14 +516,15 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     // Measured: the stale index raises nothing and each check answers it in rows. On the 0xff page quick_check answers
     // in rows, and this box's SQLite raises exactly DatabaseError from integrity_check, which the start reads as damage
     // too; another SQLite may answer that page in rows instead, so the expected `found` is the probe's, as in NOT A
-    // DATABASE, and the page's pin is only that integrity_check did not answer `ok`.
+    // DATABASE, and the page's pin is only that integrity_check did not answer exactly `ok` (or raised): its
+    // quick_check is not pinned (fix round 3, F5).
     for (const how of ['stale-index', 'garbage-page'] as const) {
       const { home, dir, db } = lane(`cb-store-start-${how}-`);
       const [planted] = await run(home, [{ op: 'store-damage', path: db, how }]);
-      expect(planted.probe.quickCheck, how).not.toEqual(['ok']);
-      expect(planted.probe.quickCheck, how).not.toBeNull();
       expect(planted.probe.integrityCheck, how).not.toEqual(['ok']);
       if (how === 'stale-index') {
+        expect(planted.probe.quickCheck).not.toEqual(['ok']);
+        expect(planted.probe.quickCheck).not.toBeNull();
         expect(planted.probe.raised).toBeNull();
         expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
       }
