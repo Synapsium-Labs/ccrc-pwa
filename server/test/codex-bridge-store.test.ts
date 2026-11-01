@@ -56,6 +56,15 @@ async function run(
 
 const rs = (n: number): object => ({ type: 'reasoning', id: `rs_fx${n}`, summary: [], encrypted_content: `ENC-${n}` });
 
+/** Whether the driver's python3 closes a connection without its checkpoint (`Connection.setconfig` and
+ *  SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, Python 3.12 and later; the driver's `store-caps` op). Below it, the driver's
+ *  `walCall` close and the store's own close before a set-aside may checkpoint a damaged WAL into its file, so a case
+ *  that needs that WAL left beside the copy cannot be built there, and skips (D-7676). */
+const NO_CKPT_CLOSE: boolean = PY
+  ? driverLines((await runBridgeDriver(mkTmp('cb-store-caps-'), { ops: [{ op: 'store-caps' }] }, {},
+    { timeoutMs: 60_000 })).stdout)[0]?.noCkptClose === true
+  : false;
+
 /** A reduce op over events written here, one SSE event per object, ending in `response.completed`. */
 function stream(items: object[]): object {
   const events: Array<Record<string, unknown>> = [
@@ -556,7 +565,8 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
   });
 
-  it('a damaged store\'s WAL goes with its copy: the fresh store never answers its row, and the copy still does', async () => {
+  // Skipped below Python 3.12 (NO_CKPT_CLOSE): there the damaged WAL may be checkpointed into the file, not left.
+  it.skipIf(!NO_CKPT_CLOSE)('a damaged store\'s WAL goes with its copy, which still answers its row', async () => {
     const { home, dir, db } = lane('cb-store-start-wal-');
     const [planted] = await run(home, [{ op: 'store-damage', path: db, how: 'stale-index', walCall: 'call_fx_wal' }]);
     expect(planted.probe.quickCheck).toEqual(['wrong # of entries in index sqlite_autoindex_reasoning_1']);
@@ -567,6 +577,8 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
       { op: 'store-get', call: 'call_fx_wal' },
     ]);
     expect(open.disabled).toBeNull();
+    // Not the rename's doing: sqlite deletes a WAL left beside a 0-byte database at its first open (measured), so the
+    // fresh store would not answer the row either way. The rename is pinned by the copy's `-wal` assertions below.
     expect(got.turn).toBeNull();
     const copies = damaged(dir).filter((n) => COPY_RE.test(n));
     expect(copies).toHaveLength(1);
@@ -582,7 +594,8 @@ describe.skipIf(!PY)('the start check: a damaged store is set aside and started 
     expect(dump.rows.map((r: Line) => r.key)).toContain(keys.call[0]);
   });
 
-  it('RETENTION: two damaged starts in a row leave only the newest copy and its siblings', async () => {
+  // Skipped below Python 3.12 (NO_CKPT_CLOSE): its first start's copy is pinned to keep a WAL beside it.
+  it.skipIf(!NO_CKPT_CLOSE)('RETENTION: two damaged starts in a row leave only the newest copy and its siblings', async () => {
     const { home, dir, db } = lane('cb-store-start-keep-');
     // An older copy and a stray sibling of another, both in the copy's name shape; two names outside it stay.
     for (const n of ['reasoning.sqlite.damaged-20200101T000000Z', 'reasoning.sqlite.damaged-20200101T000000Z-wal',
