@@ -10,7 +10,7 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (106, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
+/** The members reached through the whole store (101, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
  *  before D-7580, WP3, whose lanes' units read 11 through the port; 155 before D-7581, WP4, whose mail helpers and mail,
  *  landing-checks and tmp-sweep units take the port; 132 before D-7582, WP5, whose stall lane takes the port; 129
  *  before D-7583, WP6, whose child-reclaim chain and lane take the port; 123 before D-7584, WP7, whose archive
@@ -20,7 +20,6 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById', 'bindingRunsOf', 'bindingsOf',
   'checksRows', 'childReclaimCoordinatorClaims',
   'claimDigestDay', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode',
-  'deadAnchors', 'deadCoordinatorBreakerHeldLatest', 'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows',
   'declineApproval', 'declineAsk', 'delegationEventStats', 'delegationRunStamps', 'digestApprovals', 'digestAsks',
   'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
   'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows',
@@ -31,7 +30,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'mailQueuedSince',
   'markApprovalOperator', 'markApprovalOperatorRows', 'markDriftPushed', 'markDriftShadowed', 'markLanded',
   'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns', 'node',
-  'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteLeaseDetail', 'openAllocations', 'openCoordinatorIds',
+  'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteLeaseDetail', 'openAllocations',
   'outstandingMailFor', 'poolEpoch', 'projectDelegationCheckpoint',
   'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions', 'raiseLedgerFloor',
   'recentProvenance', 'recordDriftPass', 'recordFeedEvent',
