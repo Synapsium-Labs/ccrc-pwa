@@ -93,9 +93,18 @@ runs:
         path: ${{ runner.temp }}/ccrc-debs
         key: ${{ steps.key.outputs.apt }}
 
+    # PRESENT FIRST (D-7686). The ubuntu-24.04 image ships all four (the deps
+    # job's own log: "tmux is already the newest version", and so on for
+    # each), so on today's image no apt runs at all — and no job waits on a
+    # mirror. Measured before this: every Linux job ran `apt-get update`
+    # (nothing is ever downloaded, so the packages entry was never written and
+    # every restore missed), and when the image's first mirror stopped
+    # answering, the update stalled to the job limit.
+    #
     # The hit arm installs the downloaded packages with dpkg and no
     # `apt-get update`; if that fails for any reason the miss arm runs, so the
-    # cache can only ever save time.
+    # cache can only ever save time. The miss arm runs through apt-bounded.sh:
+    # a deadline per attempt and one retry, so a stalled mirror costs minutes.
     - name: Install system dependencies (linux)
       id: apt
       if: inputs.platform == 'linux'
@@ -103,10 +112,17 @@ runs:
       env:
         HIT: ${{ steps.debs.outputs.cache-hit }}
       run: |
+        missing=""
+        for bin in tmux jq strace python3; do command -v "$bin" > /dev/null || missing="$missing $bin"; done
+        if [ -z "$missing" ]; then
+          echo "server-deps: tmux, jq, strace and python3 are in the image; no apt"
+          exit 0
+        fi
+        echo "server-deps: not in the image:$missing"
         if [ "$HIT" = true ] && sudo dpkg -i --skip-same-version "$RUNNER_TEMP"/ccrc-debs/*.deb; then
           exit 0
         fi
-        sudo apt-get update && sudo apt-get install -y tmux jq strace python3
+        .github/ci/apt-bounded.sh 180 sh -c 'apt-get update && apt-get install -y tmux jq strace python3'
         mkdir -p "$RUNNER_TEMP/ccrc-debs"
         cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/ccrc-debs/" 2>/dev/null || true
         if compgen -G "$RUNNER_TEMP/ccrc-debs/*.deb" > /dev/null; then echo "have=true" >> "$GITHUB_OUTPUT"; fi

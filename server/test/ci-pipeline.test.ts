@@ -1186,14 +1186,107 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
         .toMatch(new RegExp(`^ {6}- uses: \\./\\.github/actions/server-deps\\n {8}with:\\n {10}platform: ${platform}$`, 'm'));
     }
     const a = read(DEPS);
-    // The miss arm of the apt install (D-6770): the hit arm dpkg-installs the cached packages first.
-    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n(?: {6}.*\n)*? {8}sudo apt-get update && sudo apt-get install -y tmux jq strace python3$/m);
+    // The miss arm of the apt install (D-6770): the hit arm dpkg-installs the cached packages first, and the miss
+    // arm runs under a deadline with one retry (D-7686).
+    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n(?: {6}.*\n)*? {8}\.github\/ci\/apt-bounded\.sh 180 sh -c 'apt-get update && apt-get install -y tmux jq strace python3'$/m);
     expect(a).toMatch(/^ {4}- name: Install system dependencies \(macos\)\n {6}if: inputs\.platform == 'macos'\n {6}shell: bash\n {6}run: brew install bash tmux flock jq coreutils$/m);
     for (const pkg of ['server', 'agent', 'pwa']) {
       expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: npm ci$`, 'm'));
     }
     // ui too: pwa reads it as source (the census above), and the cache entry holds all four trees.
     expect(a).toMatch(/^ {6}working-directory: ui\n {6}run: npm ci$/m);
+  });
+});
+
+// ── D-7686: no apt-get can hold a job to its limit ──────────────────────────
+describe('apt runs only when needed, and never without a deadline (D-7686)', () => {
+  /** The Linux apt step's `run: |` body from server-deps (a composite step: 6-space keys, 8-space script). */
+  const aptStep = (): string => {
+    const all = read(DEPS).split(/^(?= {4}- )/m);
+    const st = all.find((p) => p.startsWith('    - name: Install system dependencies (linux)\n'));
+    expect(st, 'no Linux apt step').toBeDefined();
+    const lines = st!.split('\n');
+    const at = lines.findIndex((l) => /^ {6}run: \|$/.test(l));
+    expect(at, 'the apt step has no `run: |`').toBeGreaterThan(-1);
+    const body: string[] = [];
+    for (const l of lines.slice(at + 1)) {
+      if (l !== '' && !l.startsWith(' '.repeat(8))) break;
+      body.push(l.slice(8));
+    }
+    return body.join('\n').replace(/\n+$/, '\n');
+  };
+
+  /**
+   * A PATH holding ONLY fakes plus the few real tools the step and apt-bounded.sh use, so "is tmux in the image"
+   * is decided by `present`, not by the box running the test. sudo and timeout pass straight through (timeout drops
+   * its `-k N LIMIT`), so the argv that reaches apt-get is the one the runner would run as root.
+   */
+  const sandbox = (present: string[], aptFailures: number) => {
+    const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
+    const log = join(mkTmp('ccrc-apt-log-'), 'log');
+    writeFileSync(log, '');
+    const count = `${log}.n`;
+    writeFileSync(count, '0');
+    const fakes: Record<string, string> = {
+      sudo: `echo "sudo $*" >> '${log}'\nexec "$@"`,
+      timeout: `echo "timeout $1 $2 $3" >> '${log}'\nshift 3\nexec "$@"`,
+      pkill: `echo "pkill $*" >> '${log}'`,
+      'apt-get': `echo "apt-get $*" >> '${log}'\nn=$(cat '${count}'); echo $((n + 1)) > '${count}'\n[ "$n" -ge ${aptFailures} ]`,
+    };
+    for (const bin of present) fakes[bin] = 'exit 0';
+    const dir = fakeBin(fakes);
+    for (const bin of ['bash', 'sh', 'env', 'cat', 'mkdir', 'cp']) execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+    const script = join(mkTmp('ccrc-apt-step-'), 'step.sh');
+    writeFileSync(script, aptStep());
+    const r = spawnSync(real('bash'), ['--noprofile', '--norc', '-eo', 'pipefail', script], {
+      cwd: REPO, encoding: 'utf8',
+      env: { PATH: dir, HIT: '', RUNNER_TEMP: mkTmp('ccrc-apt-rt-'), GITHUB_OUTPUT: join(mkTmp('ccrc-apt-out-'), 'out') },
+    });
+    return { status: r.status, stdout: r.stdout, log: readFileSync(log, 'utf8') };
+  };
+
+  it('all four in the image: the step installs nothing and calls no sudo', () => {
+    const r = sandbox(['tmux', 'jq', 'strace', 'python3'], 0);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('no apt');
+    expect(r.log, 'apt ran although every package is in the image').toBe('');
+  });
+
+  it('one missing: apt runs as root under the deadline, once when it succeeds', () => {
+    const r = sandbox(['tmux', 'jq', 'python3'], 0);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('not in the image: strace');
+    expect(r.log).toMatch(/^sudo env PATH=\S+ timeout -k 10 180 sh -c apt-get update && apt-get install -y tmux jq strace python3$/m);
+    expect(r.log.match(/^timeout -k 10 180$/gm), 'one attempt').toHaveLength(1);
+    expect(r.log).toContain('apt-get update\napt-get install -y tmux jq strace python3\n');
+  });
+
+  it('a failed (or timed-out) attempt is retried once, after killing what it left behind', () => {
+    const r = sandbox(['tmux', 'jq', 'python3'], 1);
+    expect(r.status).toBe(0);
+    expect(r.log.match(/^timeout -k 10 180$/gm), 'two attempts').toHaveLength(2);
+    expect(r.log).toContain('sudo pkill -KILL -x apt-get');
+    expect(r.stdout).toContain('::warning::apt-bounded: attempt 1 of 2');
+  });
+
+  it('two failures fail the step — never a third attempt', () => {
+    const r = sandbox(['tmux', 'jq', 'python3'], 99);
+    expect(r.status).not.toBe(0);
+    expect(r.log.match(/^timeout -k 10 180$/gm), 'exactly two attempts').toHaveLength(2);
+  });
+
+  it('every apt-get in the workflows goes through apt-bounded.sh, and storybook-a11y\'s apt half is bounded too', () => {
+    const files = ['.github/workflows/ci.yml', '.github/workflows/macos.yml', DEPS];
+    for (const f of files) {
+      const code = read(f).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      expect(code, `${f}: a bare sudo apt-get`).not.toMatch(/\bsudo apt-get\b/);
+      expect(code, `${f}: --with-deps runs apt with no deadline`).not.toMatch(/--with-deps/);
+    }
+    const sb = steps(job('storybook-a11y')).find((st) => /playwright install-deps/.test(st));
+    expect(sb, 'storybook-a11y no longer installs the browser libraries').toBeDefined();
+    expect(sb).toMatch(/^ {8}timeout-minutes: \d+$/m);
+    expect(sb).toMatch(/^ {10}\.\.\/\.github\/ci\/apt-bounded\.sh \d+ \.\/node_modules\/\.bin\/playwright install-deps chromium$/m);
+    expect(sb).toMatch(/^ {10}timeout -k 10 \d+ \.\/node_modules\/\.bin\/playwright install chromium$/m);
   });
 });
 
