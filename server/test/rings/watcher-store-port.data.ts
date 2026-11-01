@@ -10,7 +10,7 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (159, with #1614's `delegationRunStamps`): on `main` every reach is
+/** The members reached through the whole store (156, with #1614's `delegationRunStamps`): on `main` every reach is
  *  whole. Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'absorbParkEscalation', 'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById',
@@ -18,7 +18,7 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'cancelDeliveriesTo', 'checksRows', 'childReclaimCoordinatorClaims', 'childReclaimSessionIds', 'childStaleActivity',
   'claimDigestDay', 'closeRun', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode', 'db',
   'deadAnchors', 'deadCoordinatorBreakerHeldLatest', 'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows',
-  'declineApproval', 'declineAsk', 'delegationEventStats', 'delegationRunStamps', 'deliveredUnacked', 'delivery',
+  'declineApproval', 'declineAsk', 'delegationEventStats', 'delegationRunStamps', 'deliveredUnacked',
   'digestApprovals', 'digestAsks', 'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview',
   'driftFindingRows', 'driftFindingsOpenAt', 'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries',
   'driftPushesOnDay', 'driftStallToldRows', 'dueDeliveries', 'firstMailIdWithPrefix', 'foldPrLineage',
@@ -27,8 +27,8 @@ export const WATCHER_WHOLE_REACH: readonly string[] = [
   'insertDelegationEvents', 'insertMail', 'insertObservation', 'insertStallObservation', 'intentFor',
   'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession', 'laterReviewClosedFor', 'ledgerFloor',
   'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor', 'lifecycleGapGens', 'lifecycleLeafEndsFor',
-  'lifecycleReclaimRowsSince', 'lifecycleStats', 'mailOrigin', 'mailQueuedSince', 'markApprovalOperator',
-  'markApprovalOperatorRows', 'markDelivered', 'markDriftPushed', 'markDriftShadowed', 'markIngested', 'markLanded',
+  'lifecycleReclaimRowsSince', 'lifecycleStats', 'mailQueuedSince', 'markApprovalOperator',
+  'markApprovalOperatorRows', 'markDelivered', 'markDriftPushed', 'markDriftShadowed', 'markLanded',
   'markParkEscalated', 'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns',
   'node', 'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteGate', 'noteLeaseDetail', 'openAllocations',
   'openCoordinatorIds', 'outstandingMailFor', 'parkDelivery', 'parkedDeliveries', 'poolEpoch', 'programOpenRunCount',

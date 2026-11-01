@@ -3265,7 +3265,7 @@ export class FleetWatcher {
    * naming the wrong live one is worse — it tells a coordinator running an
    * unrelated program about a message it never sent and cannot act on.
    */
-  private mailSender(store: CoordStore, mailId: number):
+  private mailSender(store: WatcherCoordPort, mailId: number):
     { senderId: string; origin: { fromId: string; runId: number | null; subject: string } } | null {
     const origin = store.mailOrigin(mailId);
     if (!origin) return null;
@@ -3280,7 +3280,7 @@ export class FleetWatcher {
   /** `sweepMail`'s `tellSender` (Task 409 — see the docstring at its call site)
    *  and the park's operator escalation (D-5838): one durable feed row, and a
    *  presence-gated push, tagged with the sender's session. */
-  private pushSenderNotice(store: CoordStore, mailId: number, toId: string, why: string, tag: string,
+  private pushSenderNotice(store: WatcherCoordPort, mailId: number, toId: string, why: string, tag: string,
                            sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
     const s = this.mailSender(store, mailId);
     if (s === null) return;
@@ -3304,7 +3304,7 @@ export class FleetWatcher {
    *  it — the operator, a program kickoff, `coordinator` naming no run — is
    *  still pushed, tagged with the RECIPIENT's session instead, since that is
    *  the box the operator has to look at. */
-  private escalatePark(store: CoordStore, p: { id: number; mailId: number; toId: string; parkReason: string | null },
+  private escalatePark(store: WatcherCoordPort, p: { id: number; mailId: number; toId: string; parkReason: string | null },
                        sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
     const words = parkWords(p.parkReason);
     const why = `parked — ${words.why}; it will be delivered when ${words.when}`;
@@ -6496,7 +6496,7 @@ export class FleetWatcher {
    * throws, and its one warn is a bare `console.warn` in its own `try`, printed only when no fallback stood, and never
    * through the latch, which may be the fault. It records `lastFallback`; a resolution that succeeds clears it.
    */
-  private stallResolveNow(store: CoordStore, names: readonly string[], mailDisabled: boolean): StallResolution {
+  private stallResolveNow(store: WatcherCoordPort, names: readonly string[], mailDisabled: boolean): StallResolution {
     try {
       const box = stallBoxArmingOf(names, mailDisabled);
       const read = store.stallSettings();
@@ -7456,7 +7456,7 @@ export class FleetWatcher {
   }
 
   /** The gate mode of this sweep and the busy clock it moves; the sweep's own kill-switch read stays at its call site. */
-  private applyMailMode(store: CoordStore, listing: string[], now: number): MailTurnMode {
+  private applyMailMode(store: WatcherCoordPort, listing: string[], now: number): MailTurnMode {
     // The gate's mode comes from this SAME listing (worker stall watch §4.1,
     // `turnidle.ts`), through the one settings resolution the stall sweep also
     // calls (stall watch settings §9): a chosen level can set it, and strict
@@ -7475,7 +7475,7 @@ export class FleetWatcher {
   }
 
   /** The bookkeeping maps keep only what is still outstanding (parked probes, the busy-shadow memory). */
-  private pruneMailMemory(store: CoordStore, parkedRows: readonly { id: number }[],
+  private pruneMailMemory(store: WatcherCoordPort, parkedRows: readonly { id: number }[],
                           outstanding: readonly { id: number }[]): void {
     const parkedIds = new Set(parkedRows.map((p) => p.id));
     for (const id of this.parkProbeAt.keys()) if (!parkedIds.has(id)) this.parkProbeAt.delete(id);
@@ -7493,7 +7493,7 @@ export class FleetWatcher {
   }
 
   /** The `UserPromptSubmit` edge sample over every delivered, unacked row (see `mailPass`'s docstring). */
-  private async sampleEdge(store: CoordStore, unacked: ReturnType<CoordStore['deliveredUnacked']>,
+  private async sampleEdge(store: WatcherCoordPort, unacked: ReturnType<WatcherCoordPort['deliveredUnacked']>,
                            hookStateFor: (toId: string) => Promise<HookState | null>): Promise<void> {
     for (const row of unacked) {
       if (row.deliveredAt === null) continue;   // defensive; markDelivered always sets it
@@ -7538,7 +7538,7 @@ export class FleetWatcher {
   }
 
   /** One box capture per probed recipient; true when a parked row's box changed and it woke. */
-  private async probeParked(store: CoordStore, probeFor: ReadonlyMap<string, ReturnType<CoordStore['parkedDeliveries']>>,
+  private async probeParked(store: WatcherCoordPort, probeFor: ReadonlyMap<string, ReturnType<WatcherCoordPort['parkedDeliveries']>>,
                             now: number): Promise<boolean> {
     let woke = false;
     for (const [toId, rows] of probeFor) {
