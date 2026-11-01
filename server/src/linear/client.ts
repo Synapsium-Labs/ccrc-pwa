@@ -124,19 +124,20 @@ const isRateLimitedBody = (body: unknown): boolean =>
 /**
  * What one call to Linear produced, before anything reads its body for a meaning: the parsed JSON, or the
  * fixed word for why there is none. THE ONE FETCH PATH in this file (the lookup and the key check both go
- * through it), so the deadline, the header and the failure arms exist once.
+ * through it), so the deadline, the header and the failure arms exist once. Exported with this type for the
+ * callers that ask the one rate service before each call and settle with its outcome (spec §6.7).
  */
-type Call =
+export type LinearCall =
   | { ok: true; body: unknown }
   | { ok: false; reason: 'rate-limited'; retryAfterS: number }
   | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found' | 'rate-limited'> };
 
-async function callLinear(
+export async function callLinear(
   token: string,
   query: string,
   variables: Record<string, unknown>,
   deps: { fetch?: FetchLike; timeoutMs?: number },
-): Promise<Call> {
+): Promise<LinearCall> {
   const doFetch: FetchLike = deps.fetch ?? ((url, init) => fetch(url, init));
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), deps.timeoutMs ?? LINEAR_TIMEOUT_MS);
@@ -160,7 +161,7 @@ async function callLinear(
     // RATE-LIMITED (spec §6.7): a 429, or an `errors` entry with the `RATELIMITED` code whatever the status (Linear
     // refuses over its limit on a 200 and a 400 too). Its own arm, carrying the wait, so the caller can close the
     // slot until then; it is not a credential fault, and a title still degrades to the offline one.
-    const limited = (): Call => ({ ok: false, reason: 'rate-limited', retryAfterS: waitOf(res.headers) });
+    const limited = (): LinearCall => ({ ok: false, reason: 'rate-limited', retryAfterS: waitOf(res.headers) });
     if (res.status === 429) return limited();
 
     let body: unknown;
