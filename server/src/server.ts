@@ -64,12 +64,14 @@ import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
 import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, type OperatorDoorWiring } from './coord/routes.js';
+import { attributionVerdict } from './coord/attribution.js';
 import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes } from './linear/routes.js';
+import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
 import { resolveTitle } from './linear/resolve.js';
@@ -1945,6 +1947,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // are, possibly absent: never a default built here.
   registerLinearRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
+  // The Linear proxy's twelve box-token routes (#1444, spec §6), beside the connection's: the same rate service and
+  // refresher, the one journal and the policy point, each passed through as it is (possibly absent, never a default),
+  // the box token read at request time as every lane reads it, and `attributionVerdict` over this server's registry.
+  registerLinearProxyRoutes(app, {
+    ccrcDir: deps.cfg.ccrcDir, mailToken: () => deps.mailToken ?? null,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
   });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which

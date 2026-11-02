@@ -2290,16 +2290,31 @@ describe('install and update: the graph store and the sweep\'s hold (D-7360, D-7
     expect(readFileSync(marker)).toEqual(before);
   });
 
-  it('a configured store root that holds someone else\'s files is not adopted: install warns and goes on', () => {
+  // The store step warns and goes on to the end of the verb; the verb's exit is then its closing doctor's
+  // (`_inst_doctor_tail`), and the doctor FAILs a store root that is missing or carries no marker (spec section 8,
+  // D-7353). So the exit is 1 and the reason is the doctor's graphify line, never the store step dying. The doctor
+  // reads the graph settings from ccrc.env alone (D-7348): a root set only in install's environment leaves the
+  // doctor on the default root, which install never created; a root set in ccrc.env is the one both read.
+  it.each([
+    ['install\'s environment', 'env', /^FAIL graphify: .*the graph store \S+\/\.ccrc\/graphs does not exist/],
+    ['the box\'s ccrc.env', 'file', /^FAIL graphify: .*not-a-store carries no store marker/],
+  ] as const)('a configured store root (set in %s) that holds someone else\'s files is not adopted: install warns, goes on, and its doctor FAILs the store', (_label, where, doctorFail) => {
     const home = freshBox('ccrc-inst-gfx-store-foreign-');
     plantFakeVenv(home);
     const foreign = join(home, 'not-a-store');
     mkdirSync(foreign);
     writeFileSync(join(foreign, 'keep.txt'), 'mine\n');
-    const r = runInstall(home, ['install'], { CCRC_GRAPH_STORE: foreign });
-    expect(r.code, r.stderr).toBe(0);
+    if (where === 'file') {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_GRAPH_STORE=${foreign}\n`);
+    }
+    const r = runInstall(home, ['install'], where === 'env' ? { CCRC_GRAPH_STORE: foreign } : {});
     expect(r.stderr).toMatch(/graphify: WARN: .*no \.ccrc-graph-store marker; refusing to adopt it/);
     expect(existsSync(join(foreign, '.ccrc-graph-store'))).toBe(false);
+    expect(readFileSync(join(foreign, 'keep.txt'), 'utf8')).toBe('mine\n');
+    const doctorLine = r.stdout.split('\n').find((l) => /^(PASS|WARN|FAIL) graphify:/.test(l)) ?? '';
+    expect(doctorLine, r.stdout).toMatch(doctorFail);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
   });
 
   itLinux('install (and so update, whose spine it is) leaves ~/.ccrc/graph-sweep-paused in place while it enables the timer', () => {

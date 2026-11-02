@@ -1423,10 +1423,13 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the forty-six machine lanes the
-fleet host reaches (thirty-four box-token-consulting coordination routes, the
-programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
-and `/api/items/:id/{confirm,return,withdraw,blocking}`), plus `/api/notify`, which refuses an absent token like every lane,
+liveness gate reads the shipped sha out of it), the fifty-eight machine lanes the
+fleet host reaches (thirty-four box-token-consulting coordination routes plus
+the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
+verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
+the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
+and `/api/items/:id/{confirm,return,withdraw,blocking}`),
+`/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
@@ -1870,20 +1873,21 @@ phrase as JSON. There is no PWA surface for it in this build: run it on the box 
 ccrc account roster                        # the roster, as JSON
 ccrc account candidates                    # launchers in ~/.local/bin that look like accounts and are not rostered
 ccrc account add --id <id> --provider <anthropic|openrouter|compatible> --label <text> --hue <hue> \
-    [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--credential -]
+    [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--credential -] [--adopt]
 ccrc account declare --id <id> --label <text> --hue <hue> [--provider <p>] [--base-url <url>] [--suffix <s>]
 ccrc account check --id <id>               # is this lane's credential alive? (may spend one minimal turn), then the seed
 ccrc account seed --id <id>                # the first-run seed on its own: onboarding, theme, trust flags; no turn
 ccrc account enable --id <id> [--force]    # remove the -disabled marker, under the placement lock, once the lane is ready
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
-ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file
-ccrc account remove --id <id> [--keep-credential]
+ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file, validated first
+ccrc account set --id <id> [--stated -] [--placement overflow|full]   # a token lane's stated account; placement
+ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential]
 ```
 
 - **`add`** creates a ccrc-written lane (`exec.kind: "generated"`, `homeAble: true`, `telemetry: "anthropic"`)
   in a fixed order: the credential (token lanes only), the `-disabled` marker, the roster entry, then the
-  converge — `accounts.sh`, the wrapper, and the config dir `$HOME/<suffix>` (default `.claude-<id>`; it must
-  start `.claude`, the only place the agent may read) with, for a key lane, an endpoint and model `env` block
+  converge — `accounts.sh`, the wrapper, and the config dir `$HOME/<suffix>` (default `.claude-<id>`, or
+  `.<id>` for an id that already starts `claude-`; it must start `.claude`, the only place the agent may read) with, for a key lane, an endpoint and model `env` block
   in its `settings.json`, then the session-hook and skill installers run against that one home. Nothing after
   the roster entry rolls back; the cure for a failure there is `ccrc install`, which converges the same home.
   `--hue` is one of `cyan`, `violet`, `blue`, `magenta`, `amber`, `green`. `--method` says how the credential
@@ -1898,7 +1902,18 @@ ccrc account remove --id <id> [--keep-credential]
   (below).
 - **A credential only ever arrives on a pipe.** `--credential -` is the only spelling — a literal would sit in
   world-readable argv — and a terminal on stdin is refused rather than prompted:
-  `ccrc account add … --credential - < keyfile`. A `login` lane takes no `--credential`.
+  `ccrc account add … --credential - < keyfile`. A `login` lane takes no `--credential`. The whole of stdin is
+  the credential (one trailing newline dropped); a control byte anywhere in it, or more than 8 KiB, refuses
+  `key-charset`. **An Anthropic token is validated first:** before anything is written, one turn runs through the
+  upstream launcher with the candidate in its environment and a throwaway config dir under
+  `~/.ccrc/auth-scratch`. A 401 refuses `key-rejected` and an unreachable provider `token-unverified`, both with
+  nothing written; `credential` keeps the old file, and its check, until the new token passes.
+- **Re-adding an id** finds the old lane's config dir still there (remove keeps it for its transcripts):
+  `add` refuses `config-dir-exists`, saying whether it is signed in and as whom, unless `--adopt` takes it over.
+- **`set`** records the account a token lane approves, `--stated -` (1 to 120 printable characters on stdin, never
+  argv; a sign-in lane's account is measured by `check` instead), and `--placement full|overflow` (`homeAble`),
+  refused for the last placeable lane. Answers that write a secret, and `roster`, carry `fleetIdentity` and the
+  lane-secret fingerprints the server masks with.
 - **Every lane a connect verb creates starts switched off**, so nothing is placed on a credential nobody has
   measured. `check` measures it: on an `anthropic` lane it first asks Claude Code's own `auth status`; when
   that does not settle it — and on every other provider — it runs one minimal turn through the lane's own
@@ -1935,7 +1950,13 @@ ccrc account remove --id <id> [--keep-credential]
   the answer's `operator-steps`), the `-disabled` marker, the limits file and the ccrc-managed settings,
   hooks and skills in the config dir. The config dir and its transcripts stay; the key
   file is removed, and a `login` lane signed out, unless `--keep-credential`; the lane's model-class files
-  stay until `ccrc models <id> rm`.
+  stay until `ccrc models <id> rm`. It also refuses `auth-in-progress` while a sign-in for the lane runs, and
+  `sleeping-sessions` (with their ids) for hibernated rows, which a removal would move to upstream to wake there;
+  `--rehome-sleeping` moves them anyway. `~/.ccrc/auth-scratch/<id>` is deleted, and the answer's `atProvider`
+  says, per credential kind, what is still valid at the provider. `--mode discard` is the same removal for a lane
+  `add` made that was never switched on and has no session; anything else refuses `not-discardable`.
+  `--dry-run` takes no lock, writes nothing and answers what a removal would meet: live, sleeping and archived
+  sessions, upstream, the other placeable lanes, a sign-in in progress, and whether Discard applies.
 
 `add`'s answer also carries `operator-steps`: box tooling outside ccrc that enumerates accounts by hand and
 may need the new id.

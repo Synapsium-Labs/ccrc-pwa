@@ -52,7 +52,7 @@ describe('every verb writes the lane-state file (G16)', () => {
     const add = addLane(home, 'lane-c');
     expect(add.code, add.stderr).toBe(0);
     expectPrivateAndClean(home, 'lane-c');
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
 
     for (const verb of ['disable', 'enable']) {
       rmSync(laneStatePath(home, 'lane-c'));
@@ -111,7 +111,7 @@ describe('every verb writes the lane-state file (G16)', () => {
       const cred = ccrcRun(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-'], `${CANARY}-r\n`);
       expect(cred.code, 'the write into a 0500 directory refuses').not.toBe(0);
     } finally { chmodSync(secrets, 0o700); }
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
   });
 
   it('`declare` starts the lane\'s state over, as `add` does', () => {
@@ -141,7 +141,7 @@ describe('every verb writes the lane-state file (G16)', () => {
     mkdirSync(laneStateDir(home), { recursive: true, mode: 0o700 });
     writeFileSync(laneStatePath(home, 'lane-c'), JSON.stringify({ identity: 'someone@example.invalid', keyHash: 'h1' }));
     expect(addLane(home, 'lane-c').code).toBe(0);
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
   });
 
   it('a directory that exists wider than 0700 is tightened', () => {

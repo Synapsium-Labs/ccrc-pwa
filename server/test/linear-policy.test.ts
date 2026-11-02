@@ -3,7 +3,7 @@
  * need no route: the allow-all default; a deny answers `policy-denied`; a throw, a timeout past two seconds or an
  * answer of any other shape answers `policy-unavailable`, so the point fails closed; both refusals are journaled with
  * the decision id when one came back. The route clauses (the 403 and 503, reads skip it, the moved issue, the
- * cross-team parent) land with the proxy (LK9).
+ * cross-team parent) are at the end of this file (LK9).
  *
  * The port lives at L2 (`policy.ts`, types only); the deadline and the default live in `policyPoint.ts` (L3, it holds
  * a deadline timer), D-7687.
@@ -14,6 +14,7 @@ import { LINEAR_POLICY_DEADLINE_MS, LINEAR_POLICY_REFUSALS, allowAll, askWithDea
 import { serverRing } from './rings/ring.js';
 import { parsedFile } from './scan/symbols.js';
 import { linearServicesFake } from './linearServicesFake.js';
+import { IDS, WS as WS_FIXTURE, proxyRig, seedSlot, type ProxyRig } from './linearProxyRig.js';
 
 const WS = '11111111-2222-4333-8444-555555555555';
 const ASK: LinearWriteAsk = {
@@ -168,5 +169,86 @@ describe('index.ts builds one journal, sweeps it on the audit’s beat, and wire
     expect(index.text.slice(daily[0]!.start, daily[0]!.end)).toMatch(/86_400_000\)$/);
     const boot = sweeps('linearJournal').find((s) => s.start < daily[0]!.start)!;
     expect(boot.args.map((a) => a.text)).toEqual(['Date.now()']);
+  });
+});
+
+// ── the route clauses (plan task LK9): the point as the proxy asks it ──
+
+describe('the proxy asks the point at step 10, with the resolved team (#1444, spec §8, §4.5; LK9)', () => {
+  let rig: ProxyRig | null = null;
+  afterEach(async () => { await rig?.close(); rig = null; });
+
+  /** A policy that records every ask and answers as `answer` says. */
+  const recording = (answer: (ask: LinearWriteAsk) => LinearWriteDecision = () => ({ allow: true, decisionId: null })) => {
+    const asks: LinearWriteAsk[] = [];
+    const policy: LinearWritePolicy = async (ask) => { asks.push(ask); return answer(ask); };
+    return { asks, policy };
+  };
+  const mutations = (r: ProxyRig): string[] => r.calls.map((c) => c.op).filter((op) => /^(IssueCreate|IssueUpdate|CommentCreate)$/.test(op));
+  /** Workspace A's slot holding both fixture teams, so a moved issue's current identifier routes back to it. */
+  const both = [WS_FIXTURE.a.teams[0], { id: WS_FIXTURE.b.teams[0].id, key: 'BBB', name: 'Team B' }];
+
+  it('reads never ask it', async () => {
+    const p = recording();
+    rig = await proxyRig({ policy: p.policy });
+    await seedSlot(rig.ccrcDir, 'a');
+    for (const v of ['workspaces', 'teams', 'issue', 'search', 'comments', 'statuses', 'projects', 'labels', 'users'] as const) {
+      expect((await rig.call(v)).statusCode, v).toBe(200);
+    }
+    expect(p.asks).toEqual([]);
+  });
+
+  it('a deny is 403 policy-denied with a row and no mutation; a throw, a bad shape and a timeout are 503 with a row', async () => {
+    for (const [policy, status, word] of [
+      [async () => ({ allow: false, why: 'denied', decisionId: 'd-9' }), 403, 'policy-denied'],
+      [async () => { throw new Error('authorizer down'); }, 503, 'policy-unavailable'],
+      [async () => ({ allow: 'yes' }), 503, 'policy-unavailable'],
+      [() => new Promise(() => {}), 503, 'policy-unavailable'],
+    ] as const) {
+      // The never-answering policy is refused at the point's real two seconds.
+      rig = await proxyRig({ policy: policy as unknown as LinearWritePolicy });
+      await seedSlot(rig.ccrcDir, 'a');
+      const res = await rig.call('comment', { ref: 'AAA-12' });
+      expect([res.statusCode, JSON.parse(res.body).error], word).toEqual([status, word]);
+      expect(mutations(rig)).toEqual([]);
+      expect(rig.rows()).toMatchObject([{ op: 'comment', code: word }]);
+      await rig.close();
+      rig = null;
+    }
+  }, 30_000);
+
+  it('a moved issue is refused before the point is asked; the retry with the current identifier asks with its team', async () => {
+    const p = recording();
+    rig = await proxyRig({ policy: p.policy, respond: (c) => (c.op === 'ResolveIssue' && c.variables['id'] === 'AAA-12'
+      ? { body: { data: { issue: { id: IDS.issue, identifier: 'BBB-7', team: { id: both[1]!.id, key: 'BBB' } } } } } : null) });
+    await seedSlot(rig.ccrcDir, 'a', { teams: both });
+    const moved = await rig.call('update', { ref: 'AAA-12', body: { title: 'T' } });
+    expect([moved.statusCode, JSON.parse(moved.body).error, JSON.parse(moved.body).detail]).toEqual([409, 'issue-moved', 'BBB-7']);
+    expect(p.asks).toEqual([]);
+    expect(mutations(rig)).toEqual([]);
+    const retry = await rig.call('update', { ref: 'BBB-7', body: { title: 'T' } });
+    expect(retry.statusCode, retry.body).toBe(200);
+    expect(p.asks).toHaveLength(1);
+    expect(p.asks[0]).toEqual({
+      actor: { kind: 'session', id: 'project-a-calm-mesa', uuid: 'u-project-a-calm-mesa' }, verb: 'operate',
+      route: 'POST /api/linear/proxy/issues/:id',
+      resource: { workspaceId: WS_FIXTURE.a.id, teamKey: 'BBB', issue: 'BBB-7', parentTeamKey: null, op: 'update' },
+    });
+    expect(rig.rows().map((r) => [r['outcome'], r['teamKey'], r['target']])).toEqual([['refused', 'BBB', 'BBB-7'], ['ok', 'BBB', 'BBB-7']]);
+  });
+
+  it('a create in AAA with a parent in BBB asks with parentTeamKey BBB; a policy that refuses it gives 403 and no mutation, in two calls at most', async () => {
+    const p = recording((ask) => (ask.resource.parentTeamKey !== null && ask.resource.parentTeamKey !== ask.resource.teamKey
+      ? { allow: false, why: 'denied', decisionId: null } : { allow: true, decisionId: null }));
+    rig = await proxyRig({ policy: p.policy });
+    await seedSlot(rig.ccrcDir, 'a', { teams: both });
+    const res = await rig.call('create', { body: { team: 'AAA', title: 'T', parent: 'BBB-3' } });
+    expect([res.statusCode, JSON.parse(res.body).error]).toEqual([403, 'policy-denied']);
+    expect(p.asks.map((a) => [a.resource.teamKey, a.resource.parentTeamKey, a.resource.issue])).toEqual([['AAA', 'BBB', null]]);
+    expect(rig.calls.map((c) => c.op)).toEqual(['ResolveParent']);
+    expect(rig.rows()).toMatchObject([{ op: 'create', outcome: 'denied', teamKey: 'AAA', target: 'BBB-3' }]);
+    const same = await rig.call('create', { body: { team: 'AAA', title: 'T', parent: 'AAA-3' } });
+    expect(same.statusCode, same.body).toBe(200);
+    expect(rig.calls.slice(1).map((c) => c.op)).toEqual(['ResolveParent', 'IssueCreate']);
   });
 });

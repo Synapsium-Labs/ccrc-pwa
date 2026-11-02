@@ -56,6 +56,21 @@ export const WS_CREATE_REFUSALS = ['bad-project', 'name-too-long', 'bad-name', '
 export type WsCreateRefusal = (typeof WS_CREATE_REFUSALS)[number];
 
 /**
+ * The Linear proxy's own words (#1444, spec §6.8): the twelve `/api/linear/proxy/*` routes (`linear/proxyRoutes.ts`)
+ * answer them through `refuseRoute` with a computed word (the router's, the operation table's, a Linear answer's), so
+ * they are a typed vocabulary of their own rather than `GenericRefusal`s, whose "still sent" scan reads only literal
+ * words at a send. The words the proxy shares with older routes (`unauthenticated`, the attribution three,
+ * `bad-request`, `not-found`, `not-configured`, `rate-limited`, `timeout`, `unreachable`, `malformed`,
+ * `linear-unavailable`) keep their one row elsewhere in the table.
+ */
+export const LINEAR_PROXY_REFUSALS = [
+  'bad-field', 'team-unknown', 'workspace-unknown', 'name-unknown', 'team-ambiguous', 'workspace-required', 'name-ambiguous',
+  'issue-moved', 'policy-denied', 'policy-unavailable', 'journal-unavailable', 'linear-unauthorised', 'linear-forbidden',
+  'linear-invalid',
+] as const;
+export type LinearProxyRefusal = (typeof LINEAR_PROXY_REFUSALS)[number];
+
+/**
  * The workspace rename's own words (named workspaces S9, `POST /api/sessions/:id/title`), decided from ccd's refusal
  * sentences by `classifyTitleFailure` (`server/src/workspaceTitle.ts`, L1) and sent through `refuseRoute` with a
  * computed word, so a typed vocabulary of their own, like `WS_CREATE_REFUSALS`. The rename reuses the create's `bad-name`
@@ -127,7 +142,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
   | ItemMoveRefusal | LedgerRouteRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
-  | AccountRouteRefusal;
+  | AccountRouteRefusal
+  // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
+  | LinearProxyRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -231,6 +248,18 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // an item that is not in a state the move starts from, for the wrong actor and for a programme still running.
   [LEDGER_ROUTE_REFUSALS.notYourProgramme]: 403, [LEDGER_ROUTE_REFUSALS.badSpecPath]: 400, [LEDGER_ROUTE_REFUSALS.badInShort]: 400,
   'unknown-item': 404, 'not-open': 409, 'wrong-actor': 409, 'programme-live': 409,
+  // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
+  // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
+  // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's
+  // deny and Linear's own 403; 503 for a policy or a journal that could not answer, the box's fault; 502 for a stored key
+  // Linear rejected (the box's key is bad, never the caller's request); 422 for an input Linear refused.
+  'bad-field': 400,
+  'team-unknown': 404, 'workspace-unknown': 404, 'name-unknown': 404,
+  'team-ambiguous': 409, 'workspace-required': 409, 'name-ambiguous': 409, 'issue-moved': 409,
+  'policy-denied': 403, 'linear-forbidden': 403,
+  'policy-unavailable': 503, 'journal-unavailable': 503,
+  'linear-unauthorised': 502,
+  'linear-invalid': 422,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
