@@ -86,11 +86,15 @@ afterEach(() => {
 });
 
 describe('the fold and the trouble card on the Accounts screen (spec §4.2, §4.4)', () => {
+  // The last accounts answer is one fixed instant, as the store keeps it: a reader that re-ran `Date.now()` on every
+  // call drifted a millisecond past the screen's own clock (`useNow`, read at mount) and read "3m ago".
+  let readAt = 0;
   const screenWith = (conn: 'open' | 'down'): void => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    readAt = Date.now() - 240_000;
     act(() => useFleetStore.setState({
       conn, usage: [], roster: [lane('lane-a'), lane('lane-b', { kind: 'sign-in' })], accountsConnect: FRESH(),
-      accountsReadAt: () => Date.now() - 240_000,
+      accountsReadAt: () => readAt,
       lanes: {
         'lane-a': { state: { word: 'signed-out', source: 'checked 1h ago' }, ready: false, notReadyReason: 'check-failed' },
         'lane-b': LANE,
@@ -120,7 +124,8 @@ describe('the fold and the trouble card on the Accounts screen (spec §4.2, §4.
   it('offline, Remove and Replace are refused with the sentence, and nothing is sent', () => {
     const sent = [vi.spyOn(api, 'accountRemoveCheck'), vi.spyOn(api, 'accountRemove'), vi.spyOn(api, 'accountCredential')];
     screenWith('down');
-    const sentence = offlineRefusal(Date.now() - 240_000, Date.now());
+    const sentence = offlineRefusal(readAt, Date.now());
+    expect(sentence).toBe("You're offline: nothing was sent. Read 4m ago.");
     for (const [id, name] of [['lane-a', 'Replace token'], ['lane-a', 'Remove…'], ['lane-b', 'Remove…']] as const) {
       const b = within(card(id)).getByRole('button', { name });
       expect(b, `${id} ${name}`).toBeDisabled();
