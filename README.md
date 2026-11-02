@@ -1423,7 +1423,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the thirty-seven machine lanes the
+liveness gate reads the shipped sha out of it), the forty-six machine lanes the
 fleet host reaches (thirty-four box-token-consulting coordination routes plus
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
