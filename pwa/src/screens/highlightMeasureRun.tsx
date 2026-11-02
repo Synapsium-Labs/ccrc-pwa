@@ -145,7 +145,7 @@ async function until(deps: MeasureDeps, test: () => boolean, capMs: number): Pro
 /** The longest gap between animation frames while `during` runs. */
 async function longestGap(deps: MeasureDeps, during: Promise<unknown>): Promise<number> {
   let done = false;
-  void during.finally(() => { done = true; });
+  void during.then(() => { done = true; }, () => { done = true; });
   let last = await deps.frame();
   let gap = 0;
   while (!done) {
@@ -209,6 +209,9 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   let coldMs: number | null = null;
   for (const g of HIGHLIGHT_GRAMMARS) {
     const r = await timed(deps, warm, g, 'x');
+    // A highlighter that cannot answer (no worker here, a boot that failed) would leave every figure after this one
+    // meaningless, so the run ends here, naming the answer's kind (a fixed word, nothing private).
+    if (r.outcome.kind !== 'html') throw new Error(`The highlight worker did not answer (${r.outcome.kind}).`);
     if (coldMs === null) coldMs = round(r.postedAt - created);
   }
   const stats = new Map<string, { ms: number[]; ratios: number[]; chars: number; notHtml: number; largest: string }>();
@@ -273,12 +276,16 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   const checked = kept.map((k) => ({ raw: k.raw, checked: k.html.length > MD_HIGHLIGHT_MAX_HTML_CHARS ? null : checkHighlightHtml(k.html) }));
   const t1 = deps.now();
   const root4 = createRoot(deps.host);
-  flushSync(() => root4.render(
-    <>{checked.map((c, i) => <pre key={i}><HighlightedCode entry={c.checked === null ? PLAIN : { kind: 'html', mode: 'block', checked: c.checked }} raw={c.raw} /></pre>)}</>,
-  ));
-  void deps.host.offsetHeight;
-  const t2 = deps.now();
-  root4.unmount();
+  let t2: number;
+  try {
+    flushSync(() => root4.render(
+      <>{checked.map((c, i) => <pre key={i}><HighlightedCode entry={c.checked === null ? PLAIN : { kind: 'html', mode: 'block', checked: c.checked }} raw={c.raw} /></pre>)}</>,
+    ));
+    void deps.host.offsetHeight;
+    t2 = deps.now();
+  } finally {
+    root4.unmount();
+  }
   // Item 5: the largest real page through DocMarkdown, no ceilings, no part-1 bounds.
   progress('Item 5');
   let firstFrameToColouredMs: number | null = null;
@@ -291,11 +298,14 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
       createStore: (h, mode) => createHighlightStore(h, { mode, part1: false, ceilings: false }, clockOf(deps)),
     };
     const root5 = createRoot(deps.host);
-    root5.render(<HighlighterContext value={ctx}><DocMarkdown text={largest.text} pinKey="r19" parser={deps.parse} link={largest.link} /></HighlighterContext>);
-    const first = await until(deps, () => deps.host.querySelector('article') !== null, MEASURE_DEADLINE_MS);
-    const coloured = await until(deps, () => (published as HighlightStore | null)?.settled() === true, MEASURE_DEADLINE_MS * 4);
-    firstFrameToColouredMs = first === null || coloured === null ? null : round(coloured - first);
-    root5.unmount();
+    try {
+      root5.render(<HighlighterContext value={ctx}><DocMarkdown text={largest.text} pinKey="r19" parser={deps.parse} link={largest.link} /></HighlighterContext>);
+      const first = await until(deps, () => deps.host.querySelector('article') !== null, MEASURE_DEADLINE_MS);
+      const coloured = await until(deps, () => (published as HighlightStore | null)?.settled() === true, MEASURE_DEADLINE_MS * 4);
+      firstFrameToColouredMs = first === null || coloured === null ? null : round(coloured - first);
+    } finally {
+      root5.unmount();
+    }
   }
   // Items 6 and 3 (crafted): the shipped deadline.
   const item6: MeasureResult['item6'][number][] = [];
@@ -318,9 +328,14 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   const keys7 = blocks7.map((b) => store7.keyOf(b.lang, b.raw)).flatMap((k) => (k.kind === 'key' ? [k.key] : []));
   const start7 = deps.now();
   const releases = keys7.map((k) => store7.request(k));
-  const settled7 = await until(deps, () => store7.settled(), 2 * sumMs);
-  const entries7 = keys7.map((k) => store7.peek(k).kind);
-  releases.forEach((release) => release());
+  let settled7: number | null;
+  let entries7: string[];
+  try {
+    settled7 = await until(deps, () => store7.settled(), 2 * sumMs);
+    entries7 = keys7.map((k) => store7.peek(k).kind);
+  } finally {
+    releases.forEach((release) => release());
+  }
   const waitMs = settled7 === null ? null : round(settled7 - start7);
   // Item 8: a streamed chat message, at each settle cadence and, at each, for each candidate debounce.
   const LINES = Array.from({ length: 40 }, (_, i) => `const value${i} = compute(${i}, "x${i}");`);
@@ -344,17 +359,22 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
       const show = (text: string): void => {
         flushSync(() => root8.render(<HighlighterContext value={ctx}><ChatMarkdown text={text} /></HighlighterContext>));
       };
-      for (let n = 1; n <= LINES.length; n += 1) {
-        show(`Working on it.\n\n\`\`\`ts\n${LINES.slice(0, n).join('\n')}`);
-        await deps.sleep(settleMs);
+      let closedAt: number;
+      let colouredAt: number | null;
+      try {
+        for (let n = 1; n <= LINES.length; n += 1) {
+          show(`Working on it.\n\n\`\`\`ts\n${LINES.slice(0, n).join('\n')}`);
+          await deps.sleep(settleMs);
+        }
+        show(`Working on it.\n\n\`\`\`ts\n${full}\n\`\`\`\n\nDone.`);
+        closedAt = deps.now();
+        colouredAt = await until(deps, () => {
+          const code = deps.host.querySelector('code.hljs');
+          return code !== null && code.textContent === full && code.querySelector('[class^="hljs-"]') !== null;
+        }, 10 * HIGHLIGHT_STREAM_DEBOUNCE_MS + MEASURE_DEADLINE_MS);
+      } finally {
+        root8.unmount();
       }
-      show(`Working on it.\n\n\`\`\`ts\n${full}\n\`\`\`\n\nDone.`);
-      const closedAt = deps.now();
-      const colouredAt = await until(deps, () => {
-        const code = deps.host.querySelector('code.hljs');
-        return code !== null && code.textContent === full && code.querySelector('[class^="hljs-"]') !== null;
-      }, 10 * HIGHLIGHT_STREAM_DEBOUNCE_MS + MEASURE_DEADLINE_MS);
-      root8.unmount();
       byDebounce.push({ debounceMs: d, requests, closeToColouredMs: colouredAt === null ? null : round(colouredAt - closedAt) });
     }
     byCadence.push({ settleMs, byDebounce });
@@ -391,6 +411,7 @@ export const MEASURE_TEXT = {
   start: 'Start',
   stop: 'Stop',
   starting: 'Starting…',
+  stopping: 'Stopping…',
   done: 'Done.',
   result: 'Result',
   select: 'Select result',

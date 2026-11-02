@@ -3,11 +3,13 @@
 // highlighters (and, for the shipped deadline, one that times out at once), a counting clock and a frame that yields one
 // task (so React commits and the store's debounce timers fire), so it measures nothing real; the cases pin its shape, that it reads only, and that its result names nothing
 // private. The page is opened once, on the operator's phone, after W5h-a is deployed.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Highlighter } from '../src/lib/highlightProtocol';
+import { createHighlightAnswerer } from '../src/lib/highlightJob';
+import type { HighlightJob, Highlighter } from '../src/lib/highlightProtocol';
 import { HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_BOOT_BUDGET_MS, HIGHLIGHT_PAGE_MAX_TIMEOUTS, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
+import type { WorkerLike } from '../src/lib/markdownRunner';
 import { HighlightMeasure } from '../src/screens/HighlightMeasure';
 import {
   MEASURE_CANDIDATE_DEBOUNCES, MEASURE_SETTLE_CADENCES_MS, MEASURE_TEXT, formatMeasureResult, runHighlightMeasure, type MeasureDeps,
@@ -117,4 +119,116 @@ describe('R19: the page', () => {
     expect(selection?.anchorNode).toBe(pre);
     expect(selection?.focusOffset).toBe(pre!.childNodes.length);
   }, 90_000);
+});
+
+// A fix round of the same task: the page ends what it starts (its workers, its roots, its rejections), and a run whose
+// highlighter cannot answer ends with a line, not a "Done." over meaningless figures.
+
+/** A worker over the real answerer, posting `{ready}` and each answer a microtask later; a block of more than 2000
+ *  characters (the crafted shapes) is answered `unregistered` at once, so a pathological one is never highlighted
+ *  in-thread. Counts its `terminate()` calls and answers nothing once terminated. */
+class AnsweringWorker implements WorkerLike<HighlightJob> {
+  onmessage: ((e: { data: unknown }) => void) | null = null;
+  onerror: ((e: unknown) => void) | null = null;
+  onmessageerror: ((e: unknown) => void) | null = null;
+  terminated = 0;
+  private readonly answer = createHighlightAnswerer();
+  constructor() { queueMicrotask(() => { if (this.terminated === 0) this.onmessage?.({ data: { ready: true } }); }); }
+  postMessage(job: HighlightJob): void {
+    const reply = (data: unknown): void => queueMicrotask(() => { if (this.terminated === 0) this.onmessage?.({ data }); });
+    if (job.code.length > 2000) reply({ id: job.id, result: { kind: 'unregistered' } });
+    else this.answer(job, reply);
+  }
+  terminate(): void { this.terminated += 1; }
+}
+
+/** The page's own deps, from `fakes()`, less what the page supplies itself (host, signal, highlighter). */
+function pageDeps() {
+  const { host: _host, signal: _signal, highlighter: _highlighter, ...rest } = fakes().deps;
+  return rest;
+}
+
+function spawner() {
+  const spawned: AnsweringWorker[] = [];
+  const spawn = (): AnsweringWorker => { const w = new AnsweringWorker(); spawned.push(w); return w; };
+  return { spawned, spawn };
+}
+
+const runningLine = (): string => document.querySelector('[aria-live="polite"]')?.textContent ?? '';
+const pageHost = (): Element | null => document.querySelector('div.sr-only[aria-hidden="true"]');
+
+describe('R19: the page ends what it starts', () => {
+  it('terminates every worker it spawned once the run is done', async () => {
+    const { spawned, spawn } = spawner();
+    render(<HighlightMeasure deps={pageDeps()} spawn={spawn} />);
+    fireEvent.click(screen.getByRole('button', { name: MEASURE_TEXT.start }));
+    await waitFor(() => screen.getByText(MEASURE_TEXT.result), { timeout: 60_000 });
+    expect(spawned.length).toBeGreaterThan(15);
+    expect(spawned.filter((w) => w.terminated === 0).length).toBe(0);
+  }, 90_000);
+
+  it('Stop mid-run terminates its workers and unmounts its roots; Start then completes with no root warning and a clean host', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const { spawned, spawn } = spawner();
+      render(<HighlightMeasure deps={pageDeps()} spawn={spawn} />);
+      fireEvent.click(screen.getByRole('button', { name: MEASURE_TEXT.start }));
+      await waitFor(() => expect(runningLine()).toMatch(/^Item 8/), { timeout: 60_000 });
+      fireEvent.click(screen.getByRole('button', { name: MEASURE_TEXT.stop }));
+      await waitFor(() => screen.getByRole('button', { name: MEASURE_TEXT.start }), { timeout: 60_000 });
+      expect(spawned.filter((w) => w.terminated === 0).length).toBe(0);
+      expect(pageHost()?.childElementCount).toBe(0);
+      const first = spawned.length;
+      fireEvent.click(screen.getByRole('button', { name: MEASURE_TEXT.start }));
+      await waitFor(() => screen.getByText(MEASURE_TEXT.result), { timeout: 60_000 });
+      expect(spawned.length).toBeGreaterThan(first);
+      expect(spawned.filter((w) => w.terminated === 0).length).toBe(0);
+      expect(pageHost()?.childElementCount).toBe(0);
+      const messages = errors.mock.calls.map((c) => String(c[0]));
+      expect(messages.filter((m) => /createRoot|already been passed/.test(m))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  }, 150_000);
+
+  it('unmounting the page aborts the run and terminates its workers; nothing it spawned outlives it', async () => {
+    const { spawned, spawn } = spawner();
+    const view = render(<HighlightMeasure deps={pageDeps()} spawn={spawn} />);
+    fireEvent.click(screen.getByRole('button', { name: MEASURE_TEXT.start }));
+    await waitFor(() => expect(runningLine()).toMatch(/^Item 8/), { timeout: 60_000 });
+    view.unmount();
+    const at = spawned.length;
+    expect(spawned.filter((w) => w.terminated === 0).length).toBe(0);
+    // Item 8 alone would spawn one highlighter per combination, twelve, over the next seconds.
+    await new Promise((resolve) => { setTimeout(resolve, 1500); });
+    expect(spawned.length - at, 'an aborted run spawns at most the worker its current step had begun').toBeLessThanOrEqual(1);
+    expect(spawned.filter((w) => w.terminated === 0).length).toBe(0);
+  }, 90_000);
+
+  it('a highlighter that cannot answer ends the run with a line naming its answer, not "Done."', async () => {
+    const dead: Highlighter = { highlight: async () => ({ kind: 'worker-unavailable' }), status: () => 'worker-unavailable', prewarm: () => undefined };
+    const { deps } = fakes({ highlighter: () => dead });
+    await expect(runHighlightMeasure(deps, () => undefined)).rejects.toThrow('worker-unavailable');
+    const rest = pageDeps();
+    render(<HighlightMeasure deps={{ ...rest, highlighter: () => dead }} />);
+    fireEvent.click(screen.getByRole('button', { name: MEASURE_TEXT.start }));
+    await waitFor(() => expect(runningLine()).toContain('worker-unavailable'), { timeout: 60_000 });
+    expect(screen.queryByText(MEASURE_TEXT.done)).toBeNull();
+    expect(screen.queryByText(MEASURE_TEXT.result)).toBeNull();
+  }, 90_000);
+
+  it('a rejection during item 6 raises no unhandled rejection of its own', async () => {
+    const seen: unknown[] = [];
+    const on = (e: unknown): void => { seen.push(e); };
+    process.on('unhandledRejection', on);
+    try {
+      const failing: Highlighter = { highlight: async () => { throw new Error('stopped'); }, status: () => 'live', prewarm: () => undefined };
+      const { deps } = fakes({ highlighter: (ms) => (ms === HIGHLIGHT_BLOCK_DEADLINE_MS ? failing : inThreadHighlighter()) });
+      await expect(runHighlightMeasure(deps, () => undefined)).rejects.toThrow('stopped');
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      expect(seen).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', on);
+    }
+  }, 60_000);
 });
