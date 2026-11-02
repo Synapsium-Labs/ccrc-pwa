@@ -126,7 +126,7 @@ describe('select today: a fresh, a missing and a stale map (characterization)', 
     const r = runSelect(repo, ['--event', 'pull_request', '--map', map]);
     expect(r.outputs.tests).toBe('selected');
     expect(r.outputs.count).toBe('1');
-    expect(r.summary).toMatch(/older than 3 h/);
+    expect(r.summary).toMatch(/older than 5 h/);
   });
 
   it('a refresh with no durations traces the whole selection, every file once, in at most eight shards', () => {
@@ -296,11 +296,11 @@ describe('select warns when the map is old', () => {
     return runSelect(repo, ['--event', 'pull_request', '--map', map, '--now', now.toISOString(), ...extra]);
   }
 
-  it('a map built more than three hours ago is reported in the step summary and as a warning annotation', () => {
-    const r = withBuiltAt(4 * HOUR);
-    expect(r.summary).toMatch(/map is 4 h old/);
-    expect(r.summary).toMatch(/older than 3 h/);
-    expect(r.stdout).toMatch(/::warning::.*map is 4 h old/);
+  it('a map built more than five hours ago is reported in the step summary and as a warning annotation', () => {
+    const r = withBuiltAt(6 * HOUR);
+    expect(r.summary).toMatch(/map is 6 h old/);
+    expect(r.summary).toMatch(/older than 5 h/);
+    expect(r.stdout).toMatch(/::warning::.*map is 6 h old/);
     expect(r.outputs.tests).toBe('selected');
   });
 
