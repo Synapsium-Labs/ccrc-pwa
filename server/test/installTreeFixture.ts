@@ -59,6 +59,9 @@ export const TREE_FILES = [
   // D-7354, D-7360: the graph resolver, which `ccrc install`/`update` (the sweep units' renderers and the store's
   // creation) and `ccrc uninstall` (the marked store) source from beside ccrc. A real tree has it: `ccd/` is rsynced whole.
   'ccd/graph-resolve',
+  // D-7353: the engine wrapper, which doctor's closing graphify check runs as `graph-build --probe` from beside
+  // ccrc (`$CCRC_HERE/graph-build`) and FAILs by name when absent. A real tree has it: `ccd/` is rsynced whole.
+  'ccd/graph-build',
   // The GPT lane's five common executables, COPIED from the repository: the
   // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
   // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both

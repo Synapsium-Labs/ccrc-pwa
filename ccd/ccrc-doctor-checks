@@ -4788,11 +4788,10 @@ _check_graphify() {
   [ ! -e "$HOME/.ccrc/graph-gate-off" ] \
     || gfx_gate=", gate off (operator file \$HOME/.ccrc/graph-gate-off)"
 
-  local -a gfx_install_fail=() gfx_excludes_warn=()
+  local -a gfx_install_fail=() gfx_probe_fail=() gfx_store_fail=() gfx_excludes_fail=() gfx_links_fail=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
-  local -a gfx_rows_warn=()
-  # The census bound's cadence, when it could not be read (D-7054; OA-C8c (a), D-7062): its rc and the bound it left unmeasured.
-  local gfx_cadence_rc=0 gfx_cadence_what=""
+  local -a gfx_rows_warn=() gfx_knob_warn=() gfx_drift_warn=() gfx_repo_warn=() gfx_backoff_warn=()
+  local -a gfx_sizing_warn=() gfx_slice_warn=() gfx_migrate_warn=()
 
   # ── (2) engine: the venv's own `graphify --version` against the pin ──────
   # Parsed by parameter expansion, not awk — the same rule `_check_disk`'s own
@@ -4808,6 +4807,104 @@ _check_graphify() {
       gfx_install_fail+=("the engine reports $got but there is no pin at \$HOME/.ccrc/graphify.pin to compare it against")
     elif [ "$got" != "$pin" ]; then
       gfx_install_fail+=("the engine reports $got but the pin at \$HOME/.ccrc/graphify.pin says $pin")
+    fi
+  fi
+
+  # ── (3) graph revision 2 (GR7, D-7353; spec §8): the settings, the store, the probe, the units, the slice ──
+  # The graph settings are read the way the sweep's unit reads them: `_gr_knobs file` (ccd/graph-resolve, through
+  # ccrc's `_graph_knobs`), ccrc.env alone (D-7348). A value of the wrong shape kept its default, and its GK_WARN line
+  # names the key, the value, its source and the default used (spec §8 row 1).
+  local gfx_lib=0 gfx_store="" gfx_w
+  if ! declare -F _gr_knobs >/dev/null 2>&1 && [ -r "${CCRC_HERE:-}/graph-resolve" ]; then
+    # shellcheck source=SCRIPTDIR/graph-resolve
+    . "$CCRC_HERE/graph-resolve" 2>/dev/null
+  fi
+  if declare -F _gr_knobs >/dev/null 2>&1 && declare -F _graph_knobs >/dev/null 2>&1; then gfx_lib=1; fi
+  if [ "$gfx_lib" -eq 0 ]; then
+    gfx_install_fail+=("the graph resolver beside ccrc (\$HOME/ccrc/ccd/graph-resolve) or ccrc's graph settings reader is not loaded, so the graph settings and the store were never read")
+  else
+    _gr_knobs file || true
+    for gfx_w in ${GK_WARN[@]+"${GK_WARN[@]}"}; do gfx_knob_warn+=("$gfx_w"); done
+    # The store (spec §2.1, §2.2): `_gr_store` refuses a root that breaks §2.2 (FAIL, row 1); a root that is
+    # missing, unwritable or carries no marker is a FAIL too (row 3), since `ccrc install` creates it with its
+    # marker (D-7360) and the sweep refuses a pass without one. The marker is tested by `_gr_store_marked` alone.
+    if ! _gr_store >/dev/null; then
+      gfx_store_fail+=("$GR_WHY")
+    else
+      gfx_store="$GR_STORE"
+      if [ ! -d "$gfx_store" ]; then
+        gfx_store_fail+=("the graph store $gfx_store does not exist")
+      elif [ ! -w "$gfx_store" ]; then
+        gfx_store_fail+=("the graph store $gfx_store is not writable")
+      elif ! _gr_store_marked; then
+        gfx_store_fail+=("the graph store $gfx_store carries no store marker, so the sweep and every collector refuse it")
+      fi
+    fi
+  fi
+
+  # `graph-build --probe` (spec §3.4, §8 row 16): the wrapper's checks against the pinned engine, without a build,
+  # under the venv's own interpreter, as the sweep runs a build. Only when (2) found an engine and a pin to probe:
+  # a missing one is (2)'s FAIL already. The wrapper's last stderr line is its one `graph-build: <class>: …` reason.
+  if [ -x "$engine" ] && [ -n "$pin" ]; then
+    local gfx_py="$HOME/.ccrc/graphify-venv/bin/python" gfx_probe_out="" gfx_probe_rc=0
+    if [ ! -x "$gfx_py" ]; then
+      gfx_probe_fail+=("there is no interpreter at \$HOME/.ccrc/graphify-venv/bin/python, so graph-build --probe never ran")
+    elif [ ! -r "${CCRC_HERE:-}/graph-build" ]; then
+      gfx_probe_fail+=("there is no engine wrapper beside ccrc (\$HOME/ccrc/ccd/graph-build), so graph-build --probe never ran")
+    else
+      gfx_probe_out="$("$gfx_py" -s -P "$CCRC_HERE/graph-build" --probe --pin "$pin" 2>&1 >/dev/null)" || gfx_probe_rc=$?
+      if [ "$gfx_probe_rc" -ne 0 ]; then
+        gfx_probe_out="${gfx_probe_out%$'\n'}"; gfx_probe_out="${gfx_probe_out##*$'\n'}"
+        gfx_probe_fail+=("graph-build --probe against the pinned engine exited $gfx_probe_rc: ${gfx_probe_out:-it printed no reason}")
+      fi
+    fi
+  fi
+
+  # The rendered units (spec §5.2, §8 row 2; Linux, where they are systemd units): the installed timer's
+  # OnUnitActiveSec= and the service's TimeoutStartSec= against what `_inst_graph_timer`/`_inst_graph_service`
+  # (GR8, D-7354) render from the current settings. Rendered into a scratch directory in a subshell, with the
+  # settings read above (INST_GRAPH_LIB set, so the renderer does not re-read them); the doctor never writes a unit.
+  if [ "${CCD_OS:-linux}" != darwin ] && [ "$gfx_lib" -eq 1 ] && [ -n "${BOX_TREE_DIR:-}" ]; then
+    local gfx_udir="$HOME/.config/systemd/user" gfx_tmp="" gfx_u gfx_d gfx_have gfx_want gfx_l gfx_f gfx_v
+    if [ -f "$gfx_udir/ccd-graph-sweep.timer" ] || [ -f "$gfx_udir/ccd-graph-sweep.service" ]; then
+      if gfx_tmp="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-doctor-graph.XXXXXX" 2>/dev/null)" \
+         && ( INST_GRAPH_LIB=1
+              _inst_graph_timer "$BOX_TREE_DIR/deploy/systemd/ccd-graph-sweep.timer" "$gfx_tmp/ccd-graph-sweep.timer" \
+                && _inst_graph_service "$BOX_TREE_DIR/deploy/systemd/ccd-graph-sweep.service" "$gfx_tmp/ccd-graph-sweep.service"
+            ) >/dev/null 2>&1; then
+        for gfx_u in ccd-graph-sweep.timer:OnUnitActiveSec ccd-graph-sweep.service:TimeoutStartSec; do
+          gfx_d="${gfx_u#*:}"; gfx_u="${gfx_u%%:*}"
+          [ -f "$gfx_udir/$gfx_u" ] || continue
+          gfx_have="" gfx_want=""
+          for gfx_f in "have:$gfx_udir/$gfx_u" "want:$gfx_tmp/$gfx_u"; do
+            gfx_v=""
+            while IFS= read -r gfx_l || [ -n "$gfx_l" ]; do
+              case "$gfx_l" in "$gfx_d="*) gfx_v="${gfx_l#*=}" ;; esac
+            done < "${gfx_f#*:}"
+            if [ "${gfx_f%%:*}" = have ]; then gfx_have="$gfx_v"; else gfx_want="$gfx_v"; fi
+          done
+          [ "$gfx_have" = "$gfx_want" ] \
+            || gfx_drift_warn+=("the installed $gfx_u says $gfx_d=${gfx_have:-(none)}, but the current graph settings render $gfx_d=$gfx_want")
+        done
+      else
+        gfx_drift_warn+=("the graph sweep's units could not be rendered from the current settings, so the installed ones were not compared")
+      fi
+      [ -z "$gfx_tmp" ] || rm -rf -- "$gfx_tmp"
+    fi
+  fi
+
+  # The tests slice (spec §4, §8 rows 11 and 12; D-7355: it ships as ccrctests.slice): every build runs in it, and
+  # the sweep refuses a build when it is not loaded (D-7356). Its MemoryMax is what the sizing arm below compares a
+  # full build's peak against. Linux with a user manager to ask; elsewhere there is no slice to measure.
+  local gfx_mm=""
+  if [ "${CCD_OS:-linux}" != darwin ] && declare -F _have_systemctl >/dev/null 2>&1 && _have_systemctl; then
+    local gfx_show gfx_ls=""
+    gfx_show="$(systemctl --user show ccrctests.slice -p LoadState -p MemoryMax 2>/dev/null)" || gfx_show=""
+    while IFS= read -r gfx_l; do
+      case "$gfx_l" in LoadState=*) gfx_ls="${gfx_l#*=}" ;; MemoryMax=*) gfx_mm="${gfx_l#*=}" ;; esac
+    done <<< "$gfx_show"
+    if [ "$gfx_ls" != loaded ]; then
+      gfx_slice_warn+=("ccrctests.slice is not loaded, so graph builds are refused until it is installed (LoadState=${gfx_ls:-no answer})")
     fi
   fi
 
@@ -4850,24 +4947,40 @@ _check_graphify() {
     done
   fi
 
-  # ── (5) excludes: every tree the sweep would walk must ignore its own
-  # graphify-out/ — `ccd-graph-sweep`'s own gate, TRAILING SLASH included
-  # (R-3: `git check-ignore -q graphify-out` without it FAILS for a
-  # never-built tree even with the exclude line present). Mirrored, not
-  # sourced: the sweep is a standalone oneshot, not a library either.
+  # ── (5) excludes and links: every tree the sweep would walk ─────────────
+  # A tree must ignore its `graphify-out`, WITHOUT the trailing slash (GR7, D-7353; spec §6.1, §8): the link a tree
+  # now holds is not a directory to git, so the slash-only line does not ignore it, and the sweep links no tree that
+  # fails `git check-ignore -q graphify-out` (GR4). The exclude is the common dir's `info/exclude`, so a failure is
+  # reported once per repository, by its main checkout, as a FAIL. The same walk counts the trees whose
+  # `graphify-out` is still a real directory (migration pending, spec §9.1) and names each dangling link. Mirrored,
+  # not sourced: the sweep is a standalone oneshot, not a library.
   local proot="$HOME/projects" wroot="$HOME/worktrees"
-  local -a gfx_trees=()
-  local d
+  local -a gfx_trees=() gfx_bad_repos=() gfx_dangling=()
+  local d gfx_c gfx_seen_bad=" " gfx_real_dirs=0
   for d in "$proot"/*/ "$wroot"/*/*/; do
     [ -d "$d" ] || continue
     git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 && gfx_trees+=("${d%/}")
   done
-  local gfx_excl_bad=0
   for d in ${gfx_trees[@]+"${gfx_trees[@]}"}; do
-    git -C "$d" check-ignore -q graphify-out/ 2>/dev/null || gfx_excl_bad=$((gfx_excl_bad + 1))
+    if ! git -C "$d" check-ignore -q graphify-out 2>/dev/null; then
+      gfx_c="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || gfx_c="$d/.git"
+      gfx_c="${gfx_c%/.git}"
+      case "$gfx_seen_bad" in
+        *" $gfx_c "*) ;;
+        *) gfx_seen_bad+="$gfx_c "; gfx_bad_repos+=("${gfx_c/#"$HOME"/\$HOME}") ;;
+      esac
+    fi
+    if [ -L "$d/graphify-out" ]; then
+      [ -e "$d/graphify-out" ] || gfx_dangling+=("${d/#"$HOME"/\$HOME}/graphify-out")
+    elif [ -d "$d/graphify-out" ]; then
+      gfx_real_dirs=$((gfx_real_dirs + 1))
+    fi
   done
-  if [ "$gfx_excl_bad" -gt 0 ]; then
-    gfx_excludes_warn+=("$gfx_excl_bad of ${#gfx_trees[@]} tree(s) under \$HOME/projects and \$HOME/worktrees do not ignore graphify-out/")
+  for gfx_c in ${gfx_bad_repos[@]+"${gfx_bad_repos[@]}"}; do
+    gfx_excludes_fail+=("$gfx_c does not ignore graphify-out (git check-ignore -q graphify-out fails in its tree), so the sweep links none of its trees")
+  done
+  if [ "${#gfx_dangling[@]}" -gt 0 ]; then
+    gfx_links_fail+=("dangling graphify-out link(s): $(_dr_join "${gfx_dangling[@]}")")
   fi
 
   # ── (6) census: the sweep's own report on itself ──────────────────────────
@@ -4933,10 +5046,11 @@ _check_graphify() {
         gfx_census_warn+=("\$HOME/.ccrc/graph-sweep.json does not parse as a census (no readable last pass)")
         ;;
       *)
-        # 3x the timer's own interval (deploy/systemd/ccd-graph-sweep.timer,
-        # OnUnitActiveSec=15min, read from that shipped file through
-        # `_dr_cycles_s`, D-7054) — one missed run is ordinary jitter under
-        # load, three in a row means the timer itself has stopped firing.
+        # 3 x CCRC_GRAPH_REFRESH_SECS (GR7, D-7353; spec §7's consumer table): the timer's period is RENDERED from
+        # that setting at install (GR8, D-7354), so the setting is the period, read above through `_gr_knobs` (it
+        # replaces the shipped unit file's `_dr_cycles_s` read, D-7054). One missed run is ordinary jitter under
+        # load, three in a row means the timer itself has stopped firing. With the resolver not loaded the bound is
+        # unmeasured, and (3)'s FAIL already says why.
         # The census is rewritten atomically at the end of EVERY pass, so the
         # FILE's mtime is the last pass's finish — measured through the
         # `_plat_mtime` shim rather than parsing the JSON's ISO stamp, because
@@ -4945,11 +5059,8 @@ _check_graphify() {
         local now_s fin_s
         if [ -n "$finished" ] && now_s="$(date +%s 2>/dev/null)" \
            && fin_s="$(_plat_mtime "$census" 2>/dev/null)"; then
-          local age=$(( now_s - fin_s )) gfx_bound
-          gfx_bound="$(_dr_cycles_s ccd-graph-sweep.timer 3)" || gfx_cadence_rc=$?
-          if [ "$gfx_cadence_rc" -ne 0 ]; then
-            gfx_cadence_what="whether the last graph-sweep pass, finished $((age / 60)) minutes ago, is stale"
-          elif [ "$age" -gt "$gfx_bound" ]; then
+          local age=$(( now_s - fin_s )) gfx_bound=$(( 3 * ${GK[CCRC_GRAPH_REFRESH_SECS]:-0} ))
+          if [ "$gfx_lib" -eq 1 ] && [ "$age" -gt "$gfx_bound" ]; then
             gfx_census_warn+=("the last graph-sweep pass finished $((age / 60)) minutes ago — the timer may not be firing")
           fi
         fi
@@ -4957,45 +5068,148 @@ _check_graphify() {
     esac
 
     # ── D-1454: the ROWS of that pass, not only its status ─────────────────
-    # A pass whose status is `ok` can still have left a third of the fleet's
-    # trees with no graph: `ok` means the pass RAN, and every per-tree verdict
-    # lives in `trees[]`, which nothing here read. MEASURED on the reference
-    # fleet 2026-09-04 — 11 of 51 trees `refused-by-guard` and 2 `failed` on
-    # every pass, under `PASS graphify: … census ok`. The census is the only
-    # record of those rows, NO VERB PRINTS IT (there is no `ccrc graph`
-    # anything — grep `cmd_` in `ccd/ccrc`), and the sweep prints to nobody, so
-    # this line is the whole of an operator's visibility into it.
+    # A pass whose status is `ok` can still have left a third of the fleet with
+    # no graph: `ok` means the pass RAN, and every verdict about a repository
+    # lives in its row, which nothing here read. MEASURED on the reference
+    # fleet 2026-09-04 — 11 of 51 per-tree rows `refused-by-guard` and 2
+    # `failed` on every pass, under `PASS graphify: … census ok`. The census is
+    # the only record of those rows, NO VERB PRINTS IT (there is no `ccrc graph`
+    # anything — grep `cmd_` in `ccd/ccrc`), and the sweep prints to nobody but
+    # its journal, so this line is the whole of an operator's visibility into it.
+    # Since GR7 (D-7353; spec §7, §8) the rows are the repository rows,
+    # `.passes[-1].repos[]`, and the counts add `timed-out`, `oom-killed` and
+    # `skipped-slots` to `refused-by-guard` and `failed`.
     #
-    # WARN, NEVER FAIL, and that is a ruling, not a hedge: a refused tree is
+    # WARN, NEVER FAIL, and that is a ruling, not a hedge: a refused build is
     # the corpus guard doing exactly its job (D-1449's own subject), the fix is
     # in the REPOSITORY and not on this box, and a FAIL would red `ccrc doctor`
     # — hence `ccrc install`'s closing gate, D-139 — for a condition no ccrc
-    # verb can clear. The two counts share one bucket because they share one
-    # remedy (read the rows, then act per-tree); the failed count is named
-    # separately because "refused" and "could not build" are different repairs.
-    local gfx_refused gfx_rowfail gfx_rowtotal
-    gfx_refused="$(jq -r '[.passes[-1].trees[]? | select(.outcome == "refused-by-guard")] | length' "$census" 2>/dev/null)"
-    gfx_rowfail="$(jq -r '[.passes[-1].trees[]? | select(.outcome == "failed")] | length' "$census" 2>/dev/null)"
-    gfx_rowtotal="$(jq -r '[.passes[-1].trees[]?] | length' "$census" 2>/dev/null)"
+    # verb can clear; a build the heavy queue or the slice's cap stopped is the
+    # same, the previous graph stays served. The counts share one bucket because
+    # they share one remedy (read the rows, then act per repository); each is
+    # named separately because each is a different repair.
+    local gfx_counts gfx_rowtotal gfx_refused gfx_rowfail gfx_rowtimed gfx_rowoom gfx_rowslots
+    gfx_counts="$(jq -r '[.passes[-1].repos[]?] as $r
+      | [($r | length)] + ([ "refused-by-guard", "failed", "timed-out", "oom-killed", "skipped-slots" ]
+          | map(. as $o | [$r[] | select(.outcome == $o)] | length))
+      | map(tostring) | join(" ")' "$census" 2>/dev/null)"
+    read -r gfx_rowtotal gfx_refused gfx_rowfail gfx_rowtimed gfx_rowoom gfx_rowslots <<< "$gfx_counts"
     # An unparseable answer is NOT a zero — it is a measurement that failed,
     # and the arms above already own "the census does not parse". Anything but
     # a run of digits is left to them rather than reported here as "0 refused".
-    case "$gfx_refused$gfx_rowfail$gfx_rowtotal" in
-      ''|*[!0-9]*) ;;
+    case "$gfx_rowtotal:$gfx_refused:$gfx_rowfail:$gfx_rowtimed:$gfx_rowoom:$gfx_rowslots" in
+      *::*|:*|*:|*[!0-9:]*) ;;
       *)
-        if [ "$gfx_refused" -gt 0 ] || [ "$gfx_rowfail" -gt 0 ]; then
-          local -a gfx_bits=()
-          [ "$gfx_refused" -gt 0 ] && gfx_bits+=("$gfx_refused refused (untracked paths — commit them, ignore them, or name them in \$HOME/.ccrc/graph-noise/<repo>.list)")
-          [ "$gfx_rowfail" -gt 0 ] && gfx_bits+=("$gfx_rowfail failed")
-          local gfx_rows_txt="" gfx_bit
+        local -a gfx_bits=()
+        [ "$gfx_refused" -gt 0 ] && gfx_bits+=("$gfx_refused refused (untracked paths — commit them, ignore them, or name them in \$HOME/.ccrc/graph-noise/<repo>.list)")
+        [ "$gfx_rowfail" -gt 0 ] && gfx_bits+=("$gfx_rowfail failed")
+        [ "$gfx_rowtimed" -gt 0 ] && gfx_bits+=("$gfx_rowtimed timed out")
+        [ "$gfx_rowoom" -gt 0 ] && gfx_bits+=("$gfx_rowoom OOM-killed")
+        [ "$gfx_rowslots" -gt 0 ] && gfx_bits+=("$gfx_rowslots skipped (no heavy test slot)")
+        if [ "${#gfx_bits[@]}" -gt 0 ]; then
+          local gfx_rows_txt="" gfx_bit gfx_word=repositories
           for gfx_bit in "${gfx_bits[@]}"; do
             [ -z "$gfx_rows_txt" ] || gfx_rows_txt+=", "
             gfx_rows_txt+="$gfx_bit"
           done
-          gfx_rows_warn+=("$gfx_rows_txt — of $gfx_rowtotal tree(s) in the last graph-sweep pass")
+          [ "$gfx_rowtotal" -ne 1 ] || gfx_word=repository
+          gfx_rows_warn+=("$gfx_rows_txt — of $gfx_rowtotal $gfx_word in the last graph-sweep pass")
         fi
         ;;
     esac
+
+    # ── per repository (GR7, D-7353; spec §8 rows 5 to 8, 12 to 14; §3.3.1) ──
+    # Each row of the last pass, against its repository's published build (`<store>/<repo_key>/current/meta.json`,
+    # spec §2.3) and the rows of the earlier passes. The thresholds are the settings' (3 x REFRESH_SECS, 2 x
+    # FULL_REBUILD_SECS, FULL_FAIL_MAX and FAIL_BACKOFF_SECS), but for two the spec fixes: 75% of the tests slice's
+    # MemoryMax (decision G5) and three passes of `skipped-slots`. Every finding is a WARN: the previous graph stays
+    # served, and none is a defect of this box a ccrc verb clears.
+    if [ "$gfx_lib" -eq 1 ] && [ -n "$gfx_store" ]; then
+      local gfx_now gfx_row gfx_rk gfx_src gfx_out gfx_why gfx_nt gfx_ff gfx_ffat gfx_meta gfx_m
+      local gfx_engine gfx_commit gfx_built gfx_lfa gfx_mkind gfx_mpeak gfx_next gfx_last gfx_peak gfx_age
+      local gfx_slot_passes=3
+      local -a gfx_rows=()
+      gfx_now="$(date +%s 2>/dev/null)" || gfx_now=""
+      mapfile -t gfx_rows < <(jq -r '.passes[-1].repos[]?
+        | [.repo_key // "", .source // "", .outcome // "", ((.reason // "") | gsub("[\n\t\u001f]"; " ")),
+           ((.["trees"] // 0) | tostring), ((.full_failures // 0) | tostring), (.full_failed_at // "")]
+        | join("\u001f")' "$census" 2>/dev/null)
+      for gfx_row in ${gfx_rows[@]+"${gfx_rows[@]}"}; do
+        IFS=$'\037' read -r gfx_rk gfx_src gfx_out gfx_why gfx_nt gfx_ff gfx_ffat <<< "$gfx_row"
+        [ -n "$gfx_rk" ] && [[ "$gfx_rk" != */* ]] && [[ "$gfx_now" =~ ^[0-9]+$ ]] || continue
+        [[ "$gfx_nt" =~ ^[0-9]+$ ]] || gfx_nt=0
+        [[ "$gfx_ff" =~ ^[0-9]+$ ]] || gfx_ff=0
+        gfx_meta="$gfx_store/$gfx_rk/current/meta.json"
+        gfx_m=""
+        [ -r "$gfx_meta" ] && gfx_m="$(jq -r '[.engine // "", .commit // "",
+            ((try (.built_at | fromdateiso8601 | floor) catch "") | tostring),
+            ((try (.last_full_at | fromdateiso8601 | floor) catch "") | tostring),
+            .kind // "", (.peak_mem_kb | tostring)] | join("\u001f")' "$gfx_meta" 2>/dev/null)"
+        IFS=$'\037' read -r gfx_engine gfx_commit gfx_built gfx_lfa gfx_mkind gfx_mpeak <<< "$gfx_m"
+        # row 5: a repository with trees (and not excluded) has a published build at the pin.
+        if [ "$gfx_nt" -gt 0 ] && [ "$gfx_out" != excluded ]; then
+          if [ -z "$gfx_m" ]; then
+            gfx_repo_warn+=("$gfx_rk has $gfx_nt tree(s) and no published graph (last row: $gfx_out${gfx_why:+: $gfx_why})")
+          elif [ "$gfx_engine" != "$pin" ]; then
+            gfx_repo_warn+=("$gfx_rk has $gfx_nt tree(s) and no published graph at the pin $pin (current: ${gfx_engine:-unknown})")
+          fi
+        fi
+        # row 6: the served commit older than 3 x REFRESH_SECS while the source ref has moved past it.
+        if [ -n "$gfx_commit" ] && [[ "$gfx_built" =~ ^[0-9]+$ ]] && [ -n "$gfx_src" ]; then
+          gfx_age=$(( gfx_now - gfx_built ))
+          if [ "$gfx_age" -gt $(( 3 * GK[CCRC_GRAPH_REFRESH_SECS] )) ] && _gr_source_ref "$gfx_src" >/dev/null 2>&1 \
+             && [ "$GR_SOURCE_COMMIT" != "$gfx_commit" ]; then
+            gfx_repo_warn+=("$gfx_rk serves ${gfx_commit:0:12}, built $((gfx_age / 60)) minutes ago, while $GR_SOURCE_REF is at ${GR_SOURCE_COMMIT:0:12} — refresh stuck (last row: $gfx_out${gfx_why:+: $gfx_why})")
+          fi
+        fi
+        # row 7: the safety-net full rebuild (spec §3.3).
+        if [[ "$gfx_lfa" =~ ^[0-9]+$ ]] && [ $(( gfx_now - gfx_lfa )) -gt $(( 2 * GK[CCRC_GRAPH_FULL_REBUILD_SECS] )) ]; then
+          gfx_repo_warn+=("$gfx_rk's last full build was $(( (gfx_now - gfx_lfa) / 3600 )) hours ago, over 2 x CCRC_GRAPH_FULL_REBUILD_SECS=${GK[CCRC_GRAPH_FULL_REBUILD_SECS]} — the safety net is not running")
+        fi
+        # row 14: the last N passes' rows for this repository all skipped-slots.
+        if [ "$(jq -r --arg k "$gfx_rk" --argjson n "$gfx_slot_passes" '[.passes[]? | .repos[]? | select(.repo_key == $k) | .outcome]
+             | if length >= $n and (.[length - $n:] | all(. == "skipped-slots")) then "yes" else "" end' "$census" 2>/dev/null)" = yes ]; then
+          gfx_repo_warn+=("$gfx_rk: the last $gfx_slot_passes passes were all skipped-slots — the heavy queue never had room for its build")
+        fi
+        # row 13: full-build backoff (spec §3.3.1), with the way a genuine shrink is accepted (plan finding 1).
+        if [ "$gfx_ff" -ge "${GK[CCRC_GRAPH_FULL_FAIL_MAX]}" ]; then
+          gfx_next="$(jq -nr --arg t "$gfx_ffat" --argjson b "${GK[CCRC_GRAPH_FAIL_BACKOFF_SECS]}" \
+            '(try ($t | fromdateiso8601) catch null) as $e | if $e == null then "" else ($e + $b | todate) end' 2>/dev/null)"
+          if [ -n "$gfx_next" ]; then gfx_next="the next full attempt is allowed after $gfx_next"
+          else gfx_next="the time of its last failure cannot be read, so the end of the wait is unknown"; fi
+          gfx_backoff_warn+=("$gfx_rk is in full-build backoff after $gfx_ff failed full attempts (last: $gfx_out${gfx_why:+: $gfx_why}); $gfx_next")
+        fi
+        # row 12 (Linux): the sizing of full builds against the tests slice's MemoryMax (decision G5). The last
+        # full ATTEMPT decides OOM; the last PUBLISHED full build (the ring's newest `rebuilt` row, else the served
+        # build when it is a full one) decides the peak.
+        if [ "${CCD_OS:-linux}" != darwin ]; then
+          gfx_last="" gfx_peak=""
+          IFS=$'\037' read -r gfx_last gfx_peak <<< "$(jq -r --arg k "$gfx_rk" '[.passes[]? | .repos[]? | select(.repo_key == $k and .kind == "full")] as $f
+            | [($f | last | .outcome // ""), ([$f[] | select(.outcome == "rebuilt")] | last | if . == null then "" else (.peak_mem_kb | tostring) end)]
+            | join("\u001f")' "$census" 2>/dev/null)"
+          [ -n "$gfx_peak" ] || [ "$gfx_mkind" != full ] || gfx_peak="$gfx_mpeak"
+          if [ "$gfx_last" = oom-killed ]; then
+            gfx_sizing_warn+=("$gfx_rk's last full attempt was OOM-killed at MemoryMax=${gfx_mm:-unread}")
+          elif [ "$gfx_peak" = null ]; then
+            gfx_sizing_warn+=("$gfx_rk's last full build has no measured peak (peak unmeasured), so its sizing against the tests slice is unknown")
+          elif [[ "$gfx_peak" =~ ^[0-9]+$ ]] && [[ "$gfx_mm" =~ ^[0-9]+$ ]] && [ $(( gfx_peak * 1024 * 100 )) -gt $(( gfx_mm * 75 )) ]; then
+            gfx_sizing_warn+=("$gfx_rk's last full build peaked at $gfx_peak KiB, above 75% of the tests slice's MemoryMax=$gfx_mm ($(( gfx_mm / 1024 )) KiB)")
+          fi
+        fi
+      done
+      # rows 8 and 9's census half: the trees migration refused, each with its reason (spec §9.1).
+      local -a gfx_refused_trees=()
+      mapfile -t gfx_refused_trees < <(jq -r '.passes[-1].repos[]?.migrate.refused[]?
+        | "\(.path // "") (\(.reason // "" | gsub("[\n\t]"; " ")))"' "$census" 2>/dev/null)
+      if [ "$gfx_real_dirs" -gt 0 ] || [ "${#gfx_refused_trees[@]}" -gt 0 ]; then
+        gfx_migrate_warn+=("$gfx_real_dirs tree(s) still hold a real graphify-out directory (migration pending)${gfx_refused_trees[0]:+; migration refused: $(_dr_join "${gfx_refused_trees[@]}")}")
+      fi
+    fi
+  fi
+  # No census at all (a fresh box, D-1061): the real per-tree directories the walk counted still say migration is
+  # pending, with no refused list to name.
+  if [ ! -f "$census" ] && [ "$gfx_real_dirs" -gt 0 ]; then
+    gfx_migrate_warn+=("$gfx_real_dirs tree(s) still hold a real graphify-out directory (migration pending)")
   fi
 
   # ── (7) D-995: room on the filesystem WORKTREES_ROOT (or PROJECTS_ROOT) is
@@ -5017,91 +5231,98 @@ _check_graphify() {
   # comment names exactly this shape) is a measurement that FAILED, not one
   # that was never attempted, and must say so. `_check_disk` WARNs on this
   # same shape for $HOME; this mirrors its wording, over $groot instead.
-  if [ -n "$groot" ]; then
+  #
+  # GR7 (D-7353; spec §8 row 4): the graph builds now write into the STORE, so the store's device is measured too,
+  # with the same floor; D-995's worktrees (or projects) arm stays, since the corpus checkouts and the trees still
+  # live there. A store on the same device as that root is measured once (df's first column names the device).
+  local -a gfx_df_paths=() gfx_df_names=()
+  [ -z "$groot" ] || { gfx_df_paths+=("$groot"); gfx_df_names+=("\$HOME/$gwhich's filesystem"); }
+  [ -z "$gfx_store" ] || [ ! -d "$gfx_store" ] \
+    || { gfx_df_paths+=("$gfx_store"); gfx_df_names+=("the graph store's filesystem ($gfx_store)"); }
+  local gfx_i gfx_seen_dev=" " gfx_path gfx_name
+  for gfx_i in "${!gfx_df_paths[@]}"; do
+    gfx_path="${gfx_df_paths[$gfx_i]}" gfx_name="${gfx_df_names[$gfx_i]}"
     if ! command -v df >/dev/null 2>&1; then
-      gfx_disk_unread_warn+=("df is not on PATH, so free space on $groot was never measured")
-    else
-      local out line last="" avail=""
-      out="$(df -Pk "$groot" 2>/dev/null)"
-      while IFS= read -r line; do
-        [ -z "$line" ] || last="$line"
-      done <<< "$out"
-      # shellcheck disable=SC2034  # the three leading fields are read to be dropped
-      [ -z "$last" ] || read -r _gfx_df_fs _gfx_df_size _gfx_df_used avail _gfx_df_rest <<< "$last"
-      case "$avail" in
-        ''|*[!0-9]*)
-          gfx_disk_unread_warn+=("df could not read $groot, so free space on it was never measured — a stale or dead mount answers exactly this way")
-          ;;
-        *)
-          local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
-          local mib=$((avail / 1024)) gib=$((avail / 1024 / 1024))
-          if [ "$avail" -lt "$floor" ]; then
-            gfx_disk_fail+=("only $mib MiB free on \$HOME/$gwhich's filesystem — under the 2 GiB floor")
-          elif [ "$avail" -lt "$tight" ]; then
-            gfx_disk_warn+=("$gib GiB free on \$HOME/$gwhich's filesystem — getting tight")
-          fi
-          ;;
-      esac
+      gfx_disk_unread_warn+=("df is not on PATH, so free space on $gfx_path was never measured")
+      continue
     fi
-  fi
+    local out line last="" avail="" _gfx_df_fs=""
+    out="$(df -Pk "$gfx_path" 2>/dev/null)"
+    while IFS= read -r line; do
+      [ -z "$line" ] || last="$line"
+    done <<< "$out"
+    # shellcheck disable=SC2034  # the size and used fields are read to be dropped
+    [ -z "$last" ] || read -r _gfx_df_fs _gfx_df_size _gfx_df_used avail _gfx_df_rest <<< "$last"
+    case "$avail" in
+      ''|*[!0-9]*)
+        gfx_disk_unread_warn+=("df could not read $gfx_path, so free space on it was never measured — a stale or dead mount answers exactly this way")
+        continue
+        ;;
+    esac
+    case "$gfx_seen_dev" in *" $_gfx_df_fs "*) continue ;; esac
+    gfx_seen_dev+="$_gfx_df_fs "
+    local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
+    local mib=$((avail / 1024)) gib=$((avail / 1024 / 1024))
+    if [ "$avail" -lt "$floor" ]; then
+      gfx_disk_fail+=("only $mib MiB free on $gfx_name — under the 2 GiB floor")
+    elif [ "$avail" -lt "$tight" ]; then
+      gfx_disk_warn+=("$gib GiB free on $gfx_name — getting tight")
+    fi
+  done
 
   # ── the verdict, one line per bucket that has something to say ───────────
+  # FAILs first, then WARNs; one bucket per remedy. `_gfx_v <FAIL|WARN> <remedy> <finding>…` prints one line and
+  # moves rc (1 for any FAIL, else 2 for any WARN); an empty bucket prints nothing.
   local rc=0
-  if [ "${#gfx_install_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_install_fail[@]}")$gfx_gate" \
-      "run: ccrc install — it provisions the engine venv, stamps the pin, and converges every rostered home's skill"
-    rc=1
-  fi
-  if [ "${#gfx_census_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_census_fail[@]}")$gfx_gate" \
-      "read \$HOME/.ccrc/graph-sweep.log for what the pass hit, and check the timer: systemctl --user status ccd-graph-sweep.timer"
-    rc=1
-  fi
-  if [ "$gfx_cadence_rc" -eq 3 ]; then
-    _dr_fail graphify "$(_dr_cadence_unloaded_what "$gfx_cadence_what")$gfx_gate" "$(_dr_cadence_unloaded_fix graphify ccd-graph-sweep.timer)"
-    rc=1
-  fi
-  if [ "${#gfx_disk_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")$gfx_gate" \
-      "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does"
-    rc=1
-  fi
-  if [ "${#gfx_excludes_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_excludes_warn[@]}")$gfx_gate" \
-      "run: ccrc install — it writes the graphify-out/ exclude into every tree the sweep walks"
-    [ "$rc" -eq 1 ] || rc=2
-  fi
-  if [ "${#gfx_census_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")$gfx_gate" \
-      "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)"
-    [ "$rc" -eq 1 ] || rc=2
-  fi
-  if [ "$gfx_cadence_rc" -eq 1 ]; then
-    _dr_warn graphify "$(_dr_cadence_unread_what ccd-graph-sweep.timer "$gfx_cadence_what")$gfx_gate" "$(_dr_cadence_unread_fix)"
-    [ "$rc" -eq 1 ] || rc=2
-  fi
-  if [ "${#gfx_rows_warn[@]}" -gt 0 ]; then
-    # Its own bucket and its own remedy: the census WARN above is about the
-    # TIMER (is the sweep still firing), and `systemctl status` answers nothing
-    # here — these rows are per-repository work. No verb prints the census, so
-    # the remedy names the file itself rather than inventing one.
-    _dr_warn graphify "$(_dr_join "${gfx_rows_warn[@]}")$gfx_gate" \
-      "read the rows — each carries its own reason — in \$HOME/.ccrc/graph-sweep.json (.passes[-1].trees[]); a refused tree keeps its last graph and builds again as soon as its corpus is clean"
-    [ "$rc" -eq 1 ] || rc=2
-  fi
-  if [ "${#gfx_disk_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_disk_warn[@]}")$gfx_gate" \
-      "clear room on that filesystem while it is still cheap"
-    [ "$rc" -eq 1 ] || rc=2
-  fi
-  if [ "${#gfx_disk_unread_warn[@]}" -gt 0 ]; then
-    # Its own bucket, its own remedy: "clear room" (the bucket above) fixes
-    # nothing here — this is "the measurement could not be taken at all",
-    # `_check_disk`'s own remedy wording for the identical shape, adapted.
-    _dr_warn graphify "$(_dr_join "${gfx_disk_unread_warn[@]}")$gfx_gate" \
-      "check by hand: df -Pk <the root named above> — a filesystem df cannot stat answers exactly this way; install df first if it is not on PATH (coreutils on a GNU box, util-linux on some minimal images)"
-    [ "$rc" -eq 1 ] || rc=2
-  fi
+  _gfx_v() {
+    local cls="$1" fix="$2"; shift 2
+    [ "$#" -gt 0 ] || return 0
+    if [ "$cls" = FAIL ]; then _dr_fail graphify "$(_dr_join "$@")$gfx_gate" "$fix"; rc=1
+    else _dr_warn graphify "$(_dr_join "$@")$gfx_gate" "$fix"; [ "$rc" -eq 1 ] || rc=2
+    fi
+  }
+  _gfx_v FAIL "run: ccrc install — it provisions the engine venv, stamps the pin, and converges every rostered home's skill" \
+    ${gfx_install_fail[@]+"${gfx_install_fail[@]}"}
+  _gfx_v FAIL "run: ccrc install — it re-provisions the pinned engine venv that graph-build checks; the reason above is the wrapper's own" \
+    ${gfx_probe_fail[@]+"${gfx_probe_fail[@]}"}
+  _gfx_v FAIL "run: ccrc install — it creates the store and its marker at CCRC_GRAPH_STORE (default ~/.ccrc/graphs); a refused root needs CCRC_GRAPH_STORE in ~/.ccrc/ccrc.env set to an absolute path outside ~/projects and ~/worktrees" \
+    ${gfx_store_fail[@]+"${gfx_store_fail[@]}"}
+  _gfx_v FAIL "read \$HOME/.ccrc/graph-sweep.log for what the pass hit, and check the timer: systemctl --user status ccd-graph-sweep.timer" \
+    ${gfx_census_fail[@]+"${gfx_census_fail[@]}"}
+  _gfx_v FAIL "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does" \
+    ${gfx_disk_fail[@]+"${gfx_disk_fail[@]}"}
+  _gfx_v FAIL "run: ccrc install — it writes the graphify-out exclude lines (with and without the slash) into every repository's info/exclude under the two roots" \
+    ${gfx_excludes_fail[@]+"${gfx_excludes_fail[@]}"}
+  _gfx_v FAIL "the sweep relinks each tree to its repository's current build at its next pass; a link that stays dangling after that is removed by hand (rm <the link named above>)" \
+    ${gfx_links_fail[@]+"${gfx_links_fail[@]}"}
+  _gfx_v WARN "fix that line in ~/.ccrc/ccrc.env — each setting named above kept its default meanwhile — then re-run ccrc doctor" \
+    ${gfx_knob_warn[@]+"${gfx_knob_warn[@]}"}
+  _gfx_v WARN "run \`ccrc update\` to apply — it renders both units from the current graph settings; the doctor never writes them" \
+    ${gfx_drift_warn[@]+"${gfx_drift_warn[@]}"}
+  _gfx_v WARN "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)" \
+    ${gfx_census_warn[@]+"${gfx_census_warn[@]}"}
+  # Its own bucket and its own remedy: the census WARN above is about the TIMER (is the sweep still firing), and
+  # `systemctl status` answers nothing here — these rows are per-repository work. No verb prints the census, so the
+  # remedy names the file itself rather than inventing one.
+  _gfx_v WARN "read the rows — each carries its own reason — in \$HOME/.ccrc/graph-sweep.json (.passes[-1].repos[]); a refused build keeps the repository's previous graph served and builds again as soon as its corpus is clean" \
+    ${gfx_rows_warn[@]+"${gfx_rows_warn[@]}"}
+  _gfx_v WARN "read the repository's rows in \$HOME/.ccrc/graph-sweep.json (.passes[-1].repos[]) and the sweep's journal: journalctl --user -u ccd-graph-sweep.service -n 50" \
+    ${gfx_repo_warn[@]+"${gfx_repo_warn[@]}"}
+  _gfx_v WARN "the sweep tries one full build when the wait ends; if the last outcome is refused-shrink because main really lost that much code, set CCRC_GRAPH_MAX_SHRINK_PCT=100 in ~/.ccrc/ccrc.env until the next rebuilt row, then remove the line" \
+    ${gfx_backoff_warn[@]+"${gfx_backoff_warn[@]}"}
+  _gfx_v WARN "raise the tests slice's cap (CCRC_TEST_SLICE_MEMORY_MAX in ~/.ccrc/ccrc.env, then ccrc update) or lower CCRC_GRAPH_MAX_WORKERS; a peak that is never measured needs the build's cgroup memory.peak (cgroup v2)" \
+    ${gfx_sizing_warn[@]+"${gfx_sizing_warn[@]}"}
+  _gfx_v WARN "ccrc update (or ccrc install) places ~/.config/systemd/user/ccrctests.slice; then systemctl --user daemon-reload" \
+    ${gfx_slice_warn[@]+"${gfx_slice_warn[@]}"}
+  _gfx_v WARN "the sweep migrates up to CCRC_GRAPH_MIGRATE_BUDGET idle trees a pass; a refused tree names its reason above — clear it, and the next pass migrates the tree" \
+    ${gfx_migrate_warn[@]+"${gfx_migrate_warn[@]}"}
+  _gfx_v WARN "clear room on that filesystem while it is still cheap" \
+    ${gfx_disk_warn[@]+"${gfx_disk_warn[@]}"}
+  # Its own bucket, its own remedy: "clear room" (the bucket above) fixes nothing here — this is "the measurement
+  # could not be taken at all", `_check_disk`'s own remedy wording for the identical shape, adapted.
+  _gfx_v WARN "check by hand: df -Pk <the root named above> — a filesystem df cannot stat answers exactly this way; install df first if it is not on PATH (coreutils on a GNU box, util-linux on some minimal images)" \
+    ${gfx_disk_unread_warn[@]+"${gfx_disk_unread_warn[@]}"}
+  unset -f _gfx_v
   if [ "$rc" -ne 0 ]; then
     return "$rc"
   fi
