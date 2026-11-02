@@ -10735,6 +10735,18 @@ _acct_auth_read() {   # <id> -> ACCT_AUTH_STATE and ACCT_AUTH_FOR (the attempt t
 
 _acct_auth_unit() { printf 'ccrc-auth-%s-%s' "$1" "${2:0:8}"; }   # <id> <attempt> — the attempt's transient unit
 
+# `_acct_auth_stop <unit>` -> 0 it was stopped, 3 it is not loaded (it had ended), 1 it COULD NOT BE STOPPED: no user
+# manager answered, or `stop` failed for another reason. THE BUS DEFAULTS FIRST (`_svc_have_user_manager`'s contract):
+# the agent spawns these verbs with exactly {HOME, PATH, LANG}, and `systemctl --user` finds no manager without them.
+# 5 is systemctl's "not loaded", which is what a `--collect` unit is once it has ended.
+_acct_auth_stop() {
+  local rc=0
+  _codex_bus_defaults
+  _svc_have_user_manager || return 1
+  systemctl --user stop "$1.service" >/dev/null 2>&1 || rc=$?
+  case "$rc" in 0) return 0 ;; 5) return 3 ;; *) return 1 ;; esac
+}
+
 _acct_auth_start() {
   _acct_auth_flags auth-start 1 "$@"
   local id="$ACCT_AUTH_ID" method="$ACCT_AUTH_METHOD" a="$ACCT_AUTH_ATTEMPT" unit="" bin="$WRAPPER_BIN_DIR/ccd-account-auth"
@@ -10770,6 +10782,11 @@ _acct_auth_start() {
     || _acct_refuse 1 helper-absent "$bin is not installed, so there is no sign-in helper to start. Run 'ccrc install' (or 'ccrc update') to place it. Nothing was started."
   command -v systemd-run >/dev/null 2>&1 \
     || _acct_refuse_reason 1 auth-unsupported-here no-systemd-run "systemd-run is not on this box, so the sign-in cannot run detached from this verb. Nothing was started."
+  # THE USER BUS, then the manager asked over it (D-3483's one probe): without `XDG_RUNTIME_DIR` and
+  # `DBUS_SESSION_BUS_ADDRESS`, which the agent's {HOME, PATH, LANG} spawn never carries, `systemd-run --user` finds none.
+  _codex_bus_defaults
+  _svc_have_user_manager \
+    || _acct_refuse_reason 1 auth-unsupported-here no-user-manager "no systemd user manager answered at $XDG_RUNTIME_DIR, so the sign-in cannot run detached from this verb. Nothing was started."
   # AN EARLIER ATTEMPT'S LEFTOVERS: no attempt is live (measured above, under the lane lock), so whatever is on the
   # lane's private socket or in its scratch belongs to none, and a new attempt must not inherit it.
   tmux -L "ccrc-auth-$id" kill-server >/dev/null 2>&1
@@ -10790,7 +10807,8 @@ _acct_auth_start() {
     sleep 0.1
   done
   if [ "$ACCT_AUTH_FOR" != "$a" ]; then
-    systemctl --user stop "$unit.service" >/dev/null 2>&1
+    _acct_auth_stop "$unit" || [ $? -eq 3 ] \
+      || _acct_refuse 1 auth-start-unanswered "the sign-in helper did not report attempt $a within $wait s, and $unit could not be stopped: it ends on its own within 660 s, and auth-cancel can be retried. Nothing was signed in."
     _acct_refuse 1 auth-start-unanswered "the sign-in helper did not report attempt $a within $wait s, so $unit was stopped. Nothing was signed in."
   fi
   [ "$ACCT_AUTH_STATE" != failed ] \
@@ -10852,14 +10870,19 @@ _acct_auth_code() {
 
 _acct_auth_cancel() {
   _acct_auth_flags auth-cancel 0 "$@"
-  local id="$ACCT_AUTH_ID" a="$ACCT_AUTH_ATTEMPT" unit="" stopped=false
+  local id="$ACCT_AUTH_ID" a="$ACCT_AUTH_ATTEMPT" unit="" stopped=false rc=0
   _acct_known_or_refuse "$id"
   _acct_lane_lock "$id" "Nothing was stopped."
   unit="$(_acct_auth_unit "$id" "$a")"
   # A NO-OP FOR A UNIT THAT HAS ALREADY ENDED (the server issues this at the attempt's `expiresAt`). Stopping the unit
-  # TERMs everything in it, the pipe arm's helper included, and the helper's own trap writes `cancelled`.
+  # TERMs everything in it, the pipe arm's helper included, and the helper's own trap writes `cancelled`. FAIL CLOSED:
+  # a stop that did not happen leaves the server and the scratch alone, so a live helper is never told it was cancelled
+  # while it can still take a code and install. A box with no systemctl, or a darwin node, never started a unit.
   if [ "$CCD_OS" != darwin ] && command -v systemctl >/dev/null 2>&1; then
-    systemctl --user stop "$unit.service" >/dev/null 2>&1 && stopped=true
+    _acct_auth_stop "$unit" || rc=$?
+    [ "$rc" -ne 1 ] \
+      || _acct_refuse 1 auth-cancel-failed "the systemd user manager could not stop $unit, so attempt $a may still be running; its private server and scratch were left as they are. Cancelling again is safe."
+    [ "$rc" -ne 0 ] || stopped=true
   fi
   _acct_auth_read "$id"
   if [ "$ACCT_AUTH_FOR" = "$a" ]; then

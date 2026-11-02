@@ -4,7 +4,10 @@
 // with the four things a sign-in reaches planted as stand-ins, each recording what it was asked:
 //   - `systemd-run`: a transient unit is a DETACHED process in a process group of its own (a `--scope` runs in the
 //     foreground, in the caller's group, as the real one does), recorded under `<home>/fake-units/<unit>.pid`;
-//   - `systemctl --user stop <unit>`: TERMs that unit's process group and waits for it;
+//   - `systemctl --user stop <unit>`: TERMs that unit's process group and waits for it; `show-environment` is the
+//     manager probe. Both managers REFUSE as the real ones do when no user bus can be found (no `XDG_RUNTIME_DIR`),
+//     record the bus each call was given to `<home>/bus-calls`, and answer as an unreachable manager while
+//     `<home>/manager-down` exists;
 //   - `tmux`: each `-L <socket>` is a directory under `<home>/fake-tmux/`; a session is a detached process group whose
 //     output is that socket's SCROLLBACK file, which outlives `kill-server` the way a capture taken before it would;
 //   - `script`: the pty vehicle, which runs the command it is handed, for both argument orders.
@@ -52,10 +55,17 @@ export const scratchOf = (home: string, id: string): string => join(home, '.ccrc
 export const tokenFile = (home: string, id: string): string => join(home, '.cc-secrets', `${id}-oauth.env`);
 export const credFile = (home: string, suffix: string): string => join(home, suffix, '.credentials.json');
 
+/** The user bus, as both managers find it: none without \`XDG_RUNTIME_DIR\` (systemd's own sentence), and none while
+ *  \`<home>/manager-down\` exists. Each call's pair is recorded first, so a case can read what the verb exported. */
+const BUS_GUARD = `printf '%s|%s\\n' "\${XDG_RUNTIME_DIR-(unset)}" "\${DBUS_SESSION_BUS_ADDRESS-(unset)}" >> "$HOME/bus-calls"
+[ -n "\${XDG_RUNTIME_DIR:-}" ] || { echo 'Failed to connect to bus: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined' >&2; exit 1; }
+[ ! -e "$HOME/manager-down" ] || { echo 'Failed to connect to bus: No such file or directory' >&2; exit 1; }`;
+
 const SYSTEMD_RUN = `#!/usr/bin/env bash
 ${MANAGER_STANDIN_MARK}
 # authAttemptFixture: a transient unit is a detached process group; --scope runs in the foreground.
 printf '%s\\n' "$*" >> "$HOME/systemd-run-calls"
+${BUS_GUARD}
 scope=0; unit=''
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -79,9 +89,11 @@ exit 0
 
 const SYSTEMCTL = `#!/usr/bin/env bash
 ${MANAGER_STANDIN_MARK}
-# authAttemptFixture: only \`--user stop <unit>[.service]\` is modelled; it TERMs the unit's group and waits.
+# authAttemptFixture: \`--user show-environment\` and \`--user stop <unit>[.service]\`; stop TERMs the unit's group and waits.
 printf '%s\\n' "$*" >> "$HOME/systemctl-calls"
+${BUS_GUARD}
 [ "\${1:-}" = --user ] || exit 90
+[ "\${2:-}" = show-environment ] && exit 0
 [ "\${2:-}" = stop ] || exit 90
 u="\${3%.service}"; f="$HOME/fake-units/$u.pid"
 [ -f "$f" ] || { echo "Failed to stop $3: Unit $3 not loaded." >&2; exit 5; }
@@ -219,6 +231,25 @@ export function ccrcAuth(home: string, args: string[], stdin = '', extra: NodeJS
   const t0 = Date.now();
   const r = spawnSync(BASH, ['-c', 'umask 022; exec "$@"', '_', BASH, ccrcIn(home), ...args],
     { env: authEnv(home, extra), encoding: 'utf8', input: stdin, timeout: 90_000 });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', ms: Date.now() - t0 };
+}
+
+/** The env the agent's account op spawns `ccrc account` with (`agent/src/accountop.ts`): exactly HOME, PATH and LANG,
+ *  plus this fixture's own knobs (the Linux arm and the pty vehicle, none of them a bus). No `XDG_RUNTIME_DIR` and no
+ *  `DBUS_SESSION_BUS_ADDRESS`, so the verb must find the user manager by itself. */
+export function agentSpawnEnv(home: string): NodeJS.ProcessEnv {
+  const full = authEnv(home);
+  const e: NodeJS.ProcessEnv = { HOME: home, PATH: full['PATH'], LANG: 'C.UTF-8' };
+  for (const k of ['OSTYPE', 'CCRC_AUTH_SCRIPT', 'CCRC_AUTH_TICK', 'CCRC_AUTH_TIMEOUT']) e[k] = full[k];
+  assertManagerStandIns(e, home);
+  return e;
+}
+
+/** `ccrcAuth` under `agentSpawnEnv`. */
+export function ccrcAuthAsAgent(home: string, args: string[]): Result {
+  const t0 = Date.now();
+  const r = spawnSync(BASH, ['-c', 'umask 022; exec "$@"', '_', BASH, ccrcIn(home), ...args],
+    { env: agentSpawnEnv(home), encoding: 'utf8', input: '', timeout: 90_000 });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', ms: Date.now() - t0 };
 }
 

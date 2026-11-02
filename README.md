@@ -1939,7 +1939,9 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   sign-in URL and the attempt id there — never the credential. The pty methods take a pane on the lane's own
   tmux server, `tmux -L ccrc-auth-<id>`, inside that unit, which the agent's tmux grant cannot reach.
   `auth-code --id --attempt` writes the code from stdin, once (`code-already-sent` after), into the FIFO
-  `~/.cc-sessions/.auth/<id>.run/in` and never onto an argv; `auth-cancel --id --attempt` stops the unit. A lane
+  `~/.cc-sessions/.auth/<id>.run/in` and never onto an argv; `auth-cancel --id --attempt` stops the unit, or refuses `auth-cancel-failed` and leaves everything when the
+  user manager cannot stop it. Both verbs default `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` before they ask
+  the manager, since the agent spawns them with only `HOME`, `PATH` and `LANG`. A lane
   that already holds a credential signs in, or mints, into `~/.ccrc/auth-scratch/<id>` (outside every agent read
   root), and the helper hands it to `set --method setup-token|login --attempt <a>`, which probes it and, only once
   it passes, installs it under the lane lock: a re-mint into `<id>-oauth.env`, a Sign in again into the config

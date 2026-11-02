@@ -4,13 +4,14 @@
 // once and never onto an argv, and a macOS node refuses before anything is spawned. The fixture is
 // `authAttemptFixture.ts`: every manager, tmux server, pty vehicle and `claude` is a recording stand-in.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ACCOUNT_OP, BASH, HAVE_FLOCK } from './laneStateFixture.js';
 import {
-  ATTEMPT, CODE, GOOD_SIGN_IN, GOOD_TOKEN, OLD_SIGN_IN, answerOf, authBox, authEnv, ccrcAuth, ccrcAuthSpawn,
-  HOST_OSTYPE, credFile, logLines, reapAll, rosterOf, scratchOf, statusOf, tokenFile, waitQuiet, waitState,
+  ATTEMPT, CODE, GOOD_SIGN_IN, GOOD_TOKEN, OLD_SIGN_IN, answerOf, authBox, authEnv, ccrcAuth, ccrcAuthAsAgent,
+  ccrcAuthSpawn, HOST_OSTYPE, credFile, livePids, logLines, reapAll, rosterOf, scratchOf, statusOf, tokenFile,
+  waitQuiet, waitState,
 } from './authAttemptFixture.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
@@ -111,6 +112,73 @@ describe('auth-start launches a detached attempt (spec §3.5)', () => {
     expect(again.code).toBe(0);
     expect(answerOf(again)['stopped']).toBe(false);
   }, 60_000);
+});
+
+describe('the user bus, as the agent spawns the verbs (D-7750 (6), (8))', () => {
+  const asAgent = (home: string, sub: string, method?: string) => ccrcAuthAsAgent(home,
+    ['account', sub, '--id', 'lane-s', ...(method === undefined ? [] : ['--method', method]), '--attempt', ATTEMPT]);
+
+  it('with only HOME, PATH and LANG, auth-start and auth-cancel export the bus defaults and reach the manager', async () => {
+    const home = box('ccrc-auth-bus-agent-');
+    const r = asAgent(home, 'auth-start', 'login');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.ms, 'auth-start took longer than the spec\'s 5 s').toBeLessThan(5000);
+    expect(answerOf(r)).toMatchObject({ ok: true, unit: 'ccrc-auth-lane-s-01234567' });
+    expect(await waitState(home, 'lane-s', ['waiting-code'])).toBe('waiting-code');
+    const c = asAgent(home, 'auth-cancel');
+    expect(c.code, c.stdout + c.stderr).toBe(0);
+    expect(answerOf(c)).toMatchObject({ ok: true, stopped: true });
+    expect(await waitState(home, 'lane-s', ['cancelled'])).toBe('cancelled');
+    // Every manager call, the probe, the launch and the stop, was handed `_inst_enable`'s pair, and none ran without it.
+    const uid = process.getuid!();
+    const bus = logLines(home, 'bus-calls');
+    expect(bus.length, 'no manager was asked').toBeGreaterThanOrEqual(3);
+    expect(new Set(bus)).toEqual(new Set([`/run/user/${uid}|unix:path=/run/user/${uid}/bus`]));
+  }, 60_000);
+
+  it('auth-start refuses `no-user-manager` when no manager answers, and starts nothing', () => {
+    const home = box('ccrc-auth-bus-down-');
+    writeFileSync(join(home, 'manager-down'), '');
+    const r = start(home, 'lane-s', 'login');
+    expect(r.code).toBe(1);
+    expect(answerOf(r)).toMatchObject({ ok: false, error: 'auth-unsupported-here', reason: 'no-user-manager' });
+    expect(logLines(home, 'systemd-run-calls'), 'a unit was started').toEqual([]);
+    expect(statusOf(home, 'lane-s'), 'a status file was written').toBeNull();
+  }, 60_000);
+
+  it('auth-cancel fails closed when the unit cannot be stopped: the helper, its server and its scratch are left', async () => {
+    const home = box('ccrc-auth-bus-cancel-');
+    expect(start(home, 'lane-b', 'setup-token').code).toBe(0);
+    expect(await waitState(home, 'lane-b', ['waiting-code'])).toBe('waiting-code');
+    const live = livePids(home);
+    const scratch = existsSync(scratchOf(home, 'lane-b'));
+    writeFileSync(join(home, 'manager-down'), '');
+    const c = cancel(home, 'lane-b');
+    expect(c.code, c.stdout + c.stderr).toBe(1);
+    expect(answerOf(c)['error']).toBe('auth-cancel-failed');
+    expect(livePids(home), 'the cancel killed what it could not stop').toEqual(live);
+    expect(existsSync(scratchOf(home, 'lane-b'))).toBe(scratch);
+    expect(statusOf(home, 'lane-b')?.['state']).toBe('waiting-code');
+    // Once the manager answers again, the same cancel stops it.
+    rmSync(join(home, 'manager-down'));
+    expect(answerOf(cancel(home, 'lane-b'))).toMatchObject({ ok: true, stopped: true });
+    expect(await waitState(home, 'lane-b', ['cancelled'])).toBe('cancelled');
+  }, 60_000);
+
+  it.each([[false, 'was stopped'], [true, 'could not be stopped']] as const)(
+    'an unanswered auth-start says whether its unit was stopped (manager down: %s)', (down, says) => {
+      const home = box('ccrc-auth-bus-unanswered-');
+      // A helper that never reports, and takes the manager down once it is running when the case asks.
+      const helper = join(home, '.local', 'bin', 'ccd-account-auth');
+      rmSync(helper);
+      writeFileSync(helper, `#!/usr/bin/env bash\n${down ? 'touch "$HOME/manager-down"\n' : ''}sleep 30\n`, { mode: 0o755 });
+      const r = start(home, 'lane-s', 'login', { CCRC_AUTH_START_WAIT: '1' });
+      expect(r.code).toBe(1);
+      const a = answerOf(r);
+      expect(a['error']).toBe('auth-start-unanswered');
+      expect(String(a['detail'])).toContain(says);
+      expect(livePids(home).length, 'the unit\'s liveness disagrees with the sentence').toBe(down ? 1 : 0);
+    }, 60_000);
 });
 
 describe('the code relay (spec §3.7; D-5514)', () => {
