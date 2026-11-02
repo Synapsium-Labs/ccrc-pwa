@@ -14,6 +14,8 @@ import {
 } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsLeaf } from '../src/docs/DocsLeaf';
+import { DocsAssetContext } from '../src/docs/DocImage';
+import { createFetchQueue } from '../src/docs/fetchQueue';
 import { pinFor, type DocsVisit } from '../src/docs/useDocsVisit';
 import { DOCS_FAILURE_SENTENCE, DOCS_PAGE_INVALID_SENTENCE } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
@@ -1147,5 +1149,74 @@ describe("Review 439 F23: a direct load's #fragment survives the linked-worktree
     await waitFor(() => expect(container.querySelector('article li#user-content-fn-1')).not.toBeNull());
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(scroll).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- W5 Share, Task 4: a raster leaf's own image reports the pin it settled at ------------------------------------
+
+describe("W5 Share: a raster leaf's own image reports the pin it settled at (spec 4.3 item 5, 4.16; refinement (f))", () => {
+  const visitOf = (tree: DocsTreeOk, file: DocsVisit['file']): DocsVisit => ({
+    tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 }, file, freshness: { s: 'idle' }, updatedTo: null,
+    pendingFragment: null, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
+    setFragment: vi.fn(),
+  });
+
+  /** `url`'s leaf alone, under the assets context the screen gives it, with `listen` as its leaf-image listener. */
+  function leafAlone(url: string, tree: DocsTreeOk, f: FakeLoaders, listen: (pin: DocPin | null) => void,
+    file: DocsVisit['file'] = { s: 'none' }): ReturnType<typeof render> {
+    const page = pageAt(url);
+    if (page.kind !== 'path') throw new Error('fixture: not a leaf');
+    const assets = { loaders: f.loaders, queue: createFetchQueue(), onDraftAsset: () => {} };
+    return render(
+      <DocsAssetContext value={assets}>
+        <DocsLeaf visit={visitOf(tree, file)} tree={tree} page={page} parser={parser} onLeafImage={listen} />
+      </DocsAssetContext>,
+    );
+  }
+
+  const RASTER = treeOk({ entries: [entry('specs', 'x.png')] });
+  const RASTER_URL = '/docs/demo/specs/x.png';
+
+  it("reports the leaf's pin once its bytes are shown, and null when it unmounts", async () => {
+    const f = fakeLoaders({ tree: okTree(RASTER) });
+    f.raster.mockResolvedValue(okPng());
+    const seen = vi.fn();
+    const view = leafAlone(RASTER_URL, RASTER, f, seen);
+    const pin = pinFor(RASTER, pageAt(RASTER_URL));
+    await waitFor(() => expect(seen).toHaveBeenLastCalledWith(pin));
+    expect(seen.mock.calls.every(([p]) => p === null || JSON.stringify(p) === JSON.stringify(pin))).toBe(true);
+    view.unmount();
+    expect(seen).toHaveBeenLastCalledWith(null);
+  });
+
+  it('reports nothing while the image loads', async () => {
+    const f = fakeLoaders({ tree: okTree(RASTER) });
+    f.raster.mockImplementation(() => new Promise<never>(() => {}));
+    const seen = vi.fn();
+    leafAlone(RASTER_URL, RASTER, f, seen);
+    await waitFor(() => expect(f.raster).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(seen.mock.calls.filter(([p]) => p !== null)).toEqual([]);
+  });
+
+  it('a failed load settles it too: the pin is reported, as a failed read settles any leaf (refinement (f))', async () => {
+    const f = fakeLoaders({ tree: okTree(RASTER) });
+    f.raster.mockResolvedValue({ s: 'unreachable' });
+    const seen = vi.fn();
+    leafAlone(RASTER_URL, RASTER, f, seen);
+    await waitFor(() => expect(seen).toHaveBeenLastCalledWith(pinFor(RASTER, pageAt(RASTER_URL))));
+  });
+
+  it('an image inside a Markdown document reports nothing', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'x.png')] });
+    const pin = pinFor(tree, pageAt('/docs/demo/specs/a.md'));
+    if (pin === null) throw new Error('fixture: no pin');
+    const f = fakeLoaders({ tree: okTree(tree) });
+    f.raster.mockResolvedValue(okPng());
+    const seen = vi.fn();
+    const { container } = leafAlone('/docs/demo/specs/a.md', tree, f, seen,
+      { s: 'ok', pin, answer: fileResponse('![x](x.png)\n'), receivedAt: 0 });
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    expect(seen.mock.calls.filter(([p]) => p !== null)).toEqual([]);
   });
 });
