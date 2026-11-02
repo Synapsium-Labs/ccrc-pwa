@@ -64,6 +64,8 @@ import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
 import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, type OperatorDoorWiring } from './coord/routes.js';
+import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
+import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
 import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
 import { registerUpdateRoutes } from './update/routes.js';
@@ -214,6 +216,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/approvals/:id', '/api/coord/review-cap/:id',
   // The programme ledgers (plan PL3): an item's title, reason and steps are written by sessions.
   '/api/programmes/:slug/items',
+  // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).
+  '/api/waiting', '/api/programmes/:slug/goals',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -1514,6 +1518,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     frameCache.set(key, { v, json });
     return json;
   };
+  // Programme ledgers (plan PL4): what waits on the operator, built ONCE per change and handed to every socket, so a broadcast is
+  // masked and serialized once (`maskedFrame` keys on the object). Every emit drops it; a new socket always builds afresh, so
+  // a label that moves with the clock (the stale one) is current at connect.
+  // The coordinator's presence for an item's stale label, built ONCE and handed to both lanes' routes and the frame (review 1335
+  // F4): the watcher's last fleet frame and its registry ids, so an id the registry lists but the frame lacks is a doubt.
+  const presenceOf = (id: string) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, watcher?.currentRegistryIds() ?? null, id);
+  let waitingBuilt: WaitingView | null = null;
+  // A build that threw stands until the next cache drop, so the sockets of one change share ONE attempt and one failure
+  // (review 1336 F4), and the warning is said once per distinct error, not once per socket per fleet emit.
+  let waitingFailed = false;
+  let waitingWarned: string | null = null;
+  const dropWaiting = (): void => { waitingBuilt = null; waitingFailed = false; };
+  // A ledger write drops it, and so does a fleet emit: presence and the clock move the stale label with no ledger write (F3).
+  bus.on('waiting', dropWaiting);
+  bus.on('fleet', dropWaiting);
+  const waitingNow = (fresh: boolean): WaitingView | null => {
+    if (!deps.coord) return null;
+    if (fresh) dropWaiting();
+    if (waitingFailed) return null;
+    try {
+      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf);
+      waitingWarned = null;
+      return waitingBuilt;
+    } catch (err) {
+      // A row this box cannot read (a corrupt JSON column) sends no frame; the read route says the same in its own answer.
+      // A parse error can quote a session-written column, so the line goes through the masker like every other egress.
+      waitingFailed = true;
+      const line = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(`ccrc-server: waiting frame not built: ${err instanceof Error ? err.message : String(err)}`);
+      if (line !== waitingWarned) console.warn(line);
+      waitingWarned = line;
+      return null;
+    }
+  };
   app.get('/ws/fleet', { websocket: true }, (socket) => {
     // The dormant protocol handshake (Rider E): sent SYNCHRONOUSLY, before the
     // awaited assembleFleet below, so it is always the first frame a client
@@ -1563,6 +1600,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       socket.send(delegation === null
         ? JSON.stringify({ type: 'delegation', delegation: null } satisfies FleetMsg)   // nothing to mask; the cache keys on an object
         : maskedFrame(delegation, (mk) => mk.maskDeep({ type: 'delegation', delegation } satisfies FleetMsg)));
+    // Programme ledgers (plan PL4): masked like the session-derived frames (an item's text is a session's own). Additive, no
+    // `FLEET_PROTO` bump. Sent on connect (below) and on every `bus 'waiting'`.
+    // The last frame THIS socket was sent, masked: a fleet emit re-sends only when the bytes changed (as the runs frame does),
+    // so a label the clock or a coordinator's presence moved reaches a connected tab with no timer and no push (review 1335 F3).
+    let lastWaitingJson: string | null = null;
+    const onWaiting = (fresh: boolean, onlyIfChanged: boolean) => {
+      const waiting = waitingNow(fresh);
+      if (waiting === null) return;
+      const json = maskedFrame(waiting, (mk) => mk.maskDeep({ type: 'waiting', waiting } satisfies FleetMsg));
+      if (onlyIfChanged && json === lastWaitingJson) return;
+      lastWaitingJson = json;
+      socket.send(json);
+    };
+    const onWaitingEvent = () => onWaiting(false, false);
+    const onFleetWaiting = () => onWaiting(false, true);
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
     // guard re-broadcasts to every connected client the next time the census
     // changes, and there is no `currentDivergences()` to serve — a fabricated
@@ -1652,6 +1704,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // Chained after `pools`: hello, fleet, runs, coord, pools, delegation; a null value sends NOTHING, `coord`'s rule.
       const delegationNow = watcher?.currentDelegation();
       if (delegationNow) onDelegation(delegationNow);
+      // Chained after `delegation`: the operator's waiting list, whole; nothing on a box with no coordination database.
+      onWaiting(true, false);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
@@ -1660,6 +1714,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('divergence', onDivergence);
     bus.on('pools', onPools);
     bus.on('delegation', onDelegation);
+    bus.on('waiting', onWaitingEvent);
+    bus.on('fleet', onFleetWaiting);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
@@ -1668,6 +1724,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       bus.off('divergence', onDivergence);
       bus.off('pools', onPools);
       bus.off('delegation', onDelegation);
+      bus.off('waiting', onWaitingEvent);
+      bus.off('fleet', onFleetWaiting);
     });
   });
 
@@ -1916,7 +1974,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     hookStateOf: (id) => watcher?.currentHookStates().get(id) ?? null,
   };
   const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps });
-  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors);
+  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors, presenceOf);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
@@ -2383,6 +2441,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     };
     return answer;
   });
+
+  // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
+  registerLedgerOperatorRoutes(app, { coord: deps.coord, bus, now: () => Date.now(), presenceOf });
 
   /**
    * `POST /api/digest/correct` (spec §10, D-5300): the operator's correction of one digest line, `{rowKind, id,
