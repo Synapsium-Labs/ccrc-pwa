@@ -371,6 +371,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   - "a hibernated session reads refused: asleep, and the move carries on with the next".
   - "every refusal names its reason from its code; no response text is rendered".
   - "the progress line counts what has answered, not what was sent".
+  - "\"Stop after this one\" ends the move after the session in flight" and "closing the sheet mid-move is a stop".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
@@ -381,6 +382,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | `interrupt: true` always sent | move-sessions-sheet | "skipped without interrupt consent" |
   | a refusal stops the whole move | move-sessions-sheet | "…carries on with the next" |
   | render `res.text()` on a refusal | move-sessions-sheet | "no response text is rendered" |
+  | the loop's stop check deleted | move-sessions-sheet | "Stop after this one…" and "closing the sheet mid-move…" |
 
 - [ ] **Step 4: Per width × skin × mode.** 16 cells, with four sessions on `lane-b` (one busy, one hibernated): the sheet at 360 stacks its rows with the outcome word right-aligned and never truncates it; "Moving 2 of 4" is announced politely; at 1280 and 1920 the sheet is a bottom sheet until W1's desktop arm (the PR says which it saw). Both skins, dark and light.
 - [ ] **Step 5: Verify.**
