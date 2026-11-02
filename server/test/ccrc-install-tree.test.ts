@@ -1366,6 +1366,9 @@ describe('ccrc install: the executables and files it installs', () => {
       // ccrc history W1-B2: the fourth roster-reading skill installer, through the same `_inst_atomic`.
       [join(home, '.cc-sessions', 'install-history-skill.sh'),
         placed(home, 'ccd', 'install-history-skill.sh'), 0o755],
+      // The Linear skill's installer (#1444): the fifth roster-reading skill installer, the same `_inst_atomic`.
+      [join(home, '.cc-sessions', 'install-linear-skill.sh'),
+        placed(home, 'ccd', 'install-linear-skill.sh'), 0o755],
       // graphify Task 3: `_inst_graphify_skill` stages this beside the other
       // two, through the same `_inst_atomic`, right after `_inst_skills`.
       [join(home, '.cc-sessions', 'install-graphify-skill.sh'),
@@ -1415,6 +1418,7 @@ describe('ccrc install: the executables and files it installs', () => {
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
       join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
       join(home, '.cc-sessions', 'install-history-skill.sh'),
+      join(home, '.cc-sessions', 'install-linear-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       join(home, '.tmux.conf'),

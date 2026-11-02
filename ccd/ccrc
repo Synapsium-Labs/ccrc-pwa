@@ -7544,7 +7544,8 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # BEFORE REVIEWER: the worker skill points at ../ccrc-coordinator/references/…, and
   # the reviewer skill points into the same tree (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
-           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh install-history-skill.sh; do
+           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh install-history-skill.sh \
+           install-linear-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged — and 'ccrc install' is what places it there. $stands"
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
@@ -9292,7 +9293,7 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
   if [ -d "$cfg/skills" ]; then
     real="$(realpath "$cfg/skills" 2>/dev/null)" \
       || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so no skill can be removed safely. $stands"
-    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify ccrc-history; do
+    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify ccrc-history ccrc-linear; do
       { [ -e "$real/$name" ] || [ -L "$real/$name" ]; } || continue
       if [ -L "$real/$name" ] || [ -f "$real/$name" ]; then
         rm -f -- "$real/$name" \
@@ -19061,8 +19062,9 @@ _inst_hooks() {
 # installed tree by relative path (`../ccrc-coordinator/references/…`, both
 # skills side by side under one config dir) — and the reviewer skill, third,
 # points into the same tree.
-# The history skill, fourth (ccrc history spec 2026-10-05 §8.5), points into
-# no other skill's tree, so its place at the end is a grouping, not an order.
+# The history skill, fourth (ccrc history spec 2026-10-05 §8.5), and the Linear
+# skill, fifth (#1444, spec 2026-10-31 §11), point into no other skill's tree,
+# so their place at the end is a grouping, not an order.
 #
 # ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
 # per home, backs up what it is about to replace and rolls back a swap it could
@@ -19076,13 +19078,13 @@ _inst_skills() {
   if [ "$INST_ROLE" = server ]; then echo "install: skills: skipped — a server-role box hosts no sessions"; return 0; fi
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
-  for name in coordinator-skill worker-skill reviewer-skill history-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill linear-skill; do
     _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
     _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history in each account's skills directory"
+  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear in each account's skills directory"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -27274,7 +27276,7 @@ _uninst_cc_sessions() {
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
-    "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
+    "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     "$reg/account-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
@@ -27295,9 +27297,9 @@ _uninst_cc_sessions() {
       fi
     done
   fi
-  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" "$reg/linear-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the four skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the five skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────

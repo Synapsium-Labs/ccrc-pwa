@@ -501,7 +501,8 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     expect(r.code, r.stderr).toBe(0);
     expect(isEmptyRegular(sw(home, 'lane-c'))).toBe(true);
     expect(report(home, r)).toBe(`${JSON.stringify({ ok: true, id: 'lane-c', disabled: true,
-      provisioned: ['settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'graphify-skill', 'history-skill'],
+      provisioned: ['settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'graphify-skill', 'history-skill',
+        'linear-skill'],
       'operator-steps': OPERATOR_STEPS_C, roster: { version: 1, accounts: [...ROSTER.accounts, ENTRY_C] },
       // Accounts plan Task A16: the node beside the roster, so the server reloads it; no box token, no fingerprints.
       fleetIdentity: NODE_ID })}\n`);
