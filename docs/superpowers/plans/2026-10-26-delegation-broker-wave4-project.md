@@ -8,11 +8,13 @@
 
 **Tech Stack:** TypeScript ESM on Node.js `>=22.16.0`; synchronous `node:sqlite` `DatabaseSync`; Fastify and the `/ws/fleet` socket; the React PWA on `@ccrc/ui` tokens; Bash hooks and generated `ccd`; jq; Vitest.
 
+**Operator amendment — 2026-10-28: soaks waived.** The operator ruled "Skip soaks". This supersedes every elapsed-time soak requirement in this programme: wave 3's seven-day window and any restart of it, wave 4's two-day window, and wave 5's three-day window. Their status is **waived**, never passed. Historical failures and missing coverage remain recorded; no replacement T0 or wait-until date is required. Soak-only merge holds, routine soak reports and soak-clock/restart bookkeeping end. Independent implementation, dependency, ownership, exact-tip review, required CI, native merge queue, rollout verification and truthful run closure still apply. A worker's separate freeze is not lifted merely by this amendment; the coordinator releases the next bounded action against those remaining conditions. The suite-pressure and fixture-safety rules remain, but the later standing prohibition on `systemd-run` suites/typechecks supersedes the original scope wrapper; the `RUN` command below now follows that prohibition: run in the foreground inside the session's own limits, never in a new unit or scope.
+
 **Spec:** `docs/superpowers/specs/2026-10-04-delegation-broker-design.md`, stage 3 "Project" (programme wave 4), as amended by the operator's rulings of 2026-10-26:
 - §5.6: a rung-4 (`raw`) lease is never adopted automatically (D-6999);
 - §5.8: the frame has no `backlog` member (D-7002). Its other departures from §5.8 (no `lineage` member; `leases`, `unowned` and `asOf` members; unowned rows narrowed to `unresolved` and `conflicting`) were ruled by the operator on 2026-10-26 (D-7023);
 - §5.12: the journal's retention floor is 10 days (D-7000), and ended rows are retired behind the cut point (D-7001, amending wave-3 decision O4);
-- §7: wave 4's gate is 2 days and wave 5's is 3 days; stages 5 and 6 (waves 6 and 7) are dropped (D-7002).
+- §7: D-7002 originally set wave 4's gate to 2 days and wave 5's to 3 days; those timed gates are waived by the 2026-10-28 amendment above. Stages 5 and 6 (waves 6 and 7) remain dropped.
 
 These amendments are recorded here. PR3 edits §5.12 with its code; the spec text of §5.6, §5.8 and §7 follows in the wave's ledger pull request, never in a feature PR.
 
@@ -36,7 +38,7 @@ These rulings bind this plan. Each is defined in "## Deviations found".
 - **D-6999: rung-4 leases are shown, marked "inferred", and never adopted automatically.** A lease whose `sourceKind` is `raw` (a rung-4 link) is displayed nested under its linked session, marked "inferred", with the `toolUseId` of the Bash call that created it. Leases from the soak and later ones are treated alike: there is no date cut-off and no policy switch. Wave 5 never adopts one automatically; the operator attaches one with a tap (spec §5.14, resolve attach). This amends spec §5.6's sentence "A rung-4 (raw) lease is adopted when linked". Q-W4 (attributing main checkouts) stays off in wave 4. Compaction keeps every journal record within ±20 minutes of each raw lease on its repository, so a link can be re-audited later (identification gap 2). Implemented by PR1 (Task 1.2), PR2 (Tasks 2.2 and 2.7) and PR3 (Task 3.2, rule K5). Implementation note (confirmed by the operator on 2026-10-26, D-7023): a raw lease whose linked session is a programme worker is nested under the top coordinator by R9, labelled `via <linked session>`, because nesting it under the worker would draw it at depth 2; and a raw lease whose tree also has a `conflicting` attempt keeps its nested inferred row, beside the tree's unowned row.
 - **D-7000: the journal's retention floor is 10 days,** not the 30 days spec §5.12 proposed. The floor still exceeds the lane's evidence horizon (192 hours of interval retention plus a 20-minute margin), which Task 3.2 pins. Implemented by PR3.
 - **D-7001: the checkpoint is bounded by retiring ended rows behind the compaction cut point S.** A row is retired only when every journal record naming it is at or below S and no lease, lineage edge or hold names it. This amends wave-3 decision O4 beyond D-6268, which retired zero-delta Bash rows only. Implemented by PR3 (Task 3.5).
-- **D-7002: the programme is reshaped.** Waves 6 and 7 (spec stages 5 and 6: lease audit and clean) are dropped. The orphan-tree lane (#1252) owns the cleanup of these trees and must skip an adopted lease; that skip is wave 5's to build. Wave 4's gate is 2 days with no displayed row the operator flags as wrong; wave 5's gate is 3 days (both amend spec §7's "7 days"). The frame's `backlog` member is dropped, because every wave-4 lease is `not-due` and it could only read 0 (amends spec §5.8).
+- **D-7002: the programme is reshaped.** Waves 6 and 7 (spec stages 5 and 6: lease audit and clean) are dropped. The orphan-tree lane (#1252) owns the cleanup of these trees and must skip an adopted lease; that skip is wave 5's to build. The original ruling set wave 4's gate to 2 days with no displayed row the operator flags as wrong and wave 5's to 3 days (amending spec §7's "7 days"); both timed gates were waived on 2026-10-28. The frame's `backlog` member is dropped, because every wave-4 lease is `not-due` and it could only read 0 (amends spec §5.8).
 - **D-7021: compaction carries the records still needed.** On `main` leases are never released, so a pure prefix cut frees nearly nothing. The cut point S is set by the floor and the checkpoint anchor; every record at or below S that a carry rule still needs is copied verbatim into a second durable file, `delegation-carried.log`, and C1 retires a row only when no retained record names it. Implemented by PR3 (Tasks 3.2 to 3.6).
 - **D-7022: compaction is armed on landing.** The daily trigger runs from the first ready pass after PR3 is live; there is no marker. The operator accepted the rollback cost: after a compaction, a build without PR3 leaves the delegation lane `reconstructing` until a pre-compaction snapshot is restored (the snapshot `ccrc update` takes before installing PR3 is one).
 - **D-7023: the frame's shape.** The departures from spec §5.8 that PR1 lists ("Shape decisions") are accepted, with D-6999's implementation note.
@@ -59,11 +61,11 @@ These rulings bind this plan. Each is defined in "## Deviations found".
 - **Mutation-table discipline.** Every new guard ships with a row that goes red when the guard is deleted or mutated, measured before and after. Mutants are applied one at a time to a saved copy and restored from it (sha checked), never with `git checkout`.
 - **Growth cap.** At most 40 net code lines per growth-listed file per PR (`server/test/growth-check.test.ts`, `GROWTH_FILES`, `GROWTH_LIMIT`). No waiver file.
 - **Branches.** Every wave-4 branch is cut from `main` and is the worker's workspace branch. After #1558 lands, the branch merges `main` in; it never rebases and never uses `update-branch`.
-- **#1558's hunks.** Follow-up 10 (#1558, accepted and held; tip `2155e5625`, base `98fd13dad`) changes `server/src/watch.ts` at main's (`ccba6f9b6`) lines about 9985-9990, 10266-10321 and 11445-11705 (9970-9992, 10268-10339 and 11463-11751 at its tip). No wave-4 PR edits inside them. `server/test/delegation-watch.test.ts` is #1558's file too: PR1 never edits it, and PR3 and PR4 edit it outside #1558's hunks and re-point their edits by content after merging `main`.
-- **Held PRs.** Every wave-4 PR body's first line reads: "Held: not to merge before the delegation broker's soak gate (2026-10-31T09:00Z), by the operator's ruling."
+- **#1558's hunks.** Follow-up 10 (#1558, verified merged 2026-10-27; tip `2155e5625`, base `98fd13dad`) changes `server/src/watch.ts` at main's (`ccba6f9b6`) lines about 9985-9990, 10266-10321 and 11445-11705 (9970-9992, 10268-10339 and 11463-11751 at its tip). No wave-4 PR edits inside them. `server/test/delegation-watch.test.ts` is #1558's file too: PR1 never edits it, and PR3 and PR4 edit it outside #1558's hunks and re-point their edits by content after merging `main`.
+- **PR-body status (2026-10-28 amendment).** At its next authorized body update, every wave-4 PR replaces its old soak-only hold line with: "Soaks waived by the operator on 2026-10-28; merge only after accepted exact-tip review, required CI and the programme's dependency/landing order."
 - **Ledger edits: one route for every PR.** No feature PR modifies an existing file under `docs/superpowers/plans/` or `docs/superpowers/programs/` (D-6926, `.github/ci/ledger-guard.mjs`). A worker records a departure, and PR3 records its W3-M38 amendment, in a NEW per-task note `docs/superpowers/plans/<this plan's basename>/prN.md` (the guard's intended route), and mails the coordinator, who folds the notes into this plan and the programme ledger in the wave's ledger pull request. No `Ledger-Edit:` trailer is used, so the merge-main commit cannot re-arm the guard.
 - **D-numbers.** PR1 owns D-7003..D-7006; PR2 D-7007..D-7010; PR3 D-7011..D-7016; PR4 D-7017..D-7020, each wholly the worker's. D-7021..D-7024 are the operator's further rulings of 2026-10-26 (Q1+Q2, Q3, the frame's shape, C1's scope). A worker takes its PR's numbers in order and defines one only for an actual departure from this plan, in its per-task note; a number no departure takes stays `unused`. Never write a number that was not issued: a `D-TBD-<slug>` in this plan is the coordinator's to mint.
-- **Soak load and memory gate.** Every suite runs as `RUN <cmd>`, defined below. A suite starts only while the 1-minute load (as a decimal) is at or below 40 and available memory is at least 4000 MB, inside a 4 GB memory scope at the lowest CPU and I/O priority. If the gate fails, wait and re-measure. One subagent at a time, and no Workflow fan-out.
+- **Suite pressure gate (not a soak).** Every suite runs as `RUN <cmd>`, defined below. A suite starts only while the 1-minute load (as a decimal) is at or below 40 and available memory is at least 4000 MB, at the lowest CPU and I/O priority inside the session's existing limits. Never start a new unit or scope for a suite/typecheck. If the pressure gate fails, wait and re-measure. One subagent at a time, and no Workflow fan-out.
 - **Fixture HOMEs only.** Tests run on fixture HOMEs and fixture registries (`makeCcdHarness`, and the hook suites' own fixture homes); never run `ccd` against the live `$HOME`.
 - **Never read live delegation files.** No worker reads the live spool, journal, carried file, checkpoint, `coord.db` or any secret file. Live readings are the coordinator's, from the server's log lines and `/api/fleet/health`.
 - **Foreground suites.** Every suite runs in the foreground with a timeout of at least 600000 ms. A known load flake is re-run alone before a red is called a break.
@@ -73,7 +75,7 @@ These rulings bind this plan. Each is defined in "## Deviations found".
 
 ```bash
 awk '{exit !($1<=40)}' /proc/loadavg && awk '/MemAvailable/{exit !($2>=4000*1024)}' /proc/meminfo \
-  && systemd-run --user --scope -p MemoryMax=4G nice -n 19 ionice -c3 <cmd>
+  && nice -n 19 ionice -c3 <cmd>
 ```
 
 ## Review Focus
@@ -88,31 +90,32 @@ The five inputs most likely to break wave 4 for a user, and the rows that pin th
 
 ## Landing order and rollout
 
-1. **#1558 (follow-up 10) lands first,** after the soak gate. Each wave-4 branch then merges `main` in, re-runs its tip suites under `RUN`, and reports a new handoff commit.
+1. **#1558 (follow-up 10) precedes wave 4.** It is verified merged at accepted head `2155e5625`. At their authorized integration stage, wave-4 branches merge `main` in, re-run their tip suites under `RUN`, and report new handoff commits. No soak wait applies.
 2. **PR4, hook and ccd hygiene,** next, rolled out to the fleet box first. Its Task 4.1 (the two-read guards behind the sixteen-hooks spool flake) and Task 4.3 (the four `delegation-watch` rows that time out at 20 s) remove flakes that PR1's and PR3's tip suites and merge-queue runs would otherwise hit, and a queue ejection costs more calendar time than the fix (items map, "Must precede the projection"). Its Task 4.5b starts only after #1578 merges; if 4.5b is still waiting then, PR1 and PR3 do not wait for PR4, and their queue runs re-run a known flake alone before calling it a break.
 3. **PR1, the frame.** It is safe dark: an older PWA drops the unknown frame.
 4. **PR3, compaction,** after merging `main` with PR1 in. Both edit the delegation lane in `watch.ts`, in different places. Its Task 3.6 starts only after #1578 merges (Task 3.6).
 5. **PR2, the rows,** after merging `main` with PR1 in, so that the PWA ships only once the frame exists. Its cherry-picked Task 1.1 commit merges without conflict.
 
-Each PR lands with `gh pr merge <n> --match-head-commit <handoffCommit>`, only after its review is accepted and the soak gate has passed. Rollout is the operator's: `ccrc rollout` (fleet box first by default) or the console's one tap. Workers and the coordinator never roll a box by hand. Wave 4's 2-day gate starts when all four PRs are live on both boxes, measured by `ccrc version` or `GET /api/updates`, never inferred from a merge.
+Each PR lands with `gh pr merge <n> --match-head-commit <handoffCommit>`, only after accepted exact-tip review, required CI and dependency clearance. The native merge queue remains required; no elapsed-time soak gate applies. Rollout is the operator's: `ccrc rollout` (fleet box first by default) or the console's one tap. Workers and the coordinator never roll a box by hand. Both-box rollout is measured by `ccrc version` or `GET /api/updates`, never inferred from a merge.
 
 ## Gate
 
-Wave 4's gate is exactly the ruling (D-7002): it passes after 48 consecutive hours, counted from the moment all four PRs are live on both boxes, in which the operator flags no displayed row as wrong.
+**Soak status: waived by the operator on 2026-10-28 ("Skip soaks"), not passed.** There is no 48-hour window, new T0 or restart after a fix. The programme's earlier seven-day window and wave 5's three-day window are waived too. Historical failures and missing coverage remain recorded.
 
-**No displayed row is flagged wrong.** Only the operator flags rows. A flag names the row (its `leaseId` or `activityId`, or the unowned tree's project and admin record) and what is wrong with it: a wrong parent, a wrong liveness, a missing inferred marker, a row that should not exist, or a row that is missing. Any flag counts, including one on a correctly labelled raw row whose link is wrong. The coordinator records each flag in the programme ledger with the frame's `asOf`. A flag stops the gate; after its fix lands and is live, a fresh 48 hours starts. Workers and reviewers never flag rows: they report a suspected row to the coordinator, who puts it to the operator.
+**Displayed-row correctness still matters.** An operator report names the row (its `leaseId` or `activityId`, or the unowned tree's project and admin record) and what is wrong with it: a wrong parent, a wrong liveness, a missing inferred marker, a row that should not exist, or a row that is missing. The coordinator records the report with the frame's `asOf` and routes the defect through normal correction, review and verification. A defect is not waived by skipping the soak, but its correction starts no new observation clock.
 
-**Reported beside the gate, not conditions of it** (the coordinator may propose to the operator that one becomes a condition; until the operator rules so, none holds the gate):
-- **Wave 3's health.** At least once a day and once at the window's end, `/api/fleet/health`'s `delegation`: `unmeasuredRate` (`stageGate`) and `recoveryPhase`.
-- **The journal's span.** The latest `delegation compaction:` line (Task 3.7), compacted or skipped: its `limited by` term, the journal's first retained record's `accepted` instant, and the carried file's bytes and lines. In steady state the journal swings between about 10 and about 13.3 days: a cut is worthwhile only once it frees 25% of the journal, that is, once about 3.3 days past the floor have accrued, so most daily attempts log `skipped (below-share …)`. Size the disk budget for about 13.3 days plus the carried file.
+**Verification remains, without a daily/window-end soak-report obligation:**
+- Implementation completeness, dependency and ownership clearance, accepted exact-tip review, required CI and the full native merge queue.
+- Release and both-box rollout verification; no merge is treated as deployment proof.
+- Existing general health/disk/update anomaly monitoring. Waiving the soak does not stop a service, cancel another programme's monitoring or authorize new live-file reads.
 
-The coordinator takes these readings from the server's log lines and the health route, never from the live files, records them in the programme ledger, and puts the result to the operator. Wave 5 starts only after the operator accepts it.
+The ten-day journal retention floor and its compaction cadence are product behavior, not a soak gate, and stay unchanged. In steady state the journal swings between about 10 and 13.3 days plus carried records. The coordinator uses the server's log lines and health route, never the live delegation files, for any still-required verification. Wave 5 still requires its approved plan and operator acceptance; it does not wait two or three elapsed days.
 
 ## PR1: the server's `delegation` frame
 
 **Goal.** The server projects what the delegation lane holds into one additive fleet frame, `{type: 'delegation', delegation: DelegationProjectionWire}` (spec §5.8, §5.13, §8.4). It sends activities, leases and unowned work, each already decided by the server. A PWA cannot render the frame until PR2 lands, and an older PWA drops it (`pwa/src/stores/fleet.ts:216-240`'s `asFleetMsg` has no `delegation` arm). So PR1 is safe to ship before anyone can see it.
 
-**Branch and base.** Cut a fresh workspace branch from `main` (`ccba6f9b6` or later). After #1558 (follow-up 10) merges, merge `main` into the branch. Never rebase it. The PR body's first line reads: "Held: not to merge before the delegation broker's soak gate (2026-10-31T09:00Z), by the operator's ruling." Suites run under this plan's soak constraints (the `RUN` gate in Global Constraints): `nice -n 19 ionice -c3` inside `systemd-run --user --scope -p MemoryMax=4G`; start a suite only while the 1-minute load is at or below 40 and at least 4000 MB is available; one subagent at a time; fixture HOMEs only; never read the live delegation files.
+**Branch and base.** Cut a fresh workspace branch from `main` (`ccba6f9b6` or later). After #1558 (follow-up 10) merges, merge `main` into the branch. Never rebase it. The PR body's first line reads: "Soaks waived by the operator on 2026-10-28; merge only after accepted exact-tip review, required CI and the programme's dependency/landing order." Suites run under this plan's pressure constraints (the `RUN` gate in Global Constraints): `nice -n 19 ionice -c3` inside the session's existing limits, never a new unit or scope; start a suite only while the 1-minute load is at or below 40 and at least 4000 MB is available; one subagent at a time; fixture HOMEs only; never read the live delegation files.
 
 **Files.**
 - `shared/api.ts`: the L0 wire block and one `FleetMsg` arm.
@@ -595,7 +598,7 @@ The PR's CI `select tests` summary must list `delegation-projection` and `delega
 - `shared/api.ts` is not growth-listed.
 
 **Review focus.** These are the inputs most likely to break PR1:
-1. **The incarnation race.** The census is taken before the tick's `sessions`. A parent restarted between the two reads `stale` for one pass. That errs away from `live`, but it is a flicker the 2-day gate could flag.
+1. **The incarnation race.** The census is taken before the tick's `sessions`. A parent restarted between the two reads `stale` for one pass. That errs away from `live`, but the visible flicker remains a correctness concern; waiving the soak does not make it verified.
 2. **Path spelling in the precedence join.** `canonicalPath` is the census's measured path, while `workdir` is the registry's spelling. A symlinked projects root may never match, and then the lease row shows beside the session row. This is not verified on the fleet; a measured mismatch is a deviation candidate.
 3. **A restart.** `absences` is lane memory (`watch.ts:10627`), so the frame is withheld until two reconciles. A PWA connected across a server restart has its slot cleared by the reconnect (PR2, W4-U3), and a lane that stops projecting withdraws its frame (W4-W8).
 4. **The R9 read.** The narrow read of up to 200 closed runs' stamps once per pass is a few statements, not `runs()`' per-row hydration, but its bound means a worker whose run is older than that window falls back to its own row. That is a narrowing of "lineage closes only on…". Record it as a deviation candidate if review holds it. A session id that works several runs is bound by the lease's instant (W4-P16).
@@ -625,11 +628,11 @@ When no frame is present, the PWA renders today's view byte for byte and claims 
 
 **Branch.** Cut from `main`. The branch's first commit is PR1's Task 1.1 commit, cherry-picked unchanged: the L0 wire block and the rewrite of `server/test/delegation-wave3.integration.test.ts`'s closed scope census (`:1120-1178`) together. The rewritten census has allow-list semantics, so it is green on this branch from the start. The worker never edits the block or the census, which are PR1's (see "Contract with PR1" below). After #1558 and PR1 merge, merge `main` in; never rebase.
 
-**PR body.** Its first line reads: "Held: not to merge before the delegation broker's soak gate (2026-10-31T09:00Z), by the operator's ruling."
+**PR body.** Its first line reads: "Soaks waived by the operator on 2026-10-28; merge only after accepted exact-tip review, required CI and the programme's dependency/landing order."
 
 **Operator rulings implemented:**
 - **D-6999.** Every `raw` (rung-4) worktree row is nested under its linked parent and wears an "inferred" chip plus a chip naming the creating Bash call's `toolUseId`. This holds for soak-era links and later ones alike, and in every group the row can land in. Nothing in this PR acts on a row, and no attach control ships (that is wave 5's `resolve attach`).
-- **D-7002.** The PWA reads no `backlog` member, and the frame carries none. Wave 4's gate is 2 days with no displayed row the operator flags as wrong. That is why every row this PR draws is measured, labelled and dismissable by fold.
+- **D-7002.** The PWA reads no `backlog` member, and the frame carries none. The original two-day gate was waived on 2026-10-28. Every row this PR draws must still be measured, labelled and dismissable by fold.
 
 **D-number range.** D-7007 to D-7010. Each is defined as `unused` in "## Deviations found" until the worker takes one in order.
 
@@ -649,7 +652,7 @@ When no frame is present, the PWA renders today's view byte for byte and claims 
 
 **Rings.** Only `delegationWords.ts`, `nestFleet.ts`, `fleetTree.ts`, `rollup.ts` and the pure parts of `sessionFacts.ts` decide (L1). The store, `FleetCards`, `ProjectCard`, `SessionLine`, `SessionMeta` and `SessionScreen` are L4. They read decisions and pick no word of their own. The shared files touched are L0 and import nothing.
 
-**Suite discipline (soak constraints).** One subagent at a time, no Workflow fan-out, fixture data only. This PR reads no live file at all. Every run below is spelled `RUN <cmd>`, the plan's soak gate (Global Constraints). If the gate fails, wait and re-measure. Never run a suite without it. First set up once: `cd ui && npm ci`, then `cd pwa && npm ci` (pwa reads ui source from `ui/node_modules`).
+**Suite discipline (pressure constraints, not a soak).** One subagent at a time, no Workflow fan-out, fixture data only. This PR reads no live file at all. Every run below is spelled `RUN <cmd>`, the plan's suite-pressure gate (Global Constraints). If the gate fails, wait and re-measure. Never run a suite without it. First set up once: `cd ui && npm ci`, then `cd pwa && npm ci` (pwa reads ui source from `ui/node_modules`).
 
 ### Contract with PR1
 
@@ -1137,7 +1140,7 @@ crash at every edge.
 - **Branch:** cut from `main`. After #1558 (follow-up 10) merges, merge `main` in; never rebase.
 - **Rulings:** the operator ruled Q1+Q2 (D-7021), Q3 (D-7022, armed on landing) and C1's scope (D-7024) on 2026-10-26; the text below is the ruled text.
 - **First line of the PR body** (one line, verbatim):
-  `Held: not to merge before the delegation broker's soak gate (2026-10-31T09:00Z), by the operator's ruling.`
+  `Soaks waived by the operator on 2026-10-28; merge only after accepted exact-tip review, required CI and the programme's dependency/landing order.`
 - **Rulings it implements:**
   - D-7000: the retention floor is 10 days.
   - D-7001: ended rows are retired behind the cut point S.
@@ -1152,8 +1155,8 @@ crash at every edge.
     `delegation-watch`, `delegation-wave3.integration`, `coordination-snapshot`, `mail-routes` and `single-definition`;
   - docs: spec §5.12, and a new per-task note `docs/superpowers/plans/<this plan's basename>/pr3.md` carrying the W3-M38
     amendment (Global Constraints, "Ledger edits"); the wave-3 plan itself is not edited.
-- **`RUN`** in the steps below is the plan's soak gate (Global Constraints): it starts a suite only while the 1-minute
-  load is ≤ 40 and available memory is ≥ 4000 MB, under `systemd-run --user --scope -p MemoryMax=4G nice -n 19 ionice -c3`.
+- **`RUN`** in the steps below is the plan's suite-pressure gate (Global Constraints): it starts a suite only while the 1-minute
+  load is ≤ 40 and available memory is ≥ 4000 MB, under `nice -n 19 ionice -c3`.
   Run one subagent at a time, and use fixture HOMEs only.
 
 ### Read this first: three facts on origin/main that changed design A (ruled by the operator on 2026-10-26)
@@ -1796,7 +1799,7 @@ Steps:
 - add a second interval finder;
 - vacuum `coord.db`;
 - run Workflow fan-outs;
-- merge before the soak gate.
+- merge without accepted exact-tip review, required CI and dependency clearance.
 
 PR3-adjacent carries are listed in "## Rider".
 
@@ -1817,7 +1820,7 @@ command that shares a hook group with ccrc's. Nothing removes a departed owner's
 **Branch.** A workspace branch cut from `main` at `ccba6f9b6` or later. After #1558 merges, merge `main` in (never a
 rebase), and re-run the suites named at the end of this section. The PR body's first line reads (one line, verbatim):
 
-`Held: not to merge before the delegation broker's soak gate (2026-10-31T09:00Z), by the operator's ruling.`
+`Soaks waived by the operator on 2026-10-28; merge only after accepted exact-tip review, required CI and the programme's dependency/landing order.`
 
 **Files.** `ccd/session-hook.sh`, `ccd/ccd`, `ccd/contexts.tsv`, `ccd/contexts-edges.tsv`,
 `ccd/install-session-hooks.sh`, `ccd/ccrc-doctor-checks` (Task 4.5b only) and `README.md` (prose only). Test files: `server/test/delegation-spool.test.ts`, `server/test/session-hook.test.ts` (appended at the end
@@ -1832,7 +1835,7 @@ only), `server/test/delegation-watch.test.ts`, `server/test/install-session-hook
   deletes it (ledger, "Wave 4 owns the absent-owner spool prune").
 - The installer fix, option B (operator, 2026-10-15). A per-hook sweep removes only ccrc's own command and keeps a
   backup (ledger, the 2026-10-15 rulings entry).
-- The soak constraints: this PR is built now and held. It implements none of D-6999..D-7002 directly; D-7002's reshape
+- The former soak-only hold is waived on 2026-10-28; independent implementation and verification holds remain. This PR implements none of D-6999..D-7002 directly; D-7002's reshape
   leaves its scope unchanged. Rung 4's margin stays a code constant; this PR only warns.
 
 **D-numbers.** D-7017, D-7018, D-7019 and D-7020 are this PR's. Each is `unused` until the worker defines an actual
@@ -1845,8 +1848,8 @@ claims until #1578 lands, so start it only after #1578 merges. Before every task
 as worker clause 11 asks. No growth-listed `server/` file changes, but `ccd/ccd` and `ccd/session-hook.sh` are on the
 growth list (`server/test/growth-check.test.ts`, `GROWTH_FILES`, limit `GROWTH_LIMIT = 40` net code lines per file).
 
-**Build constraints (the soak).** Run every suite through the plan's `RUN` gate (Global Constraints), that is, under
-`systemd-run --user --scope -p MemoryMax=4G nice -n 19 ionice -c3 …`. Start one only while the 1-minute load is 40.0 or
+**Build constraints (pressure and fixture safety, not a soak).** Run every suite through the plan's `RUN` gate (Global Constraints), that is, under
+`nice -n 19 ionice -c3 …`. Start one only while the 1-minute load is 40.0 or
 less and available memory is at least 4000 MB. Run one subagent at a time, with no Workflow fan-out. Use fixture
 HOMEs only (`makeCcdHarness`, and the fixture homes the hook suites already build). Never read the live
 `~/.cc-sessions/delegation` tree, `~/.ccrc/coord.db`, or any journal or checkpoint. Added lines carry no numeric
@@ -2249,7 +2252,7 @@ reads the result, never the worker.
 - touch the generated helpers region of `session-hook.sh`;
 - fix D-4662's silent whole-event exits, or register `PostToolUseFailure` (both go to the rider);
 - edit the programme ledger or an existing plan (its per-task note is a new file);
-- merge before the soak gate, or rebase.
+- merge without accepted exact-tip review, required CI and dependency clearance, or rebase.
 
 PR4's carries are listed in "## Rider".
 
@@ -2321,7 +2324,7 @@ The allocator issued the contiguous block D-6999..D-7022 to this wave, and D-702
 - **D-6999** — `rung-4-leases-shown-inferred-never-auto-adopted` (operator ruling 2026-10-26; spec §5.6, §5.14): a lease whose `sourceKind` is `raw` (rung 4) is displayed nested under its linked session, marked "inferred" with the creating Bash call's `toolUseId`, for soak-era and later leases alike, with no date cut-off and no policy switch. It is never adopted automatically in wave 5; the operator attaches one with a tap (spec §5.14, resolve attach). Spec §5.6's "a rung-4 (raw) lease is adopted when linked" is amended accordingly. Q-W4 (attributing main checkouts) stays off in wave 4. Compaction keeps every journal record within ±20 minutes of each raw lease on its repository, for re-audit (identification gap 2). Implemented by PR1 Task 1.2, PR2 Tasks 2.2 and 2.7, and PR3 Task 3.2 (rule K5). Implementation note (confirmed by the operator on 2026-10-26, D-7023): a programme worker's raw lease is nested by R9 under the top coordinator with `via` naming the linked worker, since nesting it under the worker would draw it at depth 2 (W4-P15); a raw lease whose tree also has a `conflicting` attempt keeps its nested inferred row beside the tree's unowned row (W4-P12); a raw lease with no activity row anchors K5's window on its own `firstObservedAt` (W4-C7b); and K5 is met across all repositories, a superset of "on its repository", because the planner cannot see a window's repository.
 - **D-7000** — `journal-retention-floor-is-ten-days` (operator ruling 2026-10-26; spec §5.12): the journal's retention floor is 10 days, not the spec's proposed 30. It remains above the lane's evidence horizon (192 h of interval retention plus the 20-minute margin), which PR3 Task 3.2's W4-C4b pins. Implemented by PR3.
 - **D-7001** — `checkpoint-bounded-by-retiring-ended-rows-behind-the-cut` (operator ruling 2026-10-26; wave-3 decision O4, beyond D-6268): the checkpoint is bounded by retiring ended rows behind the compaction cut point S. A row is retired only when every journal record naming it is at or below S and no lease, lineage edge or hold names it. Implemented by PR3 Task 3.5 for ended activities and their mappings (a Workflow worker only with its run); the deferral of sessions and attempts to the rider is D-7024.
-- **D-7002** — `programme-reshaped-waves-6-7-dropped` (operator ruling 2026-10-26; spec §5.8, §7): waves 6 and 7 (lease audit and clean, spec stages 5 and 6) are dropped. The orphan-tree lane (#1252) owns cleanup of these trees and must skip an adopted lease, which wave 5 builds. Wave 4's gate is 2 days with no displayed row the operator flags as wrong; wave 5's gate is 3 days. The frame's `backlog` member is dropped, because it could only read 0.
+- **D-7002** — `programme-reshaped-waves-6-7-dropped` (operator ruling 2026-10-26; spec §5.8, §7): waves 6 and 7 (lease audit and clean, spec stages 5 and 6) are dropped. The orphan-tree lane (#1252) owns cleanup of these trees and must skip an adopted lease, which wave 5 builds. The original ruling set wave 4's gate to 2 days with no displayed row the operator flags as wrong and wave 5's to 3 days; both timed gates were waived on 2026-10-28. The frame's `backlog` member is dropped, because it could only read 0.
 - **D-7003** — `unused`
 - **D-7004** — `unused`
 - **D-7005** — `unused`

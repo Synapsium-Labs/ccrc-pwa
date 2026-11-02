@@ -1,5 +1,25 @@
 # Program: delegation-broker
 
+## Current scope decision — 2026-11-02
+
+The operator accepted staged visibility delivery: ship honest helper/workspace visibility while unqualified automatic-end/reopening capabilities remain explicitly unsupported or not confirmed. A live parent, silence, a missing view or an incomplete roster is not execution or completion proof. Automatic repair remains outstanding programme work; the first visibility release must not be described as full repair or programme completion.
+
+The first visibility release is designed in `docs/superpowers/specs/2026-11-02-delegation-visibility-design.md` and planned in `docs/superpowers/plans/2026-11-02-delegation-visibility.md`, both proposed for one operator approval. An adversarial review of the first draft against `main` found two critical gaps: entries of a parent that left the fleet were drawn nowhere, and the proposed compaction duplicated the rollup fold that already ships. The revised design is a PWA-only change with no server, wire, durable, timer or storage change. No delegation word says `running`. Every recorded entry is reachable: chips count every attached entry on live and dead rows, the session header lists every entry the session started, and a fleet-level region shows entries whose session is no longer listed. The existing fold stays the only compaction. Positive recent/quiet activity is not provided and remains outstanding alongside automatic repair. Approval of the design approves that limit; it does not approve thresholds, source profiles, durable migration or repair. Six deviation numbers, 7781 to 7786, are issued to this plan: D-7781 and D-7782 are the coordinator's rulings it defines, and the other four are the worker's, for actual departures only.
+
+Separately, the operator authorized obtaining the exact previously refused test-launcher inspection request from retained evidence and preparing a precise safety-disposition request. That instruction does not authorize retrying the refused inspection, reading forbidden account/secret paths or weakening guards. The original nonzero test execution remains unresolved until causally explained and legitimately verified.
+
+PR3 retention/recovery, PR4 hook/installer/doctor production and verification, the detailed Wave 5 adoption/promotion plan and implementation, and ordinary lifecycle/review/CI/native-queue obligations remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed.
+
+## Current operator amendment — 2026-10-28
+
+The operator ruled **"Skip soaks"**. All remaining elapsed-time soak gates in this programme are **waived**, not passed: wave 3's seven-day window and any restart on follow-up 10's release, wave 4's two-day window, and wave 5's three-day window. No replacement T0, restart or wait-until date is required. This amendment takes precedence over historical soak instructions below and in the earlier plans/spec. Original failed-soak observations, coverage gaps and unknown measurements remain historical facts.
+
+Soak-only merge holds, daily soak/B-list reports, gate-C reports and soak-clock/restart or pre-tap clock rulings end. Existing general health/disk/update anomaly monitoring is not canceled, and no service is stopped by this ruling. Exact-tip independent review, required CI and the native merge queue, implementation completeness, ownership and dependency clearance, rollout verification and truthful run closure remain required. Existing bounded implementation freezes that also protect those conditions require the coordinator's next scoped instruction; a soak waiver is not blanket edit, sync, push, deployment or closure authority.
+
+Follow-up 10 (#1558) is independently verified merged at accepted head `2155e56259bfff617ff2a98ce628c153836de4df`, merge commit `66fd18299caf9434d32680e5bf6c1799650c510b`, merged 2026-10-27T12:21:13Z. That establishes the merge, not a populated handoff fingerprint, complete run items, release/rollout proof or run closure. The last run-968 read still had `handoffCommit:null`, items 0/4 and state `merging`; it is not remeasured by this amendment.
+
+Wave 4 executes the approved lean four-PR plan, `docs/superpowers/plans/2026-10-26-delegation-broker-wave4-project.md`. The dependency and review/CI order in that plan remains; only elapsed-time soak waits are removed. Waves 6 and 7 remain dropped under the 2026-10-26 ruling. No new deviation number is defined by this amendment.
+
 Spec: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` (approved 2026-10-05, revisions R1–R9 included)
 Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (waves 1–2) and
 `docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` (wave 3, operator-approved 2026-10-09). Waves
