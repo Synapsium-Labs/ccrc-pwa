@@ -567,16 +567,20 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// Clause W5 Share (M4.SH7; spec 2026-10-01 4.5, 4.16): one share door and one clipboard writer. Across `pwa/src`, a
-// call of `share` on the bare `navigator` (`navigator.share(…)`, `navigator?.share(…)`, `navigator['share'](…)`,
+// Clause W5 Share (M4.SH7; spec 2026-10-01 4.5, 4.16): one share door, and one clipboard writer under pwa/src/docs.
+// Across `pwa/src`, a call of `share` on the bare `navigator` (`navigator.share(…)`, `navigator?.share(…)`,
+// `navigator['share'](…)`,
 // through parentheses, `!` and casts) sits only in `docs/ShareSheet.tsx`; under `pwa/src/docs`, a call of a member
 // named `writeText` sits only in `docs/share.ts` (`copyText`, which Copy link, the truth line's copy commit and the
 // reader's copy op all call). `navigator.canShare(…)` is a capability probe, not a share, and is not counted. Share
 // adds no `postMessage` and no `message` listener: clause W8a's walk reads the Share files and finds none.
 // NOT EXHAUSTIVE. Known evasions it does not see: `navigator` held in a variable first (`const n = navigator;
-// n.share(x)`), a computed key (`navigator[k](x)`), `.call` / `.apply` / `.bind` (`navigator.share.call(navigator, x)`),
-// `window.navigator.share(x)` or `globalThis.navigator.share(x)` (the owner is not the bare identifier), and a
-// `writeText` reached through an alias (`const w = clipboard.writeText; w(t)`). Review lens 3 reads for those, and
+// n.share(x)`), destructuring (`const { share } = navigator; share(x)`), a computed key (`navigator[k](x)`),
+// `.call` / `.apply` / `.bind` (`navigator.share.call(navigator, x)`, and the same on `writeText`), `Reflect.apply`
+// (`Reflect.apply(navigator.share, navigator, [x])`), `window.navigator.share(x)` or `globalThis.navigator.share(x)`
+// (the owner is not the bare identifier), a `writeText` reached through an alias (`const w = clipboard.writeText;
+// w(t)`), and any other clipboard writer: `clipboard.write(…)` and `document.execCommand('copy')` are not counted.
+// Review lens 3 reads for those, and
 // docs-share-sheet.test.tsx's receiver case catches a detached call in the sheet itself.
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -611,7 +615,7 @@ function shareDoorScan(base: string): { files: string[]; uses: string[] } {
   return { files, uses: uses.map((u) => `${u.file} ${u.door}`) };
 }
 
-describe('clause W5 Share: one share door and one clipboard writer (M4.SH7; M4.T7 Share clause)', () => {
+describe('clause W5 Share: one share door, and one clipboard writer under pwa/src/docs (M4.SH7; M4.T7 Share clause)', () => {
   const copies: string[] = [];
   afterAll(() => {
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });

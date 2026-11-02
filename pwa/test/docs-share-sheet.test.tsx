@@ -1,7 +1,7 @@
 // Docs W5 Share, Task 5: the share sheet (spec 2026-10-01 4.16; M4.SH4, M4.SH5, and M4.SH6 as the sheet shows it).
 // The sheet renders the `ShareTarget` it is given. `copyText` is a spy here (the module's other exports are the real
 // ones); `navigator.share` and `navigator.canShare` are defined per case and removed after each, since jsdom has
-// neither. Task 7 appends the Share chrome's colour guard. Placeholders only: `example-org/example-repo`, `demo`.
+// neither. The last describe is the Share chrome's colour guard. Placeholders only: `example-org/example-repo`, `demo`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
@@ -189,6 +189,9 @@ describe('a refusal on the sheet (M4.SH6; refinement (c))', () => {
 
 // ---- Task 7: the Share chrome paints no colour of its own (M4.S1's Share clause, as refinement (e) reads it) ------
 
+// NOT EXHAUSTIVE. Evasions it does not see: a Share rule nested in an at-rule (`@media (…) { .docs-share { … } }`) is
+// read by its at-rule prelude, not by its own selector, and is missed; and a colour set through a property outside the
+// regex's list (the list below names the ones this chrome could plausibly use).
 describe('the Share chrome paints no colour of its own (M4.S1 Share clause; refinement (e))', () => {
   const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8'));
   const shareRules = css.split('}').map((chunk) => chunk.split('{')).filter(([sel]) => /\.docs-share\b/.test(sel ?? ''));
@@ -199,7 +202,7 @@ describe('the Share chrome paints no colour of its own (M4.S1 Share clause; refi
     ]);
     for (const [sel, body] of shareRules) {
       expect(body ?? '', sel)
-        .not.toMatch(/(?:^|[;{\s])(?:color|background[a-z-]*|border[a-z-]*|outline[a-z-]*|fill|stroke|text-decoration-color)\s*:/);
+        .not.toMatch(/(?:^|[;{\s])(?:color|background[a-z-]*|border[a-z-]*|outline[a-z-]*|fill|stroke|text-decoration-color|opacity|filter|box-shadow|accent-color|caret-color)\s*:/);
     }
   });
 });
