@@ -3831,6 +3831,8 @@ const HOMEABLE = (
 });
 
 describe('ccrc account enable / disable', () => {
+  // `enable --force` IN THE MARKER CASES BELOW (accounts plan Task A13, D-7731): they pin the marker, and `enable`'s
+  // readiness question, which `--force` skips and nothing else, is `ccrc-account-enable-ready.test.ts`'s.
   it('disable writes ccd\'s marker and reports the measured state without requiring telemetry', () => {
     const home = box('ccrc-account-disable-');
     seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet', 'none')]);
@@ -3849,9 +3851,9 @@ describe('ccrc account enable / disable', () => {
     plantLauncher(home, 'alt-max');
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
-    expect(oneObject(run(home, ['account', 'enable', '--id', 'alt-max']))['disabled']).toBe(false);
+    expect(oneObject(run(home, ['account', 'enable', '--id', 'alt-max', '--force']))['disabled']).toBe(false);
     expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
-    const again = run(home, ['account', 'enable', '--id', 'alt-max']);
+    const again = run(home, ['account', 'enable', '--id', 'alt-max', '--force']);
     expect(again.code, again.stderr).toBe(0);
     expect(oneObject(again)['disabled']).toBe(false);
   });
@@ -3860,7 +3862,7 @@ describe('ccrc account enable / disable', () => {
     const home = box('ccrc-account-enable-marker-directory-');
     seedRosterJson(home, [UPSTREAM]);
     mkdirSync(offMarker(home, 'claude'), { recursive: true });
-    const r = run(home, ['account', 'enable', '--id', 'claude']);
+    const r = run(home, ['account', 'enable', '--id', 'claude', '--force']);
     expect(r.code).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('marker-conflict');
@@ -3890,7 +3892,7 @@ describe('ccrc account enable / disable', () => {
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
 
-    const r = run(home, ['account', 'enable', '--id', 'alt-max']);
+    const r = run(home, ['account', 'enable', '--id', 'alt-max', '--force']);
     expect(r.code).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('no-answer');
@@ -4057,7 +4059,8 @@ exec /bin/mkdir "$@"
     const home = box('ccrc-account-endis-argv-');
     seedRosterJson(home, [UPSTREAM]);
     for (const sub of ['enable', 'disable']) {
-      const unknown = run(home, ['account', sub, '--id', 'claude', '--force']);
+      // Not `--force`, which `enable` takes since A13 (CLI only, spec §10).
+      const unknown = run(home, ['account', sub, '--id', 'claude', '--yes']);
       expect(unknown.code, `${sub}: unknown flag`).toBe(2);
       expect(oneObject(unknown)['error'], `${sub}: unknown flag`).toBe('unknown-argument');
       for (const [idArgv, detail] of [
@@ -7546,11 +7549,14 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     // of one roster colliding on one name.
     // THE LANE-STATE FILE'S WRITER IS NOT A ROSTER WRITER (accounts plan Task
     // A11): it writes `~/.cc-sessions/.accounts/<id>.json` and never the roster,
-    // so its own rename is cut out before the count.
-    const whole = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
-    const ls = whole.indexOf('function opLaneState(');
-    expect(ls, 'the lane-state writer moved: re-derive this cut').toBeGreaterThan(-1);
-    const src = whole.slice(0, ls) + whole.slice(whole.indexOf('\n}\n', ls) + 3);
+    // so its own rename is cut out before the count. Nor is the first-run seed
+    // (A13, D-7731), which writes a lane's `.claude.json`.
+    let src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    for (const fn of ['function laneStateWrite(', 'function opSeed(']) {
+      const ls = src.indexOf(fn);
+      expect(ls, `${fn} moved: re-derive this cut`).toBeGreaterThan(-1);
+      src = src.slice(0, ls) + src.slice(src.indexOf('\n}\n', ls) + 3);
+    }
     const renames = [...src.matchAll(/\brenameSync\(/g)].length;
     expect(renames, `the roster is written from ${renames} places, not one`).toBe(1);
     expect(src, 'the temporary roster name carries nothing a reader of /proc could not derive')

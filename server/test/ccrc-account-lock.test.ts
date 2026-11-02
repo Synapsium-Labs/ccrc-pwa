@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  BASH, CANARY, HAVE_FLOCK, NODE_ID, addLane, answer, boxEnv, ccrcIn, laneBox, laneState, modeOf,
+  BASH, CANARY, HAVE_FLOCK, NODE_ID, addLane, answer, boxEnv, ccrcIn, laneBox, laneState, markReady, modeOf,
 } from './laneStateFixture.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
@@ -127,6 +127,7 @@ describe('the lock order (spec §3.9)', () => {
     expectOrder('add');
     run(['account', 'disable', '--id', 'lane-c']);
     expectOrder('disable');
+    markReady(home, 'lane-c');
     run(['account', 'enable', '--id', 'lane-c']);
     expectOrder('enable');
   });

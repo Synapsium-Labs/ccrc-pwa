@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, wr
 import { join } from 'node:path';
 import {
   ACCOUNT_OP, CANARY, HAVE_FLOCK, HEALTH_SRC, NODE_ID, addLane, answer, boxEnv, ccrcRun, laneBox, laneState,
-  laneStateDir, laneStatePath, modeOf, plantProbe, writeLaneState,
+  laneStateDir, laneStatePath, markReady, modeOf, plantProbe, writeLaneState,
 } from './laneStateFixture.js';
 import { NODE_ID_RE } from '../../shared/agent-protocol.js';
 import { readRegistryMeasured } from '../src/registry.js';
@@ -56,7 +56,8 @@ describe('every verb writes the lane-state file (G16)', () => {
 
     for (const verb of ['disable', 'enable']) {
       rmSync(laneStatePath(home, 'lane-c'));
-      const r = ccrcRun(home, ['account', verb, '--id', 'lane-c']);
+      // `--force`: the file was just removed, so `enable`'s readiness (A13) would refuse; this case is the write.
+      const r = ccrcRun(home, ['account', verb, '--id', 'lane-c', ...(verb === 'enable' ? ['--force'] : [])]);
       expect(r.code, `${verb}: ${r.stderr}`).toBe(0);
       expect(existsSync(laneStatePath(home, 'lane-c')), `${verb} wrote the lane state`).toBe(true);
       expectPrivateAndClean(home, 'lane-c');
@@ -80,7 +81,10 @@ describe('every verb writes the lane-state file (G16)', () => {
     expect(cred.code, cred.stderr).toBe(0);
     expectPrivateAndClean(home, 'lane-c');
     expectPrivateAndClean(home, 'lane-c', second);
-    expect(laneState(home, 'lane-c')).toEqual({ keyHash: 'kh0c11', fleetIdentity: NODE_ID });
+    // `check`'s run and seed times (A13) stand too: they are about the lane's `.claude.json`, not its secret.
+    expect(laneState(home, 'lane-c')).toEqual({
+      keyHash: 'kh0c11', fleetIdentity: NODE_ID, lastRunAt: expect.any(String), seedVerifiedAt: expect.any(String),
+    });
   });
 
   it('`credential` writes the file even when none was there', () => {
@@ -190,6 +194,7 @@ describe('the writer keeps what it was not asked to set (spec §3.4)', () => {
     expect(addLane(home, 'lane-c').code).toBe(0);
     const w = writeLaneState(home, ['--id', 'lane-c', '--key-hash', 'kh0a11', '--retired-key-hash', 'kh0a10']);
     expect(w.code, w.stderr).toBe(0);
+    markReady(home, 'lane-c');
     for (const verb of ['disable', 'enable']) expect(ccrcRun(home, ['account', verb, '--id', 'lane-c']).code).toBe(0);
     const roster = ccrcRun(home, ['account', 'roster']);
     expect(roster.code, roster.stderr).toBe(0);

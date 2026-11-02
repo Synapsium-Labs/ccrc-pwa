@@ -137,7 +137,10 @@ describe('AccountsScreen — every account, never hidden', () => {
     ]);
     render(<AccountsScreen />);
     expect(await screen.findByText('team·alt')).toBeInTheDocument();
-    expect(screen.getByText(/disabled on the fleet host/i)).toBeInTheDocument();
+    // Its word and its source (accounts plan Task A2): Off, "Off on the fleet host".
+    const offRow = screen.getByText('team·alt').closest('[data-disabled]') as HTMLElement;
+    expect(within(offRow).getByText('Off')).toBeInTheDocument();
+    expect(within(offRow).getByText('Off on the fleet host')).toBeInTheDocument();
     // The enabled account carries no such note.
     const claudeRow = screen.getByText('team·max').closest('[data-disabled]');
     expect(claudeRow).toHaveAttribute('data-disabled', 'false');
@@ -191,7 +194,9 @@ describe('AccountsScreen — the 0%/0% inferred/— three-way (accounts-strip.te
     const claude9Row = screen.getByText('team·alt').closest('[data-disabled]') as HTMLElement;
     expect(within(claude9Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h: one node, nothing inferred
     expect(within(claude9Row).queryByText(/inferred/)).toBeNull();
-    expect(within(claude9Row).getByText('—', { selector: '[aria-hidden="true"]' })).toBeInTheDocument();    // never-measured 7d
+    // Scoped to the meters: the Not checked lamp's glyph is a `—` too, and says something else.
+    const claude9Meters = claude9Row.querySelector('.acct-rows') as HTMLElement;
+    expect(within(claude9Meters).getByText('—', { selector: '[aria-hidden="true"]' })).toBeInTheDocument();    // never-measured 7d
     expect(within(claude9Row).getByText('not measured')).toBeInTheDocument();
   });
 });
@@ -338,14 +343,18 @@ describe('an auth-dead lane', () => {
   it('says WHY it is off, and says something different from the operator switch', async () => {
     stubAccounts([acct({ wrapper: 'claude', authDead: true })]);
     render(<AccountsScreen />);
-    expect(await screen.findByText(/sign-in expired/)).toBeInTheDocument();
-    expect(screen.queryByText('disabled on the fleet host')).toBeNull();
+    // The one word (accounts plan Task A2): Signed out, from the 401, never the operator switch's Off.
+    const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
+    expect(within(row).getByText('Signed out')).toBeInTheDocument();
+    expect(within(row).getByText('HTTP 401')).toBeInTheDocument();
+    expect(within(row).queryByText(/Off on the fleet host/)).toBeNull();
   });
 
   it('names BOTH when both are true — an operator switch does not hide a measurement', async () => {
     stubAccounts([acct({ wrapper: 'claude', disabled: true, authDead: true })]);
     render(<AccountsScreen />);
-    expect(await screen.findByText(/disabled on the fleet host; sign-in expired/)).toBeInTheDocument();
+    // Off outranks Signed out, and the card still names the measurement Off would otherwise hide.
+    expect(await screen.findByText('Off on the fleet host · also signed out (HTTP 401)')).toBeInTheDocument();
   });
 
   it('an older server that omits the field renders the lane as normal', async () => {

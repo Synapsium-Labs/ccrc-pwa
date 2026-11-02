@@ -2411,6 +2411,212 @@ button.proj-card-pool::before {
   cursor: pointer;
 }
 
+/* — One state word per lane (accounts plan Task A2, D-7718; spec 2026-10-18 accounts-connect §4) —
+   A lane card (`data-state` names its word) is its own ground, so every ink inside it below names it and the contrast
+   gate measures each pair on the card's ground and on the Signed-out card's. */
+.accounts-row[data-state] {
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+}
+/* THE LOUD STATE IS ACHROMATIC (spec §4.1): a Signed-out Refined card takes a 2px `--ink-primary` left rail on
+   `--bg-raised`, and its word goes semibold. No colour token, no red. A border rather than an inset shadow, so it
+   survives forced colours and never meets the arrived lane's accent edge. Scoped to the Refined list (A4 owns
+   Instrument's table, where the rail is selection's). */
+.accounts-row[data-state].acct-rail {
+  background: var(--bg-raised);
+  border-left: 2px solid var(--ink-primary);
+}
+.accounts-row[data-state].acct-rail .acct-lamp-word { font-weight: var(--weight-semibold); }
+/* The roll-up opens the page: a measured sentence, in the UI face, on the page's own ground. */
+.accounts-rollup {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+  background: var(--bg-page);
+}
+/* Line 1: the id chip, the label (ellipsised, never wrapping the head), the lamp at the right. */
+.accounts-row-head { min-width: 0; }
+.acct-card-id {
+  flex: none;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  font-weight: var(--weight-semibold);
+}
+.acct-card-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-lamp {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: var(--sp-1);
+  margin-left: auto;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+/* The lamp's ink, per word (spec §4.1's Loudness column). Signed in's glyph is the busy hue with NO glow (ruled
+   2026-10-18): no shadow, no animation. The glyph is a character at the word's size, so it takes the hue's TEXT token,
+   `--status-busy-text`, which holds 4.5:1 on the card and on the raised ground in every palette, where the dot token
+   `--status-busy` (a 3:1 mark) does not (D-7718). Rate-limited and Expiring carry the attention hue the same way. */
+.accounts-row[data-state] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp-glyph { color: var(--ink-primary); }
+.accounts-row[data-state] .acct-lamp[data-state='off'] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp[data-state='off'] .acct-lamp-glyph,
+.accounts-row[data-state] .acct-lamp[data-state='inconclusive'] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp[data-state='inconclusive'] .acct-lamp-glyph { color: var(--ink-secondary); }
+.accounts-row[data-state] .acct-lamp[data-state='not-checked'] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp[data-state='not-checked'] .acct-lamp-glyph { color: var(--ink-tertiary); }
+.accounts-row[data-state] .acct-lamp[data-state='signed-in'] .acct-lamp-glyph { color: var(--status-busy-text); }
+.accounts-row[data-state] .acct-lamp[data-state='rate-limited'] .acct-lamp-glyph,
+.accounts-row[data-state] .acct-lamp[data-state='expiring'] .acct-lamp-glyph { color: var(--status-attention-text); }
+/* Not checked's dashed slot: the glyph sits in a dashed frame, a reading that is absent rather than a dot. */
+.acct-lamp[data-state='not-checked'] .acct-lamp-glyph {
+  padding: 0 2px;
+  border: 1px dashed var(--edge-strong);
+  border-radius: var(--r-sm);
+}
+/* Line 2: the kind chip, the identity line (ellipsised), the pool chip. Wraps only between whole items. */
+.accounts-row-kind,
+.acct-knob {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+.accounts-row[data-state] .acct-kind-chip {
+  flex: none;
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+.accounts-row[data-state] .acct-identity {
+  flex: 1 1 12ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+/* The state's source and its age: a sentence, in the UI face; the usage age stays mono (`.accounts-fresh`). */
+.accounts-row[data-state] .accounts-state-source {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+.accounts-row[data-state] .acct-weekly-only {
+  grid-column: 2 / -1;
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  color: var(--ink-tertiary);
+}
+/* The trouble card's body (spec §4.2): what is wrong, its effect and its fix, in sans; the command in mono. */
+.acct-trouble { display: grid; gap: var(--sp-1); margin: var(--sp-1) 0; }
+.accounts-row[data-state] .acct-trouble-wrong {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.accounts-row[data-state] .acct-trouble-effect,
+.accounts-row[data-state] .acct-trouble-lead,
+.accounts-row[data-state] .acct-fix-hold,
+.accounts-row[data-state] .acct-knob-reason {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+.acct-fix-command { display: grid; gap: var(--sp-1); }
+.acct-fix-row { display: flex; gap: var(--sp-2); align-items: stretch; min-width: 0; }
+.accounts-row[data-state] .acct-fix-field {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: var(--tap-min);
+  display: flex;
+  align-items: center;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+  -webkit-user-select: all;
+  color: var(--ink-primary);
+  background: var(--bg-page);
+}
+.acct-fix-copy { flex: none; width: auto; min-height: var(--tap-min); }
+/* At a phone's width the command takes the whole row and Copy sits under it, full width. */
+@media (max-width: 480px) {
+  .acct-fix-row { flex-direction: column; }
+  .accounts-row[data-state] .acct-fix-field { flex: none; }
+  .acct-fix-copy { width: 100%; }
+}
+
+/* The kill switch row (spec §10; accounts plan Task A14, D-7732): the switch, its sentence and Check on one wrapping
+   line, the reason on a line of its own beneath them, never beside the knob. The switch is drawn as the option row's
+   box is (`--ink-secondary` frame, `--accent` once on, `--ink-disabled` when it cannot move); its name is the
+   sentence beside it and its `aria-label`. */
+/* Its shape is `.accounts-row-kind`'s (the group above); here only its place on the card. */
+.acct-knob { margin: var(--sp-1) 0 0; }
+.acct-switch {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.acct-switch:disabled { cursor: default; }
+.acct-switch-track {
+  display: block;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border: 1.5px solid var(--ink-secondary);
+  border-radius: var(--r-full);
+  background: transparent;
+}
+.acct-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: var(--r-full);
+  background: var(--ink-secondary);
+}
+.acct-switch[aria-checked='true'] .acct-switch-track { border-color: var(--accent); background: var(--accent); }
+.acct-switch[aria-checked='true'] .acct-switch-thumb { left: auto; right: 2px; background: var(--ink-on-accent); }
+.acct-switch:disabled .acct-switch-track { border-color: var(--ink-disabled); background: transparent; }
+.acct-switch:disabled .acct-switch-thumb { background: var(--ink-disabled); }
+.accounts-row[data-state] .acct-knob-state {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+}
+.acct-check, .acct-check-again { flex: none; min-height: var(--tap-min); }
+.acct-check-again { justify-self: start; }
+/* The reason's ink and type are the trouble sentences' (the group above); here only its own line. */
+.acct-knob-reason { flex: 1 0 100%; }
+
 /* — Your sign-in, which is NOT one of your accounts (D-161) —
    The passkey block and the session block used to be `.accounts-row` with an
    `.account-gauge-label` — the two classes a claude9/gpt row wears — so
@@ -3706,6 +3912,9 @@ button.proj-card-pool::before {
     overflow: hidden;
     overflow-wrap: anywhere;
   }
+  /* The Accounts card at a laptop's width and wider (accounts plan Task A2, D-7718; spec §12.1): its two meters sit
+     side by side. */
+  .accounts-row[data-state] .acct-rows { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--sp-4); }
 }
 
 /* The banner stack's slot (W2 Task S2c, BannerStack.tsx): no box of its own, so a sticky banner inside it stays

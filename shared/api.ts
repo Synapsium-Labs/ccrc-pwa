@@ -12389,9 +12389,9 @@ export interface LaneWire {
   notReadyReason?: LaneNotReadyReason;
 }
 
-/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, no last check of
- *  `ok`, or no seed verified after the last run. */
-export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'seed-unverified'] as const;
+/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, no check, a last check
+ *  not `ok`, no credential the box can find (the box's word alone, D-7732), or no seed verified after the last run. */
+export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'check-failed', 'no-credential', 'seed-unverified'] as const;
 export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
 
 /** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
@@ -12794,4 +12794,33 @@ export interface FleetHealth {
    * through `readHostPressure` alone; absent reads as UNKNOWN, never as a calm host.
    */
   psi?: HostPressureHealth;
+}
+
+// ── Accounts: Check and the kill switch (accounts plan Task A14, D-7732; spec §10, §13.1) ──────────────────────────
+// APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line.
+
+/** The words the lane routes (`server/src/accounts/routes.ts`) answer of their own, each with its one status in
+ *  `REFUSAL_STATUS` (D-7732). The verb's own `not-ready` rides the existing `not-ready` word with its `reason`, and an
+ *  id the roster does not hold answers the existing `not-found`.
+ *  `lane-busy`          another account act holds the lane's lock (409): nothing ran, a retry may.
+ *  `last-enabled-home`  disable would leave no lane that can take a new session (409, spec §10).
+ *  `lane-act-refused`   the verb refused for a reason of its own (409); its code rides `verbCode` when it is a word,
+ *                       never its sentence.
+ *  `outcome-unknown`    the act outran its bound or its answer was lost (502): the box may have acted, so the server
+ *                       reconciled and the screen re-reads; it is never retried on its own (D-5518). */
+export const ACCOUNT_ROUTE_REFUSALS = ['lane-busy', 'last-enabled-home', 'lane-act-refused', 'outcome-unknown'] as const;
+export type AccountRouteRefusal = (typeof ACCOUNT_ROUTE_REFUSALS)[number];
+
+/** `POST /api/accounts/:id/check`'s 200 (spec §13.1): the lane as the server reads it after the check and its seed. */
+export interface AccountCheckAnswer {
+  readonly ok: true;
+  readonly lane: LaneWire;
+}
+
+/** `POST /api/accounts/:id/enable` and `/disable`'s 200 (spec §13.1): the roster `GET /api/accounts` answers, and the
+ *  lane as the server reads it after the switch. */
+export interface AccountSwitchAnswer {
+  readonly ok: true;
+  readonly roster: RosterWire[];
+  readonly lane: LaneWire;
 }

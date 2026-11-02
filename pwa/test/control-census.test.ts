@@ -223,6 +223,7 @@ function controls(): Map<string, number[]> {
 /** Every hand-drawn control, with the way it reaches a thumb. */
 const CONTROLS: Record<string, string> = {
   // ── TOKEN: the control's own rule declares the floor ─────────────────────
+  'fleet/AccountKnob.tsx <button> acct-switch': 'TOKEN. The lane\'s kill switch on the Accounts card (D-7732): a 36px track inside a tap-floor box.',
   'fleet/MailBadge.tsx <button> mail-badge': 'TOKEN. The mail door in the fleet header.',
   'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
   'fleet/chips.tsx <button> acct-disclosure':

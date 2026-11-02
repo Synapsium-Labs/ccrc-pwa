@@ -12,11 +12,25 @@
  * the caller's own turn has ended, so a miss costs the call that made it nothing and cannot spend its deadline (§6.6).
  * Its calls are charged to the slot's `floor` in the rate service (§6.7), never to a session or a request.
  *
+ * THE DIRECTORY TOO (spec §4.4, R5). The same queue fills each slot's directory of states, labels, projects and
+ * active users (`directory.ts`), which it alone constructs and writes: a name the directory lacks for the request's key
+ * queues it through `nameMiss`, and an add, a replace or a Check again through `queueDirectory`, 250 entries a page up
+ * to 4 pages a collection, each page charged to the slot's `floor`. A miss queues nothing when a run was attempted for
+ * that key inside ten minutes, counted from when the run started, whether it filled the directory, failed or was
+ * refused: so the misses of an unfillable directory make at most one run in ten minutes, and session traffic cannot
+ * spend the floor that the teams refresh and the operator's key acts share. No request ever fills it.
+ *
  * NO KEY IS HELD. The queue holds slot references and times; each page of each refresh reads the key from its file
  * (`readLinearSlotKey`), so a key removed or replaced mid-refresh stops it at its next page, and it records nothing.
  */
-import { checkLinearKey, type FetchLike, type LinearKeyCheck } from './client.js';
-import type { LinearRateGrant, LinearRateLane, LinearRateRefusal, LinearRateService } from './rate.js';
+import { valueDigestHex } from '../token/files.js';
+import { callLinear, checkLinearKey, type FetchLike, type LinearKeyCheck } from './client.js';
+import { LinearDirectory, type LinearDirectoryRead } from './directory.js';
+import {
+  LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES, readLinearDirectoryPage,
+  type LinearDirectoryEntries,
+} from './ops.js';
+import { oneCallOutcome, type LinearRateGrant, type LinearRateLane, type LinearRateRefusal, type LinearRateService } from './rate.js';
 import {
   readLinearSlotKey, recordLinearSlotCheck, writeLegacyTeams, type LinearSlotRef, type LinearStoreRead,
 } from './store.js';
@@ -65,7 +79,9 @@ export async function checkLinearSlot(o: LinearSlotCheckOpts): Promise<LinearSlo
 
 /** A slot's teams are refreshed when older than this, and no slot is refreshed twice inside it (spec §4.3). */
 export const LINEAR_TEAMS_REFRESH_MS = 5 * 60_000;
-/** The wait a `refreshing` miss tells the caller to retry after (spec §4.3: `Retry-After: 10`). */
+/** A slot's directory is refreshed at most once inside this window, whatever the number of name misses (spec §4.4). */
+export const LINEAR_DIRECTORY_REFRESH_MS = 10 * 60_000;
+/** The wait a `refreshing` miss tells the caller to retry after (spec §4.3, §4.4: `Retry-After: 10`). */
 export const LINEAR_MISS_RETRY_AFTER_S = 10;
 
 /** What a routing miss tells the caller (spec §4.3): `refreshing` when a refresh that could cure it is queued or
@@ -88,10 +104,21 @@ type Listed = Extract<LinearStoreRead, { kind: 'listed' }>;
 /** The legacy slot's own fixed key; a file slot's id is a UUID, so the two never meet. */
 const slotKeyOf = (ref: LinearSlotRef): string => (ref.source === 'legacy' ? 'legacy' : `file:${ref.id}`);
 
+/** What the queue runs for a slot: its teams (the §4.1 check) or its directory (§4.4). */
+type JobKind = 'teams' | 'directory';
+interface Job { kind: JobKind; ref: LinearSlotRef }
+const jobKeyOf = (kind: JobKind, ref: LinearSlotRef): string => `${kind}|${slotKeyOf(ref)}`;
+
 export class LinearRefresher {
-  private readonly queued = new Map<string, LinearSlotRef>();
-  /** When each slot's last refresh (or Check again) started: the five-minute window is counted from here. */
+  private readonly queued = new Map<string, Job>();
+  /** When each teams job's last run (or a slot's Check again) started: its five-minute window is counted from here.
+   *  A directory's window is `attempted`'s, keyed by the key's digest, never this. */
   private readonly lastRun = new Map<string, number>();
+  /** Each slot's last directory run: the digest of the key it read first and when it started, whatever it then filled.
+   *  A name miss's ten-minute window is counted from here (spec §4.4). It holds a digest, never a key. */
+  private readonly attempted = new Map<string, { keyDigest: string; at: number }>();
+  /** The one directory (spec §4.4): this refresher is its only writer. */
+  private readonly names = new LinearDirectory();
   private running: string | null = null;
   /** True from the first enqueue until the queue is found empty, in the same turn as that finding, so a slot queued at
    *  any moment is either seen by the running pump or starts a new one. */
@@ -113,12 +140,12 @@ export class LinearRefresher {
     const at = this.now();
     let refreshing = false;
     for (const { ref, teamsAt } of this.candidates(store)) {
-      const key = slotKeyOf(ref);
+      const key = jobKeyOf('teams', ref);
       if (this.queued.has(key) || this.running === key) { refreshing = true; continue; }
       const stale = teamsAt === null || at - teamsAt > LINEAR_TEAMS_REFRESH_MS;
       const last = this.lastRun.get(key);
       if (stale && (last === undefined || at - last >= LINEAR_TEAMS_REFRESH_MS)) {
-        this.enqueue(ref);
+        this.enqueue({ kind: 'teams', ref });
         refreshing = true;
       }
     }
@@ -128,7 +155,44 @@ export class LinearRefresher {
   /** A check of `ref`'s key that ran outside the queue (the legacy Check again) counts as its refresh: the window
    *  starts again from now, so a miss straight after it does not ask Linear the same question. */
   checked(ref: LinearSlotRef): void {
-    this.lastRun.set(slotKeyOf(ref), this.now());
+    this.lastRun.set(jobKeyOf('teams', ref), this.now());
+  }
+
+  /** The directory a request reads names from (spec §4.4): read-only to everyone but this refresher. */
+  get directory(): LinearDirectoryRead {
+    return this.names;
+  }
+
+  /**
+   * A name the slot's directory does not hold for `keyDigest`, the digest of the key the request read (or a directory
+   * not yet filled for it), spec §4.4. Answers at once, before anything runs: never a promise, never a Linear call.
+   * `refreshing` (retry after `LINEAR_MISS_RETRY_AFTER_S`) when the slot's directory refresh is queued or running, or
+   * when this miss queues one. `unknown`, queueing nothing, when a run was attempted for this digest inside the
+   * ten-minute window (counted from when it started), or the directory was filled for it inside the window: at most
+   * one run in ten minutes, whatever the number of misses, and a run that failed or was refused counts (an unfillable
+   * directory would otherwise queue a run on every retry and spend the slot's floor). A replaced key has a new digest,
+   * with no run attempted for it, so its miss queues at once; `queueDirectory` is the explicit way past the window.
+   */
+  nameMiss(ref: LinearSlotRef, keyDigest: string): LinearMissDetail {
+    const key = jobKeyOf('directory', ref);
+    if (this.queued.has(key) || this.running === key) return 'refreshing';
+    const at = this.now();
+    const tried = this.attempted.get(slotKeyOf(ref));
+    if (tried !== undefined && tried.keyDigest === keyDigest && at - tried.at < LINEAR_DIRECTORY_REFRESH_MS) return 'unknown';
+    const filledAt = this.names.filledAt(ref, keyDigest);
+    if (filledAt !== null && at - filledAt < LINEAR_DIRECTORY_REFRESH_MS) return 'unknown';
+    this.enqueue({ kind: 'directory', ref });
+    return 'refreshing';
+  }
+
+  /**
+   * An add, a replace or a Check again of `ref`'s key (spec §4.4): queues the slot's directory refresh past the
+   * ten-minute window, once while one is queued. A refresh already running is not enough (it may be reading the key
+   * that was just replaced, and it stops at its next page, recording nothing), so the one queued here runs after it.
+   */
+  queueDirectory(ref: LinearSlotRef): void {
+    if (this.queued.has(jobKeyOf('directory', ref))) return;
+    this.enqueue({ kind: 'directory', ref });
   }
 
   /** Resolves once the queue is empty. For tests and an orderly shutdown; nothing in a request waits on it. */
@@ -152,8 +216,8 @@ export class LinearRefresher {
     return out;
   }
 
-  private enqueue(ref: LinearSlotRef): void {
-    this.queued.set(slotKeyOf(ref), ref);
+  private enqueue(job: Job): void {
+    this.queued.set(jobKeyOf(job.kind, job.ref), job);
     if (this.active) return;
     this.active = true;
     this.pumped = this.pump();
@@ -165,15 +229,18 @@ export class LinearRefresher {
     for (;;) {
       const next = this.queued.entries().next();
       if (next.done === true) { this.active = false; return; }
-      const [key, ref] = next.value;
+      const [key, job] = next.value;
       this.queued.delete(key);
       this.running = key;
-      this.lastRun.set(key, this.now());
+      if (job.kind === 'teams') this.lastRun.set(key, this.now());
       try {
-        await this.refresh(ref);
+        if (job.kind === 'teams') await this.refresh(job.ref);
+        else await this.refreshDirectory(job.ref);
       } catch {
         // Fixed words only: the error can carry a path, and nothing of a key or a digest is ever in a line.
-        console.warn('ccrc-server: linear: a background refresh of a workspace failed');
+        console.warn(job.kind === 'teams'
+          ? 'ccrc-server: linear: a background refresh of a workspace failed'
+          : 'ccrc-server: linear: a background refresh of a workspace directory failed');
       } finally {
         this.running = null;
       }
@@ -207,5 +274,52 @@ export class LinearRefresher {
     if (ws !== null && ws.id !== ref.id) return;
     const learned = ws === null ? null : { name: ws.name, urlKey: ws.urlKey, user: v.user, teams: ws.teams, teamsAt: at };
     await recordLinearSlotCheck(ccrcDir, ref.id, v.keyDigest, 'ok', learned, at);
+  }
+
+  /**
+   * One slot's directory (spec §4.4): each of the four collections, 250 entries a page up to 4 pages, each page taken
+   * from the slot's floor and settled with what it spent. The key is read from its file before each page, and a key
+   * gone or changed stops the refresh, recording nothing. Kept only whole: a page refused, failed or out of its grammar
+   * leaves the directory as it was. Past the fourth page a collection is cut (a known limit; the remedy is the id).
+   */
+  private async refreshDirectory(ref: LinearSlotRef): Promise<void> {
+    const { ccrcDir, rate } = this.opts;
+    const entries: {
+      viewerId: string | null;
+      states: LinearDirectoryEntries['states'][number][];
+      labels: LinearDirectoryEntries['labels'][number][];
+      projects: LinearDirectoryEntries['projects'][number][];
+      users: LinearDirectoryEntries['users'][number][];
+    } = { viewerId: null, states: [], labels: [], projects: [], users: [] };
+    let digest: string | null = null;
+    const startedAt = this.now();
+    for (const kind of LINEAR_DIRECTORY_COLLECTIONS) {
+      let after: string | null = null;
+      for (let page = 0; page < LINEAR_DIRECTORY_MAX_PAGES; page += 1) {
+        const k = await readLinearSlotKey(ccrcDir, ref);
+        if (k.kind !== 'key') return;
+        const d = valueDigestHex(k.key);
+        if (digest === null) {
+          digest = d;
+          // The attempt counts from the run's start, before the floor is asked: a refused run counts too.
+          this.attempted.set(slotKeyOf(ref), { keyDigest: d, at: startedAt });
+        } else if (d !== digest) return;
+        const t = rate.take({ lane: 'floor', slot: ref, calls: 1 });
+        if (!t.ok) return;
+        const call = await callLinear(k.key, LINEAR_DIRECTORY_DOCUMENTS[kind], { after }, { fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs });
+        rate.settle(t.grant, oneCallOutcome(call));
+        if (!call.ok) return;
+        const p = readLinearDirectoryPage(kind, call.body);
+        if (!p.ok) return;
+        entries.states.push(...p.states);
+        entries.labels.push(...p.labels);
+        entries.projects.push(...p.projects);
+        entries.users.push(...p.users);
+        if (kind === 'users' && entries.viewerId === null) entries.viewerId = p.viewerId;
+        if (p.next === null) break;
+        after = p.next;
+      }
+    }
+    if (digest !== null) this.names.put(ref, digest, entries, this.now());
   }
 }

@@ -1871,8 +1871,9 @@ ccrc account candidates                    # launchers in ~/.local/bin that look
 ccrc account add --id <id> --provider <anthropic|openrouter|compatible> --label <text> --hue <hue> \
     [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--credential -]
 ccrc account declare --id <id> --label <text> --hue <hue> [--provider <p>] [--base-url <url>] [--suffix <s>]
-ccrc account check --id <id>               # is this lane's credential alive? (may spend one minimal turn)
-ccrc account enable --id <id>              # remove the -disabled marker, under the placement lock
+ccrc account check --id <id>               # is this lane's credential alive? (may spend one minimal turn), then the seed
+ccrc account seed --id <id>                # the first-run seed on its own: onboarding, theme, trust flags; no turn
+ccrc account enable --id <id> [--force]    # remove the -disabled marker, under the placement lock, once the lane is ready
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
 ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file
 ccrc account remove --id <id> [--keep-credential]
@@ -1901,7 +1902,15 @@ ccrc account remove --id <id> [--keep-credential]
   measured. `check` measures it: on an `anthropic` lane it first asks Claude Code's own `auth status`; when
   that does not settle it — and on every other provider — it runs one minimal turn through the lane's own
   launcher in `~/.ccrc/probe` (`CCRC_ACCOUNT_PROBE_TIMEOUT`, default 60 s), so a check can spend a few
-  tokens. Then `enable`.
+  tokens. A sign-in lane's check records the account `auth status` names. After the turn, still inside the
+  verb, it **seeds** the lane's `.claude.json` (creating it if absent): `hasCompletedOnboarding` and a theme,
+  and only the trust flags (`hasTrustDialogAccepted`, `hasClaudeMdExternalIncludes*`) the upstream lane's
+  `$HOME/.claude.json` already holds as `true`, project by project. It then reads them back and records
+  `seedVerifiedAt` after the run's `lastRunAt` in the lane state. `ccrc install` and `ccrc update` seed every lane
+  whose existing `.claude.json` lacks the flag. Then `enable`, which refuses `not-ready` (with a `reason`) unless
+  the lane state records a passing last check, a credential (a token lane's key file present, or a sign-in lane's
+  identity from that check) and a seed verified after the last run. `--force` skips that question, on the
+  command line only; no route sends it.
 - **Signing a lane in.** A `login` lane's credential is Claude Code's own: run the lane's wrapper
   `~/.local/bin/<id>` and `/login`, and Claude Code writes `.credentials.json` into that lane's config dir. A
   `paste` or `setup-token` lane's credential is a long-lived OAuth token — the one Claude Code's `setup-token`
