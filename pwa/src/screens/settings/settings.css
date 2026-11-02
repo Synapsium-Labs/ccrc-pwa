@@ -217,3 +217,7 @@
 .linear-card:not([data-band='phone']) .linear-row-head { grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: var(--pad-card); }
 .linear-card:not([data-band='phone']) .linear-row-title { display: block; }
 .linear-card:not([data-band='phone']) .linear-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; }
+/* Add a workspace: the field full-width with Add below it on a phone; the field and Add on one line elsewhere. */
+.linear-add { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding-top: calc(var(--pad-card) / 2); border-top: 1px solid var(--edge-subtle); }
+.linear-add-line { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
+.linear-card:not([data-band='phone']) .linear-add-line { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }

@@ -11,25 +11,33 @@
 //   * THE LEGACY ROW KEEPS `main`'S CONTROLS (spec §3.4). Its Check again is `POST /api/linear/connection/check` and its
 //     Disconnect `DELETE /api/linear/connection`, the routes a cached older card still calls. It offers no Replace: a
 //     new key is added as a workspace of its own.
-//   * WRITES ARE CREDENTIAL ACTS. Remove and Disconnect need a recent step-up (D-5512), so they go through
+//   * WRITES ARE CREDENTIAL ACTS. Add, Remove and Disconnect need a recent step-up (D-5512), so they go through
 //     `useStepUp`'s `runAct` exactly as an account sheet's acts do: run once, and when the box answers
 //     `step-up-required` the "Confirm it's you" step shows and the operator presses the act again. The step is NOT
 //     shown ahead of time (the hook is told the stamp is fresh, `Infinity`, so it fetches no challenge until an act is
 //     refused): a card that opened a passkey challenge on every visit to Settings would also take it from a tab that
 //     was using it. A check asks for none.
+//   * THE KEY NEVER LIVES HERE LONGER THAN A TAP. The Add a workspace field is `type=password`, its value is held in
+//     this one component's state only (never a store, never browser storage), is cleared the moment an Add lands, and
+//     is cleared when the page goes to the background (the passphrase step's own rule), which also closes a replace
+//     confirm waiting on it.
+//   * A WORKSPACE THAT HAS A KEY IS REPLACED ONLY BY NAME. An Add the box answers `workspace-exists` asks "Replace the
+//     key for <name>?" and sends the same key again with `replace: true` only on Replace key (spec §10.1). A row's
+//     Replace key takes the operator to that one field: a key is pasted in one place.
 //   * EVERY REFUSAL IS A FIXED SENTENCE chosen by its word; the box's own text is never shown.
 //   * EVERY WIDTH (spec §10.3). The band is read once, from the desk query and the wide query, and set on the card as
 //     `data-band`; the stylesheet lays each band out (`settings.css`), and the band says how many team chips show
 //     before *+N more*. No text is cut short: a long name wraps.
-import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
-import { Button, Chip, Section, Skeleton, elapsedWords, useDesk, useMediaQuery } from '@ccrc/ui';
-import type { LinearConnectionView, LinearLegacyRow, LinearTeamShown, LinearWorkspaceView } from '../../../shared/linear';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { FormEvent, ReactNode } from 'react';
+import { Button, Chip, QuickConfirm, Section, Skeleton, TextInput, elapsedWords, useDesk, useMediaQuery } from '@ccrc/ui';
+import { isLinearKeyShape, type LinearConnectionView, type LinearLegacyRow, type LinearTeamShown, type LinearWorkspaceView } from '../../../shared/linear';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import type { LinearWorkspacesPoll } from '../fleet/useLinearWorkspaces';
-import { ResultLine, SETTINGS_CARDS, useResultLine } from '../fleet/settingsText';
-import { ApiError, api, apiErrorText, type LinearWorkspacesRead } from '../lib/api';
+import { LINEAR_READ_ONLY_NOTE, ResultLine, SETTINGS_CARDS, useResultLine } from '../fleet/settingsText';
+import { ApiError, api, apiErrorText, linearWorkspaceExistsOf, type LinearWorkspacesRead } from '../lib/api';
+import { onPageHidden } from '../lib/pageClock';
 
 /** The hook is told the session's step-up is fresh until an act proves otherwise: see the file's third rule. */
 const ASSUME_FRESH = Infinity;
@@ -67,6 +75,15 @@ export const LINEAR_TEXT = {
   more: (n: number) => `+${n} more`,
   fewer: 'Show fewer',
   teamsLabel: 'Teams',
+  keyLabel: 'Add a workspace: its Linear API key',
+  add: 'Add',
+  replace: 'Replace key',
+  replaceTitle: (name: string | null) => `Replace the key for ${name ?? 'this workspace'}?`,
+  replaceConsequence: (name: string | null) =>
+    `Sessions use the new key for ${name ?? 'this workspace'} from their next Linear call, and the key it replaces is removed from this box.`,
+  replaceHint: (name: string | null) => `Paste the new key for ${name ?? 'this workspace'} below and press Add.`,
+  added: (name: string | null) => (name === null ? 'Added.' : `Added ${name}.`),
+  replaced: (name: string | null) => (name === null ? 'Replaced.' : `Replaced the key for ${name}.`),
   check: 'Check again',
   remove: 'Remove',
   disconnect: 'Disconnect',
@@ -218,9 +235,22 @@ function Row({ kind, state, name, sentence, note, keyTail, checkedAt, teams, con
   );
 }
 
+/** What an Add's answer says it did, naming the workspace from the list it answered. */
+function addedText(list: LinearWorkspacesRead): string {
+  const id = list.added ?? list.replaced;
+  const name = list.workspaces.find((w) => w.id === id)?.name ?? null;
+  return list.replaced !== undefined ? LINEAR_TEXT.replaced(name) : LINEAR_TEXT.added(name);
+}
+
 export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll; stepUpDeps?: StepUpDeps }): ReactNode {
   const card = SETTINGS_CARDS.security.linear;
   const band = useBand();
+  const fieldId = useId();
+  const noteId = useId();
+  const field = useRef<HTMLInputElement | null>(null);
+  const [key, setKey] = useState('');
+  /** The workspace an Add found already keyed, while the operator is asked to replace its key by name. */
+  const [confirm, setConfirm] = useState<{ id: string; name: string | null } | null>(null);
   // The last GOOD list; a failed read with none to show is the `unread` sentence.
   const view = poll.view;
   const [busy, setBusy] = useState(false);
@@ -234,9 +264,20 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
     return () => clearInterval(t);
   }, []);
 
+  // A key typed into the field does not wait there in a backgrounded page, nor does a confirm that would send it.
+  useEffect(() => {
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') { setKey(''); setConfirm(null); }
+    };
+    return onPageHidden(onVisibility);
+  }, []);
+
   /** One act: its answer becomes what is shown; a refusal becomes its sentence; a stale step-up shows the step.
    *  `install` turns the act's answer into the list (a legacy act answers the pair's view, which then re-reads). */
-  const perform = async <A,>(act: () => Promise<A | 'unreadable'>, install: (answer: A) => void, done: string | null): Promise<void> => {
+  const perform = async <A,>(
+    act: () => Promise<A | 'unreadable'>, install: (answer: A) => void, done: string | null | ((answer: A) => string),
+    { landed, refused }: { landed?: () => void; refused?: (err: unknown) => boolean } = {},
+  ): Promise<void> => {
     setBusy(true);
     result.clear();
     let answer: A | 'unreadable' | undefined;
@@ -248,9 +289,13 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
         poll.reload();
       } else {
         install(answer);
-        if (done !== null) result.say(done);
+        const said = typeof done === 'function' ? done(answer) : done;
+        if (said !== null) result.say(said);
       }
+      landed?.();
     } catch (err) {
+      // A refusal the act answers itself (an Add's `workspace-exists`) says nothing here.
+      if (refused?.(err) === true) return;
       // A 401 raises the login screen, which is the answer: no stale line waits behind it.
       if (!(err instanceof ApiError && err.status === 401)) result.say(refusalText(err), 'refusal');
     } finally {
@@ -268,6 +313,33 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
       poll.reload();
     }, done);
 
+  /** Add the pasted key; `replace` only from the confirm that named the workspace. The key leaves the field once the
+   *  box has answered the act (not on a refusal, nor on a step-up, so the operator can press Add again). */
+  const addKey = (replace: boolean): void => {
+    const trimmed = key.trim();
+    if (trimmed === '' || busy) return;
+    // The pasted key is trimmed at both ends only (a copied key often carries a newline); the shape rule is the
+    // server's too, and is said here first so a mistyped paste costs no round trip.
+    if (!isLinearKeyShape(trimmed)) { result.say(REFUSAL_TEXT['bad-key'] ?? '', 'refusal'); return; }
+    void perform(() => api.addLinearWorkspace(trimmed, replace), (list) => poll.settle(list), addedText, {
+      landed: () => setKey(''),
+      refused: (err) => {
+        const exists = replace ? null : linearWorkspaceExistsOf(err);
+        if (exists !== null) setConfirm(exists);
+        return exists !== null;
+      },
+    });
+  };
+  const submitKey = (e: FormEvent): void => {
+    e.preventDefault();
+    addKey(false);
+  };
+  /** A row's Replace key: the one key field, with a line saying what to paste there. */
+  const replaceFor = (name: string | null): void => {
+    result.say(LINEAR_TEXT.replaceHint(name));
+    field.current?.focus();
+  };
+
   let body: ReactNode;
   if (view === null && poll.failure === null) {
     body = <Skeleton lines={2} />;
@@ -284,6 +356,11 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
               <Button variant="ghost" size={band === 'phone' ? 'full' : 'fit'} disabled={busy}
                 onClick={() => slotAct(() => api.checkLinearWorkspace(w.id), null)}>
                 {LINEAR_TEXT.check}
+              </Button>
+            )}
+            {c.replace && (
+              <Button variant="ghost" size={band === 'phone' ? 'full' : 'fit'} disabled={busy} onClick={() => replaceFor(w.name)}>
+                {LINEAR_TEXT.replace}
               </Button>
             )}
             <Button variant="ghost" size={band === 'phone' ? 'full' : 'fit'} disabled={busy}
@@ -325,8 +402,37 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
   return (
     <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose} data-linear="section" data-band={band} className="linear-card">
       {body}
+      {/* The card's foot always has Add a workspace (spec §10.2), whatever the list says. */}
+      <form className="linear-add" data-linear="add" onSubmit={submitKey}>
+        <label htmlFor={fieldId} className="settings-note">{LINEAR_TEXT.keyLabel}</label>
+        <div className="linear-add-line">
+          <TextInput
+            id={fieldId}
+            ref={field}
+            type="password"
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            aria-describedby={noteId}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+          />
+          <Button type="submit" variant="primary" size={band === 'phone' ? 'full' : 'fit'} disabled={busy || key.trim() === ''}>
+            {LINEAR_TEXT.add}
+          </Button>
+        </div>
+        <p id={noteId} className="settings-note">{LINEAR_READ_ONLY_NOTE}</p>
+      </form>
       <ConfirmItsYou stepUp={stepUp} subject={LINEAR_TEXT.stepUpSubject} />
       <ResultLine line={result.line} />
+      <QuickConfirm
+        open={confirm !== null}
+        onClose={() => setConfirm(null)}
+        title={LINEAR_TEXT.replaceTitle(confirm?.name ?? null)}
+        consequence={LINEAR_TEXT.replaceConsequence(confirm?.name ?? null)}
+        confirmLabel={LINEAR_TEXT.replace}
+        onConfirm={() => addKey(true)}
+      />
     </Section>
   );
 }

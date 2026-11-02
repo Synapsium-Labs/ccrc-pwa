@@ -210,7 +210,7 @@ describe('the list, row by row (§10.2)', () => {
     expect(legacyRow()).not.toBeNull();
   });
 
-  it('a read that fails, or answers a list this build cannot read, says so and offers nothing', async () => {
+  it('a read that fails, or answers a list this build cannot read, says so and offers nothing but Add a workspace', async () => {
     for (const answer of [
       () => reply(500, { ok: false, error: 'internal' }),
       () => list({ workspaces: [{ ...WS_A, state: 'from-the-future' }] }),
@@ -223,7 +223,7 @@ describe('the list, row by row (§10.2)', () => {
       install({ list: answer });
       await mount();
       expect(document.querySelector('[data-linear="unread"]')?.textContent).toBe(LINEAR_TEXT.unread);
-      expect(screen.queryByRole('button')).toBeNull();
+      expect(screen.queryAllByRole('button').map((b) => b.textContent)).toEqual(['Add']);
       cleanup();
     }
   });
@@ -457,7 +457,212 @@ describe('a workspace\'s Check again and Remove', () => {
   });
 });
 
+const KEY = 'lin_api_fixture_key_one_0001';
+const field = (): HTMLInputElement => screen.getByLabelText(LINEAR_TEXT.keyLabel);
+const type = (v: string): void => { fireEvent.change(field(), { target: { value: v } }); };
+const addButton = (): HTMLButtonElement => within(document.querySelector<HTMLElement>('[data-linear="add"]')!).getByRole('button', { name: 'Add' }) as HTMLButtonElement;
+const hidePage = (): void => {
+  const real = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+  try {
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+  } finally {
+    delete (document as unknown as Record<string, unknown>)['visibilityState'];
+    if (real) Object.defineProperty(Document.prototype, 'visibilityState', real);
+  }
+};
+const EXISTS = (): Response => reply(409, { ok: false, error: 'workspace-exists', workspace: { id: ID_A, name: 'Workspace A', urlKey: 'ws-a' } });
+
+describe('Add a workspace (§10.1, §10.2): the one key field', () => {
+  it('is at the card\'s foot whatever the list says: a password field that does not autocomplete, its read-only note, and Add waiting for a key', async () => {
+    for (const answer of [() => list(), () => list({ workspaces: [WS_A], legacy: LEARNED }), () => reply(500, { ok: false, error: 'internal' })]) {
+      install({ list: answer });
+      await mount();
+      expect(field().type).toBe('password');
+      expect(field().getAttribute('autocomplete')).toBe('off');
+      expect(document.getElementById(field().getAttribute('aria-describedby') ?? '')?.textContent).toBe('A read-only key lets sessions read but not write.');
+      expect(addButton().disabled).toBe(true);
+      type('   ');
+      expect(addButton().disabled).toBe(true);
+      type(KEY);
+      expect(addButton().disabled).toBe(false);
+      cleanup();
+    }
+  });
+
+  it('sends the trimmed key once, shows the list the box answers, says what it added, and clears the field', async () => {
+    install();
+    await mount();
+    type(`  ${KEY}\n`);
+    fireEvent.click(addButton());
+    await waitFor(() => expect(rows().map((r) => part(r, 'name'))).toEqual(['Workspace A']));
+    expect(box.sent.filter((s) => s.method === 'POST')).toEqual([{ method: 'POST', path: '/api/linear/workspaces', body: { key: KEY } }]);
+    expect(status()).toBe('Added Workspace A.');
+    expect(field().value).toBe('');
+  });
+
+  it('says a key that fails the shape rule is not one, without a request', async () => {
+    install();
+    await mount();
+    type('not a key');
+    fireEvent.click(addButton());
+    await waitFor(() => expect(status()).toContain("doesn't look like a Linear API key"));
+    expect(box.paths().filter((p) => p.startsWith('POST'))).toEqual([]);
+  });
+
+  it('each refusal is a fixed sentence chosen by its word; nothing changes and the field keeps what was typed', async () => {
+    const cases: [number, string, string][] = [
+      [400, 'key-rejected', 'Linear rejected that key'],
+      [400, 'key-forbidden', 'Linear refused that key access'],
+      [400, 'bad-key', "doesn't look like a Linear API key"],
+      [503, 'unreachable', "Couldn't reach Linear"],
+      [503, 'timeout', 'took too long'],
+      [503, 'malformed', 'not what was expected'],
+      [503, 'write-failed', "couldn't save"],
+      [503, 'journal-unavailable', "couldn't record this change"],
+      [503, 'linear-unavailable', "can't change Linear keys right now"],
+      [429, 'rate-limited', 'Linear is busy'],
+      [501, 'auth-off', 'Sign-in is off'],
+      [403, 'insecure-origin', 'not served over HTTPS'],
+    ];
+    for (const [code, word, sentence] of cases) {
+      install({ add: () => reply(code, { ok: false, error: word, message: LEAK, stderr: LEAK }) });
+      await mount();
+      type(KEY);
+      fireEvent.click(addButton());
+      await waitFor(() => expect(status(), word).toContain(sentence));
+      expect(document.body.textContent).not.toContain(LEAK);
+      expect(rows()).toEqual([]);
+      expect(field().value, word).toBe(KEY);
+      expect(screen.queryByRole('dialog'), word).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('a workspace that already has a key asks to replace it by name, and Replace key sends the same key with replace', async () => {
+    install({ list: () => list({ workspaces: [WS_A] }), add: EXISTS });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    const dialog = await screen.findByRole('dialog', { name: 'Replace the key for Workspace A?' });
+    // The key waits in the field while the operator answers.
+    expect(field().value).toBe(KEY);
+    box.add = () => list({ workspaces: [{ ...WS_A, keyTail: '9e1d' }], replaced: ID_A });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Replace key' }));
+    await waitFor(() => expect(part(slotRow('Workspace A'), 'meta')).toContain('…9e1d'));
+    expect(box.sent.filter((s) => s.method === 'POST').map((s) => s.body)).toEqual([{ key: KEY }, { key: KEY, replace: true }]);
+    expect(status()).toBe('Replaced the key for Workspace A.');
+    expect(field().value).toBe('');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('Cancel on the replace confirm sends nothing more and keeps the typed key', async () => {
+    install({ list: () => list({ workspaces: [WS_A] }), add: EXISTS });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    const dialog = await screen.findByRole('dialog', { name: 'Replace the key for Workspace A?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(box.sent.filter((s) => s.method === 'POST')).toHaveLength(1);
+    expect(field().value).toBe(KEY);
+  });
+
+  it('a replace refused for another reason says why and never asks again by itself', async () => {
+    let n = 0;
+    install({ list: () => list({ workspaces: [WS_A] }), add: () => (n++ === 0 ? EXISTS() : reply(400, { ok: false, error: 'key-rejected' })) });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Replace key' }));
+    await waitFor(() => expect(status()).toContain('Linear rejected that key'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(field().value).toBe(KEY);
+  });
+
+  it('an Add refused step-up-required shows "Confirm it\'s you", keeps the typed key, and does not retry by itself', async () => {
+    let refused = true;
+    install({ add: () => (refused ? reply(403, { ok: false, error: 'step-up-required' }) : list({ workspaces: [WS_A], added: ID_A })) });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    expect(await screen.findByText(/Changing the Linear key needs a fresh check/)).toBeTruthy();
+    expect(field().value).toBe(KEY);
+    expect(box.sent.filter((s) => s.method === 'POST' && s.path === '/api/linear/workspaces')).toHaveLength(1);
+    fireEvent.change(await screen.findByLabelText('Passphrase'), { target: { value: 'a test passphrase' } });
+    refused = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm with passphrase' }));
+    await waitFor(() => expect(screen.queryByText(/needs a fresh check/)).toBeNull());
+    expect(box.sent.filter((s) => s.method === 'POST' && s.path === '/api/linear/workspaces')).toHaveLength(1);
+    fireEvent.click(addButton());
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(field().value).toBe('');
+  });
+
+  it('a 2xx whose body cannot be read is re-read, because the write may have landed', async () => {
+    let reads = 0;
+    install({ list: () => (reads++ === 0 ? list() : list({ workspaces: [WS_A] })), add: () => reply(200, 'garbled') });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(box.paths().filter((p) => p === 'GET /api/linear/workspaces')).toHaveLength(2);
+    expect(field().value).toBe('');
+  });
+
+  it('clears a typed key when the page goes to the background, and closes a replace confirm waiting on it', async () => {
+    install({ list: () => list({ workspaces: [WS_A] }), add: EXISTS });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    await screen.findByRole('dialog');
+    hidePage();
+    expect(field().value).toBe('');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(box.sent.filter((s) => s.method === 'POST')).toHaveLength(1);
+  });
+
+  it('a row\'s Replace key takes the operator to the one key field and says what to paste there', async () => {
+    install({ list: () => list({ workspaces: [slot(ID_A, 'Workspace A', { ...REJECTED, org: 'Workspace A' })] }) });
+    await mount();
+    fireEvent.click(within(slotRow('Workspace A')).getByRole('button', { name: 'Replace key' }));
+    expect(document.activeElement).toBe(field());
+    expect(status()).toBe('Paste the new key for Workspace A below and press Add.');
+    expect(box.paths().filter((p) => !p.startsWith('GET'))).toEqual([]);
+  });
+
+  it('Replace key is offered where the key is not working, and never on the legacy row', async () => {
+    install({ list: () => list({
+      workspaces: [slot(ID_A, 'Workspace A', { ...REJECTED, org: 'Workspace A' }), slot(ID_B, 'Workspace B', { ...FORBIDDEN, org: 'Workspace B' })],
+      legacy: { ...UNLEARNED, view: REJECTED },
+    }) });
+    await mount();
+    expect(buttonsOf(slotRow('Workspace A'))).toEqual(['Replace key', 'Remove']);
+    expect(buttonsOf(slotRow('Workspace B'))).toEqual(['Check again', 'Replace key', 'Remove']);
+    expect(buttonsOf(legacyRow()!)).toEqual(['Check again', 'Disconnect']);
+  });
+});
+
 describe('reads and writes racing', () => {
+  it('a read issued before an Add\'s answer cannot put the old list back', async () => {
+    let releaseRead: (r: Response) => void = () => undefined;
+    let first = true;
+    install({
+      list: () => {
+        if (first) { first = false; return list(); }
+        return new Promise<Response>((res) => { releaseRead = res; });
+      },
+    });
+    await mount();
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await waitFor(() => expect(box.paths().filter((p) => p === 'GET /api/linear/workspaces')).toHaveLength(2));
+    type(KEY);
+    fireEvent.click(addButton());
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    await act(async () => { releaseRead(list()); await Promise.resolve(); });
+    expect(rows()).toHaveLength(1);
+  });
+
   it('a read issued before a write\'s answer cannot put the old list back', async () => {
     let releaseRead: (r: Response) => void = () => undefined;
     let first = true;

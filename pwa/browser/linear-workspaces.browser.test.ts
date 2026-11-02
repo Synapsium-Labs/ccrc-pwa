@@ -9,9 +9,11 @@
 //   * teams: chips that wrap, the first eight (phone), sixteen (laptop) or twenty-four (wide), then *+N more*, which
 //     shows the rest;
 //   * key tail and checked time: one line on a laptop and wide;
-//   * controls: on a phone a full-width row of buttons under the head, each at least 44 px tall; inline elsewhere.
+//   * controls: on a phone a full-width row of buttons under the head, each at least 44 px tall; inline elsewhere;
+//   * add a workspace: on a phone the field full-width with Add below it; on a laptop and wide on one line;
+//   * replace confirm: a bottom sheet on a phone, a centred dialog on a laptop and wide.
 // At every width no text is cut short with an ellipsis, nothing in the card or on the page scrolls sideways, and every
-// control is reached by the keyboard.
+// control is reached by the keyboard, and the key field is empty after Add and after the page is hidden.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no Linear. Run: `( cd pwa && CCRC_CHROME=<a Chrome or
 // Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/linear-workspaces.browser.test.ts )`.
@@ -21,7 +23,7 @@ import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import type { LinearLegacyRow, LinearWorkspaceView } from '../../shared/linear';
-import { LINEAR_TEAMS_SHOWN, type LinearBand } from '../src/screens/LinearSection';
+import { LINEAR_TEAMS_SHOWN, LINEAR_TEXT, type LinearBand } from '../src/screens/LinearSection';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
@@ -50,6 +52,7 @@ const LEGACY: LinearLegacyRow = {
   view: { state: 'connected', outcome: 'ok', org: 'Workspace L', user: 'user-a', keyTail: '9e1d', checkedAt: NOW - 60_000 },
   workspace: { name: 'Workspace L', urlKey: 'ws-l', teams: [{ key: 'LLL', name: 'Team L' }] }, superseded: false,
 };
+const KEY = 'lin_api_fixture_key_one_0001';
 const listOf = (n: number): unknown => ({ ok: true, store: 'ok', workspaces: Array.from({ length: n }, (_, i) => workspace(i + 1)), legacy: LEGACY });
 
 const FIXTURE: AppFixture = {
@@ -165,7 +168,16 @@ describe('Settings › Security › Linear at every width (spec §10.3)', () => 
       const band = bandOf(view.width);
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       let count = 12;
-      await ctx.route('**/api/linear/workspaces', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(listOf(count)) }));
+      const adds: unknown[] = [];
+      await ctx.route('**/api/linear/workspaces', (r) => {
+        if (r.request().method() !== 'POST') return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(listOf(count)) });
+        const body = r.request().postDataJSON() as { replace?: boolean };
+        adds.push(body);
+        // The first Add finds the workspace already keyed; the replace that names it lands.
+        return body.replace === true
+          ? r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ...(listOf(count) as object), replaced: uuid(2) }) })
+          : r.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'workspace-exists', workspace: { id: uuid(2), name: 'Workspace 02', urlKey: 'ws-2' } }) });
+      });
       try {
         for (const n of [12, 3, 1]) {
           count = n;
@@ -223,6 +235,61 @@ describe('Settings › Security › Linear at every width (spec §10.3)', () => 
         // Forty chips never fit one line of the column: they wrap, inside the row.
         expect(new Set(opened.rows[0]!.chipBoxes.map((c) => Math.round(c.top))).size, 'the chips wrap').toBeGreaterThan(1);
         assertContained(opened, 'teams shown');
+
+        // Add a workspace: the field full-width with Add below it on a phone, on one line elsewhere.
+        const field = section.getByLabel(LINEAR_TEXT.keyLabel);
+        await field.fill(KEY);
+        const add = await section.locator('.linear-add-line').evaluate((line) => {
+          const b = (e: Element): { left: number; right: number; top: number; bottom: number; width: number } => {
+            const r = e.getBoundingClientRect();
+            return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width };
+          };
+          return { line: b(line), field: b(line.querySelector('input')!), button: b(line.querySelector('button')!) };
+        });
+        if (band === 'phone') {
+          expect(Math.abs(add.field.width - add.line.width), 'the key field is full-width').toBeLessThanOrEqual(1);
+          expect(add.button.top, 'Add sits under the field').toBeGreaterThanOrEqual(add.field.bottom - 0.5);
+        } else {
+          expect(add.button.left, 'Add follows the field').toBeGreaterThanOrEqual(add.field.right - 0.5);
+          expect(add.button.top, 'the field and Add share a line').toBeLessThan(add.field.bottom);
+          expect(add.field.top).toBeLessThan(add.button.bottom);
+        }
+
+        // The replace confirm: a sheet on a phone, a dialog on a laptop and wide.
+        await section.getByRole('button', { name: LINEAR_TEXT.add, exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Replace the key for Workspace 02?' });
+        await expect.poll(() => dialog.count(), { timeout: 10_000 }).toBe(1);
+        // Read at rest, as `sheet-desktop-arm.browser.test.tsx` reads a sheet: once its entrance has finished.
+        const shot = await page.evaluate(async () => {
+          const el = document.querySelector<HTMLElement>('.sheet-panel[data-state="open"]')!;
+          await Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined)));
+          const r = el.getBoundingClientRect();
+          return { name: getComputedStyle(el).animationName, x: r.x, y: r.y, w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight };
+        });
+        if (band === 'phone') {
+          expect(shot.name, 'the confirm is the bottom sheet').toBe('slideFromBottom');
+          expect(Math.round(shot.w), 'the sheet is full-width').toBe(shot.vw);
+        } else {
+          expect(shot.name, 'the confirm is the centred dialog').toBe('sheet-pop-in');
+          expect(shot.w, 'the confirm is the narrow dialog').toBeLessThanOrEqual(441);
+          expect(Math.abs(shot.x + shot.w / 2 - shot.vw / 2), 'centred across').toBeLessThanOrEqual(1);
+          expect(Math.abs(shot.y + shot.h / 2 - shot.vh / 2), 'centred down').toBeLessThanOrEqual(1);
+        }
+        await dialog.getByRole('button', { name: LINEAR_TEXT.replace }).click();
+        await expect.poll(() => dialog.count(), { timeout: 10_000 }).toBe(0);
+        expect(adds).toEqual([{ key: KEY }, { key: KEY, replace: true }]);
+        // The key field is empty after Add.
+        await expect.poll(() => field.inputValue(), { timeout: 10_000 }).toBe('');
+
+        // ... and after the page is hidden.
+        await field.fill(KEY);
+        await page.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+          document.dispatchEvent(new Event('visibilitychange'));
+          delete (document as unknown as Record<string, unknown>)['visibilityState'];
+        });
+        await expect.poll(() => field.inputValue(), { timeout: 5_000 }).toBe('');
+        await field.fill(KEY);
 
         // Every control is reached by the keyboard.
         const walk = await tabWalk(page, TITLE);

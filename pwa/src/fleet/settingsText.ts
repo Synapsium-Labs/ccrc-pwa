@@ -353,6 +353,10 @@ export const SETTINGS_CARDS = {
 /** Box token's head without its purpose line (above). */
 export const BOX_TOKEN_CARD = { scope: SETTINGS_SCOPE.box, title: 'Box token' } as const;
 
+/** The Linear card's note under its Add a workspace field (#1444, spec §10.2): the read-access note the one-key card's
+ *  not-connected sentence carried, now about what a session may do with a key. */
+export const LINEAR_READ_ONLY_NOTE = 'A read-only key lets sessions read but not write.';
+
 /** The sign-in gate card's words per state, and the banner every Settings page shows while the gate is off and the
  *  page was reached from another machine (spec §5.5). The gate has no control here: it is set on the server (§1.4). */
 export const SIGN_IN_GATE_TEXT = {
