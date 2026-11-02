@@ -12,12 +12,12 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ConnectSheet, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
 import { defaultHue, methodChoices } from '../src/accounts/connectFlow';
 import {
-  DOOR_NARROWED, LEDGER, METHOD_LINES, NEEDS_FLEET_UPDATE, OUTCOME_UNKNOWN, notFoundAfterUnknown, offlineRefusal,
-  resultDone,
+  DOOR_NARROWED, LEDGER, METHOD_LINES, NEEDS_FLEET_UPDATE, OUTCOME_UNKNOWN, READ_AGAIN, notFoundAfterUnknown, offlineRefusal,
+  resultDone, stillUnknownAfterUnknown,
 } from '../src/fleet/accountWords';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
-import { useFleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore } from '../src/stores/fleet';
 
 const lane = (id: string, hue: RosterWire['hue']): RosterWire => ({
   id, label: id, hue, homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind: 'token',
@@ -55,7 +55,7 @@ function fakeClient(o: Partial<ConnectClient> = {}): { [K in keyof ConnectClient
 function sheet(over: Partial<ConnectSheetProps> = {}): { props: ConnectSheetProps; rerender: (p: Partial<ConnectSheetProps>) => void } {
   const props: ConnectSheetProps = {
     open: true, onClose: vi.fn(), roster: ROSTER, connect: FRESH(), offline: null,
-    refresh: vi.fn(async () => {}), readRoster: () => ROSTER, client: fakeClient(), ...over,
+    refresh: vi.fn(async () => 'ok' as const), readRoster: () => ROSTER, client: fakeClient(), ...over,
   };
   const r = render(<ConnectSheet {...props} />);
   return { props, rerender: (p) => { Object.assign(props, p); r.rerender(<ConnectSheet {...props} />); } };
@@ -361,7 +361,7 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
   it('outcome unknown re-reads the roster and resumes; no second add is sent', async () => {
     const client = fakeClient({ accountAdd: async () => { throw new ApiError(502, { error: 'outcome-unknown' }); } });
     let held = ROSTER;
-    const refresh = vi.fn(async () => { held = [...ROSTER, lane('lane-c', 'blue')]; });
+    const refresh = vi.fn(async () => { held = [...ROSTER, lane('lane-c', 'blue')]; return 'ok' as const; });
     sheet({ client, refresh, readRoster: () => held });
     toMethod();
     paste();
@@ -383,6 +383,79 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
     expect(field().value).toBe('');
     expect(client.accountAdd).toHaveBeenCalledTimes(1);
     expect(client.accountCheck).not.toHaveBeenCalled();
+  });
+
+  // D-7740 (5): the store's re-read is silent on failure, so the sheet must ask it whether the read landed. These two
+  // wire the REAL store's `refreshAccounts` and roster, whose failed read leaves the roster held before the add.
+  it('outcome unknown whose re-read fails too says the outcome is still unknown, never that nothing was added', async () => {
+    const client = fakeClient({ accountAdd: async () => { throw new TypeError('network'); } });
+    let reachable = false;
+    const fetchAccounts = vi.fn(async () => {
+      if (!reachable) throw new TypeError('network');
+      return { accounts: [], projected: null, roster: [...ROSTER, lane('lane-c', 'blue')] };
+    });
+    const store = createFleetStore({ fetchAccounts });
+    sheet({ client, refresh: () => store.getState().refreshAccounts(), readRoster: () => store.getState().roster });
+    toMethod();
+    paste();
+    addLane();
+    const text = stillUnknownAfterUnknown('lane-c');
+    await shown(text);
+    await waitFor(() => expect(screen.getByTestId('connect-alert')).toHaveTextContent(text));
+    expect(screen.queryByText(notFoundAfterUnknown('lane-c'))).toBeNull();
+    // No field to paste into and no Add lane: the only act is a fresh read, described by the sentence.
+    expect(screen.queryByLabelText('Paste the token')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add lane' })).toBeNull();
+    const again = await screen.findByRole('button', { name: READ_AGAIN });
+    await waitFor(() => expect(again).toBeEnabled());
+    expect(document.getElementById(again.getAttribute('aria-describedby')!)).toHaveTextContent(text);
+    expect(client.accountCheck).not.toHaveBeenCalled();
+
+    // A read that fails again holds the same state; one that lands resumes where its roster says (the lane is there).
+    fireEvent.click(again);
+    await waitFor(() => expect(fetchAccounts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: READ_AGAIN })).toBeEnabled());
+    expect(screen.queryByText(notFoundAfterUnknown('lane-c'))).toBeNull();
+    reachable = true;
+    fireEvent.click(screen.getByRole('button', { name: READ_AGAIN }));
+    await screen.findByRole('button', { name: 'Turn it on' });
+    await shown(LEDGER.found('lane-c'));
+    expect(client.accountCheck).toHaveBeenCalledWith('lane-c');
+    expect(client.accountAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it('Read again that lands with no lane says nothing was added, and still sends nothing again', async () => {
+    const client = fakeClient({ accountAdd: async () => { throw new ApiError(502, { error: 'outcome-unknown' }); } });
+    let reachable = false;
+    const fetchAccounts = vi.fn(async () => {
+      if (!reachable) throw new TypeError('network');
+      return { accounts: [], projected: null, roster: ROSTER };
+    });
+    const store = createFleetStore({ fetchAccounts });
+    sheet({ client, refresh: () => store.getState().refreshAccounts(), readRoster: () => store.getState().roster });
+    toMethod();
+    paste();
+    addLane();
+    await shown(stillUnknownAfterUnknown('lane-c'));
+    reachable = true;
+    fireEvent.click(await screen.findByRole('button', { name: READ_AGAIN }));
+    await shown(notFoundAfterUnknown('lane-c'));
+    expect(field().value).toBe('');
+    expect(screen.queryByText(stillUnknownAfterUnknown('lane-c'))).toBeNull();
+    expect(client.accountAdd).toHaveBeenCalledTimes(1);
+    expect(client.accountCheck).not.toHaveBeenCalled();
+  });
+
+  it("the store's re-read says whether a roster landed: a failed read and a roster-less answer are not one", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchAccounts = vi.fn()
+      .mockRejectedValueOnce(new TypeError('network'))
+      .mockResolvedValueOnce({ accounts: [], projected: null })
+      .mockResolvedValueOnce({ accounts: [], projected: null, roster: ROSTER });
+    const store = createFleetStore({ fetchAccounts });
+    await expect(store.getState().refreshAccounts()).resolves.toBe('error');
+    await expect(store.getState().refreshAccounts()).resolves.toBe('error');
+    await expect(store.getState().refreshAccounts()).resolves.toBe('ok');
   });
 
   it('the result frame offers Turn it on and never closes itself', async () => {

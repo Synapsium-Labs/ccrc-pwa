@@ -20,7 +20,7 @@ const LANE: LaneWire = { state: { word: 'signed-in', source: 'checked just now' 
 function mount(over: Partial<ConnectSheetProps> = {}): { props: ConnectSheetProps; rerender: (p: Partial<ConnectSheetProps>) => void } {
   const props: ConnectSheetProps = {
     open: true, onClose: vi.fn(), roster: ROSTER, connect: CONNECT, offline: null,
-    refresh: vi.fn(async () => {}), readRoster: () => ROSTER,
+    refresh: vi.fn(async () => 'ok' as const), readRoster: () => ROSTER,
     client: {
       accountAdd: vi.fn(async () => ({ ok: true as const, roster: ROSTER, lane: LANE, fleetIdentity: null })),
       accountCheck: vi.fn(async () => ({ ok: true as const, lane: LANE })),

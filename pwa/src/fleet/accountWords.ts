@@ -427,6 +427,7 @@ export const LEDGER = {
   checked: '✓ Checked: one test reply · first-run setup verified',
   enabling: (id: string): string => `… turning ${id} on`,
   on: '✓ On · new sessions can land here. Swap rotation includes it within a minute.',
+  reading: "… reading the fleet host's accounts again",
 } as const;
 
 /** Outcome unknown (spec §6.2's terminal states): the add's answer never came. */
@@ -434,6 +435,12 @@ export const OUTCOME_UNKNOWN = "The fleet host didn't answer in time. The lane m
 /** The re-read found no such lane: nothing was added, and nothing is sent again on its own. */
 export const notFoundAfterUnknown = (id: string): string =>
   `${id} isn't on the fleet host: nothing was added. Paste the token again to try again.`;
+/** The re-read after an outcome unknown did not land either, so no roster was reconciled: the sheet claims nothing
+ *  about the lane, sends nothing again, and offers only a fresh read (D-7740 (5)). */
+export const stillUnknownAfterUnknown = (id: string): string =>
+  `The fleet host's accounts couldn't be read either, so whether ${id} was added is still unknown. Nothing was sent again. Read again before pasting the token.`;
+/** The one act that state offers: read the roster again (never the add). */
+export const READ_AGAIN = 'Read again';
 
 /** Where the sheet goes back to after a refusal: the name frame, or the method frame with its field empty. */
 export type AddRefusalFrame = 'name' | 'method';

@@ -12,7 +12,8 @@
 //
 // NOTHING IS RETRIED ON ITS OWN. A refused add says why, from its code. An add whose answer never came ("outcome
 // unknown") re-reads the roster and resumes at the step the reconciled roster shows (the lane exists: Check), or says
-// nothing was added; it never sends the add again, so it can never run into `duplicate-id`.
+// nothing was added; it never sends the add again, so it can never run into `duplicate-id`. A re-read that fails too
+// reconciles nothing, so the sheet says the outcome is still unknown and offers only Read again (D-7740 (5)).
 //
 // ANNOUNCEMENTS (spec §12.4). One live region per sheet: a step change is announced politely (`role="status"`), and a
 // terminal state (refused, outcome unknown, done) as an alert (`role="alert"`). A frame that only re-renders announces
@@ -25,7 +26,7 @@ import type { Hue } from '../../../shared/roster';
 import { ApiError, api } from '../lib/api';
 import {
   ADD_LANE, ADD_REFUSED, DOOR_META, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
-  addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone,
+  READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
 } from '../fleet/accountWords';
 import { ConfirmItsYou } from './ConfirmItsYou';
 import { CopyCommand } from '../fleet/TroubleCard';
@@ -56,8 +57,9 @@ export interface ConnectSheetProps {
   connect: AccountsConnect | null;
   /** The offline refusal (`offlineRefusal`), or `null` while the store reads the server. */
   offline: string | null;
-  /** Re-reads `/api/accounts` through the store, its one reader. */
-  refresh: () => Promise<void>;
+  /** Re-reads `/api/accounts` through the store, its one reader: `'ok'` once an answer carrying a roster landed,
+   *  `'error'` when the read failed (the store's `refreshAccounts`, which never rejects). */
+  refresh: () => Promise<'ok' | 'error'>;
   /** The roster as the store holds it NOW (read after `refresh` resolves, so an outcome unknown sees the re-read). */
   readRoster: () => readonly RosterWire[];
   client?: ConnectClient;
@@ -104,6 +106,8 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   const [latency, setLatency] = useState<number | null>(null);
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** An outcome unknown whose re-read failed too: the run frame holds Read again until a read lands. */
+  const [unread, setUnread] = useState(false);
   const [said, setSaid] = useState<Announcement | null>(null);
   const secret = useRef<SecretFieldHandle>(null);
   const live = useRef(true);
@@ -158,8 +162,24 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   const reconcile = async (): Promise<void> => {
     write(OUTCOME_UNKNOWN);
     alert(OUTCOME_UNKNOWN);
-    await refresh();
+    await reread();
+  };
+
+  /** The re-read itself. A read that failed reconciled nothing: the store's roster is the one held before the add, so
+   *  "nothing was added" would be a guess. The sheet says the outcome is still unknown and offers Read again. */
+  const reread = async (): Promise<void> => {
+    const read = await refresh();
     if (!live.current) return;
+    if (read !== 'ok') {
+      const text = stillUnknownAfterUnknown(id);
+      setUnread(true);
+      setNotice(text);
+      setFrame('run');
+      alert(text);
+      return;
+    }
+    setUnread(false);
+    setNotice(null);
     // The unknown line stays in the ledger: what the re-read found is written after it.
     if (readRoster().some((r) => r.id === id)) {
       write(LEDGER.found(id));
@@ -269,6 +289,14 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     if (live.current) setBusy(false);
   };
 
+  const readAgain = async (): Promise<void> => {
+    if (blocked || busy) return;
+    setBusy(true);
+    status(LEDGER.reading);
+    await reread();
+    if (live.current) setBusy(false);
+  };
+
   const checkAgain = async (): Promise<void> => {
     if (blocked || busy) return;
     setBusy(true);
@@ -332,7 +360,17 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       );
       break;
     case 'run':
-      body = <RunFrame lines={ledger} live={busy} />;
+      body = (
+        <>
+          <RunFrame lines={ledger} live={busy} />
+          {unread && notice !== null && <p className="acct-notice" id={noticeId}>{notice}</p>}
+          {unread && (
+            <FrameFoot primary={{
+              label: READ_AGAIN, onClick: () => { void readAgain(); }, disabled: busy || blocked, busy, describedBy: noticeId,
+            }} />
+          )}
+        </>
+      );
       break;
     case 'result':
       body = (

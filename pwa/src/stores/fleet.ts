@@ -61,8 +61,11 @@ export interface FleetState {
    *  offline snapshot. */
   projected: ProjectedHome | null | undefined;
   /** Reads `GET /api/accounts` now, outside the 20 s cadence (after an account act), and resolves once its answer has
-   *  landed in `roster`, `usage`, `lanes`, `accountsConnect` and `projected`. Silent on failure, as the poll is. */
-  refreshAccounts(): Promise<void>;
+   *  landed in `roster`, `usage`, `lanes`, `accountsConnect` and `projected`. Silent on failure, as the poll is: it
+   *  never rejects and changes nothing. It resolves `'ok'` once an answer carrying a roster has landed, and `'error'`
+   *  for a read that failed or an answer without one, so a caller that must know the roster is fresh can tell a
+   *  failed re-read from a good one (the connect sheet's outcome unknown, D-7740 (5)). */
+  refreshAccounts(): Promise<'ok' | 'error'>;
   /** When the last `GET /api/accounts` answer landed (epoch ms, this device's clock), or `null` before one has. A
    *  method, not a field (D-7740): reading the time never writes the store, so an equal answer still writes nothing.
    *  The Accounts screen's offline read-line ("Read 4 min ago") reads it. */
@@ -438,7 +441,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
     // The last answer's arrival (D-7740): kept here, never in the state, so the time never counts as a write.
     let readAt: number | null = null;
-    const readAccounts = (): Promise<void> => fetchAccounts().then((r) => {
+    const readAccounts = (): Promise<'ok' | 'error'> => fetchAccounts().then((r) => {
       const held = get();
       const next: Partial<FleetState> = {};
       const lanes = isRecord(r.lanes) ? r.lanes! : null;
@@ -464,7 +467,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       }
       readAt = Date.now();
       if (Object.keys(next).length > 0) set(next);
-    }).catch(() => {});
+      return Array.isArray(r.roster) ? 'ok' as const : 'error' as const;
+    }).catch(() => 'error' as const);
 
     // THE ONE reader of `GET /api/feed` in the app (C7n, D-7192, D-7209): the connect-time durable read below and
     // `refreshFeed()` (the Inbox, on every open) both call it. Revived rather than trusted: a kind from a newer server
