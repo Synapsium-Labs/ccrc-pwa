@@ -433,7 +433,10 @@ describe('the background refresher (spec §4.3)', () => {
     const b = box();
     await put(b, WS_A, KEY_1);
     b.answers.set(KEY_1, async () => keyPage([TEAM_AAA]));
-    for (let i = 0; i < 5; i += 1) expect(b.fx.refresher.miss(await store(b))).toBe('refreshing');
+    // One read, then five misses with no await between them: an await per miss let the queued refresh finish
+    // mid-loop on a CI runner, and a miss after it answers `unknown` inside the window, as the next lines expect.
+    const listed = await store(b);
+    for (let i = 0; i < 5; i += 1) expect(b.fx.refresher.miss(listed)).toBe('refreshing');
     await b.fx.refresher.idle();
     expect(b.sent).toHaveLength(1);
     // Refreshed, and still no team ZZZ: a retry will not help until the window passes or a key is added.
