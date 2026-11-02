@@ -6133,7 +6133,7 @@ It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
-| `lander` | the mirror of the conf's `lander=coordinator`, with its own time; absent means there is no usable mirror (a project's pause, an invalid conf, a project that is not a main checkout, or a landing directory that is a symlink leaves none), and nothing reads it yet: stage 5's landing line will read it in a later wave |
+| `lander` | the mirror of the conf's `lander=coordinator`, with its own time. The probe removes it on a project's pause, for an invalid conf, a conf whose `lander` is not `coordinator`, a project that is not a main checkout and a landing directory with no conf. When `landing/` or the project's directory under it is a symlink, the probe writes and removes nothing there, so a file already behind the symlink stays; nothing reads it yet, and the reader stage 5's landing line adds in a later wave must treat such a file as absent (D-7647) |
 
 Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That covers a
 failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write. A child the
@@ -6171,7 +6171,9 @@ was not measured on that tick, for example because the tick was interrupted or t
 
 **The order.** Each tick measures the projects least recently measured first: it orders them by the modification time
 of each one's `probe`, a project with none first and ties by name. So a project the tick budget left unstarted (the
-journal's `tick-budget: <project> not started`) is the first one measured on the next tick.
+journal's `tick-budget: <project> not started`), which keeps its older `probe` or still has none, is ordered on the
+next tick before every project whose `probe` that tick rewrote. It is not promised to be first: a project with an
+older `probe` or none, including a paused one the tick then skips, sorts ahead of it.
 
 The two mirrors, `enabled` and `lander`, are reconciled in one pass at the start of every tick that runs, before any
 project is measured. `enabled` is written for a valid conf with `lineage=on`, and `lander` for a valid conf with

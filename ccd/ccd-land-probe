@@ -1527,7 +1527,9 @@ def tick_order(projects):
     project's own probe (both directories lstat-checked, the file itself lstat'd, nothing followed or opened; only the
     order depends on it, and ensure_dir still checks both directories before any write); a project with no regular
     probe comes first; ties by name. Read-only, and no file of its own: a project the tick budget left unstarted keeps
-    the oldest probe, so the next tick starts with it. The mirror pre-pass (reconcile_enabled) keeps the sorted order."""
+    its older probe or still has none, so the next tick orders it before every project whose probe this tick rewrote,
+    though not always first (a project with an older probe or none sorts ahead). The mirror pre-pass
+    (reconcile_enabled) keeps the sorted order."""
     def last(p):
         if not (real_dir(LANDING) and real_dir(LANDING + '/' + p)):
             return -1
