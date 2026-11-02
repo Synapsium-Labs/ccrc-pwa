@@ -141,8 +141,10 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
   /** Every successful write tells the live frame to re-read (PL4's listener); it carries no payload. */
   const changed = (): void => { deps.bus.emit('waiting'); };
 
-  const pushBlocking = (item: ItemRow): void => {
-    deps.notice({ kind: 'run', sessionId: '', title: 'Waiting on you', body: item.title, runId: item.runId }, 'push',
+  /** The push names the acting coordinator as its session: a `kind: 'run'` record with an empty session is the review-cap
+   *  notice's shape alone (D-6911), and the PWA's Mail door reads it. */
+  const pushBlocking = (item: ItemRow, byId: string): void => {
+    deps.notice({ kind: 'run', sessionId: byId, title: 'Waiting on you', body: item.title, runId: item.runId }, 'push',
       { tag: `item-${item.id}` });
   };
 
@@ -169,7 +171,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     }
     const now = deps.now();
     const id = coord.raiseItem({ program: slug, raisedBy: who.byId, ...v }, now);
-    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow);
+    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow, who.byId);
     changed();
     return reply.code(200).send({ ok: true, id });
   });
@@ -262,7 +264,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const res = coord.setBlocking(head.item.id, blocking, deps.now());
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${head.item.id} is closed` });
     if (wasBlocking !== blocking) {
-      if (blocking) pushBlocking(head.item);
+      if (blocking) pushBlocking(head.item, head.byId);
       changed();
     }
     return reply.code(200).send({ ok: true });
