@@ -1,0 +1,113 @@
+{
+  "name": "directory-projects-page-1",
+  "documentSource": "code",
+  "document": "query DirectoryProjects($after: String) { projects(first: 250, after: $after) { nodes { id name } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "after": null
+  },
+  "requestBody": "{\"query\":\"query DirectoryProjects($after: String) { projects(first: 250, after: $after) { nodes { id name } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"after\":null}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631308786,
+  "receivedAtMs": 1793631309337,
+  "sentAt": "2026-11-02T14:55:08.786+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:55:09 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "183"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "600"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999400"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634909693"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634909693"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "projects": {
+        "nodes": [
+          {
+            "id": "00000000-0004-4000-8000-000000000001",
+            "name": "Project A"
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "00000000-0004-4000-8000-000000000001"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"projects\":{\"nodes\":[{\"id\":\"00000000-0004-4000-8000-000000000001\",\"name\":\"Project A\"}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":\"00000000-0004-4000-8000-000000000001\"}}}}\n"
+}
