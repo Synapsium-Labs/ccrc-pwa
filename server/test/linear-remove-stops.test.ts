@@ -1,5 +1,5 @@
-// Removing a key stops access at once (#1444, spec §9, §14 row 11; plan task LK9: the proxy's clauses; the Settings
-// remove is a store call here, `removeLinearSlot`, until LK11's route lands). Nothing caches a key: the proxy reads it
+// Removing a key stops access at once (#1444, spec §9, §14 row 11; plan task LK9: the proxy's clauses, with the remove
+// as a store call, `removeLinearSlot`; LK11: the same clauses through the Settings routes, at the end of this file). Nothing caches a key: the proxy reads it
 // from its file before each Linear call, so a remove or a replace is seen by the very next call, and a key check or a
 // background refresh reads it again before each page.
 import { describe, it, expect, afterEach } from 'vitest';
@@ -9,6 +9,7 @@ import { putLinearSlot, readLinearStore, removeLinearSlot } from '../src/linear/
 import { keyTailOf } from '../src/linear/connection.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { WS, bodyOf, proxyRig, seedLegacy, seedSlot, type ProxyRig } from './linearProxyRig.js';
+import { WORKSPACES, settingsRig, type SettingsRig } from './linearSettingsRig.js';
 
 let rig: ProxyRig | null = null;
 afterEach(async () => { await rig?.close(); rig = null; });
@@ -127,5 +128,62 @@ describe('the legacy key and a file slot for the same workspace (spec §3.4, §9
     const res = await rig.call('issue', { ref: 'AAA-1' });
     expect([res.statusCode, bodyOf(res)['error']]).toEqual([501, 'not-configured']);
     expect(rig.calls.length).toBe(calls);
+  });
+});
+
+// ── the Settings routes (plan task LK11): the remove and the replace an operator makes, through their routes ──
+
+describe('the Settings remove and replace stop or switch the next call (spec §9, §10.1; LK11)', () => {
+  let settings: SettingsRig | null = null;
+  afterEach(async () => { await settings?.fx.refresher.idle(); await settings?.close(); settings = null; });
+  /** The Settings routes over the proxy rig's own slots, services and Linear stand-in. */
+  const both = async (): Promise<{ proxy: ProxyRig; s: SettingsRig }> => {
+    rig = await proxyRig();
+    settings = await settingsRig({ ccrcDir: rig.ccrcDir, fx: rig.fx, standIn: { fetch: rig.fetch, calls: rig.calls } });
+    await settings.stamp();
+    return { proxy: rig, s: settings };
+  };
+
+  it('after DELETE /api/linear/workspaces/:id the next call answers not-configured, and no other slot is chosen', async () => {
+    const { proxy, s } = await both();
+    expect((await s.req('POST', WORKSPACES, { key: WS.a.key })).statusCode).toBe(200);
+    expect((await proxy.call('issue', { ref: 'AAA-1' })).statusCode).toBe(200);
+    expect((await s.req('DELETE', `${WORKSPACES}/${WS.a.id}`)).statusCode).toBe(200);
+    const gone = await proxy.call('issue', { ref: 'AAA-1' });
+    expect([gone.statusCode, bodyOf(gone)['error']]).toEqual([501, 'not-configured']);
+    expect((await s.req('POST', WORKSPACES, { key: WS.b.key })).statusCode).toBe(200);
+    await s.fx.refresher.idle();
+    const calls = proxy.calls.length;
+    const other = await proxy.call('issue', { ref: 'AAA-1' });
+    expect([other.statusCode, bodyOf(other)['error']]).toEqual([404, 'team-unknown']);
+    expect(proxy.calls.slice(calls).filter((c) => c.authorization === WS.b.key && c.op === 'Issue')).toEqual([]);
+  });
+
+  it('a replace through the add route takes effect on the next call', async () => {
+    const { proxy, s } = await both();
+    expect((await s.req('POST', WORKSPACES, { key: WS.a.key })).statusCode).toBe(200);
+    await proxy.call('issue');
+    expect((await s.req('POST', WORKSPACES, { key: REPLACED, replace: true })).statusCode).toBe(200);
+    await proxy.call('issue');
+    expect(proxy.calls.filter((c) => c.op === 'Issue').map((c) => c.authorization)).toEqual([WS.a.key, REPLACED]);
+  });
+
+  it('the legacy key serving W and a file slot for W: the file slot is used; after its Settings remove the legacy slot serves W; after the legacy Disconnect, not-configured', async () => {
+    const { proxy, s } = await both();
+    const legacyKey = await seedLegacy(proxy.ccrcDir, 'a', { learned: true });
+    expect((await s.req('POST', WORKSPACES, { key: WS.a.key })).statusCode).toBe(200);
+    expect((await s.req('GET', WORKSPACES)).body).toContain('"superseded":true');
+    await proxy.call('issue', { ref: 'AAA-1' });
+    expect(proxy.calls.at(-1)!.authorization, 'the file slot wins').toBe(WS.a.key);
+    expect((await s.req('DELETE', `${WORKSPACES}/${WS.a.id}`)).statusCode).toBe(200);
+    expect((await s.req('GET', WORKSPACES)).body).toContain('"superseded":false');
+    expect((await proxy.call('issue', { ref: 'AAA-1' })).statusCode).toBe(200);
+    expect(proxy.calls.at(-1)!.authorization, 'the legacy slot serves W again').toBe(legacyKey);
+    // The legacy row's Disconnect is `main`'s route, behind its account gate and step-up.
+    expect((await s.req('DELETE', '/api/linear/connection')).statusCode).toBe(200);
+    const calls = proxy.calls.length;
+    const res = await proxy.call('issue', { ref: 'AAA-1' });
+    expect([res.statusCode, bodyOf(res)['error']]).toEqual([501, 'not-configured']);
+    expect(proxy.calls.length).toBe(calls);
   });
 });

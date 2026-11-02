@@ -1177,6 +1177,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/:project/file': 'repository content, not session text',
     '/api/linear/connection': "the Linear connection's state: organisation and user names, the key's last four characters, the check time; never the key",
     '/api/linear/resolve': "the operator's own typed name, its derived slug, and a Linear issue title; no session text",
+    // The Settings list (#1444, plan task LK11, spec §10.2): what the slot records and the legacy pair hold, read from the
+    // store, no session text; never a key or its digest (`linear-key-containment.test.ts`). Its acts are POSTs and a DELETE.
+    '/api/linear/workspaces': "each slot's workspace name, URL key, user, team keys and names, key tail, check time and view state, and the legacy row's view; never a key or its digest",
     // The Linear proxy's reads (#1444, spec §5.4): what Linear holds, read with the key ccrc holds, every free text
     // fenced under `untrusted` and every name cleaned; never the key or its digest (the containment census,
     // `linear-key-containment.test.ts`). Its writes are POSTs, which this sweep does not read.
