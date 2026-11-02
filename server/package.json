@@ -15,7 +15,7 @@
   "dependencies": {
     "@fastify/multipart": "^10.1.6",
     "@fastify/rate-limit": "^11.2.1",
-    "@fastify/static": "^10.1.7",
+    "@fastify/static": "^10.1.8",
     "@fastify/websocket": "^11.3.4",
     "@sigstore/bundle": "^5.0.0",
     "@sigstore/protobuf-specs": "^0.5.2",
