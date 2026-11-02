@@ -1,18 +1,21 @@
 // The Linear proxy's twelve routes (#1444, spec §6, §14 row 6; plan task LK9): each verb's happy path, and each
 // failure word at its status (§6.8). Linear is the rig's stand-in (`linearProxyRig.ts`), answering every fixed
-// document in the spec's shape: no answer here is a recorded one. The rows that need the coordinator's FX capture
-// (D-7684), which has not run, are `it.todo` naming FX.
+// document in the spec's shape, except where a row says it answers with the FX capture's recordings
+// (`linearRecorded.ts`, `fixtures/linear/`; D-7684, D-7743): the happy path of every verb, and Linear's error answers.
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { LINEAR_OPS, LINEAR_VERBS, LINEAR_PROVENANCE_LINE, linearIssueUrl, type LinearVerb } from '../src/linear/ops.js';
 import { LINEAR_PROXY_ROUTES } from '../src/linear/proxyRoutes.js';
-import { readLinearStore } from '../src/linear/store.js';
+import { putLinearSlot, readLinearStore } from '../src/linear/store.js';
+import { keyTailOf } from '../src/linear/connection.js';
+import { valueDigestHex } from '../src/token/files.js';
 import {
-  BODIES, IDS, WS, bodyOf, issueNode, proxyRig, proxyUrl, seedLegacy, seedSlot, statusAnswer, type ProxyRig,
+  BODIES, IDS, WS, bodyOf, issueNode, opNameOf, proxyRig, proxyUrl, seedLegacy, seedSlot, statusAnswer, type ProxyRig, type Responder,
 } from './linearProxyRig.js';
 import { RATELIMITED_ERRORS } from './linearFetchFake.js';
+import { linearRecord, recordedAnswer } from './linearRecorded.js';
 import { memCoordDb } from './linearServicesFake.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 
@@ -23,6 +26,37 @@ afterEach(async () => { await rig?.close(); rig = null; });
 const open = async (o: Parameters<typeof proxyRig>[0] = {}): Promise<ProxyRig> => {
   rig = await proxyRig(o);
   await seedSlot(rig.ccrcDir, 'a');
+  return rig;
+};
+
+/** The recorded workspace (`fixtures/linear/key-check-page-1.json`): its id, its one team, and a fixture key for it. */
+const FX_WS = '00000000-0000-4000-8000-000000000001';
+const FX_TEAM = { id: '00000000-0001-4000-8000-000000000001', key: 'AAA', name: 'Team A' };
+const FX_KEY = 'lin_api_fixtureRecordedK3y5m7n9p1q3r5s7t9u1v3w5x7y9z1';
+
+/** Each document's recorded answer, by the operation name it declares (a create with a parent has its own). */
+const RECORDED_BY_OP: Readonly<Record<string, string>> = {
+  Issue: 'read-issue', Search: 'read-search', Comments: 'read-comments', Statuses: 'read-statuses', Projects: 'read-projects',
+  Labels: 'read-labels', Users: 'read-users', IssueCreate: 'mutation-issue-create', IssueUpdate: 'mutation-issue-update',
+  CommentCreate: 'mutation-comment-create', ResolveIssue: 'resolve-issue', ResolveIssueAndParent: 'resolve-issue-and-parent',
+  ResolveParent: 'resolve-parent', DirectoryStates: 'directory-states-page-1', DirectoryLabels: 'directory-labels-page-1',
+  DirectoryProjects: 'directory-projects-page-1', DirectoryUsers: 'directory-users-page-1', KeyCheck: 'key-check-page-1',
+};
+const recordedFor: Responder = (c) => {
+  const input = c.variables['input'] as Record<string, unknown> | undefined;
+  if (c.op === 'IssueCreate' && input?.['parentId'] !== undefined) return recordedAnswer('mutation-issue-create-with-parent');
+  const f = RECORDED_BY_OP[c.op];
+  return f === undefined ? null : recordedAnswer(f);
+};
+
+/** A rig whose Linear answers every document with its recording, over one slot for the recorded workspace. `over`
+ *  answers a call first (an error recording); null falls back to the recordings. */
+const recordedRig = async (over: Responder = () => null): Promise<ProxyRig> => {
+  rig = await proxyRig({ respond: async (c) => (await over(c)) ?? recordedFor(c) });
+  await putLinearSlot(rig.ccrcDir, FX_KEY, {
+    workspaceId: FX_WS, name: 'Workspace A', urlKey: 'ws-a', user: 'User A', teams: [{ ...FX_TEAM }], teamsAt: Date.now(),
+    keyTail: keyTailOf(FX_KEY), keyDigest: valueDigestHex(FX_KEY), checkedAt: Date.now(), outcome: 'ok',
+  }, { replace: true });
   return rig;
 };
 
@@ -168,7 +202,55 @@ describe('each verb\'s happy path (spec §5.4)', () => {
     expect(r.rows()).toEqual([]);
   });
 
-  it.todo('FX (D-7684): each verb\'s happy path against the coordinator\'s recorded fixtures, byte for byte (`slug linear-fx-proxy-happy-paths`)');
+  it('each verb\'s happy path against the recorded fixtures: the document byte for byte, the variables as recorded (slug linear-fx-proxy-happy-paths)', async () => {
+    const r = await recordedRig();
+    /** One verb's call, and the recordings each Linear call it made must equal. */
+    const drive = async (verb: LinearVerb, o: Parameters<ProxyRig['call']>[1], files: string[]): Promise<Record<string, unknown>> => {
+      const before = r.calls.length;
+      let res = await r.call(verb, o);
+      if (bodyOf(res)['error'] === 'name-unknown') {
+        // The directory is filled in the background on a name miss (spec §4.4), from its recorded pages.
+        await r.fx.refresher.idle();
+        res = await r.call(verb, o);
+      }
+      expect(res.statusCode, `${verb} ${res.body}`).toBe(200);
+      const made = r.calls.slice(before).filter((c) => !c.op.startsWith('Directory') && c.op !== 'KeyCheck');
+      expect(made.map((c) => c.op), verb).toEqual(files.map((f) => opNameOf(linearRecord(f).document)));
+      made.forEach((c, i) => {
+        const rec = linearRecord(files[i]!);
+        expect(c.document, `${verb} ${files[i]}`).toBe(rec.document);
+        expect(c.variables, `${verb} ${files[i]}`).toEqual(rec.variables);
+        expect(c.authorization).toBe(FX_KEY);
+      });
+      return bodyOf(res);
+    };
+    expect((await drive('issue', { ref: 'AAA-7' }, ['read-issue']))['issue']).toMatchObject({
+      identifier: 'AAA-7', url: linearIssueUrl('ws-a', 'AAA-7'), workspace: 'ws-a', team: 'AAA', parent: 'AAA-6',
+      untrusted: { title: 'FX capture child issue' },
+    });
+    expect((await drive('search', { body: { team: 'AAA', text: 'FX capture' } }, ['read-search']))['items']).toHaveLength(2);
+    expect((await drive('comments', { ref: 'AAA-7' }, ['read-comments']))['items']).toMatchObject([{ author: 'User A' }]);
+    expect((await drive('statuses', { query: { team: 'AAA' } }, ['read-statuses']))['items']).toHaveLength(7);
+    expect((await drive('projects', { query: { team: 'AAA' } }, ['read-projects']))['items']).toEqual([{ id: '00000000-0004-4000-8000-000000000001', name: 'Project A' }]);
+    expect((await drive('labels', { query: { team: 'AAA' } }, ['read-labels']))['items']).toHaveLength(3);
+    expect((await drive('users', {}, ['read-users']))['items']).toHaveLength(21);
+    expect((await drive('create', { body: {
+      team: 'AAA', title: 'FX capture parent issue', description: 'Parent issue created by the FX fixture capture.', priority: 3,
+      state: 'Todo', labels: ['Bug'], assignee: 'me',
+    } }, ['mutation-issue-create']))['issue']).toMatchObject({ identifier: 'AAA-6' });
+    expect((await drive('create', { body: {
+      team: 'AAA', title: 'FX capture child issue', description: 'Child issue created by the FX fixture capture.', parent: 'AAA-6',
+    } }, ['resolve-parent', 'mutation-issue-create-with-parent']))['issue']).toMatchObject({ identifier: 'AAA-7', parent: 'AAA-6' });
+    expect((await drive('update', { ref: 'AAA-7', body: {
+      title: 'FX capture child issue (updated)', description: 'Child issue updated by the FX fixture capture.', priority: 2,
+      addLabels: ['Improvement'],
+    } }, ['resolve-issue', 'mutation-issue-update']))['issue']).toMatchObject({ identifier: 'AAA-7' });
+    expect(await drive('comment', { ref: 'AAA-7', body: { body: 'Comment written by the FX fixture capture.' } },
+      ['resolve-issue', 'mutation-comment-create'])).toEqual({ ok: true, comment: { createdAt: '2026-11-02T14:56:22.781Z' } });
+    expect(r.rows().filter((x) => x['outcome'] === 'ok').map((x) => [x['op'], x['result']])).toEqual([
+      ['create', 'AAA-6'], ['create', 'AAA-7'], ['update', null], ['comment', '00000000-0007-4000-8000-000000000001'],
+    ]);
+  });
 });
 
 describe('failure words and their statuses (spec §6.8)', () => {

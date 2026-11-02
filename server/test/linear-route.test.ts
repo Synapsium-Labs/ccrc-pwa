@@ -11,12 +11,13 @@ import path from 'node:path';
 import type { LinearStoreRecord } from '../../shared/linear.js';
 import { LINEAR_TEAM_PAGE_SIZE, checkLinearKey, verifyLinearKey, type FetchLike } from '../src/linear/client.js';
 import { keyTailOf, type LinearKeyRead } from '../src/linear/connection.js';
-import type { LinearRateService } from '../src/linear/rate.js';
+import { LINEAR_QUOTA, type LinearRateService } from '../src/linear/rate.js';
 import { LINEAR_MISS_RETRY_AFTER_S, checkLinearSlot } from '../src/linear/refresher.js';
 import { routableSlots, routeLinear, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
 import { putLinearSlot, readLinearStore, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef, type LinearStoreRead } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
+import { linearRecord, recordedAnswer, recordedComplexity } from './linearRecorded.js';
 import { linearServicesFake } from './linearServicesFake.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -172,6 +173,9 @@ const KEY_2 = 'lin_api_fixture_route_key_0002';
 interface Sent { auth: string; query: string; variables: Record<string, unknown> }
 type PageTeam = { id: string; key: string; name: string };
 const ORG_A = { id: WS_A, name: 'Workspace A', urlKey: 'ws-a' };
+/** The recorded key check's workspace and team (`fixtures/linear/key-check-page-1.json`). */
+const FX_WS = '00000000-0000-4000-8000-000000000001';
+const FX_TEAM = '00000000-0001-4000-8000-000000000001';
 
 /** A key-check answer in the shape the §4.1 document asks for: the viewer, the organization and one page of teams. */
 const keyPage = (teams: PageTeam[], next: string | null = null, org: Record<string, unknown> = ORG_A): LinearAnswer =>
@@ -292,7 +296,27 @@ describe('the key check (spec §4.1)', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it.todo('the key check page\'s recorded X-Complexity is under LINEAR_QUOTA.maxQueryComplexity (the FX capture records it; slug linear-fx-key-check-fixture)');
+  it('the key check page\'s recorded X-Complexity is under LINEAR_QUOTA.maxQueryComplexity, and both recorded pages read as the check reads them (slug linear-fx-key-check-fixture)', async () => {
+    // 628 on both pages: the cost follows `first: 250`, not the teams on the page (the second came back empty).
+    expect(LINEAR_TEAM_PAGE_SIZE).toBe(250);
+    for (const f of ['key-check-page-1', 'key-check-page-2']) {
+      expect(recordedComplexity(f), f).toBe(628);
+      expect(recordedComplexity(f)!, f).toBeLessThan(LINEAR_QUOTA.maxQueryComplexity);
+    }
+    const one = scripted([recordedAnswer('key-check-page-1')]);
+    expect(await checkLinearKey(keyHolder().read, { fetch: one.f, mayAskMore: () => true })).toEqual({
+      ok: true, org: 'Workspace A', user: 'User A', keyDigest: valueDigestHex(KEY_1), pagesSent: 1,
+      workspace: { id: FX_WS, name: 'Workspace A', urlKey: 'ws-a', teams: [{ id: FX_TEAM, key: 'AAA', name: 'Team A' }], more: false },
+    });
+    expect(one.sent.map((s) => s.query)).toEqual([linearRecord('key-check-page-1').document]);
+    expect(one.sent[0]!.variables).toEqual(linearRecord('key-check-page-1').variables);
+    // The recorded second page (no teams, no next page), after a first page that says there is one: an empty last page.
+    const two = scripted([keyPage(teamsOf(1, 250), FX_TEAM, { id: FX_WS, name: 'Workspace A', urlKey: 'ws-a' }), recordedAnswer('key-check-page-2')]);
+    const v = await checkLinearKey(keyHolder().read, { fetch: two.f, mayAskMore: () => true });
+    expect(v).toMatchObject({ ok: true, pagesSent: 2, workspace: { id: FX_WS, more: false } });
+    expect(v.ok && v.workspace?.teams).toHaveLength(250);
+    expect(two.sent[1]!.variables).toEqual(linearRecord('key-check-page-2').variables);
+  });
 });
 
 describe('checkLinearSlot: the key check through the one rate service', () => {

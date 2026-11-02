@@ -21,16 +21,18 @@ import { keyTailOf } from '../src/linear/connection.js';
 import { LinearDirectory } from '../src/linear/directory.js';
 import {
   LINEAR_DESCRIPTION_MAX_BYTES, LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES,
-  LINEAR_DIRECTORY_PAGE_SIZE, LINEAR_DOCUMENTS, LINEAR_ERROR_CODES, LINEAR_OPS, LINEAR_PROVENANCE_LINE, LINEAR_STRIPS,
+  LINEAR_DIRECTORY_PAGE_SIZE, LINEAR_DOCUMENTS, LINEAR_ERROR_CODES, LINEAR_LIST_LIMIT, LINEAR_OPS, LINEAR_PROVENANCE_LINE, LINEAR_STRIPS,
   LINEAR_VERBS, decodeLinearCursor, encodeLinearCursor, linearMoved, linearOutbound, linearResolvePlan, linearRouteAsk,
   lookupLinearName, readLinearDirectoryPage, shapeLinearResolve, shapeLinearTeams, shapeLinearWorkspaces,
   validateLinearCall, withLinearProvenance, type LinearCallRow, type LinearDirectoryEntries, type LinearOpContext,
   type LinearOpInput, type LinearResolved, type LinearShapeContext, type LinearVerb,
 } from '../src/linear/ops.js';
+import { LINEAR_QUOTA } from '../src/linear/rate.js';
 import { LINEAR_DIRECTORY_REFRESH_MS, LINEAR_MISS_RETRY_AFTER_S } from '../src/linear/refresher.js';
 import { putLinearSlot, readLinearStore, type LinearSlotRef } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { RATELIMITED_ERRORS, linearAnswer, type LinearAnswer } from './linearFetchFake.js';
+import { linearRecord, recordedComplexity } from './linearRecorded.js';
 import { linearServicesFake } from './linearServicesFake.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -57,6 +59,15 @@ const KEY_1 = 'lin_api_fixture1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const KEY_2 = 'lin_api_fixture2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const T = 1_800_000_000_000;
 const MIN = 60_000;
+
+/** Each document constant's recorded answer in `fixtures/linear/` (the FX capture, D-7684, D-7743). */
+const RECORDED_DOCUMENT = {
+  issue: 'read-issue', search: 'read-search', comments: 'read-comments', statuses: 'read-statuses', projects: 'read-projects',
+  labels: 'read-labels', users: 'read-users', create: 'mutation-issue-create', update: 'mutation-issue-update',
+  comment: 'mutation-comment-create', resolveIssue: 'resolve-issue', resolveIssueAndParent: 'resolve-issue-and-parent',
+  resolveParent: 'resolve-parent', directoryStates: 'directory-states-page-1', directoryLabels: 'directory-labels-page-1',
+  directoryProjects: 'directory-projects-page-1', directoryUsers: 'directory-users-page-1',
+} as const satisfies Record<keyof typeof LINEAR_DOCUMENTS, string>;
 
 /** An issue URL as Linear writes it, joined here so no line of this file holds the web origin and a path together. */
 const issueUrl = (urlKey: string, id: string): string => ['https:', '', 'linear.app', urlKey, 'issue', id].join('/');
@@ -218,8 +229,43 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
     for (const c of LINEAR_DIRECTORY_COLLECTIONS) expect(LINEAR_DIRECTORY_DOCUMENTS[c]).toContain('(first: 250, after: $after)');
   });
 
-  it.todo('every document\'s recorded X-Complexity is under LINEAR_QUOTA.maxQueryComplexity, the directory pages included (FX records it; slug linear-fx-ops-complexity)');
-  it.todo('every document constant equals, byte for byte, the document text its FX fixture records (FX; slug linear-fx-ops-documents)');
+  it('every document constant equals, byte for byte, the document text its FX fixture records (slug linear-fx-ops-documents)', () => {
+    expect(Object.keys(RECORDED_DOCUMENT).sort()).toEqual(Object.keys(LINEAR_DOCUMENTS).sort());
+    for (const [name, file] of Object.entries(RECORDED_DOCUMENT)) {
+      expect(linearRecord(file).document, name).toBe(LINEAR_DOCUMENTS[name as keyof typeof LINEAR_DOCUMENTS]);
+    }
+    for (const c of LINEAR_DIRECTORY_COLLECTIONS) expect(linearRecord(`directory-${c}-page-1`).document, c).toBe(LINEAR_DIRECTORY_DOCUMENTS[c]);
+  });
+
+  it('every document\'s recorded X-Complexity is under LINEAR_QUOTA.maxQueryComplexity, the directory pages included (slug linear-fx-ops-complexity)', () => {
+    for (const [name, file] of Object.entries(RECORDED_DOCUMENT)) {
+      const cost = recordedComplexity(file);
+      expect(cost, name).not.toBeNull();
+      expect(cost!, name).toBeGreaterThan(0);
+      expect(cost!, name).toBeLessThan(LINEAR_QUOTA.maxQueryComplexity);
+    }
+    // The recorded values themselves (README.md's table), so a re-capture that changes one is seen here.
+    expect(Object.fromEntries(Object.entries(RECORDED_DOCUMENT).map(([n, f]) => [n, recordedComplexity(f)]))).toEqual({
+      issue: 10, search: 12, comments: 6, statuses: 601, projects: 60, labels: 575, users: 65, create: 11, update: 11, comment: 3,
+      resolveIssue: 3, resolveIssueAndParent: 5, resolveParent: 3,
+      directoryStates: 901, directoryLabels: 875, directoryProjects: 600, directoryUsers: 651,
+    });
+  });
+
+  it('the lists a caller sizes were recorded at the default limit only; projects and users at the maximum are bounded by their recorded 250-entry page', () => {
+    // UNMEASURED (D-7743): search, comments, projects and users take a caller's `limit`, up to LINEAR_LIST_LIMIT.max (50),
+    // and FX recorded them at `first: 25` in a near-empty workspace. Cost follows `first` (projects: 60 at 25, 600 at
+    // 250), so the one measured bound is the directory's page of the SAME connection and node fields at 250 entries.
+    expect([...['search', 'comments', 'projects', 'users']].map((f) => linearRecord(`read-${f}`).variables['first'])).toEqual([25, 25, 25, 25]);
+    expect(LINEAR_LIST_LIMIT.max).toBe(50);
+    expect(LINEAR_LIST_LIMIT.max).toBeLessThan(LINEAR_DIRECTORY_PAGE_SIZE);
+    const nodesOf = (doc: string, conn: string): string => new RegExp(`${conn}\\([^)]*\\) \\{ nodes \\{ ([^}]*) \\}`).exec(doc)?.[1] ?? '?';
+    for (const [verb, conn, page] of [['projects', 'projects', 'directoryProjects'], ['users', 'users', 'directoryUsers']] as const) {
+      expect(nodesOf(LINEAR_DOCUMENTS[verb], conn), verb).not.toBe('?');
+      expect(nodesOf(LINEAR_DOCUMENTS[page], conn), verb).toBe(nodesOf(LINEAR_DOCUMENTS[verb], conn));
+      expect(recordedComplexity(RECORDED_DOCUMENT[page])!, verb).toBeLessThan(LINEAR_QUOTA.maxQueryComplexity);
+    }
+  });
   it.todo('the error-code table maps the codes FX records for a forbidden team, an invalid input and a missing issue to linear-forbidden, linear-invalid and not-found (FX; slug linear-fx-error-codes)');
   it.todo('the create input takes a caller-chosen id, so requestId is passed as the new issue\'s id (FX\'s introspection; slug linear-create-request-id)');
 });

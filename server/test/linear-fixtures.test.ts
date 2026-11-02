@@ -15,39 +15,16 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { checkLinearKey, lookupLinearIssue, verifyLinearKey, type FetchLike } from '../src/linear/client.js';
 import { LINEAR_DOCUMENTS } from '../src/linear/ops.js';
 import { LINEAR_QUOTA } from '../src/linear/rate.js';
 import { linearAnswer } from './linearFetchFake.js';
+import { LINEAR_RECORD_DIR, LINEAR_RECORD_FILES, linearRecord, recordedHeader as header, type LinearRecord } from './linearRecorded.js';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DIR = path.join(HERE, 'fixtures', 'linear');
-
-interface FixtureRecord {
-  name: string;
-  documentSource: string;
-  document: string;
-  variables: Record<string, unknown>;
-  requestBody: string;
-  requestHeaders: string[];
-  sentAtMs: number;
-  receivedAtMs: number;
-  sentAt: string;
-  status: number;
-  statusLine: string;
-  headers: [string, string][];
-  body: unknown;
-  bodyRaw: string;
-  note?: string;
-  constructed?: string;
-}
-
-const FILES = readdirSync(DIR).filter((f) => f.endsWith('.json')).sort();
-const TEXT = new Map(readdirSync(DIR).sort().map((f) => [f, readFileSync(path.join(DIR, f), 'utf8')]));
-const RECORDS = new Map(FILES.map((f) => [f, JSON.parse(TEXT.get(f)!) as FixtureRecord]));
-const header = (r: FixtureRecord, name: string): string | null =>
-  r.headers.find(([k]) => k.toLowerCase() === name)?.[1] ?? null;
+const FILES = LINEAR_RECORD_FILES;
+// Every file, the README included: the leak guard reads them all.
+const TEXT = new Map(readdirSync(LINEAR_RECORD_DIR).sort().map((f) => [f, readFileSync(path.join(LINEAR_RECORD_DIR, f), 'utf8')]));
+const RECORDS = new Map<string, LinearRecord>(FILES.map((f) => [f, linearRecord(f)]));
 
 describe('every fixture parses, one capture record each', () => {
   it('holds the recorded set and the one constructed answer', () => {

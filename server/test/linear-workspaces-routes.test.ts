@@ -17,6 +17,7 @@ import { readLinearStore } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { WS, seedLegacy, seedSlot, statusAnswer, type Responder } from './linearProxyRig.js';
 import { RATELIMITED_ERRORS } from './linearFetchFake.js';
+import { linearRecord, recordedAnswer, recordedHeader } from './linearRecorded.js';
 import { WORKSPACES, bodyOf, settingsRig, type SettingsRig, type SettingsRigOpts } from './linearSettingsRig.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -592,7 +593,60 @@ describe('the store\'s own rules, through the routes', () => {
   });
 });
 
-describe('the recorded fixtures (FX, D-7684)', () => {
-  it.todo('FX: add, replace and check against the recorded key-check fixtures (both pages, the real headers and their X-Complexity)');
-  it.todo('FX: a revoked key\'s recorded 401 answer, through add (key-rejected) and check (key-rejected recorded)');
+describe('the recorded fixtures (FX, D-7684, D-7743)', () => {
+  /** The recorded key check's workspace (`fixtures/linear/key-check-page-1.json`): one team, so one page. */
+  const FX_WS = '00000000-0000-4000-8000-000000000001';
+  const FX_KEY = 'lin_api_fixtureRecordedK3y5m7n9p1q3r5s7t9u1v3w5x7y9z1';
+  const FX_KEY_2 = 'lin_api_fixtureRecordedSecond2b4d6f8h0j2l4n6p8r0t2v4';
+  const recorded: Responder = (c) => (c.op === 'KeyCheck' ? recordedAnswer('key-check-page-1') : null);
+  const connectedFx = (key: string): Record<string, unknown> => ({
+    id: FX_WS, name: 'Workspace A', urlKey: 'ws-a', user: 'User A', teams: [{ key: 'AAA', name: 'Team A' }],
+    keyTail: key.slice(-4), checkedAt: NOW, state: 'connected', outcome: 'ok', org: 'Workspace A',
+  });
+
+  it('add, replace and check against the recorded key-check answer: its real headers, one page, the workspace learned', async () => {
+    // The page's recorded X-Complexity is under the cap (628, linear-route.test.ts holds it), and the second page is
+    // never asked: the recorded first page says there is none, and the second page's recording is an empty page.
+    expect(recordedHeader(linearRecord('key-check-page-1'), 'x-ratelimit-requests-reset')).not.toBeNull();
+    const r = await rig({ respond: recorded });
+    await r.stamp();
+    const added = await add(r, FX_KEY);
+    expect(added.statusCode, added.body).toBe(200);
+    expect(bodyOf(added)).toMatchObject({ added: FX_WS, workspaces: [connectedFx(FX_KEY)] });
+    const replaced = await add(r, FX_KEY_2, true);
+    expect(bodyOf(replaced)).toMatchObject({ replaced: FX_WS, workspaces: [connectedFx(FX_KEY_2)] });
+    const checked = await check(r, FX_WS);
+    expect(checked.statusCode, checked.body).toBe(200);
+    expect(bodyOf(checked)['workspaces']).toEqual([connectedFx(FX_KEY_2)]);
+    expect(keyChecks(r)).toBe(3);
+    expect(r.calls.filter((c) => c.op === 'KeyCheck').map((c) => c.variables)).toEqual([{ after: null }, { after: null }, { after: null }]);
+    expect(parseLinearStoreRecord(readFileSync(recordFile(r, FX_WS), 'utf8'))).toMatchObject({
+      teams: [{ id: '00000000-0001-4000-8000-000000000001', key: 'AAA', name: 'Team A' }], outcome: 'ok',
+    });
+  });
+
+  it('a revoked key\'s recorded 401 answer: add is key-rejected and writes nothing; check records key-rejected', async () => {
+    const r = await rig({ respond: (c) => (c.op === 'KeyCheck' ? recordedAnswer(c.authorization === FX_KEY ? 'key-check-page-1' : 'error-401-revoked-key') : null) });
+    await r.stamp();
+    const refused = await add(r, FX_KEY_2);
+    expect(errorOf(refused)).toEqual([400, 'key-rejected']);
+    expect(refused.body).not.toContain('Authentication required');
+    expect(slotFiles(r)).toEqual([]);
+    expect((await add(r, FX_KEY)).statusCode).toBe(200);
+    // The operator revokes the stored key in Linear: its next check gets the recorded 401, and records it.
+    writeFileSync(keyFile(r, FX_WS), `${FX_KEY_2}\n`, { mode: 0o600 });
+    const checked = await check(r, FX_WS);
+    expect(checked.statusCode, checked.body).toBe(200);
+    expect((bodyOf(checked)['workspaces'] as Record<string, unknown>[])[0]).toMatchObject({ id: FX_WS, state: 'key-rejected' });
+    expect(r.rows().map((x) => [x['op'], x['outcome'], x['code']])).toEqual([
+      ['key-add', 'refused', 'key-rejected'], ['key-add', 'ok', null], ['key-check', 'refused', 'key-rejected'],
+    ]);
+  });
+
+  it('a made-up key and a revoked key get the same recorded answer', () => {
+    const a = linearRecord('error-401-invalid-key');
+    const b = linearRecord('error-401-revoked-key');
+    expect([a.status, b.status]).toEqual([401, 401]);
+    expect(a.body).toEqual(b.body);
+  });
 });
