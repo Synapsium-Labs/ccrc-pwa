@@ -457,4 +457,26 @@ describe('shareStateFor: where Share is offered, and when it waits (spec 4.5, 4.
     const pin = pinOf(tree, '/docs/demo/specs/big.png');
     expect(shareStateFor(pageAt('/docs/demo/specs/big.png'), tree, NO_FILE, null)).toEqual(readyAt(pin));
   });
+
+  // A same-blob re-list moves the tree from C1 to C2 and rebinds only an `ok` slot's pin, so a settled slot that is not
+  // `ok` still carries its C1 pin: it shows no bytes, so the page serves the tree's commit and Share is ready at C2.
+  describe('a same-blob re-list over a settled slot that is not ok', () => {
+    const c2 = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'a.md')] });
+    const stale = committedPin(COMMIT_A);
+    const slots: [string, FileSlot][] = [
+      ['failed', { s: 'failed', pin: stale, body: { ok: false, failure: 'unreadable-path' } }],
+      ['changing', { s: 'changing', pin: stale, word: 'draft-changed' }],
+      ['too-large', { s: 'too-large', pin: stale, size: 10, cap: 5 }],
+      ['unreachable', { s: 'unreachable', pin: stale }],
+      ['auth', { s: 'auth', pin: stale }],
+    ];
+    it.each(slots)('%s at the C1 pin under a C2 tree: ready at C2, with no answer', (_name, slot) => {
+      const pin = pinOf(c2, '/docs/demo/specs/a.md');
+      expect(pin.kind === 'committed' && pin.commit).toBe(COMMIT_B);
+      expect(shareStateFor(pageAt('/docs/demo/specs/a.md'), c2, slot, null)).toEqual(readyAt(pin));
+    });
+    it('control: an ok slot at the C1 pin under a C2 tree stays updating (its held body is in flight)', () => {
+      expect(shareStateFor(pageAt('/docs/demo/specs/a.md'), c2, okAt(stale), null)).toEqual({ s: 'updating', to: COMMIT_B });
+    });
+  });
 });

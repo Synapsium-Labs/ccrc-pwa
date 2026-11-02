@@ -167,8 +167,13 @@ export function shareStateFor(
   // `none` at a leaf that opens a file is a class Docs does not preview (`other`): nothing is read until Download, so
   // the leaf is ready at `pinFor`'s pin (refinement (q)).
   if (file.s === 'none') return contentClass(page.path) === 'other' ? readyAt(expected, null) : updating;
-  if (file.s === 'loading' || !samePin(file.pin, expected)) return updating;
-  return readyAt(file.pin, file.s === 'ok' ? file.answer.show : null);
+  if (file.s === 'loading') return updating;
+  // A same-blob re-list rebinds only an `ok` slot's pin (`useDocsVisit`'s settle effect), so a settled slot that is not
+  // `ok` (failed, changing, too-large, a client slot) still carries the older pin. It shows no bytes, so the page
+  // serves the tree's commit: ready at `pinFor`'s pin with no answer, as refinement (f) settles a failed raster. Only
+  // an `ok` slot's body can still be the old one, so only it waits for the new read (a held body in flight).
+  if (file.s !== 'ok') return readyAt(expected, null);
+  return samePin(file.pin, expected) ? readyAt(file.pin, file.answer.show) : updating;
 }
 
 /** The freshness chip's `data-state` (spec 4.5's table). */

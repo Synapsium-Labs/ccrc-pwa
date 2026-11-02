@@ -1400,4 +1400,20 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     expect(await screen.findByText('No GitHub link for this project.')).toBeInTheDocument();
     expect(document.querySelector('.docs-share-sheet')?.textContent).not.toContain('Export');
   });
+
+  it('a leaf whose read settled unreachable, then a same-blob re-list to C2: Share is enabled, not stuck Updating, and links C2', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk()) });
+    f.file.mockResolvedValue({ s: 'unreachable' });
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    await waitFor(() => expect(f.file).toHaveBeenCalled());
+    await waitFor(() => expect(shareButton()).toBeEnabled());
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(shareButton()).toBeEnabled();
+    expect(screen.queryByRole('button', { name: updatingTo(COMMIT_B) })).toBeNull();
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_B}/docs/superpowers/specs/a.md`));
+  });
 });
