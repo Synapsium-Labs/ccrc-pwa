@@ -1460,7 +1460,7 @@ export function audit(root = PWA_ROOT) {
    *      .keycap`'s ground was exactly that, and threw);
    *    * a rule with a SELF_GROUNDED_EXEMPT reason is exempt wherever it is
    *      reached, not only when route 1 reaches it. */
-  const contextsFor = (base) => {
+  const contextsOf = (base) => {
     const vars = localVars(base.body);
     const out = [{ suffix: '', vars, rule: base }];
     // Each variant gets its own context, AND variants that qualify the base's
@@ -1519,6 +1519,17 @@ export function audit(root = PWA_ROOT) {
       if (g.names.length > 1) out.push({ ...g, suffix: ` [as ${g.names.join(' + ')}]` });
     }
     return out;
+  };
+
+  /** `contextsOf`, worked out once per base. It reads only this audit's fixed
+   *  inputs (the rules, the self-grounded set, the registries), so a second call
+   *  for the same rule returns the same contexts — and the passes below ask for
+   *  153 distinct bases 471 times, each answer a scan of every rule. Callers
+   *  only read the contexts; none of them mutates one. */
+  const contextsMemo = new Map();
+  const contextsFor = (base) => {
+    if (!contextsMemo.has(base)) contextsMemo.set(base, contextsOf(base));
+    return contextsMemo.get(base);
   };
 
   /** Measure one ink against one ground, in both themes. The single place a
