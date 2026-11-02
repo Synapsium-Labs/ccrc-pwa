@@ -507,6 +507,15 @@ describe('failure words and their statuses (spec §6.8)', () => {
     ]);
   });
 
+  it('Linear\'s recorded 401 (AUTHENTICATION_ERROR, a revoked key) is linear-unauthorised (502), and marks the slot rejected', async () => {
+    const r = await recordedRig((c) => (c.op === 'Issue' ? recordedAnswer('error-401-revoked-key') : null));
+    const res = await r.call('issue', { ref: 'AAA-7' });
+    expect([res.statusCode, bodyOf(res)['error']]).toEqual([502, 'linear-unauthorised']);
+    expect(res.body).not.toContain('Authentication required');
+    const store = await readLinearStore(r.ccrcDir);
+    expect(store.kind === 'listed' && store.slots[0]!.record.kind === 'details' && store.slots[0]!.record.details.outcome).toBe('rejected');
+  });
+
   it('Linear\'s recorded refusals of an input are linear-invalid (422) with the field, the change failed', async () => {
     const r = await recordedRig((c) => (c.op === 'IssueUpdate' ? recordedAnswer('error-linear-invalid-priority')
       : c.op === 'IssueCreate' ? recordedAnswer('error-linear-invalid-state') : null));
