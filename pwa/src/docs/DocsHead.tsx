@@ -1,13 +1,14 @@
 // The Docs header (spec 2026-10-01 4.4's layout, 4.5; W5 part 1 Task 10): back (up one level, never
 // `history.back()`: a deep link has no history), the crumbs (on a phone the last two behind a leading `…`), the truth
 // line (the served ref, the short commit with copy commit, how the ref was chosen, a leaf's source, badge and size,
-// and the freshness chip), the actions (View on GitHub, Open committed version) and "Updated to <short>". A pure
+// and the freshness chip), the actions (View on GitHub, Share, Open committed version) and "Updated to <short>". A pure
 // renderer of the page, the visit and the tree answer: it starts no request, and the chip's tap is the visit's
 // `refreshManual`. Every draft word is `entryView`'s through `ENTRY_BADGE_TEXT`, the one badge function the rows use
-// too (M4.T7). Share and Export are W5 part 2's.
+// too (M4.T7). Share (spec 4.16) opens ShareSheet over shareTargetFor's answer and makes no request either; Export is
+// its own run's.
 import { useState, type ReactNode } from 'react';
 import {
-  DOCS_CLASS_CAP, contentClass, docsPageUrl, entryView, githubBlobUrl,
+  DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
   type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
 import { doorMark } from '../command/door';
@@ -24,7 +25,8 @@ import {
 import { SECTION_LABEL, docsPathKind, githubTargetFor } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
 import type { DocsNotOk } from './failures';
-import { copyText, type ShareOpened } from './share';
+import { copyText, shareTargetFor, type ShareOpened } from './share';
+import { ShareSheet } from './ShareSheet';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness } from './useDocsVisit';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
@@ -384,13 +386,46 @@ function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTar
   );
 }
 
-/** The actions (spec 4.5): View on GitHub, and Open committed version, offered iff `entryView(...).offersCommitted`
- *  on a leaf not already at `view=committed`. It navigates with a history entry (URL state, so Back returns to the
- *  draft); the commit never enters the URL, it is resolved from this visit's tree. */
-function Actions(p: { readonly page: TreePage; readonly tree: DocsTreeOk; readonly file: DocsVisit['file'] }): ReactNode {
+/** What an open share sheet is about (refinement (n)): the page, the commit its tree serves, and what the leaf opened.
+ *  `ShareAction` is keyed by it, so a sheet left open closes when any of them changes, rather than name a page the
+ *  screen no longer shows. */
+function shareKeyOf(page: TreePage, tree: DocsTreeOk, share: Exclude<ShareState, { s: 'absent' }>): string {
+  const opened = share.s === 'updating' ? 'updating'
+    : share.opened.kind === 'none' ? 'none' : docsApi.file(page.project, share.opened.pin);
+  return [docsPageUrl(page), tree.ref.commit, opened].join('\u0000');
+}
+
+/** Share (spec 4.5, 4.16), after View on GitHub: disabled, reading "Updating to <short>…", while the leaf does not show
+ *  `pinFor`'s pin; otherwise a tap opens the sheet over `shareTargetFor`'s answer for what the page opened, worked out
+ *  while the sheet is open. */
+function ShareAction(p: {
+  readonly page: TreePage; readonly tree: DocsTreeOk; readonly share: Exclude<ShareState, { s: 'absent' }>;
+}): ReactNode {
+  const { page, tree, share } = p;
+  const [open, setOpen] = useState(false);
+  const target = open && share.s === 'ready' ? shareTargetFor(tree, page, share.opened) : null;
+  return (
+    <>
+      <button type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}>
+        {share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(share.to) }) : DOCS_HEAD_TEXT.share}
+      </button>
+      {/* Export (spec 4.17) passes whether it offers Export on this page; until it ships, no page does. */}
+      {target !== null && <ShareSheet target={target} exportOffered={false} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/** The actions (spec 4.5): View on GitHub; Share (spec 4.16), wherever `shareStateFor` offers it; and Open committed
+ *  version, offered iff `entryView(...).offersCommitted` on a leaf not already at `view=committed`. Open committed
+ *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
+ *  it is resolved from this visit's tree. Export joins after Share in its own run. */
+function Actions(p: {
+  readonly page: TreePage; readonly tree: DocsTreeOk; readonly file: DocsVisit['file']; readonly leafImage: DocPin | null;
+}): ReactNode {
   const { page, tree, file } = p;
   const target = githubTargetFor(page, tree);
   const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';
+  const share = shareStateFor(page, tree, file, p.leafImage);
   let committedHref: string | null = null;
   if (page.kind === 'path' && page.view !== 'committed') {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
@@ -403,6 +438,7 @@ function Actions(p: { readonly page: TreePage; readonly tree: DocsTreeOk; readon
   return (
     <div className="docs-actions">
       {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
+      {share.s !== 'absent' && <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} />}
       {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
     </div>
   );
@@ -410,7 +446,11 @@ function Actions(p: { readonly page: TreePage; readonly tree: DocsTreeOk; readon
 
 /** The Docs header. `tree` null has one meaning: the visit's tree slot is not `ok` (loading, failed, or the page names
  *  no project), so the header is back and the crumbs only (spec 4.7: a tree failure keeps the crumbs). */
-export function DocsHead(p: { readonly page: DocsPageLocation; readonly visit: DocsVisit; readonly tree: DocsTreeOk | null }): ReactNode {
+export function DocsHead(p: {
+  readonly page: DocsPageLocation; readonly visit: DocsVisit; readonly tree: DocsTreeOk | null;
+  /** The pin a raster leaf's own image settled at (`DocsScreen`'s); absent or `null`, none has. */
+  readonly leafImage?: DocPin | null;
+}): ReactNode {
   const { page, visit, tree } = p;
   const slow = useNow(30_000, tree !== null);
   // While the chip is `soon` it counts seconds: a 1 s tick re-renders, and the figure is read from the clock at render
@@ -441,7 +481,7 @@ export function DocsHead(p: { readonly page: DocsPageLocation; readonly visit: D
       {tree !== null && page.kind !== 'index' && (
         <>
           <TruthLine page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} />
-          <Actions page={page} tree={tree} file={visit.file} />
+          <Actions page={page} tree={tree} file={visit.file} leafImage={p.leafImage ?? null} />
         </>
       )}
       {visit.updatedTo !== null && (
