@@ -1246,8 +1246,16 @@ jobs:
   # ruling 2026-10-28: a fast pull request skips it). No job-level `if:` and no `needs:`: it skips by STEP on a
   # refresh or a rebuild, like the required legs, because a job skipped by
   # `if:` reads as red in full-suite. Pinned by ci-pipeline.test.ts.
+  #
+  # TWO SHARDS (D-7746). As one job it measured a 17.6-minute median in the
+  # merge queue against its 20-minute timeout, and 46 of 203 queue jobs
+  # (23%) were cancelled at 20.1-21.0 minutes: 34 of the 36 cancelled queue
+  # runs, each ejecting its entry and rebuilding up to four behind it. vitest's
+  # `--shard=i/n` goes through browser/slowFirst.ts, which splits by measured
+  # file time (`FILE_MS`, LPT), not by path hash. `test (pwa)` and `full-suite`
+  # read `needs.browser-pwa.result`, which is red when any shard is.
   browser-pwa:
-    name: browser (pwa)
+    name: browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}
     runs-on: ubuntu-latest
     # Measured 2026-10-28 (desktop polish Task C11, run 40612653530, whose
     # log has 30 browser files): the Test step took 861 s of an 893 s job,
@@ -1261,7 +1269,17 @@ jobs:
     # files and ask-inline first (desktop polish Task C12): in run
     # 40695090274, with the tree's 33 files, the Test step took 911 s and
     # those four were the first four to finish.
+    # Sharded (D-7746): run 41472953945's green queue job (47 files) reported
+    # 3,104 s of file time, and its Test step took 1,067 s. Split in two by
+    # those times, each shard holds about 1,550 s, about 520 s over three
+    # workers (ask-inline alone is 491 s), so a shard expects about nine
+    # minutes with its setup, and 20 is twice that.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+        total: [2]
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
@@ -1306,7 +1324,7 @@ jobs:
       - name: Test
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
-        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts
+        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts --shard=${{ matrix.shard }}/${{ matrix.total }}
 
   # THE FLOOR ITSELF, on exactly its own version (ccrc history spec
   # 2026-10-05 §9.9; O18). Every other leg runs '22', which setup-node
