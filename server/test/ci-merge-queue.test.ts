@@ -14,7 +14,10 @@
  *     `merge_group` — but for the one step that asks the pipeline question of
  *     a queue run too. The second half is the dangerous one: GitHub reports a
  *     job skipped by `if:` as passing, so a required leg that skipped the
- *     queue would let the queue merge a tree nobody tested.
+ *     queue would let the queue merge a tree nobody tested. The one leg that
+ *     may skip its tests in the queue is the browser suite, by STEP, on
+ *     reach.mjs's answer for the group's change (the owner's ruling of
+ *     2026-11-02): its ask is the only other place the event is named.
  *  4. A queue run runs the FULL server suite and a pull request runs the light
  *     selection (operator ruling 2026-10-25, which replaced 2026-09-28's "a
  *     queue run runs what a pull request runs"): the header's mode table says
@@ -117,6 +120,17 @@ const PIPELINE_STEP_LINES = [
   "          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}",
 ];
 
+/** The browser leg's merge-queue ask (the owner's ruling of 2026-11-02): a STEP of `browser-pwa`, never a job-level
+ *  condition, that asks reach.mjs whether the group's change can reach the browser tests. It may skip only the browser
+ *  leg's own later steps (ci-pipeline.test.ts evaluates that), so its lines are allowed there and nowhere else.
+ *  TRANSITIONAL (2026-11-02): allowed, not yet required, until the rules-only pull request lands it; the pull request
+ *  after that requires it. */
+const QUEUE_BROWSER_ASK_LINES = [
+  "        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'",
+  '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
+  '        run: node .github/ci/reach.mjs --pkg browser --event merge_group --base "$QUEUE_BASE"',
+];
+
 describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s shape)', () => {
   it('triggers on merge_group, beside pull_request', () => {
     const on = onKeys();
@@ -172,14 +186,19 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
     // event test and its body is `exit 1`, so no job and no step is skipped by it.
     const QUEUE_REFUSAL = /^ {6}- name: [^\n]+\n {8}if: github\.event_name == 'merge_group' && needs\.[a-z-]+\.result != 'success'\n {8}run: exit 1\n/gm;
     const refusals: string[] = [];
+    let browserAsk = 0;
     for (const id of req) {
       const text = (all.get(id) ?? []).join('\n') + '\n';
       for (const m of text.match(QUEUE_REFUSAL) ?? []) refusals.push(`${id}: ${/needs\.([a-z-]+)\./.exec(m)?.[1]}`);
-      const code = text.replace(QUEUE_REFUSAL, '').split('\n').filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l)).join('\n');
+      const asks = (l: string): boolean => id === 'browser-pwa' && QUEUE_BROWSER_ASK_LINES.includes(l);
+      browserAsk += (all.get(id) ?? []).filter(asks).length;
+      const code = text.replace(QUEUE_REFUSAL, '').split('\n').filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l) && !asks(l)).join('\n');
       expect(code, `\`${id}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)
         .not.toContain('merge_group');
     }
     expect(refusals.sort(), 'the queue-only refusals are exactly the browser suite and the node floor').toEqual(['pwa: browser-pwa', 'server: node-floor']);
+    // The browser ask is whole or absent (TRANSITIONAL: absent until the rules-only pull request lands it).
+    expect([0, QUEUE_BROWSER_ASK_LINES.length], 'browser-pwa carries part of the merge-queue ask').toContain(browserAsk);
   });
 
   it('runs the full suite where a pull request runs the light one: the mode table has the row, and decideMode agrees for every input', () => {
