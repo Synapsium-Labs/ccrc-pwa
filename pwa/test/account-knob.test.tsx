@@ -11,7 +11,7 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { CHECK_AGAIN_LABEL, CHECK_LABEL, laneActRefusal, notReadyWords, switchRow } from '../src/fleet/accountWords';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { fleetSession } from './fleetFixture';
+import { deadSession, fleetSession, hibernatedSession } from './fleetFixture';
 
 const now = Date.now();
 const nowSec = Math.floor(now / 1000);
@@ -217,5 +217,51 @@ describe('Check again and the screen that cannot act', () => {
     expect(within(card('lane-a')).getByText('The fleet host needs an update before lanes can be switched or checked here.')).toBeInTheDocument();
     expect(within(card('lane-a')).queryByRole('button', { name: CHECK_LABEL })).toBeNull();
     expect(screen.queryByRole('button', { name: CHECK_AGAIN_LABEL })).toBeNull();
+  });
+});
+
+describe('the off row offers Move N sessions off (spec §10, §4.5; Task A3, D-7736)', () => {
+  // lane-d is off with one live session, one asleep and one dead; lane-a is on with a live session; lane-l is off with
+  // none. The count is the sheet's (`sessionsToMove`): the asleep one is counted, the dead one has nothing to move.
+  const SESSIONS = [
+    fleetSession({ id: 'lane-d:p-one', wrapper: 'lane-d', home: 'lane-d', project: 'p-one', title: 'one' }),
+    hibernatedSession(now - 60_000, { id: 'lane-d:p-two', wrapper: 'lane-d', home: 'lane-d', project: 'p-one', title: 'two' }),
+    deadSession({ id: 'lane-d:p-three', wrapper: 'lane-d', home: 'lane-d', project: 'p-one', title: 'three' }),
+    fleetSession({ id: 'lane-a:p-one', wrapper: 'lane-a', home: 'lane-a', project: 'p-one', title: 'stays' }),
+  ];
+  const moveOn = (id: string): HTMLElement | null =>
+    within(card(id).querySelector('.acct-knob') as HTMLElement).queryByRole('button', { name: /^Move \d+ sessions? off$/ });
+
+  it('shown on an off row with its count, beside the knob', () => {
+    stubFetch(world, {});
+    show(world(), { sessions: SESSIONS });
+    const move = moveOn('lane-d');
+    expect(move).not.toBeNull();
+    expect(move).toHaveTextContent('Move 2 sessions off');
+    // It sits on the knob row, before the reason line beneath it.
+    const reason = within(card('lane-d')).getByText("Not ready: the last check didn't pass. Check it first.");
+    expect(move!.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('absent at zero, and absent while the lane is on', () => {
+    stubFetch(world, {});
+    show(world(), { sessions: SESSIONS });
+    expect(moveOn('lane-l'), 'an off lane with no sessions to move').toBeNull();
+    expect(moveOn('lane-a'), 'an on lane: the kill switch row offers no move').toBeNull();
+    cleanup();
+    show(world(), { sessions: [deadSession({ id: 'lane-d:p-three', wrapper: 'lane-d', home: 'lane-d', project: 'p-one' })] });
+    expect(moveOn('lane-d'), 'a dead pane has nothing to move').toBeNull();
+  });
+
+  it('opens the Move sessions sheet for that lane', async () => {
+    stubFetch(world, {});
+    show(world(), { sessions: SESSIONS });
+    fireEvent.click(moveOn('lane-d')!);
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText('Move sessions off lane-d')).toBeInTheDocument();
+    expect(within(sheet).getByText('one')).toBeInTheDocument();
+    expect(within(sheet).getByText('two')).toBeInTheDocument();
+    expect(within(sheet).queryByText('three')).toBeNull();
+    expect(within(sheet).queryByText('stays')).toBeNull();
   });
 });

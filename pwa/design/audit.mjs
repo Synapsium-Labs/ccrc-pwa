@@ -724,6 +724,19 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  // The Move sessions sheet (accounts plan Task A3): its session rows and the progress line sit in .sheet-panel.
+  '.move-project': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's project line under each session's name (MoveSessionsSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). .move-list, .move-row and .move-name paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.move-word': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's outcome word at the right of each session row (MoveSessionsSheet.tsx), on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
+  '.move-progress': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's live progress line (MoveSessionsSheet.tsx), a direct child of the sheet body on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
   '.route-field-label': {
     under: ['var(--bg-sheet)'],
     why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
