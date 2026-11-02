@@ -120,6 +120,10 @@ function linkOf(t: ShareTarget | null): Extract<ShareTarget, { ok: true }> {
 
 function refusalOf(t: ShareTarget | null): Extract<ShareTarget, { ok: false }> {
   if (t === null || t.ok) throw new Error(`expected a refusal, got ${JSON.stringify(t)}`);
+  // No Share word uses a question mark, so one in a sentence is `fillSentence`'s fill for a field the caller left out.
+  for (const sentence of [shareRefusalSentence(t.why, t.fields, false), ...t.notes.map(shareNoteSentence)]) {
+    expect(sentence, t.why).not.toContain('?');
+  }
   return t;
 }
 
@@ -210,6 +214,8 @@ describe('shareTargetFor: the link, its title and its text, by page (spec 4.16; 
       expect(t.url, url).toMatch(PERMALINK);
       const sentences = t.notes.map(shareNoteSentence);
       for (const arg of [t.url, t.title, t.text, ...sentences]) {
+        // No Share word uses a question mark: one would be `fillSentence`'s fill for a field left out of the note.
+        expect(arg, url).not.toContain('?');
         expect(arg, url).not.toContain(location.origin);
         expect(arg, url).not.toContain(`${DOCS_PAGE_PREFIX}/demo`);
         expect(arg, url).not.toContain(DOCS_API_PREFIX);
