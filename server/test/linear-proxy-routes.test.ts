@@ -483,6 +483,30 @@ describe('failure words and their statuses (spec §6.8)', () => {
     });
   });
 
+  it('create sends requestId as the new issue\'s id, byte for byte as recorded; a retry with it creates nothing and answers linear-invalid requestId (D-7787)', async () => {
+    let sent = 0;
+    const r = await recordedRig((c) => {
+      if (c.op !== 'IssueCreate') return null;
+      sent += 1;
+      return recordedAnswer(sent === 1 ? 'extra-issue-create-caller-id' : 'extra-issue-create-caller-id-retry');
+    });
+    const rec = linearRecord('extra-issue-create-caller-id');
+    const id = ((rec.variables['input'] as Record<string, unknown>)['id']) as string;
+    const body = { team: 'AAA', title: 'FX capture caller-chosen id', description: 'Issue created with a caller-chosen id by the FX fixture capture.', requestId: id };
+    const first = await r.call('create', { body });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(r.calls.at(-1)!.body, 'the request Linear kept the id from').toBe(rec.requestBody);
+    expect((bodyOf(first)['issue'] as Record<string, unknown>)['identifier']).toBe('AAA-8');
+    const retry = await r.call('create', { body });
+    expect([retry.statusCode, bodyOf(retry)['error'], bodyOf(retry)['detail']]).toEqual([422, 'linear-invalid', 'requestId']);
+    expect(retry.body).not.toContain(id);
+    expect(r.calls.at(-1)!.body).toBe(linearRecord('extra-issue-create-caller-id-retry').requestBody);
+    // The retry is journaled failed, never ok: viaFleet marks only what a fleet write's own answer created.
+    expect(r.rows().map((x) => [x['op'], x['outcome'], x['code'], x['result'], x['fields']])).toEqual([
+      ['create', 'ok', null, 'AAA-8', 'team,title,description'], ['create', 'failed', 'linear-invalid', null, 'team,title,description'],
+    ]);
+  });
+
   it('Linear\'s recorded refusals of an input are linear-invalid (422) with the field, the change failed', async () => {
     const r = await recordedRig((c) => (c.op === 'IssueUpdate' ? recordedAnswer('error-linear-invalid-priority')
       : c.op === 'IssueCreate' ? recordedAnswer('error-linear-invalid-state') : null));

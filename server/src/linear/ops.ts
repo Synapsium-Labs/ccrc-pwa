@@ -22,13 +22,13 @@
  * Linear-sourced name passes `cleanName`, in answers and in refusal details alike. `url` is built here from the slot's
  * URL key and the shaped identifier, never taken from Linear's answer.
  *
- * WHAT IS NOT YET RECORDED (D-7684, the coordinator's FX capture; the ruling of 2026-11-01 lands this without it).
- * The documents below are written from the spec's shapes and are not yet held, byte for byte, against a recorded
- * answer; no `X-Complexity` value is known for any of them, so the page sizes are the spec's (250 a directory page)
- * and none is computed here. The create input's caller-chosen `id` is not confirmed, so `requestId` is not a create
- * field (`slug linear-create-request-id`). The GraphQL error-code table holds only `RATELIMITED`, from Linear's
- * published rate-limiting page; the codes for a forbidden, an invalid and a missing entity wait for FX's recorded error
- * answers, and until then every other code is `unreachable`.
+ * WHAT THE FX CAPTURE RECORDED (D-7684, D-7743; `server/test/fixtures/linear/`). Every document below equals, byte for
+ * byte, the document its recording holds, and every recorded `X-Complexity` is under `LINEAR_QUOTA.maxQueryComplexity`
+ * (the directory pages at 250 entries cost 600 to 901), so no page size is lowered here; a changed document is
+ * re-captured before it lands. The lists a caller sizes were recorded at `first: 25` only, so their cost at the maximum
+ * `limit` of 50 is unmeasured (a known limit). The create input takes a caller-chosen `id`, so `requestId` is sent as
+ * the new issue's id. The GraphQL error table is built from the recorded error answers ({@link LINEAR_ERROR_CODES};
+ * D-7787 for where it departs from spec §6.8).
  */
 import { isLinearTeamKey, isLinearUrlKey, isLinearUuid } from '../../../shared/linear.js';
 import { LINEAR_NAME_MAX_CHARS, cleanName, stripLine, stripMultiline } from '../../../shared/unprintable.js';
@@ -79,9 +79,9 @@ export const LINEAR_CURSOR_MAX_CHARS = 512;
 export const LINEAR_NAME_FIELD_MAX_CHARS = LINEAR_NAME_MAX_CHARS;
 
 /** The directory's page size and cap (spec §4.4, R5): 250 entries a page, up to 4 pages a collection, so at most 1,000
- *  of each. Past the cap a name is a known limit whose remedy is its id. The FX capture records each page's
- *  `X-Complexity`, and the spec's rule is that it stays under `LINEAR_QUOTA.maxQueryComplexity`: a page that would not
- *  is lowered HERE, never at run time. */
+ *  of each. Past the cap a name is a known limit whose remedy is its id. The FX capture recorded each page's
+ *  `X-Complexity` (states 901, labels 875, projects 600, users 651), under `LINEAR_QUOTA.maxQueryComplexity`; a page
+ *  that would not be is lowered HERE, never at run time, and re-captured. */
 export const LINEAR_DIRECTORY_PAGE_SIZE = 250;
 export const LINEAR_DIRECTORY_MAX_PAGES = 4;
 
@@ -173,6 +173,7 @@ export type LinearAnswerRefusalWord =
 export const LINEAR_INPUT_FIELDS = Object.freeze({
   teamId: 'team', title: 'title', description: 'description', stateId: 'state', priority: 'priority', assigneeId: 'assignee',
   labelIds: 'labels', addedLabelIds: 'addLabels', removedLabelIds: 'removeLabels', projectId: 'project', parentId: 'parent',
+  id: 'requestId',
 } as const);
 export type LinearInputField = (typeof LINEAR_INPUT_FIELDS)[keyof typeof LINEAR_INPUT_FIELDS];
 /** The body field an input key or property names, or null for one this table does not hold. */
@@ -226,6 +227,11 @@ const errorPathHead = (e: Record<string, unknown>): unknown => (Array.isArray(e[
  * - `INVALID_INPUT`, any message: an input out of Linear's own bounds (`error-linear-invalid-priority`, `priority: 99`):
  *   `linear-invalid`, the detail the body field of its first `validationErrors` entry's `property`. This answer carries
  *   no `statusCode`, unlike `INPUT_ERROR`'s.
+ * - `INPUT_ERROR` "conflict on insert of Issue": a create whose `requestId` (sent as the issue's `id`, spec §6.6) an
+ *   issue already holds (`extra-issue-create-caller-id-retry`, the same id sent twice). Linear created nothing. It is
+ *   `linear-invalid` with the detail `requestId`, NOT the earlier create's success (D-7787): reading the issue back
+ *   would be a third Linear call for a create with a parent (§6.6 allows two), and an answer `ok` for an id the caller
+ *   chose would let any session mark any existing issue as a fleet write (`viaFleet`) by naming its UUID.
  */
 export const LINEAR_ERROR_CODES: readonly LinearErrorRow[] = Object.freeze([
   { code: 'RATELIMITED', message: null, match: () => ({ word: 'rate-limited' }), recorded: 'error-429-ratelimited-constructed' },
@@ -237,6 +243,10 @@ export const LINEAR_ERROR_CODES: readonly LinearErrorRow[] = Object.freeze([
   {
     code: 'INPUT_ERROR', message: VALIDATE_ACCESS, recorded: 'error-linear-invalid-state',
     match: (e) => withField(inputFieldOf(VALIDATE_ACCESS.exec(String(e['message']))?.[1])),
+  },
+  {
+    code: 'INPUT_ERROR', message: /^conflict on insert of Issue$/, recorded: 'extra-issue-create-caller-id-retry',
+    match: () => ({ word: 'linear-invalid', detail: 'requestId' }),
   },
   {
     code: 'INVALID_INPUT', message: null, recorded: 'error-linear-invalid-priority',
@@ -266,6 +276,8 @@ export interface LinearBodyFields {
   project?: string;
   parent?: string;
   includeArchived?: boolean;
+  /** create only: the caller's v4 UUID, sent as the new issue's `id`, so a retry cannot create it twice (§6.6). */
+  requestId?: string;
 }
 
 /** A call, validated (§5.3): what the route routes, resolves, asks the policy about and sends. */
@@ -327,6 +339,9 @@ const priorityRule: FieldRule = (v) =>
 const limitRule: FieldRule = (v) =>
   (typeof v === 'number' && Number.isInteger(v) && v >= LINEAR_LIST_LIMIT.min && v <= LINEAR_LIST_LIMIT.max ? ok(v) : NO);
 const nullableName: FieldRule = (v) => (v === null ? ok(null) : nameRule(v));
+/** A v4 UUID, lowercase as Linear writes its ids: `IssueCreateInput.id` is documented as "UUID v4" (FX's introspection). */
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const requestIdRule: FieldRule = (v) => (typeof v === 'string' && REQUEST_ID.test(v) ? ok(v) : NO);
 
 /** A cursor as a session holds it: base64url, no padding, so it passes the client's SAFE_RE (§5.4). */
 const CURSOR_WIRE = /^[A-Za-z0-9_-]{1,700}$/;
@@ -344,8 +359,9 @@ const cursorRule: FieldRule = (v) => {
   return c === null ? NO : ok(c);
 };
 
-/** Each body's fields and their rules (§5.3), and which are required. `create` takes no `requestId` until the FX
- *  capture's introspection confirms the create input takes a caller-chosen id (`slug linear-create-request-id`). */
+/** Each body's fields and their rules (§5.3), and which are required. `create`'s `requestId` is sent as the new issue's
+ *  `id`: the FX capture's introspection records `IssueCreateInput.id` as a nullable v4 UUID Linear keeps (spec §6.6,
+ *  `slug linear-create-request-id`). */
 const BODIES: Readonly<Partial<Record<LinearVerb, { fields: Readonly<Record<string, FieldRule>>; required: readonly string[] }>>> = {
   search: {
     fields: {
@@ -358,6 +374,7 @@ const BODIES: Readonly<Partial<Record<LinearVerb, { fields: Readonly<Record<stri
     fields: {
       team: teamRule, title: textRule(1, LINEAR_TITLE_MAX_CHARS), description: markdownRule(0, LINEAR_DESCRIPTION_MAX_BYTES),
       state: nameRule, priority: priorityRule, assignee: nameRule, labels: namesRule, project: nameRule, parent: refRule,
+      requestId: requestIdRule,
     },
     required: ['team', 'title'],
   },
@@ -1063,7 +1080,10 @@ export const LINEAR_OPS: Readonly<{ [V in LinearVerb]: LinearOpRow & { op: V } }
       if (teamId === null) return { ok: false, word: 'team-unknown' };
       const r = issueInput(input, ctx, input.team);
       if (!r.ok) return r;
-      return { ok: true, vars: { input: { teamId, ...r.input } }, fields: ['team', ...r.fields] };
+      // The caller's requestId is the issue's id (§6.6): a retry with it is Linear's "conflict on insert", never a second
+      // issue. It changes no field, so the journal's fields leave it out.
+      const id = input.fields.requestId;
+      return { ok: true, vars: { input: { teamId, ...(id === undefined ? {} : { id }), ...r.input } }, fields: ['team', ...r.fields] };
     },
     shape: writeShape('issueCreate', true),
     fleetKeys: () => [],

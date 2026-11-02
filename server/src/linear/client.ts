@@ -273,9 +273,9 @@ export async function lookupLinearIssue(
   };
 }
 
-/** The most teams one page of the key check asks for (spec §4.1). The FX capture records this page's `X-Complexity`, and
- *  the spec's rule is that it stays under `LINEAR_QUOTA.maxQueryComplexity`: a page that would not is lowered HERE, in
- *  this constant, never at run time. */
+/** The most teams one page of the key check asks for (spec §4.1). The FX capture recorded this page's `X-Complexity` as
+ *  628 (both pages: the cost follows `first: 250`, not the teams), under `LINEAR_QUOTA.maxQueryComplexity`; a page that
+ *  would not be is lowered HERE, in this constant, never at run time, and re-captured. */
 export const LINEAR_TEAM_PAGE_SIZE = 250;
 
 /**

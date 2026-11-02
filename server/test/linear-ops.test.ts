@@ -8,9 +8,10 @@
 // answer is a stub in the shape the table's own document asks for, and every Linear call goes through a fetch seam
 // that records it.
 //
-// FX PENDING (D-7684; the coordinator's ruling of 2026-11-01). No Linear answer is recorded on `main`, so the rows that
-// need one stay `it.todo`, naming FX: each document's recorded `X-Complexity`, each document against the text its
-// fixture records, the error codes of a forbidden, an invalid and a missing entity, and the create input's `id`.
+// THE RECORDED ANSWERS (D-7684, D-7743). The rows that need what Linear actually answers read the FX capture's
+// recordings (`linearRecorded.ts`, `fixtures/linear/`): each document against the text its recording holds, each
+// recorded `X-Complexity`, the closed error table built from the recorded error answers (D-7787), and the create
+// input's caller-chosen `id`.
 import { describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -66,6 +67,7 @@ const ERROR_TABLE_ROWS = [
   ['INPUT_ERROR', 'error-not-found'],
   ['INPUT_ERROR', 'error-linear-forbidden'],
   ['INPUT_ERROR', 'error-linear-invalid-state'],
+  ['INPUT_ERROR', 'extra-issue-create-caller-id-retry'],
   ['INVALID_INPUT', 'error-linear-invalid-priority'],
 ];
 
@@ -294,6 +296,7 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
   it('every input key a write sends maps back to the body field it came from (the detail of linear-invalid)', () => {
     const create = varsOf('create', valid('create', { body: {
       team: 'aaa', title: 't', description: 'd', state: 'todo', priority: 1, assignee: 'User A', labels: ['bug'], project: 'project x', parent: 'AAA-1',
+      requestId: ISSUE_ID,
     } }), ctxOf({ resolved: { issue: null, parent: { id: PARENT_ID, identifier: 'AAA-1', teamId: TEAM_A.id, teamKey: 'AAA' } } }));
     const update = varsOf('update', valid('update', { ref: 'AAA-12', body: { addLabels: ['Bug'], removeLabels: ['UI'] } }));
     const keys = [...Object.keys(create['input'] as object), ...Object.keys(update['input'] as object)];
@@ -329,7 +332,29 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
     other.errors[0]!.message = 'Entity not found: Something';
     expect(callRow('issue').shape(other, SHAPE)).toEqual({ ok: false, word: 'unreachable' });
   });
-  it.todo('the create input takes a caller-chosen id, so requestId is passed as the new issue\'s id (FX\'s introspection; slug linear-create-request-id)');
+  it('the create input takes a caller-chosen id, so requestId is passed as the new issue\'s id (FX\'s introspection; slug linear-create-request-id)', () => {
+    const fields = ((linearRecord('introspection-issue-create-input').body as { data: { __type: { name: string; inputFields: {
+      name: string; description: string; type: { kind: string; name: string } }[] } } }).data.__type);
+    expect(fields.name).toBe('IssueCreateInput');
+    const id = fields.inputFields.find((f) => f.name === 'id');
+    // Nullable (not NON_NULL), a String, documented as a v4 UUID.
+    expect(id?.type).toEqual({ kind: 'SCALAR', name: 'String', ofType: null });
+    expect(id?.description).toContain('UUID v4');
+    expect(varsOf('create', valid('create', { body: { team: 'AAA', title: 't', requestId: ISSUE_ID } })))
+      .toEqual({ input: { teamId: TEAM_A.id, id: ISSUE_ID, title: 't' } });
+    expect(varsOf('create', valid('create', { body: { team: 'AAA', title: 't' } }))).toEqual({ input: { teamId: TEAM_A.id, title: 't' } });
+    // requestId changes no field of the issue, so the journal's changed fields leave it out.
+    const r = callRow('create').variables(valid('create', { body: { team: 'AAA', title: 't', requestId: ISSUE_ID } }), ctxOf());
+    expect(r.ok && r.fields).toEqual(['team', 'title']);
+  });
+
+  it('a retry with the same requestId is Linear\'s recorded "conflict on insert": linear-invalid requestId, never the earlier create\'s success (D-7787)', () => {
+    const retry = linearRecord('extra-issue-create-caller-id-retry');
+    expect(retry.document).toBe(LINEAR_DOCUMENTS.create);
+    expect(retry.variables).toEqual(linearRecord('extra-issue-create-caller-id').variables);
+    expect(callRow('create').shape(retry.body, SHAPE)).toEqual({ ok: false, word: 'linear-invalid', detail: 'requestId' });
+    expect(callRow('create').shape(linearRecord('extra-issue-create-caller-id').body, SHAPE)).toMatchObject({ ok: true, result: 'AAA-8' });
+  });
 });
 
 // ── the validators ──
@@ -420,8 +445,14 @@ describe('the closed body validators (spec §5.2, §5.3)', () => {
       .toEqual({ ok: false, word: 'bad-field', field: 'labels' });
   });
 
-  it('create takes no requestId until FX confirms the create input takes a caller-chosen id (slug linear-create-request-id)', () => {
+  it('create takes requestId, a lowercase v4 UUID, and no other body does (spec §5.3, §6.6)', () => {
     expect(validateLinearCall('create', { body: { team: 'AAA', title: 't', requestId: ISSUE_ID } }))
+      .toMatchObject({ ok: true, input: { fields: { requestId: ISSUE_ID } } });
+    for (const bad of ['AAAAAAAA-1111-4000-8000-00000000000A', '11111111-2222-1000-8000-000000000001', '11111111-2222-4000-c000-000000000001', 'AAA-1', 7, null, '']) {
+      expect(validateLinearCall('create', { body: { team: 'AAA', title: 't', requestId: bad } }), String(bad))
+        .toEqual({ ok: false, word: 'bad-field', field: 'requestId' });
+    }
+    expect(validateLinearCall('update', { ref: 'AAA-12', body: { title: 't', requestId: ISSUE_ID } }))
       .toEqual({ ok: false, word: 'bad-field', field: 'requestId' });
   });
 
