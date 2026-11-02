@@ -47,7 +47,7 @@ import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
  *                                                 which ci.yml passes when the change touches `.github/` (a
  *                                                 plain-bash check, so a PR cannot talk its own selector out of a
  *                                                 full run) or the PR carries the `full-ci` label.
- *   2. `inputMode === 'refresh'`                 -> none / refresh (ci.yml passes it on the hourly schedule, and a
+ *   2. `inputMode === 'refresh'`                 -> none / refresh (ci.yml passes it on the refresh schedule, and a
  *                                                 manual dispatch can; D-6769)
  *   3. `schedule`                                -> fullGreen ? none/none/skip : full/rebuild
  *   4. `inputMode === 'full'`                    -> full / none
@@ -232,6 +232,15 @@ function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
   }
 }
 
+/** The checked-out commit's sha, '' when git cannot say. @param {string} repoDir @returns {string} */
+function headSha(repoDir) {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, stdio: 'pipe' }).toString().trim();
+  } catch {
+    return '';
+  }
+}
+
 /** The commit time of `sha` in ms, 0 when git does not know it (so an unknown stamp sorts as the oldest).
  *  @param {string} repoDir @param {string} sha */
 function commitTimeMs(repoDir, sha) {
@@ -268,16 +277,32 @@ export function refreshPriority(repoDir, map, liveTests, selection, uncertain) {
   return [...all].sort((a, b) => rank(a) - rank(b) || (rank(a) === 1 ? stampTime(a) - stampTime(b) : 0) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** The map's age warning: the map is older than `thresholdMs` (3 h: the refresh is hourly, so a map this old means
- *  refreshes are not finishing). Aged by the time it was built, else by its commit's time. Null when it is not old.
+/** The map's age warning: the map is older than `thresholdMs` (5 h: the refresh runs every three hours and takes up
+ *  to about an hour, so a map this far behind means refreshes are not finishing; D-7747). Aged by the time it was
+ *  built, else by its commit's time. Null when it is not old, and null when main has not moved past it (`unseen` 0):
+ *  a refresh that finds main where the map is skips, so an old map of an unchanged main is current, not stale.
  *  @param {TestMap} map @param {number} nowMs @param {number} commitMs the map commit's time, 0 when unknown
- *  @param {number} [thresholdMs] @returns {string | null} */
-export function staleMapWarning(map, nowMs, commitMs, thresholdMs = 3 * 3_600_000) {
+ *  @param {number} [thresholdMs] @param {number | null} [unseen] the commits on main after the map's sha, null when
+ *  unknown @returns {string | null} */
+export function staleMapWarning(map, nowMs, commitMs, thresholdMs = 5 * 3_600_000, unseen = null) {
+  if (unseen === 0) return null;
   const builtMs = map.builtAt ? Date.parse(map.builtAt) : commitMs;
   if (!builtMs) return null;
   const age = nowMs - builtMs;
   if (age <= thresholdMs) return null;
-  return `the map is ${Math.floor(age / 3_600_000)} h old (older than ${thresholdMs / 3_600_000} h): the hourly refresh is not finishing, so selection leans on a stale map`;
+  return `the map is ${Math.floor(age / 3_600_000)} h old (older than ${thresholdMs / 3_600_000} h): the refresh is not finishing, so selection leans on a stale map`;
+}
+
+/** How many commits `mainRef` has after `sha`; null when git cannot say (either is unknown here).
+ *  @param {string} repoDir @param {string} sha @param {string | undefined} mainRef @returns {number | null} */
+export function commitsAfter(repoDir, sha, mainRef) {
+  if (!sha || !mainRef) return null;
+  try {
+    const n = Number(execFileSync('git', ['rev-list', '--count', `${sha}..${mainRef}`], { cwd: repoDir, stdio: 'pipe' }).toString().trim());
+    return Number.isInteger(n) ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Markdown for `$GITHUB_STEP_SUMMARY` (spec §6.4's reason table, plus the
@@ -444,6 +469,13 @@ function main() {
     testFileList = [...liveTestsAll];
   }
 
+  // D-7747: a SCHEDULED refresh (`--skip-unmoved true`, which ci.yml passes on the refresh cron alone) traces nothing
+  // when main's head is the newest map's own commit: nothing merged since that map, so a refresh would only re-trace
+  // what it left unknown or deferred, and those stay selected (an unknown test always runs; a deferred one carries
+  // its stamp, and a change to what it read makes it uncertain). A dispatched refresh never passes the flag: it forces.
+  const mainSha = opt['skip-unmoved'] === 'true' && decide.trace === 'refresh' && realSel?.map ? headSha(repoDir) : '';
+  const unmoved = mainSha !== '' && mainSha === realSel.map.sha;
+
   /** @type {string[]} */
   let traceList;
   /** @type {import('./shards.mjs').ShardPlan | null} */
@@ -451,6 +483,9 @@ function main() {
   /** @type {string[]} */
   let deferred = [];
   if (decide.trace === 'none') {
+    traceList = [];
+  } else if (decide.trace === 'refresh' && unmoved) {
+    // D-7747: the scheduled refresh found main where the newest map is: no merge since, so nothing is traced.
     traceList = [];
   } else if (decide.trace === 'refresh') {
     // The candidates in priority order, as many as the trace shards' budget holds (planTraceBatch); the rest wait
@@ -478,8 +513,9 @@ function main() {
   // no --shard, so the trace plan must always be a real partition (LPT at
   // defaultMs when no duration is known), never the fallback that hands every
   // shard every file plus a vitest `i/n`.
-  // A refresh's plan came from planTraceBatch above, bounded.
-  tracePlan ??= planShards(traceList, durations ?? {}, PROFILES.trace);
+  // A refresh's plan came from planTraceBatch above, bounded; a rebuild's is the whole suite over its own, wider
+  // profile (D-7748).
+  tracePlan ??= planShards(traceList, durations ?? {}, PROFILES.traceRebuild);
 
   // What this run MEANT to trace, for map-build: a refresh writes every one of
   // these that left no record as unknown instead of carrying its old entry.
@@ -517,7 +553,9 @@ function main() {
 
   /** @type {string[]} */
   const notes = [];
-  if (decide.trace === 'refresh') {
+  if (unmoved) {
+    notes.push(`refresh skipped: main has not moved since the newest map (\`${mainSha}\`), so nothing is traced; a dispatch with mode \`refresh\` forces one`);
+  } else if (decide.trace === 'refresh') {
     notes.push(`refresh: ${traceList.length} test(s) traced this run, bounded to ${PROFILES.trace.budgetMs / 60_000} min per trace shard`);
     if (deferred.length > 0) notes.push(`deferred to a later refresh: ${deferred.length} test(s), carried with the stamp they have`);
     if (traceList.length === 0 && deferred.length > 0) {
@@ -538,7 +576,11 @@ function main() {
     if (total > 0) process.stdout.write(`::notice::this light run left ${total} server test(s) to the merge queue's full run (${queued.unmapped.length} unmapped, ${queued.uncertain.length} uncertain); the step summary lists them\n`);
   }
   const nowMs = opt.now ? Date.parse(opt.now) : Date.now();
-  const mapAge = realSel?.map ? staleMapWarning(realSel.map, nowMs, commitTimeMs(repoDir, realSel.map.sha)) : null;
+  // Main's head, where this run can name it: a pull request's base, or the checked-out main of a refresh.
+  const mainRef = event === 'pull_request' ? opt.base : decide.trace === 'refresh' ? 'HEAD' : undefined;
+  const mapAge = realSel?.map
+    ? staleMapWarning(realSel.map, nowMs, commitTimeMs(repoDir, realSel.map.sha), undefined, commitsAfter(repoDir, realSel.map.sha, mainRef))
+    : null;
   if (mapAge) {
     notes.push(`**warning: ${mapAge}**`);
     process.stdout.write(`::warning::${mapAge}\n`);

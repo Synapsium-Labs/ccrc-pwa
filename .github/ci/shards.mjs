@@ -62,6 +62,14 @@ export const PROFILES = {
   // 45 and defers the rest (planTraceBatch), because a shard that hits the timeout is cancelled, leaves no records,
   // and the map is not published at all.
   trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6, budgetMs: 2_700_000 },
+  // The daily (and dispatched) REBUILD traces every live test, unbounded (D-7748). At `trace`'s 8 shards each was
+  // planned at about 108 minutes (the 2026-11-02 durations: 288 min of file time, · 6 / 2 / 8), and 5 of 8 hit the
+  // 60-minute timeout every day (2026-10-31 to 11-02), so map-build found shards with no records and published no map.
+  // The same cost model as `trace`, planned to 40 minutes a shard (under the refresh's 45-minute budget): about 22
+  // shards today, up to 24. Measured, the model's · 6 runs about 1.7x long (a refresh shard planned to 45 takes about
+  // 26 minutes; the rebuild's finished shards took 42-59 of 108 planned), so a 40-minute plan is about 23 minutes
+  // traced. The refresh keeps `trace`, unchanged.
+  traceRebuild: { targetMs: 2_400_000, min: 1, max: 24, workers: 2, defaultMs: 5000, scale: 6 },
 };
 
 /** The median of the known durations; `defaultMs` when none are known. */
