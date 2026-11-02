@@ -261,7 +261,7 @@ const SITES: readonly Site[] = [
 describe('each unattended label is pinned to its own call site', () => {
   it('coord/close.ts — the close composer declares the run it closes as the actor, once, for all three of its builders', () => {
     const src = readFileSync(path.join(srcRoot, 'coord/close.ts'), 'utf8');
-    const m = /function fleetArgv\(deps: CloseRunDeps, id: number, sessionId: string, act: FleetAct\): FleetVerb \{\n\s+const dec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/.exec(src);
+    const m = /function fleetArgv\(deps: Omit<CloseRunDeps, 'coord'> & \{ coord: WatcherCoordPort \}, id: number, sessionId: string, act: FleetAct\): FleetVerb \{\n\s+const dec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/.exec(src);
     expect(m, 'fleetArgv moved or was rewritten; update the anchor before trusting this guard again').not.toBeNull();
     expect(m![1]).toBe('`run:${id} close`');
   });
