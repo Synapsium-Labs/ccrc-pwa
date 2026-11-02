@@ -182,8 +182,9 @@ describe('shareTargetFor: the link, its title and its text, by page (spec 4.16; 
     expect(t).toMatchObject({ url: `${GH}/blob/${COMMIT_A}/docs/superpowers/specs/l.md`, title: 'l.md' });
   });
 
-  it('a raster leaf links the commit of the pin its image settled at', () => {
-    const tree = treeOk({ entries: [entry('specs', 'x.png')] });
+  it('a raster leaf links the commit of the pin its image settled at, not the tree\'s', () => {
+    // The tree is at COMMIT_B and the image settled at COMMIT_A, so the commit expression cannot be `tree.ref.commit`.
+    const tree = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'x.png')] });
     const t = linkOf(shareTargetFor(tree, pageAt('/docs/demo/specs/x.png'), opened(committedPin(COMMIT_A, 'x.png'))));
     expect(t).toMatchObject({ url: `${GH}/blob/${COMMIT_A}/docs/superpowers/specs/x.png`, title: 'x.png' });
   });
