@@ -121,5 +121,5 @@
     "data": null
   },
   "bodyRaw": "{\"errors\":[{\"message\":\"Entity not found: Team\",\"path\":[\"issueCreate\"],\"locations\":[{\"line\":1,\"column\":51}],\"extensions\":{\"type\":\"invalid input\",\"code\":\"INPUT_ERROR\",\"statusCode\":400,\"userError\":true,\"userPresentableMessage\":\"Could not find referenced Team.\"}}],\"data\":null}\n",
-  "note": "A team the key cannot see: a well-formed random UUID as teamId (the free plan workspace has one team)."
+  "note": "Forbidden is not measured: a well-formed random UUID as teamId, which names no team, so this is a not-found answer. The key reached one team, so a real team out of its reach could not be tried."
 }

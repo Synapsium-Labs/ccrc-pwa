@@ -9,8 +9,11 @@ The departures from the plan's FX item are D-7743 (`docs/superpowers/plans/2026-
 ## The capture
 
 - **When.** 2026-11-02, between 14:55 and 15:06 UTC. Each file's `sentAtMs`, `receivedAtMs` and `date` header are the real ones.
-- **Where.** On the operator's Mac, not a test box (D-7743). The key was a throwaway key for a throwaway workspace. The operator
-  made it for this capture and revoked it afterwards. The capture never ran on the fleet box and never used the fleet's key.
+- **Where.** On the operator's Mac, not a test box (D-7743). The key was a throwaway key: the operator made it for this
+  capture and revoked it afterwards. The capture never ran on the fleet box and never used the fleet's key.
+- **Which workspace.** Not a throwaway test workspace, as the plan asks, but an existing one with other members, issues
+  and a project (D-7743). The capture wrote only its own three issues and one comment, and deleted them afterwards. It
+  changed nothing else. Every identity its reads returned is scrubbed (below).
 - **How.** Each request was one `POST` with the bare key as `authorization` (no `Bearer`) and the JSON body in
   `requestBody`. The calls were 1.5 s apart and nothing was retried. The capture's own issues and comment were deleted
   afterwards. Those cleanup calls are not kept here.
@@ -55,17 +58,17 @@ the HTTP status, every response header in the order Linear sent it, the parsed `
   | resolves | 3 to 5 |
   | create, update / comment | 11 / 3 |
 
-- **The cost at `limit` 50 is not measured.** The lists that take a caller's limit were captured only at `first: 25`, in an
-  almost empty workspace. Cost follows `first` (projects: 60 at 25, 600 at 250), so the cost of a full page at the maximum
+- **The cost at `limit` 50 is not measured.** The lists that take a caller's limit were captured only at `first: 25`, and
+  no answer filled a page of 50 (users 21 rows, search 2, projects and comments 1). Cost follows `first` (projects: 60 at 25, 600 at 250), so the cost of a full page at the maximum
   limit of 50 is not recorded (D-7743).
 - **Errors arrive on HTTP 200.** `data` is null, and the code is in `errors[0].extensions.code`. The `INPUT_ERROR` answers also
   carry `extensions.statusCode` 400. The `INVALID_INPUT` answer has no `statusCode`.
   - A missing issue is `INPUT_ERROR`, "Entity not found: Issue". It is not `data.issue === null`.
   - An out-of-range priority is `INVALID_INPUT`, "Argument Validation Error", with `validationErrors`.
   - An unknown `stateId` is `INPUT_ERROR`, "Entity not found in validateAccess: stateId", with `extensions.meta.missingIds`.
-- **No separate forbidden answer.** A team the key cannot see answers the same as a team that does not exist:
-  `INPUT_ERROR`, "Entity not found: Team". There is no 403 and no forbidden code. The workspace had one team, so a real
-  team out of the key's reach could not be tried. Only a random UUID was (D-7743).
+- **Forbidden is not measured.** `error-linear-forbidden` sends a random team UUID that names no team. It answers
+  `INPUT_ERROR`, "Entity not found: Team", with no 403 and no forbidden code: a not-found answer. The key reached one team,
+  so a real team out of the key's reach could not be tried, and whether one answers the same way is unknown (D-7743).
 - **A revoked key is an invalid key.** A made-up key and the revoked key both get HTTP 401 `AUTHENTICATION_ERROR` with the
   same body. Neither answer has an `x-complexity` or `x-ratelimit-*` header.
 - **The second key-check page is empty.** The workspace has one team. Page 2 was asked with page 1's `endCursor` even though
@@ -117,7 +120,7 @@ real values to fixture values never left the machine the capture ran on.
 If a later task changes a document (for example a lower page size in LK3 or LK8), the document is re-captured the same way
 before that task lands. The test turns red until it is.
 
-1. The operator makes a throwaway key for a throwaway workspace that holds nothing real.
+1. The operator makes a throwaway key for a throwaway test workspace that holds nothing real (the plan's FX item).
 2. Send the new document with the same request shape. Record the status, every response header and the raw body.
 3. Scrub it with the same mapping rules. Keep the document and the header numbers as they are.
 4. Replace the old file with the new one, update the tables above, and revoke the key.
