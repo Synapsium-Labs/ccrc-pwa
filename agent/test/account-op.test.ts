@@ -132,7 +132,8 @@ describe('the account op', () => {
     expect(res).toEqual({ t: 'res', id: 1, ok: true, kind: 'exited', code: 0, stdout: '{"ok":true}\n', fleetIdentity: NODE_ID });
     expect(readFileSync(path.join(h, 'argv'), 'utf8')).toBe([
       path.join(h, '.local', 'bin', 'ccrc'),
-      'account', 'add', '--id=lane-a', '--provider=anthropic', '--method=paste', '--label=Lane A', '--hue=cyan', '',
+      // `--credential=-`: the verb's one spelling for a secret on stdin (accounts plan Task A17).
+      'account', 'add', '--id=lane-a', '--provider=anthropic', '--method=paste', '--label=Lane A', '--hue=cyan', '--credential=-', '',
     ].join('\n'));
     expect(readFileSync(path.join(h, 'argv'), 'utf8'), 'the secret reached argv').not.toContain(CANARY);
     expect(readFileSync(path.join(h, 'stdin'), 'utf8')).toBe(CANARY);

@@ -1962,6 +1962,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a
   // script) answers `unavailable` once the gate passes. The answer's lane is re-read through `lanesWire`, the GET's.
   const accountOps = deps.accountOps;
+  // The registry rows naming a lane (its `wrapper` or `home`), for discard's route-side check (accounts plan Task A17,
+  // D-7739). An unlistable registry answers null, which refuses the discard rather than reading as no session.
+  const accountSessionsOn = async (id: string): Promise<readonly string[] | null> => {
+    // [registry-refused:refuses] an unlistable registry refuses the discard; the verb counts every row again
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    return reg.listed ? reg.records.filter((r) => r.wrapper === id || r.home === id).map((r) => r.id) : null;
+  };
   registerAccountRoutes(app, {
     gate: accountGate,
     ops: { run: async (...a) => accountOps === undefined ? { kind: 'not-started' } : accountOps.run(...a) },
@@ -1978,6 +1985,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     audit: deps.accountAudit,
     fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+    // The write routes (A17): discard's check reads the lane-state file and the kill-switch marker, and the registry.
+    laneState: async (id) => {
+      const read = await readLaneStates(deps.io, deps.cfg);
+      return { lane: read.lanes[id] ?? { kind: 'absent' }, disabled: read.disabled.has(id) };
+    },
+    sessionsOn: accountSessionsOn,
   });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated

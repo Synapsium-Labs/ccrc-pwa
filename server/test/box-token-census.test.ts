@@ -1128,14 +1128,15 @@ describe('the docs surface: four session-gated doors, no box token, no /docs rou
 
 // ── the accounts surface (accounts plan Task A14, D-7732; spec 2026-10-18 accounts-connect §13) ─────────────────────
 //
-// `server/src/accounts/routes.ts` is the SEVENTH file that registers routes: Check and the kill switch. Spec §13's rule
+// `server/src/accounts/routes.ts` is the SEVENTH file that registers routes: Check and the kill switch, and since A17
+// (D-7739) the write routes and the revoke checklist's tick (N6, D-7738). Spec §13's rule
 // for every account route is "session-only: not in EXEMPT, and never accepts a box token", so the census here is the
 // docs surface's: every registration is a door in `ACCOUNT_DOORS`, in both directions; no file under
-// `server/src/accounts/` consults the box token (a call in the gate or the port would refuse or admit all three as surely
+// `server/src/accounts/` consults the box token (a call in the gate or the port would refuse or admit every door as surely
 // as one in a handler); none is EXEMPT; and a planted call is SEEN. The doors are session-only fleet acts, not
 // coordination writes, so like the docs doors they join neither `SESSION_ONLY_ALL` nor `ALL_LANES`, and CLAUDE.md's
 // box-token bullet owes them no sentence.
-describe('the accounts surface: three session-only doors, no box token (spec 2026-10-18 §13)', () => {
+describe('the accounts surface: eight session-only doors, no box token (spec 2026-10-18 §13)', () => {
   const ACCOUNTS_SRC = read('server/src/accounts/routes.ts');
   /** Every source file of the accounts context, by listing the directory, so a file added there is read without an
    *  edit here. */
@@ -1143,7 +1144,10 @@ describe('the accounts surface: three session-only doors, no box token (spec 202
     .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/accounts/${f}`);
   /** The three doors, by path (spec §13.1). Hand-kept for the NAMES only: the cases below derive the same set from the
    *  file and compare in both directions. */
-  const ACCOUNT_DOORS = ['/api/accounts/:id/check', '/api/accounts/:id/enable', '/api/accounts/:id/disable'];
+  const ACCOUNT_DOORS = ['/api/accounts/:id/check', '/api/accounts/:id/enable', '/api/accounts/:id/disable',
+    // The write routes (accounts plan Task A17, D-7739) and the revoke checklist's tick (N6, D-7738).
+    '/api/accounts', '/api/accounts/:id/credential', '/api/accounts/:id/set', '/api/accounts/:id/remove',
+    '/api/accounts/revoke-ack'];
   const REGISTERED = registrationsIn(ACCOUNTS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
   const CHECK_LINE = "app.post('/api/accounts/:id/check', act('check'));";

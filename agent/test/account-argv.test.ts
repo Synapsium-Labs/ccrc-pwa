@@ -138,7 +138,7 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
     expect(argv).toEqual([
       'account', 'add', '--id=lane-a', '--provider=openrouter', '--method=paste', '--label=Lane A', '--hue=cyan',
       '--placement=overflow', '--models=anthropic/claude-sonnet-4.5,openai/gpt-5', '--limit=20', '--limit-reset=monthly',
-      '--expires-in=365d', '--adopt',
+      '--expires-in=365d', '--adopt', '--credential=-',
     ]);
     expect(Object.isFrozen(argv)).toBe(true);
   });
@@ -148,6 +148,17 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
     expect(buildAccountArgv('set', LANE, { placement: 'full' }, false))
       .toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--placement=full'] });
     expect(buildAccountArgv('set', LANE, { stated: 'someone@example.invalid' }, false)).toEqual({ ok: false, why: 'bad-field' });
+  });
+
+  it('add and credential read a carried secret behind --credential=-, and write it only when stdin is carried (accounts plan Task A17)', () => {
+    expect(buildAccountArgv('add', LANE, { provider: 'anthropic', method: 'paste' }, true))
+      .toEqual({ ok: true, argv: ['account', 'add', '--id=lane-a', '--provider=anthropic', '--method=paste', '--credential=-'] });
+    expect(buildAccountArgv('add', LANE, { provider: 'anthropic', method: 'login' }, false))
+      .toEqual({ ok: true, argv: ['account', 'add', '--id=lane-a', '--provider=anthropic', '--method=login'] });
+    expect(buildAccountArgv('credential', LANE, {}, true)).toEqual({ ok: true, argv: ['account', 'credential', '--id=lane-a', '--credential=-'] });
+    expect(buildAccountArgv('credential', LANE, { method: 'mint' }, false))
+      .toEqual({ ok: true, argv: ['account', 'credential', '--id=lane-a', '--method=mint'] });
+    expect(buildAccountArgv('credential', LANE, { credential: '-' }, true)).toEqual({ ok: false, why: 'bad-field' });
   });
 
   it('remove\'s mode check is the pre-check, spelled --dry-run; remove and discard keep --mode (accounts plan Task A16)', () => {

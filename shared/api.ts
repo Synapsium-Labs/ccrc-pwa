@@ -12824,3 +12824,124 @@ export interface AccountSwitchAnswer {
   readonly roster: RosterWire[];
   readonly lane: LaneWire;
 }
+
+// ── Accounts: the write routes (accounts plan Task A17, D-7738, D-7739; spec §3.2, §3.3, §11, §13.1) ────────────────
+// APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line.
+
+/** The words the write routes (`server/src/accounts/routes.ts`) answer of their own, each with its one status in
+ *  `REFUSAL_STATUS` (D-7739). The verb's own codes that the first wave's screens word cross as these words, never as the
+ *  verb's sentence; any other verb code rides the lane routes' `lane-act-refused` with `verbCode`. The Linear routes'
+ *  `key-rejected` (400) is reused for a token the provider refused, and `unmeasured` (502) for a session list the
+ *  server could not read.
+ *  `key-charset`        the secret carries a NUL, another C0 byte or DEL, is empty, or is over 8 KiB (400): refused at
+ *                       the route before any op, and again by the verb (spec §3.3).
+ *  `confirm-mismatch`   remove's typed confirm is not the lane's id (400, spec §11.5).
+ *  `not-discardable`    discard on a lane that was ever switched on, that this box has no record of adding, that is on,
+ *                       or that a session names (409, spec §11.5): checked by the route before the op, and again by the
+ *                       verb.
+ *  `lane-exists`        an add for an id the server's roster already holds (409): after an add whose outcome was
+ *                       unknown, the reconcile may have found the lane, so the retry answers the lane, never the verb's
+ *                       `duplicate-id` (spec §6.2). The answer carries the `lane`.
+ *  `bad-stated`         `set`'s stated account is empty, longer than 120 characters or carries a control byte (400).
+ *  `token-unverified`   the provider did not answer the token's probe: nothing was saved (503, spec §6.3).
+ *  `config-dir-exists`  the lane's config directory already exists (409, G20), with `signedIn` when the box measured it.
+ *  `live-sessions`      sessions run on the lane (409), their ids in `sessions`.
+ *  `sleeping-sessions`  sessions sleep on the lane (409, N3), their ids in `sessions`.
+ *  `upstream`           the lane is the upstream lane every generated wrapper execs (409).
+ *  `last-home-able`     the change would leave no lane that can take a new session (409).
+ *  `auth-in-progress`   a sign-in for the lane is in flight (409, spec §3.9).
+ *  `not-a-token-lane`   a stated account for a sign-in lane, whose account `check` measures (409).
+ *  `duplicate-id`       the verb found the id taken although the server's roster did not hold it (409): a race the
+ *                       reconcile settles. */
+export const ACCOUNT_WRITE_REFUSALS = [
+  'key-charset', 'confirm-mismatch', 'not-discardable', 'lane-exists', 'bad-stated', 'token-unverified',
+  'config-dir-exists', 'live-sessions', 'sleeping-sessions', 'upstream', 'last-home-able', 'auth-in-progress',
+  'not-a-token-lane', 'duplicate-id',
+] as const;
+export type AccountWriteRefusal = (typeof ACCOUNT_WRITE_REFUSALS)[number];
+
+/** `POST /api/accounts`'s body (spec §13.1, the first wave's fields). `credential` is the pasted secret: held for the
+ *  request only, passed on the op's stdin, never answered. `limit`, `limitReset`, `expiresIn` and `models` are later
+ *  waves' and refused here. */
+export interface AccountAddBody {
+  provider: string;
+  id: string;
+  label: string;
+  hue: string;
+  method?: string;
+  credential?: string;
+  placement?: 'overflow' | 'full';
+  adopt?: true;
+}
+
+/** `POST /api/accounts`'s 200: the roster `GET /api/accounts` answers, the new lane as the server reads it, and the
+ *  node it was added on. */
+export interface AccountAddAnswer {
+  readonly ok: true;
+  readonly roster: RosterWire[];
+  readonly lane: LaneWire;
+  readonly fleetIdentity: string | null;
+}
+
+/** `POST /api/accounts/:id/credential`'s body in the first wave: a replacement secret by paste (spec §9). */
+export interface AccountCredentialBody { credential: string }
+
+/** `POST /api/accounts/:id/credential`'s 200: the lane as the server reads it after the swap. */
+export interface AccountCredentialAnswer {
+  readonly ok: true;
+  readonly lane: LaneWire;
+}
+
+/** `POST /api/accounts/:id/set`'s body in the first wave: a token lane's stated account (1 to 120 printable
+ *  characters, carried to the verb on stdin because it names a person) and the lane's placement. */
+export interface AccountSetBody { stated?: string; placement?: 'overflow' | 'full' }
+
+/** `POST /api/accounts/:id/remove`'s body (spec §11): `remove` with the typed id, `discard` (no typed confirm), or
+ *  `check`, the pre-check, which changes nothing. */
+export type AccountRemoveBody = { mode: 'remove'; confirmId: string } | { mode: 'discard' } | { mode: 'check' };
+
+/** The credential kinds the removal ledger and the revoke checklist name (spec §11.3), each with its state at the
+ *  provider and the page that revokes it, as words the sheet maps to its link: the box never answers a URL. A sign-in's
+ *  state is `unmeasured` until G23 runs (the OA1 record of 2026-11-01): never `ended`, never `still-valid`. */
+export const AT_PROVIDER_KINDS = ['anthropic-token', 'anthropic-sign-in', 'openrouter-key', 'api-key', 'codex'] as const;
+export type AtProviderKind = (typeof AT_PROVIDER_KINDS)[number];
+export const AT_PROVIDER_STATES = ['still-valid', 'unmeasured'] as const;
+export const AT_PROVIDER_PAGES = ['claude-code-settings', 'claude-account-settings', 'openrouter-keys', 'chatgpt-settings'] as const;
+export interface AtProviderRow {
+  readonly kind: AtProviderKind;
+  readonly state: (typeof AT_PROVIDER_STATES)[number];
+  readonly revokeAt: (typeof AT_PROVIDER_PAGES)[number] | null;
+}
+
+/** `POST /api/accounts/:id/remove`'s 200 for `remove` and `discard` (spec §11.3): the roster after the removal, and the
+ *  verb's ledger as it answered it: what it removed and kept on the box, the sessions it rehomed, and what is still
+ *  valid at the provider. */
+export interface AccountRemoveAnswer {
+  readonly ok: true;
+  readonly roster: RosterWire[];
+  readonly removed: readonly string[];
+  readonly kept: readonly string[];
+  readonly rehomed: readonly string[];
+  readonly atProvider: readonly AtProviderRow[];
+}
+
+/** `POST /api/accounts/:id/remove`'s 200 for `check` (spec §11.1): the box's measurements, read just now. `live` is null
+ *  when the box could not ask tmux. */
+export interface AccountRemoveCheckAnswer {
+  readonly ok: true;
+  readonly check: {
+    readonly live: number | null;
+    readonly sleeping: readonly string[];
+    readonly archived: number;
+    readonly upstream: boolean;
+    readonly otherHomeAble: number;
+    readonly authInProgress: boolean;
+    readonly discardable: boolean;
+    readonly at: number;
+  };
+  readonly fleetIdentity: string | null;
+}
+
+/** `POST /api/accounts/revoke-ack`'s body (N6, D-7738): the lane (which may already be gone) and the credential kind
+ *  the operator ticked "I revoked it" for. It writes one `revoke-acknowledged` audit row with no value and runs no op. */
+export interface AccountRevokeAckBody { laneId: string; kind: AtProviderKind }
