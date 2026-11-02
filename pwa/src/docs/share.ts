@@ -89,7 +89,7 @@ export function shareTargetFor(tree: DocsTreeOk, page: DocsPageLocation, opened:
   const commit = leaf !== null && opened.kind === 'file' && opened.pin.kind === 'committed' ? opened.pin.commit : tree.ref.commit;
   const short = shortCommit(commit);
   const link = githubPermalink(tree.github, tree.ref, commit, target);
-  const access: ShareNoteLine[] = tree.github.state === 'named' ? [{ note: 'access', fields: { slug: tree.github.slug } }] : [];
+  const access: ShareNoteLine[] = tree.github.state === 'none' ? [] : [{ note: 'access', fields: { slug: tree.github.slug } }];
   if (!link.ok) {
     const why: ShareRefusal = link.why !== 'uncommitted' ? link.why
       : leaf !== null && leaf.view.opens === 'none' ? 'new-withheld' : 'new-draft';
