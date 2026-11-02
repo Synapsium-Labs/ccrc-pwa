@@ -68,7 +68,8 @@ function LinkSheet(p: { readonly link: ShareLink; readonly onClose: () => void }
       return;
     }
     setShareFailed(false);
-    sent.then(undefined, refused);
+    // A resolved share clears any notice an overlapping call left (a double tap's second call is refused at once).
+    sent.then(() => setShareFailed(false), refused);
   };
   const onCopy = (): void => {
     copyText(link.url).then(() => setCopy('copied'), () => setCopy('refused'));

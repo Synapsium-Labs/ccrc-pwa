@@ -124,6 +124,24 @@ describe('Share…: navigator.share, called in the click itself (M4.SH4, M4.SH5)
     expect(await screen.findByText(SHARE_SHEET_TEXT.shareFailed)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: SHARE_SHEET_TEXT.copy })).toBeInTheDocument();
   });
+
+  it('a double tap: the second call is refused while the first is open, and the first finishing clears the notice', async () => {
+    let finish: () => void = () => {};
+    const first = new Promise<void>((r) => { finish = r; });
+    const share = vi.fn<(data: unknown) => Promise<void>>()
+      .mockReturnValueOnce(first)
+      .mockRejectedValueOnce(new DOMException('an earlier share has not completed', 'InvalidStateError'));
+    webShare(share);
+    sheet();
+    const button = await screen.findByRole('button', { name: SHARE_SHEET_TEXT.share });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(share).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(SHARE_SHEET_TEXT.shareFailed)).toBeInTheDocument();
+    finish();
+    await settle();
+    expect(screen.queryByText(SHARE_SHEET_TEXT.shareFailed)).toBeNull();
+  });
 });
 
 describe('a refusal on the sheet (M4.SH6; refinement (c))', () => {
