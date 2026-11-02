@@ -231,7 +231,8 @@ describe('the built render job is its own lazily loaded worker chunk (W8a Task 4
 // DOM loads it, sees `{ready: true}`, and gets spans for a typescript job; the built `sw.js` precaches it beside the
 // parse worker's chunk; highlight.js core (named by a string from its language-not-found message) is in that chunk
 // and in the reader's render chunk (the shared Markdown library's own colouring, A6 and A22), and in no other emitted
-// file, so in no main-thread chunk. And `pwa/src` spawns it through one literal.
+// file, so in no main-thread chunk. (The count of the `new URL(...)` literal that spawns it is an AST scan in
+// `docs-scans.test.ts`'s W5h-a clause, which needs no build.)
 const HL_LOADER = `
 import { pathToFileURL } from 'node:url';
 const [chunk] = process.argv.slice(1);
@@ -285,18 +286,5 @@ describe('the built highlight worker chunk (W5h-a: M7.11, M4.H4 built half)', ()
     const holders = files.filter((n) => readFileSync(path.join(assets(), n), 'utf8').includes(MARKER));
     expect(holders.filter((n) => /^markdownHighlightWorker-[\w-]+\.js$/.test(n))).toHaveLength(1);
     expect(holders.filter((n) => !/^(?:markdownHighlightWorker|readerRenderJob)-[\w-]+\.js$/.test(n))).toEqual([]);
-  });
-
-  it('M7.11: pwa/src holds exactly one new URL(\'./markdownHighlightWorker.ts\' literal, in spawnHighlightWorker; a second is counted', () => {
-    const SRC = path.join(PWA, 'src');
-    const literal = "new URL('./markdownHighlightWorker.ts'";
-    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []);
-    const count = (texts: readonly string[]): number => texts.reduce((n, t) => n + t.split(literal).length - 1, 0);
-    const texts = walk(SRC).map((f) => readFileSync(f, 'utf8'));
-    expect(count(texts)).toBe(1);
-    const runner = readFileSync(path.join(SRC, 'lib', 'markdownRunner.ts'), 'utf8');
-    expect(runner.slice(runner.indexOf('export function spawnHighlightWorker'))).toContain(literal);
-    expect(count([...texts, `export const planted = () => new Worker(${literal}, import.meta.url));`])).toBe(2);
   });
 });
