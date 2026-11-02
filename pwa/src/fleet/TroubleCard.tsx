@@ -14,6 +14,9 @@
 // "MOVE N SESSIONS OFF" (§4.2, §4.5; Task A3) is the card's own button when its copy offers a move: Rate-limited's first
 // fix, and one beside Signed out's credential act. The card counts the lane's sessions as the sheet will move them
 // (`sessionsToMove`), offers nothing when there are none, and owns the Move sessions sheet it opens.
+//
+// "PASTE A TOKEN" / "REPLACE TOKEN" (§4.2; Task A19): a token lane's card offers its credential act as a button when
+// the screen can run it, opening the replace sheet the screen hosts. The fleet-host command stays beside it.
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, toast } from '@ccrc/ui';
@@ -71,8 +74,12 @@ export function CopyCommand({ command }: { command: string }): ReactNode {
 /** A trouble card's body: what is wrong, its effect, and the fix. Where the fix names a check and the screen can run
  *  one (`onCheck`, accounts plan Task A14, D-7732), **Check again** calls the Check route, the knob row's own; while it
  *  runs (`checking`) the button is busy and does not take a second press. `fleet` is injectable for tests. */
-export function TroubleCard({ copy, onCheck, checking = false, fleet = useFleetStore }: {
-  copy: TroubleCopy; onCheck?: () => void; checking?: boolean; fleet?: FleetStore;
+export function TroubleCard({ copy, onCheck, checking = false, replace, fleet = useFleetStore }: {
+  copy: TroubleCopy; onCheck?: () => void; checking?: boolean;
+  /** A token lane's credential act the screen can run (accounts plan Task A19, D-7742): Signed out's "Paste a token"
+   *  and Expiring's "Replace token", each opening the replace sheet. Absent: the command alone, as before. */
+  replace?: { readonly label: string; readonly onOpen: () => void };
+  fleet?: FleetStore;
 }): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -93,6 +100,9 @@ export function TroubleCard({ copy, onCheck, checking = false, fleet = useFleetS
       <p className="acct-trouble-effect">{copy.effect}</p>
       {copy.move?.primary === true && move}
       <p className="acct-trouble-lead">{copy.lead}</p>
+      {replace !== undefined && (
+        <Button variant="ghost" size="fit" className="acct-trouble-replace" onClick={replace.onOpen}>{replace.label}</Button>
+      )}
       {copy.checkAgain && onCheck !== undefined && (
         <Button variant="ghost" size="fit" className="acct-check-again" disabled={checking} aria-busy={checking || undefined} onClick={onCheck}>
           {CHECK_AGAIN_LABEL}

@@ -75,13 +75,16 @@ const OFFLINE_LINE = 'sheet-copy move-offline';
 export interface MoveSessionsSheetProps {
   /** The lane the sessions move off. */
   lane: string;
+  /** Only these sessions (remove's per-session Move, and Wake and move's woken ones; Task A19), in the fleet's order.
+   *  Absent: every session on the lane. */
+  only?: readonly string[];
   open: boolean;
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
   fleet?: FleetStore;
 }
 
-export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }: MoveSessionsSheetProps): ReactNode {
+export function MoveSessionsSheet({ lane, only, open, onClose, fleet = useFleetStore }: MoveSessionsSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
   const pools = fleet((s) => s.pools);
@@ -114,7 +117,7 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
     setChosen(null); setShowOther(false); setInterruptBusy(false); setStopping(false);
   }, [open, lane]);
 
-  const live = sessionsToMove(sessions, lane);
+  const live = sessionsToMove(sessions, lane).filter((s) => only === undefined || only.includes(s.id));
   const list = moving ?? live;
 
   // The candidates, as SwapSheet builds them: every lane this build knows except this one, minus the switched off.

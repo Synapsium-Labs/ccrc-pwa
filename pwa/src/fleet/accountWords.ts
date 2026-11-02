@@ -588,3 +588,220 @@ export function moveOutcomeOf(answer: SwapAnswer): { readonly outcome: MoveOutco
   if (code === null && status >= 500) return { outcome: 'refused', word: 'refused: the fleet host could not move it' };
   return { outcome: 'refused', word: 'refused: a reason this app does not know' };
 }
+
+// ── Remove, Discard, Replace token, the revoke checklist and the compromise disclosure (accounts plan Task A19, D-7742;
+// spec §9, §11, §3.11) ─────────────────────────────────────────────────────────────────────────────────────────────
+// Every sentence the remove and replace sheets say. A refusal is worded from its CODE only, as above. The OA1 record
+// (2026-11-01) did not measure G23, so a sign-in's row at the provider says the result is UNMEASURED: never that the
+// sign-in ended at Anthropic, and never that it is still valid.
+
+/** The fold's acts (spec §4.4): Remove opens the remove sheet, Replace token the replace sheet (token lanes only). */
+export const REMOVE_ACT = 'Remove…';
+export const REPLACE_TOKEN = 'Replace token';
+/** A signed-out token lane's trouble card offers the paste under the spec's own word (§4.2: "Paste a token"). */
+export const PASTE_A_TOKEN = 'Paste a token';
+
+/** Remove's pre-check as the box measured it (spec §11.1), in one line: "0 live sessions · not the upstream lane · 2
+ *  other lanes can take new sessions · no sign-in in progress · read just now". `at` is the box's instant, epoch ms. */
+export function removeCheckLine(c: {
+  live: number | null; upstream: boolean; otherHomeAble: number; authInProgress: boolean; at: number;
+}, now: number): string {
+  const live = c.live === null ? "live sessions couldn't be counted" : `${plural(c.live, 'live session')}`;
+  const others = c.otherHomeAble === 0 ? 'no other lane can take new sessions'
+    : `${c.otherHomeAble} other ${c.otherHomeAble === 1 ? 'lane' : 'lanes'} can take new sessions`;
+  return [
+    live,
+    c.upstream ? 'the upstream lane' : 'not the upstream lane',
+    others,
+    c.authInProgress ? 'a sign-in in progress' : 'no sign-in in progress',
+    `read ${formatAge(Math.floor((now - c.at) / 1000))}`,
+  ].join(' · ');
+}
+
+/** The destructive button's words: it recounts as sessions move (spec §11.2). */
+export function removeButtonLabel(id: string, still: number): string {
+  return still > 0 ? `Remove ${id} · ${plural(still, 'session')} still on it` : `Remove ${id}`;
+}
+export const MOVE_ONE = 'Move';
+export const MOVE_ALL = 'Move all';
+export const WAKE_AND_MOVE = 'Wake and move';
+/** Live sessions block removal (spec §11.2). */
+export const liveBlockText = (id: string, n: number): string =>
+  `${plural(n, 'session')} ${n === 1 ? 'runs' : 'run'} on ${id}. Move ${n === 1 ? 'it' : 'them'} off before removing the lane.`;
+/** Sleeping sessions are listed apart (N3, D-7733): removing the lane would wake them elsewhere, without their place. */
+export const sleepingBlockText = (id: string, n: number): string =>
+  `${plural(n, 'session')} on ${id} ${n === 1 ? 'is' : 'are'} asleep. Removing the lane would wake ${n === 1 ? 'it' : 'them'} `
+  + `somewhere else without ${n === 1 ? 'its' : 'their'} place in the conversation. Wake and move ${n === 1 ? 'it' : 'them'} first.`;
+/** What else the pre-check can hold a removal for, each in words. */
+export const removeHeld = {
+  authInProgress: (id: string): string => `A sign-in for ${id} is in progress. Cancel the sign-in first.`,
+  upstream: (id: string): string => `${id} is the upstream lane every generated lane runs through, so it can't be removed here.`,
+  liveUncounted: (id: string): string =>
+    `The fleet host couldn't count the live sessions on ${id}, so it can't be removed yet. Read it again.`,
+} as const;
+/** A wake that failed, before the move (the existing ensure route). */
+export const wakeFailed = (sid: string): string => `${sid} couldn't be woken, so it stays asleep on this lane.`;
+export const wakingProgress = (i: number, n: number): string => `Waking ${i} of ${n}…`;
+/** The pre-check's own failure: nothing was measured, so the button stays off. */
+export const removeCheckFailed = (id: string): string =>
+  `The fleet host couldn't measure ${id} for removal, so nothing can be removed yet. Read it again.`;
+export const READ_IT_AGAIN = 'Read again';
+export const READING_LANE = (id: string): string => `Reading ${id} on the fleet host…`;
+/** The typed-id confirm (spec §11.5): it must equal the id exactly. */
+export const typedConfirmLabel = (id: string): string => `Type ${id} to confirm`;
+export const removeConsequence = (id: string): string =>
+  `Removing ${id} deletes its credential on the fleet host and everything that runs it. Its config folder and transcripts stay.`;
+/** Discard (spec §11.5): one tap with step-up, for a never-enabled lane with no sessions. */
+export const DISCARD_LANE = 'Discard this lane';
+export const discardLine = (id: string): string =>
+  `${id} was never turned on and no session uses it, so it can be discarded without typing its name.`;
+
+type RemoveRefusalWord = Extract<RouteRefusal,
+  'live-sessions' | 'sleeping-sessions' | 'upstream' | 'last-home-able' | 'confirm-mismatch' | 'auth-in-progress'
+  | 'not-discardable' | 'lane-busy' | 'not-found' | 'unsupported' | 'insecure-origin' | 'unavailable' | 'unmeasured'>;
+const REMOVE_REFUSAL_TEXT: Readonly<Record<RemoveRefusalWord, (id: string) => string>> = {
+  'live-sessions': (id) => `Sessions still run on ${id}, so nothing was removed. Move them off first.`,
+  'sleeping-sessions': (id) => `Sessions are asleep on ${id}, so nothing was removed. Wake and move them first.`,
+  upstream: (id) => removeHeld.upstream(id),
+  'last-home-able': (id) => `${id} is the only lane that can take new sessions, so nothing was removed. Turn another on first.`,
+  'confirm-mismatch': (id) => `The name typed isn't ${id}, so nothing was removed.`,
+  'auth-in-progress': (id) => removeHeld.authInProgress(id),
+  'not-discardable': (id) => `${id} was turned on once, or a session uses it, so it can't be discarded. Remove it instead.`,
+  'lane-busy': (id) => `${id} is busy with another account change. Nothing was removed. Try again in a moment.`,
+  'not-found': (id) => `${id} is no longer on this box's roster.`,
+  unsupported: () => 'The fleet host needs an update before lanes can be removed here.',
+  'insecure-origin': () => "Accounts can't be changed over plain HTTP. Nothing was removed.",
+  unavailable: (id) => `The fleet host couldn't run it, so ${id} was not removed.`,
+  unmeasured: (id) => `The fleet host couldn't list the sessions on ${id}, so nothing was removed. Try again.`,
+};
+/** A removal's refusal, from its code alone. `null` for the answers the sheet handles as states of its own
+ *  (`step-up-required`, `outcome-unknown`, and a request that never completed). */
+export function removeRefusal(id: string, word: string | undefined): string | null {
+  if (word === undefined || word === 'step-up-required' || word === 'outcome-unknown') return null;
+  if (Object.hasOwn(REMOVE_REFUSAL_TEXT, word)) return REMOVE_REFUSAL_TEXT[word as RemoveRefusalWord](id);
+  return CODE_RE.test(word) ? `The fleet host refused (${word}): nothing was removed.` : `The fleet host refused: nothing was removed.`;
+}
+/** The removal's answer never came: whether it happened is unknown, and the screen reads the roster again. */
+export const removeUnknown = (id: string): string =>
+  `The fleet host didn't answer in time, so whether ${id} was removed is unknown. Reading the roster again…`;
+export const removeStillUnknown = (id: string): string =>
+  `The fleet host's accounts couldn't be read either, so whether ${id} was removed is still unknown. Nothing was sent again.`;
+export const removedButNoLedger = (id: string): string =>
+  `${id} is no longer on the roster, so it was removed, but the fleet host's ledger never arrived. A removal keeps the `
+  + "lane's config folder and transcripts on the fleet host.";
+export const notRemovedAfterUnknown = (id: string): string => `${id} is still on the roster: it was not removed.`;
+export const STEP_UP_AGAIN_REMOVE = "Confirm it's you again, then press it again. Nothing was removed.";
+
+/** The ledger's headings (spec §11.3): built from the verb's answer, never guessed. */
+export const LEDGER_HEADS = {
+  removed: 'Removed',
+  kept: 'Kept on the box',
+  rehomed: 'Archived sessions moved to the upstream lane',
+  atProvider: 'Still valid at the provider until you revoke it',
+  /** The same section when a row's state is not measured (a sign-in, G23): it claims nothing about validity. */
+  atProviderUnmeasured: 'At the provider',
+} as const;
+/** The provider section's heading: the spec's words only when every row is measured still valid. */
+export const atProviderHead = (states: readonly string[]): string =>
+  (states.every((s) => s === 'still-valid') ? LEDGER_HEADS.atProvider : LEDGER_HEADS.atProviderUnmeasured);
+export const removedDone = (id: string): string => `${id} is removed.`;
+
+/** The provider pages a revoke link opens, keyed by the box's word (`AtProviderRow.revokeAt`: the box never answers a
+ *  URL). Each with the words the link reads. */
+export const REVOKE_PAGES = {
+  'claude-code-settings': { href: 'https://claude.ai/settings/claude-code', label: 'claude.ai/settings/claude-code ↗' },
+  'claude-account-settings': { href: 'https://claude.ai/settings/account', label: 'claude.ai account settings ↗' },
+  'openrouter-keys': { href: 'https://openrouter.ai/keys', label: 'openrouter.ai/keys ↗' },
+  'chatgpt-settings': { href: 'https://chatgpt.com/#settings/Security', label: 'chatgpt.com ↗' },
+} as const satisfies Readonly<Record<string, { href: string; label: string }>>;
+
+/** One row of "Still valid at the provider" (spec §11.3), by credential kind and the state the box answered. `lead`
+ *  comes before the link and `tail` after it. A sign-in's `unmeasured` (G23 not run, the OA1 record) claims neither that
+ *  the sign-in ended at Anthropic nor that it is still valid. */
+export function atProviderWords(kind: string, state: string, keyHint: string | undefined): { lead: string; tail: string } {
+  switch (kind) {
+    case 'anthropic-token':
+      return { lead: 'The token still works at Anthropic for up to about a year. Revoke it at', tail: "; ccrc can't." };
+    case 'anthropic-sign-in':
+      return state === 'unmeasured'
+        ? { lead: 'Signed out here. Whether that also ended the sign-in at Anthropic is unmeasured. To end it there, sign out other sessions at', tail: '.' }
+        : { lead: 'Signed out here; it may still show at claude.ai until it expires. To end it, sign out other sessions at', tail: '.' };
+    case 'openrouter-key':
+      return {
+        lead: 'The key still works at OpenRouter and can still spend credit. Delete it at',
+        tail: keyHint === undefined ? '.' : ` (it's the key named after this lane, ${keyHint}).`,
+      };
+    case 'codex':
+      return { lead: 'The ChatGPT sign-in stays authorised. Remove it at', tail: '.' };
+    default:
+      return { lead: "The key still works at its provider. Revoke it there; ccrc can't.", tail: '' };
+  }
+}
+
+/** The revoke checklist item (spec §9, §11.3; N6): the operator ticks it; the tick is recorded with no value. */
+export const REVOKED_IT = 'I revoked it';
+export const REVOKED_OLD = 'I revoked the old token';
+export const revokeOldLead = 'Revoke the old token at';
+export const revokeOldTail = " (ccrc can't; it stays valid for up to a year until you do).";
+/** What the record says about the tick (spec §9: "leaving it unticked is allowed, and the full record then says so"). */
+export const revokeRecord = (ticked: boolean, old: boolean): string =>
+  ticked ? `Record: ${old ? 'old token' : 'token'} marked revoked.` : `Record: ${old ? 'old token' : 'token'} not marked revoked.`;
+export const REVOKE_NOT_RECORDED = "The tick couldn't be recorded. Try again.";
+
+/** Replace token by paste (spec §9, §6.3): validate-first on the box, the old token kept until the new one passes. */
+export const NEW_TOKEN_LABEL = 'Paste the new token';
+export const replaceIntro = (id: string): string =>
+  `The new token is checked with Anthropic before anything is saved. Until it passes, ${id} keeps the token it has.`;
+export const REPLACE_SAVE = 'Replace token';
+export const replaceLedger = {
+  saving: (id: string): string => `… checking the new token and saving it on ${id}`,
+  saved: '✓ New token saved',
+} as const;
+export const STEP_UP_AGAIN_REPLACE = "Confirm it's you again, then paste the token again. Nothing was changed.";
+export const TOKEN_CLEARED_REPLACE = 'The token was cleared when the app went to the background. Paste it again.';
+type ReplaceRefusalWord = Extract<RouteRefusal,
+  'key-rejected' | 'token-unverified' | 'key-charset' | 'lane-busy' | 'auth-in-progress' | 'not-found' | 'unsupported'
+  | 'insecure-origin' | 'unavailable'>;
+const REPLACE_REFUSAL_TEXT: Readonly<Record<ReplaceRefusalWord, (id: string) => string>> = {
+  'key-rejected': (id) => `That token was refused (HTTP 401). ${id} keeps its old token.`,
+  'token-unverified': (id) => `Anthropic didn't answer, so nothing was saved. ${id} keeps its old token. Try again.`,
+  'key-charset': (id) => `That isn't a token: it holds a line break or a control character, or is too long. ${id} keeps its old token.`,
+  'lane-busy': (id) => `${id} is busy with another account change. Nothing was changed. Try again in a moment.`,
+  'auth-in-progress': (id) => `A sign-in for ${id} is in progress. Nothing was changed.`,
+  'not-found': (id) => `${id} is no longer on this box's roster.`,
+  unsupported: () => 'The fleet host needs an update before tokens can be replaced here.',
+  'insecure-origin': () => "Accounts can't be changed over plain HTTP. Nothing was changed.",
+  unavailable: (id) => `The fleet host couldn't run it. ${id} keeps its old token.`,
+};
+/** A replacement's refusal, from its code alone; `null` for step-up and an answer that never came. */
+export function replaceRefusal(id: string, word: string | undefined): string | null {
+  if (word === undefined || word === 'step-up-required' || word === 'outcome-unknown') return null;
+  if (Object.hasOwn(REPLACE_REFUSAL_TEXT, word)) return REPLACE_REFUSAL_TEXT[word as ReplaceRefusalWord](id);
+  return CODE_RE.test(word) ? `The fleet host refused (${word}). ${id} keeps its old token.` : `The fleet host refused. ${id} keeps its old token.`;
+}
+export const replaceUnknown = (id: string): string =>
+  `The fleet host didn't answer in time, so whether ${id}'s token was replaced is unknown. Check it to see whether the lane works.`;
+/** The live sessions after a replacement (spec §9: a running session keeps the token it started with). */
+export const restartLead = (n: number): string =>
+  `${plural(n, 'session')} on this lane ${n === 1 ? 'keeps' : 'keep'} the old token until ${n === 1 ? 'it restarts' : 'they restart'}.`;
+export const RESTART = 'Restart';
+export const RESTARTED = 'restarted';
+export const RESTART_FAILED = "couldn't restart";
+export const DONE = 'Done';
+
+/** The compromise disclosure (spec §3.11): every step from another device, naming only the providers in the roster. */
+export const COMPROMISE_TITLE = 'If this fleet host is ever compromised';
+export const COMPROMISE_LEAD = 'Do every step from another device: the fleet host is what is no longer trusted.';
+export const compromiseSteps = {
+  anthropic: (token: boolean, signIn: boolean): string => `Anthropic: ${[
+    token ? "at claude.ai/settings/claude-code, revoke every long-lived token this fleet minted or was given (each lane's "
+      + 'stated identity and mint date help find them)' : null,
+    signIn ? "at the claude.ai account settings, sign out other sessions for every sign-in lane's account" : null,
+  ].filter((x): x is string => x !== null).join('; ')}.`,
+  openai: 'OpenAI: at chatgpt.com, end the sessions of every account a Codex lane signed in with.',
+  openrouter: 'OpenRouter: delete the management key; then at openrouter.ai/keys disable every key named ccrc … and any '
+    + "key you don't recognise; check the balance and activity, and turn off auto top-up until you're done.",
+  rebuilt: (codex: boolean): string =>
+    `On the rebuilt box: rotate the agent token${codex ? " and every Codex lane's gateway key" : ''}, then add each lane's `
+    + 'credential again (Mint a new token, Sign in again, Mint a replacement).',
+} as const;
