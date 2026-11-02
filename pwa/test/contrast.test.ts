@@ -113,8 +113,10 @@ const edit = (dir: string, rel: string, fn: (s: string) => string): void => {
 
 /** Run the REAL gate command against a mutated copy of the tree. */
 function runGate(dir: string = ROOT): { status: number | null; stdout: string } {
+  // `maxBuffer`: the gate prints a row per measured pair per palette, and its stdout crossed `spawnSync`'s 1 MiB default
+  // when the Waiting on you sheet joined the audit (desktop-polish PL5a); a killed child answers `status: null`.
   const r = spawnSync(process.execPath, [path.join(dir, 'design/contrast-check.mjs')], {
-    encoding: 'utf8',
+    encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
   });
   return { status: r.status, stdout: r.stdout };
 }
