@@ -11,6 +11,7 @@ import type {
 } from '../../../shared/docs';
 import { isDocsFailureWord, type DocsClientSlot } from './failures';
 import type { ImagePin } from './docsLinks';
+import type { ShareFields, ShareNote, ShareNoteLine, ShareRefusal } from './share';
 
 /** One sentence per docs failure word (spec 4.7), at least 20 characters each (M4.F1). */
 export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
@@ -436,6 +437,8 @@ export const DOCS_HEAD_TEXT = {
   githubMayDiffer: "GitHub's copy may differ from this view",
   githubOff: 'View on GitHub: {reason}',
   openCommitted: 'Open committed version',
+  share: 'Share',
+  shareUpdating: 'Updating to {short}…',
   freshNone: 'no origin',
   freshNever: 'never fetched ↻',
   freshOk: 'fetched {age} ↻',
@@ -451,6 +454,7 @@ export const DOCS_HEAD_TEXT = {
   freshRefreshFailed: 'refresh failed: {sentence} ↻',
   worktreeMain: 'main checkout',
   worktreeWorkspace: 'workspace {name}',
+  worktreeOther: 'another worktree',
 } as const;
 
 /** Why View on GitHub gives no link (spec 3.11's refusals), as "View on GitHub: {reason}". */
@@ -506,5 +510,94 @@ export function worktreeLabel(w: { readonly path: string; readonly class: 'main'
       return fillSentence(DOCS_HEAD_TEXT.worktreeWorkspace, { name: parts.at(-1) ?? w.path });
     case 'other':
       return parts.slice(-2).join('/');
+  }
+}
+
+// ===== Share (spec 4.7, 4.16; native Docs reader W5, Share) =====
+// Share's words: the sheet's own, a link's text, the refusal sentences and the notes, each map keyed by Share's own
+// closed word so a new word is a compile error until it has its sentence. Every `{field}` is a value `shareTargetFor`
+// computes from the tree answer: a short commit, a served ref, a closed worktree label, a badge's text, a count, the
+// repository's slug; never a path on the fleet box, and never a document's text.
+
+/** The share sheet's own words (spec 4.16). */
+export const SHARE_SHEET_TEXT = {
+  title: 'Share',
+  share: 'Share…',
+  copy: 'Copy link',
+  copied: 'Link copied.',
+  copyRefused: 'The clipboard refused the link. It is selected below; copy it by hand.',
+  shareFailed: 'Sharing did not finish. Copy link still works.',
+  field: 'The link to share',
+} as const;
+
+/** A link's text (spec 4.16 "Text"): a leaf, a directory or a section by its own repo path, the project page by its
+ *  name alone. Never the document's h1 or `<title>`, which its author controls. */
+export const SHARE_TEXT = {
+  path: '{project} · {path} at {short}',
+  project: '{project} at {short}',
+} as const;
+
+const NO_GITHUB_LINK = 'No GitHub link for this project.';
+
+/** Why Share sends no link (spec 4.16's refusal table), each without Export's clause, which `shareRefusalSentence`
+ *  adds on a page that offers Export. `{short}` is the short commit; `{withheld}` is `WITHHELD_SENTENCE`'s reason
+ *  without its full stop (refinement (j)). `bad-slug` says what `no-github-origin` says, under its own key. */
+export const SHARE_SENTENCE: Record<ShareRefusal, string> = {
+  'no-github-origin': NO_GITHUB_LINK,
+  'bad-slug': NO_GITHUB_LINK,
+  'bad-target': 'Docs could not build a GitHub link for this page.',
+  'not-on-origin': 'Commit {short} is not on origin; push it to share.',
+  'unmeasured': 'Docs could not measure whether origin has {short}; Refresh, then share.',
+  'new-draft': 'Not committed yet, so GitHub has nothing to show.',
+  'new-withheld': 'Not committed yet, and Docs did not read it ({withheld}); nothing to share or export.',
+};
+
+/** Export's clause (spec 4.16), and the refusals that take it on a page that offers Export. THE SEAM FOR EXPORT
+ *  (refinement (c)): until Export ships no page offers it, so every caller passes `exportOffered: false` and no
+ *  sentence carries the clause. Export's run passes its own availability and changes no sentence here. */
+export const SHARE_EXPORT_CLAUSE = 'Export makes a file you can send.';
+export const SHARE_EXPORT_CLAUSE_FOR: ReadonlySet<ShareRefusal> =
+  new Set<ShareRefusal>(['no-github-origin', 'bad-slug', 'bad-target', 'new-draft']);
+
+/** A refusal's sentence, filled from its fields, with Export's clause when the page offers Export. */
+export function shareRefusalSentence(why: ShareRefusal, fields: ShareFields, exportOffered: boolean): string {
+  const sentence = fillSentence(SHARE_SENTENCE[why], fields);
+  return exportOffered && SHARE_EXPORT_CLAUSE_FOR.has(why) ? `${sentence} ${SHARE_EXPORT_CLAUSE}` : sentence;
+}
+
+/** The sheet's notes (spec 4.16's table). `{label}` is `closedWorktreeLabel`'s; `{badge}` is `ENTRY_BADGE_TEXT`'s;
+ *  `{served}` is `servedRefText`'s; `{slug}` is the repository's `owner/name`; `{k}`, `{s}` and `{be}` count the drafts
+ *  a listing's link leaves out (refinement (i)). W6 adds Export's "viewable copy" sentence to `html-source`. */
+export const SHARE_NOTE: Record<ShareNote, string> = {
+  'access': "Opens on GitHub ({slug}). People without access see GitHub's 404.",
+  'html-source': 'GitHub shows this page as source.',
+  'onRef-not-contained': 'Commit {short} is no longer on {served}; GitHub may stop serving it.',
+  'onRef-unmeasured': 'Docs could not tell whether {short} is still on {served}.',
+  'drafts-excluded':
+    'Drafts are not included: the link opens the committed version at {short}; {label} has uncommitted changes to this doc.',
+  'view-committed': 'Uncommitted changes in {label} are not included.',
+  'admitted-committed': '{badge} in {label}; the link opens the committed version.',
+  'dir-drafts': '{k} uncommitted doc{s} here {be} not included.',
+};
+
+/** One note's sentence, filled from its fields. */
+export function shareNoteSentence(line: ShareNoteLine): string {
+  return fillSentence(SHARE_NOTE[line.note], line.fields);
+}
+
+/** A worktree as Share (and, later, Export) names it: the closed label of spec 4.17, "main checkout", "workspace
+ *  <last segment>" (class `workspace` only) or "another worktree" (refinement (b)). Never another segment of the path,
+ *  which the truth line's `worktreeLabel` may show: these words leave the browser in a link's notes. A workspace path
+ *  with no segment reads as another worktree, never as the path. */
+export function closedWorktreeLabel(w: { readonly path: string; readonly class: 'main' | 'workspace' | 'other' }): string {
+  switch (w.class) {
+    case 'main':
+      return DOCS_HEAD_TEXT.worktreeMain;
+    case 'workspace': {
+      const last = w.path.split('/').filter((s) => s !== '').at(-1);
+      return last === undefined ? DOCS_HEAD_TEXT.worktreeOther : fillSentence(DOCS_HEAD_TEXT.worktreeWorkspace, { name: last });
+    }
+    case 'other':
+      return DOCS_HEAD_TEXT.worktreeOther;
   }
 }
