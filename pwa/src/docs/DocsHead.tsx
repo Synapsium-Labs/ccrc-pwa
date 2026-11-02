@@ -21,7 +21,7 @@ import {
   DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
   failureSentence, fillSentence, kib, relationSentence, servedRefText, shortCommit, slotSentence, worktreeLabel,
 } from './docsText';
-import { SECTION_LABEL, docsPathKind } from './docsTree';
+import { SECTION_LABEL, docsPathKind, githubTargetFor } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
 import type { DocsNotOk } from './failures';
 import { copyText } from './share';
@@ -82,24 +82,9 @@ export function docsCrumbs(page: DocsPageLocation): DocsCrumb[] {
   return crumbs;
 }
 
-/** What View on GitHub points at (spec 3.11, 4.4): the repository root on a project page, the section, the
- *  directory, or the leaf (`uncommitted` when its entry has no committed side). Null has one meaning: the page has no
- *  GitHub counterpart (the index, or a path this listing does not hold). */
-export function githubTargetFor(page: DocsPageLocation, tree: DocsTreeOk): GithubTarget | null {
-  switch (page.kind) {
-    case 'index':
-      return null;
-    case 'project':
-      return { kind: 'root' };
-    case 'section':
-      return { kind: 'section', section: page.section };
-    case 'path': {
-      const k = docsPathKind(tree, page.section, page.path, modeOf(page));
-      if (k.kind === 'leaf') return { kind: 'leaf', section: page.section, path: page.path, uncommitted: k.entry.committed === null };
-      return k.kind === 'dir' ? { kind: 'dir', section: page.section, path: page.path } : null;
-    }
-  }
-}
+/** View on GitHub's and Share's target (spec 3.11, 4.4, 4.16): `docsTree.ts`'s, re-exported for the callers that import
+ *  it from the header. */
+export { githubTargetFor };
 
 /** A leaf's source (spec 4.5). `badge` null on a draft: the opened draft pin's entry no longer opens a draft in
  *  this tree (the pin outlived a re-list); `worktreePath` null: the drafts are no longer held by one worktree. */
