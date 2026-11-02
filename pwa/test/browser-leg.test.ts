@@ -6,6 +6,9 @@
 //   twice: as the config objects, and as the file lists vitest itself prints for each config (`vitest list
 //   --filesOnly --json`, in a child process with no VITEST variables), so a glob that looks right but collects the
 //   wrong files is red too.
+// - The sequencer (`browser/slowFirst.ts`) starts measured files slowest first, every name it measures is a browser
+//   file, and its `--shard` answer (CI's legs, split by measured time in `browser/legs.ts`) partitions exactly the
+//   list vitest collects under the browser config. The split's own rules are `test/browser-legs.test.ts`.
 // - `package.json` carries `test:browser` and `playwright-core` at an exact version, which the lock agrees with.
 // - `resolveChrome` (`browser/harness.ts`) throws when neither `CCRC_CHROME` nor its fallback is an executable file:
 //   that throw is what makes a box with no Chrome a red leg rather than a skipped one.
@@ -19,6 +22,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { configDefaults } from 'vitest/config';
 import { loadConfigFromFile, type ConfigEnv, type Plugin, type PluginOption, type UserConfig } from 'vite';
 import { DEFAULT_CHROME, resolveChrome } from '../browser/harness';
+import type { TestSpecification, Vitest } from 'vitest/node';
+import { MEASURED_SECONDS, splitLegs } from '../browser/legs';
 import { SLOW_FIRST, SlowFirstSequencer, slowFirst } from '../browser/slowFirst';
 
 const PWA = path.join(import.meta.dirname, '..');
@@ -66,14 +71,43 @@ describe('the hermetic run never collects the browser leg; the browser config co
     expect(browserConfig.test?.hookTimeout).toBe(60000);
   });
 
-  // C12 item 11: the files that set the leg's wall time start first.
+  // C12 item 11: the files that set the leg's wall time start first. Every measured name is checked against the tree, so
+  // a renamed or deleted slow file reds here rather than silently becoming an unmeasured one in the split.
   it('the browser config starts the slowest files first, and each one it names is a browser file', () => {
     // The config is bundled when it is loaded, so its class is a copy of the module's: compared by name.
     expect(browserConfig.test?.sequence?.sequencer?.name).toBe(SlowFirstSequencer.name);
-    for (const name of SLOW_FIRST) expect(existsSync(path.join(PWA, 'browser', name)), name).toBe(true);
-    const files = ['browser/a.browser.test.ts', ...[...SLOW_FIRST].reverse().map((n) => `browser/${n}`), 'browser/b.browser.test.ts'];
-    expect(slowFirst(files, (f) => f)).toEqual([...SLOW_FIRST.map((n) => `browser/${n}`), 'browser/a.browser.test.ts', 'browser/b.browser.test.ts']);
+    expect(SLOW_FIRST, 'SLOW_FIRST is not every measured file').toEqual(expect.arrayContaining(Object.keys(MEASURED_SECONDS)));
+    for (const name of SLOW_FIRST) expect(existsSync(path.join(PWA, name)), name).toBe(true);
+    expect(SLOW_FIRST.map((f) => MEASURED_SECONDS[f]), 'SLOW_FIRST is not slowest first')
+      .toEqual(SLOW_FIRST.map((f) => MEASURED_SECONDS[f]).sort((a, b) => b! - a!));
+    // An unmeasured file starts before every measured one; ties keep the order given.
+    const files = ['browser/a.browser.test.ts', ...[...SLOW_FIRST].reverse(), 'browser/b.browser.test.ts'];
+    expect(slowFirst(files, (f) => f)).toEqual(['browser/a.browser.test.ts', 'browser/b.browser.test.ts', ...SLOW_FIRST]);
   });
+
+  // The CI legs (`--shard=<i>/<n>`, ci.yml's browser-pwa matrix) are the sequencer's own `shard` over the specs vitest
+  // hands it. Driven here with the very list vitest collects under the browser config: the legs together are that list,
+  // each file in exactly one, so a browser file can neither be skipped nor run twice by the split.
+  it("the sequencer's --shard legs partition exactly the files vitest collects under the browser config", async () => {
+    const files = listed('vitest.browser.config.ts');
+    expect(files.length, 'the browser list is empty, so this case would prove nothing').toBeGreaterThan(3);
+    const specs = files.map((f) => ({ moduleId: path.join(PWA, f) }) as unknown as TestSpecification);
+    const legOf = async (index: number, count: number): Promise<string[]> => {
+      const ctx = { config: { root: PWA, shard: { index, count } } } as unknown as Vitest;
+      const got = await new SlowFirstSequencer(ctx).shard([...specs]);
+      return got.map((s) => path.relative(PWA, s.moduleId).split(path.sep).join('/'));
+    };
+    for (const count of [2, 3]) {
+      const legs = await Promise.all(Array.from({ length: count }, (_, i) => legOf(i + 1, count)));
+      for (const [i, leg] of legs.entries()) expect(leg.length, `leg ${i + 1}/${count} is empty`).toBeGreaterThan(0);
+      expect(legs.flat().sort(), `${count} legs`).toEqual(files);
+      // The time-balanced split, not vitest's hash split (which partitions too, blind to time).
+      expect(legs, `${count} legs`).toEqual(splitLegs(files, count));
+    }
+    // No --shard: the sequencer hands back every file.
+    const ctx = { config: { root: PWA } } as unknown as Vitest;
+    expect(await new SlowFirstSequencer(ctx).shard([...specs])).toHaveLength(files.length);
+  }, 150_000);
 
   it('vitest lists at least one file under the browser config, every one under browser/ and named *.browser.test.*', () => {
     const files = listed('vitest.browser.config.ts');

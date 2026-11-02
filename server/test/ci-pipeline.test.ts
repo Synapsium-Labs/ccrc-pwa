@@ -91,6 +91,12 @@ function job(id: string): string {
   return b!;
 }
 
+/** TRANSITIONAL (2026-11-02; the browser leg's describe says when it goes): whether `browser-pwa` is the matrix of
+ *  legs (a `strategy:` key) rather than the one job it was. */
+function browserLegs(block: string): boolean {
+  return /^ {4}strategy:$/m.test(block);
+}
+
 /** A job of macos.yml, where the macOS legs live (operator ruling 2026-10-28). */
 function macJob(id: string): string {
   const b = jobs(read(MACOS)).get(id);
@@ -1118,6 +1124,14 @@ describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
     // Script-free refusal: success is the only result that passes, so failure, cancelled and skipped all fail it.
     expect(b).toContain("if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'\n");
     expect(b).toContain("      - name: Refuse a browser suite that did not succeed in the merge queue\n        if: github.event_name == 'merge_group' && needs.browser-pwa.result != 'success'\n        run: exit 1\n");
+    // ALL the browser legs gate the queue (2026-11-02): they are one matrix job, whose `result` is success only when
+    // every leg succeeded, so the refusal above reads them all. A leg moved into a job of its own would escape it.
+    // TRANSITIONAL (see browserLegs below): while ci.yml still runs the one job, there is no matrix to pin.
+    if (browserLegs(job('browser-pwa'))) {
+      expect(job('browser-pwa'), 'the browser legs are no longer one matrix job').toMatch(/^ {4}strategy:\n(?: {6}.*\n)* {6}matrix:\n {8}leg: \[/m);
+    }
+    expect([...jobs(read(CI)).keys()].filter((id) => id.startsWith('browser')), 'a browser job the queue refusal does not read')
+      .toEqual(['browser-pwa']);
   });
 
   it('runs the pwa suite as N shards that together cover vitest --shard=1/N..N/N, and typechecks pwa exactly once', () => {
@@ -1602,17 +1616,51 @@ describe('the node-floor leg runs every history test file on the floor interpret
 //
 // pwa's second vitest config, driving a real Chrome. Not a branch-protection
 // check (operator ruling 2026-10-13): what makes it count is full-suite's
-// `needs:` and RESULTS (pinned above), and the step-skip and no-if/no-needs
-// rules it shares with the required legs (pinned above). Here: its one name,
-// its runner and deadline, and exactly what it runs.
+// `needs:` and RESULTS (pinned above), the merge queue's refusal in `test
+// (pwa)` (pinned above), and the step-skip and no-if/no-needs rules it shares
+// with the required legs (pinned above). Here: its legs' names, its runner and
+// deadline, and exactly what each leg runs.
+//
+// Since 2026-11-02 it is ONE job id, `browser-pwa`, as a matrix of legs split
+// by measured file time (pwa/browser/legs.ts; the split's partition is pinned
+// by pwa/test/browser-legs.test.ts and browser-leg.test.ts). Keeping one id is
+// what keeps every reader above whole: `needs.browser-pwa.result` is the
+// matrix's single result, success only when every leg succeeded, so the
+// queue's refusal and full-suite read all the legs without naming each.
+//
+// TRANSITIONAL (2026-11-02). The legs land in three pull requests, because a pull request that changes ci.yml may
+// change nothing else: first the split's code and these pins, while ci.yml still runs the one job; then ci.yml alone,
+// switching to the legs; then a pull request that deletes every ONE-JOB arm below and browserLegs with them,
+// leaving the legs' pins only. Until then each case accepts exactly one of the two WHOLE shapes and never a mix: a
+// matrix whose Test step lacks --shard (every leg running every file), or --shard with no matrix, is red in both arms.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 20-minute deadline', () => {
+  it('is one matrix job, `browser-pwa`, whose legs are `browser (pwa) 1/3`..`3/3`, on ubuntu-latest with a 30-minute deadline (transitionally: or the one 20-minute job)', () => {
     const b = job('browser-pwa');
-    expect(jobKey(b, 'name')).toBe('browser (pwa)');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
-    expect(named.filter((n) => n === 'browser (pwa)'), 'two jobs report `browser (pwa)`').toHaveLength(1);
+    expect(named.filter((n) => n?.startsWith('browser (pwa)')), 'two jobs report `browser (pwa)` names').toHaveLength(1);
+    if (!browserLegs(b)) {
+      // ONE-JOB arm (transitional): the shape on main before the legs, exactly as it was pinned.
+      expect(jobKey(b, 'name')).toBe('browser (pwa)');
+      expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
+      expect(jobKey(b, 'timeout-minutes')).toBe('20');
+      expect(b, 'a matrix reference with no matrix').not.toContain('${{ matrix.');
+      return;
+    }
+    expect(jobKey(b, 'name')).toBe('browser (pwa) ${{ matrix.leg }}/${{ matrix.total }}');
+    // The legs are exactly 1..total, so `--shard=<leg>/<total>` names every leg of the split once.
+    const total = /^ {8}total: \[(\d+)\]$/m.exec(b)?.[1];
+    const legs = /^ {8}leg: \[([\d, ]+)\]$/m.exec(b)?.[1];
+    expect(total, 'the browser matrix names no total').toBe('3');
+    expect(legs!.split(',').map((x) => Number(x.trim())), 'the legs are not exactly 1..total')
+      .toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
+    // No other matrix axis: a second one would run each leg twice and rename the checks.
+    expect(b.match(/^ {8}[a-z-]+: \[/gm), 'the browser matrix has an axis beyond leg and total').toHaveLength(2);
+    // One red leg must not cancel the others: their logs are the evidence of what else broke.
+    expect(b).toMatch(/^ {4}strategy:\n {6}fail-fast: false\n {6}matrix:\n/m);
     expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
-    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // A deadline is present on every leg (the job-level key applies to each matrix leg), as the backstop past a
+    // leg's measured ~10 minutes.
+    expect(jobKey(b, 'timeout-minutes')).toBe('30');
   });
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
@@ -1630,8 +1678,15 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
     expect(s.findIndex((st) => /- name: Install @ccrc\/ui$/m.test(st)), 'ui is installed before the Test step')
       .toBeLessThan(s.findIndex((st) => /- name: Test$/m.test(st)));
+    // Each leg runs its own part of the split: the sequencer answers --shard with the time-balanced leg.
+    if (!browserLegs(job('browser-pwa'))) {
+      // ONE-JOB arm (transitional): the whole suite, no --shard.
+      expect(step(job('browser-pwa'), 'Test'))
+        .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts\n/m);
+      return;
+    }
     expect(step(job('browser-pwa'), 'Test'))
-      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts\n/m);
+      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts --shard=\$\{\{ matrix\.leg \}\}\/\$\{\{ matrix\.total \}\}\n/m);
   });
 
   it('reads no secret and asks for no permission of its own', () => {
