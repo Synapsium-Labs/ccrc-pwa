@@ -66,6 +66,24 @@ describe('the share sheet: the link, its notes, and Copy link where there is no 
     expect(screen.queryByRole('button', { name: SHARE_SHEET_TEXT.share })).toBeNull();
   });
 
+  it('offers Share… where navigator.canShare answers true, asking it about exactly what the sheet would share', async () => {
+    const canShare = vi.fn((_data: unknown): boolean => true);
+    webShare(() => Promise.resolve(), canShare);
+    sheet();
+    expect(await screen.findByRole('button', { name: SHARE_SHEET_TEXT.share })).toBeInTheDocument();
+    expect(canShare).toHaveBeenCalled();
+    for (const call of canShare.mock.calls) expect(call[0]).toEqual({ url: URL_A, title: 'a.md', text: LINK.text });
+  });
+
+  it('offers no Share… where navigator.canShare answers something truthy that is not true', async () => {
+    // Typed through a cast: a real canShare answers a boolean; the sheet accepts exactly `true` (plan Task 5, Decision 1).
+    const canShare = (() => 'yes') as unknown as (data: unknown) => boolean;
+    webShare(() => Promise.resolve(), canShare);
+    sheet();
+    expect(await screen.findByRole('button', { name: SHARE_SHEET_TEXT.copy })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: SHARE_SHEET_TEXT.share })).toBeNull();
+  });
+
   it('Copy link writes the link through copyText and says so', async () => {
     sheet();
     fireEvent.click(await screen.findByRole('button', { name: SHARE_SHEET_TEXT.copy }));
