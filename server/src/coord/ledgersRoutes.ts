@@ -50,6 +50,8 @@ export interface LedgerCoordinatorDeps {
 }
 
 /** A reason for `ruling` on a modification: the programme ledger's entry id or a short pointer, never prose. */
+/** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
+const WAITING_URL = '/waiting';
 const RULING_MAX = 600;
 /** The coordinator's note when it sends an item back (spec §3.3). */
 const RETURN_NOTE_MAX = 600;
@@ -189,8 +191,10 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
    *  coordinator's session is held back while the operator views that session, and a `run` notice with an empty
    *  session is the review-cap notice's shape alone (D-6911). */
   const pushBlocking = (item: ItemRow): void => {
+    // `url` is the list a tap opens (review 1331 F1; review 1332 F6 measured that `opts.url` reaches `sendPush`). The feed
+    // row gets no target: `NotifyEvent` carries no url and widening it is not this programme's.
     deps.notice({ kind: 'coord', sessionId: '', runId: item.runId, title: 'Waiting on you', body: item.title }, 'push',
-      { tag: `item-${item.id}` });
+      { tag: `item-${item.id}`, url: WAITING_URL });
   };
 
   // ── raise, and read a programme's items ────────────────────────────────────────────────────────────────────────────
