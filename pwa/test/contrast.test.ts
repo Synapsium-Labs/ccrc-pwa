@@ -428,7 +428,10 @@ describe('the gate command', () => {
 // gate, or that a reviewer measured as still open. They run the real gate
 // binary against a mutated copy of the real tree, so nothing here can pass by
 // the test and the gate disagreeing about what the auditor does.
-describe('the gate fails a mutated tree', () => {
+// Each case copies the tree and runs the whole gate, which took 4.2 to 4.9 s a case on a CI shard against vitest's 5 s
+// default (measured on PR #2146, where one of them timed out at 5.4 s once the Waiting on you sheet joined the audit), so
+// the budget is stated here, not left to the default.
+describe('the gate fails a mutated tree', { timeout: 30_000 }, () => {
   let lastTree: string | undefined;
 
   const expectFail = (rel: string, mutate: (s: string) => string): string => {
