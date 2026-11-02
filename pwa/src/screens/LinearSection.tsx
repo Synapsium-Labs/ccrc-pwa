@@ -20,7 +20,7 @@
 //   * THE KEY NEVER LIVES HERE LONGER THAN A TAP. The Add a workspace field is `type=password`, its value is held in
 //     this one component's state only (never a store, never browser storage), is cleared the moment an Add lands, and
 //     is cleared when the page goes to the background (the passphrase step's own rule), which also closes a replace
-//     confirm waiting on it.
+//     confirm waiting on it, and stops an Add still in flight from opening one when its answer lands.
 //   * A WORKSPACE THAT HAS A KEY IS REPLACED ONLY BY NAME. An Add the box answers `workspace-exists` asks "Replace the
 //     key for <name>?" and sends the same key again with `replace: true` only on Replace key (spec §10.1). The confirm
 //     holds the key the box answered about, so a field edited while that Add was in flight cannot send a different key
@@ -253,6 +253,9 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
   /** The workspace an Add found already keyed, and the trimmed key that Add sent, while the operator is asked to
    *  replace its key by name. Replace key sends this key, never the field's (which stays editable meanwhile). */
   const [confirm, setConfirm] = useState<{ id: string; name: string | null; key: string } | null>(null);
+  /** Bumped each time the page goes to the background: an Add's `workspace-exists` answer installs its confirm only
+   *  while this is the value the Add started under, so an answer landing in a hidden page holds no key. */
+  const hiddenGeneration = useRef(0);
   // The last GOOD list; a failed read with none to show is the `unread` sentence.
   const view = poll.view;
   const [busy, setBusy] = useState(false);
@@ -269,7 +272,7 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
   // A key typed into the field does not wait there in a backgrounded page, nor does a confirm that would send it.
   useEffect(() => {
     const onVisibility = (): void => {
-      if (document.visibilityState === 'hidden') { setKey(''); setConfirm(null); }
+      if (document.visibilityState === 'hidden') { hiddenGeneration.current += 1; setKey(''); setConfirm(null); }
     };
     return onPageHidden(onVisibility);
   }, []);
@@ -322,11 +325,14 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
     if (trimmed === '' || busy) return;
     // The shape rule is the server's too, and is said here first so a mistyped paste costs no round trip.
     if (!isLinearKeyShape(trimmed)) { result.say(REFUSAL_TEXT['bad-key'] ?? '', 'refusal'); return; }
+    const generation = hiddenGeneration.current;
     void perform(() => api.addLinearWorkspace(trimmed, replace), (list) => poll.settle(list), addedText, {
       landed: () => setKey(''),
       refused: (err) => {
         const exists = replace ? null : linearWorkspaceExistsOf(err);
-        if (exists !== null) setConfirm({ id: exists.id, name: exists.name, key: trimmed });
+        // The page went to the background while the box was answering: the hide already cleared the key, and no
+        // confirm comes back holding it (the operator presses Add again on return).
+        if (exists !== null && generation === hiddenGeneration.current) setConfirm({ id: exists.id, name: exists.name, key: trimmed });
         return exists !== null;
       },
     });

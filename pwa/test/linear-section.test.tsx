@@ -640,6 +640,26 @@ describe('Add a workspace (§10.1, §10.2): the one key field', () => {
     expect(box.sent.filter((s) => s.method === 'POST')).toHaveLength(1);
   });
 
+  it('a workspace-exists answer that lands after the page was hidden opens no replace confirm and holds no key', async () => {
+    let release: (r: Response) => void = () => undefined;
+    install({ list: () => list({ workspaces: [WS_A] }), add: () => new Promise<Response>((res) => { release = res; }) });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    await waitFor(() => expect(box.sent.filter((s) => s.method === 'POST')).toHaveLength(1));
+    // The operator switches away while the box is still checking the key; its answer lands in the background.
+    hidePage();
+    expect(field().value).toBe('');
+    await act(async () => {
+      release(EXISTS());
+      for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    });
+    // On return there is no confirm waiting to send that key, and nothing more was sent.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(field().value).toBe('');
+    expect(box.sent.filter((s) => s.method === 'POST').map((s) => s.body)).toEqual([{ key: KEY }]);
+  });
+
   it('a row\'s Replace key takes the operator to the one key field and says what to paste there', async () => {
     install({ list: () => list({ workspaces: [slot(ID_A, 'Workspace A', { ...REJECTED, org: 'Workspace A' })] }) });
     await mount();
