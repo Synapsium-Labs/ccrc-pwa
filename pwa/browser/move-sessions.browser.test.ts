@@ -9,8 +9,14 @@
 // dialog from 900). Then it moves them: the second swap is held, and the progress line reads "Moving 2 of 4" in a
 // polite live region while the first row already says moved; released, the busy one is skipped and the asleep one
 // refused, each in its word, and the line says what moved.
+//
+// THE OFFLINE ROW (§Acceptance, spec §12.5): one cell per skin at 360 and 1280, dark, each read twice. Warm: the link
+// drops in the middle of a move (the second swap is held, the link is cut, then the swap answers), so the move stops
+// there and the rest read "not sent"; the sheet is closed and opened again with the link still down, and Move is off
+// with its sentence, and no swap leaves the page. Cold: the app starts with no link, from the offline snapshot, and
+// the screen draws no card it cannot read, so there is no Move to offer and none is sent.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright-core';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { fleetSession, hibernatedSession } from '../test/fleetFixture';
@@ -181,6 +187,138 @@ describe('the Move sessions sheet at every width and skin (D-7736)', () => {
         expect(after.truncatedWords, 'no outcome word truncates').toEqual([]);
         expect(after.docOverflow, 'no horizontal page scroll after the move').toBeLessThanOrEqual(0);
         expect(after.sheetOverflow, 'nothing wider than the sheet after the move').toBeLessThanOrEqual(1);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+// ---- the offline row ------------------------------------------------------------------------------------------------
+
+const OFFLINE_VIEWS: AppView[] = SKINS.flatMap((skin) => [360, 1280].map((width) => ({ skin, theme: PHOSPHOR, width })));
+// The sheet's two offline sentences, spelled as `MoveSessionsSheet.tsx` exports them.
+const MOVE_OFFLINE = "You're offline: nothing will be sent until the server answers again.";
+const MOVE_LINK_LOST = 'The server stopped answering, so the rest were not sent.';
+
+const goTo = (page: Page, to: string): Promise<void> => page.evaluate((path) => {
+  history.pushState(null, '', path);
+  dispatchEvent(new PopStateEvent('popstate'));
+}, to);
+
+/** What an offline cell reads of the open sheet. */
+interface OfflineSheet {
+  readonly rows: number;
+  readonly words: string[];
+  readonly status: string;
+  readonly alert: string | null;
+  readonly offlineNote: string | null;
+  readonly moveDisabled: boolean | null;
+  readonly fields: number;
+  readonly docOverflow: number;
+  readonly sheetOverflow: number;
+}
+
+const readSheet = (page: Page): Promise<OfflineSheet> => page.evaluate(() => {
+  const panel = document.querySelector<HTMLElement>('.sheet-panel')!;
+  const b = panel.getBoundingClientRect();
+  const move = [...panel.querySelectorAll<HTMLButtonElement>('button')].find((x) => /^Move \d+ sessions?$/.test(x.textContent ?? ''));
+  return {
+    rows: panel.querySelectorAll('.move-row').length,
+    words: [...panel.querySelectorAll<HTMLElement>('.move-row')].map((r) => r.querySelector('.move-word')?.textContent ?? ''),
+    status: panel.querySelector('.move-progress')?.textContent ?? '',
+    alert: panel.querySelector('[role="alert"]')?.textContent ?? null,
+    offlineNote: panel.querySelector('.move-offline[role="status"]')?.textContent ?? null,
+    moveDisabled: move === undefined ? null : move.disabled,
+    fields: panel.querySelectorAll('input:not([type="checkbox"]), textarea, select').length,
+    docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    sheetOverflow: Math.max(...[...panel.querySelectorAll<HTMLElement>('*')].map((e) => e.getBoundingClientRect().right)) - b.right,
+  };
+});
+
+describe('the Move sessions sheet offline, one cell per skin at 360 and 1280, dark (D-7736; spec §12.5)', () => {
+  for (const view of OFFLINE_VIEWS) {
+    it(`warm: the link drops mid-move, and offline Move is off and sends nothing — ${named(view)}`, async () => {
+      const app = await openApp(browser!, view, FIXTURE);
+      const { ctx, page, errors } = app;
+      try {
+        const swaps: string[] = [];
+        page.on('request', (r) => { if (new URL(r.url()).pathname.endsWith('/swap')) swaps.push(new URL(r.url()).pathname); });
+        let release = (): void => undefined;
+        const held = new Promise<void>((done) => { release = done; });
+        await ctx.route((u) => u.pathname === swapPath('lane-b-two'), async (route) => {
+          await held;
+          await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'session-busy' }) });
+        });
+        await page.goto(server!.origin + '/');
+        await goTo(page, '/accounts');
+        const open = page.locator('.accounts-row[data-lane="lane-b"] button', { hasText: 'Move 4 sessions off' });
+        await open.waitFor({ timeout: 30_000 });
+        await open.click();
+        await page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 10_000 });
+        await page.locator('.sheet-panel button', { hasText: /^Move 4 sessions$/ }).click();
+        const status = page.locator('.sheet-panel .move-progress');
+        await expect.poll(() => status.textContent(), { timeout: 10_000 }).toBe('Moving 2 of 4');
+
+        // The link drops with the second swap in flight; that swap's answer still lands, and the move stops after it.
+        app.cut();
+        await page.waitForFunction(() => document.querySelector('.fleet')?.getAttribute('data-conn') !== 'open', undefined,
+          { polling: 50, timeout: 10_000 });
+        release();
+        await expect.poll(() => status.textContent(), { timeout: 10_000 }).toBe('Stopped: 1 of 4 moved.');
+        const stopped = await readSheet(page);
+        expect(stopped.words).toEqual(['moved', 'skipped: busy', 'not sent', 'not sent']);
+        expect(stopped.alert).toBe(MOVE_LINK_LOST);
+        expect(swaps, 'nothing was sent after the link dropped').toEqual([swapPath('lane-b-one'), swapPath('lane-b-two')]);
+        expect(stopped.docOverflow).toBeLessThanOrEqual(0);
+        expect(stopped.sheetOverflow).toBeLessThanOrEqual(1);
+
+        // Closed and opened again, still offline: the sheet lists the lane from what the page holds, and Move is off.
+        await page.locator('.sheet-panel button', { hasText: /^Close$/ }).click();
+        await page.locator('.sheet-panel[data-state="open"]').waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+        const again = page.locator('.accounts-row[data-lane="lane-b"] button', { hasText: /^Move \d+ sessions? off$/ });
+        await again.click();
+        await page.locator('.sheet-panel .move-offline').waitFor({ timeout: 10_000 });
+        const m = await readSheet(page);
+        expect(m.offlineNote).toBe(MOVE_OFFLINE);
+        expect(m.moveDisabled, 'Move is off offline').toBe(true);
+        expect(m.rows).toBeGreaterThan(0);
+        expect(m.words.every((w) => w === ''), 'no row was sent').toBe(true);
+        expect(m.fields, 'no secret or code field').toBe(0);
+        expect(m.docOverflow, 'no horizontal page scroll').toBeLessThanOrEqual(0);
+        expect(m.sheetOverflow, 'nothing wider than the sheet').toBeLessThanOrEqual(1);
+        await page.waitForTimeout(500);
+        expect(swaps, 'no swap left the page offline').toHaveLength(2);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+
+    it(`cold: a start with no link offers no Move, and sends none — ${named(view)}`, async () => {
+      const app = await openApp(browser!, view, FIXTURE);
+      const { ctx, page, errors } = app;
+      try {
+        const swaps: string[] = [];
+        page.on('request', (r) => { if (new URL(r.url()).pathname.endsWith('/swap')) swaps.push(new URL(r.url()).pathname); });
+        // The offline snapshot `lib/offline.ts` writes (its key and shape): the four sessions and the roster.
+        const snapshot = { savedAt: now - 600_000, sessions: SESSIONS, roster: ACCOUNTS.roster };
+        await ctx.addInitScript((snap) => { localStorage.setItem('ccrc.fleet-snapshot.v1', snap); }, JSON.stringify(snapshot));
+        app.cut();
+        await page.goto(server!.origin + '/');
+        await page.getByText('4 sessions', { exact: true }).first().waitFor({ timeout: 30_000 });
+        await goTo(page, '/accounts');
+        await page.locator('[data-page-body]').waitFor({ timeout: 30_000 });
+        await page.waitForTimeout(1_500);
+        // What it draws today, read so the PR's offline row can say it: no usage answer has landed, so the list is
+        // A2's count-free placeholder, no trouble card is drawn, and so there is no Move to offer (A18 owns drawing the
+        // snapshot's roster with its ages).
+        expect(await page.locator('.accounts-list [data-loading="true"]').count()).toBeGreaterThan(0);
+        expect(await page.locator('button', { hasText: /^Move \d+ sessions? off$/ }).count()).toBe(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+          .toBeLessThanOrEqual(0);
+        expect(swaps).toEqual([]);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
