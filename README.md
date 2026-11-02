@@ -1891,9 +1891,10 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   in its `settings.json`, then the session-hook and skill installers run against that one home. Nothing after
   the roster entry rolls back; the cure for a failure there is `ccrc install`, which converges the same home.
   `--hue` is one of `cyan`, `violet`, `blue`, `magenta`, `amber`, `green`. `--method` says how the credential
-  arrives: an `anthropic` lane defaults to `login` — no key file; the credential is the `.credentials.json`
-  Claude Code writes in the config dir — and also takes `paste` or `setup-token`, a long-lived OAuth token
-  kept in `~/.cc-secrets/<id>-oauth.env`. `openrouter` and `compatible` are key lanes, the key kept in
+  arrives: an `anthropic` lane defaults to `setup-token` (Mint, the long-lived token, since the accounts plan's
+  Task A20) — a token lane whose `~/.cc-secrets/<id>-oauth.env` is minted afterwards by `auth-start --method
+  setup-token`, or piped in at once with `--credential -` — and also takes `login` — no key file; the credential
+  is the `.credentials.json` Claude Code writes in the config dir — or `paste`, a token piped in. `openrouter` and `compatible` are key lanes, the key kept in
   `~/.cc-secrets/<id>-<provider>.env`; `compatible` requires `--base-url`, and `openrouter` defaults to its own
   endpoint. `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
   required, and refused on an `anthropic` lane. `add` refuses a `selectable` list: add the account first, then
@@ -1930,12 +1931,26 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
 - **Signing a lane in.** A `login` lane's credential is Claude Code's own: run the lane's wrapper
   `~/.local/bin/<id>` and `/login`, and Claude Code writes `.credentials.json` into that lane's config dir. A
   `paste` or `setup-token` lane's credential is a long-lived OAuth token — the one Claude Code's `setup-token`
-  prints — piped to `--credential -`, and `credential` replaces it later. The helpers on the box that drive
-  the same acts without a terminal are `ccd-account-auth <id> <login|setup-token|openai-login>` and
-  `ccd account-pane --id <id> --method setup-token`, which runs that helper's mint in tmux session
-  `cc-auth-<id>` (`--cancel` stops it) and writes the token straight to `~/.cc-secrets/<id>-oauth.env`. The
-  helper publishes its state and the sign-in URL — never the credential — to `~/.cc-sessions/.auth/<id>.json`,
-  and takes the code pasted back through the FIFO beside it, `~/.cc-sessions/.auth/<id>.run/in`.
+  prints — piped to `--credential -`, and `credential` replaces it later. **Without a terminal**, the server's
+  sign-in runs `auth-start --id <id> --method login|setup-token|openai-login --attempt <32 hex>`: it launches
+  `ccd-account-auth <id> <method> --attempt <a>` as a transient user service (`ccrc-auth-<id>-<first 8 of a>`,
+  `RuntimeMaxSec=660`, `MemoryMax=512M`; never a scope, so the helper outlives its caller) and returns as soon as
+  the helper's status file `~/.cc-sessions/.auth/<id>.json` names that attempt. The helper publishes its state, the
+  sign-in URL and the attempt id there — never the credential. The pty methods take a pane on the lane's own
+  tmux server, `tmux -L ccrc-auth-<id>`, inside that unit, which the agent's tmux grant cannot reach.
+  `auth-code --id --attempt` writes the code from stdin, once (`code-already-sent` after), into the FIFO
+  `~/.cc-sessions/.auth/<id>.run/in` and never onto an argv; `auth-cancel --id --attempt` stops the unit. A lane
+  that already holds a credential signs in, or mints, into `~/.ccrc/auth-scratch/<id>` (outside every agent read
+  root), and the helper hands it to `set --method setup-token|login --attempt <a>`, which probes it and, only once
+  it passes, installs it under the lane lock: a re-mint into `<id>-oauth.env`, a Sign in again into the config
+  dir, and a switch also sets or clears the roster's `exec.secretsFile` and rewrites the wrapper and `accounts.sh`.
+  A refused, cancelled or expired attempt leaves the lane as it was, and every attempt's end kills its tmux server
+  and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
+  --sign-out` runs `claude auth logout` in that lane's config dir and removes its `.credentials.json` (whether that
+  ends the sign-in at Anthropic is unmeasured). A macOS node refuses `auth-start` with `auth-unsupported-here`
+  (reason `darwin-arm-absent`) until its launchd arm ships. `ccd account-pane --id <id> --method setup-token`, the
+  wave-1 path, runs the same helper on the same private socket (`--cancel` stops it) and writes the token straight to
+  `~/.cc-secrets/<id>-oauth.env`.
 - **`declare`** records a launcher somebody else wrote — `candidates` lists them — as an `external` entry with
   `homeAble: false` and `telemetry: "none"` (default suffix `.<id>`), also switched off. ccrc never writes,
   moves or removes that launcher.
@@ -7103,7 +7118,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
-| `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane, on the box (the agent grants no `account-pane`) |
+| `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |
 | `caps` · `version` | the verbs this copy implements; this box's build stamp |
 
 `ws-rm`, `ws-gc` and `ws-attic --drop` cross no wire (the agent grants none of

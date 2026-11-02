@@ -385,10 +385,10 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
     expect(got).toEqual(want);
     // The composition is what the op prints, so the columns are measured
     // through it rather than beside it — but the ORDER of a connect list is
-    // offer order (§4.2: anthropic's `login` is "(default)", and `check-add`
-    // takes `P.connect[0]` when `--method` is absent), so it is compared as a
-    // sequence and never as a set.
-    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('login');
+    // offer order (Q1: anthropic's Mint is the default since accounts plan Task
+    // A20, and `check-add` takes `P.connect[0]` when `--method` is absent), so
+    // it is compared as a sequence and never as a set.
+    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('setup-token');
   });
 });
 
@@ -1584,7 +1584,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // spells out as legal. It resolves to a plan, and `baseUrl` is null in it.
     const home = box('ccrc-account-add-login-');
     seedBoxRoster(home, FIXTURE_ROSTER);
-    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null });
+    // `--method login` NAMED: since accounts plan Task A20 the table's first member, and so the default, is
+    // `setup-token` (Q1), which `ccrc-account-auth-start.test.ts` measures.
+    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null, '--method': 'login' });
     expect(r.code, r.stderr).toBe(0);
     const plan = JSON.parse(r.stdout)['plan'] as Record<string, unknown>;
     expect(plan['method']).toBe('login');
@@ -2388,7 +2390,7 @@ describe('ccrc account add: the ordered write', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
     plantInstallers(home);
-    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic', '--method', 'login',
       '--label', 'lab·dev0', '--hue', 'amber']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
@@ -2747,12 +2749,14 @@ describe('ccd/ccrc: no refusal sentence may begin with a flag', () => {
     for (const [i, raw] of lines.entries()) {
       if (!raw.includes('_acct_refuse')) continue;
       if (/^\s*#/.test(raw)) continue;            // prose about the function
-      if (/^_acct_refuse\(\)/.test(raw)) continue; // its definition
+      if (/^_acct_refuse(_reason)?\(\)/.test(raw)) continue; // its definition, and its with-a-reason twin's
       mentions++;
       // THE DETAIL MUST BE ONE DOUBLE-QUOTED WORD, and that is half the check:
       // an unquoted detail would word-split into `$4`, `$5`… and arrive at
-      // `account-op.mjs` as a mis-spelled key for the same reason.
-      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
+      // `account-op.mjs` as a mis-spelled key for the same reason. The twin
+      // (accounts plan Task A20) carries a reason word between the code and it.
+      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw)
+        ?? /_acct_refuse_reason\s+[0-9]+\s+[a-z][a-z0-9-]*\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
       expect(m, `ccd/ccrc:${i + 1} calls _acct_refuse in a shape this scan cannot `
         + 'read, so the rule below went unmeasured on it. Either put the call on '
         + 'one line as `_acct_refuse <exit> <code> "<detail>"`, or teach this scan '

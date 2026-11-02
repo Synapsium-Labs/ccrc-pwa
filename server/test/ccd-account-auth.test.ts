@@ -809,11 +809,13 @@ describe('ccd-account-auth — setup-token, and the token that reaches one file'
   it('mints in a THROWAWAY config dir, never the lane\'s own', () => {
     plantLauncher('claude', TOKEN_REPLAY);
     runPane('claude-a');
+    // `<id>/config`, every scratch config dir's one spelling (accounts plan Task A20).
     expect(fs.readFileSync(path.join(h.home, 'seen-config-dir'), 'utf8'))
-      .toBe(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a'));
+      .toBe(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a', 'config'));
     // The scratch dir carries no settings.json, so no ccrc hook can fire from
-    // this pane — and the lane's own dir is untouched.
-    expect(fs.existsSync(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a', 'settings.json'))).toBe(false);
+    // this pane — and the lane's own dir is untouched. And it is gone once the
+    // run has ended: every terminal state deletes `auth-scratch/<id>` (D-5515).
+    expect(fs.existsSync(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a'))).toBe(false);
     expect(fs.existsSync(path.join(h.home, '.claude-a'))).toBe(false);
   });
 
