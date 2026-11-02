@@ -9,10 +9,15 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { MarkdownJob, ParseOutcome } from '../src/lib/markdownParse';
 import type { ReaderRenderJob, ReaderRenderOutcome } from '../src/lib/readerRenderJob';
+import type { HighlightJob, HighlightOutcome, HighlightRequest, HighlightResult } from '../src/lib/highlightProtocol';
 import {
-  chatRunner, createMarkdownRunner, defaultSpawn, docsRunner, type MarkdownRunner, type WorkerLike,
+  chatHighlighter, chatRunner, createHighlighter, createMarkdownRunner, defaultSpawn, docsHighlighter, docsRunner,
+  type MarkdownRunner, type WorkerLike,
 } from '../src/lib/markdownRunner';
-import { CHAT_PARSE_BUDGET_MS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_PARSE_BUDGET_MS } from '../src/lib/markdownLimits';
+import {
+  CHAT_PARSE_BUDGET_MS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_PARSE_BUDGET_MS, HIGHLIGHT_BLOCK_DEADLINE_MS,
+  HIGHLIGHT_BOOT_BUDGET_MS,
+} from '../src/lib/markdownLimits';
 
 /** What a fake worker records of a job: a parse job's three fields, or a render job's `kind`. */
 type Posted = Partial<Pick<MarkdownJob, 'profile'>> & Pick<MarkdownJob, 'id' | 'src'> & { readonly kind?: 'render' };
@@ -470,6 +475,30 @@ describe('two runners', () => {
   });
 });
 
+// Docs W5h-a Task 4, refinement (m): two behaviours of the parse runner no case above pinned, measured green on the
+// BASE runner before it becomes one instance of the generic `createWorkerRunner`.
+describe('W5h-a Task 4: the parse runner, pinned before the generic runner', () => {
+  it('a parse runner ignores {ready: true} and a reply with no outcome; the running job answers only its own reply', async () => {
+    const { runner, workers } = harness();
+    const p = track(runner.parse('a', CHAT));
+    workers[0]!.send({ ready: true });
+    workers[0]!.send({ id: 1 });
+    await flush();
+    expect(p.state).toBe('pending');
+    expect(workers[0]!.posts).toHaveLength(1);
+    workers[0]!.reply(1, answer(1));
+    await flush();
+    expect(p).toMatchObject({ state: 'resolved', value: answer(1) });
+  });
+
+  it('a parse runner posts its first job in the same call that spawns, with no handshake', () => {
+    const { runner, workers, spawn } = harness();
+    void runner.parse('a', CHAT);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(workers[0]!.posts).toEqual([{ id: 1, src: 'a', profile: 'chat' }]);
+  });
+});
+
 // Source pins, on raw text. The worker URL must stay one literal expression, or Vite's static analysis cannot see
 // the worker and emits no chunk; `vite.config.ts` bundles it as an ES module (without the key, Vite emits an IIFE,
 // measured). Messages are received by assigning `onmessage` and sent with `postMessage(`, in the
@@ -480,8 +509,11 @@ describe('two runners', () => {
 describe('source pins', () => {
   const LIB = path.join(import.meta.dirname, '..', 'src', 'lib');
   const read = (f: string): string => readFileSync(path.join(LIB, f), 'utf8');
-  const MARKDOWN_FILES = readdirSync(LIB).filter((f) => /^markdown.*\.tsx?$/.test(f)).sort();
-  const WORKER_FILES = ['markdownRunner.ts', 'markdownWorker.ts'];
+  const MARKDOWN_FILES = readdirSync(LIB).filter((f) => /^(?:markdown|highlight).*\.tsx?$/.test(f)).sort();
+  const WORKER_FILES = ['markdownHighlightWorker.ts', 'markdownRunner.ts', 'markdownWorker.ts'];
+  /** Whether a source posts or receives messages; whether it adds a message listener. One predicate each, read by the real cases and by their planted controls. */
+  const postsOrReceives = (s: string): boolean => /postMessage\s*\(|onmessage/.test(s);
+  const addsMessageListener = (s: string): boolean => /addEventListener\s*\(\s*['"`]message/.test(s);
 
   it('markdownRunner.ts spells the worker URL as one literal expression, once', () => {
     const literal = "new Worker(new URL('./markdownWorker.ts', import.meta.url), { type: 'module' })";
@@ -493,25 +525,36 @@ describe('source pins', () => {
     expect(config).toMatch(/^ {2}worker: \{ format: 'es', plugins: \(\) => \[workerSafeEntries\(\)\] \},$/m);
   });
 
-  it('the two worker files receive by assigning onmessage and send with postMessage(', () => {
+  it('the three worker files receive by assigning onmessage and send with postMessage( (M4.H3)', () => {
     for (const f of WORKER_FILES) {
       expect(read(f), f).toMatch(/\.onmessage\s*=\s*\(/);
       expect(read(f), f).toContain('postMessage(');
     }
   });
 
-  it('no other lib/markdown* file posts or receives messages', () => {
-    expect(MARKDOWN_FILES).toEqual(expect.arrayContaining([...WORKER_FILES, 'markdownParse.ts', 'markdown.tsx']));
+  it('no other lib/markdown* or lib/highlight* file posts or receives messages (M4.H3)', () => {
+    expect(MARKDOWN_FILES).toEqual(expect.arrayContaining([...WORKER_FILES, 'markdownParse.ts', 'markdown.tsx', 'highlightJob.ts', 'highlightGrammars.ts']));
     for (const f of MARKDOWN_FILES.filter((m) => !WORKER_FILES.includes(m))) {
-      expect(read(f), f).not.toMatch(/postMessage\s*\(|onmessage/);
+      expect(postsOrReceives(read(f)), f).toBe(false);
     }
   });
 
-  it('no lib/markdown* file adds a message listener or makes an object URL', () => {
+  it('no lib/markdown* or lib/highlight* file adds a message listener or makes an object URL (M4.H3)', () => {
     for (const f of MARKDOWN_FILES) {
-      expect(read(f), f).not.toMatch(/addEventListener\s*\(\s*['"`]message/);
+      expect(addsMessageListener(read(f)), f).toBe(false);
       expect(read(f), f).not.toMatch(/URL\s*\.\s*createObjectURL\s*\(/);
     }
+  });
+
+  it('planted (M4.H3): a postMessage( or an onmessage assignment in the store is red', () => {
+    expect(postsOrReceives('export const plant = (w: Worker) => w.postMessage(1);')).toBe(true);
+    expect(postsOrReceives('export const plant = (w: { onmessage: unknown }) => { w.onmessage = null; };')).toBe(true);
+    expect(MARKDOWN_FILES.filter((f) => !WORKER_FILES.includes(f)).every((f) => !postsOrReceives(read(f)))).toBe(true);
+  });
+
+  it('planted (M4.H3): a message listener in the store is red', () => {
+    expect(addsMessageListener("self.addEventListener('message', () => undefined);")).toBe(true);
+    expect(MARKDOWN_FILES.every((f) => !addsMessageListener(read(f)))).toBe(true);
   });
 });
 
@@ -638,5 +681,253 @@ describe('W8a Task 4: a render job on the same runner', () => {
       'worker-unavailable': true, 'worker-failed': true,
     };
     expect(Object.keys(arms)).toHaveLength(8);
+  });
+});
+
+// Docs W5h-a Task 4 (base spec 2026-10-01 section 4.10's "The highlight runner"; M4.H7, M4.H8, M4.H9, M4.H10): the
+// highlighter is `createWorkerRunner` with the ready handshake and the detach abort. Fake spawn, fake clock. The parse
+// runner's cases above pass unchanged beside it.
+class FakeHlWorker implements WorkerLike<HighlightJob> {
+  onmessage: ((e: { data: unknown }) => void) | null = null;
+  onerror: ((e: unknown) => void) | null = null;
+  onmessageerror: ((e: unknown) => void) | null = null;
+  readonly posts: HighlightJob[] = [];
+  terminated = 0;
+  postMessage(job: HighlightJob): void { this.posts.push(job); }
+  terminate(): void { this.terminated += 1; }
+  ready(): void { this.onmessage?.({ data: { ready: true } }); }
+  answer(id: number, result: HighlightResult): void { this.onmessage?.({ data: { id, result } }); }
+  fail(): void { this.onerror?.({ type: 'error' }); }
+}
+
+function hlHarness(throwOnSpawn = false) {
+  const clock = new FakeClock();
+  const workers: FakeHlWorker[] = [];
+  const spawn = vi.fn((): WorkerLike<HighlightJob> => {
+    if (throwOnSpawn) throw new ReferenceError('Worker is not defined');
+    const w = new FakeHlWorker();
+    workers.push(w);
+    return w;
+  });
+  const hl = createHighlighter({ spawn, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+  return { hl, clock, workers, spawn };
+}
+
+const HTML = (s: string): HighlightResult => ({ kind: 'html', html: s, mode: 'block' });
+function trackHl(p: Promise<HighlightOutcome>): { state: string; value?: HighlightOutcome; reason?: unknown } {
+  const t: { state: string; value?: HighlightOutcome; reason?: unknown } = { state: 'pending' };
+  p.then((v) => { t.state = 'resolved'; t.value = v; }, (r: unknown) => { t.state = 'rejected'; t.reason = r; });
+  return t;
+}
+const req = (code: string): HighlightRequest => ({ lang: 'ts', code });
+
+describe('W5h-a: the highlighter (createWorkerRunner with a ready handshake and detach)', () => {
+  it('M4.H8: no job is posted before {ready}; then exactly {id, lang, code}, and a retry adds mode line', async () => {
+    const { hl, workers } = hlHarness();
+    void hl.highlight(req('a'), {});
+    void hl.highlight({ lang: 'ts', code: 'b', mode: 'line' }, {});
+    expect(workers[0]!.posts).toEqual([]);
+    workers[0]!.ready();
+    expect(workers[0]!.posts).toEqual([{ id: 1, lang: 'ts', code: 'a' }]);
+    workers[0]!.answer(1, HTML('a'));
+    await flush();
+    expect(workers[0]!.posts[1]).toEqual({ id: 2, lang: 'ts', code: 'b', mode: 'line' });
+  });
+
+  it('M4.H8: the block deadline starts at post, not at request: a 1 999 ms boot then 749 ms of work is no timeout', async () => {
+    const { hl, clock, workers } = hlHarness();
+    const p = trackHl(hl.highlight(req('a'), {}));
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS - 1);
+    workers[0]!.ready();
+    clock.advance(HIGHLIGHT_BLOCK_DEADLINE_MS - 1);
+    await flush();
+    expect(p.state).toBe('pending');
+    clock.advance(1);
+    await flush();
+    expect(p.value).toEqual({ kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS });
+  });
+
+  it('M4.H8: a worker that never says ready answers every waiting job worker-failed at the boot budget, terminated', async () => {
+    const { hl, clock, workers } = hlHarness();
+    const a = trackHl(hl.highlight(req('a'), {}));
+    const b = trackHl(hl.highlight(req('b'), {}));
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS);
+    await flush();
+    expect([a.value, b.value]).toEqual([
+      { kind: 'worker-failed', error: 'boot-timeout' }, { kind: 'worker-failed', error: 'boot-timeout' },
+    ]);
+    expect(workers[0]!.terminated).toBe(1);
+    expect(workers[0]!.posts).toEqual([]);
+  });
+
+  it('M4.H8: the next job respawns once; a second boot failure in a row is sticky, with no further spawn', async () => {
+    const { hl, clock, spawn } = hlHarness();
+    void hl.highlight(req('a'), {});
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS);
+    const b = trackHl(hl.highlight(req('b'), {}));
+    expect(spawn).toHaveBeenCalledTimes(2);
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS);
+    await flush();
+    expect(b.value).toEqual({ kind: 'worker-failed', error: 'boot-timeout' });
+    const c = trackHl(hl.highlight(req('c'), {}));
+    await flush();
+    expect(c.value).toEqual({ kind: 'worker-failed', error: 'boot' });
+    expect(hl.status()).toBe('worker-failed');
+    hl.prewarm();
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('M4.H8: a boot that succeeds resets the count: fail, ready, then one more failure is not sticky', async () => {
+    const { hl, clock, workers, spawn } = hlHarness();
+    void hl.highlight(req('a'), {});
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS);
+    const b = trackHl(hl.highlight(req('b'), {}));
+    workers[1]!.ready();
+    clock.advance(HIGHLIGHT_BLOCK_DEADLINE_MS);
+    await flush();
+    expect(b.value).toEqual({ kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS });
+    void hl.highlight(req('c'), {});
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS);
+    expect(hl.status()).toBe('live');
+    expect(spawn).toHaveBeenCalledTimes(4);
+  });
+
+  it('M4.H8: an error event while booting is a boot failure for the waiting jobs', async () => {
+    const { hl, workers } = hlHarness();
+    const a = trackHl(hl.highlight(req('a'), {}));
+    workers[0]!.fail();
+    await flush();
+    expect(a.value).toEqual({ kind: 'worker-failed', error: 'error' });
+  });
+
+  it('M4.H7: after {ready}, a job that never answers times out at the deadline, terminate once, the next job respawns', async () => {
+    const { hl, clock, workers, spawn } = hlHarness();
+    const a = trackHl(hl.highlight(req('a'), {}));
+    workers[0]!.ready();
+    clock.advance(HIGHLIGHT_BLOCK_DEADLINE_MS);
+    await flush();
+    expect(a.value).toEqual({ kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS });
+    expect(workers[0]!.terminated).toBe(1);
+    void hl.highlight(req('b'), {});
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('M4.H7: only the overrun block is lost: of a, b, c, b never answers and a and c are answered', async () => {
+    const { hl, clock, workers } = hlHarness();
+    const [a, b, c] = ['a', 'b', 'c'].map((s) => trackHl(hl.highlight(req(s), {})));
+    workers[0]!.ready();
+    workers[0]!.answer(1, HTML('A'));
+    await flush();
+    clock.advance(HIGHLIGHT_BLOCK_DEADLINE_MS);
+    await flush();
+    workers[1]!.ready();
+    workers[1]!.answer(3, HTML('C'));
+    await flush();
+    expect([a!.value, b!.value, c!.value]).toEqual([HTML('A'), { kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS }, HTML('C')]);
+  });
+
+  it('M4.H9: aborting a running highlight job rejects it, never terminates, and the same worker serves the next job', async () => {
+    const { hl, workers, spawn } = hlHarness();
+    const ctl = new AbortController();
+    const a = trackHl(hl.highlight(req('a'), { signal: ctl.signal }));
+    const b = trackHl(hl.highlight(req('b'), {}));
+    workers[0]!.ready();
+    ctl.abort();
+    await flush();
+    expect(a.state).toBe('rejected');
+    expect(workers[0]!.terminated).toBe(0);
+    expect(workers[0]!.posts).toHaveLength(1);
+    workers[0]!.answer(1, HTML('A'));
+    await flush();
+    expect(workers[0]!.posts[1]).toEqual({ id: 2, lang: 'ts', code: 'b' });
+    workers[0]!.answer(2, HTML('B'));
+    await flush();
+    expect(b.value).toEqual(HTML('B'));
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('M4.H9: a detached job\'s deadline still runs: its timeout terminates and reaches nobody', async () => {
+    const { hl, clock, workers } = hlHarness();
+    const ctl = new AbortController();
+    const a = trackHl(hl.highlight(req('a'), { signal: ctl.signal }));
+    workers[0]!.ready();
+    ctl.abort();
+    clock.advance(HIGHLIGHT_BLOCK_DEADLINE_MS);
+    await flush();
+    expect(a.state).toBe('rejected');
+    expect(workers[0]!.terminated).toBe(1);
+  });
+
+  it('M4.H9: aborting a running parse job still terminates', async () => {
+    const { runner, workers } = harness();
+    const ctl = new AbortController();
+    const p = track(runner.parse('a', { ...CHAT, signal: ctl.signal }));
+    ctl.abort();
+    await flush();
+    expect(p.state).toBe('rejected');
+    expect(workers[0]!.terminated).toBe(1);
+  });
+
+  it('M4.H10: a spawn that throws is a sticky worker-unavailable: status says so, every job answers it, no further spawn', async () => {
+    const { hl, spawn } = hlHarness(true);
+    expect(hl.status()).toBe('worker-unavailable');
+    const a = trackHl(hl.highlight(req('a'), {}));
+    await flush();
+    expect(a.value).toEqual({ kind: 'worker-unavailable' });
+    hl.prewarm();
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('M4.H10: HighlightOutcome is its own union of eight arms, and ParseOutcome keeps its eight', () => {
+    const arms: Record<HighlightOutcome['kind'], true> = {
+      html: true, unregistered: true, 'too-large': true, 'line-too-long': true, threw: true, timeout: true,
+      'worker-unavailable': true, 'worker-failed': true,
+    };
+    expect(Object.keys(arms)).toHaveLength(8);
+    // ParseOutcome keeps its eight arms: an exhaustive literal is a type error under the pwa typecheck when an arm is
+    // added or removed (W8a's 'ParseOutcome keeps its eight arms' case pins the same, in this file).
+    const parseArms: Record<ParseOutcome['kind'], true> = {
+      tree: true, refused: true, 'too-deep': true, 'too-wide': true, threw: true, timeout: true,
+      'worker-unavailable': true, 'worker-failed': true,
+    };
+    expect(Object.keys(parseArms)).toHaveLength(8);
+    // @ts-expect-error a highlight answer is not a parse outcome
+    const notParse: ParseOutcome = { kind: 'html', html: '', mode: 'block' };
+    expect(notParse.kind).toBe('html');
+  });
+
+  it('onPosted runs when the job is posted: after ready, after the job ahead of it, never for an unposted job', async () => {
+    const { hl, workers } = hlHarness();
+    const seen: string[] = [];
+    void hl.highlight(req('a'), { onPosted: () => seen.push('a') });
+    void hl.highlight(req('b'), { onPosted: () => seen.push('b') });
+    expect(seen).toEqual([]);
+    workers[0]!.ready();
+    expect(seen).toEqual(['a']);
+    workers[0]!.answer(1, HTML('A'));
+    await flush();
+    expect(seen).toEqual(['a', 'b']);
+  });
+
+  it('a reply for another id, or with no result object, is ignored', async () => {
+    const { hl, workers } = hlHarness();
+    const a = trackHl(hl.highlight(req('a'), {}));
+    workers[0]!.ready();
+    workers[0]!.answer(9, HTML('X'));
+    workers[0]!.onmessage?.({ data: { id: 1, result: null } });
+    await flush();
+    expect(a.state).toBe('pending');
+  });
+
+  it('docsHighlighter and chatHighlighter are two highlighters', () => {
+    expect(docsHighlighter).not.toBe(chatHighlighter);
+    expect(typeof docsHighlighter.highlight).toBe('function');
+  });
+
+  it('markdownRunner.ts spells the highlight worker URL as one literal expression, once, in spawnHighlightWorker', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'markdownRunner.ts'), 'utf8');
+    const literal = "new Worker(new URL('./markdownHighlightWorker.ts', import.meta.url), { type: 'module' })";
+    expect(src.split(literal)).toHaveLength(2);
+    expect(src).toMatch(/export function spawnHighlightWorker\(\): WorkerLike<HighlightJob> \{\n\s+return new Worker\(new URL\('\.\/markdownHighlightWorker\.ts'/);
   });
 });
