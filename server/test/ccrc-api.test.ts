@@ -203,6 +203,16 @@ describe('the closed route table', () => {
     // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
     [['testbox', 'status'], 'GET', '/api/testbox'],
     [['testbox', 'tools-sync'], 'POST', '/api/testbox/tools-sync'],
+    // The programme ledgers' nine rows (plan PL3): items by programme slug, item moves by item id, Goals by slug.
+    [['items', 'raise', 'prog-a'], 'POST', '/api/programmes/prog-a/items'],
+    [['items', 'list', 'prog-a'], 'GET', '/api/programmes/prog-a/items'],
+    [['items', 'confirm', '7'], 'POST', '/api/items/7/confirm'],
+    [['items', 'return', '7'], 'POST', '/api/items/7/return'],
+    [['items', 'withdraw', '7'], 'POST', '/api/items/7/withdraw'],
+    [['items', 'block', '7'], 'POST', '/api/items/7/blocking'],
+    [['goals', 'pin', 'prog-a'], 'POST', '/api/programmes/prog-a/spec'],
+    [['goals', 'modify', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications'],
+    [['goals', 'merged', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications/merged'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
@@ -241,7 +251,8 @@ describe('the closed route table', () => {
     // Thirty-one since the claimant's approvals rows (plan Task 16).
     // Thirty-three since the test box's status and tools-sync rows (test box plan TB9, D-7411).
     // Thirty-four since the landing line's read (landing order wave 5e, D-7625).
-    expect(keys).toHaveLength(34);
+    // Forty-three since the programme ledgers' nine (plan PL3).
+    expect(keys).toHaveLength(43);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -251,7 +262,9 @@ describe('the closed route table', () => {
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
       23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
       27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
-      32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four',
+      32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four', 35: 'thirty-five', 36: 'thirty-six',
+      37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
+      43: 'forty-three',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -399,6 +412,10 @@ describe('the four claimant rows send the question door family, and refuse local
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
       ['testbox', 'status'], ['testbox', 'tools-sync'],
+      ['items', 'raise', 'prog-a', '--json', '-'], ['items', 'list', 'prog-a', '--byId', 'demo-ws', '--byUuid', 'u-demo-ws'],
+      ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
+      ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],
+      ['goals', 'merged', 'prog-a', '--json', '-'],
     ];
     expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
     plantPane('demo-ws');

@@ -103,6 +103,7 @@ import {
   type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
 } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
+import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
@@ -534,10 +535,10 @@ const TESTBOX_UNAUTHENTICATED = { ok: false, error: 'unauthenticated', detail: `
 
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
-  // Unused by the mail routes below; kept in the signature because Task 9's
-  // run routes land in this same file and share it — a signature that grows
+  // Not used by the mail routes below; the programme ledgers' routes (registered at the end of this function) emit
+  // `'waiting'` on it. Kept in the signature because the run routes in this same file share it — a signature that grows
   // per-task would be a second copy of the token+attribution gate wiring.
-  _bus: Bus,
+  bus: Bus,
   /**
    * Does this request carry a live session? Supplied by `buildServer`, because
    * the session store deliberately does NOT live in `Deps` — it must be loaded
@@ -4321,6 +4322,10 @@ export function registerCoordRoutes(
       projection, incarnationAfter,
     });
   });
+
+  // Programme ledgers (plan PL3): the coordinator's item and goals routes. Handlers live in `ledgersRoutes.ts`
+  // (a lane source of its own for `box-token-census.test.ts`); the gate and the sender check are this function's own.
+  registerLedgerCoordinatorRoutes(app, { coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: Date.now });
 
   return { withAbandon, withSweepAbandon, serial: (fn) => coordMutex.run(fn) };
 }

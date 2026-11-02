@@ -45,6 +45,7 @@ import type { ClaimRefusal } from './box-token.js';
 import type { AccountGateRefusal, AccountRouteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
+import type { ItemMoveRefusal } from './ledgers.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -116,6 +117,18 @@ export const GENERIC_REFUSALS = [
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
+/**
+ * The programme ledgers' coordinator routes' own words (plan PL3): a coordinator acting outside its programme, a spec pin
+ * the Docs reader could not safely link, and an In short outside its bounds. Declared once, here, and spelled by the
+ * routes through this table (the idiom of `SWAP_REFUSALS` and `ARCHIVE_REFUSALS`), so no code is spelled a second time
+ * and the coord code-word census (`mail-routes.test.ts`) has no literal of theirs to find. An item move's four words
+ * (`unknown-item`, `wrong-actor`, `not-open`, `programme-live`) are `shared/ledgers.ts`'s `ItemMoveRefusal`, below.
+ */
+export const LEDGER_ROUTE_REFUSALS = {
+  notYourProgramme: 'not-your-programme', badSpecPath: 'bad-spec-path', badInShort: 'bad-in-short',
+} as const;
+export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
+
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal
@@ -126,6 +139,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | QuestionDoorRefusal
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
   | DispatchAbandonRefusal
+  // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
+  | ItemMoveRefusal | LedgerRouteRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
@@ -227,6 +242,12 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The dead-dispatch switch door (D-7319): CHOSEN, not measured — a new word. 503, the status the other `-unreadable`
   // words answer: the switch's one row could not be read, which is the box's fault and not the operator's.
   'state-unreadable': 503,
+  // The programme ledgers' coordinator routes (plan PL3): CHOSEN, not measured — new words. 403 for a coordinator acting
+  // outside its programme (the family of `not-owner` and `not-parent`), 400 for what the caller sent (the spec path and
+  // the In short copy), and an item move's four words from `shared/ledgers.ts`: 404 for an item that is not there, 409 for
+  // an item that is not in a state the move starts from, for the wrong actor and for a programme still running.
+  [LEDGER_ROUTE_REFUSALS.notYourProgramme]: 403, [LEDGER_ROUTE_REFUSALS.badSpecPath]: 400, [LEDGER_ROUTE_REFUSALS.badInShort]: 400,
+  'unknown-item': 404, 'not-open': 409, 'wrong-actor': 409, 'programme-live': 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's
