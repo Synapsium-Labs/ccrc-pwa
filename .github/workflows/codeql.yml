@@ -8,7 +8,10 @@
 #     on the newest overlay-base database of main (about 6 minutes), superseded
 #     runs cancelled;
 #   - main once a day (schedule), which builds the overlay-base database the
-#     pull requests analyse against, and then deletes the older ones (`prune`);
+#     pull requests analyse against, and then deletes the older ones (`prune`).
+#     Its cache key differs from default setup's, so until the first run on
+#     main a pull request finds no base and runs a full analysis (about 10
+#     minutes for javascript-typescript);
 #   - on demand (workflow_dispatch).
 # It does NOT run on a push to main: a merge is scanned as a pull request
 # before it lands, and main itself within a day of it.
@@ -17,7 +20,8 @@
 # check or code-scanning results (the required checks are ci.yml's build-pwa
 # and test legs), so a scan there would gate nothing; and outside a pull
 # request the action builds no overlay, so each queue group would cost a full
-# analysis (about 29 minutes), more than the push scans this replaces. If a rule
+# analysis (about 10 minutes for javascript-typescript; about 570 runner minutes
+# a day at the queue's measured 57 runs a day) and decide nothing. If a rule
 # ever requires CodeQL results, add `merge_group:` to `on:` so the queue reports
 # the same `Analyze (<language>)` checks a pull request does.
 #
