@@ -485,3 +485,59 @@ describe('a scheduled refresh skips when main has not moved since the newest map
     expect(r.stdout).toMatch(/::warning::.*map is 10 h old \(older than 5 h\)/);
   });
 });
+
+// D-7748: the daily (and dispatched) rebuild traces the whole suite over its own, wider profile; the refresh keeps
+// `trace` (8 shards, 45-minute budget), so a refresh costs what it did.
+describe('a rebuild plans its trace shards by traceRebuild, a refresh by trace (D-7748)', () => {
+  const MIN = 60_000;
+
+  it('traceRebuild: the trace cost model, planned to 40 minutes a shard, at most 24 shards', () => {
+    expect(PROFILES.traceRebuild).toMatchObject({ targetMs: 40 * MIN, min: 1, max: 24, workers: PROFILES.trace.workers, scale: PROFILES.trace.scale });
+    expect(PROFILES.traceRebuild.targetMs, 'planned under the refresh\'s per-shard budget').toBeLessThanOrEqual(PROFILES.trace.budgetMs!);
+  });
+
+  it('a suite the old profile packed into 8 shards past their budget gets enough shards to stay inside 40 planned minutes', () => {
+    const { repo } = fixture();
+    const durations: Record<string, number> = {};
+    for (let i = 0; i < 60; i++) {
+      const f = `server/test/r${String(i).padStart(2, '0')}.test.ts`;
+      writeFile(repo, f, `it('${i}', () => {});\n`);
+      durations[f] = 4 * MIN;
+    }
+    commitAll(repo, 'sixty four-minute tests');
+    const times = path.join(repo, '..', `times-${path.basename(repo)}.json`);
+    writeFileSync(times, JSON.stringify(durations));
+    // With the fixture's a and b (no duration: the median, 4 min), 62 files · 4 min · 6 / 2 = 744 planned minutes:
+    // ceil(744 / 40) = 19 shards, against 8 of 93 before. Files do not divide, so LPT holds a shard within one file
+    // (12 planned minutes) of the target.
+    const r = runSelect(repo, ['--event', 'workflow_dispatch', '--input-mode', 'rebuild', '--times', times]);
+    expect(r.outputs.trace).toBe('rebuild');
+    const rows = JSON.parse(r.outputs.trace_matrix).include as Array<{ files: string }>;
+    expect(rows).toHaveLength(19);
+    for (const row of rows) expect(row.files.split(' ').length * 4 * 6 / 2, row.files).toBeLessThanOrEqual(40 + 12);
+    expect(rows.flatMap((x) => x.files.split(' ')).length).toBe(Number(r.outputs.trace_count));
+  });
+
+  it('a refresh over the same suite still plans at most 8 shards, each inside the 45-minute budget', () => {
+    const { repo, baseSha } = fixture();
+    const durations: Record<string, number> = {};
+    const tests: Record<string, unknown> = {};
+    for (let i = 0; i < 60; i++) {
+      const f = `server/test/r${String(i).padStart(2, '0')}.test.ts`;
+      writeFile(repo, f, `it('${i}', () => {});\n`);
+      durations[f] = 4 * MIN;
+      tests[f] = rec({ read: ['src/foo.ts'] });
+    }
+    const base2 = commitAll(repo, 'sixty four-minute tests');
+    writeFile(repo, 'src/foo.ts', 'export const foo = 3;\n');
+    commitAll(repo, 'every test reads this');
+    void baseSha;
+    const times = path.join(repo, '..', `times-${path.basename(repo)}.json`);
+    writeFileSync(times, JSON.stringify(durations));
+    const map = writeMap(repo, mapOf(base2, tests));
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--times', times]);
+    const rows = JSON.parse(r.outputs.trace_matrix).include as Array<{ files: string }>;
+    expect(rows.length).toBeLessThanOrEqual(8);
+    for (const row of rows) expect(row.files.split(' ').length * 4 * 6 / 2, row.files).toBeLessThanOrEqual(45);
+  });
+});

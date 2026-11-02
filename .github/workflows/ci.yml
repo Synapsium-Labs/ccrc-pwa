@@ -1425,8 +1425,11 @@ jobs:
     # is BOUNDED (planTraceBatch, .github/ci/shards.mjs): select plans at most
     # 45 minutes of that cost per shard and defers the rest to the next
     # refresh, so a shard cannot reach this timeout, which cancels it and
-    # leaves no map. 60 is oss-metadata.test.ts's ceiling and the most any job
-    # here may take.
+    # leaves no map. A rebuild traces every test over its own profile
+    # (`traceRebuild`, D-7748): planned to 40 minutes a shard, about 22 shards
+    # of about 23 traced minutes today. At the refresh's 8 it planned about
+    # 108 minutes a shard, and 5 of 8 hit this timeout every day. 60 is
+    # oss-metadata.test.ts's ceiling and the most any job here may take.
     timeout-minutes: 60
     strategy:
       fail-fast: false

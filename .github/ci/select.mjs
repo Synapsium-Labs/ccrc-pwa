@@ -513,8 +513,9 @@ function main() {
   // no --shard, so the trace plan must always be a real partition (LPT at
   // defaultMs when no duration is known), never the fallback that hands every
   // shard every file plus a vitest `i/n`.
-  // A refresh's plan came from planTraceBatch above, bounded.
-  tracePlan ??= planShards(traceList, durations ?? {}, PROFILES.trace);
+  // A refresh's plan came from planTraceBatch above, bounded; a rebuild's is the whole suite over its own, wider
+  // profile (D-7748).
+  tracePlan ??= planShards(traceList, durations ?? {}, PROFILES.traceRebuild);
 
   // What this run MEANT to trace, for map-build: a refresh writes every one of
   // these that left no record as unknown instead of carrying its old entry.

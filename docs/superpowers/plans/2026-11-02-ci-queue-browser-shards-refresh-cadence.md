@@ -6,6 +6,7 @@ issued by the ledger on 2026-11-02.
 
 - **D-7746 (2026-11-02)** — the merge-queue browser leg runs as balanced shards with a timeout of twice their expected time
 - **D-7747 (2026-11-02)** — the test-map refresh runs every three hours and skips when main has not moved since the newest map
+- **D-7748 (2026-11-02)** — the daily rebuild traces in enough shards that each finishes inside its timeout
 
 ## D-7747: the refresh cadence
 
@@ -50,4 +51,23 @@ to one extra job.
 
 **The check names.** `browser (pwa)` is not a required check. `test (pwa)` (in the merge queue) and `full-suite` read
 `needs.browser-pwa.result`, which is red when any shard is, so no aggregate job is needed.
+
+## D-7748: the daily rebuild's trace shards
+
+**Measured.** On each of the three daily runs in the window (2026-10-31 to 11-02), 5 of the 8 trace shards hit the
+60-minute timeout; the others took 42 to 59 minutes. `map-build` then found shards with no records and published no
+map, so the daily rebuild was wasted every day, and the map came from refreshes alone. (The daily `full-suite` was red
+for another reason: macOS shards, and on 2026-10-31 one server shard. `full-suite` does not need the trace shards, so
+this change alone does not turn the daily run green.)
+
+**The cost model, checked.** `select.mjs` plans a rebuild with `planShards` (LPT) at `scale` 6 over 2 workers. The
+2026-11-02 durations hold 288 minutes of file time, so 8 shards were each planned at about 108 minutes. Measured, the
+model runs about 1.7x long: a refresh shard planned to its 45-minute budget takes about 26 minutes, and 108 planned
+minutes is about 63 traced, which matches 5 of 8 at the timeout and the rest at 42 to 59.
+
+**The change.** A rebuild plans over its own profile, `traceRebuild`: the same cost model, planned to 40 minutes a
+shard (under the refresh's 45-minute budget), at most 24 shards. On the 2026-11-02 durations that is 22 shards planned
+at 39 minutes, about 23 traced minutes each, under the unchanged 60-minute timeout with more than twice the room. The
+refresh keeps `trace` (8 shards, the 45-minute budget), so a refresh costs what it did. The extra shards cost their
+setup, a few minutes each, against a rebuild that published nothing.
 
