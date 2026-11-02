@@ -73,7 +73,9 @@ describe('Remove\'s pre-check, measured on the box (spec §11.1)', () => {
     plantAttempt(home, 'lane-c', 'waiting-code');
     // The lane's lock is held the whole time: the pre-check takes none, so it answers anyway.
     const lock = join(home, '.ccrc', 'locks', 'lane-c.lock');
-    const holder = spawn('flock', [lock, 'sh', '-c', 'touch "$0"; sleep 30', join(home, 'held')], { stdio: 'ignore' });
+    // Its own process group, so the whole holder (flock, its shell and the sleep) goes at the end, not flock alone.
+    const holder = spawn('flock', [lock, 'sh', '-c', 'touch "$0"; exec sleep 30', join(home, 'held')],
+      { stdio: 'ignore', detached: true });
     try {
       await waitFor(join(home, 'held'));
       const before = snapshot(home);
@@ -88,7 +90,7 @@ describe('Remove\'s pre-check, measured on the box (spec §11.1)', () => {
       });
       expect(snapshot(home)).toEqual(before);
     } finally {
-      holder.kill('SIGKILL');
+      try { process.kill(-holder.pid!, 'SIGKILL'); } catch { /* already gone */ }
       await exited(holder);
     }
     expect(roster(home).map((x) => x.id)).toContain('lane-c');

@@ -7005,16 +7005,16 @@ _acct_read_credential() {   # <spelling> — sets ACCT_CREDENTIAL, or refuses
   # whole of stdin is read, not its first line, so a value carrying a newline cannot pass as its first line. One
   # trailing LF is a pipe's (`echo`, `printf '%s\n'`) and is dropped; any other C0 byte, DEL, a NUL (the `-d ''`
   # read stops at it, so a first read that returns 0 found one, or hit the bound), or more than 8 KiB refuses.
-  local v="" LC_ALL=C bad=$'[\x01-\x1f\x7f]'
-  if IFS= read -r -d '' -n 8194 v; then v="$v"$'\x01'; fi
-  v="${v%$'\n'}"
-  if [ "${#v}" -gt 8192 ] || [[ "$v" =~ $bad ]]; then
-    v=""
+  local key="" LC_ALL=C bad=$'[\x01-\x1f\x7f]'
+  if IFS= read -r -d '' -n 8194 key; then key="$key"$'\x01'; fi
+  key="${key%$'\n'}"
+  if [ "${#key}" -gt 8192 ] || [[ "$key" =~ $bad ]]; then
+    key=""
     _acct_refuse 2 key-charset "the credential on stdin carries a control byte (a newline inside it, a NUL, another C0 byte or DEL) or is longer than 8 KiB. No key or token holds those bytes, and a consumer could misread them. Nothing was written."
   fi
-  [ -n "${v//[[:space:]]/}" ] \
+  [ -n "${key//[[:space:]]/}" ] \
     || _acct_refuse 2 credential-empty "the --credential - flag was given and stdin carried nothing. This verb fails closed rather than writing a credential file with an empty value in it, which would be a lane holding a key that decides nothing. Nothing was written."
-  ACCT_CREDENTIAL="$v"
+  ACCT_CREDENTIAL="$key"
 }
 
 # ── THE SECRETS-FILE NAME, DERIVED ONCE IN BASH (Task 28) ─────────────────
