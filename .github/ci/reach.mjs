@@ -13,11 +13,22 @@
 // unlisted, an empty change, an unknown package and a diff that cannot be
 // taken all RUN the tests: the safe direction.
 //
-// Only a `pull_request` can skip. A merge-queue run, the daily run, a
-// dispatch and a call all run every test, and so does a pull request that
-// carries the `full-ci` label or changes `.github/` (the Select step decides
-// both for the server suite; this module repeats the label and the `.github/`
-// rule, which falls out of `.github/` being foreign to nobody).
+// Only a `pull_request` can skip, with ONE exception below. A merge-queue run,
+// the daily run, a dispatch and a call all run every test, and so does a pull
+// request that carries the `full-ci` label or changes `.github/` (the Select
+// step decides both for the server suite; this module repeats the label and
+// the `.github/` rule, which falls out of `.github/` being foreign to nobody).
+//
+// THE QUEUE'S BROWSER SKIP (the owner's ruling of 2026-11-02, reversing
+// 2026-10-25's "the queue runs every test" for the browser shards ONLY). In a
+// merge-queue run the legs in QUEUE_SKIPPABLE (the browser suite) ask the same
+// question of the group's whole change, from the queue's base to its head, and
+// skip when no file in it can reach them (`queueScope`: `skipsTests`, the same
+// FOREIGN and READS lists). A docs-only group is the case it exists for: the
+// browser tests read nothing under docs/ (the census in
+// server/test/ci-reach-census.test.ts pins that), while the pwa unit suite
+// renders docs/, so docs/ is foreign to `browser` and never to `pwa`. Every
+// other package runs every test in the queue, whatever changed.
 //
 // THE FAST RUN (operator ruling 2026-10-28). An ordinary pull request runs only
 // the fast checks: the typechecks, the build, the tests its change can reach and
@@ -37,7 +48,8 @@ import { infraTrigger } from './select-tests.mjs';
 export const FOREIGN = {
   agent: ['pwa/', 'ui/'],
   pwa: ['agent/', 'server/', 'ccd/', 'deploy/'],
-  browser: ['agent/', 'server/', 'ccd/', 'deploy/'],
+  // docs/ too: the browser tests read nothing under it (pwa's own suite does, so it is not foreign to `pwa`).
+  browser: ['agent/', 'server/', 'ccd/', 'deploy/', 'docs/'],
 };
 
 /**
@@ -69,6 +81,20 @@ export function skipsTests(pkg, changed) {
 
 /** The legs a fast pull request leaves to the merge queue and main (operator ruling 2026-10-28). */
 export const QUEUE_ONLY = ['browser'];
+
+/** The legs a merge-queue run may skip when the group's change cannot reach them (the owner's ruling of 2026-11-02:
+ *  the browser shards only). */
+export const QUEUE_SKIPPABLE = ['browser'];
+
+/**
+ * A merge-queue group's scope for a package: `skip` for a QUEUE_SKIPPABLE leg when no file of the group's change can
+ * reach its tests (`skipsTests`), otherwise `all`. Never `changed`: the queue runs a leg whole or not at all. An
+ * empty change, an unknown package and every other package answer `all`, the safe direction.
+ * @param {string} pkg @param {string[]} changed @returns {'skip'|'all'}
+ */
+export function queueScope(pkg, changed) {
+  return QUEUE_SKIPPABLE.includes(pkg) && skipsTests(pkg, changed) ? 'skip' : 'all';
+}
 
 /**
  * Whether a pull request's change may take the fast run: true only when the
@@ -221,7 +247,18 @@ function main() {
   let skip = false;
   let scope = 'all';
   let why = 'every test runs';
-  if (opt.event === 'pull_request' && opt['full-label'] !== 'true') {
+  if (opt.event === 'merge_group' && QUEUE_SKIPPABLE.includes(opt.pkg)) {
+    // The group's change, `--base` (the queue's base sha) to HEAD (its head). Undiffable: every test runs.
+    try {
+      scope = queueScope(opt.pkg, changedFiles(opt));
+      skip = scope === 'skip';
+      why = skip
+        ? `no file in this merge-queue group can reach the ${opt.pkg} tests (owner ruling 2026-11-02)`
+        : `a file in this merge-queue group can reach the ${opt.pkg} tests`;
+    } catch (e) {
+      console.log(`::warning::could not diff this merge-queue group (${e instanceof Error ? e.message : e}); running the ${opt.pkg} tests`);
+    }
+  } else if (opt.event === 'pull_request' && opt['full-label'] !== 'true') {
     try {
       const changed = changedFiles(opt);
       scope = prScope(opt.pkg, changed);
