@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, thirty-four rows, and nothing else; the
+#   * The route comes from ROUTES below, forty-six rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328).
@@ -87,7 +87,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Thirty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Forty-six rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -186,7 +186,33 @@ declare -A ROUTES=(
   # arming remote runs is the operator's act, from the Settings card.
   [testbox.status]='GET|/api/testbox|no|-'
   [testbox.tools-sync]='POST|/api/testbox/tools-sync|no|-'
+  # Linear, through the server's proxy and the key ccrc holds for each workspace (D-7669, #1444): sessions never sign
+  # in to Linear and never hold a key. Twelve rows, nine reads and three writes; the SERVER decides each row's class,
+  # never the method, which is why `search`, a read, is a POST: its text is free text, and free text never rides a URL
+  # (SAFE_RE refuses it as a query value), so it goes in the `--json` body. `search` has its own path so no issue
+  # route's `{id}` can match it. The `{id}` on the four issue rows is an issue identifier (`AAA-12`), held to
+  # LINEAR_REF_RE below before anything is sent. `workspace` is a declared query key on every row that acts in one
+  # workspace, the POSTs included, and never a body field; only `workspaces`, which lists them all, takes none. Every
+  # row carries the pane's identity in its QUERY, appended after the declared keys (the Linear block in `main`).
+  [linear.workspaces]='GET|/api/linear/proxy/workspaces|no|-'
+  [linear.teams]='GET|/api/linear/proxy/teams|no|workspace'
+  [linear.issue]='GET|/api/linear/proxy/issues/{id}|yes|workspace'
+  [linear.search]='POST|/api/linear/proxy/search|no|workspace'
+  [linear.comments]='GET|/api/linear/proxy/issues/{id}/comments|yes|workspace,limit,after'
+  [linear.statuses]='GET|/api/linear/proxy/statuses|no|team,workspace'
+  [linear.projects]='GET|/api/linear/proxy/projects|no|team,workspace,limit,after'
+  [linear.labels]='GET|/api/linear/proxy/labels|no|team,workspace'
+  [linear.users]='GET|/api/linear/proxy/users|no|workspace,limit,after'
+  [linear.create]='POST|/api/linear/proxy/issues|no|workspace'
+  [linear.update]='POST|/api/linear/proxy/issues/{id}|yes|workspace'
+  [linear.comment]='POST|/api/linear/proxy/issues/{id}/comments|yes|workspace'
 )
+
+# A Linear issue identifier, the `<REF>` of the four issue rows (D-7669): a team key that starts with a letter, a hyphen,
+# then one to nine digits. Every match also matches SAFE_RE; this is the narrower check on those rows, so `AAA12`,
+# `AAA-` and `search` are refused here, locally, as `bad-ref` (D-7685), and never sent. The server checks it again. The classes are spelled
+# out, never ranges, for the reason `_api_server_cap` gives: under a UTF-8 locale a range may collate non-ASCII letters.
+LINEAR_REF_RE='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*-[0123456789]{1,9}$'
 
 # ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──
 # ccrc:generated 1 sha256=b13a129bd7002352be7dfc797c104d07461cf4b34ab6bc1d6cb6e2dde47e177a
@@ -426,6 +452,9 @@ main() {
   if [[ "$needs" == 'yes' ]]; then
     [[ -n "$id" ]] || refuse 'no-id' "$group $verb needs an id"
     [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-id' 'id is not a plain id'
+    if [[ "$group" == 'linear' ]]; then
+      [[ "$id" =~ $LINEAR_REF_RE ]] || refuse 'bad-ref' 'the issue reference is not an identifier such as AAA-12'
+    fi
   else
     # Not ignored: a caller who passed one believes it is going somewhere.
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
@@ -571,6 +600,19 @@ main() {
   if [[ "$key" == 'approvals.show' ]]; then
     derive_identity
     query="fromId=$DERIVED_ID&fromUuid=$DERIVED_UUID"
+  fi
+
+  # Every Linear row (D-7669, #1444) carries the pane's identity, GETs and POSTs alike, and it rides the QUERY, after
+  # the declared keys, the way `approvals show` builds `fromId`/`fromUuid`. THIS BLOCK NEVER READS OR EDITS THE BODY:
+  # no splice and no textual test, so a POST's body goes on the wire byte for byte as the caller gave it. That is the
+  # opposite of the `byId` fill above, on purpose: here the caller may not choose whom a write is attributed to through
+  # this client. `byId` and `byUuid` are not declared query keys, so `--byId` is `unknown-query`, and no declared key's
+  # value can add one, because SAFE_RE refuses `&` and `=`. A body that names either (however it spells the key) is the
+  # server's to refuse, after parsing, as `bad-field`; the server reads identity from the query only. A pane with no
+  # identity is refused here and nothing is sent.
+  if [[ "$key" == linear.* ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
   fi
 
   if [[ "$key" == 'asks.list' ]]; then
