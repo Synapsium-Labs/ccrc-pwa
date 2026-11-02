@@ -4,10 +4,13 @@
 // neither. Task 7 appends the Share chrome's colour guard. Placeholders only: `example-org/example-repo`, `demo`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { ShareSheet } from '../src/docs/ShareSheet';
 import { SHARE_EXPORT_CLAUSE, SHARE_SENTENCE, SHARE_SHEET_TEXT } from '../src/docs/docsText';
 import { copyText, type ShareRefusal, type ShareTarget } from '../src/docs/share';
 import { COMMIT_A } from './docsFixtures';
+import { stripComments } from './cssRule';
 
 vi.mock('../src/docs/share', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/docs/share')>()),
@@ -142,5 +145,22 @@ describe('a refusal on the sheet (M4.SH6; refinement (c))', () => {
   it('the seam reaches the sheet: a page that offers Export shows the clause on a refusal that takes it', async () => {
     sheet({ ok: false, why: 'new-draft', fields: {}, notes: [] }, true);
     expect(await screen.findByText(`Not committed yet, so GitHub has nothing to show. ${SHARE_EXPORT_CLAUSE}`)).toBeInTheDocument();
+  });
+});
+
+// ---- Task 7: the Share chrome paints no colour of its own (M4.S1's Share clause, as refinement (e) reads it) ------
+
+describe('the Share chrome paints no colour of its own (M4.S1 Share clause; refinement (e))', () => {
+  const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8'));
+  const shareRules = css.split('}').map((chunk) => chunk.split('{')).filter(([sel]) => /\.docs-share\b/.test(sel ?? ''));
+
+  it('every rule naming .docs-share sets no ink, ground or border colour, so design/audit.mjs owes it no entry', () => {
+    expect(shareRules.map(([sel]) => (sel ?? '').trim()).sort()).toEqual([
+      '.docs-share', '.docs-share-field', '.docs-share-note', '.docs-share-sheet', '.docs-share-url', '.docs-share:disabled',
+    ]);
+    for (const [sel, body] of shareRules) {
+      expect(body ?? '', sel)
+        .not.toMatch(/(?:^|[;{\s])(?:color|background[a-z-]*|border[a-z-]*|outline[a-z-]*|fill|stroke|text-decoration-color)\s*:/);
+    }
   });
 });

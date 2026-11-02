@@ -45,7 +45,7 @@ import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
-import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT } from '../src/docs/docsText';
+import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { SessionHeaderHost } from './sessionHost';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -1126,6 +1126,39 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'More' }));
       expect(screen.getByRole('button', { name: 'Docs' })).toHaveClass('menu-item', 'docs-menu-item');
     });
+  });
+});
+
+// — native Docs reader W5, Share: the header's Share, the share sheet's two buttons, and the field a refused copy
+// leaves (spec 2026-10-01 4.14, 4.16). Both halves for each, as for the Docs controls above. —
+describe('Share: .docs-share on .docs-action, the share sheet’s Share… and Copy link, and .docs-share-field (docs W5 Share)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+    Reflect.deleteProperty(navigator, 'share');
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  it('are at least one tap tall: .docs-action and .docs-share-field on the token, the sheet’s buttons off @ccrc/ui’s Button', () => {
+    expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    expect(floorIn(docsCss, '.docs-share-field')).toBe('var(--tap-min)');
+    expect(buttonVariants({ variant: 'primary' })).toContain('min-h-tap');
+    expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap');
+  });
+
+  it('are the classes the rendered controls carry', async () => {
+    Object.defineProperty(navigator, 'share', { configurable: true, writable: true, value: () => Promise.resolve() });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true, value: { writeText: () => Promise.reject(new Error('denied')) },
+    });
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    const share = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    expect(share).toHaveClass('docs-action', 'docs-share');
+    fireEvent.click(share);
+    expect(await screen.findByRole('button', { name: SHARE_SHEET_TEXT.share })).toHaveClass('min-h-tap');
+    const copy = screen.getByRole('button', { name: SHARE_SHEET_TEXT.copy });
+    expect(copy).toHaveClass('min-h-tap');
+    fireEvent.click(copy);
+    expect(await screen.findByRole('textbox', { name: SHARE_SHEET_TEXT.field })).toHaveClass('docs-share-field');
   });
 });
 
