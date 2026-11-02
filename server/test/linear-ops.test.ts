@@ -60,6 +60,12 @@ const KEY_2 = 'lin_api_fixture2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const T = 1_800_000_000_000;
 const MIN = 60_000;
 
+/** The closed error table's rows, by code and the recording each was built from (spec §6.8; D-7787). */
+const ERROR_TABLE_ROWS = [
+  ['RATELIMITED', 'error-429-ratelimited-constructed'],
+  ['INPUT_ERROR', 'error-not-found'],
+];
+
 /** Each document constant's recorded answer in `fixtures/linear/` (the FX capture, D-7684, D-7743). */
 const RECORDED_DOCUMENT = {
   issue: 'read-issue', search: 'read-search', comments: 'read-comments', statuses: 'read-statuses', projects: 'read-projects',
@@ -266,7 +272,25 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
       expect(recordedComplexity(RECORDED_DOCUMENT[page])!, verb).toBeLessThan(LINEAR_QUOTA.maxQueryComplexity);
     }
   });
-  it.todo('the error-code table maps the codes FX records for a forbidden team, an invalid input and a missing issue to linear-forbidden, linear-invalid and not-found (FX; slug linear-fx-error-codes)');
+  it('the error table maps the recorded missing issue to not-found, on the read, the comments and the resolve (slug linear-fx-error-codes)', () => {
+    const missing = linearRecord('error-not-found');
+    expect(missing.document).toBe(LINEAR_DOCUMENTS.issue);
+    expect(callRow('issue').shape(missing.body, SHAPE)).toEqual({ ok: false, word: 'not-found' });
+    expect(callRow('comments').shape(missing.body, SHAPE)).toEqual({ ok: false, word: 'not-found' });
+    const resolve = linearRecord('error-not-found-resolve');
+    expect(resolve.document).toBe(LINEAR_DOCUMENTS.resolveIssue);
+    expect(shapeLinearResolve(resolve.body, { issue: true, parent: false })).toEqual({ ok: false, word: 'not-found' });
+    // A parent Linear does not find: the same answer at the `parent` alias's path (GraphQL names the response key; the
+    // capture recorded the issue's path only), so the detail says which.
+    const atParent = JSON.parse(JSON.stringify(resolve.body)) as { errors: { path: string[] }[] };
+    atParent.errors[0]!.path = ['parent'];
+    expect(shapeLinearResolve(atParent, { issue: false, parent: true })).toEqual({ ok: false, word: 'not-found', detail: 'parent' });
+    expect(shapeLinearResolve(atParent, { issue: true, parent: true })).toEqual({ ok: false, word: 'not-found', detail: 'parent' });
+    // Another INPUT_ERROR message is not a missing issue: the table is closed, so it is unreachable.
+    const other = JSON.parse(JSON.stringify(missing.body)) as { errors: { message: string }[] };
+    other.errors[0]!.message = 'Entity not found: Something';
+    expect(callRow('issue').shape(other, SHAPE)).toEqual({ ok: false, word: 'unreachable' });
+  });
   it.todo('the create input takes a caller-chosen id, so requestId is passed as the new issue\'s id (FX\'s introspection; slug linear-create-request-id)');
 });
 
@@ -688,7 +712,14 @@ describe('the shapers: Linear\'s text is data, fenced and stripped (spec §5.4, 
   });
 
   it('a GraphQL errors array: RATELIMITED is rate-limited, any other code unreachable, and the message is never kept', () => {
-    expect(LINEAR_ERROR_CODES).toEqual({ RATELIMITED: 'rate-limited' });
+    // THE CLOSED TABLE: each row is built from a recording, which it matches and no other row does before it.
+    expect(LINEAR_ERROR_CODES.map((r) => [r.code, r.recorded])).toEqual(ERROR_TABLE_ROWS);
+    for (const row of LINEAR_ERROR_CODES) {
+      const errors = (linearRecord(row.recorded).body as { errors: Record<string, unknown>[] }).errors;
+      const first = LINEAR_ERROR_CODES.find((r) => r.code === (errors[0]!['extensions'] as Record<string, unknown>)['code']
+        && (r.message === null || r.message.test(String(errors[0]!['message']))));
+      expect(first, row.recorded).toBe(row);
+    }
     expect(callRow('issue').shape(RATELIMITED_ERRORS, SHAPE)).toEqual({ ok: false, word: 'rate-limited' });
     const other = { errors: [{ message: 'secret detail lin_api_fixture', extensions: { code: 'SOMETHING_ELSE' } }], data: null };
     const r = callRow('create').shape(other, SHAPE);

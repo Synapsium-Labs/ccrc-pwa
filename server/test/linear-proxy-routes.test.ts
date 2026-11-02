@@ -483,7 +483,17 @@ describe('failure words and their statuses (spec §6.8)', () => {
     });
   });
 
-  it.todo('FX (D-7684): Linear\'s recorded error codes for an invalid input, a forbidden team and a missing entity answer linear-invalid (422), linear-forbidden (403) and not-found (404) (`slug linear-fx-error-codes`)');
+  it('Linear\'s recorded missing issue is not-found (404) on a read, and on a write\'s resolve, which sends no mutation (slug linear-fx-error-codes)', async () => {
+    const r = await recordedRig((c) => (c.op === 'Issue' && c.variables['id'] === 'AAA-999999' ? recordedAnswer('error-not-found')
+      : c.op === 'ResolveIssue' && c.variables['id'] === 'AAA-999999' ? recordedAnswer('error-not-found-resolve') : null));
+    const read = await r.call('issue', { ref: 'AAA-999999' });
+    expect([read.statusCode, bodyOf(read)['error']]).toEqual([404, 'not-found']);
+    expect(read.body).not.toContain('Entity not found');
+    const write = await r.call('comment', { ref: 'AAA-999999', body: { body: 'x' } });
+    expect([write.statusCode, bodyOf(write)['error']]).toEqual([404, 'not-found']);
+    expect(r.calls.map((c) => c.op)).toEqual(['Issue', 'ResolveIssue']);
+    expect(r.rows()).toMatchObject([{ op: 'comment', outcome: 'refused', code: 'not-found', target: 'AAA-999999' }]);
+  });
 });
 
 describe('a refusal never forwards Linear\'s text', () => {

@@ -165,16 +165,44 @@ export const LINEAR_DIRECTORY_DOCUMENTS: Readonly<Record<LinearDirectoryCollecti
 export type LinearAnswerRefusalWord =
   | 'not-found' | 'malformed' | 'unreachable' | 'rate-limited' | 'linear-forbidden' | 'linear-invalid';
 
+/** A refusal's detail that an error answer can name: `parent` when the entity Linear did not find is the parent. */
+export type LinearErrorDetail = 'parent';
+
+/** One error the table knows: its word, and the detail the error names, if any. */
+export interface LinearErrorMatch { word: Exclude<LinearAnswerRefusalWord, 'malformed' | 'unreachable'>; detail?: LinearErrorDetail }
+
+/** One row of the table: an `errors` entry's `extensions.code`, the message it carries (matched whole, or any message
+ *  for `null`), and what it means. The message is read ONLY to choose the row; it is never kept or forwarded. */
+export interface LinearErrorRow {
+  readonly code: string;
+  readonly message: RegExp | null;
+  readonly match: (error: Record<string, unknown>) => LinearErrorMatch;
+  /** The recording it was built from (`server/test/fixtures/linear/`), or the constructed one. */
+  readonly recorded: string;
+}
+
+/** The first segment of an error's `path`: the response key Linear failed at (`issue`, or the `parent` alias). */
+const errorPathHead = (e: Record<string, unknown>): unknown => (Array.isArray(e['path']) ? e['path'][0] : undefined);
+
 /**
- * THE CLOSED ERROR-CODE TABLE: an `errors` entry's `extensions.code`, mapped to a refusal word. Anything not in it is
- * `unreachable`, and Linear's message is never forwarded. `RATELIMITED` is from Linear's published rate-limiting page
- * (its developer documentation, "Rate limiting"), which says a request over the limit is refused with that code in its
- * `errors` array; it cannot be provoked safely, so its test answer is LK2's constructed one (`RATELIMITED_ERRORS`).
- * The codes for `linear-forbidden`, `linear-invalid` and `not-found` join from the FX capture's recorded error answers
- * (D-7684); none is written here before it records them.
+ * THE CLOSED ERROR TABLE (spec §6.8), built from the FX capture's recorded error answers (D-7684, D-7743): an `errors`
+ * entry is read by its `extensions.code` and, where one code carries several meanings, its message. Linear sends these
+ * on HTTP 200 with `data` null. Anything not in the table is `unreachable`, and Linear's message is never forwarded.
+ *
+ * - `RATELIMITED`, on any status: from Linear's published rate-limiting page ("Rate limiting"), which says a request
+ *   over the limit is refused with that code in its `errors` array. It cannot be provoked safely, so its recording is
+ *   the constructed one (`error-429-ratelimited-constructed.json`).
+ * - `INPUT_ERROR` "Entity not found: Issue": a missing issue (`error-not-found`, `error-not-found-resolve`). It is never
+ *   `data.issue === null`, which the shapers still read as not-found for an answer of that shape. At the `parent` alias's
+ *   path it is the parent that is missing (§4.5).
  */
-export const LINEAR_ERROR_CODES: Readonly<Record<string, Exclude<LinearAnswerRefusalWord, 'malformed' | 'unreachable'>>> =
-  Object.freeze({ RATELIMITED: 'rate-limited' });
+export const LINEAR_ERROR_CODES: readonly LinearErrorRow[] = Object.freeze([
+  { code: 'RATELIMITED', message: null, match: () => ({ word: 'rate-limited' }), recorded: 'error-429-ratelimited-constructed' },
+  {
+    code: 'INPUT_ERROR', message: /^Entity not found: Issue$/, recorded: 'error-not-found',
+    match: (e) => (errorPathHead(e) === 'parent' ? { word: 'not-found', detail: 'parent' } : { word: 'not-found' }),
+  },
+] satisfies LinearErrorRow[]);
 
 // ── what a validated call is ──
 
@@ -333,7 +361,7 @@ export interface LinearShapeContext {
 /** A shaped answer, with what the journal's `result` takes on an `ok` write (the created identifier or comment id). */
 export type LinearShaped =
   | { ok: true; answer: Record<string, unknown>; result: string | null }
-  | { ok: false; word: LinearAnswerRefusalWord; detail?: 'parent' };
+  | { ok: false; word: LinearAnswerRefusalWord; detail?: LinearErrorDetail };
 
 interface RowCommon {
   readonly op: LinearVerb;
@@ -452,14 +480,24 @@ export function linearResolvePlan(input: LinearOpInput): LinearResolvePlan | nul
   return null;
 }
 
-/** An `errors` array's word, through the closed table; null when the answer carries none. */
-export function linearErrorWord(body: unknown): Exclude<LinearAnswerRefusalWord, 'malformed'> | null {
+/** An `errors` array's word and detail, through the closed table: the first entry a row knows decides; an array no row
+ *  knows is `unreachable`; null when the answer carries none. */
+export function linearErrorOf(body: unknown): LinearErrorMatch | { word: 'unreachable' } | null {
   if (!isPlainObject(body) || !Array.isArray(body['errors']) || body['errors'].length === 0) return null;
   for (const e of body['errors']) {
-    const code = isPlainObject(e) && isPlainObject(e['extensions']) ? e['extensions']['code'] : undefined;
-    if (typeof code === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_ERROR_CODES, code)) return LINEAR_ERROR_CODES[code]!;
+    if (!isPlainObject(e) || !isPlainObject(e['extensions'])) continue;
+    const code = e['extensions']['code'];
+    const message = e['message'];
+    const row = LINEAR_ERROR_CODES.find((r) => r.code === code
+      && (r.message === null || (typeof message === 'string' && r.message.test(message))));
+    if (row !== undefined) return row.match(e);
   }
-  return 'unreachable';
+  return { word: 'unreachable' };
+}
+
+/** An `errors` array's word, through the closed table; null when the answer carries none. */
+export function linearErrorWord(body: unknown): Exclude<LinearAnswerRefusalWord, 'malformed'> | null {
+  return linearErrorOf(body)?.word ?? null;
 }
 
 const resolvedIssueOf = (v: unknown): LinearResolvedIssue | 'malformed' => {
@@ -476,9 +514,9 @@ const resolvedIssueOf = (v: unknown): LinearResolvedIssue | 'malformed' => {
  *  not find is `not-found`; a parent it does not find is `not-found` with the detail `parent`. */
 export function shapeLinearResolve(
   body: unknown, plan: Pick<LinearResolvePlan, 'issue' | 'parent'>,
-): { ok: true; resolved: LinearResolved } | { ok: false; word: LinearAnswerRefusalWord; detail?: 'parent' } {
-  const err = linearErrorWord(body);
-  if (err !== null) return { ok: false, word: err };
+): { ok: true; resolved: LinearResolved } | { ok: false; word: LinearAnswerRefusalWord; detail?: LinearErrorDetail } {
+  const err = linearErrorOf(body);
+  if (err !== null) return { ok: false, ...err };
   if (!isPlainObject(body) || !isPlainObject(body['data'])) return { ok: false, word: 'malformed' };
   const data = body['data'];
   let issue: LinearResolvedIssue | null = null;
@@ -649,13 +687,16 @@ function shapeIssue(v: unknown, ctx: LinearShapeContext, withDescription: boolea
 }
 
 /** The `data` object of an answer with no `errors`, or the word it ends in. */
-const dataOf = (body: unknown): Record<string, unknown> | { word: LinearAnswerRefusalWord } => {
-  const err = linearErrorWord(body);
-  if (err !== null) return { word: err };
+const dataOf = (body: unknown): Record<string, unknown> | LinearAnswerRefusal => {
+  const err = linearErrorOf(body);
+  if (err !== null) return err;
   if (!isPlainObject(body) || !isPlainObject(body['data'])) return { word: 'malformed' };
   return body['data'];
 };
-const isWord = (v: unknown): v is { word: LinearAnswerRefusalWord } => isPlainObject(v) && typeof v['word'] === 'string' && Object.keys(v).length === 1;
+/** A word an answer ends in, with the detail its error named. */
+type LinearAnswerRefusal = { word: LinearAnswerRefusalWord; detail?: LinearErrorDetail };
+const isWord = (v: unknown): v is LinearAnswerRefusal => isPlainObject(v) && typeof v['word'] === 'string'
+  && Object.keys(v).every((k) => k === 'word' || k === 'detail');
 
 /** A connection's nodes and its next cursor (encoded for the wire), or `malformed`. `paged` false: no page info. */
 function connectionOf(v: unknown, paged: boolean): { nodes: unknown[]; next: string | null } | Malformed {

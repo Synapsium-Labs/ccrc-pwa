@@ -133,6 +133,18 @@ describe('lookupLinearIssue', () => {
       .resolves.toMatchObject({ ok: false, reason: 'not-found' });
   });
 
+  it('answers not-found for Linear\'s recorded answer to a missing issue: INPUT_ERROR "Entity not found: Issue", data null (FX)', async () => {
+    // FX recorded a missing issue as an `errors` answer on a 200 with `data` null, never `data.issue === null`. It was
+    // recorded for the issue read's document; the title lookup asks the same `issue(id:)` field.
+    const rec = linearRecord('error-not-found');
+    expect([rec.status, (rec.body as { data: unknown }).data]).toEqual([200, null]);
+    const { f } = spyFetch(recordedAnswer('error-not-found'));
+    expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f })).toEqual({ ok: false, reason: 'not-found', keyDigest: valueDigestHex(KEY) });
+    // Its message names no identity, but it is never forwarded either.
+    const r = await lookupLinearIssue(REF, HAVE_KEY, { fetch: spyFetch(recordedAnswer('error-not-found')).f });
+    expect(JSON.stringify(r)).not.toContain('Entity not found');
+  });
+
   it('answers not-found for a title that is blank once sanitised — nothing to name it with', async () => {
     for (const title of ['   ', '\t\n', '\u0000\u0007']) {
       const { f } = spyFetch(okBody('ENG-1234', title));

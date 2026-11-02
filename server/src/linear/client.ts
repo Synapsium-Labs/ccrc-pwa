@@ -36,6 +36,7 @@ import { sanitizeTitle } from '../../../shared/slug.js';
 import { cleanName } from '../../../shared/unprintable.js';
 import { valueDigestHex } from '../token/files.js';
 import type { LinearKeyRead } from './connection.js';
+import { linearErrorOf } from './ops.js';
 
 /** Linear's API origin. */
 export const LINEAR_API_ORIGIN = 'https://api.linear.app';
@@ -236,13 +237,17 @@ export async function lookupLinearIssue(
   const body = call.body;
 
   if (!isRecord(body)) return fail('malformed');
+  // A missing issue is an `errors` answer with `data` null (the FX capture: INPUT_ERROR "Entity not found: Issue"),
+  // read through the operation table's closed error table, never by its message here.
+  if (linearErrorOf(body)?.word === 'not-found') return fail('not-found');
   const data = body['data'];
   if (!isRecord(data) || !('issue' in data)) return fail('malformed');
   const issue = data['issue'];
 
-  // GraphQL answers 200 with an `errors` array. A missing issue arrives as
-  // `data.issue === null`, which is NOT an error condition on the wire; both
-  // have to be read, and they mean different things to the operator.
+  // GraphQL answers 200 with an `errors` array. Linear answers a missing issue
+  // with the error above (FX), but an answer of this shape, `data.issue ===
+  // null`, is read as not-found too; with errors beside it, it is Linear's
+  // refusal of the query, not a missing issue.
   if (issue === null) {
     const errors = body['errors'];
     return fail(Array.isArray(errors) && errors.length > 0 ? 'unreachable' : 'not-found');
