@@ -227,7 +227,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These nineteen sentences").
+    // SKILL.md states it once in its own words ("These twenty sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -588,6 +588,25 @@ describe('the coordinator skill: clause 19, workflows are not a default (operato
     expect(CLAUSE_19).toContain('it never leaves a blocking question open while a child waits');
     expect(CLAUSE_19).toContain('A background workflow that stops, for any reason, is a wake');
     expect(CLAUSE_19).toContain('read the held mail (`GET /api/mail?to=<your id>`) in that turn');
+  });
+});
+
+describe('the coordinator skill: clause 20, the Waiting-on-you list and the Goals pin (D-7715)', () => {
+  const CLAUSE_20 = CONTRACT[19]!;
+
+  it('is the twentieth clause, and SKILL.md numbers it so, as a whole line', () => {
+    expect(CLAUSE_20.startsWith("The operator's own work is on the Waiting-on-you list. ")).toBe(true);
+    expect(skill).toContain(`\n20. ${CLAUSE_20}\n`);
+  });
+
+  it('names only client verbs the closed client really has, each read from its own table', () => {
+    const spans = [...CLAUSE_20.matchAll(/`ccrc-api ([a-z]+) ([a-z-]+)`/g)].map((m) => `${m[1]}.${m[2]}`);
+    expect(spans, 'clause 20 no longer names its five client verbs').toEqual(
+      ['items.raise', 'items.confirm', 'goals.pin', 'goals.modify', 'goals.merged']);
+    const client = readFileSync(CCRC_API, 'utf8');
+    const table = client.slice(client.indexOf('declare -A ROUTES=('));
+    const keys = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]='/gm)].map((m) => m[1]!);
+    for (const span of spans) expect(keys, `the client has no row for ${span}, which clause 20 names`).toContain(span);
   });
 });
 
