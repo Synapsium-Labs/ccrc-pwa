@@ -120,6 +120,43 @@ describe('Move sessions moves one at a time (spec §4.5)', () => {
     await waitFor(() => expect(status.textContent).toBe('Done: 4 of 4 moved.'));
   });
 
+  it('"Stop after this one" ends the move after the session in flight: no further swap is sent', async () => {
+    const { spy, pending } = deferredSwap();
+    show(storeWith());
+    await startMove();
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this one' }));
+    // The session in flight is not abandoned: the stop waits for its answer.
+    const stopping = screen.getByRole('button', { name: 'Stopping after this one' }) as HTMLButtonElement;
+    expect(stopping.disabled).toBe(true);
+    await act(async () => { pending[0]!.resolve(); });
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Stopped: 1 of 4 moved.'));
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(['one', 'two', 'three', 'four'].map(wordOf)).toEqual(['moved', 'not sent', 'not sent', 'not sent']);
+    // A stop the operator asked for says nothing of the link.
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('closing the sheet mid-move is a stop: the session in flight finishes, and nothing after it is sent', async () => {
+    const { spy, pending } = deferredSwap();
+    const onClose = vi.fn();
+    // The parent here leaves the sheet open, so the rows and the line can still be read after the close.
+    render(<MoveSessionsSheet lane="lane-b" open onClose={onClose} fleet={storeWith()} />);
+    await startMove();
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    // The scrim is the phone sheet's close (the ✕ is the desktop arm's); both call the sheet's own close.
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(onClose).toHaveBeenCalled();
+    await act(async () => { pending[0]!.resolve(); });
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Stopped: 1 of 4 moved.'));
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(['one', 'two', 'three', 'four'].map(wordOf)).toEqual(['moved', 'not sent', 'not sent', 'not sent']);
+  });
+
   it('only the sessions on the lane, archived and dead ones left out, asleep ones kept to be named', () => {
     const archived = fleetSession({ id: 'lane-b:gone', wrapper: 'lane-b', project: 'p-one', archivedAt: Date.now() });
     expect(sessionsToMove([...SESSIONS, archived], 'lane-b').map((s) => s.id)).toEqual([s1.id, s2.id, s3.id, s4.id]);
