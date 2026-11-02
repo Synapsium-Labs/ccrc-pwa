@@ -407,6 +407,54 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
     expect(body).toEqual({ provider: 'anthropic', id: 'lane-c', label: 'Lane C', hue: 'blue', method: 'paste', credential: TOKEN });
   });
 
+  it('a refused check holds Turn it on, with the refusal beneath it and Check again beside it (D-7740 (4))', async () => {
+    let refuse = true;
+    const client = fakeClient({
+      accountCheck: async () => {
+        if (refuse) throw new ApiError(409, { error: 'lane-act-refused', verbCode: 'probe-failed' });
+        return { ok: true as const, lane: LANE_READY };
+      },
+    });
+    sheet({ client });
+    toMethod();
+    paste();
+    addLane();
+    const on = await screen.findByRole('button', { name: 'Turn it on' });
+    const text = 'The fleet host refused (probe-failed): lane-c was not checked.';
+    await waitFor(() => expect(screen.getByTestId('connect-alert')).toHaveTextContent(text));
+    expect(screen.getByTestId('connect-alert')).not.toHaveTextContent(resultDone('lane-c', false));
+    expect(on).toBeDisabled();
+    const reason = document.getElementById(on.getAttribute('aria-describedby')!)!;
+    expect(reason).toHaveTextContent(text);
+    // The words stand in the ledger and once on the result, beneath the held primary.
+    expect(screen.getAllByText(text).filter((e) => e.closest('.sr-only') === null)).toHaveLength(2);
+    expect(screen.queryByText(/Checked: one test reply/)).toBeNull();
+    fireEvent.click(on);
+    expect(client.accountEnable).not.toHaveBeenCalled();
+
+    // Check again: this time the box answers ready, and Turn it on opens.
+    refuse = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn it on' })).toBeEnabled());
+    expect(client.accountCheck).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+    await shown(/Checked: one test reply in \d+\.\d s/);
+  });
+
+  it('a check that never answers holds Turn it on the same way, and says so', async () => {
+    const client = fakeClient({ accountCheck: async () => { throw new TypeError('network'); } });
+    sheet({ client });
+    toMethod();
+    paste();
+    addLane();
+    const on = await screen.findByRole('button', { name: 'Turn it on' });
+    const text = "The request didn't complete, so whether lane-c was checked is unknown. The screen reads it again.";
+    await waitFor(() => expect(screen.getByTestId('connect-alert')).toHaveTextContent(text));
+    expect(on).toBeDisabled();
+    expect(document.getElementById(on.getAttribute('aria-describedby')!)).toHaveTextContent(text);
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+  });
+
   it('a refused paste says why from its code, and never the response text', async () => {
     const client = fakeClient({ accountAdd: async () => { throw new ApiError(400, { error: 'key-rejected', detail: 'PLANTED-TEXT' }); } });
     sheet({ client });

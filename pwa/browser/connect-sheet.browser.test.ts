@@ -14,11 +14,18 @@
 //    the provider table's order.
 //  - A refused paste: the sentence, and the field empty. The result: Turn it on, and the ledger.
 // The contrast of every ink is the gate's (`node design/contrast-check.mjs`), not this file's.
+//
+// THE OFFLINE ROW (§Acceptance, spec §12.5; D-7740 (8)): one cell per skin at 360 and 1280, dark, four in all, each read
+// twice. Warm: the sheet is open on the method frame with a token typed when the link drops; the screen keeps the last
+// answer with every age counting on, the field is gone with its value, and the door, each card's switch and the sheet's
+// primary are refused with the one sentence and its read-line. Cold: the app starts with no link, from the offline
+// snapshot; the door is refused with the never-read line, a tap opens nothing, and no field is drawn.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { fleetSession } from '../test/fleetFixture';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -274,6 +281,159 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+// ---- the offline row ------------------------------------------------------------------------------------------------
+
+const OFFLINE_VIEWS: AppView[] = SKINS.flatMap((skin) => [360, 1280].map((width) => ({ skin, theme: PHOSPHOR, width })));
+/** The one sentence and its read-line (`offlineRefusal`). */
+const OFFLINE_READ = /^You're offline: nothing was sent\. Read \d+m ago\.$/;
+const OFFLINE_NEVER = "You're offline: nothing was sent. Nothing has been read from the server since this page opened.";
+/** The box as before, each lane last checked two minutes ago, so its source counts on from the page's clock. */
+const CHECKED = { state: { word: 'signed-in', source: 'checked 2m ago', at: now - 120_000 }, ready: true };
+const OFFLINE_FIXTURE: AppFixture = {
+  ...FIXTURE,
+  api: { ...FIXTURE.api, '/api/accounts': { ...ACCOUNTS, lanes: { 'lane-a': CHECKED, 'lane-b': CHECKED } } },
+};
+
+/** Hold the shell on its offline reading for the read that follows (accounts-cards.browser.test.ts's `holdOffline`:
+ *  the page's clock is paused so no backoff rung's attempt lands in the read, and the hold waits for the store's
+ *  `down`). The caller resumes the clock. */
+const holdOffline = async (page: Page): Promise<void> => {
+  const at = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(at + 1_000);
+  await page.waitForFunction(() => document.querySelector('.fleet')?.getAttribute('data-conn') === 'down', undefined,
+    { polling: 50, timeout: 10_000 });
+};
+
+/** What an offline cell reads off the page: the door and its reason, each card's ages and switch, the sheet's notice
+ *  and primary, and every field drawn. */
+const readOffline = (page: Page): Promise<{
+  door: { disabled: string | null; reason: string };
+  cards: { lane: string | undefined; source: string; usage: string; switchDisabled: boolean; reason: string; checks: number }[];
+  sheet: { offline: string; primaryDisabled: boolean | null; secret: number } | null;
+  fields: number;
+  docOverflow: number;
+}> => page.evaluate(() => {
+  const door = document.querySelector<HTMLElement>('.acct-door, .acct-door-action')!;
+  const panel = document.querySelector<HTMLElement>('.sheet-panel');
+  const primary = panel?.querySelector<HTMLButtonElement>('[data-frame="method"] button.btn-primary') ?? null;
+  return {
+    door: {
+      disabled: door.getAttribute('aria-disabled'),
+      reason: document.getElementById(door.getAttribute('aria-describedby') ?? '')?.textContent ?? '',
+    },
+    cards: [...document.querySelectorAll<HTMLElement>('.accounts-row')].map((c) => ({
+      lane: c.dataset['lane'],
+      source: c.querySelector('.accounts-state-source')?.textContent ?? '',
+      usage: c.querySelector('.accounts-fresh')?.textContent ?? '',
+      switchDisabled: c.querySelector<HTMLButtonElement>('.acct-switch')?.disabled ?? false,
+      reason: c.querySelector('.acct-knob-reason')?.textContent ?? '',
+      checks: c.querySelectorAll('.acct-check').length,
+    })),
+    sheet: panel === null ? null : {
+      offline: panel.querySelector('.acct-offline')?.textContent ?? '',
+      primaryDisabled: primary === null ? null : primary.disabled,
+      secret: panel.querySelectorAll('.acct-secret').length,
+    },
+    // Any text field on the page: the sheet's radios are choices, not fields.
+    fields: document.querySelectorAll('input:not([type="radio"]):not([type="checkbox"]), textarea').length,
+    docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
+});
+
+describe('the Add account door and the connect sheet offline, one cell per skin at 360 and 1280, dark (D-7740 (8); spec §12.5)', () => {
+  for (const view of OFFLINE_VIEWS) {
+    it(named(view), async () => {
+      // Warm: the link drops with the sheet open and a token typed.
+      const warm = await openApp(browser!, view, OFFLINE_FIXTURE);
+      try {
+        await warm.page.clock.install({ time: now });
+        await warm.page.goto(server!.origin + '/');
+        await go(warm.page, '/accounts');
+        await warm.page.waitForSelector('.accounts-row[data-lane="lane-b"]', { timeout: 30_000 });
+        await warm.page.click('.acct-door, .acct-door-action');
+        await warm.page.waitForSelector('[data-frame="provider"]');
+        await warm.page.click('[data-frame="provider"] button.opt');
+        await warm.page.waitForSelector('[data-frame="name"]');
+        await warm.page.fill('[data-frame="name"] input.font-mono', 'lane-c');
+        await warm.page.fill('[data-frame="name"] .acct-field:nth-of-type(2) input', 'Lane C');
+        await warm.page.click('[data-frame="name"] button.btn-primary');
+        await warm.page.waitForSelector('[data-frame="method"] .acct-secret input');
+        const token = 'sk-ant-oat01-' + 'Y'.repeat(60);
+        await warm.page.fill('.acct-secret input', token);
+        warm.cut();
+        // Four minutes with the link down, so the read-line and every age have moved on.
+        await warm.page.clock.fastForward(4 * 60_000);
+        await warm.page.waitForTimeout(1_000);
+        await holdOffline(warm.page);
+        const m = await readOffline(warm.page);
+        const leaked = await warm.page.evaluate(() => document.documentElement.outerHTML.includes('YYYYYYYYYY'));
+        const f = await frame(warm.page);
+        await warm.page.clock.resume();
+        expect([f.skin, f.theme], 'the cell draws the skin and theme it names').toEqual([view.skin, view.theme]);
+        expect(m.door.disabled, 'the door narrows in place').toBe('true');
+        expect(m.door.reason).toMatch(OFFLINE_READ);
+        // The screen keeps the last answer, each age on its own clock.
+        expect(m.cards.map((c) => c.lane)).toEqual(['lane-a', 'lane-b']);
+        for (const c of m.cards) {
+          expect(c.source, `${c.lane}: the state's source keeps counting`).toBe('checked 6m ago');
+          expect(c.usage, `${c.lane}: the usage reading keeps its age`).toMatch(/^last reported \d+m ago$/);
+          expect(c.switchDisabled, `${c.lane}: the switch is refused`).toBe(true);
+          expect(c.reason, `${c.lane}: with the sentence and the read-line`).toMatch(OFFLINE_READ);
+          expect(c.checks, `${c.lane}: no Check is offered`).toBe(0);
+        }
+        // The sheet: the sentence, its primary refused, and no secret field (its value went with its node).
+        expect(m.sheet).not.toBeNull();
+        expect(m.sheet!.offline).toMatch(OFFLINE_READ);
+        expect(m.sheet!.primaryDisabled, "the frame's primary is refused").toBe(true);
+        expect(m.sheet!.secret, 'no secret field offline').toBe(0);
+        expect(m.fields, 'no field on the page').toBe(0);
+        expect(leaked, 'the typed token is in no DOM node').toBe(false);
+        expect(m.docOverflow).toBeLessThanOrEqual(0);
+        expect(f.sheetOverflow).toBeLessThanOrEqual(1);
+        expect(warm.errors).toEqual([]);
+      } finally {
+        await warm.ctx.close();
+      }
+
+      // Cold: a start with no link, from the offline snapshot (sessions and the roster, never `lanes`, G15).
+      const cold = await openApp(browser!, view, OFFLINE_FIXTURE);
+      try {
+        const snapshot = {
+          savedAt: now - 600_000, sessions: [fleetSession({ id: 'demo-quiet-basin', project: 'demo', wrapper: 'lane-a' })],
+          roster: ROSTER,
+        };
+        await cold.ctx.addInitScript((snap) => { localStorage.setItem('ccrc.fleet-snapshot.v1', snap); }, JSON.stringify(snapshot));
+        cold.cut();
+        await cold.page.clock.install({ time: now });
+        await cold.page.goto(server!.origin + '/');
+        // The snapshot was read: the fleet counts its one session.
+        await cold.page.getByText('1 session', { exact: true }).first().waitFor({ timeout: 30_000 });
+        await go(cold.page, '/accounts');
+        await cold.page.waitForSelector('.acct-door, .acct-door-action', { timeout: 30_000 });
+        await cold.page.waitForTimeout(1_500);
+        await holdOffline(cold.page);
+        const m = await readOffline(cold.page);
+        await cold.page.clock.resume();
+        expect(m.door.disabled).toBe('true');
+        expect(m.door.reason, 'the sentence, and the read-line of a page that has read nothing').toBe(OFFLINE_NEVER);
+        // No usage answer has landed, so the list is the count-free placeholder (accounts-cards' cold cell): no card,
+        // and so no switch or Check, is drawn on what the snapshot cannot say.
+        expect(m.cards.filter((c) => c.lane !== undefined), 'no card it cannot read').toEqual([]);
+        expect(await cold.page.locator('.acct-switch, .acct-check').count(), 'no switch or Check is offered').toBe(0);
+        expect(m.fields, 'no field on the page').toBe(0);
+        expect(m.docOverflow).toBeLessThanOrEqual(0);
+        // `aria-disabled` reads as not enabled to Playwright's own checks, so the tap is forced: the door must ignore it.
+        await cold.page.click('.acct-door, .acct-door-action', { force: true });
+        await cold.page.waitForTimeout(500);
+        expect(await cold.page.locator('.sheet-panel').count(), 'a tap on the refused door opens nothing').toBe(0);
+        expect(cold.errors).toEqual([]);
+      } finally {
+        await cold.ctx.close();
       }
     }, 90_000);
   }

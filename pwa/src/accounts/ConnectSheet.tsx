@@ -128,6 +128,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     write(LEDGER.checking(id));
     status(LEDGER.checking(id));
     const t0 = Date.now();
+    let refused: string | null = null;
     try {
       const a = await client.accountCheck(id);
       if (!live.current) return;
@@ -138,13 +139,19 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       setNotice(null);
     } catch (e) {
       if (!live.current) return;
-      settle(laneActRefusal('check', id, e));
-      setNotice(laneActRefusal('check', id, e));
+      // A refused (or unanswered) check leaves no lane read: an earlier answer is not this one's, so the result frame
+      // holds Turn it on with this sentence beneath it and offers Check again (D-7740 (4)).
+      refused = laneActRefusal('check', id, e);
+      setLane(null);
+      setLatency(null);
+      settle(refused);
+      setNotice(refused);
     }
     await refresh();
     if (!live.current) return;
     setFrame('result');
-    alert(resultDone(id, false));
+    // The terminal state is announced as what it is: the refusal, or the lane added and off.
+    alert(refused ?? resultDone(id, false));
   };
 
   /** The add's answer never came: re-read, and resume where the reconciled roster says. Never a second add. */
