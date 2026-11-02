@@ -360,6 +360,9 @@ describe('POST /api/items/:id/blocking (plan PL3, review 1329 F1)', () => {
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: false })).statusCode).toBe(200);
     expect(r.sent).toHaveLength(1);
     expect(r.waiting()).toBe(3);
+    // lowering again changes nothing, so it emits nothing
+    expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: false })).statusCode).toBe(200);
+    expect(r.waiting()).toBe(3);
     expect(r.coord.itemById(id)?.neededBy).toBe('soon');
   });
 
