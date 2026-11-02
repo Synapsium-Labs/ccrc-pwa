@@ -273,7 +273,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   2026-10-25's light run: builders run scoped tests before pushing and every PR gets two reviews): every typecheck,
   `build-pwa`, the static checks, the server tests vitest relates to the change from its merge base, the traced map's
   selection for every changed path vitest's import graph cannot follow (select's `untraced`: ccd scripts, Python,
-  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs), the guard suites that scan the whole tree or the diff
+  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs; a test that failed under the trace is judged there by what it
+  recorded, not always, D-7780), the guard suites that scan the whole tree or the diff
   (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
   `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
   `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
