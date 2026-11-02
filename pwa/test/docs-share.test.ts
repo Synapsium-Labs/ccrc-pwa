@@ -8,15 +8,16 @@ import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { render } from '@testing-library/react';
 import {
-  DOCS_API_PREFIX, DOCS_PAGE_PREFIX, type DocPin, type DocsEntry, type DocsShowOk, type DocsTreeOk, type DraftsFacts,
+  DOCS_API_PREFIX, DOCS_CLASS_CAP, DOCS_PAGE_PREFIX, type DocPin, type DocsEntry, type DocsShowOk, type DocsTreeOk, type DraftsFacts,
 } from '../../shared/docs';
+import { shareStateFor } from '../src/docs/DocsHead';
 import { DocsTreeView } from '../src/docs/DocsTreeView';
 import {
   DOCS_HEAD_TEXT, SHARE_EXPORT_CLAUSE, SHARE_EXPORT_CLAUSE_FOR, SHARE_NOTE, SHARE_SENTENCE, closedWorktreeLabel,
   shareNoteSentence, shareRefusalSentence, worktreeLabel,
 } from '../src/docs/docsText';
 import { shareTargetFor, type ShareOpened, type ShareRefusal, type ShareTarget } from '../src/docs/share';
-import { pinFor } from '../src/docs/useDocsVisit';
+import { pinFor, type FileSlot } from '../src/docs/useDocsVisit';
 import {
   BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, SERVED, draftOf, entry, fileResponse, holder, pageAt, treeOk,
 } from './docsFixtures';
@@ -391,5 +392,69 @@ describe('one badge function: Share names the badge the row shows (M4.T7, Share 
     const url = '/docs/demo/specs/x.md?ref=main';
     const t = linkOf(shareTargetFor(tree, pageAt(url), opened(pinOf(tree, url))));
     expect(t.notes.find((n) => n.note === 'admitted-committed')?.fields['badge']).toBe(rowText);
+  });
+});
+
+// ---- Task 3: shareStateFor --------------------------------------------------------------------------------------
+
+describe('shareStateFor: where Share is offered, and when it waits (spec 4.5, 4.16; M4.SH8 pure half, M4.EX12)', () => {
+  const tree = treeOk({
+    entries: [
+      entry('specs', 'a.md'), entry('specs', 'm.html'), entry('specs', 'x.png'), entry('specs', 'o.pdf'),
+      entry('specs', 'big.png', { committed: { kind: 'file', blob: BLOB_2, size: DOCS_CLASS_CAP.raster + 1 } }),
+      entry('specs', 'l.md', { committed: { kind: 'symlink', blob: BLOB_1, size: 10 } }),
+      entry('specs', 'd/x.md'),
+    ],
+  });
+  const NO_FILE: FileSlot = { s: 'none' };
+  const okAt = (pin: DocPin): FileSlot => ({ s: 'ok', pin, answer: { ...fileResponse(), show: showAt(COMMIT_A) }, receivedAt: 0 });
+  const readyAt = (pin: DocPin, show: DocsShowOk | null = null) => ({ s: 'ready', opened: { kind: 'file', pin, show } });
+
+  it.each(['/docs', '/docs/demo/specs/m.html?ref=main&frame=full', '/docs/demo/specs/zzz.md'])('%s: no Share', (url) => {
+    expect(shareStateFor(pageAt(url), tree, NO_FILE, null)).toEqual({ s: 'absent' });
+  });
+
+  it.each(['/docs/demo', '/docs/demo/specs', '/docs/demo/specs/d/', '/docs/demo/specs/l.md'])(
+    '%s: ready, having opened no file', (url) => {
+      expect(shareStateFor(pageAt(url), tree, NO_FILE, null)).toEqual({ s: 'ready', opened: { kind: 'none' } });
+    });
+
+  it("a leaf whose read answered at pinFor's pin is ready, with that pin and that answer", () => {
+    const pin = pinOf(tree, '/docs/demo/specs/a.md');
+    expect(shareStateFor(pageAt('/docs/demo/specs/a.md'), tree, okAt(pin), null)).toEqual(readyAt(pin, showAt(COMMIT_A)));
+  });
+
+  it("a leaf whose first read is in flight is updating, to pinFor's commit (refinement (h))", () => {
+    const pin = pinOf(tree, '/docs/demo/specs/a.md');
+    expect(shareStateFor(pageAt('/docs/demo/specs/a.md'), tree, { s: 'loading', pin }, null))
+      .toEqual({ s: 'updating', to: COMMIT_A });
+  });
+
+  it('a leaf still showing C1 while the tree is at C2 is updating, to C2 (M4.EX12)', () => {
+    expect(shareStateFor(pageAt('/docs/demo/specs/a.md'), treeOk({ commit: COMMIT_B }), okAt(committedPin(COMMIT_A)), null))
+      .toEqual({ s: 'updating', to: COMMIT_B });
+  });
+
+  it("a leaf whose read failed at pinFor's pin is ready, with no answer", () => {
+    const pin = pinOf(tree, '/docs/demo/specs/a.md');
+    expect(shareStateFor(pageAt('/docs/demo/specs/a.md'), tree, { s: 'unreachable', pin }, null)).toEqual(readyAt(pin));
+  });
+
+  it("a class Docs does not preview reads nothing, so it is ready at pinFor's pin (refinement (q))", () => {
+    const pin = pinOf(tree, '/docs/demo/specs/o.pdf');
+    expect(shareStateFor(pageAt('/docs/demo/specs/o.pdf'), tree, NO_FILE, null)).toEqual(readyAt(pin));
+  });
+
+  it('a raster leaf waits for its own image, and is ready at the pin the image settled at (refinement (f))', () => {
+    const page = pageAt('/docs/demo/specs/x.png');
+    const pin = pinOf(tree, '/docs/demo/specs/x.png');
+    expect(shareStateFor(page, tree, NO_FILE, null)).toEqual({ s: 'updating', to: COMMIT_A });
+    expect(shareStateFor(page, tree, NO_FILE, committedPin(COMMIT_B, 'x.png'))).toEqual({ s: 'updating', to: COMMIT_A });
+    expect(shareStateFor(page, tree, NO_FILE, pin)).toEqual(readyAt(pin));
+  });
+
+  it("a raster over its class cap is never loaded, so it is ready at pinFor's pin at once (refinement (f))", () => {
+    const pin = pinOf(tree, '/docs/demo/specs/big.png');
+    expect(shareStateFor(pageAt('/docs/demo/specs/big.png'), tree, NO_FILE, null)).toEqual(readyAt(pin));
   });
 });

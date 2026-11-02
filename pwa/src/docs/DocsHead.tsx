@@ -7,8 +7,8 @@
 // too (M4.T7). Share and Export are W5 part 2's.
 import { useState, type ReactNode } from 'react';
 import {
-  docsPageUrl, entryView, githubBlobUrl,
-  type DocPin, type DocsPageLocation, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
+  DOCS_CLASS_CAP, contentClass, docsPageUrl, entryView, githubBlobUrl,
+  type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
 import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
@@ -24,8 +24,8 @@ import {
 import { SECTION_LABEL, docsPathKind, githubTargetFor } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
 import type { DocsNotOk } from './failures';
-import { copyText } from './share';
-import { pinFor, type DocsVisit, type Freshness } from './useDocsVisit';
+import { copyText, type ShareOpened } from './share';
+import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness } from './useDocsVisit';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 type TreePage = Exclude<DocsPageLocation, { kind: 'index' }>;
@@ -126,6 +126,47 @@ export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null)
     case 'draft':
       return fillSentence(DOCS_HEAD_TEXT.sourceDraft, { badge: badgeText(s.badge), label: s.label });
   }
+}
+
+/** Whether Share is offered on `page`, and on what (spec 4.5, 4.16; M4.SH8, M4.EX12). The header draws no actions until
+ *  the tree slot is `ok`, so Share is hidden before then. Past that:
+ *  - `absent`: no Share here: the index, a full-screen mockup (`frame=full`), or a path this listing does not hold
+ *    (no GitHub counterpart, as for View on GitHub; refinement (m));
+ *  - `updating`: a leaf that does not show `pinFor`'s pin yet: its first read is in flight, a re-list moved the pin and
+ *    the new read is in flight, or its raster image has not settled (refinements (f), (h)). `to` is the commit it is
+ *    moving to (a draft pin's holder HEAD);
+ *  - `ready`: what the page opened, for `shareTargetFor`.
+ *  Here and not in `share.ts` (refinement (o)): the header renders under tests that mock `share.ts` to `copyText`. */
+export type ShareState =
+  | { readonly s: 'absent' }
+  | { readonly s: 'updating'; readonly to: string }
+  | { readonly s: 'ready'; readonly opened: ShareOpened };
+
+export function shareStateFor(
+  page: DocsPageLocation, tree: DocsTreeOk, file: FileSlot, leafImage: DocPin | null,
+): ShareState {
+  if (page.kind === 'index' || (page.kind === 'path' && page.frame === 'full')) return { s: 'absent' };
+  if (githubTargetFor(page, tree) === null) return { s: 'absent' };
+  const none: ShareState = { s: 'ready', opened: { kind: 'none' } };
+  if (page.kind !== 'path') return none;
+  const k = docsPathKind(tree, page.section, page.path, modeOf(page));
+  const expected = pinFor(tree, page);
+  // A directory, or a leaf that opens nothing (a symlink, a submodule, a withheld new file): refinement (r).
+  if (k.kind !== 'leaf' || expected === null) return none;
+  const updating: ShareState = { s: 'updating', to: pinCommit(expected) };
+  const readyAt = (pin: DocPin, show: DocsShowOk | null): ShareState => ({ s: 'ready', opened: { kind: 'file', pin, show } });
+  if (contentClass(page.path) === 'raster') {
+    // `DocImage` refuses a raster over its class cap and never loads it, as nothing is read for a file slot's
+    // `too-large`: the leaf is ready at `pinFor`'s pin.
+    const size = expected.kind === 'draft' ? k.entry.draft?.size : k.entry.committed?.size;
+    if (typeof size === 'number' && size > DOCS_CLASS_CAP.raster) return readyAt(expected, null);
+    return leafImage !== null && samePin(leafImage, expected) ? readyAt(expected, null) : updating;
+  }
+  // `none` at a leaf that opens a file is a class Docs does not preview (`other`): nothing is read until Download, so
+  // the leaf is ready at `pinFor`'s pin (refinement (q)).
+  if (file.s === 'none') return contentClass(page.path) === 'other' ? readyAt(expected, null) : updating;
+  if (file.s === 'loading' || !samePin(file.pin, expected)) return updating;
+  return readyAt(file.pin, file.s === 'ok' ? file.answer.show : null);
 }
 
 /** The freshness chip's `data-state` (spec 4.5's table). */
