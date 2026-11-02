@@ -63,6 +63,10 @@ export interface FleetState {
   /** Reads `GET /api/accounts` now, outside the 20 s cadence (after an account act), and resolves once its answer has
    *  landed in `roster`, `usage`, `lanes`, `accountsConnect` and `projected`. Silent on failure, as the poll is. */
   refreshAccounts(): Promise<void>;
+  /** When the last `GET /api/accounts` answer landed (epoch ms, this device's clock), or `null` before one has. A
+   *  method, not a field (D-7740): reading the time never writes the store, so an equal answer still writes nothing.
+   *  The Accounts screen's offline read-line ("Read 4 min ago") reads it. */
+  accountsReadAt(): number | null;
   /** Reads `GET /api/feed?limit=100` now, through the store's one feed reader (C7n, D-7209), and merges the answer
    *  through `mergeFeed` with its dropped count. Resolves `'ok'` once the answer has landed in `feed`, `'error'` when
    *  the read failed (and nothing is written). The Inbox calls it on every open and words its empty state from it. */
@@ -432,6 +436,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // objects, so writing them all would hand every subscriber a new reference every 20 s and re-render it for an
     // unchanged fleet. An equal answer therefore writes nothing at all.
     const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
+    // The last answer's arrival (D-7740): kept here, never in the state, so the time never counts as a write.
+    let readAt: number | null = null;
     const readAccounts = (): Promise<void> => fetchAccounts().then((r) => {
       const held = get();
       const next: Partial<FleetState> = {};
@@ -456,6 +462,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         // round 1, finding 6).
         warnNonArrayRoster(r);
       }
+      readAt = Date.now();
       if (Object.keys(next).length > 0) set(next);
     }).catch(() => {});
 
@@ -505,6 +512,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       usage: null,
       projected: undefined,
       refreshAccounts: readAccounts,
+      accountsReadAt: () => readAt,
       refreshFeed: () => readFeed(),
 
       connect() {

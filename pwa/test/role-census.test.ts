@@ -249,6 +249,12 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.settings-theme-name': UI,
     '.update-indicator-door': META,
     '.update-indicator-stale': META,
+    // The Add account door and the connect sheet (accounts plan Task A18, D-7740): the door's word (a row's label), the
+    // field labels, the field notes with a narrowed row's and the door's reason, and a method's consequence line.
+    '.acct-door': UI,
+    '.acct-field > label, .acct-secret > label': META,
+    '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': META,
+    '.acct-method-line': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,

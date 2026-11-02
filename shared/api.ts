@@ -12401,13 +12401,13 @@ export const ACCOUNT_CAPS = ['account-v2'] as const;
 export type AccountCap = (typeof ACCOUNT_CAPS)[number];
 
 /** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511), what the screen needs to offer an act and why it cannot: whether the fleet can run the account subs
- *  (`account-v2` in its measured caps, the refusing no-evidence polarity), the gate's posture, `cfg.origin`'s class,
- *  and the first instant this session's step-up is no longer fresh (absent: none). */
+ *  (`account-v2` in its measured caps, the refusing no-evidence polarity), the gate's posture, `cfg.origin`'s class, the first instant this session's step-up is no
+ *  longer fresh (absent: none), and which of `ACCOUNT_CAPS` the fleet advertises (`caps`, D-7740: absent from an older server, which reads as none). */
 export interface AccountsConnect {
   accountOps: 'available' | 'unsupported';
   gate: 'armed' | 'dark';
   origin: AccountOriginClass;
-  stepUpFreshUntil?: number;
+  stepUpFreshUntil?: number; caps?: readonly AccountCap[];
 }
 
 /** The acts `account_events` records (D-5516; spec §3.6), closed. `step-up-locked` (D-5512), `management-remove` and
