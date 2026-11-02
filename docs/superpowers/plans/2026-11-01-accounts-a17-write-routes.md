@@ -16,7 +16,7 @@
 
 **Tests:**
 - New: `server/test/account-routes-write.test.ts` (the real server, gate, step-up, reconcile wrapper with the real `reloadRoster`, and local arm, over a stub launcher that records its argv and stdin) and `server/test/account-canary.test.ts` (the real verb in a `laneStateFixture` HOME, through the local arm and through the real in-process agent, with a probe child that echoes the token on stderr; the same acts over a stub verb that echoes on stderr both the secret it is handed and the one the lane holds; and the shapeless key end to end).
-- Extended: `server/test/auth-gate.test.ts` (`accounts/routes.ts`'s count 3 to 8, the totals 131 to 136 scanned and 128 to 133 HTTP, the gated count 85 to 90, `FLAG_AWARE` gains `POST /api/accounts/revoke-ack`), `server/src/auth/gate.ts`'s docstring count, `server/test/box-token-census.test.ts` (`ACCOUNT_DOORS` gains the five), `server/test/registry-refused-census.test.ts` (the new site), `agent/test/account-argv.test.ts`, `agent/test/account-op.test.ts` and `server/test/account-ops.test.ts` (`--credential=-`).
+- Extended: `server/test/auth-gate.test.ts` (`accounts/routes.ts`'s count 3 to 8, the totals 143 to 148 scanned and 140 to 145 HTTP, on top of #2099's Linear proxy routes, the gated count 85 to 90, `FLAG_AWARE` gains `POST /api/accounts/revoke-ack`), `server/src/auth/gate.ts`'s docstring count, `server/test/box-token-census.test.ts` (`ACCOUNT_DOORS` gains the five), `server/test/registry-refused-census.test.ts` (the new site), `agent/test/account-argv.test.ts`, `agent/test/account-op.test.ts` and `server/test/account-ops.test.ts` (`--credential=-`).
 
 **Mutation table (run):**
 

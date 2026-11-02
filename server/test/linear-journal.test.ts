@@ -8,8 +8,9 @@
  *  - `result` holds a created issue's identifier or a created comment's id, and nothing else;
  *  - `viaFleet` marks what an `ok` row's `result` holds, by one indexed query;
  *  - rows older than 365 days are swept.
- * The route clauses (a journal failure refuses the write with no Linear call; each key act's row with the gate's
- * actor) land with the routes (LK9, LK11).
+ * The proxy's route clauses (a journal failure refuses the write with no Linear call; pending before the mutation;
+ * a read's `viaFleet`) are at the end of this file (LK9); each key act's row with the gate's actor lands with the
+ * Settings routes (LK11).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
@@ -23,6 +24,7 @@ import {
 } from '../src/linear/journal.js';
 import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { mkTmp } from './tmpHelpers.js';
+import { IDS, proxyRig, seedLegacy, seedSlot, type ProxyRig } from './linearProxyRig.js';
 
 const DAY_MS = 86_400_000;
 const NOW = Date.UTC(2026, 10, 1, 12);
@@ -374,4 +376,69 @@ describe('LinearJournal: kept 365 days, and a failed write is an answer (#1444, 
     expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/session-a|AAA-12|11111111/);
     warn.mockRestore();
   });
+});
+
+// ── the route clauses (plan task LK9): the proxy's writes, journaled through its twelve routes ──
+
+describe('the proxy journals every write it sends, pending before the mutation (#1444, spec §7, §6.3; LK9)', () => {
+  let rig: ProxyRig | null = null;
+  const done = async (): Promise<void> => { await rig?.close(); rig = null; };
+
+  it('the row is pending when the mutation is sent, and its outcome replaces pending once the route answers', async () => {
+    const seen: Record<string, unknown>[][] = [];
+    rig = await proxyRig({ respond: (c) => { if (/^(IssueCreate|IssueUpdate|CommentCreate)$/.test(c.op)) seen.push(rig!.rows()); return null; } });
+    await seedSlot(rig.ccrcDir, 'a');
+    for (const [verb, o] of [['create', {}], ['update', { ref: 'AAA-12' }], ['comment', { ref: 'AAA-12' }]] as const) {
+      expect((await rig.call(verb, o)).statusCode, verb).toBe(200);
+    }
+    expect(seen.map((rows) => rows.at(-1)!['outcome']), 'Linear was called before the insert').toEqual(['pending', 'pending', 'pending']);
+    expect(rig.rows().map((r) => [r['op'], r['outcome']])).toEqual([['create', 'ok'], ['update', 'ok'], ['comment', 'ok']]);
+    await done();
+  });
+
+  it('a journal that cannot write refuses the write with journal-unavailable, and a create calls Linear for nothing', async () => {
+    const db = memCoordDb();
+    rig = await proxyRig({ db });
+    await seedSlot(rig.ccrcDir, 'a');
+    quiet();
+    db.exec('DROP TABLE linear_events');
+    const res = await rig.call('create');
+    expect([res.statusCode, JSON.parse(res.body).error]).toEqual([503, 'journal-unavailable']);
+    expect(rig.calls).toEqual([]);
+    await done();
+  });
+
+  it('result holds the created issue\'s identifier and the created comment\'s id, and a read marks them viaFleet', async () => {
+    rig = await proxyRig();
+    await seedSlot(rig.ccrcDir, 'a');
+    await rig.call('create');
+    await rig.call('comment', { ref: 'AAA-12' });
+    expect(rig.rows().map((r) => r['result'])).toEqual(['AAA-100', IDS.comment]);
+    const fleet = JSON.parse((await rig.call('issue', { ref: 'AAA-100' })).body);
+    expect(fleet.issue.viaFleet).toBe(true);
+    const other = JSON.parse((await rig.call('issue', { ref: 'AAA-12' })).body);
+    expect(other.issue.viaFleet).toBe(false);
+    const comments = JSON.parse((await rig.call('comments', { ref: 'AAA-12' })).body);
+    expect(comments.items.map((c: { viaFleet: boolean }) => c.viaFleet)).toEqual([true]);
+    await done();
+  });
+
+  it('a refused write gets its row with its word; a refusal at or before routing gets none', async () => {
+    rig = await proxyRig({ policy: async () => ({ allow: false, why: 'denied', decisionId: 'decision-1' }) });
+    await seedSlot(rig.ccrcDir, 'a');
+    await rig.call('create', { body: { team: 'ZZZ', title: 'T' } });          // routing: no row
+    await rig.call('create', { body: { team: 'AAA', title: 'T', nope: 1 } }); // validation: no row
+    await rig.call('create');                                                // the policy point: a row
+    expect(rig.rows().map((r) => [r['outcome'], r['code'], r['decisionId']])).toEqual([['denied', 'policy-denied', 'decision-1']]);
+    await done();
+  });
+
+  it('the legacy routes write no row', async () => {
+    rig = await proxyRig();
+    await seedLegacy(rig.ccrcDir, 'a', { learned: true });
+    expect((await rig.app.inject({ method: 'POST', url: '/api/linear/connection/check' })).statusCode).toBe(200);
+    expect(rig.rows()).toEqual([]);
+    await done();
+  });
+
 });

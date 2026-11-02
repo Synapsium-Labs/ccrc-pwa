@@ -97,7 +97,8 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** SEVEN files register routes since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
+/** EIGHT files register routes since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
+ *  twelve box-token routes); SEVEN since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
  *  Check and the kill switch); SIX since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
  *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its four on the docs
  *  plugin's own instance, whose parameter is named `app` so this literal scan
@@ -113,6 +114,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('docs/routes.ts'),
   ...scanRoutes('linear/routes.ts'),
   ...scanRoutes('accounts/routes.ts'),
+  ...scanRoutes('linear/proxyRoutes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -339,6 +341,9 @@ describe('the scanner is looking at something', () => {
     // 8 since the write routes (accounts plan Task A17, D-7739): `POST /api/accounts`, `/:id/credential`, `/:id/set`,
     // `/:id/remove` and `/api/accounts/revoke-ack` (N6, D-7738), session-gated and NOT EXEMPT, no box token.
     expect(scanRoutes('accounts/routes.ts').length).toBe(8);
+    // 12 in `linear/proxyRoutes.ts` (#1444, plan task LK9, spec §6): one per `ccrc-api linear` verb, every one a
+    // box-token lane IN EXEMPT whose own `onRequest` refuses every token verdict but `ok` whatever the flag says.
+    expect(scanRoutes('linear/proxyRoutes.ts').length).toBe(12);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -479,9 +484,11 @@ describe('the scanner is looking at something', () => {
     // the gated count stays 82, the exempt-HTTP count 44 -> 43.
     // 131 since the accounts lane routes' three (accounts plan Task A14, D-7732), session-gated and NOT EXEMPT, no box
     // token: the HTTP half 125 -> 128, the gated count 82 -> 85, the exempt-HTTP count stays 43.
-    // 136 since the accounts write routes' five (accounts plan Task A17, D-7739), session-gated and NOT EXEMPT, no box
-    // token: the HTTP half 128 -> 133, the gated count 85 -> 90, the exempt-HTTP count stays 43.
-    expect(ROUTES.length).toBe(136);
+    // 143 since the Linear proxy's twelve (#1444, plan task LK9), box-token lanes IN EXEMPT: the HTTP half 128 -> 140,
+    // the gated count stays 85, the exempt-HTTP count 43 -> 55.
+    // 148 since the accounts write routes' five (accounts plan Task A17, D-7739), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 140 -> 145, the gated count 85 -> 90, the exempt-HTTP count stays 55.
+    expect(ROUTES.length).toBe(148);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -534,6 +541,11 @@ describe('the scanner is looking at something', () => {
       'POST /api/docs/:project/refresh',
       // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
       'GET /api/linear/resolve',
+      // The eighth file's twelve (the Linear proxy, #1444): lost together if `linear/proxyRoutes.ts` stopped being read.
+      'GET /api/linear/proxy/workspaces', 'GET /api/linear/proxy/teams', 'GET /api/linear/proxy/issues/:id',
+      'POST /api/linear/proxy/search', 'GET /api/linear/proxy/issues/:id/comments', 'GET /api/linear/proxy/statuses',
+      'GET /api/linear/proxy/projects', 'GET /api/linear/proxy/labels', 'GET /api/linear/proxy/users',
+      'POST /api/linear/proxy/issues', 'POST /api/linear/proxy/issues/:id', 'POST /api/linear/proxy/issues/:id/comments',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -631,7 +643,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 136 scanned + the static wildcard when the bundle is built.
+    // 148 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -710,6 +722,8 @@ describe('EXEMPT is complete in both directions', () => {
     // `ccd-update-sync.timer` pulls it cookieless, the PWA reads it with a
     // session. The four other update routes are DELIBERATELY NOT here —
     // session-gated when armed, no box token at all (decision 15).
+    // The Linear proxy's twelve (#1444, plan task LK9) joined the plain box-token lanes, reason 2: a fleet-host session's
+    // `ccrc-api linear` verbs, no cookie jar, the token refused in each route's own onRequest whatever the flag says.
     // 34 since `POST /api/token/claim` (box-token lifecycle, spec 4.6) opened the
     // SEVENTH class: a door that authenticates by a single-use code it issued
     // itself. Its sibling `POST /api/token/rotate` is DELIBERATELY NOT here —
@@ -726,6 +740,14 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/landing',
       'GET /api/ledger',
       'GET /api/lifecycle',
+      'GET /api/linear/proxy/issues/:id',
+      'GET /api/linear/proxy/issues/:id/comments',
+      'GET /api/linear/proxy/labels',
+      'GET /api/linear/proxy/projects',
+      'GET /api/linear/proxy/statuses',
+      'GET /api/linear/proxy/teams',
+      'GET /api/linear/proxy/users',
+      'GET /api/linear/proxy/workspaces',
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /api/mail/inbox',
@@ -746,6 +768,10 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/claims/:id/release',
       'POST /api/coordinators/:session/intent',
       'POST /api/ledger/deviations',
+      'POST /api/linear/proxy/issues',
+      'POST /api/linear/proxy/issues/:id',
+      'POST /api/linear/proxy/issues/:id/comments',
+      'POST /api/linear/proxy/search',
       'POST /api/mail',
       'POST /api/mail/:id/ack',
       'POST /api/notify',
@@ -786,7 +812,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-four box-token lanes in EXEMPT are those coord routes, and thirty-seven with notify, pools/epoch and updates/intent', () => {
+  it('the thirty-four box-token lanes in EXEMPT are those coord routes, and forty-nine with notify, pools/epoch, updates/intent and the Linear proxy', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -872,6 +898,17 @@ describe('EXEMPT is complete in both directions', () => {
     const update = readFileSync(path.join(srcRoot, 'update/routes.ts'), 'utf8');
     expect(update).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('GET /api/updates/intent/:nodeId')).toBe(true);
+    // …and the Linear proxy's twelve, in `linear/proxyRoutes.ts` (#1444): each registration passes its own token verdict
+    // to the route's onRequest, and every one is EXEMPT.
+    const proxy = readFileSync(path.join(srcRoot, 'linear/proxyRoutes.ts'), 'utf8');
+    const proxyRoutes = [...proxy.matchAll(/app\.(get|post)\('([^']+)'/g)].map((m, i, all) => ({
+      k: `${m[1]!.toUpperCase()} ${m[2]!}`, body: proxy.slice(m.index!, all[i + 1]?.index ?? proxy.length),
+    }));
+    expect(proxyRoutes).toHaveLength(12);
+    for (const { k, body } of proxyRoutes) {
+      expect(body, `${k} consults no box token`).toMatch(/checkMailToken\(/);
+      expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
+    }
   });
 });
 
@@ -1216,7 +1253,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 133 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 145 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1280,7 +1317,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 133 HTTP routes, not the 43 exempt.
+          //    is not itself flag-aware — the assertion that covers all 145 HTTP routes, not the 55 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)
