@@ -724,6 +724,19 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  // The Move sessions sheet (accounts plan Task A3): its session rows and the progress line sit in .sheet-panel.
+  '.move-project': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's project line under each session's name (MoveSessionsSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). .move-list, .move-row and .move-name paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.move-word': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's outcome word at the right of each session row (MoveSessionsSheet.tsx), on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
+  '.move-progress': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's live progress line (MoveSessionsSheet.tsx), a direct child of the sheet body on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
   '.route-field-label': {
     under: ['var(--bg-sheet)'],
     why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
@@ -1199,6 +1212,54 @@ export const INHERITED_GROUNDS = {
   '.settings-when': {
     under: ['var(--bg-surface)'],
     why: "a Settings card's when-line (\"when you would change it\"), the tertiary step under a control's notes. Every section page's cards are @ccrc/ui's Section, whose card paints --bg-surface (SECTION_CARD's bg-surface), and the line sits directly inside it; its selector names no painted ancestor",
+  },  // ── accounts plan Task A18 (D-7740): the Add account door and the connect sheet ──────────────────
+  '.acct-door': {
+    under: ['var(--bg-page)'],
+    why: "the Add account door on a phone (ConnectSheet.tsx's AddAccountDoor), the lane list's last row: a ListRow with a transparent fill in .accounts-list, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-door-meta': {
+    under: ['var(--bg-page)'],
+    why: "the door's meta line (Anthropic · OpenAI · OpenRouter), inside the same row, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  ".acct-door[data-narrowed='true'], .acct-door[data-narrowed='true'] .acct-door-meta, .acct-door-action[data-narrowed='true']": {
+    under: ['var(--bg-page)'],
+    why: "the narrowed door in its disabled ink: the phone row in .accounts-list, or the header action in PageScaffold's head (bg-page, PAGE_HEAD), on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-field > label, .acct-secret > label': {
+    under: ['var(--bg-sheet)'],
+    why: "the connect sheet's field labels (NameFrame.tsx, SecretField.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': {
+    under: ['var(--bg-sheet)', 'var(--bg-page)'],
+    why: "the connect sheet's field notes and a narrowed provider's or method's reason (NameFrame.tsx, ProviderFrame.tsx, MethodFrame.tsx) inside <Sheet>'s .sheet-panel, which paints var(--bg-sheet), and the Add account door's reason (DoorReason) on the Accounts page's var(--bg-page); none of the frames or the reason's box paints a background, and the selector names no painted ancestor, so the auditor cannot recover either ground from CSS alone",
+  },
+  '.acct-derived': {
+    under: ['var(--bg-sheet)'],
+    why: "the derived config folder and wrapper under the Name field (NameFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-method-name': {
+    under: ['var(--bg-sheet)'],
+    why: "a method's name in the method radio (MethodFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-method-line': {
+    under: ['var(--bg-sheet)'],
+    why: "a method's consequence line in the method radio (MethodFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-ledger': {
+    under: ['var(--bg-sheet)'],
+    why: "the Run frame's step ledger (RunFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-ledger-clock': {
+    under: ['var(--bg-sheet)'],
+    why: "each ledger line's clock (RunFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-result-word': {
+    under: ['var(--bg-sheet)'],
+    why: "the Result frame's state word (ResultFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-result-line': {
+    under: ['var(--bg-sheet)'],
+    why: "the Result frame's identity and latency lines (ResultFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
 };
 

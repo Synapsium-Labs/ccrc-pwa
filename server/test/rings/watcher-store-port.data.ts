@@ -10,53 +10,42 @@
  * Measured on `origin/main` 53bc9370c.
  */
 
-/** The members reached through the whole store (122, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
+/** The members reached through the whole store (101, with #1614's `delegationRunStamps` and #2038's `requestNode`; 166
  *  before D-7580, WP3, whose lanes' units read 11 through the port; 155 before D-7581, WP4, whose mail helpers and mail,
  *  landing-checks and tmp-sweep units take the port; 132 before D-7582, WP5, whose stall lane takes the port; 129
- *  before D-7583, WP6, whose child-reclaim chain and lane take the port; and 123 before D-7584, WP7, whose archive
- *  chain, beats and lane take the port). Sorted. */
+ *  before D-7583, WP6, whose child-reclaim chain and lane take the port; 123 before D-7584, WP7, whose archive
+ *  chain, beats and lane take the port; and 122 before D-7585, WP8, whose close path, dead-coordinator, dead-dispatch
+ *  and mirror chains and lane take the port). Sorted. */
 export const WATCHER_WHOLE_REACH: readonly string[] = [
   'activeClaims', 'approvalById', 'approvalsForChild', 'approvalsInState', 'askById', 'bindingRunsOf', 'bindingsOf',
   'checksRows', 'childReclaimCoordinatorClaims',
-  'claimDigestDay', 'closeRun', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode',
-  'deadAnchors', 'deadCoordinatorBreakerHeldLatest', 'deadCoordinatorBreakerState', 'deadCoordinatorJournalRows',
+  'claimDigestDay', 'coordPlacementStamps', 'currentAskFor', 'currentAsksFor', 'currentEpisode',
   'declineApproval', 'declineAsk', 'delegationEventStats', 'delegationRunStamps', 'digestApprovals', 'digestAsks',
-  'dispatchAbandonSetting', 'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
+  'dispatchNode', 'driftAwaitingReview', 'driftFindingRows', 'driftFindingsOpenAt',
   'driftHeldQuestions', 'driftOpenRuns', 'driftOutstandingDeliveries', 'driftPushesOnDay', 'driftStallToldRows',
-  'firstMailIdWithPrefix', 'foldPrLineage', 'hasMailWithSubject', 'hasNotice', 'heldApprovalRowsByChild',
-  'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'ingestJournal', 'insertApproval', 'insertAsk',
-  'insertDelegationEvents', 'intentFor', 'journalGenerations', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
+  'firstMailIdWithPrefix', 'hasMailWithSubject', 'hasNotice', 'heldApprovalRowsByChild',
+  'heldApprovalsFor', 'heldAskFor', 'heldQuestionRows', 'insertApproval', 'insertAsk',
+  'insertDelegationEvents', 'intentFor', 'lapseApproval', 'lapseClaimRow', 'lastRunBySession',
   'ledgerFloor', 'ledgerIssued', 'ledgerProjects', 'lifecycleBirthEventsFor',
-  'lifecycleGapGens', 'lifecycleStats', 'mailQueuedSince',
+  'mailQueuedSince',
   'markApprovalOperator', 'markApprovalOperatorRows', 'markDriftPushed', 'markDriftShadowed', 'markLanded',
   'markReleaseNotified', 'markUnreachable', 'maxMailDeliveryId', 'maxRunEventId', 'mergingRuns', 'node',
-  'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteLeaseDetail', 'openAllocations', 'openCoordinatorIds',
-  'outstandingMailFor', 'poolEpoch', 'programOpenRunCount', 'projectDelegationCheckpoint',
+  'nodeByLabel', 'nodes', 'noteDispatchRefusal', 'noteLeaseDetail', 'openAllocations',
+  'outstandingMailFor', 'poolEpoch', 'projectDelegationCheckpoint',
   'projectDelegationCheckpointChanges', 'pruneApprovalInputs', 'pruneAskQuestions', 'raiseLedgerFloor',
-  'recentProvenance', 'recordDriftPass', 'recordFeedEvent', 'recordGap', 'recordRejection', 'recordRunEvent',
+  'recentProvenance', 'recordDriftPass', 'recordFeedEvent',
   'refusalsFor', 'refuseRelease', 'rekeyNode', 'releaseAsk',
-  'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk', 'retireGeneration',
+  'releaseLease', 'releases', 'renewClaimRow', 'requestNode', 'resolveNode', 'restampAsk',
   'rollSettings', 'run',
-  'runEvents', 'runEventsSince', 'runLastMoves', 'runs', 'runsNamingSession', 'sealDeadCoordinatorBreakerState',
-  'setSession', 'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
-  'stallSettings', 'stalledDispatchRunIds', 'takeApprovalForRule', 'takeAskForAnswer', 'untakeAsk',
+  'runEventsSince', 'runLastMoves', 'runs', 'sealDeadCoordinatorBreakerState',
+  'settleAsk', 'settleNode', 'staleAllocations', 'staleApproval', 'staleAsk',
+  'stallSettings', 'takeApprovalForRule', 'takeAskForAnswer', 'untakeAsk',
   'updateEpoch', 'upsertNodeMeasurement',
 ];
 
-/** Each whole hand-off key (14) with its call-site count (15 in all), sorted by key. */
+/** Each whole hand-off key (3) with its call-site count (3 in all), sorted by key. */
 export const WATCHER_WHOLE_HANDOFFS: Readonly<Record<string, number>> = {
   'watch.ts#FleetWatcher.constructor -> coord/questions.ts#createQuestions': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#endDeadCoordinator': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#readDeadCoordinatorJournalTrust': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#recordDeadCoordinatorFeed': 2,
-  'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#recordDeadCoordinatorThrew': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/endDeadCoordinator.ts#rereadDeadCoordinatorJournalTrust': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorAct -> coord/routes.ts#CoordRoutesHandle.withSweepAbandon': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#readDeadCoordinatorJournalTrust': 1,
-  'watch.ts#FleetWatcher.deadCoordinatorPass -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreaker': 1,
-  'watch.ts#FleetWatcher.deadDispatchStep -> coord/abandonDeadDispatch.ts#abandonDeadDispatches': 1,
   'watch.ts#FleetWatcher.digestBeat -> coord/digest.ts#buildDigest': 1,
-  'watch.ts#FleetWatcher.mirrorFor -> coord/mirror.ts#JournalMirror': 1,
-  'watch.ts#FleetWatcher.noteDeadCoordinatorSeed -> coord/endDeadCoordinator.ts#recordDeadCoordinatorBreakerSeed': 1,
   'watch.ts#FleetWatcher.tick -> fleet.ts#assembleFleet': 1,
 };

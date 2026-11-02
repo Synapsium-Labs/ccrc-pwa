@@ -9,7 +9,7 @@ import {
   ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, WINDOW_LIMITED_PCT, kindCodeOf, sourceAt, stateWordFor,
   type AccountStateAnswer, type AccountStateWord,
 } from '../../../shared/accounts';
-import type { AccountsConnect, AccountUsage, LaneNotReadyReason, LaneWire, RosterWire } from '../../../shared/api';
+import { SWAP_REFUSALS, type AccountsConnect, type AccountUsage, type LaneNotReadyReason, type LaneWire, type RosterWire } from '../../../shared/api';
 import type { RouteRefusal } from '../../../shared/refusal';
 import { formatAge, formatReset } from './formatReset';
 
@@ -157,11 +157,16 @@ export interface TroubleCopy {
   /** The fix includes a check, so the card offers **Check again**, which calls the Check route when the screen can run
    *  it (accounts plan Task A14, D-7732). The command stays beside it for a screen that cannot. */
   readonly checkAgain: boolean;
+  /** "Move N sessions off" (spec §4.2, §4.5; Task A3): the lane the card's sessions move off, and whether it is the
+   *  card's first fix (Rate-limited's, which is not a fault) or one beside the credential act (Signed out's). `null`
+   *  on a card whose fix is not a move. The card counts the sessions itself, and offers nothing when there are none. */
+  readonly move: { readonly from: string; readonly primary: boolean } | null;
 }
 
 /** The card body for a trouble word, or `null` for a word that is not trouble. `sessions` is how many live sessions
- *  run on the lane; `usage` is its telemetry row; `lane` its lane state, when the answer carries one. Moving sessions
- *  off is Task A3's sheet, so no sentence here offers it. */
+ *  run on the lane; `usage` is its telemetry row; `lane` its lane state, when the answer carries one. Signed out and
+ *  Rate-limited offer "Move N sessions off" (spec §4.2) through `move`; the sentences never name the move, because the
+ *  button is the offer and it says its own count. */
 export function troubleCopy(o: TroubleFacts): TroubleCopy | null {
   const body = troubleBody(o);
   // Check again is offered exactly where the fix names a check (D-7732).
@@ -196,6 +201,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           ? 'Replace its credential on the fleet host, then check it again:'
           : 'Sign it in again on the fleet host, then check it again:',
         commands: credentialLane ? [fixCommands.credential(id), fixCommands.check(id)] : [fixCommands.check(id)],
+        move: { from: id, primary: false },
       };
     }
     case 'rate-limited': {
@@ -211,6 +217,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         effect: `${resets}${sessions > 0 ? `${sessionsOn(sessions)} ${sessions === 1 ? 'is' : 'are'} waiting.` : 'No sessions are on it.'}`.trim(),
         lead: 'To keep new sessions off it until then, switch it off on the fleet host:',
         commands: [fixCommands.disable(id)],
+        move: { from: id, primary: true },
       };
     }
     case 'expiring': {
@@ -222,6 +229,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           effect: 'Long-lived tokens last about a year. When it lapses the lane signs out.',
           lead: 'Replace the token on the fleet host:',
           commands: [fixCommands.credential(id)],
+          move: null,
         };
       }
       if (credit !== undefined && credit.limit !== null && credit.remaining !== null && credit.limit > 0
@@ -231,6 +239,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           effect: 'When it hits zero, requests on it fail.',
           lead: 'Top up its credit at OpenRouter, or replace the key on the fleet host:',
           commands: [fixCommands.credential(id)],
+          move: null,
         };
       }
       // The minted key's expiry, whose date the wire does not carry: the source's first clause says it.
@@ -239,6 +248,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         effect: 'When it lapses, requests on it fail.',
         lead: 'Replace the key on the fleet host:',
         commands: [fixCommands.credential(id)],
+        move: null,
       };
     }
     case 'inconclusive':
@@ -248,12 +258,14 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           effect: 'Nothing here says whether the credential works; it may be fine.',
           lead: 'Check it again on the fleet host, which writes the lane state anew:',
           commands: [fixCommands.check(id)],
+          move: null,
         }
         : {
           wrong: "The last check couldn't reach the provider.",
           effect: 'Nothing was learned about the credential; it may be fine.',
           lead: 'Check it again on the fleet host:',
           commands: [fixCommands.check(id)],
+          move: null,
         };
     default:
       return null;
@@ -296,6 +308,196 @@ export function connectBlock(connect: AccountsConnect): string | null {
   if (connect.accountOps !== 'available') return 'The fleet host needs an update before lanes can be switched or checked here.';
   return null;
 }
+
+// ── The Add account door and the connect sheet (accounts plan Task A18, D-7740; spec §5, §6.3, §12.4, §12.5) ──────────
+// Every sentence the door and the sheet say. A refusal is worded from its CODE only (the route's `error` word), never
+// from the response's text, as `laneActRefusal` below does for the lane acts.
+
+/** The door's word and its meta line (spec §5, D-5522). */
+export const DOOR_WORD = 'Add account';
+export const DOOR_META = 'Anthropic · OpenAI · OpenRouter';
+
+/** Why the door narrows in place, other than offline (spec §5): each with its sentence and, when a command fixes it,
+ *  the command. `waiting` is the screen before its first answer, which cannot yet say whether it may add. */
+export type DoorNarrowing = 'waiting' | 'gate-dark' | 'insecure-origin' | 'unsupported';
+export const DOOR_NARROWED: { readonly [N in DoorNarrowing]: { readonly text: string; readonly fix?: string } } = {
+  waiting: { text: 'Reading the fleet host before anything can be added.' },
+  'gate-dark': {
+    text: "Turn on sign-in for this PWA first (ccrc auth on). Without it the server can't tell you from a session.",
+    fix: 'ccrc auth on',
+  },
+  'insecure-origin': {
+    text: "Adding accounts needs an https origin. This server's origin is plain HTTP, so your session and this page could be "
+      + 'read or changed on the way. Fix: ccrc expose, which sets the https origin and sign-in together.',
+    fix: 'ccrc expose',
+  },
+  unsupported: { text: "Needs a fleet update: the fleet host doesn't support adding accounts yet." },
+};
+
+/** Which narrowing applies to the door, from the server's own answer (spec §12.6, never inferred from `location`), or
+ *  `null` when it may open. `landed` is whether an accounts answer has landed; a landed answer with no `connect` is a
+ *  dark gate's (D-5511: only a session reader is sent it, and an armed gate lets no other reader in). */
+export function doorNarrowing(landed: boolean, connect: AccountsConnect | null): DoorNarrowing | null {
+  if (!landed) return 'waiting';
+  if (connect === null || connect.gate === 'dark') return 'gate-dark';
+  if (connect.origin === 'insecure') return 'insecure-origin';
+  if (connect.accountOps !== 'available') return 'unsupported';
+  return null;
+}
+
+/** THE OFFLINE REFUSAL (spec §12.5; the 09-05 §12.8 rules): one sentence for every act on the screen and in the sheet,
+ *  with the read-line, the age of the last accounts answer this device has. `readAt` is epoch ms, or `null` when this
+ *  page has had none. */
+export function offlineRefusal(readAt: number | null, now: number): string {
+  const read = readAt === null
+    ? 'Nothing has been read from the server since this page opened.'
+    : `Read ${formatAge(Math.floor((now - readAt) / 1000))}.`;
+  return `You're offline: nothing was sent. ${read}`;
+}
+
+/** The provider rows (spec §5), in the door's order: each provider's name and its line. Every provider but
+ *  `compatible`, which stays CLI in v1 (no "Other" row). The connect sheet's provider list is these keys. */
+export const PROVIDER_ROWS: { readonly [P in Exclude<import('../../../shared/providers').ProviderId, 'compatible'>]: { readonly name: string; readonly line: string } } = {
+  anthropic: { name: 'Anthropic', line: 'Claude subscription (Pro, Max, Team). Sessions run Claude Code on it.' },
+  openai: { name: 'OpenAI', line: "ChatGPT subscription. Runs as a Codex lane through ccrc's own gateway." },
+  openrouter: { name: 'OpenRouter', line: 'Pay per use, many models. Mint, connect or paste a key.' },
+};
+
+/** A provider, or a method, whose cap word the fleet does not advertise (N4): it narrows in place with this. */
+export const NEEDS_FLEET_UPDATE = 'Needs a fleet update';
+/** A method the fleet can run that this app's sheet has no steps for yet: reload once the app is updated. */
+export const NEEDS_APP_UPDATE = "This app can't run it yet: reload after the next update.";
+
+/** The Anthropic method radio (spec §6.1): each method's name and its consequence line. */
+export const METHOD_LINES: { readonly [M in 'setup-token' | 'login' | 'paste']: { readonly name: string; readonly line: string } } = {
+  'setup-token': {
+    name: 'Mint a long-lived token',
+    line: "Lasts about a year, so sessions don't keep asking you to sign in again. Inference only: Remote Control won't "
+      + 'work on this lane. You sign in on claude.ai and paste back a code.',
+  },
+  login: {
+    name: 'Sign in with Claude',
+    line: 'Refreshes itself, shows which account it is, and Remote Control works. Sessions may ask you to sign in again '
+      + 'when the sign-in lapses.',
+  },
+  paste: {
+    name: 'Paste a token',
+    line: 'You already ran claude setup-token somewhere. Inference only.',
+  },
+};
+
+/** The identity step's problems (spec §5), each worded. */
+export function idProblemText(id: string, problem: 'empty' | 'bad-id' | 'reserved-id' | 'duplicate-id'): string {
+  switch (problem) {
+    case 'empty': return 'Give the lane a name.';
+    case 'bad-id': return 'Lowercase letters, digits and hyphens, starting with a letter, at most 32 characters.';
+    case 'reserved-id': return `"${id}" is reserved on the fleet host. Pick another name.`;
+    case 'duplicate-id': return `There is already a lane named ${id}. Pick another name.`;
+  }
+}
+export function labelProblemText(problem: 'empty' | 'too-long' | 'unsafe'): string {
+  switch (problem) {
+    case 'empty': return 'Give the lane a label.';
+    case 'too-long': return 'At most 64 characters.';
+    case 'unsafe': return 'One line of text: no tabs, line breaks or control characters.';
+  }
+}
+/** A hue another lane wears: still selectable (lanes may share a hue), marked with who has it. */
+export const hueAlso = (ids: readonly string[]): string => `also ${ids.join(', ')}`;
+/** The derived folder and wrapper, read-only (spec §5). */
+export const derivedLine = (suffix: string, id: string): string => `Config folder ~/${suffix} · wrapper ${id}`;
+
+/** `config-dir-exists` (G20): what the box measured in the folder it found, and the two ways on. */
+export function configDirFoundText(id: string, signedIn: boolean | undefined): string {
+  const state = signedIn === undefined ? '' : signedIn ? ' · signed in' : ' · signed out';
+  return `A config folder for ${id} from an earlier lane is still there${state}.`;
+}
+export const PICK_ANOTHER_NAME = 'Pick another name';
+export const USE_WHATS_THERE = "Use what's there";
+
+/** The secret field's label and the paste method's primary. */
+export const TOKEN_FIELD_LABEL = 'Paste the token';
+export const ADD_LANE = 'Add lane';
+/** What the live region says when the sheet moves to a frame (spec §12.4: every step change is announced). */
+export const FRAME_SAID = {
+  provider: 'Choose a provider',
+  name: 'Name the lane',
+  method: 'Choose how the lane gets its credential',
+  adopt: "Using what's there: paste the token",
+} as const;
+/** The add was refused `step-up-required`: the stamp lapsed between the step and the act (spec §3.2). */
+export const STEP_UP_AGAIN = "Confirm it's you again, then paste the token again. Nothing was added.";
+/** The secret was cleared when the app went to the background before it was sent (spec §3.3). */
+export const TOKEN_CLEARED = 'The token was cleared when the app went to the background. Paste it again.';
+
+/** The Run frame's step ledger (spec §12.3): each step's line while it runs and once it is done. */
+export const LEDGER = {
+  adding: (id: string): string => `… checking the token and creating ${id}`,
+  added: (id: string): string => `✓ ${id} created · off`,
+  found: (id: string): string => `✓ ${id} found on the fleet host · off`,
+  checking: (id: string): string => `… checking ${id}: one test reply`,
+  checked: '✓ Checked: one test reply · first-run setup verified',
+  enabling: (id: string): string => `… turning ${id} on`,
+  on: '✓ On · new sessions can land here. Swap rotation includes it within a minute.',
+  reading: "… reading the fleet host's accounts again",
+} as const;
+
+/** Outcome unknown (spec §6.2's terminal states): the add's answer never came. */
+export const OUTCOME_UNKNOWN = "The fleet host didn't answer in time. The lane may exist; checking…";
+/** The re-read found no such lane: nothing was added, and nothing is sent again on its own. */
+export const notFoundAfterUnknown = (id: string): string =>
+  `${id} isn't on the fleet host: nothing was added. Paste the token again to try again.`;
+/** The re-read after an outcome unknown did not land either, so no roster was reconciled: the sheet claims nothing
+ *  about the lane, sends nothing again, and offers only a fresh read (D-7740 (5)). */
+export const stillUnknownAfterUnknown = (id: string): string =>
+  `The fleet host's accounts couldn't be read either, so whether ${id} was added is still unknown. Nothing was sent again. Read again before pasting the token.`;
+/** The one act that state offers: read the roster again (never the add). */
+export const READ_AGAIN = 'Read again';
+
+/** Where the sheet goes back to after a refusal: the name frame, or the method frame with its field empty. */
+export type AddRefusalFrame = 'name' | 'method';
+type AddRefusalWord = Extract<RouteRefusal,
+  'key-rejected' | 'token-unverified' | 'key-charset' | 'duplicate-id' | 'lane-busy' | 'auth-in-progress'
+  | 'unsupported' | 'insecure-origin' | 'auth-off' | 'unauthenticated' | 'unavailable' | 'bad-account-id'>;
+const ADD_REFUSAL_TEXT: Readonly<Record<AddRefusalWord, { frame: AddRefusalFrame; text: (id: string) => string }>> = {
+  'key-rejected': { frame: 'method', text: () => 'That token was refused (HTTP 401). Nothing was saved.' },
+  'token-unverified': { frame: 'method', text: () => "Anthropic didn't answer: nothing was saved. Try again." },
+  'key-charset': {
+    frame: 'method',
+    text: () => "That isn't a token: it holds a line break or a control character, or is too long. Nothing was saved.",
+  },
+  'duplicate-id': { frame: 'name', text: (id) => `The fleet host already has a lane named ${id}. Pick another name.` },
+  'bad-account-id': { frame: 'name', text: () => idProblemText('', 'bad-id') },
+  'lane-busy': { frame: 'method', text: (id) => `${id} is busy with another account change. Nothing was added. Try again in a moment.` },
+  'auth-in-progress': { frame: 'method', text: (id) => `A sign-in for ${id} is in progress. Nothing was added.` },
+  unsupported: { frame: 'method', text: () => DOOR_NARROWED.unsupported.text },
+  'insecure-origin': { frame: 'method', text: () => "Accounts can't be changed over plain HTTP. Nothing was added." },
+  'auth-off': { frame: 'method', text: () => DOOR_NARROWED['gate-dark'].text },
+  unauthenticated: { frame: 'method', text: () => 'Sign in to this PWA again, then add the lane. Nothing was added.' },
+  unavailable: { frame: 'method', text: () => "The fleet host couldn't run it: nothing was added." },
+};
+
+/** An add's refusal, from its code alone: where the sheet goes back to and what it says. `null` for the answers the
+ *  sheet handles as states of their own (`config-dir-exists`, `lane-exists`, `step-up-required`, `outcome-unknown`, and
+ *  a request that never completed). */
+export function addRefusal(id: string, word: string | undefined): { frame: AddRefusalFrame; text: string } | null {
+  if (word === undefined) return null;
+  if (Object.hasOwn(ADD_REFUSAL_TEXT, word)) {
+    const r = ADD_REFUSAL_TEXT[word as AddRefusalWord];
+    return { frame: r.frame, text: r.text(id) };
+  }
+  if (['config-dir-exists', 'lane-exists', 'step-up-required', 'outcome-unknown'].includes(word)) return null;
+  return { frame: 'method', text: CODE_RE.test(word) ? `The fleet host refused (${word}): nothing was added.` : ADD_REFUSED };
+}
+/** An add refused with no word the sheet can name. */
+export const ADD_REFUSED = 'The fleet host refused: nothing was added.';
+
+/** The Result frame (spec §12.3): a register, not a celebration. */
+export const TURN_IT_ON = 'Turn it on';
+export const LEAVE_IT_OFF = 'Leave it off for now';
+export const resultDone = (id: string, on: boolean): string => (on ? `${id} is on.` : `${id} is added, and off.`);
+/** The check's round trip, as this sheet measured it (spec §12.3's result frame). */
+export const checkLatency = (ms: number): string => `Checked: one test reply in ${(ms / 1000).toFixed(1)} s`;
 
 /** The words the lane routes refuse with that the screen names, each with its sentence (D-7732). Keyed by the route
  *  words themselves (`RouteRefusal`), so a typo is a compile error, and read by `Object.hasOwn` (ARCH-13b's rule: no
@@ -341,3 +543,48 @@ export function laneActRefusal(act: 'check' | 'switch', id: string, failure: unk
 
 /** A refusal code as a screen may print it: a kebab word, never a sentence. */
 const CODE_RE = /^[a-z][a-z0-9-]{0,47}$/;
+
+/** The trouble card's move button (spec §4.2): "Move 4 sessions off". */
+export function moveOffLabel(n: number): string {
+  return `Move ${plural(n, 'session')} off`;
+}
+
+/** One session's outcome in the Move sessions sheet (spec §4.5; Task A3): the kind, which the sheet styles and counts
+ *  by, and its word, which is all it renders. */
+export type MoveOutcome = 'moved' | 'skipped-busy' | 'refused-asleep' | 'refused-other-pool' | 'refused' | 'no-answer';
+
+/** What one swap answered, as the sheet hands it here: `ok`; a refusal's HTTP status and its `error` code, `null` when
+ *  the body carried none (a 502 with ccd's sentence, whose text is never shown); or no answer at all. */
+export type SwapAnswer = { readonly kind: 'ok' } | { readonly kind: 'refused'; readonly status: number; readonly code: string | null }
+  | { readonly kind: 'no-answer' };
+
+/** Each refusal code's outcome and word (spec §4.5: "each refusal is named in the sheet, with the reason taken from its
+ *  code"): the busy skip, the hibernation refusal, the pool refusal, and the reasons the route's other codes name. Short:
+ *  the word sits right-aligned in the sheet's row. Typed over the route codes, so a misspelled key is a compile error
+ *  rather than a reason that never shows; read with `Object.hasOwn`, so a body naming `toString` is no code here. */
+const MOVE_REFUSALS: Partial<Record<RouteRefusal, { readonly outcome: MoveOutcome; readonly word: string }>> = {
+  [SWAP_REFUSALS.sessionBusy]: { outcome: 'skipped-busy', word: 'skipped: busy' },
+  [SWAP_REFUSALS.hibernated]: { outcome: 'refused-asleep', word: 'refused: asleep' },
+  'pool-mismatch': { outcome: 'refused-other-pool', word: 'refused: other pool' },
+  [SWAP_REFUSALS.statusUnknown]: { outcome: 'refused', word: 'refused: status unreadable' },
+  'pool-unreadable': { outcome: 'refused', word: 'refused: pool unreadable' },
+  'unknown-session': { outcome: 'refused', word: 'refused: not in the registry' },
+  'registry-unmeasurable': { outcome: 'refused', word: 'refused: registry unreadable' },
+  'bad-session-id': { outcome: 'refused', word: 'refused: bad session id' },
+  'bad-request': { outcome: 'refused', word: 'refused: bad request' },
+  unsupported: { outcome: 'refused', word: 'refused: fleet host too old to cross pools' },
+};
+
+/** Each session's one outcome word, from its answer's code and never its text (spec §4.5): moved, skipped busy, refused
+ *  asleep (the hibernation refusal, `SWAP_REFUSALS.hibernated`), refused other pool (`pool-mismatch`), or refused with
+ *  the reason its code names. A code this build does not know, and a failure with no code (ccd's 502), say so in words
+ *  of their own; no response text reaches the row. No answer is not a refusal: the move may have happened. */
+export function moveOutcomeOf(answer: SwapAnswer): { readonly outcome: MoveOutcome; readonly word: string } {
+  if (answer.kind === 'ok') return { outcome: 'moved', word: 'moved' };
+  if (answer.kind === 'no-answer') return { outcome: 'no-answer', word: 'no answer: it may have moved' };
+  const { code, status } = answer;
+  const known = code !== null && Object.hasOwn(MOVE_REFUSALS, code) ? MOVE_REFUSALS[code as RouteRefusal] : undefined;
+  if (known !== undefined) return known;
+  if (code === null && status >= 500) return { outcome: 'refused', word: 'refused: the fleet host could not move it' };
+  return { outcome: 'refused', word: 'refused: a reason this app does not know' };
+}

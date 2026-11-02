@@ -9,6 +9,11 @@
 // one test reply" whole; the disabled knob draws in `--ink-disabled` and the on knob in `--accent`; under a coarse pointer
 // (360, 390) the knob and Check take a 44px tap; at 1280 and 1920 the row sits inside the page's column. The contrast of
 // every ink the row uses is the gate's (`node design/contrast-check.mjs`), not this file's.
+//
+// The off row's "Move N sessions off" (Task A3, D-7736) in the same cells: lane-d's row offers "Move 2 sessions off"
+// whole, beside the knob and above the reason; lane-a (on) and lane-l (off, no sessions) offer none; under a coarse
+// pointer it takes a 44px tap; and it opens the Move sessions sheet for lane-d, inside the viewport with no sideways
+// scroll, the bottom sheet below 900 and the centred dialog from 900.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
@@ -97,6 +102,19 @@ interface Measured {
   readonly onInk: [string, string];
   readonly smallTargets: string[];
   readonly rowInsideBody: boolean;
+  readonly moves: Record<string, string[]>;
+  readonly moveClipped: boolean;
+  readonly moveAboveReason: boolean;
+}
+
+interface SheetMeasured {
+  readonly title: string;
+  readonly rows: number;
+  readonly docOverflow: number;
+  readonly inViewport: boolean;
+  readonly panelOverflow: number;
+  readonly animation: string;
+  readonly smallTargets: string[];
 }
 
 describe('the kill switch row at every width and skin (D-7732)', () => {
@@ -147,11 +165,18 @@ describe('the kill switch row at every width and skin (D-7732)', () => {
             disabledInk: [getComputedStyle(switchD.querySelector('.acct-switch-track')!).borderTopColor, token('--ink-disabled')],
             onInk: [getComputedStyle(switchA.querySelector('.acct-switch-track')!).backgroundColor, token('--accent')],
             smallTargets: coarse
-              ? [...document.querySelectorAll<HTMLElement>('.acct-switch, .acct-check')].filter((t) => rect(t).height < 44)
+              ? [...document.querySelectorAll<HTMLElement>('.acct-switch, .acct-check, .acct-knob-move')].filter((t) => rect(t).height < 44)
                 .map((t) => t.className)
               : [],
             rowInsideBody: [...document.querySelectorAll('.acct-knob')].every((k) => rect(k).right <= rect(body).right + 0.5
               && rect(k).left >= rect(body).left - 0.5),
+            moves: Object.fromEntries(['lane-a', 'lane-d', 'lane-l'].map((id) => [id,
+              [...card(id).querySelectorAll<HTMLElement>('.acct-knob .acct-knob-move')].map((b) => b.textContent ?? '')])),
+            moveClipped: [...document.querySelectorAll<HTMLElement>('.acct-knob-move')].some((b) => b.scrollWidth > b.clientWidth + 1),
+            moveAboveReason: ((): boolean => {
+              const mv = knobD.querySelector<HTMLElement>('.acct-knob-move');
+              return mv !== null && rect(mv).bottom <= rect(reasonD).top + 1;
+            })(),
           };
         });
         expect([m.skin, m.theme], 'the cell draws the skin and theme it names').toEqual([view.skin, view.theme]);
@@ -172,6 +197,39 @@ describe('the kill switch row at every width and skin (D-7732)', () => {
         expect(m.onInk[0], 'the on knob draws in --accent').toBe(m.onInk[1]);
         expect(m.smallTargets, '44px targets under a coarse pointer').toEqual([]);
         expect(m.rowInsideBody, 'the row stays inside the page column').toBe(true);
+        expect(m.moves, 'only the off row with sessions offers a move, with its count').toEqual({
+          'lane-a': [], 'lane-d': ['Move 2 sessions off'], 'lane-l': [],
+        });
+        expect(m.moveClipped, 'Move shows whole').toBe(false);
+        expect(m.moveAboveReason, 'Move sits on the knob row, the reason beneath it').toBe(true);
+
+        // It opens the Move sessions sheet for lane-d.
+        await page.locator(".accounts-row[data-lane='lane-d'] .acct-knob-move").click();
+        await page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 10_000 });
+        const sm: SheetMeasured = await page.evaluate(() => {
+          const panel = document.querySelector<HTMLElement>('.sheet-panel')!;
+          const r = panel.getBoundingClientRect();
+          return {
+            title: panel.querySelector('.sheet-title')?.textContent ?? '',
+            rows: panel.querySelectorAll('.move-row').length,
+            docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            inViewport: r.left >= -0.5 && r.right <= innerWidth + 0.5,
+            panelOverflow: panel.scrollWidth - panel.clientWidth,
+            animation: getComputedStyle(panel).animationName,
+            smallTargets: matchMedia('(pointer: coarse)').matches
+              ? [...panel.querySelectorAll<HTMLElement>('button')].filter((b) => b.getBoundingClientRect().height < 44)
+                .map((b) => b.textContent ?? '')
+              : [],
+          };
+        });
+        expect(sm.title).toBe('Move sessions off lane-d');
+        expect(sm.rows, "the sheet lists lane-d's two sessions").toBe(2);
+        expect(sm.docOverflow, 'no horizontal page scroll with the sheet open').toBeLessThanOrEqual(0);
+        expect(sm.inViewport, 'the sheet sits inside the viewport').toBe(true);
+        expect(sm.panelOverflow, 'nothing wider than the sheet').toBeLessThanOrEqual(1);
+        if (view.width >= 900) expect(sm.animation, 'the centred dialog').toBe('sheet-pop-in');
+        else expect(sm.animation, 'the bottom sheet').toBe('slideFromBottom');
+        expect(sm.smallTargets, "44px targets in the sheet on a coarse pointer").toEqual([]);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

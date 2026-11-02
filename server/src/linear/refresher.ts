@@ -31,15 +31,18 @@ import {
   type LinearDirectoryEntries,
 } from './ops.js';
 import { oneCallOutcome, type LinearRateGrant, type LinearRateLane, type LinearRateRefusal, type LinearRateService } from './rate.js';
+import type { LinearKeyRead } from './connection.js';
 import {
   readLinearSlotKey, recordLinearSlotCheck, writeLegacyTeams, type LinearSlotRef, type LinearStoreRead,
 } from './store.js';
 import { checkOutcomeOf } from './view.js';
 
-/** A key check's answer through the rate service: refused before any call, or checked. */
+/** A key check's answer through the rate service: refused before any call, or checked. `moreRefused` is set when the
+ *  service refused the second page, which leaves the check's workspace unlearned (`workspace: null`): an act that needs
+ *  the workspace whole answers that refusal rather than a fault of Linear's answer. */
 export type LinearSlotCheck =
   | { kind: 'refused'; detail: LinearRateRefusal; retryAfterS: number }
-  | { kind: 'checked'; check: LinearKeyCheck };
+  | { kind: 'checked'; check: LinearKeyCheck; moreRefused?: { detail: LinearRateRefusal; retryAfterS: number } };
 
 export interface LinearSlotCheckOpts {
   ccrcDir: string;
@@ -58,15 +61,29 @@ export interface LinearSlotCheckOpts {
  * second page costs the first nothing and Linear's own rate limit closes the slot for the wait it gave. The key is
  * read from its file before each page (`readLinearSlotKey`); nothing here holds it.
  */
-export async function checkLinearSlot(o: LinearSlotCheckOpts): Promise<LinearSlotCheck> {
+export function checkLinearSlot(o: LinearSlotCheckOpts): Promise<LinearSlotCheck> {
+  return checkLinearKeyThrough(() => readLinearSlotKey(o.ccrcDir, o.slot), o);
+}
+
+/**
+ * The §4.1 key check of the key `readKey` reads, through the rate service, charged to `o.slot`'s `o.lane`:
+ * `checkLinearSlot`'s rule for any key, the stored one of a slot or one an operator has just pasted (the Settings add,
+ * which has no file to read yet; `routes.ts`). `readKey` is called before each page, so a stored key removed or
+ * replaced between two pages stops the check; nothing here holds the key.
+ */
+export async function checkLinearKeyThrough(
+  readKey: () => Promise<LinearKeyRead>, o: Omit<LinearSlotCheckOpts, 'ccrcDir'>,
+): Promise<LinearSlotCheck> {
   const first = o.rate.take({ lane: o.lane, slot: o.slot, calls: 1 });
   if (!first.ok) return { kind: 'refused', detail: first.detail, retryAfterS: first.retryAfterS };
   let second: LinearRateGrant | null = null;
-  const check = await checkLinearKey(() => readLinearSlotKey(o.ccrcDir, o.slot), {
+  let moreRefused: { detail: LinearRateRefusal; retryAfterS: number } | undefined;
+  const check = await checkLinearKey(readKey, {
     fetch: o.fetch, timeoutMs: o.timeoutMs,
     mayAskMore: () => {
       const t = o.rate.take({ lane: o.lane, slot: o.slot, calls: 1 });
       if (t.ok) second = t.grant;
+      else moreRefused = { detail: t.detail, retryAfterS: t.retryAfterS };
       return t.ok;
     },
   });
@@ -74,7 +91,7 @@ export async function checkLinearSlot(o: LinearSlotCheckOpts): Promise<LinearSlo
   o.rate.settle(first.grant, { spent: check.pagesSent >= 1 ? 1 : 0, closeForS: check.pagesSent === 1 ? closeForS : null });
   const late: LinearRateGrant | null = second;
   if (late !== null) o.rate.settle(late, { spent: check.pagesSent >= 2 ? 1 : 0, closeForS: check.pagesSent === 2 ? closeForS : null });
-  return { kind: 'checked', check };
+  return moreRefused === undefined ? { kind: 'checked', check } : { kind: 'checked', check, moreRefused };
 }
 
 /** A slot's teams are refreshed when older than this, and no slot is refreshed twice inside it (spec §4.3). */

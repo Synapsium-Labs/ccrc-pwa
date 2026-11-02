@@ -1156,7 +1156,13 @@ describe('8. the closed scope census', () => {
       // `workspaceAddWords.ts` joined the list with the named-workspace add: its refusal text for an account that cannot take the
       // session names ccd's own remedy ("adopt them there with: ccd start ..."), the worktree-onto-an-account sense `ccd` has always
       // used. It is user-facing copy, a string and no identifier, and no part of the delegation broker's adoption.
-      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx']],
+      // `ConnectSheet.tsx` and `accountWords.ts` joined it with the connect sheet's "Use what's there" (accounts A18): the roster
+      // `adopt` of the account add, the add route's existing `adopt?: true` field (a lane taking a config folder already on the
+      // box), its state flag and its one status line. No part of the delegation broker's adoption either.
+      ['adopt', /\badopt\w*/i, [
+        'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx',
+        'pwa/src/accounts/ConnectSheet.tsx', 'pwa/src/fleet/accountWords.ts',
+      ]],
       ['retain', /\bretain\w*/i, []],
       ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],

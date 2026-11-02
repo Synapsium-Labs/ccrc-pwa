@@ -1,6 +1,7 @@
-// THE CONTAINMENT CENSUS (#1444, spec §13.5, §14 row 12; plan task LK9 and its build notes): a key goes from its
+// THE CONTAINMENT CENSUS (#1444, spec §13.5, §14 row 12; plan tasks LK9 and LK11 and their build notes): a key goes from its
 // `.key` file to `callLinear`'s `authorization` header and nowhere else, and its digest sits only in a record's
-// `keyDigest` field. Every proxy route is driven through every arm this rig can produce, and so are the other paths
+// `keyDigest` field. Every proxy route and every Settings route (list, add, replace, check, remove) is driven through
+// every arm this rig can produce, and so are the other paths
 // that use a key: the legacy Check again, the background refresher (its queue driven by a direct call), and
 // `resolveTitle` through the preview route and directly as the workspace create and the rename call it. Everything a
 // key could leak into is captured: each response's body and headers, every `console` method, both standard streams,
@@ -21,6 +22,7 @@ import { RATELIMITED_ERRORS } from './linearFetchFake.js';
 import {
   IDS, PROXY_TOKEN, WS, proxyRig, seedLegacy, seedSlot, statusAnswer, who, type ProxyRig, type Responder,
 } from './linearProxyRig.js';
+import { WORKSPACES, settingsRig } from './linearSettingsRig.js';
 
 /** The arm the stand-in answers every Linear call with, set before each drive. */
 type Arm = 'ok' | '401' | '403' | '429' | 'ratelimited-200' | '500' | 'timeout' | 'malformed' | 'errors' | 'empty';
@@ -62,7 +64,8 @@ let legacyKey = '';
  *  own rows are `linear-rate.test.ts`'s), and past any closed slot between arms. */
 let t = 1_800_000_000_000;
 const clock = (): number => t;
-const keys = (): string[] => [WS.a.key, legacyKey];
+/** The keys the census guards: the file slot's, the legacy pair's, and the one the Settings routes add (workspace B's). */
+const keys = (): string[] => [WS.a.key, legacyKey, WS.b.key];
 
 const CONSOLE = ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const;
 const restores: (() => void)[] = [];
@@ -182,6 +185,42 @@ describe('the census drives every path that uses a key, through every arm', () =
       }
     }
   });
+
+  it('the Settings routes, through every arm: the list, an add, a refused add, a replace, both checks and a remove', async () => {
+    const settings = await settingsRig({
+      ccrcDir: rig.ccrcDir, fx: rig.fx, standIn: { fetch: rig.fetch, calls: rig.calls }, clock, timeoutMs: 20,
+    });
+    try {
+      await settings.stamp();
+      for (const a of ['ok', ...ARMS] as const) {
+        arm = a;
+        t += 7_200_000;
+        for (const [label, method, url, body] of [
+          ['list', 'GET', WORKSPACES, undefined],
+          ['add', 'POST', WORKSPACES, { key: WS.b.key }],
+          ['add again', 'POST', WORKSPACES, { key: WS.b.key }],
+          ['replace', 'POST', WORKSPACES, { key: WS.b.key, replace: true }],
+          ['check a', 'POST', `${WORKSPACES}/${WS.a.id}/check`, undefined],
+          ['check b', 'POST', `${WORKSPACES}/${WS.b.id}/check`, undefined],
+          ['list after', 'GET', WORKSPACES, undefined],
+          ['remove b', 'DELETE', `${WORKSPACES}/${WS.b.id}`, undefined],
+          ['bad key', 'POST', WORKSPACES, { key: `${WS.b.key} with a space` }],
+        ] as const) {
+          t += 61_000;
+          const res = await settings.req(method, url, body);
+          capture(`settings ${a} ${label} body`, res.body);
+          capture(`settings ${a} ${label} headers`, JSON.stringify(res.headers));
+          snapshot(`settings ${a} ${label}`);
+          await rig.fx.refresher.idle();
+          snapshot(`settings ${a} ${label} refreshed`);
+        }
+      }
+      expect(rig.calls.filter((c) => c.authorization === WS.b.key).length, 'the Settings drive never used the key it added').toBeGreaterThan(5);
+      expect(rig.rows().filter((r) => String(r['op']).startsWith('key-')).length, 'the Settings drive journaled no key act').toBeGreaterThan(20);
+    } finally {
+      await settings.close();
+    }
+  }, 120_000);
 });
 
 describe('what the census found', () => {

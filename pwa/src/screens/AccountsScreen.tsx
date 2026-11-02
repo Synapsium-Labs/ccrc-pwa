@@ -22,15 +22,22 @@
 // CHECK AND THE KILL SWITCH (accounts plan Task A14, D-7732; spec §10): every card whose answer carries `connect` draws
 // the knob row (`fleet/AccountKnob.tsx`), which moves only on the server's ack, and a trouble card whose fix is a check
 // offers Check again on the same route.
+//
+// THE ADD ACCOUNT DOOR (accounts plan Task A18, D-5522, D-7740; spec §5): one per width, mounted, never CSS-hidden. On a
+// phone (both skins) it is the lane list's last row; at ≥900 it is the page header's action, in both skins until
+// Instrument's list column holds this route's list (A4). It narrows in place with its reason, and opens the connect
+// sheet (`accounts/ConnectSheet.tsx`). OFFLINE (spec §12.5) is the store's own reading (`conn === 'down'`), never
+// `navigator.onLine`: every act on the screen (the door, Check, the knob) is refused with one sentence and the read-line.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
 import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
-import { PageScaffold, Skeleton, toast, useNow } from '@ccrc/ui';
+import { PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
+import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
-import { cardLines, connectBlock, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
 import { presenceOf } from '../fleet/presence';
@@ -189,7 +196,11 @@ export function AccountsScreen(): ReactNode {
   const lanes = useFleetStore((s) => s.lanes);
   // `connect`, on the same terms (A12): whether the screen may run a lane act, and why not. `null` draws no knob row.
   const connect = useFleetStore((s) => s.accountsConnect);
-  const blocked = connect === null ? null : connectBlock(connect);
+  // Offline (spec §12.5): the store's own reading, with the age of the last accounts answer as the read-line.
+  const conn = useFleetStore((s) => s.conn);
+  const accountsReadAt = useFleetStore((s) => s.accountsReadAt);
+  const offline = conn === 'down' ? offlineRefusal(accountsReadAt(), now) : null;
+  const blocked = offline ?? (connect === null ? null : connectBlock(connect));
   // Check and the kill switch (accounts plan Task A14, D-7732): the act in flight per lane, and each ack's switch.
   const acts = useLaneActs(refreshAccounts);
 
@@ -292,9 +303,25 @@ export function AccountsScreen(): ReactNode {
         : `Next workspace: ${homeAbleNames} all disabled — nothing can take it`
       : `Next workspace lands on ${accountLabel(roster, projected.wrapper)} — least-loaded`;
 
+  // The door (D-5522): its narrowing first (offline, then the server's own `connect`), and the sheet it opens. The sheet
+  // is keyed per opening, so every opening starts at the provider frame with nothing held from the last.
+  const desk = useDesk();
+  const narrowing = offline !== null ? null : doorNarrowing(accounts !== null, connect);
+  const doorReason = offline !== null ? { text: offline } : narrowing === null ? null : DOOR_NARROWED[narrowing];
+  const doorReasonId = 'acct-door-reason';
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [connectGen, setConnectGen] = useState(0);
+  const openConnect = (): void => { setConnectGen((g) => g + 1); setConnectOpen(true); };
+  const door = (
+    <AddAccountDoor desk={desk} narrowedBy={doorReason === null ? null : doorReasonId} onOpen={openConnect} />
+  );
+  const reason = doorReason === null ? null : <DoorReason id={doorReasonId} text={doorReason.text} fix={'fix' in doorReason ? doorReason.fix : undefined} />;
+
   return (
     // The page scaffold (D-5102). The body's grid keeps the old screen's rhythm, --sp-3 between blocks.
-    <PageScaffold title="Accounts" back={backToFleet('accounts-back')}>
+    <PageScaffold title="Accounts" back={backToFleet('accounts-back')} actions={desk ? door : undefined}>
+      {/* At ≥900 the door is the header's action, and its reason is the body's first line, beneath it. */}
+      {desk && reason}
 
       {/* The measured roll-up (spec §4.3), zero clauses omitted, and today's projection line under it. The scaffold has
           no subtitle slot, so it is the body's first line. */}
@@ -502,7 +529,21 @@ export function AccountsScreen(): ReactNode {
             </section>
           );
         })}
+        {/* On a phone the door is the list's last row, with its reason beneath it (D-5522). */}
+        {!desk && door}
+        {!desk && reason}
       </div>
+
+      <ConnectSheet
+        key={connectGen}
+        open={connectOpen}
+        onClose={() => setConnectOpen(false)}
+        roster={roster}
+        connect={connect}
+        offline={offline}
+        refresh={refreshAccounts}
+        readRoster={() => useFleetStore.getState().roster}
+      />
 
       <AccountPoolSheet
         account={poolSheetAccount}

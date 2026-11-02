@@ -235,6 +235,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.accounts-row[data-state] .acct-trouble-effect, .accounts-row[data-state] .acct-trouble-lead, .accounts-row[data-state] .acct-fix-hold, .accounts-row[data-state] .acct-knob-reason': META,
     // …and its sentence beside the knob.
     '.accounts-row[data-state] .acct-knob-state': META,
+    // The Move sessions sheet (accounts plan Task A3): each session's outcome word and the live progress line.
+    '.move-word': META,
+    '.move-progress': META,
     '.mail-dropped': META,
     '.mail-row .mail-body': META,
     '.run-row .run-state': META,
@@ -249,6 +252,12 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.settings-theme-name': UI,
     '.update-indicator-door': META,
     '.update-indicator-stale': META,
+    // The Add account door and the connect sheet (accounts plan Task A18, D-7740): the door's word (a row's label), the
+    // field labels, the field notes with a narrowed row's and the door's reason, and a method's consequence line.
+    '.acct-door': UI,
+    '.acct-field > label, .acct-secret > label': META,
+    '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': META,
+    '.acct-method-line': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,

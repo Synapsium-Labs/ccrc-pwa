@@ -528,7 +528,7 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
     navigate('/accounts?lane=claude9');
     const scroll = spyScroll();
     render(<AccountsScreen />);
-    let read!: Promise<void>;
+    let read!: Promise<unknown>;
     await act(async () => { read = useFleetStore.getState().refreshAccounts(); await Promise.resolve(); });
     expect(scroll.calls, 'no row yet, so nothing to scroll to').toHaveLength(0);
     expect(document.activeElement).toBe(document.body);
