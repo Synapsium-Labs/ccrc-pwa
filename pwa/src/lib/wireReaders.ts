@@ -3,7 +3,11 @@
 // (ARCH-13b, #557).
 import type { AutoMode, ArchiveAnswer, ArchiveBody, ArchiveRefusal, Dialog, DialogAnswered, NotifyMode, RouteFields, UpdateChannel } from '../../../shared/api';
 import { isArchiveRefusal } from '../../../shared/api';
-import { LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, type LinearCheckOutcome, type LinearConnectionView } from '../../../shared/linear';
+import {
+  LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, LINEAR_TEAMS_MAX, isLinearStoredName, isLinearTeamKey, isLinearUrlKey, isLinearUuid,
+  type LinearCheckOutcome, type LinearConnectionView, type LinearLegacyRow, type LinearTeamShown, type LinearWorkspaceView,
+  type LinearWorkspacesAnswer,
+} from '../../../shared/linear';
 import { isResolveReason, type LookupNote, type ResolveRead } from '../fleet/workspaceNameWords';
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
@@ -139,6 +143,84 @@ export function readLinearConnection(raw: unknown): LinearConnectionView | null 
 /** A 2xx `{ok: true, connection}` body, read; anything else is `'unreadable'`. */
 export function linearViewOf(raw: unknown): LinearConnectionView | 'unreadable' {
   return (isRecord(raw) && raw.ok === true ? readLinearConnection(raw.connection) : null) ?? 'unreadable';
+}
+
+/** The Settings card's list (#1444, spec §10.2): `GET /api/linear/workspaces` and each key act's answer, without `ok`. */
+export type LinearWorkspacesRead = Omit<LinearWorkspacesAnswer, 'ok'>;
+
+/** A row's teams, `{key, name}` each and nothing else; null when the list or any entry is not that shape. */
+function readTeamsShown(raw: unknown): LinearTeamShown[] | null {
+  if (!Array.isArray(raw) || raw.length > LINEAR_TEAMS_MAX) return null;
+  const out: LinearTeamShown[] = [];
+  for (const t of raw) {
+    if (!isRecord(t) || !isLinearTeamKey(t.key) || !isLinearStoredName(t.name)) return null;
+    out.push({ key: t.key, name: t.name });
+  }
+  return out;
+}
+
+/** One slot's row: its id, what its record learned, and today's view of its key. A slot always has a key file, so a
+ *  `not-connected` row is not one; a row that does not read is null, as `readLinearConnection`'s states are. */
+function readLinearWorkspace(raw: unknown): LinearWorkspaceView | null {
+  if (!isRecord(raw) || !isLinearUuid(raw.id)) return null;
+  const view = readLinearConnection(raw);
+  const teams = readTeamsShown(raw.teams);
+  const { id, name, urlKey } = raw;
+  if (view === null || view.state === 'not-connected' || teams === null) return null;
+  if (!orNull(name, isLinearStoredName) || !orNull(urlKey, isLinearUrlKey)) return null;
+  const base = { id, name: name as string | null, urlKey: urlKey as string | null, teams };
+  return 'keyTail' in view ? { ...base, ...view } : { ...base, user: null, keyTail: null, checkedAt: null, ...view };
+}
+
+/** The legacy pair's row (spec §3.4); null when it does not read. */
+function readLegacyRow(raw: unknown): LinearLegacyRow | null {
+  if (!isRecord(raw) || typeof raw.superseded !== 'boolean') return null;
+  const view = readLinearConnection(raw.view);
+  if (view === null) return null;
+  const w = raw.workspace;
+  if (w === null) return { view, workspace: null, superseded: raw.superseded };
+  const teams = isRecord(w) ? readTeamsShown(w.teams) : null;
+  if (!isRecord(w) || teams === null || !isLinearStoredName(w.name) || !isLinearUrlKey(w.urlKey)) return null;
+  return { view, workspace: { name: w.name, urlKey: w.urlKey, teams }, superseded: raw.superseded };
+}
+
+/**
+ * The card's list, read off a key act's answer or the list a refusal carries. Every row is checked, and a list with
+ * one row this build cannot read is no list: the card then says it could not read the workspaces, never a row the box
+ * did not send. NOTHING else is kept (`added` and `replaced` only as workspace ids).
+ */
+export function readLinearWorkspaces(raw: unknown): LinearWorkspacesRead | null {
+  if (!isRecord(raw) || (raw.store !== 'ok' && raw.store !== 'unreadable') || !Array.isArray(raw.workspaces)) return null;
+  const workspaces = raw.workspaces.map(readLinearWorkspace);
+  const legacy = raw.legacy === null ? null : readLegacyRow(raw.legacy);
+  if (workspaces.some((w) => w === null) || (raw.legacy !== null && legacy === null)) return null;
+  const read: LinearWorkspacesRead = { store: raw.store, workspaces: workspaces as LinearWorkspaceView[], legacy };
+  if (isLinearUuid(raw.added)) read.added = raw.added;
+  if (isLinearUuid(raw.replaced)) read.replaced = raw.replaced;
+  return read;
+}
+
+/** A 2xx `{ok: true, store, workspaces, legacy}` body, read; anything else is `'unreadable'`. */
+export function linearWorkspacesOf(raw: unknown): LinearWorkspacesRead | 'unreadable' {
+  return (isRecord(raw) && raw.ok === true ? readLinearWorkspaces(raw) : null) ?? 'unreadable';
+}
+
+/** The list a slot check's 409 `not-connected` carries (the slot or its key was gone: that list IS the check's
+ *  answer), or null for any other failure, which the caller rethrows. */
+export function linearWorkspacesNotConnectedOf(err: unknown): LinearWorkspacesRead | 'unreadable' | null {
+  if (err instanceof ApiError && err.status === 409 && isRecord(err.body) && err.body.error === 'not-connected') {
+    return readLinearWorkspaces(err.body) ?? 'unreadable';
+  }
+  return null;
+}
+
+/** The workspace an add's 409 `workspace-exists` names (spec §10.1), so the card can ask to replace its key by name;
+ *  null for any other failure. */
+export function linearWorkspaceExistsOf(err: unknown): { id: string; name: string | null } | null {
+  if (!(err instanceof ApiError) || err.status !== 409 || !isRecord(err.body) || err.body.error !== 'workspace-exists') return null;
+  const w = err.body.workspace;
+  if (!isRecord(w) || !isLinearUuid(w.id)) return null;
+  return { id: w.id, name: isLinearStoredName(w.name) ? w.name : null };
 }
 
 /**

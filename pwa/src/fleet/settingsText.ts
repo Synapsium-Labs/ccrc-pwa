@@ -339,12 +339,13 @@ export const SETTINGS_CARDS = {
     },
     // Box token's purpose line names the rotation interval, so it is built beside the card from the interval
     // constant (`SecuritySection.tsx`'s `BOX_TOKEN_TEXT.purpose`); only its scope is here.
-    // The Linear card (named workspaces S4b) follows Box token: the key is a credential this box holds, so its scope
-    // is the box's, and it sits after the reserved "Recent account changes" slot and Box token so adding it moves
-    // neither. Its body, the state sentences and the controls are `LinearSection.tsx`'s.
+    // The Linear card (named workspaces S4b; one key per workspace since #1444, spec §10.2) follows Box token: the keys
+    // are credentials this box holds, so its scope is the box's, and it sits after the reserved "Recent account
+    // changes" slot and Box token so adding it moves neither. Its body, the state sentences and the controls are
+    // `LinearSection.tsx`'s.
     linear: {
       scope: SETTINGS_SCOPE.box, title: 'Linear',
-      purpose: 'Connect Linear so a ticket you paste into a new session shows its real title. Without it the title is read from what you paste.',
+      purpose: 'Linear keys let every session on this fleet read and write Linear through ccrc, and show real ticket titles. Add one key for each Linear workspace. Sessions never see a key.',
     },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;

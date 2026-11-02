@@ -26,7 +26,7 @@ import type { AuthStatus, MarkerState, PasskeyListResponse } from '../../../../s
 import { childReclaimMarker } from '../../fleet/childReclaimWords';
 import { useCollectLaneView, type CollectLanePoll } from '../../fleet/useCollectLaneView';
 import { useDispatchAbandonView, type DispatchAbandonPoll } from '../../fleet/useDispatchAbandonView';
-import { useLinearConnection, type LinearPoll } from '../../fleet/useLinearConnection';
+import { useLinearWorkspaces, type LinearWorkspacesPoll } from '../../fleet/useLinearWorkspaces';
 import { useStallWatchView, type StallWatchPoll } from '../../fleet/useStallWatchView';
 import { useTestboxView, type TestboxPoll } from '../../fleet/useTestboxView';
 import { useUpdatesView, type UpdatesPoll } from '../../fleet/useUpdatesView';
@@ -59,8 +59,9 @@ export interface SettingsView {
   readonly dispatchAbandon: DispatchAbandonPoll;
   /** The test box block (TB10, D-7412), polled at the server poll's cadence. */
   readonly testbox: TestboxPoll;
-  /** The Linear connection (named workspaces S4b), shown on the Security page; read when the page becomes visible, not polled. */
-  readonly linear: LinearPoll;
+  /** The Linear workspace keys and the legacy key (#1444, spec §10.2), shown on the Security page; read when the page
+   *  becomes visible, not polled. */
+  readonly linear: LinearWorkspacesPoll;
   readonly pause: PauseRead;
   readonly auth: AuthRead;
   readonly push: PushState;
@@ -113,8 +114,8 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const tb = useTestboxView();
   const testbox = useMemo<TestboxPoll>(
     () => ({ view: tb.view, failure: tb.failure, reload: tb.reload }), [tb.view, tb.failure, tb.reload]);
-  const l = useLinearConnection();
-  const linear = useMemo<LinearPoll>(
+  const l = useLinearWorkspaces();
+  const linear = useMemo<LinearWorkspacesPoll>(
     () => ({ view: l.view, failure: l.failure, reload: l.reload, settle: l.settle }), [l.view, l.failure, l.reload, l.settle]);
   const coord = useFleetStore((s) => s.coord);
   const coordFrameSeen = useFleetStore((s) => s.coordFrameSeen);

@@ -11,7 +11,7 @@ import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import { questionAnswerRequest } from '../session/answerLifecycle';
-import { ANSWERED, answered, linearViewOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange } from './wireReaders';
+import { ANSWERED, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
@@ -344,6 +344,25 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     },
     disconnectLinear: async (): Promise<LinearConnectionView | 'unreadable'> =>
       linearViewOf(await (await request('/api/linear/connection', { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
+    /** The Settings card's four calls for workspace keys (#1444, spec §10.1, §10.2), beside the legacy row's four
+     *  above. Each answers the list, or `'unreadable'` for a 2xx whose body is not one (a write may have landed: the
+     *  card re-reads). A refusal rejects with its `ApiError` (`workspace-exists` names the workspace, `step-up-required`
+     *  …), except a check's 409 `not-connected`, whose list IS its answer. The key is only ever in the add's body. */
+    linearWorkspaces: async (): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request('/api/linear/workspaces', { headers: { accept: 'application/json' } })).json().catch(() => null)),
+    addLinearWorkspace: async (key: string, replace: boolean): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request('/api/linear/workspaces', jsonInit(replace ? { key, replace } : { key }))).json().catch(() => null)),
+    checkLinearWorkspace: async (id: string): Promise<LinearWorkspacesRead | 'unreadable'> => {
+      try {
+        return linearWorkspacesOf(await (await request(`/api/linear/workspaces/${encodeURIComponent(id)}/check`, jsonInit())).json().catch(() => null));
+      } catch (err) {
+        const list = linearWorkspacesNotConnectedOf(err);
+        if (list !== null) return list;
+        throw err;
+      }
+    },
+    removeLinearWorkspace: async (id: string): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request(`/api/linear/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
 
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster

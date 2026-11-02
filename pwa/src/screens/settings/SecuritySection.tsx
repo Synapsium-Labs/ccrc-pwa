@@ -24,7 +24,7 @@ import { TOKEN_ROTATION_INTERVAL_MS } from '../../../../shared/box-token';
 import { dayClock, elapsedWords } from '../updates';
 import '../../fleet/fleet.css';
 import type { AuthRead, PasskeysRead } from './SettingsDataProvider';
-import type { LinearPoll } from '../../fleet/useLinearConnection';
+import type { LinearWorkspacesPoll } from '../../fleet/useLinearWorkspaces';
 import { LinearSection } from '../LinearSection';
 import { SignInGateCard } from './SignInGateCard';
 import { ThisSessionCard } from './ThisSessionCard';
@@ -190,7 +190,7 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
  *  pending, the gate card saying why: spec §5.5's table); then the Box token card over its one /api/updates poll; then
  *  the Linear card over the frame's one Linear read. */
 export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
-  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void; linear: LinearPoll;
+  poll: UpdatesPoll; auth: AuthRead; passkeys: PasskeysRead; refreshAuth: () => void; linear: LinearWorkspacesPoll;
 }): ReactNode {
   const now = useNow(30_000);
   return (
