@@ -1,0 +1,232 @@
+{
+  "name": "read-users",
+  "documentSource": "code",
+  "document": "query Users($first: Int!, $after: String) { users(first: $first, after: $after) { nodes { id name displayName active } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "first": 25,
+    "after": null
+  },
+  "requestBody": "{\"query\":\"query Users($first: Int!, $after: String) { users(first: $first, after: $after) { nodes { id name displayName active } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"first\":25,\"after\":null}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631317802,
+  "receivedAtMs": 1793631318119,
+  "sentAt": "2026-11-02T14:55:17.802+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:55:18 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "65"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999935"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634918483"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634918483"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "users": {
+        "nodes": [
+          {
+            "id": "00000000-0005-4000-8000-000000000002",
+            "name": "User B",
+            "displayName": "user-b",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000003",
+            "name": "User C",
+            "displayName": "user-c",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000004",
+            "name": "User D",
+            "displayName": "user-d",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000005",
+            "name": "User E",
+            "displayName": "user-e",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000006",
+            "name": "User F",
+            "displayName": "user-f",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000007",
+            "name": "User G",
+            "displayName": "user-g",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000008",
+            "name": "User H",
+            "displayName": "user-h",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000009",
+            "name": "User I",
+            "displayName": "user-i",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-00000000000a",
+            "name": "User J",
+            "displayName": "user-j",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-00000000000b",
+            "name": "User K",
+            "displayName": "user-k",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-00000000000c",
+            "name": "User L",
+            "displayName": "user-l",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-00000000000d",
+            "name": "User M",
+            "displayName": "user-m",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-00000000000e",
+            "name": "User N",
+            "displayName": "user-n",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-00000000000f",
+            "name": "User O",
+            "displayName": "user-o",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000010",
+            "name": "User P",
+            "displayName": "user-p",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000011",
+            "name": "User Q",
+            "displayName": "user-q",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000012",
+            "name": "User R",
+            "displayName": "user-r",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000013",
+            "name": "User S",
+            "displayName": "user-s",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000014",
+            "name": "User T",
+            "displayName": "user-t",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000015",
+            "name": "User U",
+            "displayName": "user-u",
+            "active": true
+          },
+          {
+            "id": "00000000-0005-4000-8000-000000000001",
+            "name": "User A",
+            "displayName": "user-a",
+            "active": true
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "00000000-0005-4000-8000-000000000001"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"users\":{\"nodes\":[{\"id\":\"00000000-0005-4000-8000-000000000002\",\"name\":\"User B\",\"displayName\":\"user-b\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000003\",\"name\":\"User C\",\"displayName\":\"user-c\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000004\",\"name\":\"User D\",\"displayName\":\"user-d\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000005\",\"name\":\"User E\",\"displayName\":\"user-e\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000006\",\"name\":\"User F\",\"displayName\":\"user-f\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000007\",\"name\":\"User G\",\"displayName\":\"user-g\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000008\",\"name\":\"User H\",\"displayName\":\"user-h\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000009\",\"name\":\"User I\",\"displayName\":\"user-i\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-00000000000a\",\"name\":\"User J\",\"displayName\":\"user-j\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-00000000000b\",\"name\":\"User K\",\"displayName\":\"user-k\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-00000000000c\",\"name\":\"User L\",\"displayName\":\"user-l\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-00000000000d\",\"name\":\"User M\",\"displayName\":\"user-m\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-00000000000e\",\"name\":\"User N\",\"displayName\":\"user-n\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-00000000000f\",\"name\":\"User O\",\"displayName\":\"user-o\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000010\",\"name\":\"User P\",\"displayName\":\"user-p\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000011\",\"name\":\"User Q\",\"displayName\":\"user-q\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000012\",\"name\":\"User R\",\"displayName\":\"user-r\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000013\",\"name\":\"User S\",\"displayName\":\"user-s\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000014\",\"name\":\"User T\",\"displayName\":\"user-t\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000015\",\"name\":\"User U\",\"displayName\":\"user-u\",\"active\":true},{\"id\":\"00000000-0005-4000-8000-000000000001\",\"name\":\"User A\",\"displayName\":\"user-a\",\"active\":true}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":\"00000000-0005-4000-8000-000000000001\"}}}}\n"
+}

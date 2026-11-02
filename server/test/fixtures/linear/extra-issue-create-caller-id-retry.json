@@ -1,0 +1,126 @@
+{
+  "name": "extra-issue-create-caller-id-retry",
+  "documentSource": "code document; the same caller-chosen id sent again (a retry)",
+  "document": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }",
+  "variables": {
+    "input": {
+      "teamId": "00000000-0001-4000-8000-000000000001",
+      "id": "00000000-0006-4000-8000-000000000003",
+      "title": "FX capture caller-chosen id",
+      "description": "Issue created with a caller-chosen id by the FX fixture capture.\n\n— written by a ccrc fleet session"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }\",\"variables\":{\"input\":{\"teamId\":\"00000000-0001-4000-8000-000000000001\",\"id\":\"00000000-0006-4000-8000-000000000003\",\"title\":\"FX capture caller-chosen id\",\"description\":\"Issue created with a caller-chosen id by the FX fixture capture.\\n\\n— written by a ccrc fleet session\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631387892,
+  "receivedAtMs": 1793631388237,
+  "sentAt": "2026-11-02T14:56:27.892+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:28 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "321"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "11"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999989"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634988511"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634988511"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "conflict on insert of Issue",
+        "path": [
+          "issueCreate"
+        ],
+        "locations": [
+          {
+            "line": 1,
+            "column": 51
+          }
+        ],
+        "extensions": {
+          "type": "invalid input",
+          "code": "INPUT_ERROR",
+          "statusCode": 400,
+          "userError": true,
+          "userPresentableMessage": "Entity Issue with id 00000000-0006-4000-8000-000000000003 already exists."
+        }
+      }
+    ],
+    "data": null
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"conflict on insert of Issue\",\"path\":[\"issueCreate\"],\"locations\":[{\"line\":1,\"column\":51}],\"extensions\":{\"type\":\"invalid input\",\"code\":\"INPUT_ERROR\",\"statusCode\":400,\"userError\":true,\"userPresentableMessage\":\"Entity Issue with id 00000000-0006-4000-8000-000000000003 already exists.\"}}],\"data\":null}\n"
+}
