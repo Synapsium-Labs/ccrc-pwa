@@ -1008,6 +1008,8 @@ jobs:
   # In the merge queue it also carries the browser suite (operator ruling
   # 2026-10-28), for the node floor's reason in `server` above: a fast pull
   # request skips it, so the queue's run is its only one before the merge.
+  # `browser-pwa` is a matrix of three legs; its result is success only when
+  # every leg succeeded, so one red, cancelled or timed-out leg refuses here.
   # Elsewhere the browser suite stays advisory.
   pwa:
     name: test (pwa)
@@ -1023,7 +1025,7 @@ jobs:
         if: github.event_name == 'merge_group' && needs.browser-pwa.result != 'success'
         run: exit 1
       - name: Every pwa shard and the static checks succeeded
-        run: echo "pwa shards ${{ needs.pwa-shard.result }}, static ${{ needs.pwa-static.result }}, browser ${{ needs.browser-pwa.result }}"
+        run: echo "pwa shards ${{ needs.pwa-shard.result }}, static ${{ needs.pwa-static.result }}, browser legs ${{ needs.browser-pwa.result }}"
 
   # ── the one place a component is RENDERED and MEASURED ─────────────────────
   #
@@ -1238,8 +1240,23 @@ jobs:
   # ruling 2026-10-28: a fast pull request skips it). No job-level `if:` and no `needs:`: it skips by STEP on a
   # refresh or a rebuild, like the required legs, because a job skipped by
   # `if:` reads as red in full-suite. Pinned by ci-pipeline.test.ts.
+  #
+  # THREE LEGS, split by measured file time (2026-11-02). As one job it ran
+  # 1,066 to 1,223 s of Test step over about 3,500 s of file time, and that day
+  # 56% of merge-queue runs hit its 20-minute limit with every test green,
+  # which ejected their pull requests from the queue. Each leg runs
+  # `--shard=<leg>/<total>`, which the browser config's sequencer answers with
+  # pwa/browser/legs.ts's split (longest file first, each to the lightest leg;
+  # a file with no measured time to the lightest leg) instead of vitest's hash
+  # split, which is blind to time. Every leg computes the whole split from the
+  # files vitest collected and refuses one that is not a partition, so each
+  # file runs in exactly one leg (pwa/test/browser-legs.test.ts,
+  # browser-leg.test.ts). `needs.browser-pwa.result` is the matrix's one
+  # result, success only when every leg succeeded, so full-suite and the
+  # queue's refusal in `test (pwa)` read all three. fail-fast off, as the pwa
+  # shards: one red leg does not cancel the others' evidence.
   browser-pwa:
-    name: browser (pwa)
+    name: browser (pwa) ${{ matrix.leg }}/${{ matrix.total }}
     runs-on: ubuntu-latest
     # Measured 2026-10-28 (desktop polish Task C11, run 40612653530, whose
     # log has 30 browser files): the Test step took 861 s of an 893 s job,
@@ -1253,9 +1270,19 @@ jobs:
     # files and ask-inline first (desktop polish Task C12): in run
     # 40695090274, with the tree's 33 files, the Test step took 911 s and
     # those four were the first four to finish.
-    timeout-minutes: 20
+    #
+    # Split into three legs (2026-11-02), the slowest leg holds ask-inline
+    # (547 s at its slowest) and about 1,200 s of file time, so a leg's Test
+    # step is about ten minutes. 30 is the backstop, as the pwa shards': past
+    # it a leg has a real hang, not a slow day.
+    timeout-minutes: 30
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2, 3]
+        total: [3]
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1294,11 +1321,12 @@ jobs:
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
         run: ../.github/ci/bounded.sh 180 npm ci
-      # Local binary, never npx (see the test matrix above).
+      # Local binary, never npx (see the test matrix above). The leg's files
+      # and their measured seconds are printed first (the sequencer, to stderr).
       - name: Test
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
-        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts
+        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts --shard=${{ matrix.leg }}/${{ matrix.total }}
 
   # THE FLOOR ITSELF, on exactly its own version (ccrc history spec
   # 2026-10-05 §9.9; O18). Every other leg runs '22', which setup-node

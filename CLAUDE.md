@@ -292,8 +292,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   the traced dependency map (`.github/ci/select-tests.mjs`) as before (a label starts no run: add it, then push or close and reopen; GitHub's "Re-run jobs" replays the run with the label set it started with, so it does not pick up `full-ci`). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. A server test the map has no entry for or does not trust, or one that reads a TypeScript file as text without importing it, is left to the merge queue, so a fast PR's `plan fast server tests` summary is the list of what ran. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
   `shadow`, a full-run PR's selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
   request runs"): every server shard, the agent, pwa and browser tests and the node floor, in a concurrency group of its own, and never the
-  macOS legs or `full-suite`; there `test (pwa)` refuses a red browser suite and `test (server)` a red node floor
-  (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. The queue is the
+  macOS legs or `full-suite`; there `test (pwa)` refuses a red browser suite (any of its three legs: one matrix job,
+  `browser (pwa) <leg>/3`, split by measured file time in `pwa/browser/legs.ts`, each file in exactly one leg) and
+  `test (server)` a red node floor (step-level, merge_group-only refusals), so both gate the merge, and the perf
+  legs stay advisory. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
   live in `.github/workflows/macos.yml`, off the merge path: every push to `main` runs them (one run at a time, the newest
