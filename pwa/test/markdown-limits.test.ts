@@ -140,3 +140,39 @@ describe('markdownLimits: each limit is declared once, in lib/markdownLimits.ts'
     expect(holders.get(name)).toEqual(['pwa/src/lib/markdownLimits.ts']);
   });
 });
+
+// Docs W5h-a Task 8 (base spec 2026-10-01 section 7.10's M4.H22, its mutation "a literal at a use site"): each new limit
+// reaches its consumer by name, imported from `./markdownLimits`, and its value is not spelled as a number there. Read
+// with TypeScript's parser. NOT EXHAUSTIVE: a value built from pieces, or spelled in a consumer not listed here, is not
+// seen; the values 2 and 256 are too common to scan for, so `HIGHLIGHT_PAGE_MAX_TIMEOUTS`, `HIGHLIGHT_LINE_RETRY_UNITS`
+// and `HIGHLIGHT_CACHE_MAX_ENTRIES` are checked by import only.
+const USE_SITES: Readonly<Record<string, readonly string[]>> = {
+  'markdownRunner.ts': ['HIGHLIGHT_BLOCK_DEADLINE_MS', 'HIGHLIGHT_BOOT_BUDGET_MS'],
+  'highlightJob.ts': ['MD_HIGHLIGHT_MAX_HTML_CHARS', 'HIGHLIGHT_LINE_RETRY_UNITS', 'HIGHLIGHT_CACHE_MAX_ENTRIES', 'HIGHLIGHT_CACHE_MAX_CHARS'],
+  'highlightStore.ts': [
+    'HIGHLIGHT_PAGE_WORKER_MS', 'HIGHLIGHT_PAGE_MAX_TIMEOUTS', 'MD_HIGHLIGHT_MAX_HTML_CHARS',
+    'DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS', 'HIGHLIGHT_STREAM_DEBOUNCE_MS', 'HIGHLIGHT_LINE_RETRY_UNITS',
+  ],
+};
+
+describe('M4.H22: the new limits reach their consumers by name (W5h-a)', () => {
+  it.each(Object.entries(USE_SITES))('%s imports its limits from ./markdownLimits and spells none of their values', (file, names) => {
+    const sf = ts.createSourceFile(file, readFileSync(path.join(PWA, 'src', 'lib', file), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const imported = new Set<string>();
+    const numbers = new Set<number>();
+    const visit = (n: ts.Node): void => {
+      if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && n.moduleSpecifier.text === './markdownLimits'
+        && n.importClause?.namedBindings !== undefined && ts.isNamedImports(n.importClause.namedBindings)) {
+        for (const el of n.importClause.namedBindings.elements) imported.add(el.name.text);
+      }
+      if (ts.isNumericLiteral(n)) numbers.add(Number(n.text.replaceAll('_', '')));
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    for (const name of names) {
+      expect(imported.has(name), `${file} imports ${name}`).toBe(true);
+      const value = VALUES[name]!;
+      if (value !== 2 && value !== 256) expect(numbers.has(value), `${file} spells ${name}'s value, ${value}`).toBe(false);
+    }
+  });
+});

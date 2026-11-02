@@ -556,6 +556,14 @@ describe('source pins', () => {
     expect(addsMessageListener("self.addEventListener('message', () => undefined);")).toBe(true);
     expect(MARKDOWN_FILES.every((f) => !addsMessageListener(read(f)))).toBe(true);
   });
+
+  it('M4.H3: the scan reads the store and the context, and a postMessage or a message listener planted in the store is red', () => {
+    expect(MARKDOWN_FILES).toEqual(expect.arrayContaining(['highlightStore.ts', 'highlighterContext.ts']));
+    expect(postsOrReceives(read('highlightStore.ts'))).toBe(false);
+    const planted = `${read('highlightStore.ts')}\nself.postMessage(1);\nself.addEventListener('message', () => undefined);\n`;
+    expect(postsOrReceives(planted)).toBe(true);
+    expect(addsMessageListener(planted)).toBe(true);
+  });
 });
 
 describe("T11 review 3-1: a dropped worker's messageerror is not heard", () => {

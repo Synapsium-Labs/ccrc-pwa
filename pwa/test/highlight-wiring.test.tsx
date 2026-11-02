@@ -4,15 +4,15 @@
 // first and are coloured when the worker answers; their stores go to the Docs highlighter only; each is published
 // through `HighlighterContext`'s `publish` slot with its `settled()`, which is what Export reads (refinement (h)); the
 // Docs screen prewarms the Docs highlighter.
-import type { ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { DocMarkdown } from '../src/docs/DocMarkdown';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
-import { HighlighterContext, type HighlighterContextValue } from '../src/lib/highlighterContext';
+import { HIGHLIGHTER_DEFAULT, HighlighterContext, createProductionStore, type HighlighterContextValue } from '../src/lib/highlighterContext';
 import type { HighlightStore } from '../src/lib/highlightStore';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import type { MarkdownParser } from '../src/lib/markdownRunner';
+import { chatHighlighter, docsHighlighter, type MarkdownParser } from '../src/lib/markdownRunner';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { HLJS } from '../src/lib/highlightGrammars';
 import type { Highlighter, HighlightOutcome, HighlightRequest } from '../src/lib/highlightProtocol';
@@ -171,5 +171,21 @@ describe('the page halves of M4.H7, M4.H13 and M4.H18: what a block left plain, 
     await act(async () => { h.answer(1, coloured(LONG, 'line')); });
     await waitFor(() => expect(labels(container)).toEqual(['TypeScript · highlighted line by line']));
     expect(container.querySelector('.hljs-keyword')).not.toBeNull();
+  });
+});
+
+describe('M4.H17: the seam\'s default is production', () => {
+  it('HighlighterContext\'s default holds docsHighlighter, chatHighlighter and the production createStore, and no publish slot', () => {
+    let seen: HighlighterContextValue | undefined;
+    function Probe(): ReactNode {
+      seen = useContext(HighlighterContext);
+      return null;
+    }
+    render(<Probe />);
+    expect(seen).toBe(HIGHLIGHTER_DEFAULT);
+    expect(HIGHLIGHTER_DEFAULT.docs).toBe(docsHighlighter);
+    expect(HIGHLIGHTER_DEFAULT.chat).toBe(chatHighlighter);
+    expect(HIGHLIGHTER_DEFAULT.createStore).toBe(createProductionStore);
+    expect(HIGHLIGHTER_DEFAULT.publish).toBeUndefined();
   });
 });

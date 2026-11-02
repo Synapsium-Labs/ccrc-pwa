@@ -565,3 +565,148 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     expect(planted(LEAF, "\nimport type { ReaderMount } from './reader/bridge';\nexport type PlantedMount = ReaderMount;\n")).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause W5h-a (native Docs reader, W5h-a Task 8; base spec 2026-10-01 section 4.10's Guards; M4.H4, M4.H15's scan
+// half, M4.H17's seam half). Across `pwa/src`, read with TypeScript's parser:
+//   - a `highlight.js` specifier (any import or export form, `import()` and `import('x').T` included) sits only in
+//     `lib/highlightGrammars.ts`; `lib/highlightGrammars` is imported only by `lib/highlightJob.ts`, `lib/highlightJob`
+//     only by `lib/markdownHighlightWorker.ts`, and `lib/markdownHighlightWorker` by nothing (it is spawned by URL), so
+//     no main-thread module reaches highlight.js (M4.H4; the built half is `markdown-worker-built.test.ts`'s);
+//   - nothing imports a module under `pwa/test`, the test store above all (M4.H17);
+//   - exactly one `dangerouslySetInnerHTML` JSX attribute, in `lib/markdown.tsx`'s `HighlightedCode`, whose value is
+//     `{ __html: <name>.html }` for a `<name>` that function passes to `isCheckedHighlightHtml` (M4.H15). Export's
+//     `<style>` exception joins this clause, with its planted control, when Export lands.
+// NOT EXHAUSTIVE. Known evasions: a specifier built at run time or reached through `require`, `eval` or a re-export
+// from outside `pwa/src`; HTML written through the DOM (`innerHTML`, `outerHTML`, `insertAdjacentHTML`: none in
+// `pwa/src`, which review lens 1 reads for); a checked value's `html` read through an alias before the sink. The
+// behavioural halves are `highlight-html.test.tsx` (a forged value renders plain) and `highlight-wiring.test.tsx`
+// (the context's default is production).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Each link of the highlight worker's chain, base-relative without an extension, and the one file that may import it
+ *  (`null`: none may). */
+const HIGHLIGHT_CHAIN: ReadonlyArray<readonly [string, string | null]> = [
+  ['src/lib/highlightGrammars', 'src/lib/highlightJob.ts'],
+  ['src/lib/highlightJob', 'src/lib/markdownHighlightWorker.ts'],
+  ['src/lib/markdownHighlightWorker', null],
+];
+const HLJS_HOME = 'src/lib/highlightGrammars.ts';
+
+/** Where a sink is and whether it has the one allowed shape: `<file> <function> ok|bad`. */
+function sinkVerdict(attr: ts.JsxAttribute, file: string): string {
+  let fn: ts.Node | undefined = attr.parent;
+  while (fn !== undefined && !ts.isFunctionDeclaration(fn)) fn = fn.parent;
+  const name = fn !== undefined && ts.isFunctionDeclaration(fn) && fn.name !== undefined ? fn.name.text : '(none)';
+  const expr = attr.initializer !== undefined && ts.isJsxExpression(attr.initializer) ? attr.initializer.expression : undefined;
+  let ok = false;
+  if (fn !== undefined && expr !== undefined && ts.isObjectLiteralExpression(expr) && expr.properties.length === 1) {
+    const prop = expr.properties[0]!;
+    if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === '__html'
+      && ts.isPropertyAccessExpression(prop.initializer) && prop.initializer.name.text === 'html'
+      && ts.isIdentifier(prop.initializer.expression)) {
+      const held = prop.initializer.expression.text;
+      const look = (n: ts.Node): void => {
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'isCheckedHighlightHtml'
+          && n.arguments.length === 1 && ts.isIdentifier(n.arguments[0]!) && (n.arguments[0] as ts.Identifier).text === held) ok = true;
+        ts.forEachChild(n, look);
+      };
+      look(fn);
+    }
+  }
+  return `${file} ${name} ${ok ? 'ok' : 'bad'}`;
+}
+
+/** The findings in one module: its forbidden imports (`<file> <rule>`) and its sinks. */
+function scanHighlightFile(source: string, file: string): { hits: string[]; sinks: string[] } {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const hits: string[] = [];
+  const sinks: string[] = [];
+  for (const use of moduleUses(sf)) {
+    if (use.specifier === 'highlight.js' || use.specifier.startsWith('highlight.js/')) {
+      if (file !== HLJS_HOME) hits.push(`${file} highlight.js:import`);
+      continue;
+    }
+    const target = relativeTarget(file, use.specifier);
+    if (target === undefined) continue;
+    if (target === 'test' || target.startsWith('test/')) hits.push(`${file} test:import`);
+    for (const [module, home] of HIGHLIGHT_CHAIN) {
+      if (target === module && file !== home) hits.push(`${file} ${module.slice('src/lib/'.length)}:import`);
+    }
+  }
+  const visit = (n: ts.Node): void => {
+    if (ts.isJsxAttribute(n) && ts.isIdentifier(n.name) && n.name.text === 'dangerouslySetInnerHTML') sinks.push(sinkVerdict(n, file));
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return { hits, sinks };
+}
+
+/** The scan over every `.ts` and `.tsx` file under `<base>/src`, named relative to `base`. */
+function highlightScan(base: string): { files: string[]; hits: string[]; sinks: string[] } {
+  const files = sourceFiles(path.join(base, 'src')).map((f) => path.relative(base, f).split(path.sep).join('/'));
+  const found = files.map((rel) => scanHighlightFile(readFileSync(path.join(base, ...rel.split('/')), 'utf8'), rel));
+  return { files, hits: found.flatMap((f) => f.hits), sinks: found.flatMap((f) => f.sinks) };
+}
+
+describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no test seam in pwa/src (M4.H4, M4.H15, M4.H17)', () => {
+  const copies: string[] = [];
+  afterAll(() => { for (const dir of copies) rmSync(dir, { recursive: true, force: true }); });
+  /** A fresh copy of `pwa/src` with `edit` applied to one file (created when absent); returns the copy's base. */
+  function planted(rel: string, edit: (old: string) => string): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-w5ha-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, ...rel.split('/'));
+    let old = '';
+    try { old = readFileSync(file, 'utf8'); } catch { /* a new file */ }
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, edit(old));
+    return dir;
+  }
+  const append = (text: string) => (old: string): string => old + text;
+
+  it('M4.H4: highlight.js and the worker chain sit only in their homes across pwa/src', () => {
+    const { files, hits } = highlightScan(PWA);
+    expect(files).toEqual(expect.arrayContaining(['src/lib/highlightGrammars.ts', 'src/lib/highlightJob.ts', 'src/lib/markdown.tsx']));
+    expect(readFileSync(path.join(SRC_DIR, 'lib', 'highlightGrammars.ts'), 'utf8')).toContain("from 'highlight.js/lib/core'");
+    expect(hits.filter((h) => !h.endsWith('test:import'))).toEqual([]);
+  });
+
+  it('M4.H17: nothing under pwa/src imports from pwa/test', () => {
+    expect(highlightScan(PWA).hits.filter((h) => h.endsWith('test:import'))).toEqual([]);
+  });
+
+  it('M4.H15: exactly one sink in pwa/src, the checked one in HighlightedCode', () => {
+    expect(highlightScan(PWA).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok']);
+  });
+
+  it('M4.H4 planted: highlight.js imported in lib/markdown.tsx is red', () => {
+    const dir = planted('src/lib/markdown.tsx', append("\nimport plantedHljs from 'highlight.js/lib/core';\nexport const plantedH = plantedHljs;\n"));
+    expect(highlightScan(dir).hits).toEqual(['src/lib/markdown.tsx highlight.js:import']);
+  });
+
+  it('M4.H4 planted: highlightGrammars imported in DocsLeaf, and the worker entry imported by the runner, are red', () => {
+    const leaf = planted('src/docs/DocsLeaf.tsx', append("\nimport { HLJS as plantedG } from '../lib/highlightGrammars';\nexport const plantedGr = plantedG;\n"));
+    expect(highlightScan(leaf).hits).toEqual(['src/docs/DocsLeaf.tsx highlightGrammars:import']);
+    const runner = planted('src/lib/markdownRunner.ts', append("\nimport './markdownHighlightWorker';\n"));
+    expect(highlightScan(runner).hits).toEqual(['src/lib/markdownRunner.ts markdownHighlightWorker:import']);
+  });
+
+  it('M4.H17 planted: the test store imported from pwa/src is red', () => {
+    const dir = planted('src/lib/markdown.tsx', append("\nimport { SYNC_HIGHLIGHT } from '../../test/highlightTestStore';\nexport const plantedSync = SYNC_HIGHLIGHT;\n"));
+    expect(highlightScan(dir).hits).toEqual(['src/lib/markdown.tsx test:import']);
+  });
+
+  it('M4.H15 planted: a second sink under lib/ or under docs/export/ is red', () => {
+    const lib = planted('src/lib/markdown.tsx', append('\nexport function PlantedSink(p: { h: string }) { return <i dangerouslySetInnerHTML={{ __html: p.h }} />; }\n'));
+    expect(highlightScan(lib).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedSink bad']);
+    const exp = planted('src/docs/export/buildExport.tsx', append("export function Planted() { return <style dangerouslySetInnerHTML={{ __html: 'a{}' }} />; }\n"));
+    expect(highlightScan(exp).sinks).toContain('src/docs/export/buildExport.tsx Planted bad');
+  });
+
+  it('M4.H15 planted: the sink fed the raw string, unchecked, is red', () => {
+    const dir = planted('src/lib/markdown.tsx', (old) => old.replace('__html: checked.html', '__html: raw'));
+    expect(highlightScan(dir).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode bad']);
+  });
+});
