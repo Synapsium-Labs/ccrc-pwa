@@ -139,7 +139,7 @@ describe('the parse worker closure', () => {
 });
 
 const PINS: Readonly<Record<string, string>> = {
-  'hast-util-to-jsx-runtime': '2.3.6',
+  'hast-util-to-jsx-runtime': '2.3.7',
   'html-url-attributes': '3.0.1',
   'remark-parse': '11.0.0',
   'remark-rehype': '11.1.2',
