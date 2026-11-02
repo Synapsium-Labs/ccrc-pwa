@@ -825,3 +825,50 @@ describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no t
     expect(highlightWorkerUrlSites("new URL('./markdownWorker.ts', import.meta.url);", 'x.ts')).toEqual([]);
   });
 });
+
+// Clause W5h-a, M7.12 (base spec 2026-10-01 section 7.10): R19's page only reads. In its two modules, read with
+// TypeScript's parser: no `.refresh(` call, no `fetch(` (bare or as a member), no `localStorage`, `sessionStorage` or
+// `indexedDB`, no `clipboard` member, no import of `lib/storage`, and every member read of the `api` import is `docs`.
+// NOT EXHAUSTIVE: a call through an alias (`const r = loaders.refresh`), a computed member, and anything reached
+// through `any` or `eval` are not seen; the driver's own test asserts the fake loaders' `refresh` is never called.
+const MEASURE_MODULES: readonly string[] = ['src/screens/HighlightMeasure.tsx', 'src/screens/highlightMeasureRun.tsx'];
+
+function measureFindings(source: string, file: string): string[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const out: string[] = [];
+  for (const use of moduleUses(sf)) if (relativeTarget(file, use.specifier) === 'src/lib/storage') out.push(`${file} storage`);
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const callee = unwrap(n.expression);
+      if (memberName(callee) === 'refresh') out.push(`${file} refresh`);
+      if ((ts.isIdentifier(callee) && callee.text === 'fetch') || memberName(callee) === 'fetch') out.push(`${file} fetch`);
+    }
+    if (ts.isIdentifier(n) && ['localStorage', 'sessionStorage', 'indexedDB'].includes(n.text)) out.push(`${file} storage`);
+    if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'clipboard') out.push(`${file} clipboard`);
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'api' && n.name.text !== 'docs') out.push(`${file} api`);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+describe('clause W5h-a, M7.12: R19\'s measurement page only reads', () => {
+  const read = (rel: string): string => readFileSync(path.join(PWA, ...rel.split('/')), 'utf8');
+
+  it('its two modules make no refresh, no fetch of their own, no storage, no clipboard, and read only api.docs', () => {
+    expect(read('src/screens/HighlightMeasure.tsx')).toContain('api.docs');
+    expect(MEASURE_MODULES.flatMap((f) => measureFindings(read(f), f))).toEqual([]);
+  });
+
+  it.each([
+    ['a refresh call', 'export const planted = (l: { refresh(p: string): void }) => l.refresh("x");', 'refresh'],
+    ['a fetch of its own', "export const planted = () => fetch('/api/x');", 'fetch'],
+    ['a storage write', "export const planted = () => localStorage.setItem('k', 'v');", 'storage'],
+    ['a clipboard write', "export const planted = () => navigator.clipboard.writeText('x');", 'clipboard'],
+    ['another api read', "import { api } from '../lib/api';\nexport const planted = () => api.sessions;", 'api'],
+    ['the storage owner', "import { pageStorage } from '../lib/storage';\nexport const planted = pageStorage;", 'storage'],
+  ])('planted: %s in the run module is red', (_name, text, rule) => {
+    const file = 'src/screens/highlightMeasureRun.tsx';
+    expect(measureFindings(`${read(file)}\n${text}\n`, file)).toEqual([`${file} ${rule}`]);
+  });
+});

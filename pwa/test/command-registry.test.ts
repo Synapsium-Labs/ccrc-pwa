@@ -40,6 +40,12 @@ describe('rankCommands', () => {
   });
 });
 
+/** GO_TO's rule for a row that is not top (W5h-a): its path sits under a top row's path other than `/`, whatever its
+ *  id. R19's measurement page, `measure-highlighting` at `/settings/measure-highlighting`, is the first such row
+ *  whose id does not start `settings-`. */
+const underTop = (routes: readonly { readonly top: boolean; readonly path: string | null }[], p: string): boolean =>
+  routes.some((t) => t.top && t.path !== null && t.path !== '/' && p.startsWith(`${t.path}/`));
+
 describe('the base commands', () => {
   it('command ids are unique', () => {
     const ids = baseCommands().map((c) => c.id);
@@ -54,7 +60,8 @@ describe('the base commands', () => {
     // path no row matches would open the placeholder.
     // One Go to per top route, and one per page under a top route with a path of its own (Settings' five
     // sections, D-5504); each targets the row it is named for. A row with no path (`settings-section`) has none.
-    const offered = ROUTES.filter((r) => r.path !== null && (r.top || r.id.startsWith('settings-')));
+    // From W5h-a, GO_TO's own rule (underTop): a page under a top route is offered whatever its id.
+    const offered = ROUTES.filter((r) => r.path !== null && (r.top || underTop(ROUTES, r.path)));
     expect(GO_TO.map((g) => g.id), 'one Go to per offered route').toEqual(offered.map((r) => `go-${r.id}`));
     for (const go of GO_TO) {
       expect(`go-${matchRoute(go.path)?.route.id}`, `${go.title} → ${go.path}`).toBe(go.id);
@@ -63,6 +70,13 @@ describe('the base commands', () => {
     expect(GO_TO.map((g) => g.id)).toContain('go-docs');
     const ids = new Set(baseCommands().map((c) => c.id));
     for (const go of GO_TO) expect(ids.has(go.id), go.id).toBe(true);
+  });
+
+  it('offers R19\'s measurement page under Settings, and the oracle\'s rule admits a planted page under a top route and none under no top route (W5h-a)', () => {
+    expect(GO_TO.find((g) => g.id === 'go-measure-highlighting')?.title).toBe('Go to Settings › Measure highlighting');
+    expect(underTop(ROUTES, '/settings/planted')).toBe(true);
+    expect(underTop(ROUTES, '/planted/page')).toBe(false);
+    expect(underTop(ROUTES.filter((r) => r.path !== '/settings'), '/settings/planted')).toBe(false);
   });
 
   // C7d (D-7182): `fleetOrder` calls the fleet tree, so the palette's order is the cards' order, a worker under the
@@ -107,6 +121,8 @@ describe("the ids are W2's door table's", () => {
       // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
       'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation',
       'go-settings-security',
+      // Docs W5h-a Task 9: R19's measurement page, a page under Settings; its door is the palette's Go to.
+      'go-measure-highlighting',
       // W2 Task S2d: the ⋯ menu's items on the base, and the terminal and PR caps (D-5466).
       'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive',
       'session-restore', 'open-terminal', 'session-pr',
@@ -204,7 +220,8 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     ];
     // T3e (D-6385) adds `toggle-inspector`; every other command ranks as it did, so the table is read without it, and
     // the new command's own place is pinned in the empty list below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector');
+    // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting');
     for (const [q, ids] of BEFORE) expect(ranked(q), JSON.stringify(q)).toEqual(ids);
     // The command's own rank row: the one command whose title holds "inspector".
     expect(rankCommands('inspector', baseCommands()).map((c) => c.id)).toEqual(['toggle-inspector']);
@@ -212,6 +229,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     const empty = rankCommands('', baseCommands()).map((c) => c.id);
     expect(empty.indexOf('toggle-inspector'), 'after the session commands, before Switch layout').toBe(empty.indexOf('session-pr') + 1);
     expect(empty[empty.indexOf('toggle-inspector') + 1]).toBe('switch-layout');
+    // W5h-a: the one command whose title holds "measure", placed right after Settings' five pages.
+    expect(rankCommands('measure', baseCommands()).map((c) => c.id)).toEqual(['go-measure-highlighting']);
+    expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' five pages').toBe(empty.indexOf('go-settings-security') + 1);
   });
 });
 
