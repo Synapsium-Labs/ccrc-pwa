@@ -148,14 +148,14 @@ export function tickWithMail<T>(db: DatabaseSync, id: number, answer: string | n
 /** The coordinator marks an item blocking (work has stopped on it) or lowers it. Raising records the level it replaced
  *  as the `block` event's note; lowering restores that level, and an item that was RAISED blocking (no earlier level on
  *  record) falls back to `soon` when it carries a label and `later` when it does not. A repeat of the level it already
- *  has writes nothing. It writes `neededBy` and an event and never `state`. */
+ *  has writes nothing and answers `changed: false`: the one place that says whether the level moved. It writes `neededBy` and an event and never `state`. */
 export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now: number):
-  { ok: true } | { ok: false; why: Extract<ItemMoveRefusal, 'unknown-item' | 'not-open'> } {
+  { ok: true; changed: boolean } | { ok: false; why: Extract<ItemMoveRefusal, 'unknown-item' | 'not-open'> } {
   return tx(db, () => {
     const row = itemById(db, id);
     if (row === null) return { ok: false, why: 'unknown-item' } as const;
     if (!OPEN_ITEM_STATES.includes(row.state)) return { ok: false, why: 'not-open' } as const;
-    if ((row.neededBy === 'blocking') === blocking) return { ok: true } as const;
+    if ((row.neededBy === 'blocking') === blocking) return { ok: true, changed: false } as const;
     let next: NeededBy = 'blocking';
     if (!blocking) {
       const last = db.prepare("SELECT note FROM operator_item_events WHERE itemId = ? AND act = 'block' ORDER BY id DESC LIMIT 1")
@@ -165,7 +165,7 @@ export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now
     }
     db.prepare('UPDATE operator_items SET neededBy = ? WHERE id = ?').run(next, id);
     writeItemEvent(db, id, now, blocking ? 'block' : 'unblock', 'coordinator', blocking ? row.neededBy : null);
-    return { ok: true } as const;
+    return { ok: true, changed: true } as const;
   });
 }
 

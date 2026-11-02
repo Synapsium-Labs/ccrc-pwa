@@ -12,6 +12,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { PushPayload } from '../src/push.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
+import { clientRoutes } from './ccrcApiTable.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const HEADERS = { 'x-ccrc-mail-token': ID_GATE_TOKEN };
@@ -29,7 +30,7 @@ interface Rig {
 }
 
 /** prog-a is claimed by lane-a, prog-b by lane-b; both sessions are in the registry. */
-async function rig(): Promise<Rig> {
+async function rig(viewing: readonly string[] = []): Promise<Rig> {
   const home = mkTmp('ccrc-ledgers-coord-routes-');
   seedRow(home, 'lane-a');
   seedRow(home, 'lane-b');
@@ -39,7 +40,8 @@ async function rig(): Promise<Rig> {
   let waiting = 0;
   bus.on('waiting', () => { waiting += 1; });
   app = await buildServer(
-    { ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, coord, push: { notify: async (p: PushPayload) => { sent.push(p); } } as never },
+    { ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, coord, push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
+      viewers: { isVisible: (id: string) => viewing.includes(id) } as never },
     bus,
   );
   const open = (program: string, claimedBy: string): number =>
@@ -81,6 +83,48 @@ describe('the box token comes first, before the body and before any await (plan 
     const r = await rig();
     const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE }, { 'x-ccrc-mail-token': 'e'.repeat(64) });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('the client rows and the server agree (review 1331 F8)', () => {
+  const rows = clientRoutes().filter((c) => /^(items|goals)\./.test(c.key));
+  it('the client has exactly the nine items and goals rows', () => {
+    expect(rows.map((c) => c.key).sort()).toEqual(
+      ['goals.merged', 'goals.modify', 'goals.pin', 'items.block', 'items.confirm', 'items.list', 'items.raise', 'items.return', 'items.withdraw']);
+  });
+  // Every one of the nine is gated by the box token first, so a registered route answers 401 to a call with no token
+  // and a path nobody registered answers 404: a rename on either side turns this red.
+  it.each(rows.map((c) => [c.key, c.method, c.path] as const))('%s (%s %s) is a route the server registers', async (_key, method, rowPath) => {
+    const r = await rig();
+    const res = await r.app.inject({ method: method as 'GET' | 'POST', url: rowPath.replace('{id}', 'prog-a') });
+    expect(res.statusCode, `${method} ${rowPath}: ${res.body}`).toBe(401);
+  });
+});
+
+describe('attribution on every route: a valid token and a wrong byUuid is 403 stale-uuid, with nothing written (review 1331 F3)', () => {
+  const SPEC_PATH = 'docs/superpowers/specs/2026-10-31-x-design.md';
+  // One row per call site of `requireAttribution`: `itemHead` serves the first four, then the spec, modifications and merged routes.
+  const ROUTES: readonly (readonly [string, (id: number) => string, Record<string, unknown>])[] = [
+    ['confirm', (id) => `/api/items/${id}/confirm`, {}],
+    ['return', (id) => `/api/items/${id}/return`, { note: 'Not yet.' }],
+    ['withdraw', (id) => `/api/items/${id}/withdraw`, {}],
+    ['blocking', (id) => `/api/items/${id}/blocking`, { blocking: true }],
+    ['spec', () => '/api/programmes/prog-a/spec', { specPath: SPEC_PATH, inShort: 'What the programme builds.' }],
+    ['modifications', () => '/api/programmes/prog-a/modifications', { text: 'Narrowed the scope.' }],
+    ['modifications/merged', () => '/api/programmes/prog-a/modifications/merged', { pr: 77 }],
+  ];
+  it.each(ROUTES)('%s refuses stale-uuid and writes, emits and pushes nothing', async (_name, url, body) => {
+    const r = await rig();
+    const id = await raise(r, { runId: r.runA });
+    await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Earlier.', pr: 77 });
+    const before = { item: r.coord.itemById(id), goals: r.coord.goalsFor('prog-a'), events: r.coord.itemHistory(id) };
+    const emitted = r.waiting();
+    const res = await post(r, url(id), { byId: 'lane-a', byUuid: 'u-someone-else', ...body });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'stale-uuid' });
+    expect({ item: r.coord.itemById(id), goals: r.coord.goalsFor('prog-a'), events: r.coord.itemHistory(id) }).toEqual(before);
+    expect(r.waiting()).toBe(emitted);
+    expect(r.sent).toEqual([]);
   });
 });
 
@@ -138,6 +182,15 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
     const id = await raise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA });
     expect(r.sent).toHaveLength(1);
     expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}` });
+  });
+
+  it('a blocking raise and a block still push while the operator views the raising coordinator (F1: the notice is not a run notice of that session)', async () => {
+    const r = await rig(['lane-a']);
+    const id = await raise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA });
+    expect(r.sent).toHaveLength(1);
+    const soon = await raise(r, { runId: r.runA });
+    expect((await post(r, `/api/items/${soon}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
+    expect(r.sent.map((p) => p.tag)).toEqual([`item-${id}`, `item-${soon}`]);
   });
 
   it.each([

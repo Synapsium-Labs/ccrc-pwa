@@ -535,8 +535,8 @@ const TESTBOX_UNAUTHENTICATED = { ok: false, error: 'unauthenticated', detail: `
 
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
-  // Unused by the mail routes below; kept in the signature because Task 9's
-  // run routes land in this same file and share it — a signature that grows
+  // Not used by the mail routes below; the programme ledgers' routes (registered at the end of this function) emit
+  // `'waiting'` on it. Kept in the signature because the run routes in this same file share it — a signature that grows
   // per-task would be a second copy of the token+attribution gate wiring.
   bus: Bus,
   /**

@@ -227,7 +227,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found all seven files, and EXACTLY the route count the surface has', () => {
+  it('found all eight files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
@@ -337,7 +337,7 @@ describe('the scanner is looking at something', () => {
     // session-gated and NOT EXEMPT, no box token; the PUT and DELETE also take the account gate with a step-up.
     expect(scanRoutes('linear/routes.ts').length).toBe(5);
     // 9 in `coord/ledgersRoutes.ts` (programme ledgers PL3): the coordinator's item and goals routes, each registered from
-    // `registerCoordRoutes` and each EXEMPT-BUT-AUTHENTICATED (box token and attribution). They add nine to the exempt-HTTP count.
+    // `registerCoordRoutes` and each IN EXEMPT as a box-token machine lane (box token and attribution, no cookie). They add nine to the exempt-HTTP count.
     expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(9);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
     // `/disable`, session-gated and NOT EXEMPT, no box token; each takes the account gate on the `account-v2` cap.

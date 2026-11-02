@@ -1424,8 +1424,9 @@ step 10 of
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
 liveness gate reads the shipped sha out of it), the forty-six machine lanes the
-fleet host reaches (thirty-four box-token-consulting coordination routes plus
-`/api/notify`, which refuses an absent token like every lane,
+fleet host reaches (thirty-four box-token-consulting coordination routes, the
+programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
+and `/api/items/:id/{confirm,return,withdraw,blocking}`), plus `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,

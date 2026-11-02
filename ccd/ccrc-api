@@ -188,9 +188,9 @@ declare -A ROUTES=(
   [testbox.tools-sync]='POST|/api/testbox/tools-sync|no|-'
   # The programme ledgers (plan PL3): the coordinator's side of the Waiting-on-you list and the Goals pin. All nine
   # are box-token gated and attribution-checked, and a coordinator may act only on its own programme's items and pin. The
-  # `{id}` of the first, second and last four is the programme's slug (a `SAFE_RE` shape); of the item rows, the item's id.
-  # `items list` is a read that names its caller in the query, as `asks list` does elsewhere: `byId` and `byUuid` are the
-  # caller's own, supplied as flags.
+  # `{id}` of the first, second and last three is the programme's slug (a `SAFE_RE` shape); of the four item-move rows, the
+  # item's id. `items list` is a read that names its caller in the query: `byId` and `byUuid` are the caller's own,
+  # supplied as flags.
   [items.raise]='POST|/api/programmes/{id}/items|yes|-'
   [items.list]='GET|/api/programmes/{id}/items|yes|byId,byUuid'
   [items.confirm]='POST|/api/items/{id}/confirm|yes|-'

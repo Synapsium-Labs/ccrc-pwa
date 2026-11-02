@@ -141,10 +141,11 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
   /** Every successful write tells the live frame to re-read (PL4's listener); it carries no payload. */
   const changed = (): void => { deps.bus.emit('waiting'); };
 
-  /** The push names the acting coordinator as its session: a `kind: 'run'` record with an empty session is the review-cap
-   *  notice's shape alone (D-6911), and the PWA's Mail door reads it. */
-  const pushBlocking = (item: ItemRow, byId: string): void => {
-    deps.notice({ kind: 'run', sessionId: byId, title: 'Waiting on you', body: item.title, runId: item.runId }, 'push',
+  /** A blocking item must reach the operator. It is a `coord` notice with no session: a `run` notice naming the
+   *  coordinator's session is held back while the operator views that session, and a `run` notice with an empty
+   *  session is the review-cap notice's shape alone (D-6911). */
+  const pushBlocking = (item: ItemRow): void => {
+    deps.notice({ kind: 'coord', sessionId: '', runId: item.runId, title: 'Waiting on you', body: item.title }, 'push',
       { tag: `item-${item.id}` });
   };
 
@@ -171,7 +172,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     }
     const now = deps.now();
     const id = coord.raiseItem({ program: slug, raisedBy: who.byId, ...v }, now);
-    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow, who.byId);
+    if (v.neededBy === 'blocking') pushBlocking(coord.itemById(id) as ItemRow);
     changed();
     return reply.code(200).send({ ok: true, id });
   });
@@ -258,13 +259,11 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const head = await itemHead(req, reply, coord);
     if (head === null) return;
     const blocking = flag === true;
-    // `setBlocking` answers ok whether or not the level moved, so the push and the emit read the level BEFORE the call.
-    // Nothing awaits between this read and the write below: the store is synchronous.
-    const wasBlocking = head.item.neededBy === 'blocking';
     const res = coord.setBlocking(head.item.id, blocking, deps.now());
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${head.item.id} is closed` });
-    if (wasBlocking !== blocking) {
-      if (blocking) pushBlocking(head.item, head.byId);
+    // The store decides, inside its transaction, whether the level moved; the push and the emit follow its answer.
+    if (res.changed) {
+      if (blocking) pushBlocking(head.item);
       changed();
     }
     return reply.code(200).send({ ok: true });
