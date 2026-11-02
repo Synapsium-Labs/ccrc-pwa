@@ -1521,9 +1521,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // Programme ledgers (plan PL4): what waits on the operator, built ONCE per change and handed to every socket, so a broadcast is
   // masked and serialized once (`maskedFrame` keys on the object). Every emit drops it; a new socket always builds afresh, so
   // a label that moves with the clock (the stale one) is current at connect.
-  const presenceOf = (id: string) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, id);
+  // The coordinator's presence for an item's stale label, built ONCE and handed to both lanes' routes and the frame (review 1335
+  // F4): the watcher's last fleet frame and its registry ids, so an id the registry lists but the frame lacks is a doubt.
+  const presenceOf = (id: string) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, watcher?.currentRegistryIds() ?? null, id);
   let waitingBuilt: WaitingView | null = null;
+  // A ledger write drops it, and so does a fleet emit: presence and the clock move the stale label with no ledger write (F3).
   bus.on('waiting', () => { waitingBuilt = null; });
+  bus.on('fleet', () => { waitingBuilt = null; });
   const waitingNow = (fresh: boolean): WaitingView | null => {
     if (!deps.coord) return null;
     if (fresh) waitingBuilt = null;
@@ -1532,7 +1536,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return waitingBuilt;
     } catch (err) {
       // A row this box cannot read (a corrupt JSON column) sends no frame; the read route says the same in its own answer.
-      console.warn(`ccrc-server: waiting frame not built: ${err instanceof Error ? err.message : String(err)}`);
+      // A parse error can quote a session-written column, so the line goes through the masker like every other egress.
+      console.warn((deps.masker ?? SHAPE_ONLY_MASKER).maskText(`ccrc-server: waiting frame not built: ${err instanceof Error ? err.message : String(err)}`));
       return null;
     }
   };
@@ -1587,11 +1592,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         : maskedFrame(delegation, (mk) => mk.maskDeep({ type: 'delegation', delegation } satisfies FleetMsg)));
     // Programme ledgers (plan PL4): masked like the session-derived frames (an item's text is a session's own). Additive, no
     // `FLEET_PROTO` bump. Sent on connect (below) and on every `bus 'waiting'`.
-    const onWaiting = (fresh = false) => {
+    // The last frame THIS socket was sent, masked: a fleet emit re-sends only when the bytes changed (as the runs frame does),
+    // so a label the clock or a coordinator's presence moved reaches a connected tab with no timer and no push (review 1335 F3).
+    let lastWaitingJson: string | null = null;
+    const onWaiting = (fresh: boolean, onlyIfChanged: boolean) => {
       const waiting = waitingNow(fresh);
-      if (waiting !== null) socket.send(maskedFrame(waiting, (mk) => mk.maskDeep({ type: 'waiting', waiting } satisfies FleetMsg)));
+      if (waiting === null) return;
+      const json = maskedFrame(waiting, (mk) => mk.maskDeep({ type: 'waiting', waiting } satisfies FleetMsg));
+      if (onlyIfChanged && json === lastWaitingJson) return;
+      lastWaitingJson = json;
+      socket.send(json);
     };
-    const onWaitingEvent = () => onWaiting();
+    const onWaitingEvent = () => onWaiting(false, false);
+    const onFleetWaiting = () => onWaiting(false, true);
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
     // guard re-broadcasts to every connected client the next time the census
     // changes, and there is no `currentDivergences()` to serve — a fabricated
@@ -1682,7 +1695,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const delegationNow = watcher?.currentDelegation();
       if (delegationNow) onDelegation(delegationNow);
       // Chained after `delegation`: the operator's waiting list, whole; nothing on a box with no coordination database.
-      onWaiting(true);
+      onWaiting(true, false);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
@@ -1692,6 +1705,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('pools', onPools);
     bus.on('delegation', onDelegation);
     bus.on('waiting', onWaitingEvent);
+    bus.on('fleet', onFleetWaiting);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
@@ -1701,6 +1715,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       bus.off('pools', onPools);
       bus.off('delegation', onDelegation);
       bus.off('waiting', onWaitingEvent);
+      bus.off('fleet', onFleetWaiting);
     });
   });
 
@@ -1949,7 +1964,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     hookStateOf: (id) => watcher?.currentHookStates().get(id) ?? null,
   };
   const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps });
-  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors);
+  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors, presenceOf);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
@@ -2410,6 +2425,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return answer;
   });
 
+  // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
+  registerLedgerOperatorRoutes(app, { coord: deps.coord, bus, now: () => Date.now(), presenceOf });
+
   /**
    * `POST /api/digest/correct` (spec §10, D-5300): the operator's correction of one digest line, `{rowKind, id,
    * text}`. Queues durable system mail from `operator` to the row's coordinator (kind `finding`, subject "Operator
@@ -2418,9 +2436,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * is no coordinator's decision is `409 not-coordinator`; a second correction while the first is undelivered is
    * `409 duplicate`.
    */
-  // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
-  registerLedgerOperatorRoutes(app, { coord: deps.coord, bus, now: () => Date.now(), presenceOf });
-
   app.post('/api/digest/correct', async (req, reply) => {
     if (!deps.coord) return refuseRoute(reply, 'not-configured');
     const parsed = parseDigestCorrectBody(req.body);

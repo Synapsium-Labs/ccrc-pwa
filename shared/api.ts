@@ -4157,7 +4157,7 @@ export type FleetMsg =
   /** Programme ledgers (plan PL4): what waits on the operator, whole (every programme's open and checking items,
    *  the Recently cleared trail and the goals). ADDITIVE, no `FLEET_PROTO` bump: an already-deployed PWA drops an unknown
    *  frame type silently. Sent on connect and again on every change a coordinator or the operator makes; FLEET-LEVEL, never
-   *  a `FleetSession` field. `WaitingFrame` in `ledgers.ts` names this same shape for the server's sender. */
+   *  a `FleetSession` field. Its payload type, `WaitingView`, is declared in `ledgers.ts`. */
   | { type: 'waiting'; waiting: WaitingView };
 
 /**

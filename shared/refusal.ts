@@ -130,6 +130,8 @@ export const LEDGER_ROUTE_REFUSALS = {
   // only open run has no claimant (`programme-unclaimed`: abandon that run, a dismiss is refused `programme-live`), and a tick of
   // a secret item (`use-secret-route`: the value goes to its own route, never the tick).
   programmeEnded: 'programme-ended', programmeUnclaimed: 'programme-unclaimed', useSecretRoute: 'use-secret-route',
+  // …and the tick's mail past the mail body cap (review 1335 F6): the generic `too-large` word, 413, its status declared with the generic ones.
+  tooLarge: 'too-large',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 

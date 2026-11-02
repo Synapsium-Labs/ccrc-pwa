@@ -12,7 +12,8 @@ import { buildServer } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { itemMailBody, itemMailSubject } from '../src/coord/ledgersMail.js';
+import { itemMailBody, itemMailSubject, tickMail } from '../src/coord/ledgersMail.js';
+import { FleetWatcher } from '../src/watch.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -20,6 +21,7 @@ import {
   ANSWER_MAX, TICK_UNANSWERED_MS, coordinatorPresenceIn, itemIsStale, type CoordinatorPresence, type ItemView, type WaitingView,
 } from '../../shared/ledgers.js';
 import { LEDGER_ROUTE_REFUSALS, REFUSAL_STATUS } from '../../shared/refusal.js';
+import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES, SECRET_MASK } from '../../shared/api.js';
 
 let app: FastifyInstance | null = null;
 afterEach(async () => {
@@ -29,10 +31,19 @@ afterEach(async () => {
   removeTmpFixtures();
 });
 
-interface Rig { app: FastifyInstance; coord: CoordStore; waiting: () => number; runA: number }
+interface Rig { app: FastifyInstance; coord: CoordStore; waiting: () => number; runA: number; bus: Bus }
+
+/** What the server's watcher last measured, for the stale label's presence input: the fleet frame it last broadcast (`null`
+ *  before the first) and the registry ids of its last good listing, refused ids included (`null` before one). A stub with
+ *  only these two readers, over the real class's prototype, so a method the server calls on it that the stub lacks fails loudly. */
+interface Watched { fleet: { id: string; presence?: string }[] | null; registryIds: string[] | null }
+const stubWatcher = (w: Watched): FleetWatcher => Object.assign(Object.create(FleetWatcher.prototype) as FleetWatcher, {
+  currentFleet: () => w.fleet, currentRegistryIds: () => (w.registryIds === null ? null : new Set(w.registryIds)),
+  currentCoord: () => null, currentPools: () => null, currentDelegation: () => null, currentStallQuietMs: () => null, inFlight: () => null, serverCapsSettled: async () => undefined, stop: () => undefined,
+}) as FleetWatcher;
 
 /** prog-a is claimed by lane-a (open run), prog-b by lane-b; both sessions are in the registry. */
-async function rig(): Promise<Rig> {
+async function rig(watched?: Watched): Promise<Rig> {
   const home = mkTmp('ccrc-ledgers-operator-routes-');
   seedRow(home, 'lane-a');
   seedRow(home, 'lane-b');
@@ -40,12 +51,12 @@ async function rig(): Promise<Rig> {
   const bus = new Bus();
   let waiting = 0;
   bus.on('waiting', () => { waiting += 1; });
-  app = await buildServer({ ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, coord }, bus);
+  app = await buildServer({ ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, coord }, bus, watched === undefined ? undefined : stubWatcher(watched));
   const open = (program: string, claimedBy: string): number =>
     (coord.openRun({ program, title: program.toUpperCase(), project: 'project-a', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
   const runA = open('prog-a', 'lane-a');
   open('prog-b', 'lane-b');
-  return { app, coord, waiting: () => waiting, runA };
+  return { app, coord, waiting: () => waiting, runA, bus };
 }
 
 const NOW0 = Date.UTC(2026, 10, 2, 9, 0, 0);
@@ -75,7 +86,7 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
     expect(stateOf(r, id)).toBe('checking');
     const mail = mailRows(r);
     expect(mail).toHaveLength(1);
-    expect(mail[0]).toMatchObject({ fromId: 'operator', toId: 'lane-a', runId: r.runA, kind: 'answer', subject: itemMailSubject(r.coord.itemById(id)!) });
+    expect(mail[0]).toMatchObject({ fromId: 'operator', toId: 'lane-a', runId: null, kind: 'answer', subject: itemMailSubject(r.coord.itemById(id)!) });
     expect(mail[0]!.body).toContain('no answer: this item takes none');
     expect(mail[0]!.body).toContain(`ccrc-api items confirm|return ${id}`);
     expect(r.waiting()).toBe(1);
@@ -261,6 +272,7 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
     raise(r, { title: `Use ${key} now` });
     const res = await r.app.inject({ method: 'GET', url: '/api/waiting' });
     expect(res.body).not.toContain(key.slice(8, 40));
+    expect(res.body).toContain(SECRET_MASK);
   });
 });
 
@@ -278,24 +290,50 @@ describe('the tick mail (plan PL4)', () => {
     expect(none).toContain('Re-measure before you confirm; return it with what you found if it does not hold. ccrc-api items confirm|return 7');
     expect(itemMailBody(item({ kind: 'value', answer: 'forty' }), 'forty')).toContain('forty');
   });
+  it('the subject stays inside MAIL_SUBJECT_MAX_BYTES and is cut on a code-point boundary (review 1335 F6)', () => {
+    for (const unit of ['€', '😀', 'T']) {
+      const subject = itemMailSubject(item({ title: unit.repeat(140) }));
+      expect(Buffer.byteLength(subject, 'utf8'), unit).toBeLessThanOrEqual(MAIL_SUBJECT_MAX_BYTES);
+      expect(Buffer.from(subject, 'utf8').toString('utf8'), unit).toBe(subject);
+      expect(subject, unit).not.toContain('\uFFFD');
+    }
+    expect(itemMailSubject(item({ title: '€'.repeat(140) }))).toMatch(/^done: item 7: €+$/);
+  });
+  it('tickMail refuses a body past MAIL_BODY_MAX_BYTES with the measured size, and builds a fitting one', () => {
+    const big = tickMail(item({ title: '€'.repeat(3000) }), null);
+    expect(big).toMatchObject({ ok: false, limit: MAIL_BODY_MAX_BYTES });
+    expect((big as { bytes: number }).bytes).toBeGreaterThan(MAIL_BODY_MAX_BYTES);
+    const fits = tickMail(item({ title: 'Short' }), 'yes');
+    expect(fits).toMatchObject({ ok: true, subject: 'done: item 7: Short' });
+  });
+  it('a tick whose body would pass the cap is refused too-large and writes nothing (review 1335 F6)', async () => {
+    const r = await rig();
+    const id = raise(r, { title: '€'.repeat(3000) });
+    const res = await tick(r, id);
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'too-large' });
+    expect(stateOf(r, id)).toBe('open');
+    expect(mailRows(r)).toEqual([]);
+  });
 });
 
 describe('ItemView.stale: a pure decider in the shared vocabulary (plan PL4, review 1331 A3)', () => {
   const base = { state: 'checking', tickedAt: NOW0, now: NOW0 + TICK_UNANSWERED_MS, mail: 'queued', coordinator: 'alive' } as const;
   it('thirty minutes is the named constant', () => { expect(TICK_UNANSWERED_MS).toBe(30 * 60 * 1000); });
-  it('a freshly ticked item with its mail still queued is not stale', () => {
+  it('a freshly ticked item with its mail still unacknowledged is not stale', () => {
     expect(itemIsStale({ ...base, now: NOW0 + TICK_UNANSWERED_MS - 1 })).toBe(false);
   });
-  it('a tick whose mail is still undelivered thirty minutes on is stale', () => {
-    expect(itemIsStale(base)).toBe(true);
-    expect(itemIsStale({ ...base, mail: 'rejected' })).toBe(true);
+  it('a tick whose mail is not acknowledged thirty minutes on is stale, whatever else its delivery says (review 1335 F2)', () => {
+    for (const mail of ['queued', 'delivered', 'rejected', 'unknown', 'none'] as const) {
+      expect(itemIsStale({ ...base, mail }), mail).toBe(true);
+    }
   });
-  it('a delivered, acked or unknown mail is not stale on its own', () => {
-    for (const mail of ['delivered', 'acked', 'unknown', 'none'] as const) expect(itemIsStale({ ...base, mail })).toBe(false);
+  it('an acknowledged mail is not stale on its own', () => {
+    expect(itemIsStale({ ...base, mail: 'acked' })).toBe(false);
   });
-  it('a dead or absent coordinator is stale at once, with the mail delivered', () => {
+  it('a dead or absent coordinator is stale at once, whatever the mail says', () => {
     for (const coordinator of ['dead', 'absent'] as const) {
-      expect(itemIsStale({ ...base, now: NOW0 + 1, mail: 'delivered', coordinator })).toBe(true);
+      expect(itemIsStale({ ...base, now: NOW0 + 1, mail: 'acked', coordinator })).toBe(true);
     }
   });
   it('a coordinator that could not be measured says nothing', () => {
@@ -306,14 +344,16 @@ describe('ItemView.stale: a pure decider in the shared vocabulary (plan PL4, rev
       expect(itemIsStale({ ...base, state, coordinator: 'dead' })).toBe(false);
     }
   });
-  it('reads the coordinator\'s presence from the fleet: absent when not listed, dead when presence says so, unmeasured with no fleet', () => {
+  it('reads the coordinator\'s presence from the fleet frame and the registry ids: a refused id is a doubt, never absent (review 1335 F4)', () => {
     const fleet = [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'dead' }, { id: 'lane-c', presence: 'asleep' }, { id: 'lane-d', presence: 'unknown' }, { id: 'lane-e' }] as never;
-    const read = (id: string): CoordinatorPresence => coordinatorPresenceIn(fleet, id);
-    expect([read('lane-a'), read('lane-b'), read('lane-c'), read('lane-d'), read('lane-e'), read('lane-z')])
-      .toEqual(['alive', 'dead', 'alive', 'unmeasured', 'unmeasured', 'absent']);
-    expect(coordinatorPresenceIn(null, 'lane-a')).toBe('unmeasured');
+    const registry = new Set(['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-refused']);
+    const read = (id: string): CoordinatorPresence => coordinatorPresenceIn(fleet, registry, id);
+    expect(['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-refused', 'lane-z'].map(read))
+      .toEqual(['alive', 'dead', 'alive', 'unmeasured', 'unmeasured', 'unmeasured', 'absent']);
+    expect(coordinatorPresenceIn(fleet, null, 'lane-z'), 'no registry listing yet: nothing is known about an id the frame lacks').toBe('unmeasured');
+    expect(coordinatorPresenceIn(null, registry, 'lane-a')).toBe('unmeasured');
   });
-  it('a route labels a checking item stale when its tick\'s mail is still queued thirty minutes on', async () => {
+  it('a route labels a checking item stale when its tick\'s mail is not acknowledged thirty minutes on', async () => {
     const r = await rig();
     const id = raise(r);
     vi.spyOn(Date, 'now').mockReturnValue(NOW0);
@@ -323,6 +363,91 @@ describe('ItemView.stale: a pure decider in the shared vocabulary (plan PL4, rev
     expect((await read()).stale).toBe(false);
     vi.spyOn(Date, 'now').mockReturnValue(NOW0 + TICK_UNANSWERED_MS);
     expect((await read()).stale).toBe(true);
+  });
+});
+
+describe('the tick mail and its label across the run and the coordinator\'s life (review 1335 F1, F2)', () => {
+  const ALIVE: Watched = { fleet: [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'alive' }], registryIds: ['lane-a', 'lane-b'] };
+  const labelOf = async (r: Rig, id: number): Promise<boolean> =>
+    ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting.items.find((i) => i.id === id)!.stale;
+
+  it('F1: the tick mail survives the close of the run the item was raised under, through the real close path', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    // The coordinator opens the next wave BEFORE closing the last (its own rule), then closes wave 1 through the store's close.
+    r.coord.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 2, waveOf: null, claimedBy: 'lane-a' });
+    // Wave 1's run was never dispatched, so it closes as an abandon (`planned` to `failed`): the same `closeRun`, the same cancel of the run's mail.
+    const closed = r.coord.closeRun({ runId: r.runA, finalState: 'failed', causedBy: 'coordinator', handoffCommit: null, program: 'prog-a', viaClosing: false });
+    expect(closed.ok, JSON.stringify(closed)).toBe(true);
+    const mail = r.coord.newestTickMail(itemMailSubject(r.coord.itemById(id)!));
+    expect(mail, 'the tick mail was parked by the run close (rejected, undeliverable)').toMatchObject({ toId: 'lane-a', state: 'queued' });
+  });
+
+  it('F2: a takeover with the mail unacknowledged reads stale after thirty minutes, though the new coordinator is alive', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    r.coord.db.prepare("UPDATE runs SET claimedBy = 'lane-b' WHERE program = 'prog-a'").run();
+    expect(r.coord.programmeCoordinator('prog-a')).toBe('lane-b');
+    expect(await labelOf(r, id), 'inside the window').toBe(false);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0 + TICK_UNANSWERED_MS);
+    expect(await labelOf(r, id), 'the mail went to a coordinator that is no longer the programme\'s').toBe(true);
+  });
+
+  it('F2: the duplicate guard finds the newest tick mail whoever it went to, so a takeover does not allow a second mail', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    r.coord.db.prepare("UPDATE runs SET claimedBy = 'lane-b' WHERE program = 'prog-a'").run();
+    expect(r.coord.moveItem(id, 'return', 'coordinator', { note: 'Not yet.' }, NOW0 + 1, { programmeHasOpenRun: true }).ok).toBe(true);
+    const again = await tick(r, id);
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ error: 'duplicate' });
+    expect(mailRows(r)).toHaveLength(1);
+  });
+
+  it('F2: an acknowledged mail clears the duplicate guard and the label', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    r.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked'").run();
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0 + TICK_UNANSWERED_MS);
+    expect(await labelOf(r, id)).toBe(false);
+  });
+});
+
+describe('the coordinator\'s presence reaches the label through the route and the server\'s own reading (review 1335 F4, F5)', () => {
+  const stateOf2 = async (watched: Watched): Promise<boolean> => {
+    const r = await rig(watched);
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    return ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting.items.find((i) => i.id === id)!.stale;
+  };
+  it('a coordinator the fleet frame reads dead labels the item at once', async () => {
+    expect(await stateOf2({ fleet: [{ id: 'lane-a', presence: 'dead' }], registryIds: ['lane-a'] })).toBe(true);
+  });
+  it('a coordinator the fleet frame lacks and the registry lacks too reads absent: the item is labelled', async () => {
+    expect(await stateOf2({ fleet: [{ id: 'lane-other', presence: 'alive' }], registryIds: ['lane-other'] })).toBe(true);
+  });
+  it('a coordinator the registry lists but the fleet frame lacks (a refused id) is a doubt: the item is not labelled', async () => {
+    expect(await stateOf2({ fleet: [{ id: 'lane-other', presence: 'alive' }], registryIds: ['lane-other', 'lane-a'] })).toBe(false);
+  });
+  it('an alive coordinator does not label the item', async () => {
+    expect(await stateOf2({ fleet: [{ id: 'lane-a', presence: 'alive' }], registryIds: ['lane-a'] })).toBe(false);
+  });
+  it('before the watcher has broadcast anything, nothing is labelled', async () => {
+    expect(await stateOf2({ fleet: null, registryIds: null })).toBe(false);
+  });
+  it('the coordinator\'s own list (the box-token lane) reads the same presence', async () => {
+    const r = await rig({ fleet: [{ id: 'lane-a', presence: 'dead' }], registryIds: ['lane-a'] });
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    const res = await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a', headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((res.json() as { items: ItemView[] }).items.find((i) => i.id === id)!.stale).toBe(true);
   });
 });
 
@@ -371,7 +496,8 @@ describe('review 1333 F1: no await between the item read and the write, in each 
     const { url, payload, headers } = door(id);
     const res = await r.app.inject({ method: 'POST', url, payload: payload as never, ...(headers ? { headers } : {}) });
     expect(res.statusCode, res.body).toBe(200);
-    expect(order.filter((x) => x === 'write'), `${name} made one write`).toHaveLength(1);
-    expect(order[0], `${name}: an await sits between the item read and the write (the microtask ran first: ${order.join(', ')})`).toBe('write');
+    // Exactly the write, then the microtask queued at the first read: an await between them flips the pair, and a route
+    // whose first read moved off `itemById` (so no microtask was queued) fails here rather than passing unobserved.
+    expect(order, `${name}: an await sits between the item read and the write, or the first read is not itemById`).toEqual(['write', 'microtask']);
   });
 });

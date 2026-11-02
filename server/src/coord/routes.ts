@@ -104,7 +104,7 @@ import {
 } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
-import { coordinatorPresenceIn } from '../../../shared/ledgers.js';
+import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
@@ -604,6 +604,12 @@ export function registerCoordRoutes(
    * session routes and no press wiring of its own.
    */
   operatorDoors?: () => OperatorDoorWiring,
+  /**
+   * Programme ledgers (plan PL4): the coordinator's presence for an item's stale label, built ONCE by `buildServer` from the
+   * watcher's last fleet frame and registry ids and handed to this file's ledger routes and to the operator's alike, so the two
+   * lanes cannot read it differently. Defaulted to a doubt, so a bare server labels nothing.
+   */
+  presenceOf: (sessionId: string) => CoordinatorPresence = () => 'unmeasured',
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -4328,7 +4334,7 @@ export function registerCoordRoutes(
   // (a lane source of its own for `box-token-census.test.ts`); the gate and the sender check are this function's own.
   registerLedgerCoordinatorRoutes(app, {
     coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(),
-    presenceOf: (id) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, id),
+    presenceOf,
   });
 
   return { withAbandon, withSweepAbandon, serial: (fn) => coordMutex.run(fn) };

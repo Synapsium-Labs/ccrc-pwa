@@ -213,14 +213,16 @@ export function goalsFor(db: DatabaseSync, program: string): GoalsView {
   };
 }
 
-/** The newest delivery state of the operator's tick mail for an item: system mail from `operator` with this run, recipient
- *  and subject, or `none` when no such mail was ever queued. The stale label's one input about the mail (plan PL4); a later
- *  tick of a sent-back item queues a newer mail with the same subject, and that is the one read. */
-export function tickMailState(db: DatabaseSync, runId: number | null, toId: string, subject: string): MailDeliveryState | 'none' {
+/** The newest tick mail of an item: system mail from `operator` with this subject (`itemMailSubject` names the item's id, so
+ *  the subject alone finds it), whatever its run and whoever it was addressed to, with that delivery's state and recipient;
+ *  null when none was ever queued. ONE READER for the duplicate guard and the stale label (plan PL4, review 1335 F1, F2): a
+ *  run that closed or a coordinator that was replaced since the tick does not hide the mail, and a later tick of a sent-back
+ *  item queues a newer mail with the same subject, which is the one read. */
+export function newestTickMail(db: DatabaseSync, subject: string): { state: MailDeliveryState; toId: string } | null {
   const r = db.prepare(
-    "SELECT d.state AS state FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = 'operator' AND m.runId IS ? AND d.toId = ? AND m.subject = ? ORDER BY m.id DESC, d.id DESC LIMIT 1",
-  ).get(runId, toId, subject) as { state: MailDeliveryState } | undefined;
-  return r?.state ?? 'none';
+    "SELECT d.state AS state, d.toId AS toId FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = 'operator' AND m.subject = ? ORDER BY m.id DESC, d.id DESC LIMIT 1",
+  ).get(subject) as { state: MailDeliveryState; toId: string } | undefined;
+  return r ?? null;
 }
 
 /** Every programme that has a spec pin, in slug order: with the programmes that hold items, the ones the waiting list carries goals for. */

@@ -31,7 +31,8 @@ import {
   type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
-import { itemMailBody, itemMailSubject } from './ledgersMail.js';
+import { itemMailSubject, tickMail } from './ledgersMail.js';
+import { OUTSTANDING_DELIVERY_STATES } from '../../../shared/api.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
@@ -68,15 +69,17 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
 
 /** THE ONE BUILDER of an `ItemView` (plan PL4, review 1331 A3): the coordinator's list, the operator's routes and the
  *  `/ws/fleet` frame all come through here, so a label cannot differ between them. It MEASURES the inputs of `itemIsStale`
- *  (the tick mail's newest delivery state, the coordinator's presence) and hands them to that L1 decider; it decides
+ *  (the newest tick mail's delivery state, the coordinator's presence) and hands them to that L1 decider; it decides
  *  nothing itself. Only a `checking` item is measured: an item with no coordinator at all reads `absent`. */
 export function viewOfItem(coord: CoordStore, row: ItemRow, now: number, presenceOf: (sessionId: string) => CoordinatorPresence): ItemView {
   let stale = false;
   if (row.state === 'checking') {
     const coordinator = coord.programmeCoordinator(row.program);
+    // The newest tick mail by its subject alone, whoever it went to (review 1335 F2): a takeover leaves it unacknowledged.
+    const mail = coord.newestTickMail(itemMailSubject(row));
     stale = itemIsStale({
       state: row.state, tickedAt: row.tickedAt, now,
-      mail: coordinator === null ? 'none' : coord.tickMailState(row.runId, coordinator, itemMailSubject(row)),
+      mail: mail === null ? 'none' : mail.state,
       coordinator: coordinator === null ? 'absent' : presenceOf(coordinator),
     });
   }
@@ -426,7 +429,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
 
   // NO AWAIT in the two moves below, deliberately: the handlers are synchronous, so the state they read (the item, the
   // programme's runs, the outstanding mail) is the state they write against; `tickWithMail` and `moveItem` re-decide inside
-  // their own transaction. `ledgers-operator-routes.test.ts` scans each handler for an `await` after its item read.
+  // their own transaction. `ledgers-operator-routes.test.ts` pins it by call order (a microtask queued at the first item read
+  // must run after the write), for these two and for PL3's four item routes.
 
   app.get('/api/waiting', (_req, reply) => {
     const coord = deps.coord;
@@ -471,13 +475,22 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
         ? refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeUnclaimed, { detail: PROGRAMME_UNCLAIMED_SENTENCE })
         : refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeEnded, { detail: PROGRAMME_ENDED_SENTENCE });
     }
-    const subject = itemMailSubject(item);
-    if (coord.hasOutstandingMail('operator', item.runId, coordinator, subject)) {
-      return refuseRoute(reply, 'duplicate', { detail: 'the coordinator has not yet read the mail of the last tick of this item' });
+    const mail = tickMail(item, answer);
+    if (!mail.ok) {
+      return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.tooLarge, { detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` });
+    }
+    // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): one still outstanding
+    // blocks a second, so a takeover cannot queue it twice either.
+    const earlier = coord.newestTickMail(mail.subject);
+    if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)) {
+      return refuseRoute(reply, 'duplicate', { detail: 'an earlier tick of this item has not been acknowledged by its coordinator yet' });
     }
     const now = deps.now();
-    const res = coord.tickWithMail(id, answer, now, (moved) => insertSystemMailTx(coord, null, {
-      fromId: 'operator', toId: coordinator, runId: moved.runId, kind: 'answer', subject, body: itemMailBody(moved, answer),
+    // The mail rides NO run (review 1335 F1): the run it would ride is the one the coordinator closes when the wave ends, and
+    // `closeRun` parks every unacknowledged mail of the run it closes. System mail to a literal session id with no run is
+    // deliverable whatever the runs do (the digest's correction is the same shape).
+    const res = coord.tickWithMail(id, answer, now, () => insertSystemMailTx(coord, null, {
+      fromId: 'operator', toId: coordinator, runId: null, kind: 'answer', subject: mail.subject, body: mail.body,
     }));
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be ticked from here` });
     deps.bus.emit('waiting');

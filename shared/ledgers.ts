@@ -126,9 +126,6 @@ export interface WaitingView {
   goals: GoalsView[];
 }
 
-/** The live frame: additive on the fleet socket, no `FLEET_PROTO` bump. */
-export type WaitingFrame = { type: 'waiting'; waiting: WaitingView };
-
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };
 const STATE_RANK: Readonly<Record<ItemState, number>> = {
   open: 0, checking: 1, done: 2, withdrawn: 3, dismissed: 4,
@@ -209,20 +206,31 @@ export const ITEM_OPTIONS_MAX = 6;
 export const ANSWER_MAX = 2000;
 
 /** The coordinator's presence as an item's label reads it. `unmeasured` says the server has no reading to give (no fleet
- *  frame yet, or the session's own presence is a doubt): it is never `dead`, so a doubt cannot label an item. */
+ *  frame or registry listing yet, an id the registry lists but the frame lacks, or the session's own presence is a doubt): it
+ *  is never `dead`, so a doubt cannot label an item. */
 export type CoordinatorPresence = 'alive' | 'dead' | 'absent' | 'unmeasured';
 const COORDINATOR_PRESENCE_MAP: Record<CoordinatorPresence, true> = { alive: true, dead: true, absent: true, unmeasured: true };
 export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as readonly CoordinatorPresence[];
 
-/** The coordinator's presence from the fleet frame the server last broadcast: not listed is `absent`; a session the
- *  server read as `dead` is `dead`; `alive` and `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a
- *  server that predates `presence`, is `unmeasured`; no frame yet is `unmeasured` too. */
+/**
+ * The coordinator's presence from what the server last measured: the fleet frame it broadcast and the registry ids of its last
+ * good listing (refused ids included). A `dead` row is `dead`; `alive` and `asleep` (hibernated, woken by mail) are `alive`; a
+ * doubt, or a row from a server that predates `presence`, is `unmeasured`; an id the frame lacks is `absent` only when the
+ * listing is known and does not hold it either, and `unmeasured` when the listing holds it (a refused id, or a row the
+ * registry could not assemble, is in no fleet row) or when no listing has landed yet.
+ *
+ * WHY THIS IS NOT `measureClaimant` (the one dead predicate, D-5290; "legitimately different", review 1335 F4): that function
+ * is async, a fresh registry read and a tmux verdict, and an item's view must be built SYNCHRONOUSLY (`viewOfItem`: the
+ * routes' call-order pin forbids an await between an item read and its write, and the frame builds the same view). Every arm
+ * here agrees with that predicate's ladder (`readSession`, which the frame's `presence` is) except that a frame cannot see a
+ * fresh tmux verdict; and the one arm the two would otherwise disagree on, an id the frame lacks, is closed above.
+ */
 export function coordinatorPresenceIn(
-  fleet: readonly { id: string; presence?: Presence }[] | null, id: string,
+  fleet: readonly { id: string; presence?: Presence }[] | null, registryIds: ReadonlySet<string> | null, id: string,
 ): CoordinatorPresence {
   if (fleet === null) return 'unmeasured';
   const row = fleet.find((s) => s.id === id);
-  if (row === undefined) return 'absent';
+  if (row === undefined) return registryIds === null || registryIds.has(id) ? 'unmeasured' : 'absent';
   switch (row.presence) {
     case 'dead': return 'dead';
     case 'alive': case 'asleep': return 'alive';
@@ -230,22 +238,26 @@ export function coordinatorPresenceIn(
   }
 }
 
+/** The newest tick mail's delivery state, or `none` when no tick mail was ever queued for the item. */
+export type TickMailState = MailDeliveryState | 'none';
+
 /** What `itemIsStale` is decided from, all of it measured by the caller: the item's state and tick time, the clock, the
- *  newest delivery state of the tick's mail (`none` when there is no such mail), and the coordinator's presence. */
+ *  newest tick mail's delivery state (whoever it was addressed to), and the coordinator's presence. */
 export interface StaleInputs {
   state: ItemState;
   tickedAt: number | null;
   now: number;
-  mail: MailDeliveryState | 'none';
+  mail: TickMailState;
   coordinator: CoordinatorPresence;
 }
 
-/** ItemView.stale (spec §3.3, plan PL4): a CHECKING item whose coordinator reads dead or absent, or whose tick's mail is
- *  still undelivered (`queued`, or `rejected`: the lane gave up) `TICK_UNANSWERED_MS` after the tick. A delivered mail is
- *  the coordinator's to answer, and `unknown` and `unmeasured` are doubts, not findings, so none of them labels an item.
- *  Every other state is never stale. */
+/** ItemView.stale (spec §3.3, plan PL4): a CHECKING item whose coordinator reads dead or absent, or whose newest tick mail is
+ *  not acknowledged `TICK_UNANSWERED_MS` after the tick. Only `acked` counts as heard (review 1335 F2): a mail still `queued`,
+ *  `rejected`, `unknown`, delivered but not acknowledged, or missing altogether (`none`) is not, whoever it went to, so a
+ *  takeover that left the old coordinator's mail unread is labelled too. `unmeasured` is a doubt, not a finding, so it never
+ *  labels. Every other state is never stale. */
 export function itemIsStale(i: StaleInputs): boolean {
   if (i.state !== 'checking') return false;
   if (i.coordinator === 'dead' || i.coordinator === 'absent') return true;
-  return (i.mail === 'queued' || i.mail === 'rejected') && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
+  return i.mail !== 'acked' && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
 }

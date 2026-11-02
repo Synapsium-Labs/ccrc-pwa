@@ -9850,8 +9850,8 @@ export class CoordStore {
   addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
-  /** The newest delivery state of an item's tick mail, `none` when none was queued (the stale label's input, plan PL4). */
-  tickMailState(runId: number | null, toId: string, subject: string): MailDeliveryState | 'none' { return ledgers.tickMailState(this.db, runId, toId, subject); }
+  /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
+  newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
   pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is

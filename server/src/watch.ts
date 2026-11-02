@@ -1061,6 +1061,9 @@ export class FleetWatcher {
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
   /** The registry ids of the last good listing (`null` until one lands: nothing is mailed without it). */
   private registryIds: ReadonlySet<string> | null = null;
+  /** The registry ids of the last good listing, refused ids included, or null before one (the ledgers' presence reading: an id
+   *  the fleet frame lacks but this holds is a doubt, not an absence). */
+  currentRegistryIds(): ReadonlySet<string> | null { return this.registryIds; }
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
