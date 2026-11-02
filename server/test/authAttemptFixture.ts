@@ -4,7 +4,7 @@
 // with the four things a sign-in reaches planted as stand-ins, each recording what it was asked:
 //   - `systemd-run`: a transient unit is a DETACHED process in a process group of its own (a `--scope` runs in the
 //     foreground, in the caller's group, as the real one does), recorded under `<home>/fake-units/<unit>.pid`;
-//   - `systemctl --user stop <unit>`: TERMs that unit's process group and waits for it; `show-environment` is the
+//   - `systemctl --user stop <unit>`: TERMs that unit's process group and every descendant, and waits for it; `show-environment` is the
 //     manager probe. Both managers REFUSE as the real ones do when no user bus can be found (no `XDG_RUNTIME_DIR`),
 //     record the bus each call was given to `<home>/bus-calls`, and answer as an unreachable manager while
 //     `<home>/manager-down` exists;
@@ -82,8 +82,11 @@ done
 if [ "$scope" = 1 ]; then exec "$@"; fi
 mkdir -p "$HOME/fake-units"
 set -m
-"$@" </dev/null >/dev/null 2>"$HOME/fake-units/$unit.stderr" &
-printf '%s\\n' "$!" > "$HOME/fake-units/$unit.pid"
+# THE UNIT RECORDS ITSELF before it execs the command, as the manager has the unit before systemd-run returns: a pid
+# written by this stand-in after the fork is lost when the caller's group is killed in between, and a stop then finds
+# no unit while the helper it started runs on.
+bash -c 'printf "%s\\n" "$$" > "$1"; shift; exec "$@"' _ "$HOME/fake-units/$unit.pid" "$@" \
+  </dev/null >/dev/null 2>"$HOME/fake-units/$unit.stderr" &
 exit 0
 `;
 
@@ -98,7 +101,11 @@ ${BUS_GUARD}
 u="\${3%.service}"; f="$HOME/fake-units/$u.pid"
 [ -f "$f" ] || { echo "Failed to stop $3: Unit $3 not loaded." >&2; exit 5; }
 p="$(<"$f")"; rm -f "$f"
-kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null
+# THE WHOLE UNIT, as systemd's control-group kill reaches it: the unit's group and every descendant, which includes a
+# child that made a group of its own (\`timeout\` does), so the helper is never left waiting on one the stop missed.
+all="$p"; q="$p"
+while [ -n "$q" ]; do n=''; for x in $q; do n="$n $(pgrep -P "$x" 2>/dev/null | tr '\\n' ' ')"; done; q="$(echo $n)"; all="$all $q"; done
+kill -TERM -- "-$p" 2>/dev/null; kill -TERM $all 2>/dev/null
 for _ in $(seq 1 100); do kill -0 "$p" 2>/dev/null || exit 0; sleep 0.1; done
 exit 0
 `;
