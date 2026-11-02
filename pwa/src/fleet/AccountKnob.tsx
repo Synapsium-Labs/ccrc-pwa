@@ -34,7 +34,7 @@ export interface LaneActs {
 }
 
 /** The screen's lane acts. `refresh` re-reads `/api/accounts` through the store, its one reader. */
-export function useLaneActs(refresh: () => Promise<void>): LaneActs {
+export function useLaneActs(refresh: () => Promise<unknown>): LaneActs {
   const [busy, setBusy] = useState<Record<string, 'check' | 'switch'>>({});
   const [acked, setAcked] = useState<Record<string, boolean>>({});
   const settle = (id: string): void => setBusy((b) => { const { [id]: _done, ...rest } = b; return rest; });

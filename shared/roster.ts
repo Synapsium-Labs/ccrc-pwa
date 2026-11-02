@@ -1286,3 +1286,37 @@ export function parseRoster(json: unknown): Roster {
 
   return { version: 1, accounts, byId, byIdLengthDesc, homeAble, upstreamId };
 }
+
+// ── The connect sheet's reading of a new lane's name (accounts plan Task A18, D-7740) ──────────────────────────────
+// APPENDED at the foot: the parser's own gates above stay the authority, and these read them rather than restate them.
+
+/** The lane ids `ccrc account add` refuses as reserved: `auth` (`_acct_id_or_refuse`, ccd/ccrc: the auth pane's tmux
+ *  session is `cc-auth-<id>`), and the GPT-lane toolchain names the parser above refuses. Display only: the verb is
+ *  the authority, and the sheet reads this list to say so before it asks. */
+export const RESERVED_LANE_IDS: readonly string[] = ['auth', ...GPT_TOOLCHAIN_ACCOUNT_IDS];
+
+/** Why a new lane's id cannot be added, or `null` (spec §5's identity step, live against the roster the server holds):
+ *  `ID_RE` above, the reserved ids, then the ids already taken. */
+export function newLaneIdProblem(id: string, taken: readonly string[]): 'bad-id' | 'reserved-id' | 'duplicate-id' | null {
+  if (!ID_RE.test(id)) return 'bad-id';
+  if (RESERVED_LANE_IDS.includes(id)) return 'reserved-id';
+  if (taken.includes(id)) return 'duplicate-id';
+  return null;
+}
+
+/** Why a new lane's label cannot be used, or `null`: 1 to 64 characters, and none of them a control byte
+ *  (`LABEL_UNSAFE_RE` above, the parser's own gate). */
+export function newLaneLabelProblem(label: string): 'empty' | 'too-long' | 'unsafe' | null {
+  if (label.length === 0) return 'empty';
+  if ([...label].length > 64) return 'too-long';
+  if (LABEL_UNSAFE_RE.test(label)) return 'unsafe';
+  return null;
+}
+
+/** The config folder `ccrc account add` gives a new lane (G4): `.claude-<id>`, or `.<id>` when the id already starts
+ *  `claude-`, so `claude-a` is `.claude-a` and never `.claude-claude-a`. The verb owns the rule (`_acct_add_parse` in
+ *  ccd/ccrc and `defaultSuffixOf` in deploy/account-op.mjs, which `ccrc-account.test.ts` holds equal); the sheet only
+ *  shows what it will be, and `connect-sheet.test.tsx` holds this copy to the same cases. */
+export function newLaneConfigSuffix(id: string): string {
+  return id.startsWith('claude-') ? `.${id}` : `.claude-${id}`;
+}

@@ -2522,7 +2522,9 @@ button.proj-card-pool::before {
 }
 /* The trouble card's body (spec §4.2): what is wrong, its effect and its fix, in sans; the command in mono. */
 .acct-trouble { display: grid; gap: var(--sp-1); margin: var(--sp-1) 0; }
-.accounts-row[data-state] .acct-trouble-wrong {
+.accounts-row[data-state] .acct-trouble-wrong,
+.acct-notice,
+.acct-offline {
   margin: 0;
   font-family: var(--family-ui);
   font-size: var(--fs-sm);
@@ -2538,8 +2540,10 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
 }
 .acct-fix-command { display: grid; gap: var(--sp-1); }
-.acct-fix-row { display: flex; gap: var(--sp-2); align-items: stretch; min-width: 0; }
-.accounts-row[data-state] .acct-fix-field {
+.acct-fix-row,
+.acct-secret-row { display: flex; gap: var(--sp-2); align-items: stretch; min-width: 0; }
+.accounts-row[data-state] .acct-fix-field,
+.acct-door-reason .acct-fix-field {
   flex: 1 1 0;
   min-width: 0;
   min-height: var(--tap-min);
@@ -3928,4 +3932,143 @@ button.proj-card-pool::before {
   display: flex;
   justify-content: flex-end;
   margin-bottom: var(--sp-2);
+}
+
+/* — The Add account door and the connect sheet (accounts plan Task A18, D-5522, D-7740; spec §5, §12.1–§12.4) —
+   The door is one per width: on a phone the lane list's last row, a `ListRow` at the skin's own row height (52px in
+   Refined, 44px in Instrument, `--row-h`), the word and its meta on one line that wraps only between them; at ≥900 a
+   secondary button in the page header. Narrowed, it stays where it is in the secondary ink (a word that must still read,
+   so never the disabled ink, which no text pair clears), with its reason beneath. */
+.acct-door {
+  flex-wrap: wrap;
+  column-gap: var(--sp-3);
+  row-gap: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-ui);
+  color: var(--ink-primary);
+}
+.acct-door-meta {
+  min-width: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+.acct-door[data-narrowed='true'],
+.acct-door[data-narrowed='true'] .acct-door-meta,
+.acct-door-action[data-narrowed='true'] { color: var(--ink-secondary); cursor: default; }
+.acct-door-reason { display: grid; gap: var(--sp-1); min-width: 0; }
+/* The sheet's body: every frame a stack, nothing wider than the sheet at 360. */
+.acct-connect,
+.acct-frame { display: grid; gap: var(--sp-3); min-width: 0; }
+.acct-field,
+.acct-secret { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-field > label,
+.acct-secret > label {
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-medium);
+  color: var(--ink-secondary);
+}
+/* The sheet's field notes, a narrowed row's reason and the door's reason: the trouble card's meta sentence style, kept
+   as a rule of its own because those rules are scoped under `.accounts-row[data-state]` and these sit in the sheet or
+   under the page header, outside any card. They may carry a long unbroken name, so they wrap anywhere. */
+.acct-field-note,
+.acct-narrowed,
+.acct-door-reason > p,
+.acct-door-reason .acct-fix-hold {
+  margin-block: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+.acct-narrowed { display: block; }
+/* The derived config folder and wrapper: one mono line, ellipsised at a phone's width (spec §12.3). */
+.acct-derived {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+/* The hue: six swatches in one row, each cell 44px, a worn hue ringed and still selectable. */
+.acct-hues { grid-template-columns: repeat(6, minmax(var(--tap-min), 1fr)); column-gap: var(--sp-1); }
+.acct-hues > legend { grid-column: 1 / -1; }
+.acct-hue { gap: var(--sp-1); min-width: var(--tap-min); }
+.acct-hue-body { display: inline-flex; align-items: center; }
+.acct-swatch {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+}
+.acct-swatch[data-worn='true'] { box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 3px var(--edge-strong); }
+/* Pick another name or Use what's there. */
+.acct-found {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+/* The method radio: the name over its consequence line, and the reason a narrowed method gives. */
+.acct-methods { row-gap: var(--sp-2); }
+.acct-method-body { display: grid; gap: 2px; min-width: 0; }
+.acct-method-name { font-weight: var(--weight-medium); color: var(--ink-primary); }
+.acct-method-line { font-size: var(--fs-meta); color: var(--ink-secondary); }
+/* A frame's foot: the quiet acts, then the primary; a full-width primary takes its own line on a phone. */
+.acct-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The step ledger: mono, a clock per line; only the running line breathes (the box is working). */
+.acct-ledger {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.acct-ledger > li {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--sp-2);
+}
+/* The running line's dot: the living process, the only glow here (spec §12.3). */
+.acct-ledger-dot {
+  width: var(--sp-2);
+  height: var(--sp-2);
+  border-radius: var(--r-full);
+  background: transparent;
+}
+.acct-ledger > li[data-live='true'] .acct-ledger-dot { background: var(--status-busy); animation: var(--animate-breathe); }
+@media (prefers-reduced-motion: reduce) {
+  .acct-ledger > li[data-live='true'] .acct-ledger-dot { animation: none; }
+}
+.acct-ledger-clock { flex: none; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.acct-ledger-text { min-width: 0; overflow-wrap: anywhere; }
+/* The result: a register, not a celebration. */
+.acct-result-word {
+  margin: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-base);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+}
+.acct-result-line {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-secondary);
 }
