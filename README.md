@@ -7560,8 +7560,8 @@ Nothing reaches `main` through the queue without it. The one way around it is a 
 fast run, so such a merge lands only what the fast run tested. Don't do it; the daily `full-suite` is the next run that
 would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
-`main`. An **hourly** refresh runs no test legs: it re-traces what every merge since the last one affected and
-refreshes the map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when
+`main`. A refresh **every three hours** runs no test legs: it re-traces what every merge since the last one affected and
+refreshes the map, and traces nothing when `main` has not moved since the newest map. The **daily** run runs every leg in full, macOS included, ending in `full-suite` — skipped when
 `main`'s head already carries a green one from a trusted run; `gh workflow run ci.yml --ref <branch> -f mode=full` asks
 for a full run by hand. A promotion to `stable` needs a green `full-suite` on its commit, and `release-stable.yml` runs
 one first when none exists. So a green pull request proves its fast checks; the merge queue proves the suite.

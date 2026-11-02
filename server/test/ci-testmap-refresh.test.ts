@@ -422,3 +422,66 @@ describe('the order a refresh traces in', () => {
     expect(order).toEqual(['server/test/c.test.ts', 'server/test/z.test.ts', 'server/test/b.test.ts', 'server/test/a.test.ts']);
   });
 });
+
+// D-7747: the refresh runs every three hours, and the SCHEDULED one (ci.yml passes `--skip-unmoved true` on the refresh
+// cron alone) traces nothing when main's head is the newest map's own commit. A dispatch passes no flag and refreshes.
+describe('a scheduled refresh skips when main has not moved since the newest map (D-7747)', () => {
+  // The map is at HEAD and has no entry for b, so a refresh that runs traces b (a new test).
+  function atHead(extra: Record<string, unknown> = {}) {
+    const { repo, headSha } = fixture();
+    const map = writeMap(repo, mapOf(headSha, { 'server/test/a.test.ts': rec({ read: ['src/foo.ts'], tracedAt: headSha }) }, extra));
+    return { repo, headSha, map };
+  }
+
+  it('the map is at main\'s head: nothing is traced, and the summary says why', () => {
+    const { repo, headSha, map } = atHead();
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true']);
+    expect(r.outputs.trace).toBe('refresh');
+    expect(r.outputs.trace_count).toBe('0');
+    expect(JSON.parse(r.outputs.trace_matrix).include).toEqual([]);
+    expect(r.summary).toContain(`refresh skipped: main has not moved since the newest map (\`${headSha}\`)`);
+  });
+
+  it('the same map without the flag (a dispatch) refreshes: the new test is traced', () => {
+    const { repo, map } = atHead();
+    const r = runSelect(repo, ['--event', 'workflow_dispatch', '--input-mode', 'refresh', '--map', map]);
+    expect(r.outputs.trace_count).toBe('1');
+    expect(r.summary).not.toContain('refresh skipped');
+  });
+
+  it('main moved past the map: the flag changes nothing, and the merge is traced', () => {
+    const { repo, baseSha } = fixture();
+    const map = writeMap(repo, mapOf(baseSha, { 'server/test/a.test.ts': rec({ read: ['src/foo.ts'] }), 'server/test/b.test.ts': rec() }));
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true']);
+    expect(r.outputs.trace_count).toBe('1');
+    expect(r.summary).not.toContain('refresh skipped');
+  });
+
+  it('no map: the flag changes nothing, and every test is traced', () => {
+    const { repo } = fixture();
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', path.join(repo, 'absent.json'), '--skip-unmoved', 'true']);
+    expect(Number(r.outputs.trace_count)).toBeGreaterThan(0);
+  });
+
+  it('an old map of a main that has not moved is current, not stale: no warning on the refresh or on a pull request', () => {
+    const now = new Date('2026-10-26T12:00:00Z');
+    const { repo, map } = atHead({ builtAt: new Date(now.getTime() - 10 * 3_600_000).toISOString() });
+    const refresh = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true', '--now', now.toISOString()]);
+    expect(refresh.stdout).not.toMatch(/::warning::/);
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    writeFile(repo, 'src/bar.ts', 'export const bar = 1;\n');
+    commitAll(repo, 'the PR change');
+    const pr = runSelect(repo, ['--event', 'pull_request', '--base', 'main', '--map', map, '--now', now.toISOString()]);
+    expect(pr.summary).not.toMatch(/older than/);
+    expect(pr.stdout).not.toMatch(/::warning::/);
+  });
+
+  it('an old map that main has moved past is still reported', () => {
+    const now = new Date('2026-10-26T12:00:00Z');
+    const { repo, baseSha } = fixture();
+    const map = writeMap(repo, mapOf(baseSha, { 'server/test/a.test.ts': rec({ read: ['src/foo.ts'] }), 'server/test/b.test.ts': rec() },
+      { builtAt: new Date(now.getTime() - 10 * 3_600_000).toISOString() }));
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true', '--now', now.toISOString()]);
+    expect(r.stdout).toMatch(/::warning::.*map is 10 h old \(older than 5 h\)/);
+  });
+});
