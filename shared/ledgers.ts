@@ -10,10 +10,10 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
 
-/** What the operator is asked to do. `value` and `secret` take something back; `secret` never
- *  through the item's answer (spec §5). */
+/** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
+ *  `secret`'s value goes to its slot, never through the answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
 const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
 export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
@@ -24,9 +24,6 @@ const ITEM_STATE_MAP: Record<ItemState, true> = {
   open: true, checking: true, done: true, withdrawn: true, dismissed: true,
 };
 export const ITEM_STATES = Object.keys(ITEM_STATE_MAP) as readonly ItemState[];
-/** The states an item still waits in. Derived from nothing else: it is the pair the transition table
- *  leaves by `confirm`, `return`, `withdraw` and `dismiss`. */
-export const OPEN_ITEM_STATES: readonly ItemState[] = ['open', 'checking'];
 
 /** `blocking` = work has stopped on it; `soon` carries a short label; `later` is the rest. */
 export type NeededBy = 'blocking' | 'soon' | 'later';
@@ -53,6 +50,13 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
   withdraw: { actor: 'coordinator', from: ['open', 'checking'], to: 'withdrawn' },
   dismiss: { actor: 'operator', from: ['open', 'checking'], to: 'dismissed' },
 };
+
+/** The states an item still waits in: the states some row of `ITEM_TRANSITIONS` leaves, in `ITEM_STATES` order
+ *  (today `open` and `checking`). Derived from the table, so a state the table can still move an item out of
+ *  is never missing from it. */
+export const OPEN_ITEM_STATES: readonly ItemState[] = ITEM_STATES.filter(
+  (s) => Object.values(ITEM_TRANSITIONS).some((row) => row.from.includes(s)),
+);
 
 /** Why a move of one item is refused (the decider's three, and `unknown-item` for an id the store holds no row for).
  *  Declared once here so the store's answers and, in PL3 and PL4, the routes' typed refusals read the same words. */
@@ -155,7 +159,11 @@ export const WAITS_ON_KINDS = Object.keys(WAITS_ON_MAP) as readonly WaitsOn[];
 
 /**
  * Priority: any active work run -> `work`; any work run awaiting review or any active review run ->
- * `review`; any `merging` run -> `merge-queue`; any `planned` run -> `next-wave`; else `ended`.
+ * `review`; any `merging` run -> `merge-queue`; any `planned` run -> `next-wave`; any other run that is
+ * still open (a `closing` run, a run of kind `unknown`, a review run awaiting its own review) -> `work`;
+ * else `ended`. `ended` means exactly what the store's `programmeHasOpenRun` means: no run outside
+ * `TERMINAL_RUN_STATES`, so the panel never says "the programme has no open run" while a dismiss is
+ * refused `programme-live` (review 1323 R1).
  */
 export function programmeWaitsOn(runs: readonly { state: RunState; kind: RunKind }[]): WaitsOn {
   const active = (r: { state: RunState }) => (ACTIVE_RUN_STATES as readonly RunState[]).includes(r.state);
@@ -164,6 +172,7 @@ export function programmeWaitsOn(runs: readonly { state: RunState; kind: RunKind
     || (r.kind === 'review' && active(r)))) return 'review';
   if (runs.some((r) => r.state === 'merging')) return 'merge-queue';
   if (runs.some((r) => r.state === 'planned')) return 'next-wave';
+  if (runs.some((r) => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(r.state))) return 'work';
   return 'ended';
 }
 
