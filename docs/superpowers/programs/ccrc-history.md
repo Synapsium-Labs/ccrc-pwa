@@ -29,13 +29,14 @@ each box that hosts sessions, and gives a session a way to recall what it compac
 session-written leaves in W3), and a `ccrc history` CLI plus a skill. Modelled on lossless-claw (MIT), ported rather
 than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W4 ship at all.
 
-## Current checkpoint — 2026-11-01
+## Current checkpoint — 2026-11-02
 
 The latest accepted state is recorded here and in the live run board; older dated completion-plan and operational
 measurements below are history, not authority to repeat their actions. W2's prospective observation is **seven days**,
 excluding setup and pilot. No valid live start or W2 PASS is established by this checkpoint. The two capped drafts
-and the separately refused runbook correction remain held. The independent ingestion-test follow-up (#2063) is
-accepted **for landing**, not yet merged. Run 1022 remains planned, open and undispatched to preserve continuity.
+and the separately refused runbook correction remain held. The independent ingestion-test follow-up (#2063)
+**merged** on 2026-11-01 at the exact independently reviewed head; its administrative run close is next at this
+checkpoint. Run 1022 remains planned, open and undispatched to preserve continuity.
 
 ## Waves
 
@@ -67,13 +68,13 @@ accepted **for landing**, not yet merged. Run 1022 remains planned, open and und
 | 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft; run 1190 awaiting-review, review rounds 3/3; no cap lift or implementation authority |
 | 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **held/unaccepted**, draft; run 1233 awaiting-review, review rounds 3/3; operator's seven-day ruling stands independently of this draft |
 | 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **held/unaccepted**, draft; run 1236 awaiting-review, review rounds 1/3; review 1238 closed/read, bounded correction not sent after routing refusal |
-| 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **accepted for landing** at `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 awaiting-review, item 1/1, review rounds 1/3; review 1321 done/released; fresh landing gates still required |
+| 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **merged** 2026-11-01 19:04:40Z as `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`, exact reviewed head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 merging at this checkpoint, item 1/1, review rounds 1/3; review 1321 done/released; MERGED mail then final run close owed |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the operator records the W2 gate as passed |
 | 8 | W4: subagents and `touched` | fleet | — | only if the operator records the W2 gate as passed, and never before wave 5 is live |
 
 ## Decisions & deviations
 
-### Latest rulings and evidence — 2026-10-30 to 2026-11-01
+### Latest rulings and evidence — 2026-10-30 to 2026-11-02
 
 - **Seven-day observation, operator ruling 2026-10-30.** Explicitly set `window_plan.planned_days=7` in every signed
   or superseding draft, and schedule `window.end_ms = window.start_ms + 604800000`. Setup and pilot do not count.
@@ -123,8 +124,18 @@ accepted **for landing**, not yet merged. Run 1022 remains planned, open and und
   server shard; the required summaries succeeded at capture. Browser/PWA test steps and macOS were skipped, not
   passed executions. No full-suite green, pre-change runtime defect or live evaluation result is claimed. A failed
   non-required external review-gate app had inaccessible details: unverified evidence, neither waived nor a proven
-  product defect. Fresh repository rules, reviews, comments/threads/alerts, checks, exact head and landing-line
-  gates still govern enqueue. No merge is claimed by this ledger commit.
+  product defect. Those are review-time evidence limits, not a claim that skipped legs executed. Fresh repository
+  rules, reviews, comments/threads/alerts, checks, exact head and landing-line gates governed the later enqueue.
+- **Exact-head landing, independently measured 2026-11-02.** The accepted advance to merging pinned run 1320's
+  landing entry to the reviewed head. The complete fresh verdict selected the native queue; the separate required
+  checks gate then exited zero, and the landing line was unpaused with the matching pinned entry. The normal
+  exact-head enqueue was followed by an actual `QUEUED` entry, not merely armed auto-merge. GitHub now reads #2063
+  `MERGED`, at head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`, merged 2026-11-01 19:04:40Z as
+  `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`; the separate workspace PR measurement agrees. No repeat enqueue is
+  owed. Run 1320 still reads merging at this checkpoint: send the worker MERGED before final close, then require an
+  accepted close, release and its own terminal done row. No live evaluation start, rollout, PASS or programme
+  completion follows from this test-only merge. The earlier required-check results for this ledger PR are not
+  evidence for its amended head; fresh checks and landing gates are still required for the ledger itself.
 
 ### Earlier dated rulings
 
@@ -1927,13 +1938,13 @@ holds over an earlier one for the same item.
 
 ## Next-wave brief
 
-1. Finish landing the independently reviewed test-only #2063 at `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`.
-   Run 1320 is awaiting-review with item 1/1; review 1321 is already done/released and the deliverable accepted for
-   landing. Do not repeat that review or read the worker diff in the coordinator. Advance to merging with the exact
-   verified fingerprint, read repository policy fresh, apply the required-check gate and the unpaused exact-head
-   landing-line gate, then use the normal native queue if that remains the measured route. Never bypass or update
-   the branch. Prove an actual queue entry and end the turn for server mail. Any refusal/stop is reported, not retried
-   through another route. After exact-head merge proof, send MERGED mail before closing/reclaim; keep 1022 open.
+1. Finish only the administrative close of test-only #2063, whose exact-head merge is independently proven above.
+   Read run 1320 first: if already done/released, do not close or enqueue again. Otherwise it remains merging with
+   item 1/1; send MERGED mail before final close can reclaim its child, use the measured merged-phase fingerprint
+   with both tips at `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`, and require accepted close, release and its own
+   terminal done row. Review 1321 is already done/released; do not repeat it or read the worker diff in the
+   coordinator. Preserve its carried minor advisories and evidence limits. Keep 1022 open. Finish the separate
+   ledger PR only through its own fresh checks, review and repository landing gates; no ledger merge is yet proven.
 2. Preserve the capped/unaccepted preparation in #1876 and #1969, and the unsent correction for #1975 after the
    refused routing act. They await their respective operator dispositions; no implicit cap reset or recovery.
 3. Progress only already-authorised W2 preparation under the seven-day ruling and existing decisions/runbook.
