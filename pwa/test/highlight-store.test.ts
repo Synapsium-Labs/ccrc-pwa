@@ -1,0 +1,445 @@
+// The highlight store (native Docs reader, W5h-a Task 5; base spec 2026-10-01 section 4.10 "The store", "Page
+// ceilings", "The line retry"; M4.H11, M4.H12, M4.H13 main half, M4.H18 store half). A fake highlighter records
+// every request with its signal and `onPosted`, and answers on demand; a fake clock drives the worker-time ceiling.
+// The React side (`CodeBlock` on the store) is Task 6's and Task 7's.
+import { describe, expect, it } from 'vitest';
+import type { Root as HastRoot } from 'hast';
+import type { Highlighter, HighlighterStatus, HighlightOutcome, HighlightRequest } from '../src/lib/highlightProtocol';
+import {
+  UNREQUESTED_ENTRY, blockKey, codeBlocksOf, createHighlightStore, type HighlightClock, type HighlightEntry,
+  type HighlightStoreOptions,
+} from '../src/lib/highlightStore';
+import {
+  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS,
+  DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS, HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_LINE_RETRY_UNITS,
+  HIGHLIGHT_PAGE_MAX_TIMEOUTS, HIGHLIGHT_PAGE_WORKER_MS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS,
+  MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
+} from '../src/lib/markdownLimits';
+
+interface Call {
+  readonly req: HighlightRequest;
+  readonly signal?: AbortSignal;
+  readonly onPosted?: () => void;
+  readonly resolve: (o: HighlightOutcome) => void;
+  aborted: boolean;
+  posted: boolean;
+}
+
+/** A highlighter that records each request and answers only when told. */
+class FakeHighlighter implements Highlighter {
+  readonly calls: Call[] = [];
+  state: HighlighterStatus = 'live';
+  highlight(req: HighlightRequest, opts: { signal?: AbortSignal; onPosted?: () => void }): Promise<HighlightOutcome> {
+    return new Promise((resolve, reject) => {
+      const call: Call = { req, signal: opts.signal, onPosted: opts.onPosted, resolve, aborted: false, posted: false };
+      this.calls.push(call);
+      opts.signal?.addEventListener('abort', () => { call.aborted = true; reject(opts.signal!.reason); }, { once: true });
+    });
+  }
+  status(): HighlighterStatus { return this.state; }
+  prewarm(): void {}
+}
+
+/** A clock whose timers fire only when the test advances it. */
+function fakeClock(): HighlightClock & { advance(ms: number): void } {
+  let now = 0;
+  let next = 1;
+  const timers = new Map<number, { at: number; fn: () => void }>();
+  return {
+    now: () => now,
+    setTimer: (fn, ms) => { const h = next++; timers.set(h, { at: now + ms, fn }); return h; },
+    clearTimer: (h) => { timers.delete(h as number); },
+    advance(ms) {
+      const end = now + ms;
+      for (;;) {
+        const due = [...timers].filter(([, t]) => t.at <= end).sort(([, a], [, b]) => a.at - b.at)[0];
+        if (due === undefined) break;
+        timers.delete(due[0]);
+        now = due[1].at;
+        due[1].fn();
+      }
+      now = end;
+    },
+  };
+}
+
+const flush = (): Promise<void> => new Promise((r) => { setTimeout(r, 0); });
+const HTML = (html: string, mode: 'block' | 'line' = 'block'): HighlightOutcome => ({ kind: 'html', html, mode });
+const TIMEOUT: HighlightOutcome = { kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS };
+const OK = '<span class="hljs-keyword">x</span>';
+
+function setup(options: HighlightStoreOptions = { mode: 'docs' }) {
+  const h = new FakeHighlighter();
+  const clock = fakeClock();
+  const store = createHighlightStore(h, options, clock);
+  const key = (lang: string, raw: string): string => {
+    const k = store.keyOf(lang, raw);
+    if (k.kind !== 'key') throw new Error(`no key: ${JSON.stringify(k)}`);
+    return k.key;
+  };
+  /** Posts call `i` once (its onPosted runs), as the highlighter does when the job reaches the worker. */
+  const post = (i: number): void => {
+    const call = h.calls[i]!;
+    if (call.posted) return;
+    call.posted = true;
+    call.onPosted?.();
+  };
+  /** Posts call `i` if it was not, then answers it, then lets the store hear it. */
+  const answer = async (i: number, o: HighlightOutcome): Promise<void> => {
+    post(i);
+    h.calls[i]!.resolve(o);
+    await flush();
+  };
+  return { h, clock, store, key, post, answer };
+}
+
+/** `n` characters of python, distinct by `tag`, in lines under 100 characters, with no long word or blank run. */
+const py = (n: number, tag: string): string =>
+  (tag + ' ' + 'x '.repeat(n)).replace(/(.{80})/g, '$1\n').slice(0, n);
+const kinds = (store: { peek(k: string): HighlightEntry }, keys: string[]): string[] => keys.map((k) => store.peek(k).kind);
+
+describe('M4.H11: a content-keyed store', () => {
+  it('two blocks with equal (lang, raw) make one request; peek is synchronous and never requests', () => {
+    const { h, store, key } = setup();
+    const k = key('ts', 'const a = 1;');
+    expect(store.peek(k)).toBe(UNREQUESTED_ENTRY);
+    expect(h.calls).toHaveLength(0);
+    store.request(k);
+    store.request(k);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]!.req).toEqual({ lang: 'ts', code: 'const a = 1;' });
+    expect(store.peek(k).kind).toBe('pending');
+  });
+
+  it('a re-request of an answered key (a re-render, a Copy click) makes no request', async () => {
+    const { h, store, key, answer } = setup();
+    const k = key('ts', 'a');
+    const release = store.request(k);
+    await answer(0, HTML(OK));
+    release();
+    store.request(k)();
+    store.request(k);
+    expect(h.calls).toHaveLength(1);
+    expect(store.peek(k).kind).toBe('html');
+  });
+
+  it('releasing one of two references keeps the job; releasing the last detaches it and the key is unrequested again', () => {
+    const { h, store, key } = setup();
+    const k = key('ts', 'a');
+    const one = store.request(k);
+    const two = store.request(k);
+    one();
+    one();
+    expect(h.calls[0]!.aborted).toBe(false);
+    two();
+    expect(h.calls[0]!.aborted).toBe(true);
+    expect(store.peek(k)).toBe(UNREQUESTED_ENTRY);
+  });
+
+  it('peek returns the same object until the entry changes; subscribe(key) returns the same function for a key', async () => {
+    const { store, key, answer } = setup();
+    const k = key('ts', 'a');
+    expect(store.peek('never-seen')).toBe(store.peek('never-seen-either'));
+    store.request(k);
+    const pending = store.peek(k);
+    expect(store.peek(k)).toBe(pending);
+    await answer(0, HTML(OK));
+    const html = store.peek(k);
+    expect(html).not.toBe(pending);
+    expect(store.peek(k)).toBe(html);
+    expect(store.subscribe(k)).toBe(store.subscribe(k));
+    expect(store.subscribe()).toBe(store.subscribe());
+  });
+
+  it('a listener on a key hears its change, and a store-wide listener hears every change', async () => {
+    const { store, key, answer } = setup();
+    const k = key('ts', 'a');
+    const heard: string[] = [];
+    store.subscribe(k)(() => heard.push('key'));
+    store.subscribe()(() => heard.push('all'));
+    store.request(k);
+    await answer(0, HTML(OK));
+    expect(heard).toEqual(['key', 'all', 'key', 'all']);
+  });
+
+  it('releaseAll detaches every outstanding job', () => {
+    const { h, store, key } = setup();
+    store.request(key('ts', 'a'));
+    store.request(key('ts', 'b'));
+    store.releaseAll();
+    expect(h.calls.map((c) => c.aborted)).toEqual([true, true]);
+  });
+
+  it('a chat store evicts every key no block references after a commit', async () => {
+    const { store, key, answer } = setup({ mode: 'chat' });
+    const a = key('ts', 'a');
+    const b = key('ts', 'b');
+    const releaseA = store.request(a);
+    store.request(b);
+    await answer(0, HTML(OK));
+    releaseA();
+    store.evictUnreferenced();
+    expect(store.peek(a)).toBe(UNREQUESTED_ENTRY);
+    expect(store.peek(b).kind).toBe('pending');
+  });
+
+  it('keyOf: a key, or why the block can never be requested, in BASE\'s order; part 1\'s bounds only with part1', () => {
+    expect(blockKey('ts', 'a')).toEqual({ kind: 'key', key: 'ts\u0000a' });
+    expect(blockKey('nope', 'a')).toEqual({ kind: 'unregistered' });
+    expect(blockKey('', 'a')).toEqual({ kind: 'unregistered' });
+    const big = 'a\n'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    expect(blockKey('python', big)).toEqual({ kind: 'over-cap', chars: big.length });
+    const ts = 'a\n'.repeat(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS);
+    expect(blockKey('ts', ts)).toEqual({ kind: 'part1', bound: 'grammar-cap', chars: ts.length });
+    expect(blockKey('ts', ts, false).kind).toBe('key');
+    const word = 'a'.repeat(MD_HIGHLIGHT_MAX_WORD_CHARS + 1);
+    expect(blockKey('python', word)).toEqual({ kind: 'part1', bound: 'word', chars: word.length });
+    const line = 'a '.repeat(MD_HIGHLIGHT_MAX_LINE_CHARS);
+    expect(blockKey('python', line)).toEqual({ kind: 'part1', bound: 'line', chars: line.length });
+    const blank = `a${'\n'.repeat(MD_HIGHLIGHT_MAX_BLANK_CHARS + 1)}b`;
+    expect(blockKey('python', blank)).toEqual({ kind: 'part1', bound: 'blank', chars: MD_HIGHLIGHT_MAX_BLANK_CHARS + 1 });
+    expect(blockKey('python', blank, false).kind).toBe('key');
+  });
+});
+
+describe('M4.H12: page ceilings and settled()', () => {
+  it('the input ceiling skips at seed, in document order, a shared key counted once', () => {
+    const { store, key } = setup();
+    const blocks = Array.from({ length: 9 }, (_, i) => ({ lang: 'python', raw: py(60000, `b${i}`) }));
+    expect(8 * 60000).toBeLessThanOrEqual(DOCS_HIGHLIGHT_PAGE_MAX_CHARS);
+    store.seed([...blocks.slice(0, 2), blocks[0]!, ...blocks.slice(2)]);
+    const keys = blocks.map((b) => key(b.lang, b.raw));
+    expect(kinds(store, keys)).toEqual([...Array(8).fill('unrequested'), 'skipped']);
+    expect(store.peek(keys[8]!)).toEqual({ kind: 'skipped', ceiling: 'page-input' });
+  });
+
+  it('the output ceiling: the answer that would pass the page HTML cap is skipped, and every later request', async () => {
+    const { store, key, answer } = setup();
+    const big = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+    const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / big.length);
+    const raws = Array.from({ length: fit + 2 }, (_, i) => `b${i}`);
+    store.seed(raws.map((raw) => ({ lang: 'python', raw })));
+    const ks = raws.map((r) => key('python', r));
+    for (const k of ks) store.request(k);
+    for (let i = 0; i <= fit; i += 1) await answer(i, HTML(big));
+    expect(kinds(store, ks)).toEqual([...Array(fit).fill('html'), 'skipped', 'skipped']);
+    expect(store.peek(ks[fit]!)).toEqual({ kind: 'skipped', ceiling: 'page-output' });
+  });
+
+  it('the timeout ceiling: at HIGHLIGHT_PAGE_MAX_TIMEOUTS timeouts every unanswered key is skipped, the running job detached', async () => {
+    const { h, store, key, answer } = setup();
+    const ks = ['a', 'b', 'c', 'd'].map((s) => key('python', s));
+    store.seed(['a', 'b', 'c', 'd'].map((raw) => ({ lang: 'python', raw })));
+    for (const k of ks) store.request(k);
+    for (let i = 0; i < HIGHLIGHT_PAGE_MAX_TIMEOUTS; i += 1) await answer(i, TIMEOUT);
+    expect(store.peek(ks[0]!)).toEqual({ kind: 'plain', first: { kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS }, retry: null });
+    expect(kinds(store, ks.slice(HIGHLIGHT_PAGE_MAX_TIMEOUTS))).toEqual(['skipped', 'skipped']);
+    expect(store.peek(ks[3]!)).toEqual({ kind: 'skipped', ceiling: 'page-timeouts' });
+    expect(h.calls.slice(HIGHLIGHT_PAGE_MAX_TIMEOUTS).every((c) => c.aborted)).toBe(true);
+    expect(store.settled()).toBe(true);
+  });
+
+  it('the worker-time ceiling fires mid-job: the running job is detached and the rest skipped', async () => {
+    const { h, clock, store, key, post, answer } = setup();
+    const ks = ['a', 'b', 'c'].map((s) => key('python', s));
+    store.seed(['a', 'b', 'c'].map((raw) => ({ lang: 'python', raw })));
+    for (const k of ks) store.request(k);
+    post(0);
+    clock.advance(HIGHLIGHT_PAGE_WORKER_MS - 1);
+    await answer(0, HTML(OK));
+    post(1);
+    clock.advance(1);
+    await flush();
+    expect(h.calls[1]!.aborted).toBe(true);
+    expect(kinds(store, ks)).toEqual(['html', 'skipped', 'skipped']);
+    expect(store.peek(ks[1]!)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
+  });
+
+  it('a detached job\'s timeout counts against no ceiling', async () => {
+    const { h, store, key, answer } = setup({ mode: 'chat' });
+    const release = store.request(key('python', 'a'));
+    release();
+    h.calls[0]!.resolve(TIMEOUT);
+    await flush();
+    for (const s of ['b', 'c']) store.request(key('python', s));
+    await answer(1, TIMEOUT);
+    expect(h.calls).toHaveLength(3);
+    expect(h.calls[2]!.aborted).toBe(false);
+    expect(store.peek(key('python', 'c')).kind).toBe('pending');
+  });
+
+  it('settled(): false while a seeded key is unanswered, from creation; true once every one is html, plain or skipped', async () => {
+    const { store, key, answer } = setup();
+    store.seed([{ lang: 'python', raw: 'a' }, { lang: 'python', raw: 'b' }]);
+    expect(store.settled()).toBe(false);
+    store.request(key('python', 'a'));
+    store.request(key('python', 'b'));
+    await answer(0, HTML(OK));
+    expect(store.settled()).toBe(false);
+    await answer(1, { kind: 'threw', error: 'Error' });
+    expect(store.settled()).toBe(true);
+  });
+
+  it('a Docs store seeded with nothing is settled; a chat store is settled when no referenced key is waiting', async () => {
+    expect(setup().store.settled()).toBe(true);
+    const { store, key, answer } = setup({ mode: 'chat' });
+    store.request(key('python', 'a'));
+    expect(store.settled()).toBe(false);
+    await answer(0, HTML(OK));
+    expect(store.settled()).toBe(true);
+  });
+
+  it('a chat store applies neither page cap: no input skip at any size, no output skip', async () => {
+    const { store, key, answer } = setup({ mode: 'chat' });
+    const huge = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+    const ks = Array.from({ length: Math.ceil(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / huge.length) + 1 }, (_, i) => key('python', `k${i}`));
+    for (const [i, k] of ks.entries()) { store.request(k); await answer(i, HTML(huge)); }
+    expect(kinds(store, ks).every((s) => s === 'html')).toBe(true);
+  });
+
+  it('part 1\'s scan page budget skips at seed with its own ceiling, and only its grammars; part1 off, never', () => {
+    const { store, key } = setup();
+    const n = Math.floor(DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS / MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS);
+    const ts = Array.from({ length: n + 1 }, (_, i) => ({ lang: 'ts', raw: py(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, `t${i}`) }));
+    const json = { lang: 'json', raw: py(1000, 'j') };
+    store.seed([...ts, json]);
+    expect(store.peek(key('ts', ts[n]!.raw))).toEqual({ kind: 'skipped', ceiling: 'part1-scan' });
+    expect(store.peek(key('ts', ts[n - 1]!.raw)).kind).toBe('unrequested');
+    expect(store.peek(key('json', json.raw)).kind).toBe('unrequested');
+    const off = setup({ mode: 'docs', part1: false }).store;
+    off.seed(ts);
+    expect(off.peek(`ts\u0000${ts[n]!.raw}`).kind).toBe('unrequested');
+  });
+
+  it('part 1\'s markdown page budget skips at seed with its own ceiling, and only markdown', () => {
+    const { store, key } = setup();
+    const md = Array.from({ length: 3 }, (_, i) => ({ lang: i === 1 ? 'md' : 'markdown', raw: py(DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS / 2, `m${i}`) }));
+    const yaml = { lang: 'yaml', raw: py(1000, 'y') };
+    store.seed([...md, yaml]);
+    expect(kinds(store, md.map((b) => key(b.lang, b.raw)))).toEqual(['unrequested', 'unrequested', 'skipped']);
+    expect(store.peek(key('markdown', md[2]!.raw))).toEqual({ kind: 'skipped', ceiling: 'part1-markdown' });
+    expect(store.peek(key('yaml', yaml.raw)).kind).toBe('unrequested');
+  });
+
+  it('a chat store is not settled while a shown key waits for its request (the debounce window)', async () => {
+    const { store, key, answer } = setup({ mode: 'chat' });
+    const k = key('python', 'a');
+    const unshow = store.show(k);
+    expect(store.settled()).toBe(false);
+    store.request(k);
+    expect(store.settled()).toBe(false);
+    await answer(0, HTML(OK));
+    expect(store.settled()).toBe(true);
+    unshow();
+    expect(store.settled()).toBe(true);
+  });
+
+  it('with ceilings off nothing is skipped, at seed or live (R19\'s store)', async () => {
+    const { store, key, answer } = setup({ mode: 'docs', ceilings: false });
+    const blocks = Array.from({ length: 10 }, (_, i) => ({ lang: 'python', raw: py(60000, `c${i}`) }));
+    store.seed(blocks);
+    const ks = blocks.map((b) => key(b.lang, b.raw));
+    expect(kinds(store, ks).every((s) => s === 'unrequested')).toBe(true);
+    for (const k of ks) store.request(k);
+    for (let i = 0; i < 4; i += 1) await answer(i, TIMEOUT);
+    expect(kinds(store, ks.slice(4)).every((s) => s === 'pending')).toBe(true);
+  });
+});
+
+describe('M4.H13 (main half) and M4.H18 (store half): the receipt re-check and the line retry', () => {
+  const long = 'a\n'.repeat(HIGHLIGHT_LINE_RETRY_UNITS);
+
+  it('an answer over MD_HIGHLIGHT_MAX_HTML_CHARS is too-large on receipt, and a long block is retried in line mode, pending meanwhile', async () => {
+    const { h, store, key, answer } = setup();
+    const k = key('python', long);
+    store.seed([{ lang: 'python', raw: long }]);
+    store.request(k);
+    await answer(0, HTML(`<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS)}</span>`));
+    expect(h.calls[1]!.req).toEqual({ lang: 'python', code: long, mode: 'line' });
+    expect(store.peek(k).kind).toBe('pending');
+    expect(store.settled()).toBe(false);
+    await answer(1, HTML(OK, 'line'));
+    expect(store.peek(k)).toMatchObject({ kind: 'html', mode: 'line' });
+  });
+
+  it('a block of exactly the unit gets no retry and stays plain under its first failure; one unit more is retried', async () => {
+    const at = 'a '.repeat(HIGHLIGHT_LINE_RETRY_UNITS / 2);
+    const { h, store, key, answer } = setup({ mode: 'chat', ceilings: false });
+    store.request(key('python', at));
+    await answer(0, TIMEOUT);
+    expect(h.calls).toHaveLength(1);
+    expect(store.peek(key('python', at))).toEqual({ kind: 'plain', first: { kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS }, retry: null });
+    store.request(key('python', `${at}b`));
+    await answer(1, TIMEOUT);
+    expect(h.calls[2]!.req.mode).toBe('line');
+  });
+
+  it('a retry that fails differently leaves the block plain under its first failure, the retry\'s outcome recorded', async () => {
+    const { store, key, answer } = setup({ mode: 'chat', ceilings: false });
+    const k = key('python', long);
+    store.request(k);
+    await answer(0, { kind: 'too-large', htmlChars: MD_HIGHLIGHT_MAX_HTML_CHARS + 1 });
+    await answer(1, TIMEOUT);
+    expect(store.peek(k)).toEqual({ kind: 'plain', first: { kind: 'too-large' }, retry: { kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS } });
+  });
+
+  it('a retry the ceilings refuse leaves the block plain under its first failure, never skipped', async () => {
+    const { store, key, answer } = setup({ mode: 'chat' });
+    const ks = Array.from({ length: HIGHLIGHT_PAGE_MAX_TIMEOUTS }, (_, i) => key('python', `${long}${i}`));
+    for (const k of ks) store.request(k);
+    for (let i = 0; i < ks.length; i += 1) await answer(i, TIMEOUT);
+    for (const k of ks) expect(store.peek(k)).toMatchObject({ kind: 'plain', first: { kind: 'timeout' } });
+    expect(store.peek(ks[ks.length - 1]!)).toMatchObject({ retry: { kind: 'refused' } });
+  });
+
+  it('threw and unregistered get no retry; a block coloured whole is never sent in line mode', async () => {
+    const { h, store, key, answer } = setup({ mode: 'chat' });
+    store.request(key('python', `${long}x`));
+    await answer(0, { kind: 'threw', error: 'Error' });
+    store.request(key('python', `${long}y`));
+    await answer(1, { kind: 'unregistered' });
+    store.request(key('python', `${long}z`));
+    await answer(2, HTML(OK));
+    expect(h.calls.map((c) => c.req.mode ?? 'block')).toEqual(['block', 'block', 'block']);
+  });
+
+  it('the retry counts against the page ceilings: its timeout is counted', async () => {
+    const { store, key, answer } = setup({ mode: 'chat' });
+    const k = key('python', long);
+    const other = key('python', 'other');
+    store.request(k);
+    store.request(other);
+    await answer(0, TIMEOUT);
+    await answer(2, TIMEOUT);
+    expect(store.peek(other)).toEqual({ kind: 'skipped', ceiling: 'page-timeouts' });
+  });
+});
+
+describe('refinement (g): no worker, no fallback', () => {
+  it.each<[HighlighterStatus, unknown]>([
+    ['worker-unavailable', { kind: 'worker-unavailable' }],
+    ['worker-failed', { kind: 'worker-failed', error: 'boot' }],
+  ])('a highlighter that is %s: the block is plain at once with that cause, nothing queued', (state, cause) => {
+    const { h, store, key } = setup({ mode: 'chat' });
+    h.state = state;
+    const k = key('python', 'a');
+    store.request(k);
+    expect(h.calls).toHaveLength(0);
+    expect(store.peek(k)).toEqual({ kind: 'plain', first: cause, retry: null });
+  });
+});
+
+describe('codeBlocksOf: the seeding walk', () => {
+  it('walks pre elements in document order: the code class\'s language, and the text with one trailing newline stripped', () => {
+    const code = (cls: string[] | undefined, text: string) => ({
+      type: 'element', tagName: 'pre', properties: {},
+      children: [{ type: 'element', tagName: 'code', properties: cls === undefined ? {} : { className: cls }, children: [{ type: 'text', value: text }] }],
+    });
+    const tree = { type: 'root', children: [
+      code(['language-TS'], 'a\n\n'),
+      { type: 'element', tagName: 'blockquote', properties: {}, children: [code(['x', 'language-md', 'language-ts'], 'b')] },
+      code(undefined, 'c\n'),
+    ] } as unknown as HastRoot;
+    expect(codeBlocksOf(tree)).toEqual([{ lang: 'ts', raw: 'a\n' }, { lang: 'md', raw: 'b' }, { lang: '', raw: 'c' }]);
+  });
+});
