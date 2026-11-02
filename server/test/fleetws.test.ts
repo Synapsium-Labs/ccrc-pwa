@@ -58,6 +58,8 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 // case at the bottom of this file is what closes that, and it can only exist
 // because the drop is opt-in.
 const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: boolean } = {}) => {
+  // The programme ledgers' `waiting` frame (plan PL4) rides every cold start on a box with a coordination database and is the
+  // subject of `ledgers-frame.test.ts` alone: dropped here, as `pools` is, so the order cases below stay about their own frames.
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
@@ -70,6 +72,7 @@ const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: bo
     // edits today, and a silent break for the eleventh case somebody writes
     // tomorrow. The one describe that is ABOUT this frame passes `keepPools`.
     if (opts.keepPools !== true && (m as { type?: unknown }).type === 'pools') return;
+    if ((m as { type?: unknown }).type === 'waiting') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);

@@ -9,6 +9,7 @@
 // Everything here is keyed on the programme's SLUG (spec §3.4). The moves are decided by `nextItemState` in
 // `shared/ledgers.ts` and by nothing in this file: `moveItemInTx` is THE ONLY WRITER of `operator_items.state`.
 import type { DatabaseSync } from 'node:sqlite';
+import type { MailDeliveryState } from '../../../shared/api.js';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState,
   type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
@@ -210,4 +211,21 @@ export function goalsFor(db: DatabaseSync, program: string): GoalsView {
     program, specPath: pin?.specPath ?? null, inShort: pin?.inShort ?? null, inShortAt: pin?.inShortAt ?? null,
     modifications: mods.map((m) => ({ id: m.id, at: m.at, text: m.text, ruling: m.ruling, itemId: m.itemId, pr: m.pr, merged: m.mergedAt !== null })),
   };
+}
+
+/** The newest tick mail of an item: system mail from `operator` with this subject (`itemMailSubject` names the item's id, so
+ *  the subject alone finds it), whatever its run and whoever it was addressed to, with that delivery's state and recipient;
+ *  null when none was ever queued. ONE READER for the duplicate guard and the stale label (plan PL4, review 1335 F1, F2): a
+ *  run that closed or a coordinator that was replaced since the tick does not hide the mail, and a later tick of a sent-back
+ *  item queues a newer mail with the same subject, which is the one read. */
+export function newestTickMail(db: DatabaseSync, subject: string): { state: MailDeliveryState; toId: string } | null {
+  const r = db.prepare(
+    "SELECT d.state AS state, d.toId AS toId FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = 'operator' AND m.subject = ? ORDER BY m.id DESC, d.id DESC LIMIT 1",
+  ).get(subject) as { state: MailDeliveryState; toId: string } | undefined;
+  return r ?? null;
+}
+
+/** Every programme that has a spec pin, in slug order: with the programmes that hold items, the ones the waiting list carries goals for. */
+export function pinnedProgrammes(db: DatabaseSync): string[] {
+  return (db.prepare('SELECT slug FROM programs WHERE specPath IS NOT NULL ORDER BY slug').all() as { slug: string }[]).map((r) => r.slug);
 }
