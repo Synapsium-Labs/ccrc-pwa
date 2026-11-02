@@ -69,6 +69,8 @@ type Phase = 'idle' | 'running' | 'done';
 export const MOVE_OFFLINE = "You're offline: nothing will be sent until the server answers again.";
 /** A move the link stopped: the session in flight keeps its own word, and nothing after it was sent. */
 export const MOVE_LINK_LOST = 'The server stopped answering, so the rest were not sent.';
+/** The class both offline lines wear: the sheet's sentence, marked as the offline one. */
+const OFFLINE_LINE = 'sheet-copy move-offline';
 
 export interface MoveSessionsSheetProps {
   /** The lane the sessions move off. */
@@ -217,8 +219,8 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
       )}
       {/* Announced politely, and only ever counts what has answered. */}
       <p className="move-progress" role="status" aria-live="polite">{progress}</p>
-      {phase === 'done' && linkLost && <p className="sheet-copy move-offline" role="alert">{MOVE_LINK_LOST}</p>}
-      {phase === 'idle' && n > 0 && offline && <p className="sheet-copy move-offline" role="status">{MOVE_OFFLINE}</p>}
+      {phase === 'done' && linkLost && <p className={OFFLINE_LINE} role="alert">{MOVE_LINK_LOST}</p>}
+      {phase === 'idle' && n > 0 && offline && <p className={OFFLINE_LINE} role="status">{MOVE_OFFLINE}</p>}
       {phase === 'idle' && n > 0 && (
         <>
           <p className="sheet-copy">
