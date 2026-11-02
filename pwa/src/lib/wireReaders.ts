@@ -12,7 +12,9 @@ import { isResolveReason, type LookupNote, type ResolveRead } from '../fleet/wor
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import { BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, type BoxTokenView, type RotateAnswer } from '../../../shared/box-token';
+import type { RouteRefusal } from '../../../shared/refusal';
 import { ApiError } from './apiError';
+import { refusalText } from './refusalWords';
 import { isCount, isRecord } from './wire';
 
 /** An answer route's 200 that could not be read: the answer landed, and the next screen is unknown (`next` absent). */
@@ -205,20 +207,28 @@ export function linearWorkspacesOf(raw: unknown): LinearWorkspacesRead | 'unread
   return (isRecord(raw) && raw.ok === true ? readLinearWorkspaces(raw) : null) ?? 'unreadable';
 }
 
+/** The two refusals whose bodies carry what the card shows next, and what each carries. Read through `refusalText`
+ *  (ARCH-13b), never a literal branch on the word. */
+const LINEAR_CARRIES: Readonly<Record<Extract<RouteRefusal, 'not-connected' | 'workspace-exists'>, 'list' | 'workspace'>> = {
+  'not-connected': 'list',
+  'workspace-exists': 'workspace',
+};
+const carriedBy = (err: unknown): 'list' | 'workspace' | null =>
+  (err instanceof ApiError && err.status === 409 ? refusalText(err, LINEAR_CARRIES) as 'list' | 'workspace' | null : null);
+
 /** The list a slot check's 409 `not-connected` carries (the slot or its key was gone: that list IS the check's
  *  answer), or null for any other failure, which the caller rethrows. */
 export function linearWorkspacesNotConnectedOf(err: unknown): LinearWorkspacesRead | 'unreadable' | null {
-  if (err instanceof ApiError && err.status === 409 && isRecord(err.body) && err.body.error === 'not-connected') {
-    return readLinearWorkspaces(err.body) ?? 'unreadable';
-  }
-  return null;
+  if (carriedBy(err) !== 'list') return null;
+  return readLinearWorkspaces((err as ApiError).body) ?? 'unreadable';
 }
 
 /** The workspace an add's 409 `workspace-exists` names (spec §10.1), so the card can ask to replace its key by name;
  *  null for any other failure. */
 export function linearWorkspaceExistsOf(err: unknown): { id: string; name: string | null } | null {
-  if (!(err instanceof ApiError) || err.status !== 409 || !isRecord(err.body) || err.body.error !== 'workspace-exists') return null;
-  const w = err.body.workspace;
+  const body = carriedBy(err) === 'workspace' ? (err as ApiError).body : null;
+  if (!isRecord(body)) return null;
+  const w = body.workspace;
   if (!isRecord(w) || !isLinearUuid(w.id)) return null;
   return { id: w.id, name: isLinearStoredName(w.name) ? w.name : null };
 }
