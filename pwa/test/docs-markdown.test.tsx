@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import type { Element as HastElement, Root as HastRoot } from 'hast';
 import { docsPageUrl, type DocsShowOk } from '../../shared/docs';
+import { HighlighterContext } from '../src/lib/highlighterContext';
 import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { utf8ByteLength } from '../src/lib/markdownGuard';
 import {
@@ -25,6 +26,7 @@ import {
   DocPlain, docGateSentence, docMarkdownSource, docShownAsTextNote, docsPlainNote,
 } from '../src/docs/DocMarkdown';
 import { treeOk } from './docsFixtures';
+import { inThreadContext } from './highlightTestStore';
 
 /** `renderHast`, wrapped: every call is recorded, and while `hast.throwing` is set every call throws. */
 const hast = vi.hoisted(() => ({ throwing: false }));
@@ -328,16 +330,24 @@ describe('a tree renders through detachUrls and DOC_COMPONENTS (spec 4.10 step 4
   it('the page highlight budget reaches the blocks: of nine 60 000-character python blocks the ninth is not highlighted', async () => {
     // 60 000 characters in 60 lines of 1 000 (the line bound caps a line at MD_HIGHLIGHT_MAX_LINE_CHARS, so one long line
     // would be unhighlighted), with no long run of blank units (the whitespace bound, MD_HIGHLIGHT_MAX_BLANK_CHARS).
-    const body = 'import a = 1' + ' x'.repeat(493) + ' \n' + (' x'.repeat(499) + ' \n').repeat(59);
-    const fence = (): HastElement => ({
+    // The nine are distinct (`import a${i}= 1`, the same length), because a store keys a block by its content and counts
+    // identical blocks once (W5h-a).
+    const fence = (i: number): HastElement => ({
       type: 'element', tagName: 'pre', properties: {},
-      children: [{ type: 'element', tagName: 'code', properties: { className: ['language-python'] }, children: [{ type: 'text', value: body }] }],
+      children: [{ type: 'element', tagName: 'code', properties: { className: ['language-python'] },
+        children: [{ type: 'text', value: `import a${i}= 1` + ' x'.repeat(493) + ' \n' + (' x'.repeat(499) + ' \n').repeat(59) }] }],
     });
-    const tree: HastRoot = { type: 'root', children: Array.from({ length: 9 }, fence) };
-    const { container } = render(<DocMarkdown text="nine blocks" pinKey="p" parser={answering({ kind: 'tree', tree, depth: 3 })} link={LINK} />);
+    const tree: HastRoot = { type: 'root', children: Array.from({ length: 9 }, (_, i) => fence(i)) };
+    const { container } = render(
+      <HighlighterContext value={inThreadContext()}>
+        <DocMarkdown text="nine blocks" pinKey="p" parser={answering({ kind: 'tree', tree, depth: 3 })} link={LINK} />
+      </HighlighterContext>,
+    );
     await waitFor(() => expect(container.querySelectorAll('.code-block')).toHaveLength(9), { timeout: 60000 });
-    expect([...container.querySelectorAll('.code-block')].map((b) => b.querySelectorAll('.hljs-keyword').length))
-      .toEqual([1, 1, 1, 1, 1, 1, 1, 1, 0]);
+    await waitFor(() => expect(container.querySelectorAll('.hljs-keyword')).toHaveLength(8), { timeout: 60000 });
+    const blocks = [...container.querySelectorAll('.code-block')];
+    expect(blocks.map((b) => b.querySelectorAll('.hljs-keyword').length)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 0]);
+    expect(blocks[8]!.querySelector('.code-block-lang')?.textContent).toMatch(/· not highlighted \(page highlighting limit\)$/);
   }, 90000);
 });
 

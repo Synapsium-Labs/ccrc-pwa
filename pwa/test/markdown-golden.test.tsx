@@ -7,12 +7,14 @@
 // written only outside CI, so CI cannot pass vacuously; never run this file with `-u`. This file imports nothing
 // W4 creates: only `MessageBubble`, the corpus, React's server renderer, RTL and highlight.js's core (the same
 // instance `MessageBubble` registers its grammars on).
+// From W5h-a (base spec 4.15's M4.M1, amended) it also imports the registry as data and the test store, and renders under that store, so the stored files are unchanged (the settled output). Never regenerate them.
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import hljs from 'highlight.js/lib/core';
+import { HIGHLIGHT_GRAMMARS, isRegisteredGrammar } from '../src/lib/highlightNames';
+import { withSyncHighlight } from './highlightTestStore';
 import { MessageBubble } from '../src/session/MessageBubble';
 import {
   CHAT_ALIAS_TAGS, CHAT_CORPUS, CHAT_UNREGISTERED_TAGS, RECAP_CASE, languageCases, type CorpusCase,
@@ -24,21 +26,21 @@ const GOLDEN_DIR = path.join(import.meta.dirname, 'golden', 'markdown');
 const TS = '2026-10-09T00:00:00Z';
 
 /** The grammars `MessageBubble` registers, MEASURED (importing it registers them as a side effect). */
-const REGISTERED: readonly string[] = [...hljs.listLanguages()].sort();
+const REGISTERED: readonly string[] = [...HIGHLIGHT_GRAMMARS];
 const TAGS: readonly string[] = [...new Set([...REGISTERED, ...CHAT_ALIAS_TAGS, ...CHAT_UNREGISTERED_TAGS])];
 const CASES: readonly CorpusCase[] = [...CHAT_CORPUS, ...languageCases(TAGS)];
 const ALL: readonly CorpusCase[] = [...CASES, RECAP_CASE];
 
 const html = (c: CorpusCase): string =>
-  renderToStaticMarkup(
+  renderToStaticMarkup(withSyncHighlight(
     <MessageBubble id="s" event={{ kind: 'assistant', uuid: `g-${c.name}`, ts: TS, text: c.text }} streaming={c.streaming} />,
-  );
+  ));
 
 /** The recap's Markdown body renders only once the card is opened, so it goes through the DOM and a click. */
 function openedRecap(): string {
-  const { container } = render(
+  const { container } = render(withSyncHighlight(
     <MessageBubble id="s" event={{ kind: 'assistant', uuid: 'g-recap', ts: TS, text: RECAP_CASE.text, ...(RECAP_CASE.compaction === true ? { compaction: true } : {}) }} />,
-  );
+  ));
   fireEvent.click(screen.getByRole('button', { name: /Context compacted/ }));
   expect(container.querySelector('.compaction-body.msg-assist')).not.toBeNull();
   return container.innerHTML;
@@ -57,8 +59,8 @@ describe('M4.M1: chat Markdown output is held to its golden files', () => {
 describe('the golden is not vacuous', () => {
   it('measures a non-empty grammar list, every listed alias resolves and no unregistered tag does', () => {
     expect(REGISTERED.length).toBeGreaterThan(0);
-    for (const tag of [...REGISTERED, ...CHAT_ALIAS_TAGS]) expect(hljs.getLanguage(tag), tag).toBeDefined();
-    for (const tag of CHAT_UNREGISTERED_TAGS) expect(hljs.getLanguage(tag), tag).toBeUndefined();
+    for (const tag of [...REGISTERED, ...CHAT_ALIAS_TAGS]) expect(isRegisteredGrammar(tag), tag).toBe(true);
+    for (const tag of CHAT_UNREGISTERED_TAGS) expect(isRegisteredGrammar(tag), tag).toBe(false);
   });
 
   it('every case name is a unique file-safe slug', () => {
@@ -79,6 +81,13 @@ describe('the golden is not vacuous', () => {
 
   it('two renders of the corpus are byte-identical', () => {
     expect(CASES.map(html)).toEqual(CASES.map(html));
+  });
+
+  it('M4.M1 control: rendered with no test store, a coloured golden loses its spans (W5h-a)', () => {
+    const c = CASES.find((x) => x.name === 'lang-ts')!;
+    const plain = renderToStaticMarkup(<MessageBubble id="s" event={{ kind: 'assistant', uuid: `g-${c.name}`, ts: TS, text: c.text }} />);
+    expect(html(c)).toContain('hljs-keyword');
+    expect(plain).not.toContain('hljs-keyword');
   });
 });
 

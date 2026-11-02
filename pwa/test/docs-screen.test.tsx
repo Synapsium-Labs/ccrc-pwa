@@ -26,6 +26,7 @@ import {
   BLOB_1, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
+import { withSyncHighlight } from './highlightTestStore';
 
 /** Parses in this thread, as the worker would. */
 const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
@@ -548,7 +549,8 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
       'x.ts': fileAs('x.ts', 'const a: number = 1;', 'text'),
       'x.txt': fileAs('x.txt', 'plain words', 'text'),
     });
-    const { container } = open('/docs/demo/specs/x.ts', f);
+    navigate('/docs/demo/specs/x.ts');
+    const { container } = render(withSyncHighlight(<Routed loaders={f.loaders} />));
     await waitFor(() => expect(container.querySelector('.docs-leaf .code-block')).not.toBeNull());
     expect(container.querySelector('.code-block-lang')?.textContent).toBe('TypeScript');
     expect(container.querySelector('.code-block code.hljs .hljs-keyword')?.textContent).toBe('const');

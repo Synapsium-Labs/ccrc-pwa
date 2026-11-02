@@ -4,10 +4,12 @@
 // whose `&` begins one of highlight.js's five entities, balanced; anything else is `null`. Linear: its step counter
 // (not a clock) grows in proportion to the input. Only the check makes a `CheckedHighlightHtml`. The sink's half (a
 // plain string at the code component renders plain) is appended by Task 6.
+import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { HLJS } from '../src/lib/highlightGrammars';
 import { HIGHLIGHT_NAME_SET, isRegisteredGrammar } from '../src/lib/highlightNames';
 import { checkHighlightHtml, codeBlocksOf, isCheckedHighlightHtml } from '../src/lib/highlightStore';
+import { HighlightedCode } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { CHAT_ALIAS_TAGS, CHAT_CORPUS, languageCases } from './markdownCorpus';
 
@@ -113,5 +115,18 @@ describe('only the check makes a CheckedHighlightHtml', () => {
     expect(isCheckedHighlightHtml(Object.freeze({ html: checked.html }))).toBe(false);
     expect(isCheckedHighlightHtml(checked.html)).toBe(false);
     expect(isCheckedHighlightHtml(null)).toBe(false);
+  });
+});
+
+// Docs W5h-a Task 6 (M4.H15's behavioural half): the code component inserts only a value the check made.
+describe('M4.H15: the one sink inserts only checked HTML', () => {
+  it('a checked value renders its spans; a plain string or a look-alike at the sink renders the block plain', () => {
+    const good = render(<HighlightedCode entry={{ kind: 'html', mode: 'block', checked: checkHighlightHtml('<span class="hljs-keyword">x</span>')! }} raw="x" />);
+    expect(good.container.querySelector('code.hljs .hljs-keyword')?.textContent).toBe('x');
+    for (const forged of [{ html: '<img src=x onerror=alert(1)>' }, Object.freeze({ html: '<img src=x onerror=alert(1)>' })]) {
+      const { container } = render(<HighlightedCode entry={{ kind: 'html', mode: 'block', checked: forged as never }} raw="<img src=x>" />);
+      expect(container.querySelector('img')).toBeNull();
+      expect(container.querySelector('code.hljs')?.textContent).toBe('<img src=x>');
+    }
   });
 });

@@ -1,12 +1,12 @@
 // The tool card's wells on the code palette (T4a, D-6387): `renderToolWell` hands `ToolCard` a renderer that reads each
-// well through `toolWellPlan` and the one bounded highlighter. These tests pin that a plain well keeps today's DOM,
+// well through `toolWellPlan` and the highlight worker, through a one-block store per well (W5h-a). These tests pin that a plain well keeps today's DOM,
 // that no ANSI value ever reaches a `style` attribute, that a failed call's row says so at rest, that a block over
 // CodeBlock's bound renders plain, and that inline code is a well chip.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as planner from '../src/session/toolWell';
-import * as markdown from '../src/lib/markdown';
+import { HLJS } from '../src/lib/highlightGrammars';
 import { ToolWellText } from '../src/session/ToolWellText';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from '@ccrc/ui';
@@ -14,6 +14,7 @@ import { renderToolWell } from '../src/session/ToolWellText';
 import { ChatMarkdown } from '../src/lib/markdown';
 import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from '../src/lib/markdownLimits';
 import { ANSI_HUE_TOKEN } from '../src/lib/ansi';
+import { withSyncHighlight } from './highlightTestStore';
 
 afterEach(cleanup);
 
@@ -25,7 +26,7 @@ const result = (text: string, isError = false): ToolResultEvent => ({ kind: 'too
 
 /** An expanded card: its wells, in document order (input, then result). */
 function expanded(u: ToolUseEvent, r?: ToolResultEvent): HTMLElement[] {
-  const { container } = render(<ToolCard use={u} result={r} renderWell={renderToolWell(u)} />);
+  const { container } = render(withSyncHighlight(<ToolCard use={u} result={r} renderWell={renderToolWell(u)} />));
   fireEvent.click(container.querySelector('.tool-row')!);
   return Array.from(container.querySelectorAll<HTMLElement>('.well'));
 }
@@ -42,7 +43,7 @@ describe('tool well', () => {
 
   it('bare expanded card preserves raw input and displays empty-result fallback', () => {
     const raw = '{"command":"pwd"}';
-    const { container } = render(<ToolCard use={use('Bash', raw)} result={result('')} />);
+    const { container } = render(withSyncHighlight(<ToolCard use={use('Bash', raw)} result={result('')} />));
     fireEvent.click(container.querySelector('.tool-row')!);
     const wells = container.querySelectorAll('.well');
     expect(wells[0]?.textContent).toBe(raw);
@@ -59,7 +60,7 @@ describe('tool well', () => {
   it('strips input escapes on the plain fallback; over its bound an input shows its JSON text as written', () => {
     const esc = String.fromCharCode(27);
     const malformed = `bad${esc}[2Kinput`;
-    const plain = render(<ToolWellText use={{ name: 'Bash', input: malformed }} part="input" text={malformed} />);
+    const plain = render(withSyncHighlight(<ToolWellText use={{ name: 'Bash', input: malformed }} part="input" text={malformed} />));
     expect(plain.container.textContent).toBe('badinput');
     plain.unmount();
     // JSON spells the escape as six characters and refuses a raw one, so the over-bound text holds no ESC to strip
@@ -67,7 +68,7 @@ describe('tool well', () => {
     const long = JSON.stringify({ command: `${'x'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1)}${esc}[2Kdone` });
     expect(long).not.toContain(esc);
     expect(() => JSON.parse(`{"command":"a${esc}b"}`)).toThrow();
-    const capped = render(<ToolWellText use={{ name: 'Bash', input: long }} part="input" text={long} />);
+    const capped = render(withSyncHighlight(<ToolWellText use={{ name: 'Bash', input: long }} part="input" text={long} />));
     expect(capped.container.textContent).toBe(long);
   });
 
@@ -83,21 +84,21 @@ describe('tool well', () => {
 
   it('memoizes mounted well work by scalar inputs', () => {
     const plans = vi.spyOn(planner, 'toolWellPlan');
-    const highlights = vi.spyOn(markdown, 'boundedHighlight');
+    const highlights = vi.spyOn(HLJS, 'highlight');
     const text = '{"command":"pwd"}';
-    const view = render(<ToolWellText use={{ name: 'Bash', input: text }} part="input" text={text} />);
+    const view = render(withSyncHighlight(<ToolWellText use={{ name: 'Bash', input: text }} part="input" text={text} />));
     expect(plans).toHaveBeenCalledTimes(1);
     expect(highlights).toHaveBeenCalledTimes(1);
-    view.rerender(<ToolWellText use={{ name: 'Bash', input: text }} part="input" text={text} />);
+    view.rerender(withSyncHighlight(<ToolWellText use={{ name: 'Bash', input: text }} part="input" text={text} />));
     expect(plans).toHaveBeenCalledTimes(1);
     expect(highlights).toHaveBeenCalledTimes(1);
-    view.rerender(<ToolWellText use={{ name: 'Read', input: text }} part="input" text={text} />);
+    view.rerender(withSyncHighlight(<ToolWellText use={{ name: 'Read', input: text }} part="input" text={text} />));
     expect(plans).toHaveBeenCalledTimes(2);
     expect(view.container.textContent).toBe(JSON.stringify({ command: 'pwd' }, null, 2));
-    view.rerender(<ToolWellText use={{ name: 'Read', input: text }} part="result" text={text} />);
+    view.rerender(withSyncHighlight(<ToolWellText use={{ name: 'Read', input: text }} part="result" text={text} />));
     expect(plans).toHaveBeenCalledTimes(3);
     expect(view.container.textContent).toBe(text);
-    view.rerender(<ToolWellText use={{ name: 'Read', input: text }} part="result" text="changed" />);
+    view.rerender(withSyncHighlight(<ToolWellText use={{ name: 'Read', input: text }} part="result" text="changed" />));
     expect(plans).toHaveBeenCalledTimes(4);
     expect(view.container.textContent).toBe('changed');
     plans.mockRestore();
@@ -124,7 +125,7 @@ describe('tool well', () => {
   it("a failed call's row says 'failed'; an ok or running call's does not", () => {
     const u = use('Bash', '{"command":"false"}');
     const rowOf = (r?: ToolResultEvent): HTMLElement => {
-      const { container } = render(<ToolCard use={u} result={r} />);
+      const { container } = render(withSyncHighlight(<ToolCard use={u} result={r} />));
       return container.querySelector<HTMLElement>('.tool-row')!;
     };
     const failed = rowOf(result('boom', true));
@@ -158,7 +159,7 @@ describe('tool well', () => {
     expect(scoped).not.toBeNull();
     expect(scoped![1]).toMatch(/background:\s*var\(--bg-well\)/);
     expect(scoped![1]).toMatch(/color:\s*var\(--ink-on-well\)/);
-    const { container } = render(<ChatMarkdown text={'run `ls -la` now'} />);
+    const { container } = render(withSyncHighlight(<ChatMarkdown text={'run `ls -la` now'} />));
     const chip = container.querySelector('.md-code');
     expect(chip?.textContent).toBe('ls -la');
   });

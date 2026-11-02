@@ -4,18 +4,17 @@
 // characters after the trailing-newline strip. A registered block over the cap renders as plain text and labels
 // itself "{label} · not highlighted ({KiB} KiB)", KiB being its characters / 1024 rounded up. (Not
 // `code-block.test.tsx`: open PR #111 creates that file.)
+// From W5h-a the cap is `highlightStore.ts#blockKey`'s and the colours the highlight worker's; the cases render under a synchronous test store, and one runs the real store (M4.H1 re-proved through the store).
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, waitFor } from '@testing-library/react';
 import { defaultUrlTransform } from 'react-markdown';
-import hljs from 'highlight.js/lib/core';
-import {
-  CHAT_COMPONENTS, CodeBlock, boundedHighlight,
-} from '../src/lib/markdown';
-import {
-  HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_CACHE_MAX_ENTRIES, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
-} from '../src/lib/markdownLimits';
+import { CHAT_COMPONENTS, CodeBlock, PreHighlightContext } from '../src/lib/markdown';
+import { HLJS } from '../src/lib/highlightGrammars';
+import { createProductionStore } from '../src/lib/highlighterContext';
+import { MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
+import { inThreadHighlighter, syncTestStore, withSyncStore } from './highlightTestStore';
 
 afterEach(() => {
   cleanup();
@@ -31,12 +30,12 @@ const tsBody = (chars: number): string => 'const a = 1;\n'.repeat(Math.ceil(char
 const pyBody = (chars: number): string => 'import a\n'.repeat(Math.ceil(chars / 9)).slice(0, chars - 1) + 'x';
 
 /** One fenced block, as react-markdown hands it to the `pre` component. */
-function block(lang: string, body: string, highlight?: boolean): HTMLElement {
-  return render(
-    <CodeBlock highlight={highlight}>
+function block(lang: string, body: string): HTMLElement {
+  return render(withSyncStore(
+    <CodeBlock>
       <code className={`language-${lang}`}>{`${body}\n`}</code>
     </CodeBlock>,
-  ).container;
+  )).container;
 }
 
 const keywords = (c: HTMLElement): number => c.querySelectorAll('.hljs-keyword').length;
@@ -58,44 +57,51 @@ describe('M4.H1: the block highlight cap', () => {
     expect(label(c)).toBe('TypeScript');
   });
 
-  it('the cap is inclusive: 65 536 characters are highlighted, 65 537 are not', () => {
+  // From W5h-a the shipped per-block HTML cap (MD_HIGHLIGHT_MAX_HTML_CHARS) keeps a 65 536-character python block of
+  // keyword lines plain, whatever the block cap admits: its markup is over that cap. The two cases below keep what
+  // part 1's cap decides (the block is admitted, its key is requestable, and it is requested) and then assert what
+  // ships (plain, labelled "output too large") until W5h-b.
+  it('the cap is inclusive: 65 536 characters are admitted and requested, and stay plain over the HTML cap until W5h-b; 65 537 are not requested', () => {
     expect(MD_HIGHLIGHT_BLOCK_MAX_CHARS).toBe(65536);
-    const at = block('python', pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS));
-    expect(keywords(at)).toBeGreaterThan(0);
-    expect(label(at)).toBe('Python');
+    const atBody = pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    const store = syncTestStore('chat');
+    const at = render(withSyncStore(<CodeBlock><code className="language-python">{`${atBody}\n`}</code></CodeBlock>, store)).container;
+    const key = store.keyOf('python', atBody);
+    expect(key.kind).toBe('key');
+    expect(store.requests).toHaveLength(1);
+    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
+    expect(HLJS.highlight(atBody, { language: 'python', ignoreIllegals: true }).value.length).toBeGreaterThan(MD_HIGHLIGHT_MAX_HTML_CHARS);
+    expect(keywords(at)).toBe(0);
+    expect(label(at)).toBe('Python · not highlighted (output too large)');
     cleanup();
-    const over = block('python', pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1));
+    const overStore = syncTestStore('chat');
+    const over = render(withSyncStore(<CodeBlock><code className="language-python">{`${pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1)}\n`}</code></CodeBlock>, overStore)).container;
+    expect(overStore.keyOf('python', pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1)).kind).toBe('over-cap');
+    expect(overStore.requests).toEqual([]);
     expect(keywords(over)).toBe(0);
     expect(label(over)).toBe('Python · not highlighted (65 KiB)');
   });
 
-  it('counts the block after the trailing-newline strip, as the copy button does', () => {
-    // pyBody(65 536) plus the newline `block` appends is 65 537 characters before the strip.
-    expect(keywords(block('python', pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS)))).toBeGreaterThan(0);
+  it('counts the block after the trailing-newline strip, as the copy button does: admitted and requested, plain over the HTML cap until W5h-b', () => {
+    // pyBody(65 536) plus the newline the block appends is 65 537 characters before the strip.
+    const body = pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    const store = syncTestStore('chat');
+    const c = render(withSyncStore(<CodeBlock><code className="language-python">{`${body}\n`}</code></CodeBlock>, store)).container;
+    const key = store.keyOf('python', body);
+    expect(key.kind).toBe('key');
+    expect(store.requests).toHaveLength(1);
+    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
+    expect(label(c)).toBe('Python · not highlighted (output too large)');
+    expect(code(c)).toBe(body);
   });
 
   it('a 70 000-char block from the parse pipeline is capped too', () => {
     const outcome = parseMarkdown('```ts\n' + tsBody(70000) + '\n```');
     if (outcome.kind !== 'tree') throw new Error(`expected a tree, got ${outcome.kind}`);
-    const c = render(renderHast(outcome.tree, { components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform }))
+    const c = render(withSyncStore(renderHast(outcome.tree, { components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform })))
       .container;
     expect(keywords(c)).toBe(0);
     expect(label(c)).toBe('TypeScript · not highlighted (69 KiB)');
-  });
-});
-
-describe('the highlight prop and the other two conditions', () => {
-  it('highlight={false} renders a small registered block as plain <code class="hljs"> with its plain label', () => {
-    const body = tsBody(1000);
-    const c = block('ts', body, false);
-    expect(keywords(c)).toBe(0);
-    expect(c.querySelector('pre > code.hljs')?.children).toHaveLength(0);
-    expect(code(c)).toBe(body);
-    expect(label(c)).toBe('TypeScript');
-  });
-
-  it('highlight={true} is the default', () => {
-    expect(keywords(block('ts', tsBody(1000), true))).toBeGreaterThan(0);
   });
 
   it('an unregistered language is unchanged by the cap: no spans either way, its own label', () => {
@@ -106,99 +112,15 @@ describe('the highlight prop and the other two conditions', () => {
     expect(label(block('mermaid', tsBody(1000)))).toBe('mermaid');
   });
 });
-
-// Desktop polish Task C7: `boundedHighlight` keeps what highlight.js answered in a bounded module cache keyed by the
-// language and the block, read only after every bound has passed. Each case starts from an empty cache: the shared
-// `afterEach` in `test/setup.ts` empties it. Each case in this block also highlights text that no other case in this file
-// does, so no count here depends on that reset. (The file's earlier cases repeat bodies, `tsBody(1000)` and
-// `pyBody(65 536)`, but count no calls: they read the markup, which a held answer leaves unchanged.)
-describe('the highlight cache (C7)', () => {
-  it('hljs.highlight runs once per (lang, code)', () => {
-    const spy = vi.spyOn(hljs, 'highlight');
-    const body = `${tsBody(400)} // once-per-pair`;
-    const first = block('ts', body);
-    expect(keywords(first)).toBeGreaterThan(0);
-    const html = first.querySelector('pre > code.hljs')?.innerHTML;
-    cleanup();
-    const second = block('ts', body);
-    expect(spy).toHaveBeenCalledTimes(1);
-    // The same markup, from the cache.
-    expect(second.querySelector('pre > code.hljs')?.innerHTML).toBe(html);
-    cleanup();
-    // Another language is another pair, even over the same text.
-    block('javascript', body);
-    expect(spy).toHaveBeenCalledTimes(2);
-  });
-
-  it('a block the bounds refuse is highlighted never and cached never', () => {
-    const spy = vi.spyOn(hljs, 'highlight');
-    // Over the word bound: plain, labelled, and highlight.js is never asked, however often it renders.
-    const long = `const ${'w'.repeat(MD_HIGHLIGHT_MAX_WORD_CHARS + 1)} = 1;`;
-    for (let i = 0; i < 2; i += 1) {
-      const c = block('ts', long);
-      expect(keywords(c)).toBe(0);
-      expect(label(c)).toBe(`TypeScript · not highlighted (a ${MD_HIGHLIGHT_MAX_WORD_CHARS + 1}-character word)`);
-      cleanup();
-    }
-    expect(spy).not.toHaveBeenCalled();
-    // A pair already in the cache, then refused by a page budget (`highlight={false}`): the refusal is decided before
-    // the cache is read, so the block renders plain and nothing is highlighted again.
-    const body = `${tsBody(300)} // cached-then-refused`;
-    expect(keywords(block('ts', body))).toBeGreaterThan(0);
-    cleanup();
-    expect(spy).toHaveBeenCalledTimes(1);
-    const refused = block('ts', body, false);
-    expect(keywords(refused)).toBe(0);
-    expect(code(refused)).toBe(body);
-    expect(spy).toHaveBeenCalledTimes(1);
-  });
-
-  // The bounds the module cache is built with, pinned by what it holds (review 1128 F2): a constant alone would not
-  // notice a cache built with another number.
-  it(`the cache holds ${HIGHLIGHT_CACHE_MAX_ENTRIES} entries, and one more drops the least recently used`, () => {
-    expect(HIGHLIGHT_CACHE_MAX_ENTRIES).toBe(256);
-    const spy = vi.spyOn(hljs, 'highlight');
-    const small = (i: number): string => `const entry${i} = ${i}; // entry-bound`;
-    for (let i = 0; i < HIGHLIGHT_CACHE_MAX_ENTRIES; i += 1) boundedHighlight(small(i), 'ts');
-    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES);
-    // Every one is held: asked again in the same order, none is highlighted again, and the order is unchanged.
-    for (let i = 0; i < HIGHLIGHT_CACHE_MAX_ENTRIES; i += 1) boundedHighlight(small(i), 'ts');
-    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES);
-    // One more drops the least recently used, the first, and keeps the second.
-    boundedHighlight(small(HIGHLIGHT_CACHE_MAX_ENTRIES), 'ts');
-    boundedHighlight(small(1), 'ts');
-    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES + 1);
-    boundedHighlight(small(0), 'ts');
-    expect(spy).toHaveBeenCalledTimes(HIGHLIGHT_CACHE_MAX_ENTRIES + 2);
-  });
-
-  it(`the cache holds ${HIGHLIGHT_CACHE_MAX_CHARS} characters of markup, and a block past them drops the least recently used`, () => {
-    expect(HIGHLIGHT_CACHE_MAX_CHARS).toBe(4_000_000);
-    // Dense JSON blocks of one size, about 858 000 characters of markup each (C7's Step 0).
-    const dense = (i: number): string =>
-      JSON.stringify(Array.from({ length: 3000 }, (_, k) => [i, k, true, null]), null, 1).slice(0, MD_HIGHLIGHT_BLOCK_MAX_CHARS);
-    // How many fit the bound together, measured from highlight.js itself, outside the cache.
-    const markupOf = (i: number): number => hljs.highlight(dense(i), { language: 'json', ignoreIllegals: true }).value.length;
-    let fit = 0;
-    let markup = 0;
-    // Each block's markup is computed once (review 1132 A7): the condition and the sum read the same figure.
-    for (let next = markupOf(fit); markup + next <= HIGHLIGHT_CACHE_MAX_CHARS; next = markupOf(fit)) {
-      markup += next;
-      fit += 1;
-    }
-    expect(fit).toBeGreaterThan(1);
-    expect(fit).toBeLessThan(10); // single-digit `i`: every block the same size
-    const spy = vi.spyOn(hljs, 'highlight');
-    for (let i = 0; i < fit; i += 1) expect(boundedHighlight(dense(i), 'json').html).not.toBeNull();
-    expect(spy).toHaveBeenCalledTimes(fit);
-    // Every one is held: asked again in the same order, none is highlighted again.
-    for (let i = 0; i < fit; i += 1) boundedHighlight(dense(i), 'json');
-    expect(spy).toHaveBeenCalledTimes(fit);
-    // One more passes the bound: the least recently used, the first, goes, and the second stays.
-    boundedHighlight(dense(fit), 'json');
-    boundedHighlight(dense(1), 'json');
-    expect(spy).toHaveBeenCalledTimes(fit + 1);
-    boundedHighlight(dense(0), 'json');
-    expect(spy).toHaveBeenCalledTimes(fit + 2);
+describe('M4.H1 through the real store: a block over the cap is never posted', () => {
+  it('a 70 000-character python block makes no request and says its size; a 1 000-character one is requested', async () => {
+    const h = inThreadHighlighter();
+    const store = createProductionStore(h, 'chat');
+    const big = render(<PreHighlightContext value={store}><CodeBlock><code className="language-python">{pyBody(70000)}</code></CodeBlock></PreHighlightContext>);
+    expect(big.container.querySelector('.code-block-lang')?.textContent).toBe('Python · not highlighted (69 KiB)');
+    expect(h.calls).toHaveLength(0);
+    const small = render(<PreHighlightContext value={store}><CodeBlock><code className="language-python">{pyBody(1000)}</code></CodeBlock></PreHighlightContext>);
+    await waitFor(() => expect(small.container.querySelector('.hljs-keyword')).not.toBeNull());
+    expect(h.calls.map((c) => c.code.length)).toEqual([1000]);
   });
 });

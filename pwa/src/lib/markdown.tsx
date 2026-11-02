@@ -11,39 +11,23 @@
 // Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `CodeBlock` does not highlight a block
 // holding a word longer than `MD_HIGHLIGHT_MAX_WORD_CHARS` (r10), and `keystrokeParts` moved to `markdownGuard.ts`,
 // where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11).
-// W5 Task 6: `SHARED_COMPONENTS.pre` reads `PreHighlightContext`, the Docs page's highlight budget; chat provides
-// none, so chat's output is unchanged (refinement (h)).
-// Desktop polish Task C7: `boundedHighlight` keeps what highlight.js answered in a bounded module cache, read only after
-// every bound has passed; chat's remark plugins are one module constant; `ChatMarkdown` is memoised on its props.
+// Desktop polish Task C7: chat's remark plugins are one module constant; `ChatMarkdown` is memoised on its props.
+// W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL`, `codeLanguage` and part 1's scans to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
 import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
-import React, { createContext, memo, useCallback, useContext, useState, type ReactNode } from 'react';
-import type { Element as HastElement } from 'hast';
-import hljs from 'highlight.js/lib/core';
-import type { HLJSApi, LanguageFn } from 'highlight.js';
-import bash from 'highlight.js/lib/languages/bash';
-import typescript from 'highlight.js/lib/languages/typescript';
-import javascript from 'highlight.js/lib/languages/javascript';
-import json from 'highlight.js/lib/languages/json';
-import python from 'highlight.js/lib/languages/python';
-import css from 'highlight.js/lib/languages/css';
-import xml from 'highlight.js/lib/languages/xml'; // html / svg
-import yaml from 'highlight.js/lib/languages/yaml';
-import markdown from 'highlight.js/lib/languages/markdown';
-import diff from 'highlight.js/lib/languages/diff';
-import sql from 'highlight.js/lib/languages/sql';
-import dockerfile from 'highlight.js/lib/languages/dockerfile';
-import rust from 'highlight.js/lib/languages/rust';
-import go from 'highlight.js/lib/languages/go';
-import php from 'highlight.js/lib/languages/php';
-import { createLru } from './highlightCache';
+import React, {
+  createContext, memo, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode,
+} from 'react';
 import { remarkAlerts } from './remarkAlerts';
+import { LANG_LABEL, codeLanguage } from './highlightNames';
+import { HighlighterContext } from './highlighterContext';
 import {
-  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, HIGHLIGHT_CACHE_MAX_CHARS,
-  HIGHLIGHT_CACHE_MAX_ENTRIES, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
-  MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
-  MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
+  UNREQUESTED_ENTRY, blockKey, isCheckedHighlightHtml, type BlockKey, type HighlightEntry, type HighlightStore,
+} from './highlightStore';
+import {
+  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN,
+  MD_MAX_TREE_DEPTH,
 } from './markdownLimits';
 import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
 import type { ParseOutcome } from './markdownParse';
@@ -90,73 +74,6 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
   window.open(absolute(href), '_blank', 'noopener,noreferrer');
 }
 
-/** highlight.js's `xml` grammar (registered as `xml`, with `html` and `svg` and every alias xml declares: xhtml, rss, atom, xjb, xsd, xsl, plist and wsf) with the `subLanguage` removed from the two modes
- *  that carry one that costs: the `<script>` mode (`'javascript'`; `["javascript","handlebars","xml"]` through 11.11) and
- *  the `<style>` mode (`'css'`; `["css","xml"]` through 11.11), the `starts` of the two tag modes. highlight.js 11.12
- *  narrowed both from a list to a single name, so the walk below matches either shape. Those are the only modes of the stock definition with a
- *  `subLanguage`; each keeps its `end` and `returnEnd`, so the contents run to the closing tag as ONE plain run.
- *  Why (review 450 F1): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
- *  closer: 1, 2, 4 and 8 KiB cost 66, 308, 1 729 and 7 918 ms; `<style>{` per line, 8 KiB 2.4 s with no javascript
- *  involved), and with them removed every probed shape is linear (a snapshot of 2026-10-14 on a loaded box, load average about 40: xml 167 ms per 64 KiB at most; markdown, which
- *  embeds xml, about 650 ms on its worst shape, `<a>` in lines, which is why it has a page budget of its own,
- *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`; the claim it supports is the GROWTH, linear from 8 to 128 KiB, not the figures). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
- *  `<script` or `<style>`); in an `xml` or html block, markup outside them is coloured as before. Three grammars hand
- *  tags to `xml` with a kept continuation, so an unclosed `<script>` or `<style>` reaches past its own contents
- *  there (review 460 F9 and review 471 F1, measured against stock highlight.js 11.11.1):
- *  - in a `markdown` block, chat's included, every later inline tag of the block (`<a href>`, `<b>`, after a later
- *    heading too) renders as a bare `language-xml` span with no tag, name or attribute colour. After `<script>`
- *    stock xml coloured those tags as tags; after `<style>` stock coloured them as CSS (selector tags), not as tags.
- *    Only the matching closing tag (`</script>` or `</style>` respectively) restores colour; any other closing tag,
- *    the other of the two included, leaves it so;
- *  - in the JSX of `javascript` and `typescript` (and their aliases, `jsx` and `tsx` among them), the rest of the
- *    block after an unclosed `<script>` or `<style>` is plain, where stock coloured it in the sub-language the tag
- *    starts (javascript after `<script>`; css or xml after `<style>`, whichever highlight.js's relevance picked),
- *    never as the block's own grammar;
- *  - the same two grammars hand an `html` tagged template (html`...`) to `xml` with the same kept continuation, so a
- *    `<script>` or `<style>` inside one leaves every later JSX tag of the block uncoloured (a bare `language-xml`
- *    span), while the code around those tags keeps its colour.
- *  No markdown fence of `docs/superpowers` holds the shape (470 checked), and chat's golden files are unchanged. `xml` and `markdown` then reach no
- *  bounded grammar, so they keep the 64 KiB cap. */
-const xmlWithoutSubLanguages: LanguageFn = (h) => {
-  const def = xml(h);
-  const seen = new Set<object>();
-  const stack: object[] = [def];
-  while (stack.length > 0) {
-    const mode = stack.pop()!;
-    if (seen.has(mode)) continue;
-    seen.add(mode);
-    const m = mode as { subLanguage?: unknown; contains?: unknown; variants?: unknown; starts?: unknown };
-    const subs = typeof m.subLanguage === 'string' ? [m.subLanguage] : Array.isArray(m.subLanguage) ? m.subLanguage : [];
-    if (subs.includes('javascript') || subs.includes('css')) delete m.subLanguage;
-    for (const list of [m.contains, m.variants]) {
-      if (Array.isArray(list)) for (const child of list) if (typeof child === 'object' && child !== null) stack.push(child);
-    }
-    if (typeof m.starts === 'object' && m.starts !== null) stack.push(m.starts);
-  }
-  return def;
-};
-
-// Registering a grammar also registers any aliases IT declares — that is where
-// `golang` comes from, and why it is not in the list below. The php grammar
-// declares none, so `php` is the only fence word that reaches it.
-for (const [name, def] of Object.entries({
-  bash, typescript, javascript, json, python, css, xml: xmlWithoutSubLanguages,
-  yaml, markdown, diff, sql, dockerfile, rust, go, php,
-})) hljs.registerLanguage(name, def);
-hljs.registerAliases(['zsh', 'shell'], { languageName: 'bash' });
-hljs.registerAliases(['tsx'], { languageName: 'typescript' });
-hljs.registerAliases(['html', 'svg'], { languageName: 'xml' });
-
-export const LANG_LABEL: Readonly<Record<string, string>> = {
-  bash: 'bash', sh: 'shell', shell: 'shell', zsh: 'zsh',
-  typescript: 'TypeScript', ts: 'TypeScript', tsx: 'TSX',
-  javascript: 'JavaScript', js: 'JavaScript', jsx: 'JSX',
-  json: 'JSON', python: 'Python', py: 'Python', css: 'CSS',
-  xml: 'XML', html: 'HTML', yaml: 'YAML', yml: 'YAML',
-  markdown: 'Markdown', md: 'Markdown', diff: 'diff', sql: 'SQL',
-  dockerfile: 'Dockerfile', rust: 'Rust', go: 'Go', php: 'PHP',
-};
-
 /** Flatten a react-markdown child tree to source text (for copy + highlight). */
 export function nodeText(n: ReactNode): string {
   if (n == null || typeof n === 'boolean') return '';
@@ -166,254 +83,78 @@ export function nodeText(n: ReactNode): string {
   return '';
 }
 
-/** The longest run of word units in `s` (0 for none): a word unit is a UTF-16 code unit in `[A-Za-z0-9_$]` or at
- *  `0x7f` or above. The upper range is counted because highlight.js's PHP grammar takes `\x7f-\xff` as identifier
- *  characters (64 KiB of `_é` in a `php` fence cost about 38 s), and a unit above it cannot be told from one inside
- *  it without the grammar, so the class fails closed. One pass over its code units, no regular expression, so its
- *  cost is linear in the length of `s` whatever it holds. */
-export function longestWordRun(s: string): number {
-  let best = 0;
-  let run = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    if ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x5f || c === 0x24 || c >= 0x7f) {
-      run += 1;
-      if (run > best) best = run;
-    } else {
-      run = 0;
-    }
+const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
+
+/** A block's entry in `store`, read as React reads an external store; the shared `unrequested` entry with no store
+ *  or no key. `peek` is also the server snapshot, so `renderToStaticMarkup` reads the store and never requests. */
+export function useHighlightEntry(store: HighlightStore | null, key: string | null): HighlightEntry {
+  const subscribe = store === null || key === null ? NO_SUBSCRIPTION : store.subscribe(key);
+  const snapshot = (): HighlightEntry => (store === null || key === null ? UNREQUESTED_ENTRY : store.peek(key));
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/** Shows `key` and holds one reference on it while the block displays it; releases both on cleanup or when the key
+ *  changes (Task 7 adds chat's debounce to the request). */
+export function useHighlightRequest(store: HighlightStore | null, key: string | null): void {
+  useEffect(() => {
+    if (store === null || key === null) return undefined;
+    const unshow = store.show(key);
+    const release = store.request(key);
+    return () => {
+      release();
+      unshow();
+    };
+  }, [store, key]);
+}
+
+/** What a block's label says (section 4.10's table): the language, then why a registered block is not coloured. */
+export function codeBlockLabel(label: string, raw: string, answer: BlockKey, entry: HighlightEntry): string {
+  const kib = `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`;
+  switch (answer.kind) {
+    case 'unregistered':
+      return label;
+    case 'over-cap':
+      return kib;
+    case 'part1':
+      return answer.bound === 'grammar-cap' ? kib
+        : `${label} · not highlighted (a ${answer.chars}-character ${answer.bound === 'word' ? 'word' : answer.bound === 'line' ? 'line' : 'run of whitespace'})`;
+    case 'key':
+      break;
   }
-  return best;
-}
-
-/** The length in UTF-16 code units of the longest line of `s` (0 for none); a line ends at `\n` or `\r`, so a
- *  CRLF pair counts neither character. One pass, linear in the length of `s`. */
-export function longestLine(s: string): number {
-  let best = 0;
-  let run = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    if (c === 0x0a || c === 0x0d) {
-      run = 0;
-    } else {
-      run += 1;
-      if (run > best) best = run;
-    }
+  switch (entry.kind) {
+    case 'html':
+      return entry.mode === 'line' ? `${label} · highlighted line by line` : label;
+    case 'skipped':
+      return entry.ceiling === 'part1-scan' || entry.ceiling === 'part1-markdown' ? label : `${label} · not highlighted (page highlighting limit)`;
+    case 'plain':
+      if (entry.first.kind === 'timeout') return `${label} · not highlighted (took over ${entry.first.budgetMs / 1000} s)`;
+      return entry.first.kind === 'too-large' ? `${label} · not highlighted (output too large)` : label;
+    case 'unrequested':
+    case 'pending':
+      return label;
   }
-  return best;
 }
 
-/** The length of the longest run of blank code units in `s` (0 for none): ECMAScript's `\s` set, U+0009 to U+000D,
- *  U+0020, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. The run crosses line
- *  breaks: `typescript` and `javascript` cost highlight.js the square of a blank run that holds a line terminator
- *  (64 KiB of `\n` about 5 to 6 s, of U+2028 about 10 s), and these are exactly the units that join such a run. One
- *  pass, no regular expression, so its cost is linear in the length of `s` whatever it holds. */
-export function longestBlankRun(s: string): number {
-  let best = 0;
-  let run = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    if ((c >= 0x09 && c <= 0x0d) || c === 0x20 || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a)
-        || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff) {
-      run += 1;
-      if (run > best) best = run;
-    } else {
-      run = 0;
-    }
-  }
-  return best;
+/** THE highlight sink in `pwa/src` (section 4.10 "The single sink and its check", M4.H15): the one
+ *  `dangerouslySetInnerHTML`, which inserts only the `html` of a value `isCheckedHighlightHtml` accepts. Anything
+ *  else, a plain string from a forged store included, renders `raw` as text in the same element. `CodeBlock` and
+ *  the tool wells draw code through it. */
+export function HighlightedCode({ entry, raw }: { readonly entry: HighlightEntry; readonly raw: string }): ReactNode {
+  const checked: unknown = entry.kind === 'html' ? entry.checked : null;
+  if (isCheckedHighlightHtml(checked)) return <code className="hljs" dangerouslySetInnerHTML={{ __html: checked.html }} />;
+  return <code className="hljs">{raw}</code>;
 }
 
-/** The language a code element's class names (`language-<name>`), lower-cased; `''` when it names none. */
-export function codeLanguage(className: string): string {
-  return (/language-([\w-]+)/.exec(className)?.[1] ?? '').toLowerCase();
-}
+/** The highlight store a code block reads (section 4.10 `CodeBlock`): a Docs page's, a text leaf's or a chat
+ *  message's. `null`, the default, has ONE meaning: no store, so the block renders plain. Every production mount
+ *  provides one. */
+export const PreHighlightContext = createContext<HighlightStore | null>(null);
 
-/** The registered grammars a definition embeds through highlight.js `subLanguage`, by registered name. A grammar's
- *  definition is what `h.getLanguage` answers (the object `registerLanguage` stored). highlight.js 11.11.1 compiles a
- *  mode IN PLACE on first use (`compileMode` replaces `contains` and sets `isCompiled` on the registered mode itself);
- *  only variant and parent-dependent modes are cloned, through `inherit`, which copies `subLanguage`. So the walk sees
- *  every `subLanguage` before and after compilation, and it keeps a `seen` set because `'self'` and compiled modes make
- *  the graph cyclic. Never follows `parent`. A name nothing registers (yaml's `ruby`) reaches nothing. An EMPTY array
- *  means auto-detect across every registered grammar in highlight.js (`processSubLanguage` passes `null` to
- *  `highlightAuto`), so it reaches all of them. A string `subLanguage` is looked up by name WITHOUT alias resolution at
- *  runtime, while the walk resolves aliases with `getLanguage`, which can only over-bound, the safe direction. */
-function embeddedGrammars(
-  h: HLJSApi, def: object, nameOf: ReadonlyMap<object, string>, every: readonly string[],
-): ReadonlySet<string> {
-  const found = new Set<string>();
-  const seen = new Set<object>();
-  const stack: object[] = [def];
-  while (stack.length > 0) {
-    const mode = stack.pop()!;
-    if (seen.has(mode)) continue;
-    seen.add(mode);
-    const m = mode as { subLanguage?: unknown; contains?: unknown; variants?: unknown; starts?: unknown };
-    if (Array.isArray(m.subLanguage) && m.subLanguage.length === 0) for (const n of every) found.add(n);
-    const subs = typeof m.subLanguage === 'string' ? [m.subLanguage] : Array.isArray(m.subLanguage) ? m.subLanguage : [];
-    for (const sub of subs) {
-      const target = typeof sub === 'string' ? h.getLanguage(sub) : undefined;
-      const name = target === undefined ? undefined : nameOf.get(target);
-      if (name !== undefined) found.add(name);
-    }
-    for (const list of [m.contains, m.variants]) {
-      if (Array.isArray(list)) for (const child of list) if (typeof child === 'object' && child !== null) stack.push(child);
-    }
-    if (typeof m.starts === 'object' && m.starts !== null) stack.push(m.starts);
-  }
-  return found;
-}
-
-/** The bounded grammars of `h` and the cap each takes: the grammars of `base`, and every registered grammar whose
- *  `subLanguage` chain reaches one of them, at the SMALLEST cap among those its chain reaches (`embeddedGrammars` says
- *  what a chain is). Pure over `h`'s registered grammars, so a test derives it on synthetic instances. The set is fixed
- *  at module load: no grammar is registered later in `pwa/src`. */
-export function deriveBoundedCaps(h: HLJSApi, base: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
-  const names = h.listLanguages();
-  const nameOf = new Map<object, string>();
-  for (const n of names) {
-    const def = h.getLanguage(n);
-    if (def !== undefined) nameOf.set(def, n);
-  }
-  const embeds = new Map<string, ReadonlySet<string>>();
-  for (const n of names) embeds.set(n, embeddedGrammars(h, h.getLanguage(n)!, nameOf, names));
-  const caps = new Map<string, number>(base);
-  // Fixed point: a cap only ever falls, and there are finitely many grammars, so this ends.
-  for (let changed = true; changed;) {
-    changed = false;
-    for (const n of names) {
-      let cap = caps.get(n) ?? Infinity;
-      for (const sub of embeds.get(n) ?? []) cap = Math.min(cap, caps.get(sub) ?? Infinity);
-      if (cap !== Infinity && cap !== caps.get(n)) {
-        caps.set(n, cap);
-        changed = true;
-      }
-    }
-  }
-  return caps;
-}
-
-/** The grammars highlight.js is quadratic in (review 450 F1), and the cap each takes: typescript and javascript at
- *  `MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS`, rust at `MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS`, and every registered grammar whose
- *  `subLanguage` chain reaches one of them (none today: `xml` is registered without its script and style
- *  sub-languages) at the smallest cap among those its chain reaches. `deriveBoundedCaps` applied once to this module's
- *  instance, so a grammar registered later that embeds a bounded one is bounded with no list to forget;
- *  `markdown-bounds.test.tsx` derives the same set again, independently, and asserts it is equal. */
-export const HIGHLIGHT_BOUNDED_CAPS: ReadonlyMap<string, number> = deriveBoundedCaps(hljs, new Map<string, number>([
-  ['typescript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS], ['javascript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS],
-  ['rust', MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS],
-]));
-
-/** `HIGHLIGHT_BOUNDED_CAPS` by definition object, so every alias highlight.js knows follows its grammar by identity and
- *  no list of aliases is kept here. */
-const BOUNDED_BY_DEF: ReadonlyMap<object, number> = new Map(
-  [...HIGHLIGHT_BOUNDED_CAPS].map(([name, cap]) => [hljs.getLanguage(name)!, cap] as const),
-);
-
-/** The cap of a bounded grammar `lang` resolves to; `null` for any other (or none). */
-function boundedCap(lang: string): number | null {
-  if (!lang) return null;
-  const def = hljs.getLanguage(lang);
-  return def === undefined ? null : BOUNDED_BY_DEF.get(def) ?? null;
-}
-
-/** The longest block, in characters, `CodeBlock` highlights in `lang`: the cap of `HIGHLIGHT_BOUNDED_CAPS` for a
- *  grammar in it (review 450 F1; typescript, javascript and rust, and any grammar embedding them: none today),
- *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` for every other grammar. */
-export function highlightBlockCap(lang: string): number {
-  return boundedCap(lang) ?? MD_HIGHLIGHT_BLOCK_MAX_CHARS;
-}
-
-/** Whether a block in `lang` counts against a Docs page's budget for the grammars that grow with the square of a
- *  block's size (`DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, review 450 F1): every grammar in `HIGHLIGHT_BOUNDED_CAPS`. */
-export function inScanPageBudget(lang: string): boolean {
-  return boundedCap(lang) !== null;
-}
-
-/** Whether a block in `lang` counts against a Docs page's budget for `markdown` code
- *  (`DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, review 450 F1): every alias highlight.js resolves to the `markdown` grammar, by
- *  identity. */
-export function inMarkdownPageBudget(lang: string): boolean {
-  if (!lang) return false;
-  const def = hljs.getLanguage(lang);
-  return def !== undefined && def === hljs.getLanguage('markdown');
-}
-
-/** What `boundedHighlight` answers: `html` is the highlighted markup (`null`: not highlighted), the rest are the
- *  figures and refusals a block's label reads. */
-export interface BoundedHighlight {
-  html: string | null;
-  overCap: boolean;
-  refusedOverCap: boolean;
-  word: number;
-  overWord: boolean;
-  line: number;
-  overLine: boolean;
-  blank: number;
-  overBlank: boolean;
-}
-
-/** Whether `lang` names a grammar highlight.js has registered (a name or an alias). The one predicate: `CodeBlock`'s
- *  `registered` reads it, and the tool wells' plan (`session/toolWell.ts`) is handed it by its caller. */
-export function isRegisteredGrammar(lang: string): boolean {
-  return Boolean(lang && hljs.getLanguage(lang));
-}
-
-/** What highlight.js answered for a (language, block) pair, by `lang` and `raw` as `boundedHighlight` received them.
- *  `ignoreIllegals` makes the answer a function of the pair, so a held answer is the markup a call would return. Module
- *  scope, so it lives as long as the page: chat, the tool wells and the Docs reader share it. Tests start from an empty
- *  one: `pwa/test/setup.ts` empties it after every test (`highlightCache.ts#clearEveryLru`). */
-const HIGHLIGHTED = createLru<string>(HIGHLIGHT_CACHE_MAX_ENTRIES, HIGHLIGHT_CACHE_MAX_CHARS, (html) => html.length);
-
-/** `hljs.highlight`'s markup for `raw` in `lang`, from the cache when it holds the pair. Only `boundedHighlight` calls
- *  it, once every bound has passed, so a block the bounds refuse is never highlighted and never cached. */
-function highlighted(raw: string, lang: string): string {
-  const key = `${lang}\u0000${raw}`;
-  const held = HIGHLIGHTED.get(key);
-  if (held !== undefined) return held;
-  const html = hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value; // sync, never throws
-  HIGHLIGHTED.set(key, html);
-  return html;
-}
-
-/** The ONE call of `hljs.highlight` in the PWA: whether and how a block `raw` in `lang` is highlighted, with the
- *  figures `CodeBlock`'s label reads. `highlight` is `CodeBlock`'s page-budget prop (`undefined`: allowed). Highlighted
- *  only when the language is registered, `highlight` is not `false`, the block is at most
- *  `highlightBlockCap(lang)` characters (after the trailing-newline strip: `MD_HIGHLIGHT_BLOCK_MAX_CHARS`, or a smaller
- *  cap for the grammars of `HIGHLIGHT_BOUNDED_CAPS`, review 450 F1), its longest run of word units
- *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10), its longest line is at most
- *  `MD_HIGHLIGHT_MAX_LINE_CHARS` (the line bound), and its longest blank run (`longestBlankRun`, whitespace that may
- *  span lines) is at most `MD_HIGHLIGHT_MAX_BLANK_CHARS` (the whitespace bound). A registered block over the size cap
- *  renders as plain text and says so in its label, its size in whole KiB of characters, rounded up; one within it
- *  that holds a longer word renders as plain text labelled with that word's length, one with a longer line, labelled
- *  with that line's length, and one with a longer blank run, labelled with that run's length (a block that trips more
- *  than one is labelled by the first: word, then line, then blank run). The size check comes first, so a block over
- *  the cap is never scanned. A block a page budget refuses (`highlight={false}`) is never scanned either: over its own cap it is labelled
- *  by its size the same way, and within it its label is the language alone. The markup comes from a bounded cache
- *  (`highlighted`), asked only once the block has passed every bound. */
-export function boundedHighlight(raw: string, lang: string, highlight?: boolean): BoundedHighlight {
-  const registered = isRegisteredGrammar(lang);
-  const wanted = highlight !== false && registered;
-  const cap = highlightBlockCap(lang);
-  const overCap = wanted && raw.length > cap;
-  // A block the page budget refuses is over the cap all the same, and says so (M4.H1); the size is read from the
-  // length alone, so a refused block is never scanned for a word or a line.
-  const refusedOverCap = registered && !wanted && raw.length > cap;
-  const word = wanted && !overCap ? longestWordRun(raw) : 0;
-  const overWord = word > MD_HIGHLIGHT_MAX_WORD_CHARS;
-  const line = wanted && !overCap ? longestLine(raw) : 0;
-  const overLine = line > MD_HIGHLIGHT_MAX_LINE_CHARS;
-  const blank = wanted && !overCap && !overWord && !overLine ? longestBlankRun(raw) : 0;
-  const overBlank = blank > MD_HIGHLIGHT_MAX_BLANK_CHARS;
-  const html = wanted && !overCap && !overWord && !overLine && !overBlank ? highlighted(raw, lang) : null;
-  return { html, overCap, refusedOverCap, word, overWord, line, overLine, blank, overBlank };
-}
-
-/** Fenced code: language label + copy bar over a syntax-highlighted well.
- *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
- *  Highlighted only as `boundedHighlight` decides (the grammar, the page budget and the four bounds are described
- *  there); the label says why a registered block is not. */
-export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
+/** Fenced code: language label + copy bar over the well. The bar is a SIBLING above the scrolling <pre>, never an
+ *  overlay. It makes no highlight.js call: it reads its entry in the store, plain until the worker's answer is
+ *  `html` (the plain first frame, section 4.10), and its label says why a registered block is not coloured. */
+export function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
+  const store = useContext(PreHighlightContext);
   const [copied, setCopied] = useState(false);
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as
     | React.ReactElement<{ className?: string; children?: ReactNode }>
@@ -421,7 +162,10 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   const lang = codeLanguage(codeEl?.props.className ?? '');
   const label = LANG_LABEL[lang] ?? (lang || 'text');
   const raw = nodeText(children).replace(/\n$/, '');
-  const { html, overCap, refusedOverCap, word, overWord, line, overLine, blank, overBlank } = boundedHighlight(raw, lang, highlight);
+  const answer = useMemo(() => (store === null ? blockKey(lang, raw) : store.keyOf(lang, raw)), [store, lang, raw]);
+  const key = answer.kind === 'key' ? answer.key : null;
+  const entry = useHighlightEntry(store, key);
+  useHighlightRequest(store, key);
   const onCopy = useCallback(() => {
     void navigator.clipboard?.writeText(raw).then(() => {
       setCopied(true);
@@ -431,22 +175,14 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   return (
     <div className="code-block">
       <div className="code-block-bar">
-        <span className="code-block-lang">
-          {overCap || refusedOverCap
-            ? `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`
-            : overWord ? `${label} · not highlighted (a ${word}-character word)`
-              : overLine ? `${label} · not highlighted (a ${line}-character line)`
-                : overBlank ? `${label} · not highlighted (a ${blank}-character run of whitespace)` : label}
-        </span>
+        <span className="code-block-lang">{codeBlockLabel(label, raw, answer, entry)}</span>
         <button type="button" className="code-block-copy" onClick={onCopy}
                 aria-label="Copy code" data-copied={copied || undefined}>
           <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
         </button>
       </div>
       <pre>
-        {html != null
-          ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
-          : <code className="hljs">{raw}</code>}
+        <HighlightedCode entry={entry} raw={raw} />
       </pre>
     </div>
   );
@@ -457,18 +193,9 @@ export function TableWrap({ children }: { children?: ReactNode }): ReactNode {
   return <div className="md-table-wrap"><table>{children}</table></div>;
 }
 
-/** The Docs page's highlight budget as `pre` reads it (spec 4.10 "Highlighting"; refinement (h)): given the `pre`
- *  element being rendered (its hast `node`), whether the page admits highlighting it; `false` gives `CodeBlock`
- *  `highlight={false}`. `null`, the default, has ONE meaning: no page budget (chat never provides one), so the block
- *  rule alone decides, exactly as before. */
-export const PreHighlightContext = createContext<((pre: HastElement) => boolean) | null>(null);
-
-/** Fenced code through `CodeBlock`, under the page budget when one is provided. With a budget and no `node` (neither
- *  react-markdown nor `renderHast` ever omits it) the block is not highlighted: the budget cannot be asked. */
-function SharedPre({ children, node }: { children?: ReactNode; node?: HastElement }): ReactNode {
-  const budget = useContext(PreHighlightContext);
-  const refused = budget !== null && (node === undefined || !budget(node));
-  return <CodeBlock highlight={refused ? false : undefined}>{children}</CodeBlock>;
+/** Fenced code through `CodeBlock`, which reads the store `PreHighlightContext` carries. */
+function SharedPre({ children }: { children?: ReactNode }): ReactNode {
+  return <CodeBlock>{children}</CodeBlock>;
 }
 
 /** A GFM task-list checkbox's accessible name, by its state. remark-gfm emits the box bare (no `<label>`), so without
@@ -476,8 +203,8 @@ function SharedPre({ children, node }: { children?: ReactNode; node?: HastElemen
  *  `markdown-task-label.test.tsx` holds both renderers and the Prose story's mirror to these words. */
 export const TASK_CHECKBOX_NAME = { checked: 'done', unchecked: 'to do' } as const;
 
-/** The components chat and the Docs screen share: inline code (kbd chips), fenced code (under the Docs page's highlight
- *  budget when one is provided), tables, and task-list checkboxes named by their state (the markup is otherwise
+/** The components chat and the Docs screen share: inline code (kbd chips), fenced code (on the highlight store `PreHighlightContext` carries),
+ *  tables, and task-list checkboxes named by their state (the markup is otherwise
  *  remark-gfm's: still disabled, still the item's or its first paragraph's first child, which prose.css relies on). */
 export const SHARED_COMPONENTS: Components = {
   input({ node: _node, ...props }) {
@@ -673,9 +400,17 @@ const chatParse: MarkdownParser = (src, opts) => chatRunner.parse(src, opts);
  *  thread behind the pre-scan; a longer one parses through `parser` (absent = `chatRunner`'s), with a
  *  `CHAT_PARSE_BUDGET_MS` budget. The two paths are two components, so crossing the threshold remounts. The
  *  streaming caret is the caller's sibling after it. Memoised on its props (desktop polish Task C7): the same text
- *  through the same parser renders nothing again. */
+ *  through the same parser renders nothing again. It holds one highlight store for the message (W5h-a). */
 export const ChatMarkdown = memo(function ChatMarkdown({ text, parser = chatParse }: { text: string; parser?: MarkdownParser }): ReactNode {
-  return utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
-    ? <SyncChatMarkdown text={text} />
-    : <AsyncChatMarkdown text={text} parser={parser} />;
+  const highlighters = useContext(HighlighterContext);
+  // One highlight store per message, on chat's own highlighter, for both paths (section 4.12 "Chat highlighting").
+  const store = useMemo(() => highlighters.createStore(highlighters.chat, 'chat'), [highlighters]);
+  useEffect(() => () => store.releaseAll(), [store]);
+  return (
+    <PreHighlightContext value={store}>
+      {utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
+        ? <SyncChatMarkdown text={text} />
+        : <AsyncChatMarkdown text={text} parser={parser} />}
+    </PreHighlightContext>
+  );
 });
