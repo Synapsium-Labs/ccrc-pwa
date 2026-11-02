@@ -395,8 +395,12 @@ export const singleReaders = (): W7Site[] => overPwa(singleReadersIn);
 
 /** The placement scorers a PWA copy would be built from: the PWA's own least-loaded pick and the server's projection. */
 export const PLACEMENT_NAMES: readonly string[] = ['leastLoaded', 'projectHome'];
-/** The one legitimately different caller (spec K15: a swap target, not a new session's home) and the picker's own file. */
-export const PLACEMENT_ALLOWED: readonly string[] = ['pwa/src/fleet/SwapSheet.tsx', 'pwa/src/fleet/accountPicker.ts'];
+/** The legitimately different callers (spec K15: a swap target, not a new session's home) and the picker's own file.
+ *  The Move sessions sheet (D-7736) picks one swap target for a lane's sessions with SwapSheet's own chooser, so it
+ *  ranks swap targets as SwapSheet does; neither places a new session. */
+export const PLACEMENT_ALLOWED: readonly string[] = [
+  'pwa/src/fleet/SwapSheet.tsx', 'pwa/src/fleet/MoveSessionsSheet.tsx', 'pwa/src/fleet/accountPicker.ts',
+];
 
 /** A PWA copy of new-session placement: a reference (not an import) to `leastLoaded` or `projectHome` in a file other
  *  than `SwapSheet.tsx` and `accountPicker.ts`, or a definition of `projectHome` anywhere in the PWA. 0 on the base: the
