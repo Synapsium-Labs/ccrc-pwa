@@ -2612,7 +2612,7 @@ button.proj-card-pool::before {
   font-size: var(--fs-meta);
   color: var(--ink-primary);
 }
-.acct-check, .acct-check-again { flex: none; min-height: var(--tap-min); }
+.acct-check, .acct-check-again, .acct-knob-move { flex: none; min-height: var(--tap-min); }
 .acct-check-again { justify-self: start; }
 /* The reason's ink and type are the trouble sentences' (the group above); here only its own line. */
 .acct-knob-reason { flex: 1 0 100%; }

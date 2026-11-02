@@ -14,13 +14,21 @@
 // WHEN THE SCREEN CANNOT ACT. With no `connect` (a dark gate's answer, an older server) the row is not drawn. With a
 // `connect` that says the fleet cannot run the acts, or an insecure origin, the row is drawn with the knob disabled and
 // the server's reason beneath it.
+//
+// "MOVE N SESSIONS OFF" (§10, §4.5; Task A3, D-7736). An off row offers it beside the knob: switching off keeps every
+// running session, and this is how they leave. The row counts the lane's sessions as the sheet will move them
+// (`sessionsToMove`, the trouble card's count), offers nothing when there are none or while the lane is on, and owns
+// the Move sessions sheet it opens, as the trouble card does. The move is the swap route's, not an account act, so the
+// screen's `blocked` reason does not hold it back; the sheet itself sends nothing offline.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, toast } from '@ccrc/ui';
 import type { AccountStateWord } from '../../../shared/accounts';
 import type { LaneWire } from '../../../shared/api';
 import { api } from '../lib/api';
-import { CHECK_LABEL, STATE_LAMPS, laneActRefusal, switchRow } from './accountWords';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { CHECK_LABEL, STATE_LAMPS, laneActRefusal, moveOffLabel, switchRow } from './accountWords';
+import { MoveSessionsSheet, sessionsToMove } from './MoveSessionsSheet';
 import './fleet.css';
 
 /** An act in flight on a lane, and the switch an ack has set until the store's next answer lands. */
@@ -87,10 +95,16 @@ export interface AccountKnobProps {
   busy: 'check' | 'switch' | undefined;
   onFlip: () => void;
   onCheck: () => void;
+  /** Injectable for tests; defaults to the app-wide fleet store. */
+  fleet?: FleetStore;
 }
 
-/** The row: the switch, its sentence, Check, and the reason beneath, which wraps under the knob, never beside it. */
-export function AccountKnob({ id, on, notReady, blocked, running, busy, onFlip, onCheck }: AccountKnobProps): ReactNode {
+/** The row: the switch, its sentence, Check, Move N sessions off while the lane is off, and the reason beneath, which
+ *  wraps under the knob, never beside it. */
+export function AccountKnob({ id, on, notReady, blocked, running, busy, onFlip, onCheck, fleet = useFleetStore }: AccountKnobProps): ReactNode {
+  const sessions = fleet((s) => s.sessions);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const toMove = on ? 0 : sessionsToMove(sessions, id).length;
   const reason = blocked ?? notReady;
   const switchDisabled = busy !== undefined || blocked !== null || (!on && notReady !== null);
   return (
@@ -117,7 +131,13 @@ export function AccountKnob({ id, on, notReady, blocked, running, busy, onFlip, 
           {CHECK_LABEL}
         </Button>
       )}
+      {toMove > 0 && (
+        <Button variant="ghost" size="fit" className="acct-knob-move" onClick={() => setMoveOpen(true)}>
+          {moveOffLabel(toMove)}
+        </Button>
+      )}
       {reason !== null && <p className="acct-knob-reason" id={`acct-knob-reason-${id}`}>{reason}</p>}
+      <MoveSessionsSheet lane={id} open={moveOpen} onClose={() => setMoveOpen(false)} fleet={fleet} />
     </div>
   );
 }
