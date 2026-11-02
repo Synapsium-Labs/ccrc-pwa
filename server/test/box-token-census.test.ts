@@ -78,6 +78,9 @@ const UPDATE_SRC = read('server/src/update/routes.ts');
  *  reason — a box-token call there would BE a lane — and so that "neither route
  *  consults the box token" is a measured zero over a file this census reads. */
 const TOKEN_SRC = read('server/src/token/routes.ts');
+/** The EIGHTH file that registers routes and the fifth lane source (#1444, plan task LK9): the Linear proxy's twelve,
+ *  every one a box-token lane. Read like the files above, so its lanes are counted where the prose counts them. */
+const LINEAR_PROXY_SRC = read('server/src/linear/proxyRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -185,7 +188,11 @@ const lanesIn = (src: string): string[] => {
 const COORD_LANES = lanesIn(COORD_SRC);
 const UPDATE_LANES = lanesIn(UPDATE_SRC);
 const TOKEN_LANES = lanesIn(TOKEN_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES];
+const LINEAR_PROXY_LANES = lanesIn(LINEAR_PROXY_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES];
+/** The box-token machine lanes gate.ts counts first (#1444): the coordination routes and the Linear proxy's, before
+ *  `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -264,7 +271,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Test box plan TB9 (D-7554): forty with the test box's read and its tools sync, which take a session or the token.
   'thirty-nine', 'forty',
   // Landing order wave 5e: forty-one with GET /api/landing, a plain requireMailToken lane.
-  'forty-one'];
+  'forty-one',
+  // The Linear proxy (#1444, plan task LK9): forty-six machine lanes and forty-nine in all with its twelve.
+  'forty-two', 'forty-three', 'forty-four', 'forty-five', 'forty-six', 'forty-seven', 'forty-eight', 'forty-nine'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -403,7 +412,9 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // THREE since update-management W2: `server.ts`'s pair plus the update
     // projection read, the one handler in `update/routes.ts` that consults the
     // box token (design 2026-09-20 §12, decision 15).
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3);
+    // …plus the Linear proxy's twelve since #1444 (plan task LK9), its own lane source, asserted on its own.
+    expect(LINEAR_PROXY_LANES, 'the Linear proxy is not being read, or a route lost its token check').toHaveLength(12);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -527,7 +538,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       ['gate.ts, the CSRF/origin note', ' * EXEMPT ROUTES ARE SKIPPED', 'their real guard is'],
     ] as const) {
       const p = passage(name, GATE_SRC, from, to);
-      expectNumerals(name, p, [word(COORD_LANES.length), word(ALL_LANES.length)]);
+      expectNumerals(name, p, [word(MACHINE_LANES.length), word(ALL_LANES.length)]);
     }
   });
 
@@ -1174,5 +1185,53 @@ describe('the accounts surface: three session-only doors, no box token (spec 202
       expect(SESSION_ONLY_ALL, `${door} was counted as a coordination write`).not.toContain(door);
       expect(ALL_LANES.map(pathOf), `${door} was counted as a box-token lane`).not.toContain(door);
     }
+  });
+});
+
+// ── the Linear proxy surface (#1444, plan task LK9; spec 2026-10-31 §6.2) ──────────────────────────────────────────────
+//
+// `server/src/linear/proxyRoutes.ts` is the EIGHTH file that registers routes and the fifth lane source: twelve routes,
+// one per `ccrc-api linear` verb, and every one a box-token lane (R2: the token is checked in each route's own
+// `onRequest`, whatever `CCRC_AUTH` says, and no cookie stands in for it). So the census here is the update surface's
+// with the sense reversed: every registration is a lane, in both directions with the door list; every one is EXEMPT;
+// none is a session-only coordination write; and a registration planted without a token check is SEEN as no lane.
+describe('the Linear proxy surface: twelve box-token lanes, every one EXEMPT (spec 2026-10-31 §6.2)', () => {
+  const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
+  /** The twelve, by method and path (spec §5.1). Hand-kept for the NAMES only: the cases below derive the same set from
+   *  the file and compare in both directions. */
+  const LINEAR_PROXY_DOORS = [
+    'GET /api/linear/proxy/workspaces', 'GET /api/linear/proxy/teams', 'GET /api/linear/proxy/issues/:id',
+    'POST /api/linear/proxy/search', 'GET /api/linear/proxy/issues/:id/comments', 'GET /api/linear/proxy/statuses',
+    'GET /api/linear/proxy/projects', 'GET /api/linear/proxy/labels', 'GET /api/linear/proxy/users',
+    'POST /api/linear/proxy/issues', 'POST /api/linear/proxy/issues/:id', 'POST /api/linear/proxy/issues/:id/comments',
+  ];
+  const REGISTERED = registrationsIn(LINEAR_PROXY_SRC).map((r) => r.key);
+
+  it('linear/proxyRoutes.ts registers exactly the twelve doors, each once', () => {
+    expect(new Set(REGISTERED).size).toBe(REGISTERED.length);
+    expect([...REGISTERED].sort()).toEqual([...LINEAR_PROXY_DOORS].sort());
+  });
+
+  it('every registration is a lane, and every lane is EXEMPT with a reason that says box-token gated', () => {
+    expect([...LINEAR_PROXY_LANES].sort()).toEqual([...REGISTERED].sort());
+    for (const k of LINEAR_PROXY_DOORS) {
+      const at = GATE_SRC.indexOf(`  ['${k}',`);
+      expect(at, `${k} is not EXEMPT`).toBeGreaterThan(-1);
+      expect(GATE_SRC.slice(at, GATE_SRC.indexOf('],', at)), `${k}'s reason does not say how it is gated`).toContain('box-token gated');
+    }
+  });
+
+  it('no door is a session-only coordination write, and none is dual-credential (no cookie arm)', () => {
+    for (const k of LINEAR_PROXY_DOORS) {
+      expect(SESSION_ONLY_ALL, `${k} was counted as a session-only write`).not.toContain(pathOf(k));
+      const at = GATE_SRC.indexOf(`  ['${k}',`);
+      expect(GATE_SRC.slice(at, GATE_SRC.indexOf('],', at)), `${k} claims the cookie-or-token class`).not.toContain('EXEMPT-BUT-AUTHENTICATED');
+    }
+  });
+
+  it('a registration planted with no token check of its own is SEEN, and is no lane', () => {
+    const planted = `${LINEAR_PROXY_SRC}\napp.get('/api/linear/proxy/planted', async (req, reply) => reply.send({ ok: true }));\n`;
+    expect(registrationsIn(planted).map((r) => r.key)).toContain('GET /api/linear/proxy/planted');
+    expect(lanesIn(planted)).not.toContain('GET /api/linear/proxy/planted');
   });
 });

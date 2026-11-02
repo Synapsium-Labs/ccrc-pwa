@@ -10,10 +10,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyReply } from 'fastify';
-import { GENERIC_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
+import { GENERIC_REFUSALS, LINEAR_PROXY_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import { CLAIM_REFUSALS } from '../../shared/box-token.js';
 import { refuseRoute } from '../src/refuse.js';
 import { addedLines, mergeBaseDiff, mergeBaseText, removedLines } from './mergeBase.js';
+import { parsedFile } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(here, '..', 'src');
@@ -431,5 +432,24 @@ describe('the inline-send ratchet (D-5381) — ceilings, and none added', () => 
       [null, 'x'], [null, null],
     ]);
     expect(refusalSends(sample).filter((s) => s.status === null && !TABLE_STATUS.test(s.arg)).length).toBe(1);
+  });
+});
+
+describe('the Linear proxy\'s words (#1444, spec §6.8; plan task LK9)', () => {
+  it('each is a route refusal at the status spec §6.8 gives it', () => {
+    expect(Object.fromEntries(LINEAR_PROXY_REFUSALS.map((w) => [w, REFUSAL_STATUS[w]]))).toEqual({
+      'bad-field': 400, 'team-unknown': 404, 'workspace-unknown': 404, 'name-unknown': 404, 'team-ambiguous': 409,
+      'workspace-required': 409, 'name-ambiguous': 409, 'issue-moved': 409, 'policy-denied': 403, 'policy-unavailable': 503,
+      'journal-unavailable': 503, 'linear-unauthorised': 502, 'linear-forbidden': 403, 'linear-invalid': 422,
+    });
+    for (const w of LINEAR_PROXY_REFUSALS) expect(ROUTE_REFUSALS).toContain(w);
+    // A typed vocabulary of its own, not GenericRefusals: the proxy sends them computed, through refuseRoute.
+    for (const w of LINEAR_PROXY_REFUSALS) expect(GENERIC_REFUSALS as readonly string[]).not.toContain(w);
+  });
+
+  it('the proxy answers every refusal through refuseRoute: no inline send in linear/proxyRoutes.ts', () => {
+    const file = path.join(SRC, 'linear', 'proxyRoutes.ts');
+    expect(refusalSends(readFileSync(file, 'utf8'))).toEqual([]);
+    expect(parsedFile(file).calls.filter((c) => c.name === 'refuseRoute').length, 'the scan sees no refusal at all').toBeGreaterThan(10);
   });
 });

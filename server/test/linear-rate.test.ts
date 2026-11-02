@@ -3,8 +3,8 @@
 // rest; Linear's own refusal (a 429, or `RATELIMITED` on a 200 or a 400) closes the slot until its wait and nothing
 // reaches the fake until then; tokenless callers of the cookie routes spend only the request lane; an absent service
 // calls Linear for nothing; and the composition root builds the one instance every caller receives. The tokenless
-// and neighbour clauses that drive the proxy land with the proxy (LK9), the Settings clause with the Settings routes
-// (LK11). Nothing here reaches the network: `fetch` is the injected seam, and the clock is the test's.
+// and neighbour clauses that drive the proxy landed with the proxy (LK9), the Settings clause lands with the Settings routes
+// (LK11); the proxy's clauses are at the end of this file. Nothing here reaches the network: `fetch` is the injected seam, and the clock is the test's.
 import { describe, it, expect, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -29,6 +29,7 @@ import { RATELIMITED_ERRORS, linearAnswer, type LinearAnswer } from './linearFet
 import { linearServicesFake } from './linearServicesFake.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { WS, proxyRig, seedLegacy, seedSlot, who as proxyWho, type ProxyRig } from './linearProxyRig.js';
 
 removeTmpFixturesEachTest();
 
@@ -467,4 +468,117 @@ describe('one instance (spec §6.7: "nothing else holds a bucket")', () => {
     expect(body(rename)).toMatchObject({ ok: true, title: 'ENG-1234' });
     expect(n).toBe(0);
   });
+});
+
+// ── THE PROXY (plan task LK9): row 8's clauses that drive the twelve routes ──
+
+describe('the proxy spends the slot\'s proxy lane, keyed by the attributed session (spec §6.7, §6.9; LK9)', () => {
+  let proxy: ProxyRig | null = null;
+  afterEach(async () => { await proxy?.close(); proxy = null; });
+
+  it('a session at its limit gets rate-limited session with Retry-After, and another session is not charged for it', async () => {
+    const clock = { now: T0 };
+    proxy = await proxyRig({ via: 'direct', clock: () => clock.now });
+    await seedSlot(proxy.ccrcDir, 'a');
+    for (let i = 0; i < LINEAR_SESSION_BUDGET.callsPerMinute; i += 1) expect((await proxy.call('issue')).statusCode).toBe(200);
+    const limited = await proxy.call('issue');
+    expect([limited.statusCode, body(limited)['error'], body(limited)['detail']]).toEqual([429, 'rate-limited', 'session']);
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
+    expect((await proxy.call('issue', { as: proxyWho('project-a-other-session') })).statusCode, 'one bucket per session').toBe(200);
+    expect(proxy.calls).toHaveLength(LINEAR_SESSION_BUDGET.callsPerMinute + 1);
+  });
+
+  it('ids of ninety neighbours give at most the slot\'s 1,700 proxy calls an hour; a title lookup and a refresh still run', async () => {
+    const clock = { now: T0 };
+    proxy = await proxyRig({ via: 'direct', clock: () => clock.now });
+    await seedSlot(proxy.ccrcDir, 'a');
+    clock.now = T0 + HOUR;                       // an hour after the restart: every lane full
+    let granted = 0;
+    let stop: Record<string, unknown> | null = null;
+    // Two routes, so the outer limiter's 1,200 a minute a route (the server's bound, not Linear's) is never the wall.
+    for (let s = 0; s < 90 && stop === null; s += 1) {
+      for (let i = 0; i < LINEAR_SESSION_BUDGET.callsPerMinute; i += 1) {
+        const res = await proxy.call(s % 2 === 0 ? 'issue' : 'comments', { as: proxyWho(`project-a-neighbour-${s}`) });
+        if (res.statusCode === 200) { granted += 1; continue; }
+        stop = body(res);
+        break;
+      }
+    }
+    expect(granted).toBe(LINEAR_LANE_CALLS_PER_HOUR.proxy);
+    expect(stop).toMatchObject({ error: 'rate-limited', detail: 'workspace' });
+    // The request lane and the floor are untouched: a title lookup calls Linear, and so does a background refresh.
+    const before = proxy.calls.length;
+    const t = await resolveTitle('AAA-12', { key: 'AAA', num: '12', titleSlug: null }, {
+      ccrcDir: proxy.ccrcDir, rate: proxy.fx.rate, fetch: proxy.fetch,
+    });
+    expect(t.source).toBe('linear');
+    proxy.fx.refresher.queueDirectory({ source: 'file', id: WS.a.id });
+    await proxy.fx.refresher.idle();
+    expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['Issue', 'DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers']);
+  }, 120_000);
+
+  it('twenty sessions spending the proxy lane leave the legacy slot\'s title lookups and Check again running', async () => {
+    const ids = Array.from({ length: 20 }, (_, i) => `project-a-session-${i}`);
+    proxy = await proxyRig({ sessions: ids, clock: () => T0 });
+    await seedLegacy(proxy.ccrcDir, 'b', { learned: true });
+    for (const id of ids) {
+      for (let i = 0; i < LINEAR_SESSION_BUDGET.callsPerMinute; i += 1) {
+        const res = await proxy.call('issue', { ref: 'BBB-1', as: proxyWho(id) });
+        expect(res.statusCode, res.body).toBe(200);
+      }
+    }
+    const before = proxy.calls.length;
+    const preview = await proxy.app.inject({ method: 'GET', url: '/api/linear/resolve?ref=BBB-1' });
+    expect(body(preview)).toMatchObject({ source: 'linear' });
+    const again = await proxy.app.inject({ method: 'POST', url: '/api/linear/connection/check' });
+    expect(again.statusCode, again.body).toBe(200);
+    expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['Issue', 'KeyCheck']);
+  });
+
+  it('tokenless, cookieless callers on an unarmed box spend only the request lane: the proxy lane and the floor hold', async () => {
+    const clock = { now: T0 };
+    proxy = await proxyRig({ authEnabled: false, clock: () => clock.now });
+    await seedLegacy(proxy.ccrcDir, 'b', { learned: true });
+    clock.now = T0 + HOUR;                       // every lane full
+    let online = 0;
+    for (let i = 0; i < 150; i += 1) {
+      const res = await proxy.app.inject({ method: 'GET', url: '/api/linear/resolve?ref=BBB-1' });
+      if (body(res)['source'] === 'linear') online += 1;
+    }
+    expect(online).toBe(LINEAR_LANE_CALLS_PER_HOUR.request);
+    for (let i = 0; i < 10; i += 1) {
+      const res = await proxy.app.inject({ method: 'POST', url: '/api/linear/connection/check' });
+      expect([res.statusCode, body(res)['error'], body(res)['detail']]).toEqual([429, 'rate-limited', 'workspace']);
+    }
+    // …and the same tokenless caller reaches no proxy route at all.
+    expect((await proxy.call('issue', { ref: 'BBB-1', token: null })).statusCode).toBe(401);
+    // A background refresh still runs from the floor, and a tokened proxy call from the proxy lane, which is whole.
+    const before = proxy.calls.length;
+    proxy.fx.refresher.queueDirectory(LEGACY_SLOT);
+    await proxy.fx.refresher.idle();
+    expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers']);
+    expect((await proxy.call('issue', { ref: 'BBB-1' })).statusCode).toBe(200);
+    expect(drain(proxy.fx.rate, { lane: 'proxy', slot: LEGACY_SLOT, calls: 1 }).n).toBe(LINEAR_LANE_CALLS_PER_HOUR.proxy - 1);
+  });
+
+  it('a call that resolves first takes two from every bucket and gives back the one it did not spend', async () => {
+    const clock = { now: T0 };
+    proxy = await proxyRig({ via: 'direct', clock: () => clock.now, respond: (c) => (c.op === 'ResolveIssue' ? { body: { data: { issue: null } } } : null) });
+    await seedSlot(proxy.ccrcDir, 'a');
+    expect(body(await proxy.call('comment', { ref: 'AAA-12' }))['error']).toBe('not-found');
+    // One call was made; the second is back in the lane: 425 at the restart, less the one.
+    expect(drain(proxy.fx.rate, { lane: 'proxy', slot: { source: 'file', id: WS.a.id }, calls: 1 }).n).toBe(424);
+  });
+});
+
+describe('one instance, the proxy among its receivers (spec §6.7; LK9)', () => {
+  it('buildServer passes the one service, possibly absent, to the proxy routes too', () => {
+    const SERVER = path.join(SRC, 'server.ts');
+    const proxied = callsIn(symbolOf(SERVER, 'buildServer')).filter((c) => c.name === 'registerLinearProxyRoutes')
+      .map((c) => c.args.map((a) => a.text).join(', '));
+    expect(proxied).toHaveLength(1);
+    expect(proxied[0]).toMatch(/\brate: deps\.linearRate \?\? null\b/);
+    expect(proxied[0]).toMatch(/\brefresher: deps\.linearRefresher \?\? null\b/);
+  });
+
 });
