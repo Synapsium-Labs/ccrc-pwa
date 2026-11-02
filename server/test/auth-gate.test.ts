@@ -340,7 +340,9 @@ describe('the scanner is looking at something', () => {
     expect(scanRoutes('linear/routes.ts').length).toBe(5);
     // 9 in `coord/ledgersRoutes.ts` (programme ledgers PL3): the coordinator's item and goals routes, each registered from
     // `registerCoordRoutes` and each IN EXEMPT as a box-token machine lane (box token and attribution, no cookie). They add nine to the exempt-HTTP count.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(9);
+    // 13 since PL4: the operator's four, `GET /api/waiting`, `GET /api/programmes/:slug/goals`, `POST /api/items/:id/tick`
+    // and `POST /api/items/:id/dismiss`, registered from `server.ts` by `registerLedgerOperatorRoutes`, session-gated and NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(13);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
     // `/disable`, session-gated and NOT EXEMPT, no box token; each takes the account gate on the `account-v2` cap.
     // 8 since the write routes (accounts plan Task A17, D-7739): `POST /api/accounts`, `/:id/credential`, `/:id/set`,
@@ -495,7 +497,9 @@ describe('the scanner is looking at something', () => {
     // token: the HTTP half 140 -> 145, the gated count 85 -> 90, the exempt-HTTP count stays 55.
     // 157 since the programme ledgers' PL3 on top: nine box-token lanes in a ninth file, `coord/ledgersRoutes.ts`, each IN EXEMPT; the
     // other files' counts are unchanged, the total 148 -> 157, the HTTP half 145 -> 154, the gated count stays 90, the exempt-HTTP count 55 -> 64.
-    expect(ROUTES.length).toBe(157);
+    // 161 since PL4 on top: the operator's four routes in the same file, session-gated and NOT EXEMPT, no box token: the
+    // total 157 -> 161, the HTTP half 154 -> 158, the gated count 90 -> 94, the exempt-HTTP count stays 64.
+    expect(ROUTES.length).toBe(161);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -655,7 +659,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 157 scanned + the static wildcard when the bundle is built.
+    // 161 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1274,7 +1278,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 154 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 158 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1338,7 +1342,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 154 HTTP routes, not the 64 exempt.
+          //    is not itself flag-aware — the assertion that covers all 158 HTTP routes, not the 64 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

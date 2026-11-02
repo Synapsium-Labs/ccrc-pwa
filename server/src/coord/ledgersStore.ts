@@ -9,6 +9,7 @@
 // Everything here is keyed on the programme's SLUG (spec §3.4). The moves are decided by `nextItemState` in
 // `shared/ledgers.ts` and by nothing in this file: `moveItemInTx` is THE ONLY WRITER of `operator_items.state`.
 import type { DatabaseSync } from 'node:sqlite';
+import type { MailDeliveryState } from '../../../shared/api.js';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState,
   type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
@@ -210,4 +211,19 @@ export function goalsFor(db: DatabaseSync, program: string): GoalsView {
     program, specPath: pin?.specPath ?? null, inShort: pin?.inShort ?? null, inShortAt: pin?.inShortAt ?? null,
     modifications: mods.map((m) => ({ id: m.id, at: m.at, text: m.text, ruling: m.ruling, itemId: m.itemId, pr: m.pr, merged: m.mergedAt !== null })),
   };
+}
+
+/** The newest delivery state of the operator's tick mail for an item: system mail from `operator` with this run, recipient
+ *  and subject, or `none` when no such mail was ever queued. The stale label's one input about the mail (plan PL4); a later
+ *  tick of a sent-back item queues a newer mail with the same subject, and that is the one read. */
+export function tickMailState(db: DatabaseSync, runId: number | null, toId: string, subject: string): MailDeliveryState | 'none' {
+  const r = db.prepare(
+    "SELECT d.state AS state FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = 'operator' AND m.runId IS ? AND d.toId = ? AND m.subject = ? ORDER BY m.id DESC, d.id DESC LIMIT 1",
+  ).get(runId, toId, subject) as { state: MailDeliveryState } | undefined;
+  return r?.state ?? 'none';
+}
+
+/** Every programme that has a spec pin, in slug order: with the programmes that hold items, the ones the waiting list carries goals for. */
+export function pinnedProgrammes(db: DatabaseSync): string[] {
+  return (db.prepare('SELECT slug FROM programs WHERE specPath IS NOT NULL ORDER BY slug').all() as { slug: string }[]).map((r) => r.slug);
 }

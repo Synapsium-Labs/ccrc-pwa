@@ -10,7 +10,7 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
 
 /** What the operator is asked to do. `value` and `secret` take something back; `secret` never
  *  through the item's answer (spec §5). */
@@ -84,7 +84,7 @@ export function nextItemState(
   return { ok: true, to: row.to };
 }
 
-/** One item as the console shows it. `stale` is always `false` until the server computes it (PL4). */
+/** One item as the console shows it. `stale` is the server's verdict (`itemIsStale`, below): a label only. */
 export interface ItemView {
   id: number;
   program: string;
@@ -198,9 +198,54 @@ export function isSpecPath(p: string): boolean {
 
 /** "Recently cleared" keeps seven days (spec D13). */
 export const CLEARED_WINDOW_MS = 7 * 24 * 3600 * 1000;
+/** How long a tick's mail may stay undelivered before the item says "ticked; coordinator not responding" (plan PL4). A label
+ *  only: no push and no stall arm hang off it (spec §3.3, D19). */
+export const TICK_UNANSWERED_MS = 30 * 60 * 1000;
 export const SOON_LABEL_MAX = 40;
 export const ITEM_TITLE_MAX = 140;
 export const ITEM_TEXT_MAX = 2000;
 export const ITEM_STEPS_MAX = 12;
 export const ITEM_OPTIONS_MAX = 6;
 export const ANSWER_MAX = 2000;
+
+/** The coordinator's presence as an item's label reads it. `unmeasured` says the server has no reading to give (no fleet
+ *  frame yet, or the session's own presence is a doubt): it is never `dead`, so a doubt cannot label an item. */
+export type CoordinatorPresence = 'alive' | 'dead' | 'absent' | 'unmeasured';
+const COORDINATOR_PRESENCE_MAP: Record<CoordinatorPresence, true> = { alive: true, dead: true, absent: true, unmeasured: true };
+export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as readonly CoordinatorPresence[];
+
+/** The coordinator's presence from the fleet frame the server last broadcast: not listed is `absent`; a session the
+ *  server read as `dead` is `dead`; `alive` and `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a
+ *  server that predates `presence`, is `unmeasured`; no frame yet is `unmeasured` too. */
+export function coordinatorPresenceIn(
+  fleet: readonly { id: string; presence?: Presence }[] | null, id: string,
+): CoordinatorPresence {
+  if (fleet === null) return 'unmeasured';
+  const row = fleet.find((s) => s.id === id);
+  if (row === undefined) return 'absent';
+  switch (row.presence) {
+    case 'dead': return 'dead';
+    case 'alive': case 'asleep': return 'alive';
+    default: return 'unmeasured';
+  }
+}
+
+/** What `itemIsStale` is decided from, all of it measured by the caller: the item's state and tick time, the clock, the
+ *  newest delivery state of the tick's mail (`none` when there is no such mail), and the coordinator's presence. */
+export interface StaleInputs {
+  state: ItemState;
+  tickedAt: number | null;
+  now: number;
+  mail: MailDeliveryState | 'none';
+  coordinator: CoordinatorPresence;
+}
+
+/** ItemView.stale (spec §3.3, plan PL4): a CHECKING item whose coordinator reads dead or absent, or whose tick's mail is
+ *  still undelivered (`queued`, or `rejected`: the lane gave up) `TICK_UNANSWERED_MS` after the tick. A delivered mail is
+ *  the coordinator's to answer, and `unknown` and `unmeasured` are doubts, not findings, so none of them labels an item.
+ *  Every other state is never stale. */
+export function itemIsStale(i: StaleInputs): boolean {
+  if (i.state !== 'checking') return false;
+  if (i.coordinator === 'dead' || i.coordinator === 'absent') return true;
+  return (i.mail === 'queued' || i.mail === 'rejected') && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
+}

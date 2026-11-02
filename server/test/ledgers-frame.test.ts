@@ -1,0 +1,140 @@
+// Programme ledgers (plan PL4): the `waiting` frame on /ws/fleet. Sent on connect and on every bus 'waiting' (a
+// coordinator's write or the operator's tick), through `maskedFrame` like the delegation frame, additive with no
+// `FLEET_PROTO` bump. Real server over a fixture HOME, a real socket, neutral names (prog-a, lane-a).
+import { describe, it, expect, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
+import path from 'node:path';
+import WebSocket from 'ws';
+import type { FastifyInstance } from 'fastify';
+import { buildServer } from '../src/server.js';
+import { Bus } from '../src/bus.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
+import { testDeps } from './helpers.js';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { FLEET_PROTO, SECRET_MASK, type FleetMsg } from '../../shared/api.js';
+import type { WaitingFrame, WaitingView } from '../../shared/ledgers.js';
+
+const HEADERS = { 'x-ccrc-mail-token': ID_GATE_TOKEN };
+const NOW0 = Date.UTC(2026, 10, 2, 9, 0, 0);
+
+let app: FastifyInstance | null = null;
+const sockets: WebSocket[] = [];
+afterEach(async () => {
+  for (const s of sockets.splice(0)) s.close();
+  await app?.close();
+  app = null;
+  removeTmpFixtures();
+});
+
+interface Rig { app: FastifyInstance; coord: CoordStore; bus: Bus; port: number; runA: number }
+
+async function rig(withCoord = true): Promise<Rig> {
+  const home = mkTmp('ccrc-ledgers-frame-');
+  seedRow(home, 'lane-a');
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const bus = new Bus();
+  app = await buildServer({ ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, ...(withCoord ? { coord } : {}) }, bus);
+  const runA = (coord.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' }) as { id: number }).id;
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const addr = app.server.address();
+  return { app, coord, bus, port: typeof addr === 'object' && addr !== null ? addr.port : 0, runA };
+}
+
+/** A socket that keeps every message; `until` resolves with the Nth `waiting` frame seen so far or to come. */
+function connect(port: number): { frames: () => FleetMsg[]; waitingFrame: (n: number) => Promise<WaitingFrame>; raw: () => string[] } {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+  sockets.push(ws);
+  const raw: string[] = [];
+  const parsed: FleetMsg[] = [];
+  const listeners: (() => void)[] = [];
+  ws.on('message', (d) => { raw.push(String(d)); parsed.push(JSON.parse(String(d)) as FleetMsg); listeners.forEach((l) => l()); });
+  const waitings = (): WaitingFrame[] => parsed.filter((m): m is WaitingFrame => m.type === 'waiting');
+  return {
+    frames: () => parsed, raw: () => raw,
+    waitingFrame: (n) => new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`no waiting frame #${n}; got ${parsed.map((m) => m.type).join(',')}`)), 4000);
+      const check = (): void => { const w = waitings()[n - 1]; if (w) { clearTimeout(t); resolve(w); } };
+      listeners.push(check);
+      check();
+    }),
+  };
+}
+
+const raise = async (r: Rig, over: Record<string, unknown> = {}) =>
+  r.app.inject({
+    method: 'POST', url: '/api/programmes/prog-a/items', headers: HEADERS,
+    payload: { byId: 'lane-a', byUuid: 'u-lane-a', kind: 'do', title: 'Turn on the setting', why: 'The wave needs it.', how: ['Open Settings'],
+      neededBy: 'later', runId: r.runA, ...over } as never,
+  });
+
+describe('the waiting frame (plan PL4)', () => {
+  it('is sent on connect, with the whole view, and FLEET_PROTO stays 1', async () => {
+    const r = await rig();
+    r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: 'First', why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, NOW0);
+    const sock = connect(r.port);
+    const f = await sock.waitingFrame(1);
+    expect(f.type).toBe('waiting');
+    expect(f.waiting.items.map((i) => i.title)).toEqual(['First']);
+    expect(f.waiting.cleared).toEqual([]);
+    expect(FLEET_PROTO).toBe(1);
+  });
+
+  it('is sent again after a raise, and again after the operator\'s tick', async () => {
+    const r = await rig();
+    const sock = connect(r.port);
+    expect((await sock.waitingFrame(1)).waiting.items).toEqual([]);
+    const made = await raise(r);
+    expect(made.statusCode, made.body).toBe(200);
+    const id = (made.json() as { id: number }).id;
+    const second = await sock.waitingFrame(2);
+    expect(second.waiting.items.map((i) => [i.id, i.state])).toEqual([[id, 'open']]);
+    const ticked = await r.app.inject({ method: 'POST', url: `/api/items/${id}/tick`, payload: {} as never });
+    expect(ticked.statusCode, ticked.body).toBe(200);
+    const third = await sock.waitingFrame(3);
+    expect(third.waiting.items.map((i) => [i.id, i.state])).toEqual([[id, 'checking']]);
+  });
+
+  it('is sent to every connected socket on one emit', async () => {
+    const r = await rig();
+    const a = connect(r.port);
+    const b = connect(r.port);
+    await a.waitingFrame(1); await b.waitingFrame(1);
+    r.bus.emit('waiting');
+    const [fa, fb] = await Promise.all([a.waitingFrame(2), b.waitingFrame(2)]);
+    expect(fa.waiting).toEqual(fb.waiting);
+  });
+
+  it('is not sent on a box with no coordination database', async () => {
+    const r = await rig(false);
+    const sock = connect(r.port);
+    await new Promise((res) => setTimeout(res, 300));
+    r.bus.emit('waiting');
+    await new Promise((res) => setTimeout(res, 200));
+    expect(sock.frames().some((m) => m.type === 'waiting')).toBe(false);
+    expect(sock.frames().some((m) => m.type === 'hello')).toBe(true);
+  });
+
+  it('passes through the masker: a shaped secret planted in an item title carries the mask', async () => {
+    const r = await rig();
+    const key = ['sk', 'ant', 'api03', createHash('sha256').update('frame').digest('base64url').repeat(3).slice(0, 95)].join('-');
+    r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: `Paste ${key} there`, why: `because ${key}`, how: [`run ${key}`], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, NOW0);
+    const sock = connect(r.port);
+    await sock.waitingFrame(1);
+    const text = sock.raw().filter((s) => s.includes('"waiting"')).join('');
+    expect(text).not.toContain(key.slice(8, 40));
+    expect(text).toContain(SECRET_MASK);
+  });
+
+  it('carries the stale verdict the routes carry: one builder', async () => {
+    const r = await rig();
+    const id = r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: 'T', why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, NOW0);
+    const sock = connect(r.port);
+    await sock.waitingFrame(1);
+    await r.app.inject({ method: 'POST', url: `/api/items/${id}/tick`, payload: {} as never });
+    const frame = await sock.waitingFrame(2);
+    const route = ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting;
+    expect(frame.waiting.items.map((i) => ({ ...i, history: [] }))).toEqual(route.items.map((i) => ({ ...i, history: [] })));
+  });
+});

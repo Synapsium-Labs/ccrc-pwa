@@ -6,6 +6,12 @@
 // are registered from `registerCoordRoutes`, but their handlers live here so `routes.ts` does not take another
 // 400 lines (ARCH-01, `growth-check`).
 //
+// The OPERATOR'S routes (plan PL4) are in the same file, registered by `registerLedgerOperatorRoutes` from `server.ts`
+// beside `/api/digest/correct`: session-gated only (they sit behind the auth gate when it is armed), no box token. They are
+// the doors `box-token-census.test.ts` names as session-only, and they decide nothing themselves: a move is `nextItemState`'s,
+// the stale label is `itemIsStale`'s (L1, `shared/ledgers.ts`), and ONE builder, `viewOfItem`, makes an `ItemView` for the
+// routes of both lanes and for the `/ws/fleet` frame.
+//
 // THE ORDER EVERY ROUTE KEEPS (plan PL3 Step 3): the box token before any `await`; the body's shape; attribution
 // (`byId`/`byUuid`); ownership (`claimsProgramme(byId, program)`, else 403 `not-your-programme`; a throw from it, an
 // unreadable run series, is 503 `run-unreadable`, never a bare 500); the decider; the write; the emit; the answer. A
@@ -20,10 +26,13 @@ import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import {
-  ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SOON_LABEL_MAX,
-  isSlotSlug, isSpecPath, type ItemKind, type ItemView, type NeededBy,
+  ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SOON_LABEL_MAX,
+  isSlotSlug, isSpecPath, itemIsStale, nextItemState, type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy,
+  type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
+import { itemMailBody, itemMailSubject } from './ledgersMail.js';
+import { insertSystemMailTx } from './rundefsTx.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
@@ -34,6 +43,9 @@ export interface LedgerCoordinatorDeps {
   notice: NoticeSink;
   bus: Bus;
   now: () => number;
+  /** The coordinator's presence as the server last measured it (`coordinatorPresenceIn` over the fleet frame it last
+   *  broadcast), for an item's stale label. */
+  presenceOf: (sessionId: string) => CoordinatorPresence;
 }
 
 /** A reason for `ruling` on a modification: the programme ledger's entry id or a short pointer, never prose. */
@@ -43,14 +55,43 @@ const RETURN_NOTE_MAX = 600;
 /** The sentence of one In short copy (spec §4). */
 const IN_SHORT_MAX = 1200;
 
-/** One item as the console reads it. `stale` is `false` until PL4 computes it; `secretSet` is `null` until PL6 stores one. */
-export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[]): ItemView {
+/** One item as the console reads it, with the stale verdict its builder measured. `secretSet` is `null` until PL6 stores one. */
+export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale: boolean): ItemView {
   return {
     id: row.id, program: row.program, runId: row.runId, kind: row.kind, title: row.title, why: row.why, how: row.how,
-    options: row.options, neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale: false,
+    options: row.options, neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
     secretSlot: row.secretSlot, secretSet: null,
     history: events.map((e) => ({ at: e.at, act: e.act, note: e.note })),
+  };
+}
+
+/** THE ONE BUILDER of an `ItemView` (plan PL4, review 1331 A3): the coordinator's list, the operator's routes and the
+ *  `/ws/fleet` frame all come through here, so a label cannot differ between them. It MEASURES the inputs of `itemIsStale`
+ *  (the tick mail's newest delivery state, the coordinator's presence) and hands them to that L1 decider; it decides
+ *  nothing itself. Only a `checking` item is measured: an item with no coordinator at all reads `absent`. */
+export function viewOfItem(coord: CoordStore, row: ItemRow, now: number, presenceOf: (sessionId: string) => CoordinatorPresence): ItemView {
+  let stale = false;
+  if (row.state === 'checking') {
+    const coordinator = coord.programmeCoordinator(row.program);
+    stale = itemIsStale({
+      state: row.state, tickedAt: row.tickedAt, now,
+      mail: coordinator === null ? 'none' : coord.tickMailState(row.runId, coordinator, itemMailSubject(row)),
+      coordinator: coordinator === null ? 'absent' : presenceOf(coordinator),
+    });
+  }
+  return itemViewOf(row, coord.itemHistory(row.id), stale);
+}
+
+/** What waits on the operator, whole: every programme's open and checking items, the Recently cleared trail, and goals for
+ *  each programme that holds an item or a spec pin (slug order). The read route and the live frame both answer this. */
+export function waitingViewOf(coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence): WaitingView {
+  const { open, cleared } = coord.itemsFor(null, now);
+  const programmes = [...new Set([...open.map((i) => i.program), ...cleared.map((i) => i.program), ...coord.pinnedProgrammes()])].sort();
+  return {
+    items: open.map((r) => viewOfItem(coord, r, now, presenceOf)),
+    cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf)),
+    goals: programmes.map((p) => coord.goalsFor(p)),
   };
 }
 
@@ -187,7 +228,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const { open, cleared } = coord.itemsFor(slug, deps.now());
-    return reply.code(200).send({ ok: true, items: [...open, ...cleared].map((r) => itemViewOf(r, coord.itemHistory(r.id))) });
+    return reply.code(200).send({ ok: true, items: [...open, ...cleared].map((r) => viewOfItem(coord, r, deps.now(), deps.presenceOf)) });
   });
 
   // ── one item: confirm, send back, withdraw, and the blocking switch ─────────────────────────────────────────────────
@@ -358,5 +399,103 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const marked = coord.markModificationsMerged(slug, pr, deps.now());
     if (marked > 0) changed();
     return reply.code(200).send({ ok: true, marked });
+  });
+}
+
+// ── the OPERATOR'S routes (plan PL4) ─────────────────────────────────────────────────────────────────────────────
+//
+// Session-gated, no box token: like `/api/digest/correct`, the operator's door. What they need.
+export interface LedgerOperatorDeps {
+  coord: CoordStore | undefined;
+  bus: Bus;
+  now: () => number;
+  presenceOf: (sessionId: string) => CoordinatorPresence;
+}
+
+/** The tick's words to the operator, and the reasons behind the two programme refusals. */
+const PROGRAMME_ENDED_SENTENCE = 'the programme has no open run, so no coordinator is waiting on this tick: dismiss the item instead';
+const PROGRAMME_UNCLAIMED_SENTENCE =
+  'the programme\'s open run has no coordinator to mail: end that run with the operator\'s abandon door first (a dismiss is refused while it is open)';
+
+export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerOperatorDeps): void {
+  const bad = (reply: FastifyReply, detail: string) => refuseRoute(reply, 'bad-request', { detail });
+  const itemIdOf = (req: FastifyRequest): number | null => {
+    const raw = (req.params as { id: string }).id;
+    return /^[1-9][0-9]{0,15}$/.test(raw) ? Number(raw) : null;
+  };
+
+  // NO AWAIT in the two moves below, deliberately: the handlers are synchronous, so the state they read (the item, the
+  // programme's runs, the outstanding mail) is the state they write against; `tickWithMail` and `moveItem` re-decide inside
+  // their own transaction. `ledgers-operator-routes.test.ts` scans each handler for an `await` after its item read.
+
+  app.get('/api/waiting', (_req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf) });
+  });
+
+  app.get('/api/programmes/:slug/goals', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    return reply.code(200).send({ ok: true, goals: coord.goalsFor((req.params as { slug: string }).slug) });
+  });
+
+  app.post('/api/items/:id/tick', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const id = itemIdOf(req);
+    if (id === null) return bad(reply, 'the item id is a positive integer');
+    const body = req.body ?? {};
+    if (!isObject(body)) return bad(reply, 'the body is an object');
+    // The order of the plan's Interfaces block: the item is there; a secret takes its own route; then the item must be open
+    // (Review Focus 3: a double tap is `not-open`, and `tickWithMail` re-decides it inside its transaction); the answer's rules;
+    // the coordinator; the duplicate guard; the tick with its mail.
+    const item = coord.itemById(id);
+    if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    if (item.kind === 'secret') {
+      return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.useSecretRoute, { detail: 'a secret is given on its own route; it never rides a tick' });
+    }
+    const verdict = nextItemState(item.state, 'tick', 'operator', { programmeHasOpenRun: false });
+    if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${item.state}, not open` });
+    const given = body['answer'];
+    let answer: string | null = null;
+    if (item.kind === 'do') {
+      if (given !== undefined && given !== null) return bad(reply, 'a do item takes no answer');
+    } else {
+      answer = text(given, ANSWER_MAX);
+      if (answer === null) return bad(reply, `a ${item.kind} item needs an answer of 1 to ${ANSWER_MAX} characters`);
+    }
+    const coordinator = coord.programmeCoordinator(item.program);
+    if (coordinator === null) {
+      return coord.programmeHasOpenRun(item.program)
+        ? refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeUnclaimed, { detail: PROGRAMME_UNCLAIMED_SENTENCE })
+        : refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeEnded, { detail: PROGRAMME_ENDED_SENTENCE });
+    }
+    const subject = itemMailSubject(item);
+    if (coord.hasOutstandingMail('operator', item.runId, coordinator, subject)) {
+      return refuseRoute(reply, 'duplicate', { detail: 'the coordinator has not yet read the mail of the last tick of this item' });
+    }
+    const now = deps.now();
+    const res = coord.tickWithMail(id, answer, now, (moved) => insertSystemMailTx(coord, null, {
+      fromId: 'operator', toId: coordinator, runId: moved.runId, kind: 'answer', subject, body: itemMailBody(moved, answer),
+    }));
+    if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be ticked from here` });
+    deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf) });
+  });
+
+  app.post('/api/items/:id/dismiss', (req, reply) => {
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const id = itemIdOf(req);
+    if (id === null) return bad(reply, 'the item id is a positive integer');
+    const item = coord.itemById(id);
+    if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    const now = deps.now();
+    // Spec D15: the operator may dismiss only while the programme has no open run; `nextItemState` decides it from this.
+    const res = coord.moveItem(id, 'dismiss', 'operator', {}, now, { programmeHasOpenRun: coord.programmeHasOpenRun(item.program) });
+    if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be dismissed from here` });
+    deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf) });
   });
 }

@@ -104,6 +104,7 @@ import {
 } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
+import { coordinatorPresenceIn } from '../../../shared/ledgers.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
@@ -4325,7 +4326,10 @@ export function registerCoordRoutes(
 
   // Programme ledgers (plan PL3): the coordinator's item and goals routes. Handlers live in `ledgersRoutes.ts`
   // (a lane source of its own for `box-token-census.test.ts`); the gate and the sender check are this function's own.
-  registerLedgerCoordinatorRoutes(app, { coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: Date.now });
+  registerLedgerCoordinatorRoutes(app, {
+    coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(),
+    presenceOf: (id) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, id),
+  });
 
   return { withAbandon, withSweepAbandon, serial: (fn) => coordMutex.run(fn) };
 }

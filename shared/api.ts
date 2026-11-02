@@ -13,6 +13,7 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
+import type { WaitingFrame } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { LandingEntry } from './landingLine.js';
 
@@ -4152,7 +4153,12 @@ export type FleetMsg =
   /** Delegation broker wave 4 (spec §5.8). Additive on the same terms as `pools`: an already-deployed PWA drops an
    *  unknown frame type silently, so NO `FLEET_PROTO` bump. FLEET-LEVEL, never a `FleetSession` field, so
    *  `reviveFleetSession` stays the rows' only reviver. Sent only once the server holds a projection; `null` withdraws it. */
-  | { type: 'delegation'; delegation: DelegationProjectionWire | null };
+  | { type: 'delegation'; delegation: DelegationProjectionWire | null }
+  /** Programme ledgers (plan PL4): what waits on the operator, whole (every programme's open and checking items,
+   *  the Recently cleared trail and the goals). ADDITIVE, no `FLEET_PROTO` bump: an already-deployed PWA drops an unknown
+   *  frame type silently. Sent on connect and again on every change a coordinator or the operator makes; FLEET-LEVEL, never
+   *  a `FleetSession` field. The shape is `WaitingFrame` in `ledgers.ts`. */
+  | WaitingFrame;
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers
