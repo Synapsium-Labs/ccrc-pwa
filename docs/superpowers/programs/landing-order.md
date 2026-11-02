@@ -33,7 +33,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5a | 3 and 4, hardening | the hardening that the reviews of waves 4c and 4b, and three older review items (1141, 1216, 1222), carried forward: the lineage parser, the radar lane, the chip's words, and text and pins (Carried constraints). Kept apart from 5 so that the landing line's PR carries only its own data, routes and verb (D-4329's reason) | server, pwa, skills | waves 4c and 4b | #1960 (plan #1944) | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, D-7528 to D-7539; Decisions, 2026-10-30 03:40); run 1228 (the run's wave 14) opened 2026-10-30; reviewed once (run 1232) and accepted with no fix round; merged 2026-10-30 (`d196d8b3`); five departures, D-7544 to D-7548, in `docs/superpowers/plans/2026-10-30-landing-order-wave5a-departures.md` (Decisions, 2026-10-30 08:16) |
 | 5b | 5, skill text | the new-head route is the coordinator's own act (the operator's answer to D-7536's question), the evidence that a red is `main`'s own, the report-less fix round from `merging`, review 1232's F9 (a) and (c), and **A requested change** against clause 19; D-7546's restatement is a droppable task, held for the operator | skills | wave 5a | — | merged 2026-10-31 (#2015 `83c3544c`; `docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md`, D-7588 to D-7592, and its departures note, D-7606 to D-7608; Decisions, 2026-10-31 02:45); Task 2 (D-7546) not taken, held for the operator |
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
-| 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 required for F1 and two wording items, not accepted or landed (Decisions, 2026-11-02 22:35); plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647 |
+| 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 (Decisions, 2026-11-02 22:35); review 1357 clean at `307e47b85`, accepted and landing, departures D-7788 to D-7790 (Decisions, 2026-11-02 23:55); plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647 |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
 | 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); run 1312 remains planned and undispatched pending publication checks and the operator's reading of the exact proposed CLAUDE.md amendments |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
@@ -1792,6 +1792,27 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Next.** Run 1311 is back at `working`, and the fix-round mail asks for fresh claims, one commit and an
     exact-tip fast-CI handoff; the third and last ordinary review round follows. The worker's three departures
     still need a disposition before acceptance. Wave 5f's hold is unchanged; run 1312 stays planned and undispatched.
+- **2026-11-02 23:55 — wave 5d accepted after review 1357 (D-7788 to D-7790).**
+  - **The review.** Fix round 2 returned one commit, `307e47b85`, touching only the README and `tick_order`'s
+    docstring, with exact-tip fast CI green (30 jobs succeeded, 8 skipped, none failed). Review 1357, the third and
+    last ordinary round, closed `ok: true` with the reviewer's own fingerprint. Three lenses and seven refuters ran,
+    none unverified. Every round-2 ruling held at the tip: the ledger guard passes in enforce mode by the trailer,
+    the every-attempt sentence equals the plan's text, and the new wording matches the code. The reviewer reran all
+    14 gate files with the handoff's counts; CI did not run `docs-grammar` or `docs-shared`, whose green rests on
+    those local runs and the merge queue's full run.
+  - **The one finding — carried to 5i, not a fix round.** No test goes red if `remove_own`'s check that the
+    project's own landing directory is real is deleted: the symlinked-project-directory case plants no mirror file
+    behind the link, and K7/K7b link only `landing/`. The guard dates from wave 3b and the code is right by every
+    reading; the gap sits under the README promise that round 2 wrote. Three refuters upheld it by reading, none ran
+    the mutant. The review cap is spent and a test-only round would need the operator's lift, while 5i adds the
+    marker's reader that must treat such a file as absent (D-7647). So 5i carries the pin (Carried constraints).
+  - **Departures.** The worker's three claims are issued and defined in
+    `docs/superpowers/plans/2026-11-02-landing-order-wave5d-departures.md`: D-7788 (mutation evidence in the temp
+    root, as the brief asked), D-7789 (a bash runner around the plan's own `ccrc test` command) and D-7790 (eight
+    commits: three task commits, two wording-neutral rewraps and three ordered fix-round commits). Each is accepted.
+  - **Next.** Wave 5f's run 1312 is already open, so the programme keeps an open run. Run 1311 advances to
+    `merging` and #2029 lands by the verdict's route, bound to `307e47b85`; the run closes only after the merge is
+    proven. The `lander=` key is the operator's to write, once the fleet box runs this probe.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2263,6 +2284,13 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
     - **The read is unbounded.** With a held 40-byte secret, the masker replaces `order`'s shas after about 2048
       entries, and `entries`' after about 4096. The landing check then fails closed. 5h bounds the read, to
       non-terminal states or with `?pr=`.
+- **From wave 5d's reviews (1327, 1357).**
+  - **To 5i** (the marker's reader):
+    - **Pin the project-directory symlink arm.** Plant `lander` and `enabled` behind a symlinked `landing/<project>`,
+      run with `lander=none` or no conf, and assert both survive; deleting `remove_own`'s `real_dir(dirpath)` check
+      must go red. Today only a symlinked `landing/` is pinned (K7, K7b).
+    - **The word "first" survives in two places:** N6-b's test title and the 5d plan's D-7642 text. The shipped
+      README and docstring promise only an order before the projects a tick rewrote. Read the shipped text.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
@@ -2345,11 +2373,10 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   release the operator rolls out, and 5h reads it only once the fleet box runs it.
 - **5e is merged** (#2020 `4fc83e57`; Decisions, 2026-10-31 15:17). Deploy: ccrc's updater carries the server and
   the skill text. Its read is advisory until 5i, and a server older than the line answers 404, which reads as no entry.
-- **5d needs fix round 2** (#2029, run 1311; Decisions, 2026-11-02 22:35). Review 1327 is closed and its report
-  ruled: F1 needs D-7646's `Ledger-Edit` trailer on the final head commit; F3 and F4 are README and docstring
-  wording; F2 is accepted as the plan's own text. One commit, an exact-tip fast-CI handoff, then the third and last
-  ordinary review round. A2 stays carried and the gate fence unchanged. No acceptance or landing yet. The plan
-  is `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`; the
-  `lander=` key and D-7546's restatement ship to the fleet box first, only after normal acceptance and landing.
+- **5d is accepted and landing** (#2029 at `307e47b85`, run 1311; Decisions, 2026-11-02 23:55). Review 1357 was
+  clean but for one carried test gap (to 5i); departures D-7788 to D-7790. The plan is
+  `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`; the `lander=` key and
+  D-7546's restatement reach the fleet box with the next release the operator rolls out, and the operator writes
+  `lander=` only once the fleet box runs this probe.
 - **5f is planned, not dispatched** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, run 1312; Decisions, 2026-10-31 20:00). Publication checks and the operator's reading of its exact proposed CLAUDE.md amendments precede dispatch; independent whole-plan review is complete with the source-coverage limits recorded in the plan.
 - **5g to 5k follow in order**, each planned against `main` as it then stands. 5h also waits until the fleet box runs 5c.
