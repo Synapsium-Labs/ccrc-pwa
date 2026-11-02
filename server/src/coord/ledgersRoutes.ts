@@ -192,10 +192,11 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
 
   // ── one item: confirm, send back, withdraw, and the blocking switch ─────────────────────────────────────────────────
 
-  /** The shared head of the four item routes below (each has checked the token): the id, the body's identity, attribution, the item, and the
-   *  item's OWN programme's ownership. Returns the item and the caller, or null with the refusal sent. */
-  const itemHead = async (req: FastifyRequest, reply: FastifyReply, coord: CoordStore):
-    Promise<{ item: ItemRow; byId: string; body: Body } | null> => {
+  /** The head of the four item routes below (each has checked the token): the id, the body's identity and attribution. It
+   *  decides NO ownership: attribution is the route's last await, and `ownedItem` reads and checks the item after it. Returns
+   *  the caller's id, or null with the refusal sent. */
+  const itemHead = async (req: FastifyRequest, reply: FastifyReply):
+    Promise<{ id: number; byId: string; body: Body } | null> => {
     const rawId = (req.params as { id: string }).id;
     const id = /^[1-9][0-9]{0,15}$/.test(rawId) ? Number(rawId) : null;
     const body = req.body ?? {};
@@ -203,10 +204,16 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (id === null) { bad(reply, 'the item id is a positive integer'); return null; }
     if (who === null) { bad(reply, 'byId and byUuid are required strings'); return null; }
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return null;
-    const item = coord.itemById(id);
-    if (item === null) { refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` }); return null; }
-    if (!owns(coord, reply, who.byId, item.program)) return null;
-    return { item, byId: who.byId, body: body as Body };
+    return { id, byId: who.byId, body: body as Body };
+  };
+
+  /** The item and its OWN programme's ownership, or null with the refusal sent. SYNCHRONOUS, and called right before the
+   *  write with no await between them, so the ownership a route acts on is the ownership it read. */
+  const ownedItem = (coord: CoordStore, reply: FastifyReply, head: { id: number; byId: string }): ItemRow | null => {
+    const item = coord.itemById(head.id);
+    if (item === null) { refuseRoute(reply, 'unknown-item', { detail: `no item ${head.id}` }); return null; }
+    if (!owns(coord, reply, head.byId, item.program)) return null;
+    return item;
   };
 
   /** A move by the coordinator. The programme has an open run by construction (`claimsProgramme` held), and only
@@ -222,9 +229,11 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (!deps.requireMailToken(req, reply, 'POST /api/items/:id/confirm')) return;
     const coord = deps.coord;
     if (!coord) return notConfigured(reply);
-    const head = await itemHead(req, reply, coord);
+    const head = await itemHead(req, reply);
     if (head === null) return;
-    return move(coord, reply, head.item, 'confirm', null);
+    const item = ownedItem(coord, reply, head);
+    if (item === null) return;
+    return move(coord, reply, item, 'confirm', null);
   });
 
   app.post('/api/items/:id/return', async (req, reply) => {
@@ -236,18 +245,22 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     // The note is checked ahead of attribution, as the body's shape is (the order the plan names); a missing note
     // reaches here as null and is refused before any item is read.
     if (isObject(req.body) && note === null) return bad(reply, `a returned item needs a note of 1 to ${RETURN_NOTE_MAX} characters`);
-    const head = await itemHead(req, reply, coord);
+    const head = await itemHead(req, reply);
     if (head === null) return;
-    return move(coord, reply, head.item, 'return', note);
+    const item = ownedItem(coord, reply, head);
+    if (item === null) return;
+    return move(coord, reply, item, 'return', note);
   });
 
   app.post('/api/items/:id/withdraw', async (req, reply) => {
     if (!deps.requireMailToken(req, reply, 'POST /api/items/:id/withdraw')) return;
     const coord = deps.coord;
     if (!coord) return notConfigured(reply);
-    const head = await itemHead(req, reply, coord);
+    const head = await itemHead(req, reply);
     if (head === null) return;
-    return move(coord, reply, head.item, 'withdraw', null);
+    const item = ownedItem(coord, reply, head);
+    if (item === null) return;
+    return move(coord, reply, item, 'withdraw', null);
   });
 
   app.post('/api/items/:id/blocking', async (req, reply) => {
@@ -256,14 +269,16 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (!coord) return notConfigured(reply);
     const flag = isObject(req.body) ? req.body['blocking'] : undefined;
     if (isObject(req.body) && typeof flag !== 'boolean') return bad(reply, 'blocking is true or false');
-    const head = await itemHead(req, reply, coord);
+    const head = await itemHead(req, reply);
     if (head === null) return;
+    const item = ownedItem(coord, reply, head);
+    if (item === null) return;
     const blocking = flag === true;
-    const res = coord.setBlocking(head.item.id, blocking, deps.now());
-    if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${head.item.id} is closed` });
+    const res = coord.setBlocking(item.id, blocking, deps.now());
+    if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${item.id} is closed` });
     // The store decides, inside its transaction, whether the level moved; the push and the emit follow its answer.
     if (res.changed) {
-      if (blocking) pushBlocking(head.item);
+      if (blocking) pushBlocking(item);
       changed();
     }
     return reply.code(200).send({ ok: true });

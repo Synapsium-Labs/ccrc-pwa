@@ -10,6 +10,7 @@ import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { PushPayload } from '../src/push.js';
+import { NotifyLog } from '../src/notifylog.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { clientRoutes } from './ccrcApiTable.js';
@@ -41,7 +42,8 @@ async function rig(viewing: readonly string[] = []): Promise<Rig> {
   bus.on('waiting', () => { waiting += 1; });
   app = await buildServer(
     { ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, coord, push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
-      viewers: { isVisible: (id: string) => viewing.includes(id) } as never },
+      viewers: { isVisible: (id: string) => viewing.includes(id) } as never,
+      notifyLog: new NotifyLog(path.join(home, '.ccrc', 'notify.json')) },
     bus,
   );
   const open = (program: string, claimedBy: string): number =>
@@ -191,6 +193,11 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
     const soon = await raise(r, { runId: r.runA });
     expect((await post(r, `/api/items/${soon}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
     expect(r.sent.map((p) => p.tag)).toEqual([`item-${id}`, `item-${soon}`]);
+    // The feed record is a `coord` notice with no session (review 1332 F4), not a `run` one.
+    expect(r.coord.db.prepare('SELECT kind, sessionId, title, runId FROM feed_events ORDER BY id').all()).toEqual([
+      { kind: 'coord', sessionId: '', title: 'Waiting on you', runId: r.runA },
+      { kind: 'coord', sessionId: '', title: 'Waiting on you', runId: r.runA },
+    ]);
   });
 
   it.each([
@@ -340,15 +347,19 @@ describe('POST /api/items/:id/blocking (plan PL3, review 1329 F1)', () => {
   it('pushes only on a change to true', async () => {
     const r = await rig();
     const id = await raise(r, { runId: r.runA });
+    expect(r.waiting()).toBe(1);
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
     expect(r.sent).toHaveLength(1);
     expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}` });
-    // already blocking: ok, no second push
+    expect(r.waiting()).toBe(2);   // a change to blocking emits once (review 1332 F2)
+    // already blocking: ok, no second push, no second emit
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
     expect(r.sent).toHaveLength(1);
-    // lowering never pushes
+    expect(r.waiting()).toBe(2);
+    // lowering never pushes, and emits once
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: false })).statusCode).toBe(200);
     expect(r.sent).toHaveLength(1);
+    expect(r.waiting()).toBe(3);
     expect(r.coord.itemById(id)?.neededBy).toBe('soon');
   });
 
