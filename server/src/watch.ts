@@ -9286,7 +9286,7 @@ export class FleetWatcher {
     this.runLaneSync('digestBeat', () => this.digestBeat(coord, now));
   }
 
-  private digestBeat(coord: CoordStore, now: number): void {
+  private digestBeat(coord: WatcherCoordPort, now: number): void {
     try {
       const hour = readDigestHour(this.deps.cfg.ccrcDir);
       const day = digestDayFor(now, hour);
