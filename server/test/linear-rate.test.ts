@@ -3,14 +3,14 @@
 // rest; Linear's own refusal (a 429, or `RATELIMITED` on a 200 or a 400) closes the slot until its wait and nothing
 // reaches the fake until then; tokenless callers of the cookie routes spend only the request lane; an absent service
 // calls Linear for nothing; and the composition root builds the one instance every caller receives. The tokenless
-// and neighbour clauses that drive the proxy landed with the proxy (LK9), the Settings clause lands with the Settings routes
-// (LK11); the proxy's clauses are at the end of this file. Nothing here reaches the network: `fetch` is the injected seam, and the clock is the test's.
+// and neighbour clauses that drive the proxy landed with the proxy (LK9), the Settings clause with the Settings routes
+// (LK11); the proxy's clauses, then the Settings routes', are at the end of this file. Nothing here reaches the network: `fetch` is the injected seam, and the clock is the test's.
 import { describe, it, expect, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { registerLinearRoutes } from '../src/linear/routes.js';
+import { LINEAR_ADD_SLOT, registerLinearRoutes } from '../src/linear/routes.js';
 import { resolveTitle } from '../src/linear/resolve.js';
 import { LEGACY_SLOT, type LinearSlotRef } from '../src/linear/store.js';
 import type { LinearRefresher } from '../src/linear/refresher.js';
@@ -30,6 +30,7 @@ import { linearServicesFake } from './linearServicesFake.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { WS, proxyRig, seedLegacy, seedSlot, who as proxyWho, type ProxyRig } from './linearProxyRig.js';
+import { WORKSPACES, settingsRig } from './linearSettingsRig.js';
 
 removeTmpFixturesEachTest();
 
@@ -581,4 +582,49 @@ describe('one instance, the proxy among its receivers (spec §6.7; LK9)', () => 
     expect(proxied[0]).toMatch(/\brefresher: deps\.linearRefresher \?\? null\b/);
   });
 
+});
+
+describe('the Settings routes spend the floor, and the one service (spec §6.7, §10.1; LK11)', () => {
+  it('add and check are charged to the floor: an empty request lane and an empty proxy lane stop neither; an empty floor stops each, with no call', async () => {
+    const clock = { now: T0 };
+    const s = await settingsRig({ clock: () => clock.now });
+    try {
+      await s.stamp();
+      const a: LinearSlotRef = { source: 'file', id: WS.a.id };
+      for (const slot of [a, LINEAR_ADD_SLOT]) {
+        drain(s.fx.rate, { lane: 'request', slot, calls: 1 });
+        drain(s.fx.rate, { lane: 'proxy', slot, calls: 1 });
+      }
+      expect((await s.req('POST', WORKSPACES, { key: WS.a.key })).statusCode).toBe(200);
+      await s.fx.refresher.idle();
+      expect((await s.req('POST', `${WORKSPACES}/${WS.a.id}/check`)).statusCode).toBe(200);
+      await s.fx.refresher.idle();
+      // The slot's floor starts at 50: the add's directory refresh took four pages, the check one, its directory four.
+      expect(drain(s.fx.rate, { lane: 'floor', slot: a, calls: 1 }).n).toBe(50 - 4 - 1 - 4);
+      const n = s.calls.length;
+      const checked = await s.req('POST', `${WORKSPACES}/${WS.a.id}/check`);
+      expect([checked.statusCode, JSON.parse(checked.body)]).toEqual([429, { ok: false, error: 'rate-limited', detail: 'workspace', retryAfterS: 18 }]);
+      // The add's key check is charged to the floor of a key not yet named by its workspace (D-7741): its one page here.
+      expect(drain(s.fx.rate, { lane: 'floor', slot: LINEAR_ADD_SLOT, calls: 1 }).n).toBe(49);
+      const added = await s.req('POST', WORKSPACES, { key: WS.b.key });
+      expect([added.statusCode, JSON.parse(added.body)['error']]).toEqual([429, 'rate-limited']);
+      expect(s.calls.length, 'a refused act called Linear').toBe(n);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('the add\'s bucket is no workspace\'s: Linear ids are version-4 UUIDs, and it is the nil UUID', () => {
+    expect(LINEAR_ADD_SLOT).toEqual({ source: 'file', id: '00000000-0000-0000-0000-000000000000' });
+    expect(WS.a.id[14]).toBe('4');
+  });
+
+  it('buildServer passes the one service and the one refresher, possibly absent, to the Settings routes', () => {
+    const SERVER = path.join(SRC, 'server.ts');
+    const settings = callsIn(symbolOf(SERVER, 'buildServer')).filter((c) => c.name === 'registerLinearWorkspaceRoutes')
+      .map((c) => c.args.map((a) => a.text).join(', '));
+    expect(settings).toHaveLength(1);
+    expect(settings[0]).toMatch(/\brate: deps\.linearRate \?\? null\b/);
+    expect(settings[0]).toMatch(/\brefresher: deps\.linearRefresher \?\? null\b/);
+  });
 });

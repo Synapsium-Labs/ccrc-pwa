@@ -9,8 +9,8 @@
  *  - `viaFleet` marks what an `ok` row's `result` holds, by one indexed query;
  *  - rows older than 365 days are swept.
  * The proxy's route clauses (a journal failure refuses the write with no Linear call; pending before the mutation;
- * a read's `viaFleet`) are at the end of this file (LK9); each key act's row with the gate's actor lands with the
- * Settings routes (LK11).
+ * a read's `viaFleet`) are at the end of this file (LK9); each key act's row with the gate's actor, through the
+ * Settings routes, follows them (LK11).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
@@ -24,7 +24,11 @@ import {
 } from '../src/linear/journal.js';
 import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { mkTmp } from './tmpHelpers.js';
-import { IDS, proxyRig, seedLegacy, seedSlot, type ProxyRig } from './linearProxyRig.js';
+import { IDS, WS as WS_FIX, proxyRig, seedLegacy, seedSlot, type ProxyRig } from './linearProxyRig.js';
+import { WORKSPACES, settingsRig, type SettingsRig } from './linearSettingsRig.js';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { callsIn, symbolOf } from './scan/symbols.js';
 
 const DAY_MS = 86_400_000;
 const NOW = Date.UTC(2026, 10, 1, 12);
@@ -441,4 +445,74 @@ describe('the proxy journals every write it sends, pending before the mutation (
     await done();
   });
 
+});
+
+// ── the key acts' clauses (plan task LK11): the Settings routes journal every act on a slot key ──
+
+describe('every Settings act on a slot key writes its row with the gate\'s actor (#1444, spec §7, §10.1; LK11)', () => {
+  let s: SettingsRig | null = null;
+  const done = async (): Promise<void> => { await s?.fx.refresher.idle(); await s?.close(); s = null; };
+  const slotFiles = (r: SettingsRig): string[] => {
+    const dir = path.join(r.ccrcDir, 'linear');
+    return existsSync(dir) ? readdirSync(dir).sort().map((f) => `${f} ${readFileSync(path.join(dir, f), 'utf8')}`) : [];
+  };
+
+  it('add, replace, check and remove: pending before the act, then its outcome; the actor minted by the gate, no session', async () => {
+    const seen: unknown[] = [];
+    s = await settingsRig({ respond: (c) => { if (c.op === 'KeyCheck') seen.push(s!.rows().at(-1)?.['outcome']); return null; } });
+    await s.stamp();
+    for (const [method, url, body] of [
+      ['POST', WORKSPACES, { key: WS_FIX.a.key }], ['POST', WORKSPACES, { key: WS_FIX.a.key, replace: true }],
+      ['POST', `${WORKSPACES}/${WS_FIX.a.id}/check`, undefined], ['DELETE', `${WORKSPACES}/${WS_FIX.a.id}`, undefined],
+    ] as const) {
+      expect((await s.req(method, url, body)).statusCode, `${method} ${url}`).toBe(200);
+      await s.fx.refresher.idle();
+    }
+    expect(seen, 'Linear was asked before the row was written').toEqual(['pending', 'pending', 'pending']);
+    const rows = s.rows();
+    expect(rows.map((r) => [r['op'], r['outcome'], r['sessionId'], r['sessionUuid']])).toEqual([
+      ['key-add', 'ok', null, null], ['key-replace', 'ok', null, null], ['key-check', 'ok', null, null], ['key-remove', 'ok', null, null],
+    ]);
+    for (const r of rows) expect(String(r['actor'])).toMatch(/^a test phone [0-9a-f]{8}$/);
+    await done();
+  });
+
+  it('a journal that cannot take the row refuses every key act with journal-unavailable: no file touched, no Linear call', async () => {
+    const db = memCoordDb();
+    s = await settingsRig({ db });
+    await s.stamp();
+    await seedSlot(s.ccrcDir, 'a');
+    const before = slotFiles(s);
+    quiet();
+    db.exec('DROP TABLE linear_events');
+    for (const [method, url, body] of [
+      ['POST', WORKSPACES, { key: WS_FIX.b.key }], ['POST', WORKSPACES, { key: WS_FIX.a.key, replace: true }],
+      ['POST', `${WORKSPACES}/${WS_FIX.a.id}/check`, undefined], ['DELETE', `${WORKSPACES}/${WS_FIX.a.id}`, undefined],
+    ] as const) {
+      const res = await s.req(method, url, body);
+      expect([res.statusCode, JSON.parse(res.body).error], `${method} ${url}`).toEqual([503, 'journal-unavailable']);
+    }
+    expect(s.calls).toEqual([]);
+    expect(slotFiles(s)).toEqual(before);
+    await done();
+  });
+
+  it('the legacy routes write no row, beside the Settings routes', async () => {
+    s = await settingsRig();
+    await s.stamp();
+    await seedLegacy(s.ccrcDir, 'a', { learned: false });
+    expect((await s.req('POST', '/api/linear/connection/check')).statusCode).toBe(200);
+    expect((await s.req('PUT', '/api/linear/connection', { key: WS_FIX.b.key })).statusCode).toBe(200);
+    expect((await s.req('DELETE', '/api/linear/connection')).statusCode).toBe(200);
+    expect(s.rows()).toEqual([]);
+    await done();
+  });
+
+  it('buildServer hands the one journal, possibly absent, to the Settings routes', () => {
+    const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'server.ts');
+    const calls = callsIn(symbolOf(server, 'buildServer')).filter((c) => c.name === 'registerLinearWorkspaceRoutes')
+      .map((c) => c.args.map((a) => a.text).join(', '));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/\bjournal: deps\.linearJournal \?\? null\b/);
+  });
 });

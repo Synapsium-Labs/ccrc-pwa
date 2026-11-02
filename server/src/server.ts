@@ -70,7 +70,7 @@ import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { registerTokenRoutes } from './token/routes.js';
-import { registerLinearRoutes } from './linear/routes.js';
+import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
@@ -1948,6 +1948,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerLinearRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
+  // The Settings routes for workspace keys (#1444, spec §10.1), beside the connection's in the same file: the same gate,
+  // rate service and refresher, and the one journal every key act writes first, each passed through as it is (possibly
+  // absent, never a default).
+  registerLinearWorkspaceRoutes(app, {
+    ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    journal: deps.linearJournal ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
   });
   // The Linear proxy's twelve box-token routes (#1444, spec §6), beside the connection's: the same rate service and
   // refresher, the one journal and the policy point, each passed through as it is (possibly absent, never a default),

@@ -2,8 +2,8 @@
 // There is no migration: `linear.key` and its v1 `linear.json` stay exactly as on `main`, read-only to the store,
 // which answers them as one more slot. What the legacy key's Check again learns beyond the v1 record lives in
 // `linear/legacy-teams.json`, honoured only while its digest is the present `linear.key`'s. Row 2's halves over the
-// refresher, titles, the proxy (LK9, at the end of this file) and the Settings routes join this file with the stages
-// that build them.
+// refresher, titles, the proxy (LK9) and the Settings routes (LK11), each at the end of this file, joined it with the
+// stages that built them.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
@@ -27,7 +27,8 @@ import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
 import { linearDeps, linearServicesFake } from './linearServicesFake.js';
-import { proxyRig, seedLegacy, seedSlot, statusAnswer, who as proxyWho } from './linearProxyRig.js';
+import { WS as WS_FIX, proxyRig, seedLegacy, seedSlot, statusAnswer, who as proxyWho } from './linearProxyRig.js';
+import { WORKSPACES, settingsRig } from './linearSettingsRig.js';
 
 removeTmpFixturesEachTest();
 afterEach(() => { vi.restoreAllMocks(); });
@@ -506,4 +507,65 @@ describe('the pair is read-only to the proxy: every route, every arm (row 2)', (
       await r.close();
     }
   }, 60_000);
+});
+
+// ── row 2's Settings half (plan task LK11) ──
+
+describe('the pair is read-only to the Settings routes: every act, every arm (row 2)', () => {
+  it('linear.key and linear.json keep their bytes and mtimes across every Settings act, and nothing copies them into linear/', async () => {
+    let arm: 'ok' | '401' | '403' | '429' | '500' = 'ok';
+    let t = 1_800_000_000_000;
+    const s = await settingsRig({ clock: () => t, timeoutMs: 20, respond: () => (arm === 'ok' ? null : statusAnswer(Number(arm))) });
+    try {
+      await s.stamp();
+      const legacy = await seedLegacy(s.ccrcDir, 'b', { learned: true });
+      await seedSlot(s.ccrcDir, 'a');
+      const before = pairState(s.ccrcDir);
+      const teamsBefore = readFileSync(path.join(s.ccrcDir, LINEAR_STORE_DIR, LEGACY_TEAMS_FILE), 'utf8');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      for (const a of ['ok', '401', '403', '500', '429'] as const) {
+        arm = a;
+        t += 7_200_000;
+        // An add for the legacy key's own workspace too: a file slot supersedes the pair, and never copies or moves it.
+        for (const [method, url, body] of [
+          ['GET', WORKSPACES, undefined], ['POST', WORKSPACES, { key: WS_FIX.b.key }], ['POST', WORKSPACES, { key: WS_FIX.b.key, replace: true }],
+          ['POST', `${WORKSPACES}/${WS_FIX.a.id}/check`, undefined], ['POST', `${WORKSPACES}/${WS_FIX.b.id}/check`, undefined],
+          ['GET', WORKSPACES, undefined], ['DELETE', `${WORKSPACES}/${WS_FIX.b.id}`, undefined], ['GET', WORKSPACES, undefined],
+        ] as const) {
+          t += 61_000;
+          const res = await s.req(method, url, body);
+          expect(res.statusCode, `${a} ${method} ${url}: ${res.body}`).not.toBe(500);
+          await s.fx.refresher.idle();
+        }
+      }
+      expect(s.calls.filter((c) => c.op === 'KeyCheck').length, 'the Settings acts barely asked Linear').toBeGreaterThan(10);
+      expect(s.calls.some((c) => c.authorization === legacy), 'a Settings act used the legacy key').toBe(false);
+      expect(pairState(s.ccrcDir)).toEqual(before);
+      expect(readFileSync(path.join(s.ccrcDir, LINEAR_STORE_DIR, LEGACY_TEAMS_FILE), 'utf8')).toBe(teamsBefore);
+      for (const f of readdirSync(path.join(s.ccrcDir, LINEAR_STORE_DIR))) {
+        expect(readFileSync(path.join(s.ccrcDir, LINEAR_STORE_DIR, f), 'utf8'), `${f} holds the legacy key`).not.toContain(legacy);
+      }
+    } finally {
+      await s.close();
+    }
+  }, 60_000);
+
+  it('a slot added for the legacy key\'s workspace supersedes the legacy row, and its remove lifts that; the pair stays as it was', async () => {
+    const s = await settingsRig();
+    try {
+      await s.stamp();
+      await seedLegacy(s.ccrcDir, 'a', { learned: true });
+      const before = pairState(s.ccrcDir);
+      const legacyOf = async (): Promise<unknown> => JSON.parse((await s.req('GET', WORKSPACES)).body).legacy;
+      expect(await legacyOf()).toMatchObject({ superseded: false, workspace: { urlKey: WS_FIX.a.urlKey } });
+      expect((await s.req('POST', WORKSPACES, { key: WS_FIX.a.key })).statusCode).toBe(200);
+      expect(await legacyOf()).toMatchObject({ superseded: true, view: { state: 'connected' } });
+      expect((await s.req('DELETE', `${WORKSPACES}/${WS_FIX.a.id}`)).statusCode).toBe(200);
+      expect(await legacyOf()).toMatchObject({ superseded: false });
+      await s.fx.refresher.idle();
+      expect(pairState(s.ccrcDir)).toEqual(before);
+    } finally {
+      await s.close();
+    }
+  });
 });

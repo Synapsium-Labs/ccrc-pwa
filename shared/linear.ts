@@ -126,7 +126,7 @@ export type ResolveAnswer =
 // The slot store (#1444): one key per Linear workspace under `~/.ccrc/linear/`, `<id>.key` beside its version 2
 // record `<id>.json`, where `<id>` is the workspace's id. The record is a DISPLAY record, never a credential: of the
 // key it carries the tail and the digest, and the digest never leaves the server. `server/src/linear/store.ts`
-// reads and writes it; the wire answer that shows it (`LinearWorkspaceView`) is a later stage's.
+// reads and writes it; the wire answer that shows it is `LinearWorkspaceView`, below.
 // ---------------------------------------------------------------------------
 
 /** A Linear id (a workspace's `organization { id }`, a team's `id`): a lowercase UUID. A workspace id is a slot's
@@ -222,4 +222,53 @@ export function parseLinearStoreRecord(raw: string): LinearStoreRecord | null {
   return {
     workspaceId, name, urlKey, user, teams, teamsAt, keyTail, keyDigest, checkedAt, outcome: outcome as LinearCheckOutcome,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The Settings routes' answer (#1444, spec §10.1, §10.2): what `GET /api/linear/workspaces` and each key act on
+// `/api/linear/workspaces` answer. NEVER A KEY: the most the wire carries of one is `keyTail`, and never the digest.
+// ---------------------------------------------------------------------------
+
+/** A team as a row shows it: its key and its (cleaned) name. Linear's team id stays on the server. */
+export interface LinearTeamShown {
+  key: string;
+  name: string;
+}
+
+/** What a slot's row shows beside its state. Each field is what the slot's record learned for the key now stored,
+ *  and null (`teams` empty) when no record describes that key: the record is absent, unreadable, malformed, or
+ *  describes another key (`details-unknown` says which), or the key file itself cannot be used. */
+export interface LinearWorkspaceShown {
+  /** The workspace's id, the slot's name: what the check and remove routes take as `:id`. */
+  id: string;
+  name: string | null;
+  urlKey: string | null;
+  user: string | null;
+  teams: LinearTeamShown[];
+  keyTail: string | null;
+  checkedAt: number | null;
+}
+
+/** One slot as the Settings card shows it (spec §10.2): today's per-key view, its nine states unchanged, carried per
+ *  slot. A slot always has a key file, so its state is never `not-connected`. */
+export type LinearWorkspaceView = LinearWorkspaceShown & LinearConnectionView;
+
+/** The legacy pair's row (spec §3.4): `view` is today's `LinearConnectionView` of the pair; `workspace` is what its
+ *  Check again learned for the key now stored, or null; `superseded` is true while a file slot holds that workspace. */
+export interface LinearLegacyRow {
+  view: LinearConnectionView;
+  workspace: { name: string; urlKey: string; teams: LinearTeamShown[] } | null;
+  superseded: boolean;
+}
+
+/** Every successful answer of the four `/api/linear/workspaces` routes. `store` is `unreadable` when the slot
+ *  directory cannot be listed (permissions), and the list is then empty. An add names its slot in `added`, a replace
+ *  in `replaced`. */
+export interface LinearWorkspacesAnswer {
+  ok: true;
+  store: 'ok' | 'unreadable';
+  workspaces: LinearWorkspaceView[];
+  legacy: LinearLegacyRow | null;
+  added?: string;
+  replaced?: string;
 }

@@ -453,3 +453,12 @@ describe('the Linear proxy\'s words (#1444, spec §6.8; plan task LK9)', () => {
     expect(parsedFile(file).calls.filter((c) => c.name === 'refuseRoute').length, 'the scan sees no refusal at all').toBeGreaterThan(10);
   });
 });
+
+describe('the Settings add\'s word (#1444, spec §10.1; plan task LK11)', () => {
+  it('workspace-exists is a route refusal at 409, a GenericRefusal the add sends as a literal', () => {
+    expect(REFUSAL_STATUS['workspace-exists']).toBe(409);
+    expect(GENERIC_REFUSALS as readonly string[]).toContain('workspace-exists');
+    const routes = readFileSync(path.join(SRC, 'linear', 'routes.ts'), 'utf8');
+    expect([...routes.matchAll(HELPER_WORD)].map((m) => m[1])).toContain('workspace-exists');
+  });
+});
