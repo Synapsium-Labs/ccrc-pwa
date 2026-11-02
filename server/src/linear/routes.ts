@@ -19,7 +19,7 @@ import { oneCallOutcome, type LinearRateRefusal, type LinearRateService } from '
 import { checkLinearKeyThrough, checkLinearSlot, type LinearRefresher } from './refresher.js';
 import { resolveName } from './resolve.js';
 import {
-  LEGACY_SLOT, putLinearSlot, readLinearSlotKey, readLinearStore, recordLinearSlotCheck, removeLinearSlot,
+  LEGACY_SLOT, putLinearSlot, readLinearStore, recordLinearSlotCheck, removeLinearSlot,
   writeLegacyTeams, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef,
 } from './store.js';
 import { checkOutcomeOf, linearConnectionView, type KeyMeasure } from './view.js';
@@ -359,6 +359,17 @@ export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: Linear
     };
   };
 
+  /**
+   * The stored slot a request's `:id` names, found in the directory's own listing: its files are then named by the id the
+   * listing read, never by the request's text, which is only compared with it. `unreadable` when the directory cannot be
+   * listed; null when no `.key` there has this id.
+   */
+  const storedSlot = async (id: string): Promise<LinearFileSlot | null | 'unreadable'> => {
+    const store = await readLinearStore(opts.ccrcDir);
+    if (store.kind !== 'listed') return 'unreadable';
+    return store.slots.find((x) => x.id === id) ?? null;
+  };
+
   app.get('/api/linear/workspaces', noStore, async () => listAnswer());
 
   // The body errors answer before any handler or gate runs, so `no-store` rides the `onRequest` hook (as on the PUT).
@@ -432,13 +443,15 @@ export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: Linear
     const act = beginAct(journal, 'key-check', passed.actor, id);
     if (act === null) return refuseRoute(reply, 'journal-unavailable');
 
-    const ref: LinearSlotRef = { source: 'file', id };
-    // Its kind only: the key itself is read again by the check, before each page, and held by nothing here.
-    if ((await readLinearSlotKey(opts.ccrcDir, ref)).kind !== 'key') {
+    // The slot as the directory lists it, its key measured (its kind and digest, never the key itself): the check reads
+    // the key again from its file, before each page.
+    const slot = await storedSlot(id);
+    if (slot === 'unreadable' || slot === null || slot.key.kind !== 'key') {
       // Nothing to check: the slot is not there, or its key file has no usable key (the list says which).
       const { store, workspaces, legacy } = await listAnswer();
       return act.refuse(reply, 'not-connected', { store, workspaces, legacy });
     }
+    const ref: LinearSlotRef = { source: 'file', id: slot.id };
     // The §4.1 key check of the STORED key on the slot's floor, the key read again from its file before each page.
     const checked = await checkLinearSlot({ ccrcDir: opts.ccrcDir, slot: ref, lane: 'floor', rate, ...net });
     if (checked.kind === 'refused') return act.refuseRate(reply, checked.detail, checked.retryAfterS);
@@ -451,12 +464,12 @@ export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: Linear
     }
     const at = now();
     // An answer naming another workspace is no answer for this slot: nothing is recorded for it.
-    if (v.ok && v.workspace !== null && v.workspace.id !== id) return act.refuse(reply, 'malformed');
+    if (v.ok && v.workspace !== null && v.workspace.id !== slot.id) return act.refuse(reply, 'malformed');
     try {
       // Recorded only while the slot's key still has the digest that was checked (the digest rule).
       const learned = v.ok && v.workspace !== null
         ? { name: v.workspace.name, urlKey: v.workspace.urlKey, user: v.user, teams: v.workspace.teams, teamsAt: at } : null;
-      await recordLinearSlotCheck(opts.ccrcDir, id, v.keyDigest, v.ok ? 'ok' : checkOutcomeOf(v.reason), learned, at);
+      await recordLinearSlotCheck(opts.ccrcDir, slot.id, v.keyDigest, v.ok ? 'ok' : checkOutcomeOf(v.reason), learned, at);
     } catch {
       return act.refuse(reply, 'write-failed');
     }
@@ -481,8 +494,11 @@ export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: Linear
     const act = beginAct(journal, 'key-remove', passed.actor, id);
     if (act === null) return refuseRoute(reply, 'journal-unavailable');
     try {
-      // The key FIRST, then the record, inside the lock: the next call that reads the slot finds no key (spec §9).
-      await removeLinearSlot(opts.ccrcDir, id);
+      // A slot that is not there is removed already. One that is: the key FIRST, then the record, inside the lock, so the
+      // next call that reads the slot finds no key (spec §9). Its files are named by the id the listing read.
+      const slot = await storedSlot(id);
+      if (slot === 'unreadable') return act.refuse(reply, 'write-failed');
+      if (slot !== null) await removeLinearSlot(opts.ccrcDir, slot.id);
     } catch {
       return act.refuse(reply, 'write-failed');
     }
