@@ -178,7 +178,8 @@ describe('the waiting frame (plan PL4)', () => {
     const r = await rig();
     const id = r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: 'T', why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, NOW0);
     const key = ['sk', 'ant', 'api03', createHash('sha256').update('warn').digest('base64url').repeat(3).slice(0, 95)].join('-');
-    r.coord.db.prepare('UPDATE operator_items SET how = ? WHERE id = ?').run(key, id);
+    // A row this box cannot read: the store's own error carries session-written text (here a whole shaped key).
+    vi.spyOn(r.coord, 'itemsFor').mockImplementation(() => { throw new Error(`operator item ${id}: how is not a string list: ${key}`); });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const sock = connect(r.port);
     await sock.typeFrame('hello', 1);
