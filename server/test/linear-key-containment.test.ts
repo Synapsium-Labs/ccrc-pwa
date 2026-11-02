@@ -45,6 +45,17 @@ const ARMS: readonly Arm[] = ['ok', '401', '403', '429', 'ratelimited-200', '500
 const captured: { where: string; text: string }[] = [];
 const capture = (where: string, text: string): void => { captured.push({ where, text }); };
 
+/** Every record file as it stood after each drive (a record a later write cleans up still counts), by file. */
+const snapshots: { where: string; file: string; raw: string }[] = [];
+const snapshot = (where: string): void => {
+  const dir = path.join(rig.ccrcDir, 'linear');
+  for (const f of existsSync(dir) ? readdirSync(dir) : []) {
+    if (!f.endsWith('.key')) snapshots.push({ where, file: f, raw: readFileSync(path.join(dir, f), 'utf8') });
+  }
+  const legacy = path.join(rig.ccrcDir, 'linear.json');
+  if (existsSync(legacy)) snapshots.push({ where, file: 'linear.json', raw: readFileSync(legacy, 'utf8') });
+};
+
 let rig: ProxyRig;
 let legacyKey = '';
 /** The services' clock, moved past each bucket's window between calls so the buckets never stop the drive (their
@@ -92,6 +103,7 @@ async function drive(label: string, verb: LinearVerb, o: Parameters<ProxyRig['ca
   const res = await rig.call(verb, { body: BODY[verb], ...o });
   capture(`${label} ${verb} body`, res.body);
   capture(`${label} ${verb} headers`, JSON.stringify(res.headers));
+  snapshot(`${label} ${verb}`);
 }
 
 /** Every eight-character run of `key`. */
@@ -137,6 +149,7 @@ describe('the census drives every path that uses a key, through every arm', () =
       capture(`check ${a} headers`, JSON.stringify(res.headers));
       const view = await rig.app.inject({ method: 'GET', url: '/api/linear/connection' });
       capture(`connection ${a}`, view.body);
+      snapshot(`check ${a}`);
     }
   });
 
@@ -149,6 +162,7 @@ describe('the census drives every path that uses a key, through every arm', () =
       rig.fx.refresher.queueDirectory({ source: 'legacy' });
       rig.fx.refresher.miss(store);
       await rig.fx.refresher.idle();
+      snapshot(`refresh ${a}`);
     }
   });
 
@@ -163,6 +177,7 @@ describe('the census drives every path that uses a key, through every arm', () =
             ccrcDir: rig.ccrcDir, rate: rig.fx.rate, fetch: rig.fetch, timeoutMs: 20,
           }).catch((e: unknown) => ({ threw: String(e) }));
           capture(`${caller} ${a} ${ref}`, JSON.stringify(t));
+          snapshot(`${caller} ${a} ${ref}`);
         }
       }
     }
@@ -192,33 +207,24 @@ describe('what the census found', () => {
     }
   });
 
-  it('every record parses as the store parses it, and holds its digest at keyDigest and nowhere else', () => {
-    const dir = path.join(rig.ccrcDir, 'linear');
-    const files = readdirSync(dir).sort();
-    expect(files.filter((f) => f.endsWith('.json')).length, 'no record was written: the census is over nothing').toBeGreaterThan(1);
-    const records: { file: string; raw: string; parsed: unknown }[] = [];
-    for (const f of files) {
-      const raw = readFileSync(path.join(dir, f), 'utf8');
-      if (f.endsWith('.key')) continue;
-      const parsed = f === 'legacy-teams.json' ? parseLegacyTeams(raw)
-        : /^[0-9a-f-]{36}\.json$/.test(f) ? parseLinearStoreRecord(raw) : null;
-      expect(parsed, `${f} does not parse as the store reads it (or is a file no store writes)`).not.toBeNull();
-      records.push({ file: f, raw, parsed });
-    }
-    const legacyJson = path.join(rig.ccrcDir, 'linear.json');
-    expect(existsSync(legacyJson)).toBe(true);
-    const lraw = readFileSync(legacyJson, 'utf8');
-    expect(parseLinearDetails(lraw), 'linear.json no longer parses as main reads it').not.toBeNull();
-    records.push({ file: 'linear.json', raw: lraw, parsed: parseLinearDetails(lraw) });
-    for (const { file, raw, parsed } of records) {
+  it('every record, after every drive, parses as the store parses it and holds its digest at keyDigest and nowhere else', () => {
+    snapshot('the end');
+    expect(snapshots.filter((x) => /^[0-9a-f-]{36}\.json$/.test(x.file)).length, 'no slot record was seen: the census is over nothing').toBeGreaterThan(50);
+    expect(snapshots.some((x) => x.file === 'legacy-teams.json')).toBe(true);
+    expect(snapshots.some((x) => x.file === 'linear.json')).toBe(true);
+    const parse = (file: string, raw: string): unknown => (file === 'legacy-teams.json' ? parseLegacyTeams(raw)
+      : file === 'linear.json' ? parseLinearDetails(raw)
+        : /^[0-9a-f-]{36}\.json$/.test(file) ? parseLinearStoreRecord(raw) : null);
+    for (const { where, file, raw } of snapshots) {
+      const parsed = parse(file, raw);
+      expect(parsed, `${file} after ${where} does not parse as the store reads it (or is a file no store writes)`).not.toBeNull();
       const { keyDigest, ...rest } = parsed as Record<string, unknown>;
-      expect(typeof keyDigest, file).toBe('string');
+      expect(typeof keyDigest, `${file} after ${where}`).toBe('string');
       for (const key of keys()) {
         const d = valueDigestHex(key);
-        expect(JSON.stringify(rest).includes(d), `${file} holds a digest outside keyDigest`).toBe(false);
-        // The raw text holds the digest exactly once when it is this key's, at its field.
-        if (raw.includes(d)) expect(raw.split(d).length - 1, `${file} holds the digest twice`).toBe(1);
-        for (const r of runsOf(key)) expect(raw.includes(r), `${file} holds a run of a key`).toBe(false);
+        expect(JSON.stringify(rest).includes(d), `${file} after ${where} holds a digest outside keyDigest`).toBe(false);
+        if (raw.includes(d)) expect(raw.split(d).length - 1, `${file} after ${where} holds the digest twice`).toBe(1);
+        for (const r of runsOf(key)) expect(raw.includes(r), `${file} after ${where} holds a run of a key`).toBe(false);
       }
     }
   });
