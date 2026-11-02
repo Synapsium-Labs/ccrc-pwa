@@ -207,7 +207,8 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
     expect(ans).toEqual({ kind: 'exited', code: 0, stdout: '{"ok":true}\n' });
     expect(readFileSync(path.join(rec, 'argv0'), 'utf8')).toBe(path.join(home, '.local', 'bin', 'ccrc'));
     const argv = readFileSync(path.join(rec, 'argv'), 'utf8');
-    expect(argv).toBe('account\ncredential\n--id=lane-a\n');
+    // `--credential=-`: the verb's one spelling for a secret on stdin (accounts plan Task A17); never the secret itself.
+    expect(argv).toBe('account\ncredential\n--id=lane-a\n--credential=-\n');
     expect(argv).not.toContain('CANARY-');
     expect(readFileSync(path.join(rec, 'stdin'))).toEqual(secret);
     expect(readFileSync(path.join(rec, 'environ'), 'utf8')).not.toContain('CANARY-');

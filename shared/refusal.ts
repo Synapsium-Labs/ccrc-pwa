@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, AccountRouteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 
@@ -112,7 +112,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
   | DispatchAbandonRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
-  | AccountRouteRefusal;
+  | AccountRouteRefusal
+  // The write routes (accounts plan Task A17, D-7739): their words of their own.
+  | AccountWriteRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -175,6 +177,14 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // and 502 for an outcome the server could not learn, the status `fleetFailed` answers for a fleet that did not
   // answer, because the box may have acted and the cure is the re-read, never the caller's retry.
   'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'outcome-unknown': 502,
+  // The write routes (accounts plan Task A17, D-7739): CHOSEN, not measured — new words, on the lane routes' rule. 400
+  // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
+  // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry
+  // may help, and nothing was saved).
+  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400,
+  'not-discardable': 409, 'lane-exists': 409, 'config-dir-exists': 409, 'live-sessions': 409, 'sleeping-sessions': 409,
+  'upstream': 409, 'last-home-able': 409, 'auth-in-progress': 409, 'not-a-token-lane': 409, 'duplicate-id': 409,
+  'token-unverified': 503,
   // The Linear routes (named workspaces S4, S4b): CHOSEN, not measured — new words. 400 for what the caller sent
   // (a ref with no text or over its cap, a key the shape rule refuses, a key Linear rejected or forbade: all things the
   // operator can fix and none a fault of the box), 409 for a check with no usable stored key, and 503 for Linear
