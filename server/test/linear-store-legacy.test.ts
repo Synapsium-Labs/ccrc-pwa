@@ -2,7 +2,8 @@
 // There is no migration: `linear.key` and its v1 `linear.json` stay exactly as on `main`, read-only to the store,
 // which answers them as one more slot. What the legacy key's Check again learns beyond the v1 record lives in
 // `linear/legacy-teams.json`, honoured only while its digest is the present `linear.key`'s. Row 2's halves over the
-// refresher, titles, the proxy and the Settings routes join this file with the stages that build them.
+// refresher, titles, the proxy (LK9, at the end of this file) and the Settings routes join this file with the stages
+// that build them.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
@@ -26,6 +27,7 @@ import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
 import { linearDeps, linearServicesFake } from './linearServicesFake.js';
+import { proxyRig, seedLegacy, seedSlot, statusAnswer, who as proxyWho } from './linearProxyRig.js';
 
 removeTmpFixturesEachTest();
 afterEach(() => { vi.restoreAllMocks(); });
@@ -466,4 +468,42 @@ describe('the background refresh of the legacy slot writes only legacy-teams.jso
     await b.fx.refresher.idle();
     expect(b.calls()).toBe(0);
   });
+});
+
+// ── row 2's proxy half (plan task LK9) ──
+
+describe('the pair is read-only to the proxy: every route, every arm (row 2)', () => {
+  it('linear.key and linear.json keep their bytes and mtimes across every proxy call, and nothing copies them into linear/', async () => {
+    let arm: 'ok' | '401' | '403' | '429' | 'timeout' = 'ok';
+    // One session per arm, so no session's minute bucket stops the drive; the 429 arm last, since it closes the slot.
+    const ids = ['ok', '401', '403', 'timeout', '429'].map((a) => `project-a-arm-${a}`);
+    const r = await proxyRig({ sessions: ids, timeoutMs: 20, respond: () => (arm === 'ok' ? null : arm === 'timeout' ? new Promise(() => {}) : statusAnswer(Number(arm))) });
+    try {
+      const legacy = await seedLegacy(r.ccrcDir, 'b', { learned: true });
+      await seedSlot(r.ccrcDir, 'a');
+      const before = pairState(r.ccrcDir);
+      const files = readdirSync(path.join(r.ccrcDir, LINEAR_STORE_DIR)).sort();
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      for (const a of ['ok', '401', '403', 'timeout', '429'] as const) {
+        arm = a;
+        for (const verb of ['workspaces', 'teams', 'issue', 'search', 'comments', 'statuses', 'projects', 'labels', 'users', 'create', 'update', 'comment'] as const) {
+          // Each call routed to the legacy slot (team BBB, workspace ws-b): the pair is the one in use.
+          await r.call(verb, {
+            ref: 'BBB-12', as: proxyWho(`project-a-arm-${a}`),
+            ...(['teams', 'statuses', 'projects', 'labels', 'users'].includes(verb) ? { query: { workspace: 'ws-b' } } : {}),
+            ...(verb === 'search' ? { body: { team: 'BBB', text: 'x' } } : verb === 'create' ? { body: { team: 'BBB', title: 'T' } } : {}),
+          });
+        }
+        await r.fx.refresher.idle();
+      }
+      expect(r.calls.filter((c) => c.authorization === legacy).length, 'the legacy key was barely used: the census is over nothing').toBeGreaterThan(30);
+      expect(pairState(r.ccrcDir)).toEqual(before);
+      expect(readdirSync(path.join(r.ccrcDir, LINEAR_STORE_DIR)).sort()).toEqual(files);
+      for (const f of readdirSync(path.join(r.ccrcDir, LINEAR_STORE_DIR))) {
+        expect(readFileSync(path.join(r.ccrcDir, LINEAR_STORE_DIR, f), 'utf8'), `${f} holds the legacy key`).not.toContain(legacy);
+      }
+    } finally {
+      await r.close();
+    }
+  }, 60_000);
 });

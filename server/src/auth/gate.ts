@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 128 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 140 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,12 +72,13 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The thirty-four box-token machine lanes plus `/api/notify`, `/api/pools/epoch`
+ *  2. The forty-six box-token machine lanes (the coordination routes and the Linear proxy's routes, #1444)
+ *     plus `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084) and, from update-management W4,
  *     `ccd-update-sync.timer`; none of them has a cookie jar and never
- *     will. All thirty-seven CHECK the box token (`checkMailToken`), and the mail pair
+ *     will. All forty-nine CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -377,6 +378,50 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "a child's claimant hands its question over to the operator (the core of `/api/asks/:id/release` and " +
     '`/api/approvals/:id/release`) — box-token gated, the same attribution and the same held-for check as the rule ' +
     'door directly above'],
+
+  // The Linear proxy (#1444, spec §6.2): twelve box-token lanes, one per `ccrc-api linear` verb. Each caller is a
+  // fleet-host session through `ccrc-api` with no cookie jar, so each route is dead the moment the flag arms unless
+  // exempted, the argument `POST /api/claims` makes for itself. Each route's own `onRequest` refuses every token verdict
+  // but `ok`, whatever `CCRC_AUTH` says, and takes no session cookie in its place (R2); attribution is checked against
+  // the registry before anything else runs (`linear/proxyRoutes.ts`).
+  ['GET /api/linear/proxy/workspaces',
+    'a session lists the Linear workspaces ccrc holds a key for — box-token gated in its own onRequest whatever the flag, ' +
+    'no cookie accepted, attribution checked against the registry; read from the slot records, no Linear call'],
+  ['GET /api/linear/proxy/teams',
+    "a session lists a workspace's teams — box-token gated in its own onRequest whatever the flag, no cookie accepted, " +
+    'attribution checked against the registry; read from the slot record, no Linear call'],
+  ['GET /api/linear/proxy/issues/:id',
+    'a session reads one Linear issue through the key ccrc holds — box-token gated in its own onRequest whatever the flag, ' +
+    'no cookie accepted, attribution checked against the registry, one fixed document from the operation table'],
+  ['POST /api/linear/proxy/search',
+    'a session searches Linear issues (a POST only so free text rides the body, a read by its row) — box-token gated in ' +
+    'its own onRequest whatever the flag, no cookie accepted, attribution checked against the registry'],
+  ['GET /api/linear/proxy/issues/:id/comments',
+    "a session reads an issue's comments — box-token gated in its own onRequest whatever the flag, no cookie accepted, " +
+    'attribution checked against the registry, one fixed document from the operation table'],
+  ['GET /api/linear/proxy/statuses',
+    "a session lists a workspace's workflow states — box-token gated in its own onRequest whatever the flag, no cookie " +
+    'accepted, attribution checked against the registry, one fixed document from the operation table'],
+  ['GET /api/linear/proxy/projects',
+    "a session lists a workspace's projects — box-token gated in its own onRequest whatever the flag, no cookie accepted, " +
+    'attribution checked against the registry, one fixed document from the operation table'],
+  ['GET /api/linear/proxy/labels',
+    "a session lists a workspace's labels — box-token gated in its own onRequest whatever the flag, no cookie accepted, " +
+    'attribution checked against the registry, one fixed document from the operation table'],
+  ['GET /api/linear/proxy/users',
+    "a session lists a workspace's users, never their email addresses — box-token gated in its own onRequest whatever " +
+    'the flag, no cookie accepted, attribution checked against the registry, one fixed document from the operation table'],
+  ['POST /api/linear/proxy/issues',
+    'a session files a Linear issue — box-token gated in its own onRequest whatever the flag, no cookie accepted, ' +
+    'attribution checked against the registry, asked of the policy point and journaled before the one mutation is sent'],
+  ['POST /api/linear/proxy/issues/:id',
+    'a session updates a Linear issue — box-token gated in its own onRequest whatever the flag, no cookie accepted, ' +
+    "attribution checked against the registry, resolved to the issue's current team, asked of the policy point and " +
+    'journaled before the one mutation is sent'],
+  ['POST /api/linear/proxy/issues/:id/comments',
+    'a session comments on a Linear issue — box-token gated in its own onRequest whatever the flag, no cookie accepted, ' +
+    "attribution checked against the registry, resolved to the issue's current team, asked of the policy point and " +
+    'journaled before the one mutation is sent'],
 
   ['POST /api/token/claim',
     'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +
@@ -805,8 +850,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the thirty-four box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — thirty-seven in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the forty-six box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — forty-nine in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same
