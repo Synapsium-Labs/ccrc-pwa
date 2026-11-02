@@ -203,6 +203,16 @@ describe('the closed route table', () => {
     // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
     [['testbox', 'status'], 'GET', '/api/testbox'],
     [['testbox', 'tools-sync'], 'POST', '/api/testbox/tools-sync'],
+    // The programme ledgers' nine rows (plan PL3): items by programme slug, item moves by item id, Goals by slug.
+    [['items', 'raise', 'prog-a'], 'POST', '/api/programmes/prog-a/items'],
+    [['items', 'list', 'prog-a'], 'GET', '/api/programmes/prog-a/items'],
+    [['items', 'confirm', '7'], 'POST', '/api/items/7/confirm'],
+    [['items', 'return', '7'], 'POST', '/api/items/7/return'],
+    [['items', 'withdraw', '7'], 'POST', '/api/items/7/withdraw'],
+    [['items', 'block', '7'], 'POST', '/api/items/7/blocking'],
+    [['goals', 'pin', 'prog-a'], 'POST', '/api/programmes/prog-a/spec'],
+    [['goals', 'modify', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications'],
+    [['goals', 'merged', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications/merged'],
     // The twelve Linear rows (D-7669, #1444): every one derives the pane's identity into its query, so each runs in a pane.
     [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces'],
     [['linear', 'teams'], 'GET', '/api/linear/proxy/teams'],
@@ -255,7 +265,8 @@ describe('the closed route table', () => {
     // Thirty-three since the test box's status and tools-sync rows (test box plan TB9, D-7411).
     // Thirty-four since the landing line's read (landing order wave 5e, D-7625).
     // Forty-six since the twelve Linear rows (D-7669, #1444).
-    expect(keys).toHaveLength(46);
+    // Fifty-five since the programme ledgers' nine (plan PL3).
+    expect(keys).toHaveLength(55);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -267,7 +278,8 @@ describe('the closed route table', () => {
       27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
       32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four', 35: 'thirty-five', 36: 'thirty-six',
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
-      43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six',
+      43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
+      49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -415,6 +427,10 @@ describe('the four claimant rows send the question door family, and refuse local
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
       ['testbox', 'status'], ['testbox', 'tools-sync'],
+      ['items', 'raise', 'prog-a', '--json', '-'], ['items', 'list', 'prog-a', '--byId', 'demo-ws', '--byUuid', 'u-demo-ws'],
+      ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
+      ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],
+      ['goals', 'merged', 'prog-a', '--json', '-'],
       ['linear', 'workspaces'], ['linear', 'teams', '--workspace', 'ws-a'], ['linear', 'issue', 'AAA-12'],
       ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],

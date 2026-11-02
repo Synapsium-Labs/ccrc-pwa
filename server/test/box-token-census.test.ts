@@ -78,6 +78,12 @@ const UPDATE_SRC = read('server/src/update/routes.ts');
  *  reason — a box-token call there would BE a lane — and so that "neither route
  *  consults the box token" is a measured zero over a file this census reads. */
 const TOKEN_SRC = read('server/src/token/routes.ts');
+/** The NINTH file that registers routes and the sixth lane source (programme ledgers PL3): the coordinator's nine item and goals routes. Their
+ *  handlers sit in a lane file of their own rather than in `coord/routes.ts` (ARCH-01, `growth-check`: that file does not take
+ *  another 400 lines), and `registerCoordRoutes` registers them with its own `requireMailToken` and `requireAttribution`.
+ *  Read here as a lane source so that "nine box-token lanes" is a measured count over the file that holds them and not a
+ *  claim: a scan of `coord/routes.ts` alone would see none of them. */
+const LEDGER_SRC = read('server/src/coord/ledgersRoutes.ts');
 /** The EIGHTH file that registers routes and the fifth lane source (#1444, plan task LK9): the Linear proxy's twelve,
  *  every one a box-token lane. Read like the files above, so its lanes are counted where the prose counts them. */
 const LINEAR_PROXY_SRC = read('server/src/linear/proxyRoutes.ts');
@@ -188,11 +194,12 @@ const lanesIn = (src: string): string[] => {
 const COORD_LANES = lanesIn(COORD_SRC);
 const UPDATE_LANES = lanesIn(UPDATE_SRC);
 const TOKEN_LANES = lanesIn(TOKEN_SRC);
+const LEDGER_LANES = lanesIn(LEDGER_SRC);
 const LINEAR_PROXY_LANES = lanesIn(LINEAR_PROXY_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES];
-/** The box-token machine lanes gate.ts counts first (#1444): the coordination routes and the Linear proxy's, before
- *  `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES];
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES];
+/** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
+ *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -272,8 +279,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'thirty-nine', 'forty',
   // Landing order wave 5e: forty-one with GET /api/landing, a plain requireMailToken lane.
   'forty-one',
-  // The Linear proxy (#1444, plan task LK9): forty-six machine lanes and forty-nine in all with its twelve.
-  'forty-two', 'forty-three', 'forty-four', 'forty-five', 'forty-six', 'forty-seven', 'forty-eight', 'forty-nine'];
+  // The Linear proxy (#1444, plan task LK9) and the programme ledgers (PL3): fifty-five machine lanes and fifty-eight in all.
+  'forty-two', 'forty-three', 'forty-four', 'forty-five', 'forty-six', 'forty-seven', 'forty-eight', 'forty-nine',
+  'fifty', 'fifty-one', 'fifty-two', 'fifty-three', 'fifty-four', 'fifty-five', 'fifty-six', 'fifty-seven', 'fifty-eight'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -414,7 +422,14 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // box token (design 2026-09-20 §12, decision 15).
     // …plus the Linear proxy's twelve since #1444 (plan task LK9), its own lane source, asserted on its own.
     expect(LINEAR_PROXY_LANES, 'the Linear proxy is not being read, or a route lost its token check').toHaveLength(12);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length);
+    // …and the programme ledgers' nine (plan PL3), every one of the nine routes in `coord/ledgersRoutes.ts` a lane, by name.
+    expect(LEDGER_LANES.slice().sort(), 'the ledgers file lost a box-token lane, or gained one with no census row').toEqual([
+      'GET /api/programmes/:slug/items', 'POST /api/items/:id/blocking', 'POST /api/items/:id/confirm',
+      'POST /api/items/:id/return', 'POST /api/items/:id/withdraw', 'POST /api/programmes/:slug/items',
+      'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
+      'POST /api/programmes/:slug/spec',
+    ]);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 

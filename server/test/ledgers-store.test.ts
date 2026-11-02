@@ -221,9 +221,10 @@ describe('blocking (plan PL2)', () => {
   it('setBlocking raises neededBy to blocking, and lowering restores the raised value, each with an event', () => {
     const s = mk();
     const id = raise(s, { neededBy: 'soon', soonLabel: 'before wave 6' });
-    expect(s.setBlocking(id, true, NOW + 1)).toEqual({ ok: true });
+    expect(s.setBlocking(id, true, NOW + 1)).toEqual({ ok: true, changed: true });
     expect(s.itemById(id)).toMatchObject({ neededBy: 'blocking', soonLabel: 'before wave 6' });
-    expect(s.setBlocking(id, false, NOW + 2)).toEqual({ ok: true });
+    expect(s.setBlocking(id, false, NOW + 2)).toEqual({ ok: true, changed: true });
+    expect(s.setBlocking(id, false, NOW + 3)).toEqual({ ok: true, changed: false });
     expect(s.itemById(id)).toMatchObject({ neededBy: 'soon', soonLabel: 'before wave 6' });
     expect(eventsOf(s, id)).toEqual(['raise:coordinator', 'block:coordinator', 'unblock:coordinator']);
   });
@@ -251,8 +252,8 @@ describe('blocking (plan PL2)', () => {
     const s = mk();
     expect(s.setBlocking(77, true, NOW)).toEqual({ ok: false, why: 'unknown-item' });
     const id = raise(s);
-    expect(s.setBlocking(id, true, NOW + 1)).toEqual({ ok: true });
-    expect(s.setBlocking(id, true, NOW + 2)).toEqual({ ok: true });
+    expect(s.setBlocking(id, true, NOW + 1)).toEqual({ ok: true, changed: true });
+    expect(s.setBlocking(id, true, NOW + 2)).toEqual({ ok: true, changed: false });
     expect(eventsOf(s, id)).toEqual(['raise:coordinator', 'block:coordinator']);
     s.moveItem(id, 'withdraw', 'coordinator', {}, NOW + 3, live);
     expect(s.setBlocking(id, false, NOW + 4)).toEqual({ ok: false, why: 'not-open' });

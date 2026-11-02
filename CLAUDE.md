@@ -493,7 +493,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   /api/claims/:id/release`,
   `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
   four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
-  `GET /api/approvals/:id`, coordinator-first routing D-5298) all call
+  `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
+  are in `server/src/coord/ledgersRoutes.ts`, a lane source of its own for the census, registered from `registerCoordRoutes`:
+  `POST /api/programmes/:slug/items`, `GET /api/programmes/:slug/items`, `POST /api/items/:id/confirm`,
+  `POST /api/items/:id/return`, `POST /api/items/:id/withdraw`, `POST /api/items/:id/blocking`,
+  `POST /api/programmes/:slug/spec`, `POST /api/programmes/:slug/modifications` and
+  `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
+  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`
