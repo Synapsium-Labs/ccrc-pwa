@@ -1261,6 +1261,27 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "the Result frame's identity and latency lines (ResultFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
+  // ── accounts plan Task A19 (D-7742): Remove, Discard, Replace token and the compromise disclosure ──────────────────
+  '.acct-remove-name': {
+    under: ['var(--bg-sheet)'],
+    why: "a session's name in the remove sheet's live list and the replace sheet's restart list (RemoveSheet.tsx, ReplaceSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-session-word': {
+    under: ['var(--bg-sheet)'],
+    why: "a session's restart word in the replace sheet (ReplaceSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-removal-lines': {
+    under: ['var(--bg-sheet)'],
+    why: "a ledger section's mono lines, and the sleeping session ids (RemoveSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-compromise > summary': {
+    under: ['var(--bg-sheet)'],
+    why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-compromise-steps': {
+    under: ['var(--bg-sheet)'],
+    why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

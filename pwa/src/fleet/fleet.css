@@ -4097,3 +4097,85 @@ button.proj-card-pool::before {
   font-size: var(--fs-sm);
   color: var(--ink-secondary);
 }
+
+/* — Remove, Discard, Replace token and the compromise disclosure (accounts plan Task A19, D-7742; spec §9, §11, §3.11) —
+   The fold's two acts sit under the knob row and wrap at a phone's width. In the sheets, every block is a stack that is
+   never wider than the panel at 360: a session row keeps its act right-aligned and lets the name wrap, the ledger's
+   lines are mono and wrap anywhere (box paths), and the revoke row is the checklist item under its sentence. */
+.acct-fold {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  margin: var(--sp-1) 0 0;
+}
+.acct-fold > button,
+.acct-trouble-replace { flex: none; min-height: var(--tap-min); }
+.acct-trouble-replace { justify-self: start; }
+.acct-remove-block,
+.acct-removal-section,
+.acct-revoke { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-remove-session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  border-bottom: 1px solid var(--edge-subtle);
+}
+.acct-remove-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.acct-session-word {
+  flex: none;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+/* A ledger section's heading: the sheet's own ink and face, a step heavier. */
+.acct-removal-head { margin: 0; font-size: var(--fs-sm); font-weight: var(--weight-medium); }
+.acct-removal-lines {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.acct-at-provider { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-1) 0; }
+/* The compromise disclosure: closed by default, its summary a 44px row in the sheet's ink. */
+.acct-compromise {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+.acct-compromise > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+}
+.acct-compromise-steps {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-inline-start: var(--sp-4);
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}

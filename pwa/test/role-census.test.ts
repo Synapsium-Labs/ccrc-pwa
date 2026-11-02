@@ -258,6 +258,10 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.acct-field > label, .acct-secret > label': META,
     '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': META,
     '.acct-method-line': META,
+    // Remove and Replace token (accounts plan Task A19, D-7742): a session's restart word, and the compromise
+    // disclosure's steps.
+    '.acct-session-word': META,
+    '.acct-compromise-steps': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,

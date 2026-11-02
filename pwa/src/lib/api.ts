@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
@@ -360,6 +360,18 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `credential` for the paste method. The body is sent once and kept nowhere: no retry, no queue. A refusal rejects
      *  with its `ApiError`, whose `error` word the connect sheet words (`addRefusal`), never its text. */
     accountAdd: (body: AccountAddBody) => postJson<AccountAddAnswer>('/api/accounts', body),
+    /** Remove, Discard and Replace token (accounts plan Task A19, D-7742; spec §9, §11, §13.1). `accountRemoveCheck` is
+     *  remove's pre-check (`{mode:'check'}`, which changes nothing); `accountRemove` sends `{mode:'remove', confirmId}`
+     *  or `{mode:'discard'}`; `accountCredential` a replacement token by paste, sent once and kept nowhere;
+     *  `accountRevokeAck` the operator's tick, which carries the lane and the credential kind and no value (N6). A
+     *  refusal rejects with its `ApiError`, whose `error` word the sheet words, never its text. */
+    accountRemoveCheck: (id: string) =>
+      postJson<AccountRemoveCheckAnswer>(`/api/accounts/${encodeURIComponent(id)}/remove`, { mode: 'check' } satisfies AccountRemoveBody),
+    accountRemove: (id: string, body: Exclude<AccountRemoveBody, { mode: 'check' }>) =>
+      postJson<AccountRemoveAnswer>(`/api/accounts/${encodeURIComponent(id)}/remove`, body),
+    accountCredential: (id: string, body: AccountCredentialBody) =>
+      postJson<AccountCredentialAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, body),
+    accountRevokeAck: (body: AccountRevokeAckBody) => postJson<{ ok: true }>('/api/accounts/revoke-ack', body),
     // `ProjectRow`, not a hand-written twin — the comment two lines up names
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
