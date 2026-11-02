@@ -554,8 +554,8 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     expect(comment).toContain('Six jobs ask for more than this');
   });
 
-  it('probe-macos runs on a push to main and the daily schedule only — never on a pull request, and never gating a called or dispatched full run', () => {
-    // macos.yml (operator ruling 2026-10-28): a direct run (push to main, dispatch), or a call that asks with `probe: true`.
+  it('probe-macos runs on a dispatch of macos.yml and the daily schedule only — never on a pull request or a push, and never gating a called or dispatched full run', () => {
+    // macos.yml (operator rulings 2026-10-28 and 2026-11-02): a direct run (a dispatch), or a call that asks with `probe: true`.
     expect(jobKey(macJob('probe-macos'), 'if')).toBe("github.workflow == 'macos' || inputs.probe");
     expect(jobKey(job('macos-probe'), 'if')).toBe("github.event_name != 'merge_group' && github.event_name == 'schedule' && github.event.schedule != '23 */3 * * *'");
     expect(job('macos-probe')).toMatch(/^ {6}probe: true$/m);
@@ -564,13 +564,18 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     for (const [id, b] of jobs(read(CI))) expect(needs(b), `${id} must not wait on the probe`).not.toContain('macos-probe');
   });
 
-  it('the macOS legs are off the merge path: macos.yml runs on a push to main and when called, never on a pull request or a queue run', () => {
+  it('the macOS legs are off the merge path and off the push: macos.yml runs when called (the daily run is their nightly) or dispatched, never on a push, a schedule of its own, a pull request or a queue run', () => {
+    // Re-pointed 2026-11-02 from "runs on a push to main": 56 of the 65 per-push runs were red and held the
+    // organisation's macOS slots the daily run and release-stable's gate need. ci.yml's daily run already calls both
+    // legs, so a schedule here would run the same suite twice a night.
     const on = section(read(MACOS), 'on');
-    expect(on).toMatch(/^ {2}push:\n {4}branches: \[main\]$/m);
+    expect(on).not.toMatch(/^ {2}(push|schedule):/m);
+    expect(on).toMatch(/^ {2}workflow_dispatch:$/m);
+    expect(on).toMatch(/^ {2}workflow_call:$/m);
     expect(on).not.toMatch(/pull_request|merge_group/);
     expect(read(CI)).not.toMatch(/runs-on: macos/);
     expect(jobKey(job('macos'), 'if')).toContain("github.event_name != 'merge_group' && github.event_name != 'pull_request'");
-    // Pushes coalesce: one group for every direct run, never cancelled.
+    // Dispatches coalesce: one group for every direct run, never cancelled.
     expect(section(read(MACOS), 'concurrency')).toContain('cancel-in-progress: false');
     expect(section(read(MACOS), 'concurrency')).toContain("github.workflow == 'macos' && 'main'");
   });
