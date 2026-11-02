@@ -107,7 +107,7 @@ const measure = (k: LinearKeyRead): KeyMeasure =>
  */
 export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts): void {
   const now = opts.now ?? Date.now;
-  const net = { fetch: opts.fetch, timeoutMs: opts.timeoutMs };
+  const net = { fetch: opts.fetch, timeoutMs: opts.timeoutMs, now };
 
   app.get('/api/linear/resolve', noStore, async (req, reply) => {
     const q: unknown = req.query;
@@ -321,7 +321,7 @@ function legacyRow(l: LinearLegacySlot): LinearLegacyRow {
 
 export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: LinearWorkspaceRouteOpts): void {
   const now = opts.now ?? Date.now;
-  const net = { fetch: opts.fetch, timeoutMs: opts.timeoutMs };
+  const net = { fetch: opts.fetch, timeoutMs: opts.timeoutMs, now };
 
   /** The list, from fresh reads. A slot directory that cannot be listed still shows the legacy pair, unlearned. */
   const listAnswer = async (): Promise<LinearWorkspacesAnswer> => {

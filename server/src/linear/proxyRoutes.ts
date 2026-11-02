@@ -355,7 +355,7 @@ export function registerLinearProxyRoutes(app: FastifyInstance, deps: LinearProx
     /** One Linear call with the key just read, counted for the settle. */
     const send = async (key: string, document: string, variables: Record<string, unknown>): Promise<LinearCall> => {
       spent += 1;
-      const r = await callLinear(key, document, variables, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
+      const r = await callLinear(key, document, variables, { fetch: deps.fetch, timeoutMs: deps.timeoutMs, now });
       if (!r.ok && r.reason === 'rate-limited') closeForS = r.retryAfterS;
       return r;
     };
