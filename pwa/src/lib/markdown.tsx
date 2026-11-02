@@ -17,7 +17,7 @@ import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from '
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import React, {
-  createContext, memo, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode,
+  createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
 } from 'react';
 import { remarkAlerts } from './remarkAlerts';
 import { LANG_LABEL, codeLanguage } from './highlightNames';
@@ -93,15 +93,26 @@ export function useHighlightEntry(store: HighlightStore | null, key: string | nu
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
-/** Shows `key` and holds one reference on it while the block displays it; releases both on cleanup or when the key
- *  changes (Task 7 adds chat's debounce to the request). */
+/** Holds one reference on `key` while the block shows it, and releases it on cleanup or when the key changes. A
+ *  block's first key is requested at once, and so is a re-run of the same key (React's development double effects);
+ *  on a store with a debounce (chat), a CHANGED key is requested only once it has held still for `store.debounceMs`
+ *  (section 4.12's streaming rule), so a fence that grows on every settle asks the worker when the stream pauses,
+ *  and the request it supersedes was released at the change (detached: the worker lives on). */
 export function useHighlightRequest(store: HighlightStore | null, key: string | null): void {
+  const lastKey = useRef<string | null>(null);
   useEffect(() => {
     if (store === null || key === null) return undefined;
+    // The block shows `key` from now, requested or not, so a chat store is not settled while it waits (refinement (r)).
     const unshow = store.show(key);
-    const release = store.request(key);
+    const immediate = store.debounceMs === 0 || lastKey.current === null || lastKey.current === key;
+    lastKey.current = key;
+    let release: (() => void) | undefined;
+    let timer: number | undefined;
+    if (immediate) release = store.request(key);
+    else timer = window.setTimeout(() => { release = store.request(key); }, store.debounceMs);
     return () => {
-      release();
+      if (timer !== undefined) window.clearTimeout(timer);
+      release?.();
       unshow();
     };
   }, [store, key]);
@@ -406,6 +417,11 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, parser = chatPars
   // One highlight store per message, on chat's own highlighter, for both paths (section 4.12 "Chat highlighting").
   const store = useMemo(() => highlighters.createStore(highlighters.chat, 'chat'), [highlighters]);
   useEffect(() => () => store.releaseAll(), [store]);
+  // Chat prewarms its highlighter on its first message's mount (section 4.10's singletons; refinement (p)).
+  useEffect(() => { highlighters.chat.prewarm(); }, [highlighters.chat]);
+  // After each commit, the keys no mounted block references are evicted, so the store holds this message's current
+  // blocks only (section 4.10 "Chat"). No dependency list: it runs after every commit, after the blocks' effects.
+  useEffect(() => { store.evictUnreferenced(); });
   return (
     <PreHighlightContext value={store}>
       {utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES

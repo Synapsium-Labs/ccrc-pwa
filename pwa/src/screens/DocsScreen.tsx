@@ -7,7 +7,7 @@
 // that parsed, and `DocsBanners` on a page with a listing; so a tree failure keeps the crumbs and a file failure keeps
 // the header and the truth line (spec 4.7's placement, M4.F4). Its stylesheet is docs/docs.css (spec 4.14), which
 // also holds the fleet header's Docs door: this static import, through app.tsx's, puts it in the main stylesheet.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DOCS_PAGE_PREFIX, docsPageUrl, parseDocsPage, parseDocsRef,
   type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
@@ -31,6 +31,7 @@ import { docsPathKind } from '../docs/docsTree';
 import { useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
 import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
+import { HighlighterContext } from '../lib/highlighterContext';
 import { docsRunner, type MarkdownParser } from '../lib/markdownRunner';
 import { navigate } from '../lib/router';
 import { useNow } from '@ccrc/ui';
@@ -178,6 +179,13 @@ export function DocsScreen(p: {
   useEffect(() => {
     if (parser === DEFAULT_DOCS_PARSER) docsRunner.prewarm();
   }, [parser]);
+
+  // The Docs highlighter's worker is started on mount too, so the first code block does not wait for its boot
+  // (base spec 4.10 "The highlight runner").
+  const highlighters = useContext(HighlighterContext);
+  useEffect(() => {
+    highlighters.docs.prewarm();
+  }, [highlighters.docs]);
 
   // A direct load's `#fragment` is honoured once, like a cross-doc link's (refinement (o)).
   const setFragment = visit.setFragment;
