@@ -18,6 +18,10 @@
 // state). Signed out, Rate-limited, Expiring and Inconclusive lift to the top as trouble cards, and the measured
 // roll-up opens the page. THE POOL CHIP AND `AccountPoolSheet` STAY through the redesign (D-7718's amendment): pool
 // membership is still set here (spec §8.4).
+//
+// CHECK AND THE KILL SWITCH (accounts plan Task A14, D-7732; spec §10): every card whose answer carries `connect` draws
+// the knob row (`fleet/AccountKnob.tsx`), which moves only on the server's ack, and a trouble card whose fix is a check
+// offers Check again on the same route.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
@@ -26,8 +30,9 @@ import type { AccountPoolWire } from '../../../shared/poolrule';
 import { PageScaffold, Skeleton, toast, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
-import { cardLines, identityLine, isTrouble, kindChipWords, laneAnswerOf, offAlso, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { cardLines, connectBlock, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
+import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
@@ -182,6 +187,11 @@ export function AccountsScreen(): ReactNode {
   // `GET /api/accounts`'s `lanes`: each lane's word and what the screen may show about its credential, sent only to a
   // reader with the session verdict (D-5511). `null` before it lands, and on a dark gate's answer.
   const lanes = useFleetStore((s) => s.lanes);
+  // `connect`, on the same terms (A12): whether the screen may run a lane act, and why not. `null` draws no knob row.
+  const connect = useFleetStore((s) => s.accountsConnect);
+  const blocked = connect === null ? null : connectBlock(connect);
+  // Check and the kill switch (accounts plan Task A14, D-7732): the act in flight per lane, and each ack's switch.
+  const acts = useLaneActs(refreshAccounts);
 
   // Each lane's one word, once per render: the order, the roll-up and the card all read the same answer.
   const answers = new Map<string, AccountStateAnswer>();
@@ -375,6 +385,11 @@ export function AccountsScreen(): ReactNode {
             : null;
           // A Codex lane has no 5-hour window: its absent 5h says so rather than "—" (spec §4.1).
           const weeklyOnly = entry?.kind === 'codex' && (a?.five ?? null) === null;
+          // The kill switch (spec §10): as the last answer has it, or as an ack set it until the next answer lands. An
+          // off lane that is not ready says why it cannot be turned on; an on lane can always be switched off.
+          const switchOn = acts.acked[wrapper] ?? answer.word !== 'off';
+          const notReady = !switchOn && laneWire !== undefined && !laneWire.ready ? notReadyWords(laneWire.notReadyReason) : null;
+          const canAct = connect !== null && blocked === null && inRoster;
           return (
             <section
               key={wrapper}
@@ -430,7 +445,13 @@ export function AccountsScreen(): ReactNode {
                 {also === null ? lines.state : `${lines.state} · ${also}`}
               </p>
 
-              {trouble !== null && <TroubleCard copy={trouble} />}
+              {trouble !== null && (
+                <TroubleCard
+                  copy={trouble}
+                  onCheck={canAct ? () => acts.check(wrapper) : undefined}
+                  checking={acts.busy[wrapper] !== undefined}
+                />
+              )}
 
               {/* `off` greys the meters' fills while each keeps its frozen
                   classification on `data-band`: the colour and the reading
@@ -453,6 +474,19 @@ export function AccountsScreen(): ReactNode {
                   reads as "last known", never as live: no refresh button,
                   because there is nothing to refresh until a session runs. */}
               <p className="accounts-fresh">{lines.usage}</p>
+
+              {connect !== null && inRoster && (
+                <AccountKnob
+                  id={wrapper}
+                  on={switchOn}
+                  notReady={notReady}
+                  blocked={blocked}
+                  running={onAccount.length}
+                  busy={acts.busy[wrapper]}
+                  onFlip={() => acts.flip(wrapper, !switchOn)}
+                  onCheck={() => acts.check(wrapper)}
+                />
+              )}
 
               {onAccount.length > 0 && (
                 <ul className="accounts-sessions">

@@ -260,12 +260,13 @@ export function sourceAt(answer: AccountStateAnswer, now: number, resets?: Sourc
 }
 
 /** Why a lane is not ready, the first that applies (A13's three conditions, as the lane-state file records them): no
- *  readable lane state, no last check of `ok`, or no seed verified after the last run. Display only (D-5518): `enable`
- *  reads the file on the box. Spelled here, structurally, as `LANE_NOT_READY_REASONS` in `shared/api.ts`. */
-export function laneNotReadyReason(read: LaneStateRead): 'no-lane-state' | 'not-checked' | 'seed-unverified' | null {
+ *  readable lane state, no check, a last check not `ok`, or no seed verified after the last run. Display only (D-5518):
+ *  `enable` reads the file on the box, which alone also answers `no-credential` (D-7732). In the box's order. */
+export function laneNotReadyReason(read: LaneStateRead): 'no-lane-state' | 'not-checked' | 'check-failed' | 'seed-unverified' | null {
   if (read.kind !== 'read') return 'no-lane-state';
   const st = read.state;
-  if (st.check?.verdict !== 'ok') return 'not-checked';
+  if (st.check === undefined) return 'not-checked';
+  if (st.check.verdict !== 'ok') return 'check-failed';
   if (st.seedVerifiedAt === undefined || st.lastRunAt === undefined || !(st.seedVerifiedAt > st.lastRunAt)) return 'seed-unverified';
   return null;
 }

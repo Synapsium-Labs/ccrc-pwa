@@ -231,7 +231,10 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     // The Accounts card's state words (accounts plan Task A2, D-7718): the roll-up, the lamp and the trouble sentences.
     '.accounts-rollup': META,
     '.acct-lamp': META,
-    '.accounts-row[data-state] .acct-trouble-effect, .accounts-row[data-state] .acct-trouble-lead, .accounts-row[data-state] .acct-fix-hold': META,
+    // The kill switch row (accounts plan Task A14, D-7732): the reason beneath the knob joins the trouble sentences.
+    '.accounts-row[data-state] .acct-trouble-effect, .accounts-row[data-state] .acct-trouble-lead, .accounts-row[data-state] .acct-fix-hold, .accounts-row[data-state] .acct-knob-reason': META,
+    // …and its sentence beside the knob.
+    '.accounts-row[data-state] .acct-knob-state': META,
     '.mail-dropped': META,
     '.mail-row .mail-body': META,
     '.run-row .run-state': META,
