@@ -1606,13 +1606,19 @@ describe('the node-floor leg runs every history test file on the floor interpret
 // rules it shares with the required legs (pinned above). Here: its one name,
 // its runner and deadline, and exactly what it runs.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 20-minute deadline', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-latest with a 20-minute deadline (D-7746)', () => {
     const b = job('browser-pwa');
-    expect(jobKey(b, 'name')).toBe('browser (pwa)');
+    expect(jobKey(b, 'name')).toBe('browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
-    expect(named.filter((n) => n === 'browser (pwa)'), 'two jobs report `browser (pwa)`').toHaveLength(1);
+    expect(named.filter((n) => n?.startsWith('browser (pwa)')), 'two jobs report `browser (pwa)`').toHaveLength(1);
     expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
     expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // The shards are exactly 1..total, so `--shard=i/n` covers the whole browser config.
+    const total = /^ {8}total: \[(\d+)\]$/m.exec(b)?.[1];
+    const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(b)?.[1];
+    expect(total, 'the shard matrix names no total').toBeDefined();
+    expect(list!.split(',').map((x) => Number(x.trim()))).toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
+    expect(b).toMatch(/^ {6}fail-fast: false$/m);
   });
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
@@ -1631,7 +1637,7 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     expect(s.findIndex((st) => /- name: Install @ccrc\/ui$/m.test(st)), 'ui is installed before the Test step')
       .toBeLessThan(s.findIndex((st) => /- name: Test$/m.test(st)));
     expect(step(job('browser-pwa'), 'Test'))
-      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts\n/m);
+      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}\n/m);
   });
 
   it('reads no secret and asks for no permission of its own', () => {
