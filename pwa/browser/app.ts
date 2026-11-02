@@ -15,10 +15,6 @@ import type { FleetSession } from '../../shared/api';
 import { fleetSession } from '../test/fleetFixture';
 import { DIST_KEY } from './dist';
 
-// TRANSITIONAL (2026-11-02): the per-file builder, re-exported until every browser file serves the shared build
-// (test/browser-dist.test.ts says when it goes).
-export { buildDist, removeDist } from './dist';
-
 /** The run's one production build (`browser/globalSetup.ts`, the browser config's global setup), sealed read-only.
  *  Every browser file serves it; none builds its own or removes it. Throws when the run has none, as under a config
  *  without that setup: a red file, never one that quietly builds its own. */

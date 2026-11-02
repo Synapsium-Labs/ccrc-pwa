@@ -13,7 +13,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { TEST_ROSTER } from '../test/rosterFixture';
 import { LOOKUP_NOTE, type LookupNote } from '../src/fleet/workspaceNameWords';
@@ -54,7 +54,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -62,7 +62,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 /** Stage the workspace create's answer, after the fixture's own routes so it wins. */

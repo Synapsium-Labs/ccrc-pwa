@@ -2,7 +2,7 @@
 // M8.B6, and M8.1, M8.3, M8.4, M8.6, M8.8, M8.11, M8.20 on the live DOM; labs E14, E15, E16; section 4.3's worst case).
 // These are claims about what Chrome DOES with the production frame: the sandbox, the two CSPs, the port, the pinned
 // srcdoc order and the Mermaid draw. jsdom has no CSP, no sandbox and no srcdoc browsing context, so every row drives
-// a real Chrome through `playwright-core` over the production PWA (`app.ts`'s `buildDist`, `serveDist`, `openApp`)
+// a real Chrome through `playwright-core` over the production PWA (the run's one build, `app.ts`'s `sharedDist`, `serveDist`, `openApp`)
 // whose `/api/docs` answers from fixtures here. No server, no ccd, no tmux: the shell is the built bundle and nothing
 // else.
 //
@@ -38,7 +38,7 @@ import {
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
 import { READER_IMAGE_BUDGET_BYTES, READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
-import { buildDist, openApp, removeDist, serveDist, type DistServer, type OpenedApp } from './app';
+import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
 import { onePixelPng, resolveChrome, startOrigins, type OriginAnswer, type OriginRoute, type Origins } from './harness';
 
 // ---- fixture documents (project `demo`, section `specs`) ------------------------------------------------------------
@@ -382,7 +382,7 @@ beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
   origins = await startOrigins(ROUTES);
   FILES = fixtureFiles(origins);
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 240_000);
@@ -401,7 +401,6 @@ afterAll(async () => {
   await browser?.close();
   await server?.close();
   await origins?.close();
-  removeDist(dist);
 });
 
 interface ApiHit {
