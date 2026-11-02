@@ -1,14 +1,20 @@
-# THE macOS LEGS, off the merge path (operator ruling 2026-10-28). Neither leg
-# runs on a pull request or in the merge queue, and neither feeds a required
-# check: they run
-#   - on every push to main (this workflow's own trigger), coalesced: one run at
-#     a time and at most one pending, the newest, which covers every merge since
-#     the last (GitHub replaces an older pending run in the same group);
+# THE macOS LEGS, off the merge path (operator ruling 2026-10-28) and off the
+# push to main (operator ruling 2026-11-02). Neither leg runs on a pull request,
+# in the merge queue or on a push, and neither feeds a required check: they run
 #   - nightly, called by ci.yml's daily run: the tests (`tests: true`) under
 #     `full-suite`, which gates a promotion to stable, and the probe
-#     (`probe: true`) as a call of its own that gates nothing;
-#   - in ci.yml's dispatched and called full runs, the tests only.
-# A red here is a failing run on main's commit and in the Actions list, so it is
+#     (`probe: true`) as a call of its own that gates nothing. That run is
+#     skipped when main's head already carries a green `full-suite`, so an
+#     unchanged, verified main costs no macOS run;
+#   - in ci.yml's dispatched and called full runs, the tests only, so
+#     release-stable's gate runs them before a promotion when no green
+#     `full-suite` is on the commit;
+#   - on a dispatch of this workflow (`gh workflow run macos.yml --ref <ref>`),
+#     both legs, for the day a Darwin change wants its answer before the night.
+# A push to main no longer starts a run (D-7745): 56 of the 65 per-push runs to
+# 2026-11-02 were red, and they held the organisation's five macOS slots that the
+# daily run and release-stable's gate need. A macOS red now surfaces on the
+# daily run and at release-stable, as a failing run in the Actions list, so it is
 # never silent; it blocks no pull request.
 name: macos
 
@@ -16,8 +22,9 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches: [main]
+  # No `push` and no `schedule` here: the nightly run is ci.yml's daily call
+  # (above), and a schedule of this file's own would run the same suite a
+  # second time each night.
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -43,7 +50,7 @@ env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '3'
 
 # A direct run (`github.workflow` is this file's name only then: a called run carries its caller's) shares one
-# group, never cancelled, so pushes coalesce. A called run gets a group of its caller's run and its inputs.
+# group, never cancelled, so dispatches coalesce. A called run gets a group of its caller's run and its inputs.
 concurrency:
   group: ci-macos-${{ github.workflow == 'macos' && 'main' || format('{0}-{1}-{2}', github.run_id, inputs.tests, inputs.probe) }}
   cancel-in-progress: false
@@ -117,7 +124,7 @@ jobs:
   test-macos:
     name: test-macos ${{ matrix.shard }}/${{ matrix.total }}
     needs: plan
-    # A direct run (a push to main, a dispatch) plans its own matrix; a call hands select's in and asks for the
+    # A direct run (a dispatch) plans its own matrix; a call hands select's in and asks for the
     # tests with `tests: true`. `!cancelled()` so a call, whose `plan` is skipped, still runs.
     if: ${{ !cancelled() && (github.workflow == 'macos' && needs.plan.result == 'success' || github.workflow != 'macos' && inputs.tests) }}
     runs-on: macos-latest
@@ -189,7 +196,7 @@ jobs:
   # (each case carries `script`'s rc and stderr), and the default reporter
   # elides those for passing cases.
   probe-macos:
-    # A direct run (every push to main, a dispatch) and ci.yml's daily call with `probe: true` only. An advisory
+    # A direct run (a dispatch) and ci.yml's daily call with `probe: true` only. An advisory
     # probe must not gate a dispatched full run, or release-stable's called one: those call with `probe: false`, and
     # ci.yml's `full-suite` needs only the call that runs the tests.
     if: github.workflow == 'macos' || inputs.probe
