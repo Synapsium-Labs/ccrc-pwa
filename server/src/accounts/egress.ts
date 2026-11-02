@@ -3,7 +3,7 @@
 // fleet row, whose server-built identity fields are never masked. `mask.ts` owns WHAT is masked; this file owns only
 // which part of each shape it is applied to.
 import { Transform, type Readable } from 'node:stream';
-import { SECRET_MASK_TOO_LARGE, type FleetSession } from '../../../shared/api.js';
+import { SECRET_MASK, SECRET_MASK_TOO_LARGE, type FleetSession } from '../../../shared/api.js';
 import type { SecretMasker } from './mask.js';
 
 /** A body of these media types is bytes, not text: decoding it to mask it would corrupt it, so it passes as it is. */
@@ -77,4 +77,33 @@ export function maskFleetFrame<T>(mk: SecretMasker, frame: T): T {
   const strip = rows.map((s: object) => Object.fromEntries(Object.entries(s).filter(([k]) => !KEPT.has(k))));
   const masked = mk.maskDeep({ ...frame, sessions: strip });
   return { ...masked, sessions: masked.sessions.map((m, i) => Object.assign({ ...(rows[i] as object) }, m)) } as T;
+}
+
+/** The spellings of one held secret a text could carry: its bytes, and its base64 and base64url forms, padded and not
+ *  (`stdinB64` is the op's base64). Empty forms are dropped. */
+function heldForms(secret: string): string[] {
+  const b64 = Buffer.from(secret, 'utf8').toString('base64');
+  const url = Buffer.from(secret, 'utf8').toString('base64url');
+  return [...new Set([secret, b64, b64.replace(/=+$/, ''), url])].filter((f) => f !== '');
+}
+
+/**
+ * The secrets a write route holds for one request, masked by their exact bytes and their base64 in every string of
+ * `value` (spec §3.3, "the route also masks the exact secret bytes it holds, and their base64, in any text it returns";
+ * accounts plan Task A17, D-7739). Defence in depth behind the answer hook, which masks the shapes and the fingerprinted
+ * secrets: a pasted secret has no fingerprint row until the box's answer lands, and may have no shape at all. Walks
+ * plain JSON values (strings, arrays, plain objects); anything else passes as it is. Pure.
+ */
+export function maskHeld<T>(value: T, held: readonly string[]): T {
+  const forms = held.flatMap(heldForms).sort((a, b) => b.length - a.length);
+  if (forms.length === 0) return value;
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return forms.reduce((s, f) => s.split(f).join(SECRET_MASK), v);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v !== null && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) {
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    }
+    return v;
+  };
+  return walk(value) as T;
 }

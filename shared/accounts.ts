@@ -75,6 +75,10 @@ export interface LaneState {
   readonly keyExpiresAt?: number;
   readonly seedVerifiedAt?: number;
   readonly lastRunAt?: number;
+  /** When `add` made the lane and when `enable` first switched it on (accounts plan Task A16): the write routes' discard
+   *  check reads them (A17, D-7739). Never on `LaneWire`. */
+  readonly addedAt?: number;
+  readonly enabledAt?: number;
 }
 
 /** The two non-readings stay two (D-5517): an absent file is Not checked, an unreadable one Inconclusive. */
@@ -285,6 +289,12 @@ const UNPRINTABLE_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}]/u;
  *  on the wire than the hint is meant to show. */
 export const KEY_HINT_RE = /^[A-Za-z0-9_-]{1,16}…[A-Za-z0-9]{4}$/;
 
+/** An identity a lane-state file may hold and a screen may draw: 1 to `LANE_IDENTITY_MAX` characters, not blank, no
+ *  unprintable character. The one grammar for the file's `identity` and for the stated account `set` carries (the write
+ *  routes refuse anything else `bad-stated` before the verb, which holds it to its own rule again; A17, D-7739). */
+export const isLaneIdentity = (v: unknown): v is string =>
+  typeof v === 'string' && v.trim() !== '' && v.length <= LANE_IDENTITY_MAX && !UNPRINTABLE_RE.test(v);
+
 const timeOf = (v: unknown): number | undefined => {
   if (typeof v !== 'string' || !ISO_RE.test(v)) return undefined;
   const t = Date.parse(v);
@@ -298,7 +308,8 @@ const oneOf = <T extends string>(set: readonly T[], v: unknown): T | undefined =
 /**
  * The lane-state file's JSON, held field by field to its grammar (D-5755 (11): any fleet-user process can write the
  * file, so every field is untrusted). A field off its grammar is dropped, never the file: what is left is still a
- * measurement. Only the fields `LaneWire` carries or `stateWordFor` reads are kept; `keyHash`, `retiredKeyHash`,
+ * measurement. Only the fields `LaneWire` carries, `stateWordFor` reads or the write routes' discard check reads
+ * (`addedAt`, `enabledAt`) are kept; `keyHash`, `retiredKeyHash`,
  * `keyLimit`, `limitReset` and `fleetIdentity` never leave the box's file through here. `null` for a value that is
  * not a JSON object, which the reader answers as unreadable.
  */
@@ -312,9 +323,7 @@ export function laneStateOf(json: unknown): LaneState | null {
     if (at !== undefined) out.check = { verdict: c.verdict, at };
   }
   const id = o['identity'];
-  if (typeof id === 'string' && id.trim() !== '' && id.length <= LANE_IDENTITY_MAX && !UNPRINTABLE_RE.test(id)) {
-    out.identity = id;
-  }
+  if (isLaneIdentity(id)) out.identity = id;
   const idSource = oneOf(LANE_IDENTITY_SOURCES, o['identitySource']);
   if (idSource !== undefined) out.identitySource = idSource;
   const hint = o['keyHint'];
@@ -327,7 +336,7 @@ export function laneStateOf(json: unknown): LaneState | null {
     const remaining = amountOf(cr.limit_remaining);
     if (limit !== undefined && remaining !== undefined && (limit === null || limit >= 0)) out.credit = { limit, remaining };
   }
-  for (const k of ['validatedAt', 'mintedAt', 'keyExpiresAt', 'seedVerifiedAt', 'lastRunAt'] as const) {
+  for (const k of ['validatedAt', 'mintedAt', 'keyExpiresAt', 'seedVerifiedAt', 'lastRunAt', 'addedAt', 'enabledAt'] as const) {
     const t = timeOf(o[k]);
     if (t !== undefined) out[k] = t;
   }

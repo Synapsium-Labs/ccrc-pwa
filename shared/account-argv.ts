@@ -59,7 +59,8 @@ interface SubSpec {
   readonly stdin: 'none' | 'optional' | 'required';
   /** Fixed words after the fields, never from a caller. */
   readonly fixed?: readonly string[];
-  /** The word written when the caller carries stdin: what the verb reads from it (`set`'s `--stated=-`). */
+  /** The word written when the caller carries stdin: what the verb reads from it (`set`'s `--stated=-`, `add`'s and
+   *  `credential`'s `--credential=-`). */
   readonly stdinFlag?: string;
   /** The fields it takes, in the order they are written. */
   readonly fields: Readonly<Record<string, FieldSpec>>;
@@ -87,8 +88,11 @@ const attempt: FieldSpec = { flag: '--attempt', rule: { kind: 'attempt' }, requi
 /** THE TABLE: every sub, its CLI spelling and the only fields it takes. Keyed by `AccountSub`, so a sub added to
  *  `ACCOUNT_SUBS` without a row here is a compile error. */
 export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.freeze({
+  // A secret on stdin is read only behind `--credential -` (`_acct_read_credential`, the verb's one spelling), so the
+  // builder writes `--credential=-` whenever the caller carries stdin, and never otherwise (accounts plan Task A17,
+  // D-7739: the canary's paste through the route found the add refused `credential-required` without it).
   'add': {
-    cli: ['add'], lane: true, stdin: 'optional',
+    cli: ['add'], lane: true, stdin: 'optional', stdinFlag: '--credential=-',
     fields: {
       provider: { flag: '--provider', rule: ADD_PROVIDERS, required: true }, method: { flag: '--method', rule: ADD_METHODS },
       label, hue: { flag: '--hue', rule: e(...HUES) }, placement, models: { flag: '--models', rule: { kind: 'models' } },
@@ -108,7 +112,7 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
   'enable': { cli: ['enable'], lane: true, stdin: 'none', fields: {} },
   'disable': { cli: ['disable'], lane: true, stdin: 'none', fields: {} },
   'credential': {
-    cli: ['credential'], lane: true, stdin: 'optional',
+    cli: ['credential'], lane: true, stdin: 'optional', stdinFlag: '--credential=-',
     fields: {
       method: { flag: '--method', rule: e('mint') }, retire: { flag: '--retire', rule: { kind: 'flag' } },
       liveAck: { flag: '--live-ack', rule: { kind: 'flag' } },
