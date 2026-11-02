@@ -18,6 +18,10 @@
 //     (the route's `SWAP_REFUSALS.hibernated`, which it answers before any turn read), refused other pool
 //     (`pool-mismatch`), or refused with the reason its code names. No response text is rendered, and a refusal never
 //     stops the sessions after it.
+//   - OFFLINE, NOTHING IS SENT (spec §12.5). Offline is the fleet store's own reading (`conn` not `open`), never
+//     `navigator.onLine`. Opened offline, the sheet says so and Move is off, so no swap leaves the page. A move under
+//     way stops when the link drops or a swap gets no answer at all: that session reads "no answer: it may have moved",
+//     and the rest read "not sent" rather than each spending a request that cannot be answered.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isArchivedRow, type FleetSession } from '../../../shared/api';
@@ -61,6 +65,11 @@ async function swapOnce(id: string, wrapper: string, crossPool: boolean, interru
 
 type Phase = 'idle' | 'running' | 'done';
 
+/** Opened offline: why Move is off (spec §12.5). The read-line beside it is Task A18's, with the store's read time. */
+export const MOVE_OFFLINE = "You're offline: nothing will be sent until the server answers again.";
+/** A move the link stopped: the session in flight keeps its own word, and nothing after it was sent. */
+export const MOVE_LINK_LOST = 'The server stopped answering, so the rest were not sent.';
+
 export interface MoveSessionsSheetProps {
   /** The lane the sessions move off. */
   lane: string;
@@ -75,6 +84,8 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
   const roster = fleet((s) => s.roster);
   const pools = fleet((s) => s.pools);
   const accounts = fleet((s) => (open ? s.usage : null));
+  // The store's offline reading: a cold start from the snapshot (`connecting`) is no more live than a dropped link.
+  const offline = fleet((s) => s.conn !== 'open');
 
   const [phase, setPhase] = useState<Phase>('idle');
   // The list being moved, frozen when the move starts: a moved session leaves the lane in the next fleet frame, and its
@@ -83,6 +94,7 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
   const [outcomes, setOutcomes] = useState<ReadonlyMap<string, { outcome: MoveOutcome; word: string }>>(new Map());
   const [answered, setAnswered] = useState(0);
   const [stopped, setStopped] = useState(false);
+  const [linkLost, setLinkLost] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
   const [showOther, setShowOther] = useState(false);
   const [interruptBusy, setInterruptBusy] = useState(false);
@@ -96,7 +108,7 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
   // A fresh sheet for each opening and each lane, unless a move is still finishing its session in flight.
   useEffect(() => {
     if (!open || running.current) return;
-    setPhase('idle'); setMoving(null); setOutcomes(new Map()); setAnswered(0); setStopped(false);
+    setPhase('idle'); setMoving(null); setOutcomes(new Map()); setAnswered(0); setStopped(false); setLinkLost(false);
     setChosen(null); setShowOther(false); setInterruptBusy(false); setStopping(false);
   }, [open, lane]);
 
@@ -127,15 +139,19 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
       : ALL_SWITCHED_OFF;
 
   const run = (): void => {
-    if (target === null || running.current) return;
+    if (target === null || running.current || offline) return;
     const batch = [...list];
     const to = target;
     running.current = true;
     stop.current = false;
     setMoving(batch); setPhase('running'); setAnswered(0); setOutcomes(new Map()); setStopped(false); setStopping(false);
+    setLinkLost(false);
     void (async () => {
+      let lost = false;
       for (const s of batch) {
         if (stop.current) break;
+        // Read between moves, never sent into: a link the store reads down answers nothing.
+        if (fleet.getState().conn !== 'open') { lost = true; break; }
         // `crossPool` only where the target crosses for THIS session's project, and only when the crossing was picked.
         const cross = crossing && splitOf(s).crossing.includes(to);
         let answer = await swapOnce(s.id, to, cross, false);
@@ -146,10 +162,13 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
         const word = moveOutcomeOf(answer);
         setOutcomes((m) => new Map(m).set(s.id, word));
         setAnswered((n) => n + 1);
+        // No answer at all puts the link in doubt: the rest are not sent into it (a refusal is an answer, and goes on).
+        if (answer.kind === 'no-answer') { lost = true; break; }
       }
       running.current = false;
       if (!mounted.current) return;
-      setStopped(stop.current);
+      setStopped(stop.current || lost);
+      setLinkLost(lost);
       setPhase('done');
     })();
   };
@@ -198,6 +217,8 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
       )}
       {/* Announced politely, and only ever counts what has answered. */}
       <p className="move-progress" role="status" aria-live="polite">{progress}</p>
+      {phase === 'done' && linkLost && <p className="sheet-copy move-offline" role="alert">{MOVE_LINK_LOST}</p>}
+      {phase === 'idle' && n > 0 && offline && <p className="sheet-copy move-offline" role="status">{MOVE_OFFLINE}</p>}
       {phase === 'idle' && n > 0 && (
         <>
           <p className="sheet-copy">
@@ -227,7 +248,7 @@ export function MoveSessionsSheet({ lane, open, onClose, fleet = useFleetStore }
             checked={interruptBusy}
             onClick={() => setInterruptBusy((v) => !v)}
           />
-          <Button disabled={target === null} onClick={run}>{`Move ${n} ${n === 1 ? 'session' : 'sessions'}`}</Button>
+          <Button disabled={target === null || offline} onClick={run}>{`Move ${n} ${n === 1 ? 'session' : 'sessions'}`}</Button>
         </>
       )}
       {phase === 'running' && (

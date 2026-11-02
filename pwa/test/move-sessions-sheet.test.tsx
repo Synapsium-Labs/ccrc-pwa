@@ -8,10 +8,10 @@ import type { AccountUsage, FleetSession, ProjectPoolsWire, RosterWire } from '.
 import { SWAP_REFUSALS } from '../../shared/api';
 import { stateWordFor } from '../../shared/accounts';
 import { api, ApiError } from '../src/lib/api';
-import { MoveSessionsSheet, sessionsToMove } from '../src/fleet/MoveSessionsSheet';
+import { MOVE_LINK_LOST, MOVE_OFFLINE, MoveSessionsSheet, sessionsToMove } from '../src/fleet/MoveSessionsSheet';
 import { TroubleCard } from '../src/fleet/TroubleCard';
 import { troubleCopy } from '../src/fleet/accountWords';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, type FleetState, type FleetStore } from '../src/stores/fleet';
 import { fleetSession, hibernatedSession } from './fleetFixture';
 
 const nowSec = Math.floor(Date.now() / 1000);
@@ -43,11 +43,13 @@ const s4 = fleetSession({ id: 'lane-b:p-four', wrapper: 'lane-b', home: 'lane-b'
 const elsewhere = fleetSession({ id: 'lane-a:p-one', wrapper: 'lane-a', home: 'lane-a', project: 'p-one', title: 'stays' });
 const SESSIONS = [s1, s2, s3, s4, elsewhere];
 
-const storeWith = (o: { sessions?: FleetSession[]; usage?: AccountUsage[]; pools?: ProjectPoolsWire | null } = {}): FleetStore => {
+const storeWith = (o: {
+  sessions?: FleetSession[]; usage?: AccountUsage[]; pools?: ProjectPoolsWire | null; conn?: FleetState['conn'];
+} = {}): FleetStore => {
   const store = createFleetStore({ makeSocket: fakeSocket });
   act(() => {
     store.setState({
-      conn: 'open', sessions: o.sessions ?? SESSIONS, roster: ROSTER, usage: o.usage ?? USAGE,
+      conn: o.conn ?? 'open', sessions: o.sessions ?? SESSIONS, roster: ROSTER, usage: o.usage ?? USAGE,
       pools: o.pools === undefined ? POOLS : o.pools,
     });
   });
@@ -230,6 +232,65 @@ describe('busy, asleep and refused sessions', () => {
     await startMove();
     await waitFor(() => expect(wordOf('one')).toBe('no answer: it may have moved'));
     expect(document.body.textContent).not.toMatch(/Failed to fetch/);
+  });
+});
+
+describe('offline, nothing is sent (spec §12.5)', () => {
+  for (const conn of ['down', 'connecting'] as const) {
+    it(`opened with the store reading ${conn}, the sheet says so and Move sends nothing`, async () => {
+      const spy = vi.spyOn(api, 'swap').mockResolvedValue(undefined as never);
+      show(storeWith({ conn }));
+      expect(screen.getByText(MOVE_OFFLINE).getAttribute('role')).toBe('status');
+      const move = screen.getByRole('button', { name: 'Move 4 sessions' }) as HTMLButtonElement;
+      expect(move.disabled).toBe(true);
+      fireEvent.click(move);
+      await flush();
+      expect(spy).not.toHaveBeenCalled();
+      expect(wordOf('one')).toBe('');
+    });
+  }
+
+  it('the link back on, the sentence goes and Move is live again', async () => {
+    const store = storeWith({ conn: 'down' });
+    show(store);
+    act(() => { store.setState({ conn: 'open' }); });
+    expect(screen.queryByText(MOVE_OFFLINE)).toBeNull();
+    expect((screen.getByRole('button', { name: 'Move 4 sessions' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('the link dropping mid-move stops it: the rest read not sent, and none is sent into the dead link', async () => {
+    const { spy, pending } = deferredSwap();
+    const store = storeWith();
+    show(store);
+    await startMove();
+    await flush();
+    act(() => { store.setState({ conn: 'down' }); });
+    await act(async () => { pending[0]!.resolve(); });
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Stopped: 1 of 4 moved.'));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(['one', 'two', 'three', 'four'].map(wordOf)).toEqual(['moved', 'not sent', 'not sent', 'not sent']);
+    expect(screen.getByRole('alert').textContent).toBe(MOVE_LINK_LOST);
+  });
+
+  it('a swap with no answer at all stops the move before the next is sent', async () => {
+    const spy = vi.spyOn(api, 'swap').mockRejectedValue(new TypeError('Failed to fetch'));
+    show(storeWith());
+    await startMove();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Stopped: 0 of 4 moved.'));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(['one', 'two', 'three', 'four'].map(wordOf))
+      .toEqual(['no answer: it may have moved', 'not sent', 'not sent', 'not sent']);
+    expect(screen.getByRole('alert').textContent).toBe(MOVE_LINK_LOST);
+  });
+
+  it('a refusal is an answer: the move goes on past it, and says nothing of the link', async () => {
+    vi.spyOn(api, 'swap').mockImplementation((id: string) => (id === s3.id
+      ? Promise.reject(refusal(409, { ok: false, error: SWAP_REFUSALS.hibernated }))
+      : Promise.resolve(undefined)) as never);
+    show(storeWith());
+    await startMove();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Done: 3 of 4 moved.'));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
