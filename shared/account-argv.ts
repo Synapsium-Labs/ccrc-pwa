@@ -44,8 +44,8 @@ const MODELS_MAX = 16;
 /** A field's grammar. Each `check` sees a string that already passed the global rules (no C0/DEL, no leading `-`, no
  *  `..` segment). `flag`: the value must be exactly `true`, and the flag is written bare. */
 type FieldRule =
-  | { kind: 'enum'; values: readonly string[] }
-  | { kind: 'label' } | { kind: 'stated' } | { kind: 'dollars' } | { kind: 'attempt' } | { kind: 'models' }
+  | { kind: 'enum'; values: readonly string[]; spell?: Readonly<Record<string, string>> }
+  | { kind: 'label' } | { kind: 'dollars' } | { kind: 'attempt' } | { kind: 'models' }
   | { kind: 'flag' };
 
 interface FieldSpec { readonly flag: string; readonly rule: FieldRule; readonly required?: true }
@@ -59,6 +59,8 @@ interface SubSpec {
   readonly stdin: 'none' | 'optional' | 'required';
   /** Fixed words after the fields, never from a caller. */
   readonly fixed?: readonly string[];
+  /** The word written when the caller carries stdin: what the verb reads from it (`set`'s `--stated=-`). */
+  readonly stdinFlag?: string;
   /** The fields it takes, in the order they are written. */
   readonly fields: Readonly<Record<string, FieldSpec>>;
 }
@@ -96,9 +98,11 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
   'auth-start': { cli: ['auth-start'], lane: true, stdin: 'none', fields: { method: { flag: '--method', rule: AUTH_METHODS, required: true }, attemptId: attempt } },
   'auth-code': { cli: ['auth-code'], lane: true, stdin: 'required', fields: { attemptId: attempt } },
   'auth-cancel': { cli: ['auth-cancel'], lane: true, stdin: 'none', fields: { attemptId: attempt } },
+  // The stated identity names a person, so it rides stdin, never an argv (accounts plan Task A16, D-7735 (9)):
+  // `--stated=-` is written when the caller carries it, and the verb holds it to 1 to 120 printable characters.
   'set': {
-    cli: ['set'], lane: true, stdin: 'none',
-    fields: { stated: { flag: '--stated', rule: { kind: 'stated' } }, placement, limit, limitReset },
+    cli: ['set'], lane: true, stdin: 'optional', stdinFlag: '--stated=-',
+    fields: { placement, limit, limitReset },
   },
   'check': { cli: ['check'], lane: true, stdin: 'none', fields: {} },
   'enable': { cli: ['enable'], lane: true, stdin: 'none', fields: {} },
@@ -112,7 +116,11 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
   },
   'remove': {
     cli: ['remove'], lane: true, stdin: 'none',
-    fields: { mode: { flag: '--mode', rule: e('remove', 'discard') }, deleteCodexAuth: { flag: '--delete-codex-auth', rule: { kind: 'flag' } } },
+    // `check` is Remove's pre-check, spelled `--dry-run`: it refuses nothing and writes nothing (spec §11.1; A16).
+    fields: {
+      mode: { flag: '--mode', rule: { kind: 'enum', values: Object.freeze(['remove', 'discard', 'check']), spell: Object.freeze({ check: '--dry-run' }) } },
+      deleteCodexAuth: { flag: '--delete-codex-auth', rule: { kind: 'flag' } },
+    },
   },
   'roster': { cli: ['roster'], lane: false, stdin: 'none', fields: {} },
   'or-management-remove': { cli: ['openrouter-management', 'remove'], lane: false, stdin: 'none', fields: {} },
@@ -147,7 +155,6 @@ function valueOk(rule: FieldRule, v: string): boolean {
   switch (rule.kind) {
     case 'enum': return rule.values.includes(v);
     case 'label': { const n = codePoints(v); return n >= 1 && n <= 64; }
-    case 'stated': { const n = codePoints(v); return n >= 1 && n <= 120; }
     case 'dollars': return DOLLARS_RE.test(v) && Number(v) <= DOLLARS_MAX;
     case 'attempt': return ATTEMPT_ID_RE.test(v);
     case 'models': {
@@ -190,8 +197,10 @@ export function buildAccountArgv(sub: unknown, laneId: unknown, fields: unknown,
     }
     const v = given[key];
     if (!globallyOk(v) || !valueOk(f.rule, v)) return { ok: false, why: 'bad-field' };
-    argv.push(f.rule.kind === 'flag' ? f.flag : `${f.flag}=${v}`);
+    const spelled = f.rule.kind === 'enum' && f.rule.spell !== undefined && Object.hasOwn(f.rule.spell, v) ? f.rule.spell[v] : undefined;
+    argv.push(f.rule.kind === 'flag' ? f.flag : spelled ?? `${f.flag}=${v}`);
   }
+  if (spec.stdinFlag !== undefined && hasStdin) argv.push(spec.stdinFlag);
   if (spec.fixed) argv.push(...spec.fixed);
   return { ok: true, argv: Object.freeze(argv) };
 }

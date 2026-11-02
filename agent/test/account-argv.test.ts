@@ -32,7 +32,7 @@ const VALID: Record<AccountSub, { laneId: string | null; fields: Record<string, 
   'auth-start': { laneId: LANE, stdin: false, fields: { method: 'login', attemptId: ATTEMPT } },
   'auth-code': { laneId: LANE, stdin: true, fields: { attemptId: ATTEMPT } },
   'auth-cancel': { laneId: LANE, stdin: false, fields: { attemptId: ATTEMPT } },
-  'set': { laneId: LANE, stdin: false, fields: { stated: 'Max plan, work', placement: 'full', limit: '100000', limitReset: 'daily' } },
+  'set': { laneId: LANE, stdin: true, fields: { placement: 'full', limit: '100000', limitReset: 'daily' } },
   'check': { laneId: LANE, stdin: false, fields: {} },
   'enable': { laneId: LANE, stdin: false, fields: {} },
   'disable': { laneId: LANE, stdin: false, fields: {} },
@@ -62,10 +62,9 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
     expect(buildAccountArgv('enable', '--force', {}, false)).toEqual({ ok: false, why: 'bad-id' });
   });
 
-  it('refuses ../ in a label, a stated identity, a model id and the lane id', () => {
+  it('refuses ../ in a label, a model id and the lane id', () => {
     expect(build('add', { label: '../x' })).toEqual({ ok: false, why: 'bad-field' });
     expect(build('add', { label: 'a/../b' })).toEqual({ ok: false, why: 'bad-field' });
-    expect(build('set', { stated: '..' })).toEqual({ ok: false, why: 'bad-field' });
     expect(build('add', { models: 'openai/../gpt-5' })).toEqual({ ok: false, why: 'bad-field' });
     expect(build('check', {}, '..')).toEqual({ ok: false, why: 'bad-id' });
     expect(build('check', {}, '../lane-a')).toEqual({ ok: false, why: 'bad-id' });
@@ -74,7 +73,6 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
   it('refuses a newline, any other C0 byte and DEL in every free-text field', () => {
     for (const bad of ['Lane\nA', 'Lane\rA', 'Lane\u0000A', 'Lane\tA', 'Lane\u007fA']) {
       expect(build('add', { label: bad }), JSON.stringify(bad)).toEqual({ ok: false, why: 'bad-field' });
-      expect(build('set', { stated: bad }), JSON.stringify(bad)).toEqual({ ok: false, why: 'bad-field' });
     }
     expect(build('check', {}, 'lane-a\n')).toEqual({ ok: false, why: 'bad-id' });
   });
@@ -85,8 +83,6 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
     expect(build('add', { label: 'x'.repeat(65) })).toEqual({ ok: false, why: 'bad-field' });
     expect(build('add', { label: 'x'.repeat(10 * 1024) })).toEqual({ ok: false, why: 'bad-field' });
     expect(build('add', { label: '' })).toEqual({ ok: false, why: 'bad-field' });
-    expect(build('set', { stated: 'x'.repeat(120) })).toMatchObject({ ok: true });
-    expect(build('set', { stated: 'x'.repeat(121) })).toEqual({ ok: false, why: 'bad-field' });
   });
 
   it('refuses a bad model id, a duplicate, and more than sixteen', () => {
@@ -145,6 +141,19 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
       '--expires-in=365d', '--adopt',
     ]);
     expect(Object.isFrozen(argv)).toBe(true);
+  });
+
+  it('set carries the stated identity on stdin as --stated=-, and refuses it as a field (accounts plan Task A16)', () => {
+    expect(buildAccountArgv('set', LANE, {}, true)).toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--stated=-'] });
+    expect(buildAccountArgv('set', LANE, { placement: 'full' }, false))
+      .toEqual({ ok: true, argv: ['account', 'set', '--id=lane-a', '--placement=full'] });
+    expect(buildAccountArgv('set', LANE, { stated: 'someone@example.invalid' }, false)).toEqual({ ok: false, why: 'bad-field' });
+  });
+
+  it('remove\'s mode check is the pre-check, spelled --dry-run; remove and discard keep --mode (accounts plan Task A16)', () => {
+    expect(buildAccountArgv('remove', LANE, { mode: 'check' }, false)).toEqual({ ok: true, argv: ['account', 'remove', '--id=lane-a', '--dry-run'] });
+    expect(buildAccountArgv('remove', LANE, { mode: 'discard' }, false)).toEqual({ ok: true, argv: ['account', 'remove', '--id=lane-a', '--mode=discard'] });
+    expect(buildAccountArgv('remove', LANE, { mode: 'remove' }, false)).toEqual({ ok: true, argv: ['account', 'remove', '--id=lane-a', '--mode=remove'] });
   });
 
   it('the management subs spell the CLI verb, and lower carries the fixed --lower-only (no sub can raise the ceiling)', () => {

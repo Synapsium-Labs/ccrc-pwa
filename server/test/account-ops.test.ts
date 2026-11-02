@@ -251,9 +251,10 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
 
   it('builds typed fields into one argv word each, from the same builder as the agent (A8)', async () => {
     const { home, rec } = fixtureHome();
-    expect(await localAccountOps({ home }).run('set', 'lane-a', { placement: 'full', stated: 'Max plan, work' }))
+    // The stated identity rides stdin, never argv (accounts plan Task A16): the builder writes `--stated=-`.
+    expect(await localAccountOps({ home }).run('set', 'lane-a', { placement: 'full' }, Buffer.from('Max plan, work')))
       .toMatchObject({ kind: 'exited', code: 0 });
-    expect(readFileSync(path.join(rec, 'argv'), 'utf8')).toBe('account\nset\n--id=lane-a\n--stated=Max plan, work\n--placement=full\n');
+    expect(readFileSync(path.join(rec, 'argv'), 'utf8')).toBe('account\nset\n--id=lane-a\n--placement=full\n--stated=-\n');
   });
 
   it('a sub past its bound gets TERM, then KILL after the grace, and answers timeout', async () => {
