@@ -483,6 +483,14 @@ describe('failure words and their statuses (spec §6.8)', () => {
     });
   });
 
+  it('Linear\'s recorded answer for a team the key cannot see is not-found (404) team, the change failed; its 403 alone is linear-forbidden (D-7787)', async () => {
+    const r = await recordedRig((c) => (c.op === 'IssueCreate' ? recordedAnswer('error-linear-forbidden') : null));
+    const res = await r.call('create', { body: { team: 'AAA', title: 'FX forbidden team' } });
+    expect([res.statusCode, bodyOf(res)['error'], bodyOf(res)['detail']]).toEqual([404, 'not-found', 'team']);
+    expect(res.body).not.toContain('Entity not found');
+    expect(r.rows()).toMatchObject([{ op: 'create', outcome: 'failed', code: 'not-found', teamKey: 'AAA' }]);
+  });
+
   it('Linear\'s recorded missing issue is not-found (404) on a read, and on a write\'s resolve, which sends no mutation (slug linear-fx-error-codes)', async () => {
     const r = await recordedRig((c) => (c.op === 'Issue' && c.variables['id'] === 'AAA-999999' ? recordedAnswer('error-not-found')
       : c.op === 'ResolveIssue' && c.variables['id'] === 'AAA-999999' ? recordedAnswer('error-not-found-resolve') : null));

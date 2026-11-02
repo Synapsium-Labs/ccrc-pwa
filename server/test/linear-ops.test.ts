@@ -64,6 +64,7 @@ const MIN = 60_000;
 const ERROR_TABLE_ROWS = [
   ['RATELIMITED', 'error-429-ratelimited-constructed'],
   ['INPUT_ERROR', 'error-not-found'],
+  ['INPUT_ERROR', 'error-linear-forbidden'],
 ];
 
 /** Each document constant's recorded answer in `fixtures/linear/` (the FX capture, D-7684, D-7743). */
@@ -272,6 +273,15 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
       expect(recordedComplexity(RECORDED_DOCUMENT[page])!, verb).toBeLessThan(LINEAR_QUOTA.maxQueryComplexity);
     }
   });
+  it('a team the key cannot see (the recorded random team UUID) is not-found with the detail team, never linear-forbidden (D-7787)', () => {
+    // Linear answers it INPUT_ERROR "Entity not found: Team", with no 403 and no forbidden code: the same not-found
+    // answer as a team that does not exist. linear-forbidden stays for Linear's HTTP 403 only (callLinear's arm).
+    const unseen = linearRecord('error-linear-forbidden');
+    expect(unseen.document).toBe(LINEAR_DOCUMENTS.create);
+    expect(unseen.status).toBe(200);
+    expect(callRow('create').shape(unseen.body, SHAPE)).toEqual({ ok: false, word: 'not-found', detail: 'team' });
+  });
+
   it('the error table maps the recorded missing issue to not-found, on the read, the comments and the resolve (slug linear-fx-error-codes)', () => {
     const missing = linearRecord('error-not-found');
     expect(missing.document).toBe(LINEAR_DOCUMENTS.issue);

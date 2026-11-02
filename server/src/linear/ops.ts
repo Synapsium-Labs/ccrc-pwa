@@ -165,8 +165,9 @@ export const LINEAR_DIRECTORY_DOCUMENTS: Readonly<Record<LinearDirectoryCollecti
 export type LinearAnswerRefusalWord =
   | 'not-found' | 'malformed' | 'unreachable' | 'rate-limited' | 'linear-forbidden' | 'linear-invalid';
 
-/** A refusal's detail that an error answer can name: `parent` when the entity Linear did not find is the parent. */
-export type LinearErrorDetail = 'parent';
+/** A refusal's detail that an error answer can name: `parent` when the entity Linear did not find is the parent, `team`
+ *  when it is the team (D-7787). */
+export type LinearErrorDetail = 'parent' | 'team';
 
 /** One error the table knows: its word, and the detail the error names, if any. */
 export interface LinearErrorMatch { word: Exclude<LinearAnswerRefusalWord, 'malformed' | 'unreachable'>; detail?: LinearErrorDetail }
@@ -195,6 +196,10 @@ const errorPathHead = (e: Record<string, unknown>): unknown => (Array.isArray(e[
  * - `INPUT_ERROR` "Entity not found: Issue": a missing issue (`error-not-found`, `error-not-found-resolve`). It is never
  *   `data.issue === null`, which the shapers still read as not-found for an answer of that shape. At the `parent` alias's
  *   path it is the parent that is missing (§4.5).
+ * - `INPUT_ERROR` "Entity not found: Team": a team the key cannot see (`error-linear-forbidden`, a random team UUID). It
+ *   is `not-found` with the detail `team`, NOT `linear-forbidden` (D-7787): Linear gave no 403 and no forbidden code, so
+ *   a team out of the key's reach and a team that does not exist are one answer, and the table cannot tell them apart.
+ *   `linear-forbidden` stays for Linear's HTTP 403 (`callLinear`'s `forbidden` arm), which no recording holds.
  */
 export const LINEAR_ERROR_CODES: readonly LinearErrorRow[] = Object.freeze([
   { code: 'RATELIMITED', message: null, match: () => ({ word: 'rate-limited' }), recorded: 'error-429-ratelimited-constructed' },
@@ -202,6 +207,7 @@ export const LINEAR_ERROR_CODES: readonly LinearErrorRow[] = Object.freeze([
     code: 'INPUT_ERROR', message: /^Entity not found: Issue$/, recorded: 'error-not-found',
     match: (e) => (errorPathHead(e) === 'parent' ? { word: 'not-found', detail: 'parent' } : { word: 'not-found' }),
   },
+  { code: 'INPUT_ERROR', message: /^Entity not found: Team$/, match: () => ({ word: 'not-found', detail: 'team' }), recorded: 'error-linear-forbidden' },
 ] satisfies LinearErrorRow[]);
 
 // ── what a validated call is ──
