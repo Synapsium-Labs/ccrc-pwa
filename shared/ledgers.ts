@@ -195,8 +195,8 @@ export function isSpecPath(p: string): boolean {
 
 /** "Recently cleared" keeps seven days (spec D13). */
 export const CLEARED_WINDOW_MS = 7 * 24 * 3600 * 1000;
-/** How long a tick's mail may stay undelivered before the item says "ticked; coordinator not responding" (plan PL4). A label
- *  only: no push and no stall arm hang off it (spec §3.3, D19). */
+/** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
+ *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
 export const TICK_UNANSWERED_MS = 30 * 60 * 1000;
 export const SOON_LABEL_MAX = 40;
 export const ITEM_TITLE_MAX = 140;
@@ -213,17 +213,20 @@ const COORDINATOR_PRESENCE_MAP: Record<CoordinatorPresence, true> = { alive: tru
 export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as readonly CoordinatorPresence[];
 
 /**
- * The coordinator's presence from what the server last measured: the fleet frame it broadcast and the registry ids of its last
- * good listing (refused ids included). A `dead` row is `dead`; `alive` and `asleep` (hibernated, woken by mail) are `alive`; a
- * doubt, or a row from a server that predates `presence`, is `unmeasured`; an id the frame lacks is `absent` only when the
- * listing is known and does not hold it either, and `unmeasured` when the listing holds it (a refused id, or a row the
- * registry could not assemble, is in no fleet row) or when no listing has landed yet.
+ * The coordinator's presence from what the server last measured: the fleet frame it broadcast and the ids of its last good
+ * registry listing, read from the listing's raw `*.uuid` names (refused ids included). A `dead` row is `dead`; `alive` and
+ * `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a server that predates `presence`, is `unmeasured`;
+ * an id the frame lacks is `absent` only when the listing is known and does not hold it either, and `unmeasured` when the
+ * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row) or when no listing has landed
+ * yet.
  *
  * WHY THIS IS NOT `measureClaimant` (the one dead predicate, D-5290; "legitimately different", review 1335 F4): that function
  * is async, a fresh registry read and a tmux verdict, and an item's view must be built SYNCHRONOUSLY (`viewOfItem`: the
  * routes' call-order pin forbids an await between an item read and its write, and the frame builds the same view). Every arm
  * here agrees with that predicate's ladder (`readSession`, which the frame's `presence` is) except that a frame cannot see a
- * fresh tmux verdict; and the one arm the two would otherwise disagree on, an id the frame lacks, is closed above.
+ * fresh tmux verdict; and the one arm the two would otherwise disagree on, an id the frame lacks, is closed above: the
+ * listing's names hold a row the registry could not assemble as well as a refused one, where `measureClaimant` answers
+ * `unmeasurable`.
  */
 export function coordinatorPresenceIn(
   fleet: readonly { id: string; presence?: Presence }[] | null, registryIds: ReadonlySet<string> | null, id: string,
@@ -260,4 +263,13 @@ export function itemIsStale(i: StaleInputs): boolean {
   if (i.state !== 'checking') return false;
   if (i.coordinator === 'dead' || i.coordinator === 'absent') return true;
   return i.mail !== 'acked' && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
+}
+
+/** Whether an outstanding tick mail has been left behind (review 1336 F1): it went to a session that is no longer the
+ *  programme's coordinator AND that session reads `dead` or `absent`. Such a mail can never be acknowledged by its recipient
+ *  (the ack route takes only the recipient's own), and nothing re-addresses a mail to a literal session id, so it must not
+ *  hold the operator's next tick of a sent-back item. A recipient that is still the coordinator, or that reads `alive` or
+ *  `unmeasured`, keeps blocking: a live displaced coordinator must not get a second mail beside the new one. */
+export function tickMailLeftBehind(i: { recipient: string; coordinator: string; recipientPresence: CoordinatorPresence }): boolean {
+  return i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent');
 }

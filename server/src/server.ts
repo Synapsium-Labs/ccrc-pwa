@@ -1525,19 +1525,29 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // F4): the watcher's last fleet frame and its registry ids, so an id the registry lists but the frame lacks is a doubt.
   const presenceOf = (id: string) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, watcher?.currentRegistryIds() ?? null, id);
   let waitingBuilt: WaitingView | null = null;
+  // A build that threw stands until the next cache drop, so the sockets of one change share ONE attempt and one failure
+  // (review 1336 F4), and the warning is said once per distinct error, not once per socket per fleet emit.
+  let waitingFailed = false;
+  let waitingWarned: string | null = null;
+  const dropWaiting = (): void => { waitingBuilt = null; waitingFailed = false; };
   // A ledger write drops it, and so does a fleet emit: presence and the clock move the stale label with no ledger write (F3).
-  bus.on('waiting', () => { waitingBuilt = null; });
-  bus.on('fleet', () => { waitingBuilt = null; });
+  bus.on('waiting', dropWaiting);
+  bus.on('fleet', dropWaiting);
   const waitingNow = (fresh: boolean): WaitingView | null => {
     if (!deps.coord) return null;
-    if (fresh) waitingBuilt = null;
+    if (fresh) dropWaiting();
+    if (waitingFailed) return null;
     try {
       waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf);
+      waitingWarned = null;
       return waitingBuilt;
     } catch (err) {
       // A row this box cannot read (a corrupt JSON column) sends no frame; the read route says the same in its own answer.
       // A parse error can quote a session-written column, so the line goes through the masker like every other egress.
-      console.warn((deps.masker ?? SHAPE_ONLY_MASKER).maskText(`ccrc-server: waiting frame not built: ${err instanceof Error ? err.message : String(err)}`));
+      waitingFailed = true;
+      const line = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(`ccrc-server: waiting frame not built: ${err instanceof Error ? err.message : String(err)}`);
+      if (line !== waitingWarned) console.warn(line);
+      waitingWarned = line;
       return null;
     }
   };

@@ -27,7 +27,7 @@ import { refuseRoute } from '../refuse.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SOON_LABEL_MAX,
-  isSlotSlug, isSpecPath, itemIsStale, nextItemState, type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy,
+  isSlotSlug, isSpecPath, itemIsStale, nextItemState, tickMailLeftBehind, type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy,
   type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
@@ -45,7 +45,7 @@ export interface LedgerCoordinatorDeps {
   bus: Bus;
   now: () => number;
   /** The coordinator's presence as the server last measured it (`coordinatorPresenceIn` over the fleet frame it last
-   *  broadcast), for an item's stale label. */
+   *  broadcast and the ids of the registry listing it last took), for an item's stale label and for the duplicate guard. */
   presenceOf: (sessionId: string) => CoordinatorPresence;
 }
 
@@ -480,10 +480,12 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.tooLarge, { detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` });
     }
     // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): one still outstanding
-    // blocks a second, so a takeover cannot queue it twice either.
+    // blocks a second, so a takeover cannot queue it twice either. Except one left behind (review 1336 F1): its recipient is
+    // no longer the coordinator and reads dead or absent, so nothing will ever acknowledge it.
     const earlier = coord.newestTickMail(mail.subject);
-    if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)) {
-      return refuseRoute(reply, 'duplicate', { detail: 'an earlier tick of this item has not been acknowledged by its coordinator yet' });
+    if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)
+      && !tickMailLeftBehind({ recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId) })) {
+      return refuseRoute(reply, 'duplicate', { detail: `an earlier tick of this item went to ${earlier.toId}, which has not acknowledged it` });
     }
     const now = deps.now();
     // The mail rides NO run (review 1335 F1): the run it would ride is the one the coordinator closes when the wave ends, and

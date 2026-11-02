@@ -1061,9 +1061,12 @@ export class FleetWatcher {
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
   /** The registry ids of the last good listing (`null` until one lands: nothing is mailed without it). */
   private registryIds: ReadonlySet<string> | null = null;
-  /** The registry ids of the last good listing, refused ids included, or null before one (the ledgers' presence reading: an id
-   *  the fleet frame lacks but this holds is a doubt, not an absence). */
-  currentRegistryIds(): ReadonlySet<string> | null { return this.registryIds; }
+  /** The ids of the last good listing as the listing names them: every `*.uuid` basename, so a refused id and a row the registry
+   *  could not assemble are held with the rest; null before one (the ledgers' presence reading: an id the fleet frame lacks but
+   *  this holds is a doubt, not an absence). Apart from `registryIds` on purpose: that set is the mail and census lanes' (the
+   *  rows the registry composed, refused ids included), and this one must not narrow with a row that failed to assemble. */
+  currentRegistryIds(): ReadonlySet<string> | null { return this.listedIds; }
+  private listedIds: ReadonlySet<string> | null = null;
   private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
@@ -2513,6 +2516,9 @@ export class FleetWatcher {
       }
       const records = registryRead.records;
       this.registryIds = new Set([...records.map((r) => r.id), ...registryRead.refused]);
+      this.listedIds = new Set([
+        ...registryRead.names.filter((n) => n.endsWith('.uuid')).map((n) => n.slice(0, -'.uuid'.length)), ...registryRead.refused,
+      ]);
       // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
       // second read; see `childMarks`.
       const childMarks = new Map(records.map((r) => [r.id, r.child] as const));

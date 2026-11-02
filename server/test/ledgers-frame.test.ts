@@ -189,4 +189,22 @@ describe('the waiting frame (plan PL4)', () => {
     expect(text).toContain('waiting frame not built');
     expect(text).not.toContain(key.slice(8, 40));
   });
+
+  it('review 1336 F4: a view that cannot be built is attempted once per change, not once per socket, and warned once per distinct error', async () => {
+    const r = await rig();
+    r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: 'T', why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, NOW0);
+    const itemsFor = vi.spyOn(r.coord, 'itemsFor').mockImplementation(() => { throw new Error('operator item 1: how is not a string list'); });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const socks = [connect(r.port), connect(r.port), connect(r.port)];
+    // The cold burst ends with the `runs` frame and then the waiting attempt, in one synchronous step: once `runs` is here, the attempt is made.
+    for (const s of socks) await s.typeFrame('runs', 1);
+    const fleet0 = socks.map((s) => s.typeCount('fleet'));
+    const built0 = itemsFor.mock.calls.length;
+    for (let i = 0; i < 3; i += 1) r.bus.emit('fleet', []);
+    for (const [i, s] of socks.entries()) await s.typeFrame('fleet', fleet0[i]! + 3);
+    expect(itemsFor.mock.calls.length - built0, 'one attempt per fleet emit, shared by the three sockets').toBe(3);
+    const lines = warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('waiting frame not built'));
+    expect(lines, 'one warning for the one distinct error, across sockets and emits').toHaveLength(1);
+    for (const s of socks) expect(s.typeCount('waiting')).toBe(0);
+  });
 });

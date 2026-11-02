@@ -353,6 +353,13 @@ describe('ItemView.stale: a pure decider in the shared vocabulary (plan PL4, rev
     expect(coordinatorPresenceIn(fleet, null, 'lane-z'), 'no registry listing yet: nothing is known about an id the frame lacks').toBe('unmeasured');
     expect(coordinatorPresenceIn(null, registry, 'lane-a')).toBe('unmeasured');
   });
+  it('a listed row the registry could not assemble is in the listing\'s ids and reads unmeasured, an unlisted id absent (review 1336 F2)', () => {
+    const fleet = [{ id: 'lane-a', presence: 'alive' }] as never;
+    // The ids are the listing's raw `*.uuid` names (`listedIds`), so a torn row is in the set though no fleet row carries it.
+    const listed = new Set(['lane-a', 'lane-torn']);
+    expect(coordinatorPresenceIn(fleet, listed, 'lane-torn')).toBe('unmeasured');
+    expect(coordinatorPresenceIn(fleet, listed, 'lane-gone')).toBe('absent');
+  });
   it('a route labels a checking item stale when its tick\'s mail is not acknowledged thirty minutes on', async () => {
     const r = await rig();
     const id = raise(r);
@@ -416,6 +423,110 @@ describe('the tick mail and its label across the run and the coordinator\'s life
     r.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked'").run();
     vi.spyOn(Date, 'now').mockReturnValue(NOW0 + TICK_UNANSWERED_MS);
     expect(await labelOf(r, id)).toBe(false);
+  });
+
+  // Review 1336 F3: the guards pinned in the direction the last round changed them.
+  const markDeliveries = (r: Rig, state: string): void => {
+    r.coord.db.prepare("UPDATE mail_deliveries SET state = ? WHERE mailId IN (SELECT id FROM mail WHERE fromId = 'operator')").run(state);
+  };
+  const sendBack = (r: Rig, id: number): void => {
+    expect(r.coord.moveItem(id, 'return', 'coordinator', { note: 'Not yet.' }, NOW0 + 1, { programmeHasOpenRun: true }).ok).toBe(true);
+  };
+
+  it('F3: return, acknowledge, tick again answers 200 and queues the second mail', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    markDeliveries(r, 'acked');
+    sendBack(r, id);
+    const again = await tick(r, id);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(mailRows(r)).toHaveLength(2);
+  });
+
+  it('F3: an earlier delivery that is delivered but not acknowledged still refuses the tick duplicate', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    markDeliveries(r, 'delivered');
+    sendBack(r, id);
+    const again = await tick(r, id);
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ error: 'duplicate' });
+    expect(mailRows(r)).toHaveLength(1);
+  });
+
+  it('F3: a delivered mail is not heard: the route labels the item stale thirty minutes on', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    markDeliveries(r, 'delivered');
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0 + TICK_UNANSWERED_MS);
+    expect(await labelOf(r, id)).toBe(true);
+  });
+
+  it('F3: a takeover after the old coordinator acknowledged the mail is not stale, though the new coordinator never saw it', async () => {
+    const r = await rig(ALIVE);
+    const id = raise(r);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    markDeliveries(r, 'acked');
+    r.coord.db.prepare("UPDATE runs SET claimedBy = 'lane-b' WHERE program = 'prog-a'").run();
+    vi.spyOn(Date, 'now').mockReturnValue(NOW0 + TICK_UNANSWERED_MS);
+    expect(await labelOf(r, id)).toBe(false);
+  });
+
+  // Review 1336 F1: an outstanding tick mail to a coordinator that is no longer the programme's, and is gone, blocks nothing.
+  const takeover = async (w: Watched, lane: { id: string; presence?: string }[] | null) => {
+    const r = await rig(w);
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    markDeliveries(r, 'delivered');
+    r.coord.db.prepare("UPDATE runs SET claimedBy = 'lane-b' WHERE program = 'prog-a'").run();
+    w.fleet = lane;
+    sendBack(r, id);
+    return { r, id };
+  };
+  it('F1: after a takeover from a coordinator the fleet reads dead, the re-tick succeeds with one new mail, to the new coordinator', async () => {
+    const w: Watched = { fleet: [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'alive' }], registryIds: ['lane-a', 'lane-b'] };
+    const { r, id } = await takeover(w, [{ id: 'lane-a', presence: 'dead' }, { id: 'lane-b', presence: 'alive' }]);
+    const again = await tick(r, id);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(mailRows(r).map((m) => m.toId)).toEqual(['lane-a', 'lane-b']);
+  });
+  it('F1: after a takeover from a coordinator the registry no longer lists, the re-tick succeeds too', async () => {
+    const w: Watched = { fleet: [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'alive' }], registryIds: ['lane-a', 'lane-b'] };
+    const { r, id } = await takeover(w, [{ id: 'lane-b', presence: 'alive' }]);
+    w.registryIds = ['lane-b'];
+    const again = await tick(r, id);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(mailRows(r).map((m) => m.toId)).toEqual(['lane-a', 'lane-b']);
+  });
+  it('F1: with the displaced coordinator alive, the re-tick is still refused duplicate and the sentence names it', async () => {
+    const w: Watched = { fleet: [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'alive' }], registryIds: ['lane-a', 'lane-b'] };
+    const { r, id } = await takeover(w, [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'alive' }]);
+    const again = await tick(r, id);
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ error: 'duplicate', detail: expect.stringContaining('lane-a') });
+    expect(mailRows(r)).toHaveLength(1);
+  });
+  it('F1: with the displaced coordinator unmeasured (the registry lists it, the frame lacks it), the re-tick is still refused', async () => {
+    const w: Watched = { fleet: [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'alive' }], registryIds: ['lane-a', 'lane-b'] };
+    const { r, id } = await takeover(w, [{ id: 'lane-b', presence: 'alive' }]);
+    expect((await tick(r, id)).statusCode).toBe(409);
+    expect(mailRows(r)).toHaveLength(1);
+  });
+  it('F1: the recipient that is still the programme\'s coordinator blocks, though it reads dead (its mail waits for its return)', async () => {
+    const w: Watched = { fleet: [{ id: 'lane-a', presence: 'alive' }, { id: 'lane-b', presence: 'alive' }], registryIds: ['lane-a', 'lane-b'] };
+    const r = await rig(w);
+    const id = raise(r);
+    expect((await tick(r, id)).statusCode).toBe(200);
+    markDeliveries(r, 'delivered');
+    w.fleet = [{ id: 'lane-a', presence: 'dead' }, { id: 'lane-b', presence: 'alive' }];
+    sendBack(r, id);
+    expect((await tick(r, id)).statusCode).toBe(409);
+    expect(mailRows(r)).toHaveLength(1);
   });
 });
 
