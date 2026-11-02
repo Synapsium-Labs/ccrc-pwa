@@ -1177,6 +1177,17 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/:project/file': 'repository content, not session text',
     '/api/linear/connection': "the Linear connection's state: organisation and user names, the key's last four characters, the check time; never the key",
     '/api/linear/resolve': "the operator's own typed name, its derived slug, and a Linear issue title; no session text",
+    // The Linear proxy's reads (#1444, spec §5.4): what Linear holds, read with the key ccrc holds, every free text
+    // fenced under `untrusted` and every name cleaned; never the key or its digest (the containment census,
+    // `linear-key-containment.test.ts`). Its writes are POSTs, which this sweep does not read.
+    '/api/linear/proxy/workspaces': "the slots' workspace names, URL keys, team keys and view states; never a key",
+    '/api/linear/proxy/teams': "a workspace's team keys and names, from its record; never a key",
+    '/api/linear/proxy/issues/:id': "one Linear issue, its text under untrusted; never the key",
+    '/api/linear/proxy/issues/:id/comments': "an issue's comments, each body under untrusted; never the key",
+    '/api/linear/proxy/statuses': "a workspace's workflow state names and ids",
+    '/api/linear/proxy/projects': "a workspace's project names and ids",
+    '/api/linear/proxy/labels': "a workspace's label names and ids",
+    '/api/linear/proxy/users': "a workspace's user names and ids, never an email address",
   };
 
   it('every GET route and websocket is masked by the hook, masked inline, or exempt with a reason', () => {
