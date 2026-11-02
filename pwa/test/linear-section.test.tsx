@@ -458,6 +458,7 @@ describe('a workspace\'s Check again and Remove', () => {
 });
 
 const KEY = 'lin_api_fixture_key_one_0001';
+const KEY_TWO = 'lin_api_fixture_key_two_0002';
 const field = (): HTMLInputElement => screen.getByLabelText(LINEAR_TEXT.keyLabel);
 const type = (v: string): void => { fireEvent.change(field(), { target: { value: v } }); };
 const addButton = (): HTMLButtonElement => within(document.querySelector<HTMLElement>('[data-linear="add"]')!).getByRole('button', { name: 'Add' }) as HTMLButtonElement;
@@ -554,6 +555,23 @@ describe('Add a workspace (§10.1, §10.2): the one key field', () => {
     expect(status()).toBe('Replaced the key for Workspace A.');
     expect(field().value).toBe('');
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('Replace key sends the key the box answered about, even when the field was edited while that Add was held', async () => {
+    let release: (r: Response) => void = () => undefined;
+    install({ list: () => list({ workspaces: [WS_A] }), add: () => new Promise<Response>((res) => { release = res; }) });
+    await mount();
+    type(KEY);
+    fireEvent.click(addButton());
+    await waitFor(() => expect(box.sent.filter((s) => s.method === 'POST')).toHaveLength(1));
+    // While the Add is held the operator types another key; the box then answers the FIRST key's workspace.
+    type(KEY_TWO);
+    await act(async () => { release(EXISTS()); await Promise.resolve(); });
+    const dialog = await screen.findByRole('dialog', { name: 'Replace the key for Workspace A?' });
+    box.add = () => list({ workspaces: [{ ...WS_A, keyTail: '9e1d' }], replaced: ID_A });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Replace key' }));
+    await waitFor(() => expect(status()).toBe('Replaced the key for Workspace A.'));
+    expect(box.sent.filter((s) => s.method === 'POST').map((s) => s.body)).toEqual([{ key: KEY }, { key: KEY, replace: true }]);
   });
 
   it('Cancel on the replace confirm sends nothing more and keeps the typed key', async () => {

@@ -22,8 +22,9 @@
 //     is cleared when the page goes to the background (the passphrase step's own rule), which also closes a replace
 //     confirm waiting on it.
 //   * A WORKSPACE THAT HAS A KEY IS REPLACED ONLY BY NAME. An Add the box answers `workspace-exists` asks "Replace the
-//     key for <name>?" and sends the same key again with `replace: true` only on Replace key (spec §10.1). A row's
-//     Replace key takes the operator to that one field: a key is pasted in one place.
+//     key for <name>?" and sends the same key again with `replace: true` only on Replace key (spec §10.1). The confirm
+//     holds the key the box answered about, so a field edited while that Add was in flight cannot send a different key
+//     under the shown name. A row's Replace key takes the operator to that one field: a key is pasted in one place.
 //   * EVERY REFUSAL IS A FIXED SENTENCE chosen by its word; the box's own text is never shown.
 //   * EVERY WIDTH (spec §10.3). The band is read once, from the desk query and the wide query, and set on the card as
 //     `data-band`; the stylesheet lays each band out (`settings.css`), and the band says how many team chips show
@@ -249,8 +250,9 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
   const noteId = useId();
   const field = useRef<HTMLInputElement | null>(null);
   const [key, setKey] = useState('');
-  /** The workspace an Add found already keyed, while the operator is asked to replace its key by name. */
-  const [confirm, setConfirm] = useState<{ id: string; name: string | null } | null>(null);
+  /** The workspace an Add found already keyed, and the trimmed key that Add sent, while the operator is asked to
+   *  replace its key by name. Replace key sends this key, never the field's (which stays editable meanwhile). */
+  const [confirm, setConfirm] = useState<{ id: string; name: string | null; key: string } | null>(null);
   // The last GOOD list; a failed read with none to show is the `unread` sentence.
   const view = poll.view;
   const [busy, setBusy] = useState(false);
@@ -313,26 +315,26 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
       poll.reload();
     }, done);
 
-  /** Add the pasted key; `replace` only from the confirm that named the workspace. The key leaves the field once the
-   *  box has answered the act (not on a refusal, nor on a step-up, so the operator can press Add again). */
-  const addKey = (replace: boolean): void => {
-    const trimmed = key.trim();
+  /** Send a trimmed key; `replace` only from the confirm that named the workspace, with the key that confirm holds.
+   *  The key leaves the field once the box has answered the act (not on a refusal, nor on a step-up, so the operator
+   *  can press Add again). */
+  const sendKey = (trimmed: string, replace: boolean): void => {
     if (trimmed === '' || busy) return;
-    // The pasted key is trimmed at both ends only (a copied key often carries a newline); the shape rule is the
-    // server's too, and is said here first so a mistyped paste costs no round trip.
+    // The shape rule is the server's too, and is said here first so a mistyped paste costs no round trip.
     if (!isLinearKeyShape(trimmed)) { result.say(REFUSAL_TEXT['bad-key'] ?? '', 'refusal'); return; }
     void perform(() => api.addLinearWorkspace(trimmed, replace), (list) => poll.settle(list), addedText, {
       landed: () => setKey(''),
       refused: (err) => {
         const exists = replace ? null : linearWorkspaceExistsOf(err);
-        if (exists !== null) setConfirm(exists);
+        if (exists !== null) setConfirm({ id: exists.id, name: exists.name, key: trimmed });
         return exists !== null;
       },
     });
   };
   const submitKey = (e: FormEvent): void => {
     e.preventDefault();
-    addKey(false);
+    // The pasted key is trimmed at both ends only (a copied key often carries a newline).
+    sendKey(key.trim(), false);
   };
   /** A row's Replace key: the one key field, with a line saying what to paste there. */
   const replaceFor = (name: string | null): void => {
@@ -431,7 +433,7 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
         title={LINEAR_TEXT.replaceTitle(confirm?.name ?? null)}
         consequence={LINEAR_TEXT.replaceConsequence(confirm?.name ?? null)}
         confirmLabel={LINEAR_TEXT.replace}
-        onConfirm={() => addKey(true)}
+        onConfirm={() => { if (confirm !== null) sendKey(confirm.key, true); }}
       />
     </Section>
   );
