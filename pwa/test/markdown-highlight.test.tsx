@@ -9,9 +9,11 @@ import { cleanup, render } from '@testing-library/react';
 import { defaultUrlTransform } from 'react-markdown';
 import hljs from 'highlight.js/lib/core';
 import {
-  CHAT_COMPONENTS, CodeBlock, HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_CACHE_MAX_ENTRIES, boundedHighlight,
+  CHAT_COMPONENTS, CodeBlock, boundedHighlight,
 } from '../src/lib/markdown';
-import { MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS } from '../src/lib/markdownLimits';
+import {
+  HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_CACHE_MAX_ENTRIES, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
+} from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 

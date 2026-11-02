@@ -40,7 +40,8 @@ import php from 'highlight.js/lib/languages/php';
 import { createLru } from './highlightCache';
 import { remarkAlerts } from './remarkAlerts';
 import {
-  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
+  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, HIGHLIGHT_CACHE_MAX_CHARS,
+  HIGHLIGHT_CACHE_MAX_ENTRIES, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
   MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
   MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
 } from './markdownLimits';
@@ -357,18 +358,6 @@ export interface BoundedHighlight {
 export function isRegisteredGrammar(lang: string): boolean {
   return Boolean(lang && hljs.getLanguage(lang));
 }
-
-/** The most blocks the highlight cache holds (desktop polish Task C7). Chat's corpus highlights 33 blocks of at most
- *  1 315 characters of markup each (measured at C7's Step 0), so a long session's fences fit many times over. */
-export const HIGHLIGHT_CACHE_MAX_ENTRIES = 256;
-
-/** The most characters of markup the highlight cache holds (desktop polish Task C7): a dense 64 KiB JSON block, the
- *  most `MD_HIGHLIGHT_BLOCK_MAX_CHARS` admits, comes out as about 858 000 characters (C7's Step 0), so four or so of
- *  those at once. The bound weighs the markup only, not the keys. A key is its language, one separator and its
- *  block's text, and the markup holds that text escaped, so a key is at most its markup plus the language's name and
- *  one character: the cache holds at most twice this many characters, plus a language name and one character per
- *  entry. */
-export const HIGHLIGHT_CACHE_MAX_CHARS = 4_000_000;
 
 /** What highlight.js answered for a (language, block) pair, by `lang` and `raw` as `boundedHighlight` received them.
  *  `ignoreIllegals` makes the answer a function of the pair, so a held answer is the markup a call would return. Module

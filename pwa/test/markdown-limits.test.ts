@@ -32,6 +32,18 @@ const VALUES: Readonly<Record<string, number>> = {
   DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS: 393216,
   DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS: 131072,
   MD_KEYSTROKE_MAX_CHARS: 64,
+  // W5h-a (base spec 4.9's W5h rows and "Two more"): seven provisional values, then two fixed ones, then the
+  // highlight cache's two bounds, moved from markdown.tsx unchanged (the W5h-a plan's refinement (c)).
+  HIGHLIGHT_BLOCK_DEADLINE_MS: 750,
+  HIGHLIGHT_BOOT_BUDGET_MS: 2000,
+  HIGHLIGHT_PAGE_WORKER_MS: 3000,
+  HIGHLIGHT_PAGE_MAX_TIMEOUTS: 2,
+  MD_HIGHLIGHT_MAX_HTML_CHARS: 262144,
+  DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS: 2097152,
+  HIGHLIGHT_STREAM_DEBOUNCE_MS: 250,
+  HIGHLIGHT_LINE_RETRY_UNITS: 256,
+  HIGHLIGHT_CACHE_MAX_ENTRIES: 256,
+  HIGHLIGHT_CACHE_MAX_CHARS: 4000000,
 };
 const NAMES: readonly string[] = [...Object.keys(VALUES), 'DOCS_PARSE_BUDGET_MS'].sort();
 
@@ -44,8 +56,22 @@ describe('markdownLimits: the values of section 4.9', () => {
     expect(typeof limits.DOCS_PARSE_BUDGET_MS).toBe('function');
   });
 
-  it('exports exactly the nineteen limits', () => {
+  it('exports exactly the twenty-nine limits', () => {
     expect(Object.keys(limits).sort()).toEqual(NAMES);
+  });
+
+  it('M4.H22: the provisional page HTML cap admits M4.H2\'s eight 60 000-character blocks at 2.90 HTML characters a character', () => {
+    expect(limits.DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS).toBeGreaterThanOrEqual(Math.ceil(8 * 60000 * 2.9));
+    expect(limits.MD_HIGHLIGHT_MAX_HTML_CHARS).toBe(4 * limits.MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+  });
+
+  it('M4.H22: each provisional value says so in its docstring', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'markdownLimits.ts'), 'utf8');
+    for (const name of ['HIGHLIGHT_BLOCK_DEADLINE_MS', 'HIGHLIGHT_BOOT_BUDGET_MS', 'HIGHLIGHT_PAGE_WORKER_MS',
+      'HIGHLIGHT_PAGE_MAX_TIMEOUTS', 'MD_HIGHLIGHT_MAX_HTML_CHARS', 'DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS',
+      'HIGHLIGHT_STREAM_DEBOUNCE_MS']) {
+      expect(src, name).toMatch(new RegExp(`/\\*\\* PROVISIONAL \\(W5h-a; W5h-b sets it from R19\\)\\.(?:(?!\\*/)[^])*\\*/\\nexport const ${name} = `));
+    }
   });
 });
 
