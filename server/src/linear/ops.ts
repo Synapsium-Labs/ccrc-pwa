@@ -165,9 +165,24 @@ export const LINEAR_DIRECTORY_DOCUMENTS: Readonly<Record<LinearDirectoryCollecti
 export type LinearAnswerRefusalWord =
   | 'not-found' | 'malformed' | 'unreachable' | 'rate-limited' | 'linear-forbidden' | 'linear-invalid';
 
+/**
+ * The body field each input key a write sends was built from (spec §5.3; `issueInput` and the create row write these
+ * keys). An error that names an input key or a property is answered with the field it came from, so a detail is always
+ * one of this table's own names and never Linear's text. `linear-ops.test.ts` holds it equal to the keys sent.
+ */
+export const LINEAR_INPUT_FIELDS = Object.freeze({
+  teamId: 'team', title: 'title', description: 'description', stateId: 'state', priority: 'priority', assigneeId: 'assignee',
+  labelIds: 'labels', addedLabelIds: 'addLabels', removedLabelIds: 'removeLabels', projectId: 'project', parentId: 'parent',
+} as const);
+export type LinearInputField = (typeof LINEAR_INPUT_FIELDS)[keyof typeof LINEAR_INPUT_FIELDS];
+/** The body field an input key or property names, or null for one this table does not hold. */
+const inputFieldOf = (key: unknown): LinearInputField | null =>
+  (typeof key === 'string' && Object.prototype.hasOwnProperty.call(LINEAR_INPUT_FIELDS, key)
+    ? LINEAR_INPUT_FIELDS[key as keyof typeof LINEAR_INPUT_FIELDS] : null);
+
 /** A refusal's detail that an error answer can name: `parent` when the entity Linear did not find is the parent, `team`
- *  when it is the team (D-7787). */
-export type LinearErrorDetail = 'parent' | 'team';
+ *  when it is the team (D-7787), and for `linear-invalid` the body field Linear named. */
+export type LinearErrorDetail = 'parent' | 'team' | LinearInputField;
 
 /** One error the table knows: its word, and the detail the error names, if any. */
 export interface LinearErrorMatch { word: Exclude<LinearAnswerRefusalWord, 'malformed' | 'unreachable'>; detail?: LinearErrorDetail }
@@ -181,6 +196,12 @@ export interface LinearErrorRow {
   /** The recording it was built from (`server/test/fixtures/linear/`), or the constructed one. */
   readonly recorded: string;
 }
+
+/** The message of an id Linear does not hold in a write's input; its one group is the input key. */
+const VALIDATE_ACCESS = /^Entity not found in validateAccess: ([A-Za-z]{1,32})$/;
+/** `linear-invalid`, with the field when there is one. */
+const withField = (field: LinearInputField | null): LinearErrorMatch =>
+  (field === null ? { word: 'linear-invalid' } : { word: 'linear-invalid', detail: field });
 
 /** The first segment of an error's `path`: the response key Linear failed at (`issue`, or the `parent` alias). */
 const errorPathHead = (e: Record<string, unknown>): unknown => (Array.isArray(e['path']) ? e['path'][0] : undefined);
@@ -200,6 +221,11 @@ const errorPathHead = (e: Record<string, unknown>): unknown => (Array.isArray(e[
  *   is `not-found` with the detail `team`, NOT `linear-forbidden` (D-7787): Linear gave no 403 and no forbidden code, so
  *   a team out of the key's reach and a team that does not exist are one answer, and the table cannot tell them apart.
  *   `linear-forbidden` stays for Linear's HTTP 403 (`callLinear`'s `forbidden` arm), which no recording holds.
+ * - `INPUT_ERROR` "Entity not found in validateAccess: <key>": an id in the input that Linear does not hold
+ *   (`error-linear-invalid-state`, a random `stateId`): `linear-invalid`, the detail the body field the key came from.
+ * - `INVALID_INPUT`, any message: an input out of Linear's own bounds (`error-linear-invalid-priority`, `priority: 99`):
+ *   `linear-invalid`, the detail the body field of its first `validationErrors` entry's `property`. This answer carries
+ *   no `statusCode`, unlike `INPUT_ERROR`'s.
  */
 export const LINEAR_ERROR_CODES: readonly LinearErrorRow[] = Object.freeze([
   { code: 'RATELIMITED', message: null, match: () => ({ word: 'rate-limited' }), recorded: 'error-429-ratelimited-constructed' },
@@ -208,6 +234,17 @@ export const LINEAR_ERROR_CODES: readonly LinearErrorRow[] = Object.freeze([
     match: (e) => (errorPathHead(e) === 'parent' ? { word: 'not-found', detail: 'parent' } : { word: 'not-found' }),
   },
   { code: 'INPUT_ERROR', message: /^Entity not found: Team$/, match: () => ({ word: 'not-found', detail: 'team' }), recorded: 'error-linear-forbidden' },
+  {
+    code: 'INPUT_ERROR', message: VALIDATE_ACCESS, recorded: 'error-linear-invalid-state',
+    match: (e) => withField(inputFieldOf(VALIDATE_ACCESS.exec(String(e['message']))?.[1])),
+  },
+  {
+    code: 'INVALID_INPUT', message: null, recorded: 'error-linear-invalid-priority',
+    match: (e) => {
+      const v = isPlainObject(e['extensions']) ? e['extensions']['validationErrors'] : undefined;
+      return withField(Array.isArray(v) && isPlainObject(v[0]) ? inputFieldOf(v[0]['property']) : null);
+    },
+  },
 ] satisfies LinearErrorRow[]);
 
 // ── what a validated call is ──

@@ -21,7 +21,7 @@ import { keyTailOf } from '../src/linear/connection.js';
 import { LinearDirectory } from '../src/linear/directory.js';
 import {
   LINEAR_DESCRIPTION_MAX_BYTES, LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES,
-  LINEAR_DIRECTORY_PAGE_SIZE, LINEAR_DOCUMENTS, LINEAR_ERROR_CODES, LINEAR_LIST_LIMIT, LINEAR_OPS, LINEAR_PROVENANCE_LINE, LINEAR_STRIPS,
+  LINEAR_DIRECTORY_PAGE_SIZE, LINEAR_DOCUMENTS, LINEAR_ERROR_CODES, LINEAR_INPUT_FIELDS, LINEAR_LIST_LIMIT, LINEAR_OPS, LINEAR_PROVENANCE_LINE, LINEAR_STRIPS,
   LINEAR_VERBS, decodeLinearCursor, encodeLinearCursor, linearMoved, linearOutbound, linearResolvePlan, linearRouteAsk,
   lookupLinearName, readLinearDirectoryPage, shapeLinearResolve, shapeLinearTeams, shapeLinearWorkspaces,
   validateLinearCall, withLinearProvenance, type LinearCallRow, type LinearDirectoryEntries, type LinearOpContext,
@@ -65,6 +65,8 @@ const ERROR_TABLE_ROWS = [
   ['RATELIMITED', 'error-429-ratelimited-constructed'],
   ['INPUT_ERROR', 'error-not-found'],
   ['INPUT_ERROR', 'error-linear-forbidden'],
+  ['INPUT_ERROR', 'error-linear-invalid-state'],
+  ['INVALID_INPUT', 'error-linear-invalid-priority'],
 ];
 
 /** Each document constant's recorded answer in `fixtures/linear/` (the FX capture, D-7684, D-7743). */
@@ -273,6 +275,32 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
       expect(recordedComplexity(RECORDED_DOCUMENT[page])!, verb).toBeLessThan(LINEAR_QUOTA.maxQueryComplexity);
     }
   });
+  it('an input Linear refuses is linear-invalid, the detail the body field it names: INVALID_INPUT (priority 99) and an unknown stateId', () => {
+    const priority = linearRecord('error-linear-invalid-priority');
+    expect(priority.document).toBe(LINEAR_DOCUMENTS.update);
+    expect(callRow('update').shape(priority.body, SHAPE)).toEqual({ ok: false, word: 'linear-invalid', detail: 'priority' });
+    const state = linearRecord('error-linear-invalid-state');
+    expect(state.document).toBe(LINEAR_DOCUMENTS.create);
+    expect(callRow('create').shape(state.body, SHAPE)).toEqual({ ok: false, word: 'linear-invalid', detail: 'state' });
+    // A property or an input key no body field maps from names no detail: Linear's text is never echoed.
+    const odd = JSON.parse(JSON.stringify(priority.body)) as { errors: { extensions: { validationErrors: { property: string }[] } }[] };
+    odd.errors[0]!.extensions.validationErrors[0]!.property = 'somethingElse';
+    expect(callRow('update').shape(odd, SHAPE)).toEqual({ ok: false, word: 'linear-invalid' });
+    const oddState = JSON.parse(JSON.stringify(state.body)) as { errors: { message: string }[] };
+    oddState.errors[0]!.message = 'Entity not found in validateAccess: somethingElse';
+    expect(callRow('create').shape(oddState, SHAPE)).toEqual({ ok: false, word: 'linear-invalid' });
+  });
+
+  it('every input key a write sends maps back to the body field it came from (the detail of linear-invalid)', () => {
+    const create = varsOf('create', valid('create', { body: {
+      team: 'aaa', title: 't', description: 'd', state: 'todo', priority: 1, assignee: 'User A', labels: ['bug'], project: 'project x', parent: 'AAA-1',
+    } }), ctxOf({ resolved: { issue: null, parent: { id: PARENT_ID, identifier: 'AAA-1', teamId: TEAM_A.id, teamKey: 'AAA' } } }));
+    const update = varsOf('update', valid('update', { ref: 'AAA-12', body: { addLabels: ['Bug'], removeLabels: ['UI'] } }));
+    const keys = [...Object.keys(create['input'] as object), ...Object.keys(update['input'] as object)];
+    for (const k of keys) expect(LINEAR_INPUT_FIELDS[k as keyof typeof LINEAR_INPUT_FIELDS], k).toBeDefined();
+    expect(Object.keys(LINEAR_INPUT_FIELDS).sort()).toEqual([...new Set(keys)].sort());
+  });
+
   it('a team the key cannot see (the recorded random team UUID) is not-found with the detail team, never linear-forbidden (D-7787)', () => {
     // Linear answers it INPUT_ERROR "Entity not found: Team", with no 403 and no forbidden code: the same not-found
     // answer as a team that does not exist. linear-forbidden stays for Linear's HTTP 403 only (callLinear's arm).

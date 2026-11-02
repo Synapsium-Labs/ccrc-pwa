@@ -483,6 +483,19 @@ describe('failure words and their statuses (spec §6.8)', () => {
     });
   });
 
+  it('Linear\'s recorded refusals of an input are linear-invalid (422) with the field, the change failed', async () => {
+    const r = await recordedRig((c) => (c.op === 'IssueUpdate' ? recordedAnswer('error-linear-invalid-priority')
+      : c.op === 'IssueCreate' ? recordedAnswer('error-linear-invalid-state') : null));
+    const update = await r.call('update', { ref: 'AAA-7', body: { priority: 4 } });
+    expect([update.statusCode, bodyOf(update)['error'], bodyOf(update)['detail']]).toEqual([422, 'linear-invalid', 'priority']);
+    expect(update.body).not.toContain('Argument Validation');
+    let create = await r.call('create', { body: { team: 'AAA', title: 'FX invalid state', state: 'Todo' } });
+    if (bodyOf(create)['error'] === 'name-unknown') { await r.fx.refresher.idle(); create = await r.call('create', { body: { team: 'AAA', title: 'FX invalid state', state: 'Todo' } }); }
+    expect([create.statusCode, bodyOf(create)['error'], bodyOf(create)['detail']]).toEqual([422, 'linear-invalid', 'state']);
+    expect(create.body).not.toContain('validateAccess');
+    expect(r.rows().filter((x) => x['code'] === 'linear-invalid').map((x) => [x['op'], x['outcome']])).toEqual([['update', 'failed'], ['create', 'failed']]);
+  });
+
   it('Linear\'s recorded answer for a team the key cannot see is not-found (404) team, the change failed; its 403 alone is linear-forbidden (D-7787)', async () => {
     const r = await recordedRig((c) => (c.op === 'IssueCreate' ? recordedAnswer('error-linear-forbidden') : null));
     const res = await r.call('create', { body: { team: 'AAA', title: 'FX forbidden team' } });
