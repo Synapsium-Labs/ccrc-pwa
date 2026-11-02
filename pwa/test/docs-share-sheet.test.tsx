@@ -86,6 +86,27 @@ describe('the share sheet: the link, its notes, and Copy link where there is no 
     expect([field.selectionStart, field.selectionEnd]).toEqual([0, URL_A.length]);
     expect(screen.getByText(SHARE_SHEET_TEXT.copyRefused)).toBeInTheDocument();
   });
+
+  it('a second refused copy focuses and selects the field again, and announces the refusal anew', async () => {
+    vi.mocked(copyText).mockRejectedValue(new Error('denied'));
+    sheet();
+    const copy = await screen.findByRole('button', { name: SHARE_SHEET_TEXT.copy });
+    fireEvent.click(copy);
+    const field = await screen.findByRole('textbox', { name: SHARE_SHEET_TEXT.field });
+    if (!(field instanceof HTMLInputElement)) throw new Error('the field is not an input');
+    const firstAlert = screen.getByText(SHARE_SHEET_TEXT.copyRefused);
+    expect(document.activeElement).toBe(field);
+    copy.focus();
+    field.setSelectionRange(0, 0);
+    expect(document.activeElement).toBe(copy);
+    fireEvent.click(copy);
+    await settle();
+    expect(copyText).toHaveBeenCalledTimes(2);
+    expect(document.activeElement).toBe(field);
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, URL_A.length]);
+    // The repeat refusal is a new alert node, so a screen reader announces it again.
+    expect(screen.getByText(SHARE_SHEET_TEXT.copyRefused)).not.toBe(firstAlert);
+  });
 });
 
 describe('Share…: navigator.share, called in the click itself (M4.SH4, M4.SH5)', () => {

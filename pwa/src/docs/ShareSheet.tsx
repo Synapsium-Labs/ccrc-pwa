@@ -48,12 +48,15 @@ function LinkSheet(p: { readonly link: ShareLink; readonly onClose: () => void }
   const canShare = useMemo(() => webShareUsable(data), [data]);
   const [shareFailed, setShareFailed] = useState(false);
   const [copy, setCopy] = useState<'idle' | 'copied' | 'refused'>('idle');
+  // Counts the copy attempts that have answered, so a repeat of the SAME answer still acts: a second refusal focuses
+  // and selects the field again (the press moved focus off it) and, as the alert's key, is announced anew.
+  const [attempt, setAttempt] = useState(0);
   const field = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (copy !== 'refused' || field.current === null) return;
     field.current.focus();
     field.current.select();
-  }, [copy]);
+  }, [copy, attempt]);
   const refused = (e: unknown): void => {
     if (errorName(e) !== 'AbortError') setShareFailed(true);
   };
@@ -72,7 +75,10 @@ function LinkSheet(p: { readonly link: ShareLink; readonly onClose: () => void }
     sent.then(() => setShareFailed(false), refused);
   };
   const onCopy = (): void => {
-    copyText(link.url).then(() => setCopy('copied'), () => setCopy('refused'));
+    copyText(link.url).then(
+      () => { setCopy('copied'); setAttempt((n) => n + 1); },
+      () => { setCopy('refused'); setAttempt((n) => n + 1); },
+    );
   };
   return (
     <Sheet
@@ -91,7 +97,7 @@ function LinkSheet(p: { readonly link: ShareLink; readonly onClose: () => void }
         <Notes notes={link.notes} />
         {shareFailed && <p className="docs-share-note" role="alert">{SHARE_SHEET_TEXT.shareFailed}</p>}
         {copy === 'copied' && <p className="docs-share-note" role="status">{SHARE_SHEET_TEXT.copied}</p>}
-        {copy === 'refused' && <p className="docs-share-note" role="alert">{SHARE_SHEET_TEXT.copyRefused}</p>}
+        {copy === 'refused' && <p key={attempt} className="docs-share-note" role="alert">{SHARE_SHEET_TEXT.copyRefused}</p>}
         {copy === 'refused' && (
           <input ref={field} className="docs-share-field" readOnly value={link.url} aria-label={SHARE_SHEET_TEXT.field} />
         )}
