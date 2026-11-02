@@ -7602,7 +7602,10 @@ required checks report on what ran. A head branch under `train/`, the `full-ci` 
 infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockfile, a `vitest.*config.*`, a
 `tsconfig*.json`, `.gitattributes` or `.npmrc`) makes it the full run. A **merge-queue** run (`merge_group`) runs the
 full Linux suite — every server shard, the agent, pwa and browser tests and the node floor; `test (pwa)` refuses a red
-browser suite there and `test (server)` a red node floor, so either stops the merge (the perf legs stay advisory).
+browser suite there and `test (server)` a red node floor, so either stops the merge (the perf legs stay advisory). The
+one exception is the browser suite, by the owner's ruling of 2026-11-02: its shards skip their tests when no file in the
+group can reach them (`reach.mjs` `queueScope`), so a docs-only group skips them, and a deliberate skip reports success
+to `test (pwa)`. `docs/` still reaches the pwa suite, which renders it.
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
 fast run, so such a merge lands only what the fast run tested. Don't do it; the daily `full-suite` is the next run that
