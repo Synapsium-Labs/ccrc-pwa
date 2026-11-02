@@ -28,7 +28,7 @@ import path from 'node:path';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  BASH, CANARY, HAVE_FLOCK, REPO, boxEnv, ccrcIn, laneBox, seedRoster, type Result,
+  BASH, CANARY, HAVE_FLOCK, NODE_ID, REPO, boxEnv, ccrcIn, laneBox, seedRoster, type Result,
 } from './laneStateFixture.js';
 
 /** The plan's lane vocabulary: one upstream and two generated Anthropic token lanes. */
@@ -502,7 +502,9 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     expect(isEmptyRegular(sw(home, 'lane-c'))).toBe(true);
     expect(report(home, r)).toBe(`${JSON.stringify({ ok: true, id: 'lane-c', disabled: true,
       provisioned: ['settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'graphify-skill', 'history-skill'],
-      'operator-steps': OPERATOR_STEPS_C, roster: { version: 1, accounts: [...ROSTER.accounts, ENTRY_C] } })}\n`);
+      'operator-steps': OPERATOR_STEPS_C, roster: { version: 1, accounts: [...ROSTER.accounts, ENTRY_C] },
+      // Accounts plan Task A16: the node beside the roster, so the server reloads it; no box token, no fingerprints.
+      fleetIdentity: NODE_ID })}\n`);
   });
 
   it('`declare` leaves the declared lane switched off: an empty regular marker, and its `declared` report byte for byte', () => {
@@ -678,8 +680,10 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
 
   /** `remove`'s `removed` report for lane-a, with `removed` as given. */
   const removedReport = (removed: string[]): string => `${JSON.stringify({ ok: true, id: 'lane-a',
-    roster: { version: 1, accounts: ROSTER.accounts.filter((a) => a.id !== 'lane-a') },
-    rehomed: [], kept: [], removed, 'operator-steps': [] })}\n`;
+    roster: { version: 1, accounts: ROSTER.accounts.filter((a) => a.id !== 'lane-a') }, fleetIdentity: NODE_ID,
+    rehomed: [], kept: [], removed, 'operator-steps': [],
+    // Accounts plan Task A16 (spec §11.3): lane-a holds a token, which stays valid at Anthropic until revoked.
+    atProvider: [{ kind: 'anthropic-token', state: 'still-valid', revokeAt: 'claude-code-settings' }] })}\n`;
 
   it('`remove` lists the marker in `removed` at its place in the loop: limits file, marker, hookstate, turn marker', () => {
     const home = box('ccrc-markers-remove-');
@@ -957,10 +961,11 @@ describe('the disabled switch is never projected from the roster (D-7048)', () =
       const r = spawnSync(BASH, ['-c', 'umask 022; exec "$@"', '_', BASH, ccrcIn(home), ...args], { env: boxEnv(home), encoding: 'utf8', input: stdin });
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     };
-    // `ccrc account set` is not a verb on this tree: it refuses, and the switch stands.
+    // `ccrc account set` (accounts plan Task A16) with nothing to set refuses, and the switch stands.
     const set = run(['account', 'set', '--id', 'lane-b']);
     expect(set.code).toBe(2);
-    expect(JSON.parse(set.stdout)).toMatchObject({ ok: false, error: 'unknown-subcommand' });
+    expect(JSON.parse(set.stdout)).toMatchObject({ ok: false, error: 'missing-value' });
+    expect(run(['account', 'set', '--id', 'lane-b', '--placement', 'full']).code).toBe(0);
     expect(run(['account', 'check', '--id', 'lane-b']).code).toBe(0);
     expect(run(['account', 'disable', '--id', 'lane-b']).code).toBe(0);
     expect(run(['account', 'enable', '--id', 'lane-b', '--force']).code).toBe(0);

@@ -83,7 +83,7 @@ describe('one act per lane (G18)', () => {
     const home = laneBox('ccrc-lane-lock-check-');
     expect(addLane(home, 'lane-c').code).toBe(0);
     held(home, 'lane-c', 'account check --id lane-c');
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
   });
 
   it('`remove` on a held lane is refused `lane-busy`, and the lane stands', () => {

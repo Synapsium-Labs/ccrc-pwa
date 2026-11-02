@@ -9149,6 +9149,9 @@ EOF
   # Same channel, same argument, as the three tokens above; and the same
   # obligation, which is the list named in the comment beside `stop-surface`.
   echo account-v1
+  # `account-v2` (N4, D-7734): this box's `ccrc account` carries W2a's write subs (paste validate-first, `set`,
+  # Remove's pre-check and discard; accounts plan Task A16), so the server offers them. Later waves add their own words.
+  echo account-v2
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now

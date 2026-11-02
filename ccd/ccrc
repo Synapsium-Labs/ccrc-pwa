@@ -1976,7 +1976,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates check credential declare disable enable remove roster seed"
+ACCT_SUBS="add candidates check credential declare disable enable remove roster seed set"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -7001,11 +7001,17 @@ _acct_read_credential() {   # <spelling> — sets ACCT_CREDENTIAL, or refuses
     || _acct_refuse 2 credential-not-stdin "the --credential flag takes exactly one spelling, \"-\", which reads the secret from stdin. A value given here would sit in this process's argv, which is world-readable on this box for as long as the process lives. Nothing was written."
   [ -t 0 ] \
     && _acct_refuse 2 credential-needs-a-pipe "the --credential - flag reads the secret from a PIPE, and stdin here is a terminal. This verb does not prompt: it is driven by the server, and a prompt would have no echo discipline and no interrupt handling. Pipe the secret in, or use 'ccrc passwd' for the one secret this box does prompt for. Nothing was written."
-  local v=""
-  IFS= read -r v
-  # `read` returns 1 at EOF with no delimiter, which is the ordinary shape of a
-  # one-line pipe with no trailing newline — so the RETURN CODE is not the test.
-  # The VALUE is.
+  # THE BYTES ARE CHECKED BEFORE ANY CONSUMER SEES THEM (spec §3.3, `key-charset`; accounts plan Task A16). The
+  # whole of stdin is read, not its first line, so a value carrying a newline cannot pass as its first line. One
+  # trailing LF is a pipe's (`echo`, `printf '%s\n'`) and is dropped; any other C0 byte, DEL, a NUL (the `-d ''`
+  # read stops at it, so a first read that returns 0 found one, or hit the bound), or more than 8 KiB refuses.
+  local v="" LC_ALL=C bad=$'[\x01-\x1f\x7f]'
+  if IFS= read -r -d '' -n 8194 v; then v="$v"$'\x01'; fi
+  v="${v%$'\n'}"
+  if [ "${#v}" -gt 8192 ] || [[ "$v" =~ $bad ]]; then
+    v=""
+    _acct_refuse 2 key-charset "the credential on stdin carries a control byte (a newline inside it, a NUL, another C0 byte or DEL) or is longer than 8 KiB. No key or token holds those bytes, and a consumer could misread them. Nothing was written."
+  fi
   [ -n "${v//[[:space:]]/}" ] \
     || _acct_refuse 2 credential-empty "the --credential - flag was given and stdin carried nothing. This verb fails closed rather than writing a credential file with an empty value in it, which would be a lane holding a key that decides nothing. Nothing was written."
   ACCT_CREDENTIAL="$v"
@@ -7197,7 +7203,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
 # shape library alone. Everything that needs the roster or the provider table is
 # `check-add`'s, in node, on the same exit-code table.
 ACCT_ID=""; ACCT_PROVIDER=""; ACCT_LABEL=""; ACCT_HUE=""; ACCT_SUFFIX=""
-ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""
+ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""; ACCT_ADOPT=""
 _acct_add_parse() {
   _acct_shape
   local flag="" v=""
@@ -7205,6 +7211,8 @@ _acct_add_parse() {
     flag="${1%%=*}"
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      # G20 (accounts plan Task A16): take over a config directory that already exists, as it is.
+      --adopt) ACCT_ADOPT=1; shift; continue ;;
       --id|--provider|--label|--hue|--suffix|--base-url|--models|--method|--credential)
         [ $# -ge 2 ] \
           || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
@@ -7274,7 +7282,11 @@ _acct_add_parse() {
   # note); the agreement between the two is measured, not asserted, by
   # `ccrc-account.test.ts`'s "`_acct_add_parse` and `check-add` default the
   # config dir to the same string".
-  [ -n "$ACCT_SUFFIX" ] || ACCT_SUFFIX=".claude-$ACCT_ID"
+  # G4 (accounts plan Task A16): an id that already starts `claude-` is `.<id>`, never `.claude-claude-…`.
+  # `defaultSuffixOf` in `deploy/account-op.mjs` is the same rule.
+  if [ -z "$ACCT_SUFFIX" ]; then
+    case "$ACCT_ID" in claude-*) ACCT_SUFFIX=".$ACCT_ID" ;; *) ACCT_SUFFIX=".claude-$ACCT_ID" ;; esac
+  fi
   # THE READ ROOT, NOT A STYLE RULE. `underClaudeGlob`
   # (agent/src/whitelist.ts:48-53) admits only $HOME/.claude*, and every server
   # read of a lane's transcripts and statusline goes through `configDirFor`. A
@@ -7689,7 +7701,8 @@ _acct_add() {
   local plan rc=0
   plan="$(_acct_node check-add \
     --file "$(_acct_roster_path)" --id "$ACCT_ID" --provider "$ACCT_PROVIDER" \
-    --label "$ACCT_LABEL" --hue "$ACCT_HUE" --suffix "$ACCT_SUFFIX" \
+    --label "$ACCT_LABEL" --hue "$ACCT_HUE" --suffix "$ACCT_SUFFIX" --home "$HOME" \
+    ${ACCT_ADOPT:+--adopt true} \
     ${ACCT_BASE_URL:+--base-url "$ACCT_BASE_URL"} \
     ${ACCT_MODELS:+--models "$ACCT_MODELS"} \
     ${ACCT_METHOD:+--method "$ACCT_METHOD"})" || rc=$?
@@ -7759,6 +7772,8 @@ _acct_add() {
     [ -n "$ACCT_CRED_SPELLING" ] \
       || _acct_refuse 2 credential-required "provider \"$ACCT_PROVIDER\" with method \"${ACCT_METHOD:-paste}\" is a token lane and needs the key: pass --credential - and pipe it in. Nothing was written."
     _acct_read_credential "$ACCT_CRED_SPELLING"
+    # PASTE VALIDATES FIRST (spec §6.3): an Anthropic token is probed before any byte of the lane is written.
+    [ "$envvar" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$ACCT_ID" "Nothing was written."
     _acct_write_secret "$ACCT_ID" "$ACCT_PROVIDER" "$envvar"
   else
     [ -z "$ACCT_CRED_SPELLING" ] \
@@ -7826,7 +7841,7 @@ _acct_add() {
   _acct_operator_steps "$ACCT_ID"
   # THE LANE STATE, FRESH (accounts plan Task A11): a new lane's state starts
   # over, so a stale file under a re-used id lends it nothing.
-  _acct_lane_state "$ACCT_ID" --mode fresh
+  _acct_lane_state "$ACCT_ID" --mode fresh --added-at now
 
   # ── 7. THE ANSWER ───────────────────────────────────────────────────────
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`
@@ -8125,7 +8140,7 @@ _acct_own_temp() {   # <path> — this verb's temp, removed by the TERM trap
 
 _acct_on_term() {    # the TERM trap `cmd_account` installs
   local t=""
-  for t in ${ACCT_OWN_TEMPS[@]+"${ACCT_OWN_TEMPS[@]}"}; do rm -f -- "$t" 2>/dev/null; done
+  for t in ${ACCT_OWN_TEMPS[@]+"${ACCT_OWN_TEMPS[@]}"}; do rm -rf -- "$t" 2>/dev/null; done   # -r: the paste probe's directory (A16)
   exit 143
 }
 
@@ -8278,9 +8293,66 @@ _acct_enable() {   # [--id X] [--force]
     6) _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written." ;;
     *) _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written." ;;
   esac
-  _acct_lane_state "$ACCT_ONE_ID"
+  _acct_lane_state "$ACCT_ONE_ID" --enabled-at now
   _acct_read_op "The marker for account $ACCT_ONE_ID was removed and the lane is switched on. Only this report failed." \
     switched --id "$ACCT_ONE_ID" --disabled false
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── `ccrc account set` (G5; spec §6.3, §8.4; accounts plan Task A16, D-7735) ─────────────────────────────────
+# `--stated -`: the account the operator says a token lane approves, 1 to 120 characters on stdin (never argv: it
+# names a person), with no control byte, into the lane state as `identitySource: stated`. A sign-in lane's identity
+# is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
+# be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
+_acct_set() {
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --id=*) id="${1#*=}" ;;
+      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --id takes a value. Nothing was written."; id="$2"; shift ;;
+      --stated=-) stated=1 ;;
+      --stated) [ "${2:-}" = - ] || _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written."; stated=1; shift ;;
+      --stated=*) _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written." ;;
+      --placement=overflow|--placement=full) placement="${1#*=}" ;;
+      --placement) { [ "${2:-}" = overflow ] || [ "${2:-}" = full ]; } || _acct_refuse 2 bad-value "the flag --placement takes overflow or full. Nothing was written."; placement="$2"; shift ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated - and --placement overflow|full" ;;
+    esac
+    shift
+  done
+  _acct_id_or_refuse "$id"
+  [ "$stated" -eq 1 ] || [ -n "$placement" ] \
+    || _acct_refuse 2 missing-value "ccrc account set needs --stated - or --placement overflow|full. Nothing was written."
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
+  _acct_lane "$id"
+  if [ "$stated" -eq 1 ]; then
+    { [ -n "$ACCT_SECRETS" ] || [ "$ACCT_PROVIDER" != anthropic ]; } \
+      || _acct_refuse 1 not-a-token-lane "lane $id is a sign-in lane, whose account is read off the provider by 'ccrc account check', so a stated one would only contradict it. Nothing was written."
+    local LC_ALL=C bad=$'[\x01-\x1f\x7f]'
+    IFS= read -r -d '' -n 8194 v && v="$v"$'\x01'
+    v="${v%$'\n'}"
+    { [[ ! "$v" =~ $bad ]] && [ -n "${v//[[:space:]]/}" ]; } \
+      || _acct_refuse 2 bad-stated "the stated account on stdin is empty or carries a control byte. Give 1 to 120 printable characters. Nothing was written."
+    printf '%s' "$v" | _acct_write_op "Nothing was written." lane-state --id "$id" --identity - --identity-source stated \
+      || exit $?
+    v=""; done_note="The stated account was recorded. "
+  fi
+  if [ -n "$placement" ]; then
+    _acct_marker_lock "${done_note}Nothing else was written."
+    if [ "$placement" = overflow ]; then
+      _acct_placeable
+      for f in ${ACCT_PLACEABLE[@]+"${ACCT_PLACEABLE[@]}"}; do [ "$f" = "$id" ] && was_placeable=1; done
+      if [ "$was_placeable" -eq 1 ]; then
+        _acct_placeable "$id"
+        [ "${#ACCT_PLACEABLE[@]}" -gt 0 ] \
+          || _acct_refuse 1 last-home-able "lane $id is the only lane fresh sessions can be placed on, so taking it out of placement would leave them nowhere. ${done_note}Nothing else was written."
+      fi
+    fi
+    _acct_write_op "${done_note}Nothing else was written." set-placement --file "$(_acct_roster_path)" --id "$id" --placement "$placement"
+    _acct_projection "The roster records lane $id's placement as $placement."
+  fi
+  _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"
 }
 
@@ -8808,6 +8880,7 @@ _acct_upstream_id() {   # <what-still-stands> -> ACCT_UPSTREAM_ID
 # that comment names, not a precedent.
 ACCT_LIVE_MEASURED=false
 ACCT_LIVE_IDS=()
+ACCT_ASLEEP_IDS=(); ACCT_ARCHIVED_IDS=()
 # WHICH QUESTION WENT UNANSWERED. `ACCT_LIVE_MEASURED` goes false for three
 # unrelated conditions — the registry could not be listed, a `.wrapper` exists
 # and cannot be read, tmux could not be asked — and one refusal asserting the
@@ -8824,6 +8897,7 @@ _acct_live() {   # <id>
   ACCT_LIVE_MEASURED=true
   ACCT_LIVE_IDS=()
   ACCT_LIVE_WHY=""
+  ACCT_ASLEEP_IDS=(); ACCT_ARCHIVED_IDS=()
   # `-e` FIRST, and the three arms are the three conditions the header names.
   # An absent registry falls through both branches with `rows` empty, which is
   # the measured `[]`; anything that exists but cannot be listed and entered
@@ -8881,6 +8955,12 @@ _acct_live() {   # <id>
     return 0
   fi
   [ "${#rows[@]}" -gt 0 ] || return 0
+  # N3 (D-7733): a row with no pane is asleep (`.hibernated`, D-5242) or archived (`.archived`), counted apart from the
+  # live ones, because `remove` would rehome a sleeping row onto upstream, where it would wake.
+  for sid in "${rows[@]}"; do
+    if [ -e "$reg/$sid.hibernated" ] || [ -L "$reg/$sid.hibernated" ]; then ACCT_ASLEEP_IDS+=("$sid")
+    elif [ -f "$reg/$sid.archived" ]; then ACCT_ARCHIVED_IDS+=("$sid"); fi
+  done
   # ── A NON-ZERO tmux IS NOT AUTOMATICALLY AN UNANSWERED QUESTION ──────────
   # MEASURED: `tmux list-sessions` exits 1 when NO SERVER IS RUNNING, which is
   # the ordinary state of a box whose sessions have all been stopped — not a
@@ -8917,6 +8997,16 @@ _acct_live() {   # <id>
   for sid in "${rows[@]}"; do
     n="cc-$sid"; n="${n//[.:]/_}"; case $'\n'"$names"$'\n' in *$'\n'"$n"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
   done
+  # A row with a pane is live, whatever else its files say.
+  local -a keep=()
+  for sid in ${ACCT_ASLEEP_IDS[@]+"${ACCT_ASLEEP_IDS[@]}"}; do
+    case " ${ACCT_LIVE_IDS[*]-} " in *" $sid "*) ;; *) keep+=("$sid") ;; esac
+  done
+  ACCT_ASLEEP_IDS=(${keep[@]+"${keep[@]}"}); keep=()
+  for sid in ${ACCT_ARCHIVED_IDS[@]+"${ACCT_ARCHIVED_IDS[@]}"}; do
+    case " ${ACCT_LIVE_IDS[*]-} " in *" $sid "*) ;; *) keep+=("$sid") ;; esac
+  done
+  ACCT_ARCHIVED_IDS=(${keep[@]+"${keep[@]}"})
   return 0
 }
 
@@ -9123,6 +9213,8 @@ _acct_credential() {
   # one value in this run that must never be read for a request the box was
   # going to refuse anyway.
   _acct_read_credential "$cred"                # -> ACCT_CREDENTIAL, or refuses
+  # VALIDATE FIRST (accounts plan Task A16): the old file stands, and so does its check, until the new token passes.
+  [ "$ACCT_SECRET_ENV" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$id" "Nothing was written: the old credential file stands."
   # A verdict measured on the old secret says nothing about this one (D-5755
   # (12)), and it is dropped BEFORE the write, so a write that refuses or a TERM
   # after the rename fails safe: the lane reads Not checked either way.
@@ -9131,7 +9223,7 @@ _acct_credential() {
   _acct_live "$id"
 
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
-  local -a args=(--id "$id" --measured "$ACCT_LIVE_MEASURED")
+  local -a args=(--id "$id" --measured "$ACCT_LIVE_MEASURED" --file "$(_acct_roster_path)")
   local sid=""
   for sid in ${ACCT_LIVE_IDS[@]+"${ACCT_LIVE_IDS[@]}"}; do args+=(--live "$sid"); done
   # CAPTURED WITH THIS SITE'S OWN CLAUSE (D-2130, D-2135), not passed straight
@@ -9244,9 +9336,41 @@ _acct_remove_census() {   # <id> <clause> [<after-wait>]
   exit 1
 }
 
+# ── REMOVE'S PRE-CHECK AND GATE (spec §11.1, §11.5; accounts plan Task A16, N3 = D-7733) ─────────────────
+# Bash measures, `pre-remove` decides. The census: live rows by pane, sleeping and archived rows by their files
+# (`_acct_live`), the lanes still placeable without this one, whether it is upstream and whether its marker holds it
+# off. `--dry-run` takes no lock, writes nothing and refuses nothing a removal would: it answers the measurements
+# and exits. The gate runs inside the removal, under both locks and after the live census.
+_acct_remove_facts_args() {   # <id> -> ACCT_REMOVE_ARGS
+  local id="$1" s="" up=false off=false
+  _acct_live "$id"
+  _acct_placeable "$id"
+  [ "$ACCT_KIND" != upstream ] || up=true
+  [ ! -f "$_SVC_REG/$id-disabled" ] || off=true
+  ACCT_REMOVE_ARGS=(--file "$(_acct_roster_path)" --id "$id" --live-measured "$ACCT_LIVE_MEASURED"
+    --other-home-able "${#ACCT_PLACEABLE[@]}" --upstream "$up" --disabled "$off")
+  for s in ${ACCT_LIVE_IDS[@]+"${ACCT_LIVE_IDS[@]}"}; do ACCT_REMOVE_ARGS+=(--live "$s"); done
+  for s in ${ACCT_ASLEEP_IDS[@]+"${ACCT_ASLEEP_IDS[@]}"}; do ACCT_REMOVE_ARGS+=(--sleeping "$s"); done
+  for s in ${ACCT_ARCHIVED_IDS[@]+"${ACCT_ARCHIVED_IDS[@]}"}; do ACCT_REMOVE_ARGS+=(--archived "$s"); done
+}
+
+_acct_remove_precheck() {   # <id> — answers and exits
+  _acct_lane "$1"
+  _acct_remove_facts_args "$1"
+  _acct_read_op "Nothing was written." pre-remove "${ACCT_REMOVE_ARGS[@]}" --mode check
+  printf '%s\n' "$ACCT_OUT"
+  exit 0
+}
+
+_acct_remove_gate() {   # <id> <remove|discard> <rehome-sleeping 0|1> — refuses, or returns 0
+  _acct_remove_facts_args "$1"
+  [ "$3" -eq 0 ] || ACCT_REMOVE_ARGS+=(--rehome-sleeping true)
+  _acct_write_op "Nothing was written." pre-remove "${ACCT_REMOVE_ARGS[@]}" --mode "$2"
+}
+
 _acct_remove() {
   local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0 usage_note=""
-  local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0
+  local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0 mode=remove dry=0 rehome_sleeping=0
   local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=() lane_before=() lane_left=()
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
@@ -9266,7 +9390,15 @@ _acct_remove() {
         [ "$seen_keep" -eq 0 ] \
           || _acct_refuse 2 duplicate-argument "the singular flag --keep-credential was given more than once. Nothing was written."
         seen_keep=1; keepcred=1; shift; continue ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\" - it takes --id and optional --keep-credential" ;;
+      # Accounts plan Task A16 (D-7735): `discard` (spec §11.5), the pre-check (`--dry-run`, spec §11.1) and N3's
+      # CLI-only `--rehome-sleeping` (D-7733). No route sends the last or `--keep-credential`.
+      --mode=remove|--mode=discard) mode="${1#*=}"; shift; continue ;;
+      --mode) { [ "${2:-}" = remove ] || [ "${2:-}" = discard ]; } \
+          || _acct_refuse 2 bad-value "the flag --mode takes remove or discard. Nothing was written."
+        mode="$2"; shift 2; continue ;;
+      --dry-run) dry=1; shift; continue ;;
+      --rehome-sleeping) rehome_sleeping=1; shift; continue ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\" - it takes --id and optional --mode remove|discard, --dry-run, --rehome-sleeping and --keep-credential" ;;
     esac
     [ -n "$v" ] \
       || _acct_refuse 2 missing-value "the flag --id was given an empty value. Give it an account id. Nothing was written."
@@ -9275,6 +9407,7 @@ _acct_remove() {
   done
 
   _acct_id_or_refuse "$id"
+  [ "$dry" -eq 0 ] || _acct_remove_precheck "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_sweep_secret_temps "$id"
   _acct_lane "$id"
@@ -9289,6 +9422,7 @@ _acct_remove() {
   _acct_remove_home_preflight "$id" "Nothing was written."
   _acct_marker_lock "Nothing was written."
   _acct_remove_census "$id" "Nothing was written."
+  _acct_remove_gate "$id" "$mode" "$rehome_sleeping"
 
   # Validate the shared auth deadline before the first mutation, but only when
   # this run will actually invoke logout for a login credential.
@@ -9634,7 +9768,13 @@ _acct_remove() {
     _acct_lane_state "$id" --mode delete
     { [ -e "$lane_state" ] || [ -L "$lane_state" ]; } && kept+=("$lane_state") || removed+=("$lane_state")
   fi
-  local -a args=(--file "$(_acct_roster_path)" --id "$id")
+  # Every removal deletes the lane's sign-in scratch (spec §3.9; A16). A link is removed, never followed.
+  f="$HOME/.ccrc/auth-scratch/$id"
+  if [ -e "$f" ] || [ -L "$f" ]; then
+    rm -rf -- "$f" 2>/dev/null
+    { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f") || removed+=("$f")
+  fi
+  local -a args=(--file "$(_acct_roster_path)" --id "$id" --kind "$ACCT_KIND" --provider "$ACCT_PROVIDER" --secret-env "$ACCT_SECRET_ENV" --secrets "$ACCT_SECRETS")
   for f in ${rehomed[@]+"${rehomed[@]}"}; do args+=(--rehomed "$f"); done
   for f in ${kept[@]+"${kept[@]}"}; do args+=(--kept "$f"); done
   for f in ${removed[@]+"${removed[@]}"}; do args+=(--removed "$f"); done
@@ -10300,6 +10440,41 @@ _acct_note_cap() {   # <note> -> the note, or its first $ACCT_NOTE_MAX character
     "${n:0:$ACCT_NOTE_MAX}" "$ACCT_NOTE_MAX"
 }
 
+# ── VALIDATE FIRST (spec §6.3; accounts plan Task A16, D-7735) ───────────────────────────────────────────
+# The candidate in ACCT_CREDENTIAL is probed BEFORE any byte of it is written: one turn through the upstream
+# launcher with the candidate in the probe's environment, and a config directory of its own under
+# `~/.ccrc/auth-scratch` (outside every agent read root), which goes when the probe ends. A 401 refuses
+# `key-rejected` and an unreachable or unreadable answer `token-unverified`, both with nothing written: the field
+# comes back empty. Only `ok` returns. The verdict is the check's own classifier, so the two never disagree.
+_acct_token_probe() {   # <id> <what-still-stands> -> 0, or refuses
+  local -; set +x +a
+  local id="$1" stands="$2" root="$HOME/.ccrc/auth-scratch" dir="" out="" rc=0 row="" verdict=""
+  _acct_upstream_id "$stands"
+  _acct_probe_deadline
+  mkdir -p -m 0700 "$root" "$CCRC_PROBE_DIR" \
+    || _acct_refuse 1 probe-cwd "cannot create $root (0700) or $CCRC_PROBE_DIR, so the token cannot be checked before it is saved. $stands"
+  _acct_backup_exclude "$root"
+  rm -rf -- "$root/.$id-probe."*   # one a SIGKILL left; this lane's lock is held, so none is running
+  dir="$(mktemp -d "$root/.$id-probe.XXXXXX")" \
+    || _acct_refuse 1 probe-cwd "cannot create a probe directory under $root, so the token cannot be checked before it is saved. $stands"
+  _acct_own_temp "$dir"
+  out="$(cd "$CCRC_PROBE_DIR" && CLAUDE_CONFIG_DIR="$dir" CLAUDE_CODE_OAUTH_TOKEN="$ACCT_CREDENTIAL" \
+    CLAUDE_CODE_MAX_RETRIES=0 _plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" \
+      -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
+  rm -rf -- "$dir"
+  if [ "$rc" -eq 124 ]; then
+    row="$(printf '' | _acct_node classify --source probe --exit 124 --timed-out true --deadline "$ACCT_DEADLINE")"
+  else
+    row="$(printf '%s' "$out" | _acct_node classify --source probe --exit "$rc")"
+  fi
+  verdict="$(jq -r '.verdict // empty' <<<"$row" 2>/dev/null)" || verdict=""
+  case "$verdict" in
+    ok) return 0 ;;
+    auth-dead) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That token was refused (HTTP 401). $stands" ;;
+    *) ACCT_CREDENTIAL=""; _acct_refuse 1 token-unverified "Anthropic didn't answer ($verdict${verdict:+, }exit $rc), so the token could not be checked: $stands Try again." ;;
+  esac
+}
+
 _acct_check() {
   local id="" v="" flag=""
   while [ $# -gt 0 ]; do
@@ -10514,6 +10689,10 @@ cmd_account() {
       ;;
     disable)
       _acct_disable "$@"
+      return 0
+      ;;
+    set)
+      _acct_set "$@"
       return 0
       ;;
     declare)

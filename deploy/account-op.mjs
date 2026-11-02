@@ -40,7 +40,7 @@ import {
   readSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
 // refusing a hue, a label, a model id or a model map the writer would then
@@ -614,7 +614,7 @@ const OPS = {
   // own.
   candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
   'check-add': {
-    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method'],
+    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt'],
     repeat: [],
   },
   // ONE key carries the whole request, because `check-add` already resolved it:
@@ -686,7 +686,7 @@ const OPS = {
   // always had.
   drop: { keys: ['file', 'id', 'stands'], repeat: [] },
   removed: {
-    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step'],
+    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step', 'kind', 'provider', 'secret-env', 'secrets'],
     repeat: ['rehomed', 'kept', 'removed', 'operator-step'],
   },
   // `--stands` here is `drop`'s key at a second address and for its reason: a
@@ -701,7 +701,7 @@ const OPS = {
   // the JSON-shaped position this file owns. `measured` is a separate key from
   // the list itself precisely so an EMPTY list and an UNMEASURED one are two
   // argv shapes rather than one.
-  rotated: { keys: ['id', 'measured', 'live'], repeat: ['live'] },
+  rotated: { keys: ['id', 'measured', 'live', 'file'], repeat: ['live'] },
   // THE ONE OP THAT READS STDIN, and the header's "no secret ever reaches this
   // file" rule survives intact — what arrives is a LAUNCHER's own diagnostic
   // JSON (`{"loggedIn":…}`, `{"type":"result",…}`) and never a credential.
@@ -724,7 +724,7 @@ const OPS = {
   'lane-state': {
     keys: [
       'id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear',
-      'identity', 'identity-source', 'last-run-at', 'seed-verified-at',
+      'identity', 'identity-source', 'last-run-at', 'seed-verified-at', 'added-at', 'enabled-at',
     ],
     repeat: [],
   },
@@ -735,6 +735,14 @@ const OPS = {
   // THE ROSTER HALF OF `ccrc codex switch` (codex-bridge Stage 2, Task 12; spec D20): a codex lane's mode, written
   // through `writeRoster`, the one writer. Silent on success, like `drop`. Its arm says why the default is DELETED.
   'codex-mode': { keys: ['file', 'id', 'bridge'], repeat: [] },
+  // Accounts plan Task A16 (D-7735).
+  'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
+  'set-done': { keys: ['file', 'id'], repeat: [] },
+  'pre-remove': {
+    keys: ['file', 'id', 'mode', 'live', 'live-measured', 'sleeping', 'archived', 'other-home-able', 'upstream',
+      'disabled', 'rehome-sleeping'],
+    repeat: ['live', 'sleeping', 'archived'],
+  },
 };
 
 /** THE VERDICT TABLE, and the only copy of it in the tree. §8 puts the
@@ -1263,6 +1271,9 @@ const LANE_STATE_FIELDS = [
   'check', 'identity', 'identitySource', 'keyHint', 'keySource', 'keyHash', 'keyLimit', 'limitReset',
   'keyExpiresAt', 'retiredKeyHash', 'validatedAt', 'credit', 'mintedAt', 'seedVerifiedAt', 'lastRunAt',
   'fleetIdentity',
+  // The box's own two (accounts plan Task A16, D-7735 (5)): when `add` made the lane and when `enable` last switched
+  // it on, which is what Discard's "never enabled" reads. The server's reader names neither and drops both.
+  'addedAt', 'enabledAt',
 ];
 /** The fields `--clear` may drop. */
 const LANE_STATE_CLEARABLE = ['check'];
@@ -1397,6 +1408,12 @@ function opLaneState(a) {
     refuse('bad-argv', '--identity and --identity-source come together: an identity with no source is not a reading');
     return 2;
   }
+  if (a['identity'] === '-') {
+    // `ccrc account set --stated -` (accounts plan Task A16): the operator's words arrive on stdin, never on an argv.
+    let v = '';
+    try { v = readFileSync(0, 'utf8'); } catch { v = ''; }
+    a['identity'] = v.endsWith('\n') ? v.slice(0, -1) : v;
+  }
   if (a['identity'] !== undefined) {
     const v = a['identity'];
     if (v.trim() === '' || v.length > LANE_IDENTITY_MAX || identityUnprintable(v)
@@ -1407,11 +1424,12 @@ function opLaneState(a) {
     }
   }
   const times = {};
-  for (const [k, field] of [['last-run-at', 'lastRunAt'], ['seed-verified-at', 'seedVerifiedAt']]) {
+  for (const [k, field] of [['last-run-at', 'lastRunAt'], ['seed-verified-at', 'seedVerifiedAt'],
+    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt']]) {
     if (a[k] === undefined) continue;
     const t = laneTimeOf(a[k]);
     if (t === null || (k === 'seed-verified-at' && a[k] === 'now')) {
-      refuse('bad-argv', `--${k} must be a UTC time to the second or the millisecond${k === 'last-run-at' ? ', or now' : ''}`);
+      refuse('bad-argv', `--${k} must be a UTC time to the second or the millisecond${k === 'seed-verified-at' ? '' : ', or now'}`);
       return 2;
     }
     times[field] = t;
@@ -1698,6 +1716,300 @@ function opReady(a) {
   return 0;
 }
 
+/** ── ACCOUNTS PLAN TASK A16: THE BOX HALF OF W2a (D-5513, D-5518, N3 = D-7733, N4 = D-7734; as built D-7735) ────
+ *  Re-add safety, `set`, Remove's pre-check and gate, the provider ledger, and the lane-secret fingerprints. */
+
+/** The default config directory (G4): `.claude-<id>`, or `.<id>` when the id already starts `claude-`, so a lane
+ *  `claude-a` is `.claude-a` and never `.claude-claude-a`. `_acct_add_parse` spells the same rule in bash, and
+ *  `ccrc-account.test.ts` holds the two equal. */
+function defaultSuffixOf(id) {
+  return id.startsWith('claude-') ? `.${id}` : `.claude-${id}`;
+}
+
+/** What an existing config directory holds (G20), measured without reading a credential: signed in when its
+ *  `.credentials.json` is there, and the account its `.claude.json` names, when it names a printable one. */
+function configDirFound(dir) {
+  let signedIn = false;
+  try { lstatSync(join(dir, '.credentials.json')); signedIn = true; } catch { signedIn = false; }
+  let identity = null;
+  const cj = readClaudeJson(join(dir, SEED_FILE_NAME));
+  if (cj.kind === 'read' && isPlainObject(cj.json.oauthAccount)) {
+    const e = cj.json.oauthAccount.emailAddress;
+    if (typeof e === 'string' && e.trim() !== '' && e.length <= LANE_IDENTITY_MAX && !identityUnprintable(e)) identity = e;
+  }
+  return { signedIn, identity };
+}
+
+/** `config-dir-exists` (G20): a re-added id must not inherit the old lane's sign-in, transcripts or settings
+ *  silently, so an existing `$HOME/<suffix>` refuses with what it holds unless `--adopt` is given. Class 1: a fact
+ *  about the box, not about argv. */
+function configDirTakenClass(home, suffix, id) {
+  const dir = join(home, suffix);
+  try { lstatSync(dir); } catch (e) { return e.code === 'ENOENT' ? 0 : configDirRefusal(dir, id, null); }
+  return configDirRefusal(dir, id, configDirFound(dir));
+}
+
+function configDirRefusal(dir, id, found) {
+  const what = found === null ? 'could not be measured'
+    : found.signedIn ? `is signed in${found.identity === null ? '' : ` as ${found.identity}`}`
+      : `is signed out${found.identity === null ? '' : ` (it last named ${found.identity})`}`;
+  const detail = `${dir} already exists and ${what}, so a new lane "${id}" would inherit its sign-in, transcripts `
+    + 'and settings. Pass --adopt to take it over as it is, or pick another id or --suffix. Nothing was written.';
+  out({ ok: false, error: 'config-dir-exists', detail, found });
+  process.stderr.write(`${SELF}: ${detail} (config-dir-exists)\n`);
+  return 1;
+}
+
+/** ── THE LANE-SECRET FINGERPRINTS (D-5996, D-6057 (9)) ────────────────────────────────────────────────────────
+ *  `{gen, rows: [{laneId, fp, len}]}`, where `fp` is HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret) over the
+ *  secret with its trailing `=` stripped, `len` that stripped secret's UTF-8 byte length (20 to 8192), and `gen` the
+ *  token's generation id. `server/src/accounts/mask.ts` is the other half (`fingerprintRow`,
+ *  `fingerprintGeneration`, `fingerprintAnswerOf`); `ccrc-account-paste.test.ts` holds the two equal. The box token is
+ *  `~/.cc-secrets/ccrc-mail.token`, read by `extractToken`'s rule (`server/src/coord/token.ts`): the first line that
+ *  is neither blank nor a `#` comment, with every space removed. No token, no fingerprints: the field is left out. */
+const FP_DOMAIN = 'ccrc-secret-fp-v1\0';
+const FP_GEN_DOMAIN = 'ccrc-secret-fp-gen-v1\0';
+const FP_LEN_MIN = 20;
+const FP_LEN_MAX = 8192;
+const SMALL_FILE_MAX = 64 * 1024;
+
+/** A small regular file's text, never through a symlink, or `null`. */
+function readSmallFile(p) {
+  let fd;
+  try {
+    fd = openSync(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > SMALL_FILE_MAX) return null;
+    const buf = Buffer.alloc(SMALL_FILE_MAX + 1);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return n > SMALL_FILE_MAX ? null : buf.subarray(0, n).toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* closed */ } }
+  }
+}
+
+function boxTokenOf(home) {
+  const raw = readSmallFile(join(home, '.cc-secrets', 'ccrc-mail.token'));
+  if (raw === null) return null;
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === '' || t.startsWith('#')) continue;
+    const v = t.replace(/\s+/g, '');
+    return v === '' ? null : v;
+  }
+  return null;
+}
+
+/** One word of bash, as `printf %q` writes it (`_acct_write_secret`) or bare (`ccd-account-auth`'s capture): a
+ *  backslash escapes the next byte, `'…'` is literal, `$'…'` is ANSI-C and `"…"` is double-quoted. `null` when the
+ *  word does not close. */
+function unquoteWord(s) {
+  const C = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+  let o = '';
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '\\') { if (i + 1 >= s.length) return null; o += s[i + 1]; i += 2; continue; }
+    if (c === "'") { const j = s.indexOf("'", i + 1); if (j < 0) return null; o += s.slice(i + 1, j); i = j + 1; continue; }
+    if (c === '$' && s[i + 1] === "'") {
+      i += 2;
+      for (;;) {
+        if (i >= s.length) return null;
+        const d = s[i];
+        if (d === "'") { i += 1; break; }
+        if (d !== '\\') { o += d; i += 1; continue; }
+        const e = s[i + 1];
+        const oct = /^[0-7]{1,3}/.exec(s.slice(i + 1));
+        const hex = e === 'x' ? /^[0-9A-Fa-f]{1,2}/.exec(s.slice(i + 2)) : null;
+        if (oct !== null) { o += String.fromCharCode(parseInt(oct[0], 8)); i += 1 + oct[0].length; } else if (hex !== null) { o += String.fromCharCode(parseInt(hex[0], 16)); i += 2 + hex[0].length; } else if (e !== undefined && Object.hasOwn(C, e)) { o += C[e]; i += 2; } else { o += d; i += 1; }
+      }
+      continue;
+    }
+    if (c === '"') {
+      i += 1;
+      for (;;) {
+        if (i >= s.length) return null;
+        const d = s[i];
+        if (d === '"') { i += 1; break; }
+        if (d === '\\' && '"\\$`'.includes(s[i + 1] ?? '')) { o += s[i + 1]; i += 2; continue; }
+        o += d; i += 1;
+      }
+      continue;
+    }
+    o += c; i += 1;
+  }
+  return o;
+}
+
+/** The value a lane's secrets file exports as `envVar`, or `null`. The file is read, never sourced. */
+function envSecretOf(home, rel, envVar) {
+  const raw = readSmallFile(join(home, rel));
+  if (raw === null) return null;
+  for (const line of raw.split('\n')) {
+    const m = /^export ([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line);
+    if (m !== null && m[1] === envVar) return unquoteWord(m[2]);
+  }
+  return null;
+}
+
+/** The fingerprints of every lane secret the roster names, keyed with this box's token, or `undefined`. */
+function fingerprintsOf(home, json) {
+  const token = boxTokenOf(home);
+  if (token === null || !isPlainObject(json) || !Array.isArray(json['accounts'])) return undefined;
+  const rows = [];
+  for (const acct of json['accounts']) {
+    if (!isPlainObject(acct) || !isPlainObject(acct['exec'])) continue;
+    const e = acct['exec'];
+    if (e['kind'] !== 'generated' || typeof e['secretsFile'] !== 'string') continue;
+    const envVar = PROVIDER_ENV_VAR[e['provider'] ?? 'anthropic'];
+    if (typeof envVar !== 'string') continue;
+    const secret = envSecretOf(home, e['secretsFile'], envVar);
+    if (secret === null) continue;
+    const bare = secret.replace(/=+$/, '');
+    const len = Buffer.byteLength(bare, 'utf8');
+    if (len < FP_LEN_MIN || len > FP_LEN_MAX) continue;
+    rows.push({ laneId: acct['id'], fp: createHmac('sha256', token).update(FP_DOMAIN, 'utf8').update(bare, 'utf8').digest('hex'), len });
+  }
+  const gen = createHash('sha256').update(FP_GEN_DOMAIN).update(token, 'utf8').digest('hex').slice(0, 16);
+  return { gen, rows };
+}
+
+/** What every answer that carries the roster carries beside it (spec §3.9, §13.2): the node that built it, and the
+ *  lane-secret fingerprints when this box has a token to key them with. */
+function rosterFields(json) {
+  const home = process.env.HOME ?? '';
+  const fingerprints = isAbsolute(home) ? fingerprintsOf(home, json) : undefined;
+  return { roster: json, fleetIdentity: readNodeIdentity(home), ...(fingerprints === undefined ? {} : { fingerprints }) };
+}
+
+/** ── WHAT IS STILL VALID AT THE PROVIDER (spec §11.3) ─────────────────────────────────────────────────────────
+ *  `remove`'s `atProvider` ledger, one row per credential kind: whether the credential outlives the lane at its
+ *  provider, and which page revokes it (a word the sheet maps to its link, never a URL from the box). A sign-in
+ *  lane's row follows OA1's G23 record (2026-11-01): whether `claude auth logout` ends the sign-in at Anthropic was
+ *  NOT measured, so it says `unmeasured`, never `ended` and never `still-valid`. */
+const AT_PROVIDER = {
+  'anthropic-token': { state: 'still-valid', revokeAt: 'claude-code-settings' },
+  'anthropic-sign-in': { state: 'unmeasured', revokeAt: 'claude-account-settings' },
+  'openrouter-key': { state: 'still-valid', revokeAt: 'openrouter-keys' },
+  'api-key': { state: 'still-valid', revokeAt: null },
+  codex: { state: 'still-valid', revokeAt: 'chatgpt-settings' },
+};
+
+/** The credential kind of a removed lane, from the fields `lane` answered for it before the drop. */
+function credentialKindOf(kind, provider, secretEnv, secrets) {
+  if (kind === 'codex') return 'codex';
+  if (kind === 'external' || kind === undefined) return null;
+  if (secrets === undefined || secrets === '') return provider === 'anthropic' ? 'anthropic-sign-in' : null;
+  if (secretEnv === 'CLAUDE_CODE_OAUTH_TOKEN') return 'anthropic-token';
+  if (secretEnv === 'ANTHROPIC_AUTH_TOKEN') return provider === 'openrouter' ? 'openrouter-key' : 'api-key';
+  return null;
+}
+
+/** ── A SIGN-IN IN FLIGHT (spec §3.9) ──────────────────────────────────────────────────────────────────────────
+ *  `ccd-account-auth`'s status file, `~/.cc-sessions/.auth/<id>.json`, in a state that is not terminal and written
+ *  within the attempt's bound (`RuntimeMaxSec=660`, D-5515): a file a killed helper left `starting` an hour ago is no
+ *  attempt. A20 adds the attempt id; this reads only the state and its time. */
+const AUTH_LIVE_STATES = ['starting', 'url', 'waiting-code', 'exchanging'];
+const AUTH_ATTEMPT_MAX_MS = 660_000;
+
+function authInProgressOf(home, id) {
+  const raw = readSmallFile(join(home, '.cc-sessions', '.auth', `${id}.json`));
+  if (raw === null) return false;
+  let j = null;
+  try { j = JSON.parse(raw); } catch { j = null; }
+  if (!isPlainObject(j) || !AUTH_LIVE_STATES.includes(j.state)) return false;
+  const at = typeof j.updatedAt === 'string' ? Date.parse(j.updatedAt) : NaN;
+  return Number.isFinite(at) && Date.now() - at <= AUTH_ATTEMPT_MAX_MS;
+}
+
+/** A lane-state file as an object, or `null`. */
+function laneStateOf(home, id) {
+  const raw = readSmallFile(join(laneStateDir(home), `${id}.json`));
+  if (raw === null) return null;
+  try { const j = JSON.parse(raw); return isPlainObject(j) ? j : null; } catch { return null; }
+}
+
+/** ── REMOVE'S PRE-CHECK AND GATE (spec §11.1, §11.2, §11.5; N3) ──────────────────────────────────────────────
+ *  Bash measures the rows (`_acct_live`: live by pane, sleeping by `.hibernated`, archived by `.archived`) and the
+ *  placeable lanes; this decides. `--mode check` is `remove --dry-run`: it refuses nothing, writes nothing and
+ *  answers what the sheet shows. `remove` and `discard` are silent when they may go on, and refuse, in this order:
+ *  `auth-in-progress`, `sleeping-sessions` (unless `--rehome-sleeping true`, the CLI's, which no route sends), and,
+ *  for `discard`, `not-discardable`. A lane is discardable only when `add` made it on this build (`addedAt`), no
+ *  `enable` ever switched it on (`enabledAt`), its marker still holds it off, it is not upstream, and it has no live,
+ *  sleeping or archived session. */
+function opPreRemove(a) {
+  for (const k of ['file', 'id', 'mode', 'live-measured', 'other-home-able', 'upstream', 'disabled']) {
+    if (a[k] === undefined) { refuse('bad-argv', `pre-remove needs --${k}`); return 2; }
+  }
+  const mode = a['mode'];
+  if (!['check', 'remove', 'discard'].includes(mode)) { refuse('bad-argv', '--mode must be check, remove or discard'); return 2; }
+  const bool = (k) => (a[k] === 'true' ? true : a[k] === 'false' ? false : null);
+  for (const k of ['live-measured', 'upstream', 'disabled']) {
+    if (bool(k) === null) { refuse('bad-argv', `--${k} must be true or false`); return 2; }
+  }
+  if (a['rehome-sleeping'] !== undefined && a['rehome-sleeping'] !== 'true') { refuse('bad-argv', '--rehome-sleeping takes true'); return 2; }
+  if (!/^[0-9]{1,4}$/.test(a['other-home-able'])) { refuse('bad-argv', '--other-home-able must be a count'); return 2; }
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const id = a['id'];
+  const home = process.env.HOME ?? '';
+  if (!isAbsolute(home)) { refuse('bad-argv', 'HOME is not an absolute path'); return 2; }
+  const live = bool('live-measured') ? (a['live'] ?? []) : null;
+  const sleeping = a['sleeping'] ?? [];
+  const archived = a['archived'] ?? [];
+  const st = laneStateOf(home, id);
+  const authInProgress = authInProgressOf(home, id);
+  const neverEnabled = st !== null && typeof st.addedAt === 'string' && st.enabledAt === undefined;
+  const discardable = neverEnabled && bool('disabled') && !bool('upstream') && live !== null && live.length === 0
+    && sleeping.length === 0 && archived.length === 0;
+  if (mode === 'check') {
+    out({
+      ok: true, id, dryRun: true, live: live === null ? null : live.length, sleeping, archived: archived.length,
+      upstream: bool('upstream'), otherHomeAble: Number(a['other-home-able']), authInProgress, discardable,
+      at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), fleetIdentity: readNodeIdentity(home),
+    });
+    return 0;
+  }
+  const say = (code, detail, extra = {}) => {
+    out({ ok: false, error: code, detail, ...extra });
+    process.stderr.write(`${SELF}: ${detail} (${code})\n`);
+    return 1;
+  };
+  if (authInProgress) {
+    return say('auth-in-progress', `a sign-in for lane ${id} is in progress. Cancel the sign-in first, then remove the lane. Nothing was written.`);
+  }
+  if (sleeping.length > 0 && a['rehome-sleeping'] !== 'true') {
+    return say('sleeping-sessions', `lane ${id} has ${sleeping.length} sleeping session(s): ${sleeping.join(', ')}. `
+      + 'Removing the lane would move them to the upstream lane, where they would wake. Wake and move each one first, '
+      + 'or pass --rehome-sleeping to move them as they are. Nothing was written.', { sleeping });
+  }
+  if (mode === 'discard' && !discardable) {
+    const why = st === null || typeof st.addedAt !== 'string' ? 'this box has no record of adding it'
+      : st.enabledAt !== undefined ? 'it was switched on once' : !bool('disabled') ? 'it is switched on'
+        : bool('upstream') ? 'it is the upstream lane' : 'it has sessions';
+    return say('not-discardable', `lane ${id} cannot be discarded: ${why}. Remove it instead, which asks for its id. Nothing was written.`);
+  }
+  return 0;
+}
+
+/** `set --placement` (G5): `full` makes the lane home-able, `overflow` takes it out of fresh placement. Silent. */
+function opSetPlacement(a) {
+  const acct = rosterEntryOf(a, 'set-placement');
+  if (acct === null) return 1;
+  const p = a['placement'];
+  if (p !== 'overflow' && p !== 'full') { refuse('bad-argv', '--placement must be overflow or full'); return 2; }
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const homeAble = p === 'full';
+  if (acct['homeAble'] === homeAble) return 0;
+  const next = { ...json, accounts: json['accounts'].map((x) => (isPlainObject(x) && x['id'] === a['id'] ? { ...x, homeAble } : x)) };
+  const admits = rosterAdmits(next, `setting lane "${a['id']}"'s placement to ${p} would make ${a['file']} unparseable: `);
+  if (admits !== 0) return admits;
+  return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
+}
+
 function main(argv) {
   const op = argv[2];
   if (op === undefined || !Object.hasOwn(OPS, op)) {
@@ -1728,11 +2040,20 @@ function main(argv) {
     // `fleetIdentity` (spec §13.3's `roster --json` row; D-5518): the node
     // that read this roster, so the server's `reloadRoster` (A12) can refuse a
     // roster that came from another box. `null` when the node-id is not known.
-    out({ ok: true, roster: json, fleetIdentity: readNodeIdentity(process.env.HOME ?? '') });
+    out({ ok: true, ...rosterFields(json) });
     return 0;
   }
 
   if (op === 'lane-state') return opLaneState(a);
+  if (op === 'pre-remove') return opPreRemove(a);
+  if (op === 'set-placement') return opSetPlacement(a);
+  if (op === 'set-done') {
+    if (rosterEntryOf(a, 'set-done') === null) return 1;
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    out({ ok: true, id: a['id'], ...rosterFields(json) });
+    return 0;
+  }
   if (op === 'seed') return opSeed(a);
   if (op === 'ready') return opReady(a);
 
@@ -1822,7 +2143,11 @@ function main(argv) {
     // here: `??` catches only `undefined`, which is the whole of D-2148's
     // second half — this line used to emit `"configDirSuffix": ""` into the
     // plan for `--suffix ''`.
-    const suffix = a['suffix'] ?? `.claude-${id}`;
+    const suffix = a['suffix'] ?? defaultSuffixOf(id);
+    if (a['adopt'] !== undefined && a['adopt'] !== 'true') {
+      refuse('bad-argv', `check-add takes --adopt true or nothing, and got ${JSON.stringify(a['adopt'])}`);
+      return 2;
+    }
 
     // ── THE PROVIDER, AND WHICH VERB OWNS IT ────────────────────────────────
     // The "is it a provider at all" half is `providerKnownClass` above, shared
@@ -2083,6 +2408,10 @@ function main(argv) {
     // account, whichever verb is asking.
     const free = suffixFreeClass(accounts, suffix, a['file']);
     if (free !== 0) return free;
+    if (a['home'] !== undefined && a['adopt'] !== 'true') {
+      const taken = configDirTakenClass(a['home'], suffix, id);
+      if (taken !== 0) return taken;
+    }
 
     // ── WHAT TASKS 24 AND 25 WRITE FROM ─────────────────────────────────────
     // The RESOLVED plan, computed once, here, so no later step re-derives a
@@ -2358,7 +2687,7 @@ function main(argv) {
       disabled: a['disabled'] === 'true',
       provisioned: a['provisioned'] ?? [],
       'operator-steps': a['operator-step'] ?? [],
-      roster: json,
+      ...rosterFields(json),
     });
     return 0;
   }
@@ -2712,14 +3041,16 @@ function main(argv) {
         `${a['file']} still carries account "${a['id']}", so this run cannot report it removed`);
       return 1;
     }
+    const kind = credentialKindOf(a['kind'], a['provider'], a['secret-env'], a['secrets']);
     out({
       ok: true,
       id: a['id'],
-      roster: json,
+      ...rosterFields(json),
       rehomed: a['rehomed'] ?? [],
       kept: a['kept'] ?? [],
       removed: a['removed'] ?? [],
       'operator-steps': a['operator-step'] ?? [],
+      ...(a['kind'] === undefined ? {} : { atProvider: kind === null ? [] : [{ kind, ...AT_PROVIDER[kind] }] }),
     });
     return 0;
   }
@@ -2758,6 +3089,14 @@ function main(argv) {
         + 'ccrc, not a fact about your box');
       return 2;
     }
+    // Accounts plan Task A16: with `--file`, the answer carries the roster, the node and the fingerprints, so the
+    // server reloads the rotated lane's fingerprint from it (D-5996).
+    let withRoster = {};
+    if (a['file'] !== undefined) {
+      const json = readRoster(a['file']);
+      if (json === null) return 1;
+      withRoster = rosterFields(json);
+    }
     out({
       ok: true,
       id: a['id'],
@@ -2766,6 +3105,7 @@ function main(argv) {
       // so they are decided once, here, from a flag bash had to set on purpose
       // — never inferred from an empty list.
       live: a['measured'] === 'true' ? (a['live'] ?? []) : null,
+      ...withRoster,
     });
     return 0;
   }
