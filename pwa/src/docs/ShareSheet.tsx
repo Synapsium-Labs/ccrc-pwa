@@ -1,9 +1,10 @@
 // The share sheet (spec 2026-10-01 4.16; native Docs reader W5, Share). Ring L4 delivery over @ccrc/ui's `Sheet`: it
-// shows the `ShareTarget` it is given (`shareTargetFor`'s answer, worked out when the sheet opens) and runs the two
+// shows the `ShareTarget` it is given (`shareTargetFor`'s answer, worked out on every render while the sheet is open;
+// `ShareAction`'s key closes the sheet when the page, the tree's commit or the opened pin changes) and runs the two
 // ways a link leaves the page; it decides nothing about the link. Decision 1: Share always opens this sheet.
 // - Share… shows only where Web Share can send the link (`navigator.share`, and `navigator.canShare` where the browser
-//   has it). Its click calls `navigator.share` as the FIRST statement of a handler that is not async, on `navigator`,
-//   so the reader's activation is still live when the browser checks it (M4.SH4). `AbortError` (the reader closed the
+//   has it). Its click makes `navigator.share` the FIRST call of a handler that is not async, on `navigator`, so the
+//   reader's activation is still live when the browser checks it (M4.SH4). `AbortError` (the reader closed the
 //   native sheet) does nothing; any other refusal, thrown or rejected, shows a notice and leaves Copy link.
 // - Copy link goes through `copyText`, the one clipboard writer under `pwa/src/docs` (M4.SH7). When the clipboard
 //   refuses, a read-only field holds the link, focused and selected, to copy by hand.
@@ -60,8 +61,9 @@ function LinkSheet(p: { readonly link: ShareLink; readonly onClose: () => void }
   const refused = (e: unknown): void => {
     if (errorName(e) !== 'AbortError') setShareFailed(true);
   };
-  // NOT async, and `navigator.share` its first statement: nothing that spends a microtask may come before it, or the
-  // click's activation is gone and the browser refuses the call (M4.SH4). Called on `navigator`, never detached.
+  // NOT async, and `navigator.share` its first call (the `let sent` declaration before it calls nothing): nothing that
+  // spends a microtask may come before it, or the click's activation is gone and the browser refuses the call (M4.SH4).
+  // Called on `navigator`, never detached.
   const onShare = (): void => {
     let sent: Promise<void>;
     try {
