@@ -1197,8 +1197,8 @@ describe('8. the closed scope census', () => {
     arms.push(union.slice(armStart));
     const armsTrimmed = arms.map((a) => a.trim()).filter((a) => a !== '');
     expect(armsTrimmed.filter((a) => !a.startsWith('{')), 'every FleetMsg arm is an inline object type').toEqual([]);
-    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is main\'s seven plus `delegation`').toEqual(
-      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools', 'delegation']);
+    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is main\'s seven plus `delegation` and the programme ledgers\' `waiting`').toEqual(
+      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools', 'delegation', 'waiting']);
     // the frame's literal is the socket's alone (a subset, so this is green before the socket sends it and on PR2's branch)
     const literal = filesUnder('server/src', /\.ts$/).filter((f) => /\b(type|t):\s*'delegation'/.test(code(read(f))));
     expect(literal.filter((f) => f !== 'server/src/server.ts'), 'a server file outside the socket that writes the frame').toEqual([]);

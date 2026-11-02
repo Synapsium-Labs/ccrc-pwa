@@ -10,7 +10,7 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
 
 /** What the operator is asked to do. `value` and `secret` take something back; `secret` never
  *  through the item's answer (spec §5). */
@@ -84,7 +84,7 @@ export function nextItemState(
   return { ok: true, to: row.to };
 }
 
-/** One item as the console shows it. `stale` is always `false` until the server computes it (PL4). */
+/** One item as the console shows it. `stale` is the server's verdict (`itemIsStale`, below): a label only. */
 export interface ItemView {
   id: number;
   program: string;
@@ -125,9 +125,6 @@ export interface WaitingView {
   cleared: ItemView[];
   goals: GoalsView[];
 }
-
-/** The live frame: additive on the fleet socket, no `FLEET_PROTO` bump. */
-export type WaitingFrame = { type: 'waiting'; waiting: WaitingView };
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };
 const STATE_RANK: Readonly<Record<ItemState, number>> = {
@@ -198,9 +195,81 @@ export function isSpecPath(p: string): boolean {
 
 /** "Recently cleared" keeps seven days (spec D13). */
 export const CLEARED_WINDOW_MS = 7 * 24 * 3600 * 1000;
+/** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
+ *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
+export const TICK_UNANSWERED_MS = 30 * 60 * 1000;
 export const SOON_LABEL_MAX = 40;
 export const ITEM_TITLE_MAX = 140;
 export const ITEM_TEXT_MAX = 2000;
 export const ITEM_STEPS_MAX = 12;
 export const ITEM_OPTIONS_MAX = 6;
 export const ANSWER_MAX = 2000;
+
+/** The coordinator's presence as an item's label reads it. `unmeasured` says the server has no reading to give (no fleet
+ *  frame or registry listing yet, an id the registry lists but the frame lacks, or the session's own presence is a doubt): it
+ *  is never `dead`, so a doubt cannot label an item. */
+export type CoordinatorPresence = 'alive' | 'dead' | 'absent' | 'unmeasured';
+const COORDINATOR_PRESENCE_MAP: Record<CoordinatorPresence, true> = { alive: true, dead: true, absent: true, unmeasured: true };
+export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as readonly CoordinatorPresence[];
+
+/**
+ * The coordinator's presence from what the server last measured: the fleet frame it broadcast and the ids of its last good
+ * registry listing, read from the listing's raw `*.uuid` names (refused ids included). A `dead` row is `dead`; `alive` and
+ * `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a server that predates `presence`, is `unmeasured`;
+ * an id the frame lacks is `absent` only when the listing is known and does not hold it either, and `unmeasured` when the
+ * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row) or when no listing has landed
+ * yet.
+ *
+ * WHY THIS IS NOT `measureClaimant` (the one dead predicate, D-5290; "legitimately different", review 1335 F4): that function
+ * is async, a fresh registry read and a tmux verdict, and an item's view must be built SYNCHRONOUSLY (`viewOfItem`: the
+ * routes' call-order pin forbids an await between an item read and its write, and the frame builds the same view). Every arm
+ * here agrees with that predicate's ladder (`readSession`, which the frame's `presence` is) except that a frame cannot see a
+ * fresh tmux verdict; and the one arm the two would otherwise disagree on, an id the frame lacks, is closed above: the
+ * listing's names hold a row the registry could not assemble as well as a refused one, where `measureClaimant` answers
+ * `unmeasurable`.
+ */
+export function coordinatorPresenceIn(
+  fleet: readonly { id: string; presence?: Presence }[] | null, registryIds: ReadonlySet<string> | null, id: string,
+): CoordinatorPresence {
+  if (fleet === null) return 'unmeasured';
+  const row = fleet.find((s) => s.id === id);
+  if (row === undefined) return registryIds === null || registryIds.has(id) ? 'unmeasured' : 'absent';
+  switch (row.presence) {
+    case 'dead': return 'dead';
+    case 'alive': case 'asleep': return 'alive';
+    default: return 'unmeasured';
+  }
+}
+
+/** The newest tick mail's delivery state, or `none` when no tick mail was ever queued for the item. */
+export type TickMailState = MailDeliveryState | 'none';
+
+/** What `itemIsStale` is decided from, all of it measured by the caller: the item's state and tick time, the clock, the
+ *  newest tick mail's delivery state (whoever it was addressed to), and the coordinator's presence. */
+export interface StaleInputs {
+  state: ItemState;
+  tickedAt: number | null;
+  now: number;
+  mail: TickMailState;
+  coordinator: CoordinatorPresence;
+}
+
+/** ItemView.stale (spec §3.3, plan PL4): a CHECKING item whose coordinator reads dead or absent, or whose newest tick mail is
+ *  not acknowledged `TICK_UNANSWERED_MS` after the tick. Only `acked` counts as heard (review 1335 F2): a mail still `queued`,
+ *  `rejected`, `unknown`, delivered but not acknowledged, or missing altogether (`none`) is not, whoever it went to, so a
+ *  takeover that left the old coordinator's mail unread is labelled too. `unmeasured` is a doubt, not a finding, so it never
+ *  labels. Every other state is never stale. */
+export function itemIsStale(i: StaleInputs): boolean {
+  if (i.state !== 'checking') return false;
+  if (i.coordinator === 'dead' || i.coordinator === 'absent') return true;
+  return i.mail !== 'acked' && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
+}
+
+/** Whether an outstanding tick mail has been left behind (review 1336 F1): it went to a session that is no longer the
+ *  programme's coordinator AND that session reads `dead` or `absent`. Such a mail can never be acknowledged by its recipient
+ *  (the ack route takes only the recipient's own), and nothing re-addresses a mail to a literal session id, so it must not
+ *  hold the operator's next tick of a sent-back item. A recipient that is still the coordinator, or that reads `alive` or
+ *  `unmeasured`, keeps blocking: a live displaced coordinator must not get a second mail beside the new one. */
+export function tickMailLeftBehind(i: { recipient: string; coordinator: string; recipientPresence: CoordinatorPresence }): boolean {
+  return i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent');
+}

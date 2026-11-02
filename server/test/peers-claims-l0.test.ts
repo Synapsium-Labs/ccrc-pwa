@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly twelve import lines: eleven types, and one value from an import-free L0 sibling (D-3021)', () => {
+  it('shared/api.ts has exactly thirteen import lines: twelve types, and one value from an import-free L0 sibling (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -162,7 +162,8 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // holds, shared/api.ts pulls nothing into the PWA but L0, because reapcrumb.ts imports nothing
     // (`reapcrumb.test.ts` pins that). The fleet health's host-pressure block (#1170) an
     // eleventh, a type from the import-free pressure.ts. The landing line's entry (landing order wave 5e) a twelfth,
-    // a type from the import-free landingLine.ts.
+    // a type from the import-free landingLine.ts. The operator's waiting frame (programme ledgers PL4) a thirteenth, a type from
+    // ledgers.ts, which imports from api.ts only types and the run-state list: the import is erased, so nothing cycles.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
@@ -171,6 +172,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { BuildInfo } from './buildinfo.js';",
       "import type { BoxTokenView } from './box-token.js';",
       "import type { WorkflowView } from './workflows.js';",
+      "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
       "import type { LandingEntry } from './landingLine.js';",
       "import type { NodeRole } from './node-role.js';",
