@@ -61,18 +61,41 @@ const CLOSE = '</span>';
 const HLJS_PREFIX = 'hljs-';
 const LANGUAGE_PREFIX = 'language-';
 
-/** A class the check accepts: `hljs-` then one or more of `[a-z0-9_ -]`, or `language-NAME` for a registered name or
- *  alias. */
+/** Whether `c` is one of `[a-z0-9]`. */
+function isLowerAlnum(c: number): boolean {
+  return (c >= 0x61 && c <= 0x7a) || (c >= 0x30 && c <= 0x39);
+}
+
+/** A class the check accepts: exactly what highlight.js 11 emits for a scope (`scopeToCSSClass`), or `language-NAME`
+ *  for a registered name or alias. The value splits on SINGLE spaces, with no empty token; token 0 is `hljs-` and one
+ *  or more of `[a-z0-9_-]`; token k >= 1 (a tiered scope's piece) is one or more of `[a-z0-9-]` and then exactly k
+ *  underscores. One pass: each character is read once. */
 function acceptedClass(cls: string): boolean {
-  if (cls.startsWith(HLJS_PREFIX)) {
-    if (cls.length === HLJS_PREFIX.length) return false;
-    for (let k = HLJS_PREFIX.length; k < cls.length; k += 1) {
-      const c = cls.charCodeAt(k);
-      if (!((c >= 0x61 && c <= 0x7a) || (c >= 0x30 && c <= 0x39) || c === 0x5f || c === 0x20 || c === 0x2d)) return false;
-    }
-    return true;
+  if (!cls.startsWith(HLJS_PREFIX)) {
+    return cls.startsWith(LANGUAGE_PREFIX) && HIGHLIGHT_NAME_SET.has(cls.slice(LANGUAGE_PREFIX.length));
   }
-  return cls.startsWith(LANGUAGE_PREFIX) && HIGHLIGHT_NAME_SET.has(cls.slice(LANGUAGE_PREFIX.length));
+  let pos = 0;
+  for (let tier = 0; ; tier += 1) {
+    const space = cls.indexOf(' ', pos);
+    const end = space === -1 ? cls.length : space;
+    if (tier === 0) {
+      if (end - pos <= HLJS_PREFIX.length) return false;
+      for (let k = pos + HLJS_PREFIX.length; k < end; k += 1) {
+        const c = cls.charCodeAt(k);
+        if (!(isLowerAlnum(c) || c === 0x5f || c === 0x2d)) return false;
+      }
+    } else {
+      let body = end;
+      while (body > pos && cls.charCodeAt(body - 1) === 0x5f) body -= 1;
+      if (end - body !== tier || body === pos) return false;
+      for (let k = pos; k < body; k += 1) {
+        const c = cls.charCodeAt(k);
+        if (!(isLowerAlnum(c) || c === 0x2d)) return false;
+      }
+    }
+    if (space === -1) return true;
+    pos = space + 1;
+  }
 }
 
 /** The worker's HTML, checked: one linear pass that accepts exactly `<span class="…">` with an accepted class,
@@ -393,13 +416,13 @@ export function createHighlightStore(
       if (checked === null) {
         failure = { kind: 'malformed' };
       } else if (docs && ceilingsOn && outputChars + o.html.length > DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS) {
-        set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });
         close('page-output');
+        set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });
         return;
       } else {
         outputChars += o.html.length;
-        set(key, { kind: 'html', mode: o.mode, checked });
         checkCeilings();
+        set(key, { kind: 'html', mode: o.mode, checked });
         return;
       }
     }

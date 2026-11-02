@@ -67,6 +67,19 @@ describe('M4.H14: what the check refuses (each leaves the block plain)', () => {
     ['an unclosed span', '<span class="hljs-x">a'],
     ['an extra </span>', 'a</span>'],
     ['a closer before its opener', '</span><span class="hljs-x">a'],
+    ['a plain class after the scope (it could be a styled class of the app)', '<span class="hljs-a fab">a</span>'],
+    ['an app class after the scope', '<span class="hljs-a render-fallback--root">a</span>'],
+    ['an empty scope before a second token', '<span class="hljs- a">a</span>'],
+    ['two spaces between tokens', '<span class="hljs-a  b_">a</span>'],
+    ['a second token with no underscore', '<span class="hljs-a b">a</span>'],
+    ['a second token with the wrong underscore count', '<span class="hljs-a b__">a</span>'],
+    ['a third token with the second\'s count', '<span class="hljs-a b_ c_">a</span>'],
+    ['a trailing space', '<span class="hljs-a ">a</span>'],
+    ['an underscore-only second token', '<span class="hljs-a _">a</span>'],
+    ['an underscore inside a second token', '<span class="hljs-a b_c_">a</span>'],
+    ['an upper-case second token', '<span class="hljs-a B_">a</span>'],
+    ['an opener whose class quote is not followed by >', '<span class="hljs-a" a</span>'],
+    ['another tag as long as an opener', '<spam class="hljs-a">x</span>'],
   ])('%s', (_name, html) => {
     expect(checkHighlightHtml(html)).toBeNull();
   });

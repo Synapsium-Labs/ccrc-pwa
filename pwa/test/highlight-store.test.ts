@@ -29,11 +29,14 @@ interface Call {
 class FakeHighlighter implements Highlighter {
   readonly calls: Call[] = [];
   state: HighlighterStatus = 'live';
+  /** A real highlighter rejects an aborted job; a test turns this off to let the abort race an answer that is
+   *  already on its way (a detached job's late answer). */
+  rejectOnAbort = true;
   highlight(req: HighlightRequest, opts: { signal?: AbortSignal; onPosted?: () => void }): Promise<HighlightOutcome> {
     return new Promise((resolve, reject) => {
       const call: Call = { req, signal: opts.signal, onPosted: opts.onPosted, resolve, aborted: false, posted: false };
       this.calls.push(call);
-      opts.signal?.addEventListener('abort', () => { call.aborted = true; reject(opts.signal!.reason); }, { once: true });
+      opts.signal?.addEventListener('abort', () => { call.aborted = true; if (this.rejectOnAbort) reject(opts.signal!.reason); }, { once: true });
     });
   }
   status(): HighlighterStatus { return this.state; }
@@ -257,8 +260,10 @@ describe('M4.H12: page ceilings and settled()', () => {
 
   it('a detached job\'s timeout counts against no ceiling', async () => {
     const { h, store, key, answer } = setup({ mode: 'chat' });
+    h.rejectOnAbort = false;
     const release = store.request(key('python', 'a'));
     release();
+    expect(h.calls[0]!.aborted).toBe(true);
     h.calls[0]!.resolve(TIMEOUT);
     await flush();
     for (const s of ['b', 'c']) store.request(key('python', s));
@@ -374,6 +379,20 @@ describe('M4.H13 (main half) and M4.H18 (store half): the receipt re-check and t
     expect(h.calls[2]!.req.mode).toBe('line');
   });
 
+  it('an answer both over the per-block cap and malformed is too-large (length first, refinement (e)), and a long block is retried', async () => {
+    const { h, store, key, answer } = setup({ mode: 'chat', ceilings: false });
+    const bad = `<img src=x>${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS)}`;
+    const short = key('python', 'a');
+    store.request(short);
+    await answer(0, HTML(bad));
+    expect(store.peek(short)).toEqual({ kind: 'plain', first: { kind: 'too-large' }, retry: null });
+    const k = key('python', long);
+    store.request(k);
+    await answer(1, HTML(bad));
+    expect(h.calls[2]!.req).toEqual({ lang: 'python', code: long, mode: 'line' });
+    expect(store.peek(k).kind).toBe('pending');
+  });
+
   it('a retry that fails differently leaves the block plain under its first failure, the retry\'s outcome recorded', async () => {
     const { store, key, answer } = setup({ mode: 'chat', ceilings: false });
     const k = key('python', long);
@@ -412,6 +431,47 @@ describe('M4.H13 (main half) and M4.H18 (store half): the receipt re-check and t
     await answer(0, TIMEOUT);
     await answer(2, TIMEOUT);
     expect(store.peek(other)).toEqual({ kind: 'skipped', ceiling: 'page-timeouts' });
+  });
+});
+
+describe('one ceiling wins before any listener runs (decision 4)', () => {
+  /** Calls `store.request(late)` from inside the notification of `watch` once it shows `kind`. */
+  function requestFromListener(store: ReturnType<typeof setup>['store'], watch: string, kind: string, late: string): void {
+    store.subscribe(watch)(() => { if (store.peek(watch).kind === kind) store.request(late); });
+  }
+
+  it('the output ceiling latches before the skipped key\'s listener runs: a request made from it starts no job', async () => {
+    const { h, store, key, answer } = setup();
+    const big = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+    const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / big.length);
+    const ks = Array.from({ length: fit + 1 }, (_, i) => key('python', `b${i}`));
+    const late = key('python', 'late');
+    for (const k of ks) store.request(k);
+    requestFromListener(store, ks[fit]!, 'skipped', late);
+    const calls = h.calls.length;
+    for (let i = 0; i <= fit; i += 1) await answer(i, HTML(big));
+    expect(store.peek(ks[fit]!)).toEqual({ kind: 'skipped', ceiling: 'page-output' });
+    expect(h.calls).toHaveLength(calls);
+    expect(store.peek(late)).toEqual({ kind: 'skipped', ceiling: 'page-output' });
+  });
+
+  it('the worker-time ceiling, reached by an html answer, latches before that key\'s listener runs', async () => {
+    const h = new FakeHighlighter();
+    let now = 0;
+    const store = createHighlightStore(h, { mode: 'chat' }, { now: () => now, setTimer: () => 0, clearTimer: () => undefined });
+    const k = (s: string): string => { const r = store.keyOf('python', s); if (r.kind !== 'key') throw new Error('no key'); return r.key; };
+    const first = k('a');
+    const late = k('late');
+    store.request(first);
+    requestFromListener(store, first, 'html', late);
+    h.calls[0]!.posted = true;
+    h.calls[0]!.onPosted?.();
+    now = HIGHLIGHT_PAGE_WORKER_MS;
+    h.calls[0]!.resolve(HTML(OK));
+    await flush();
+    expect(store.peek(first).kind).toBe('html');
+    expect(h.calls).toHaveLength(1);
+    expect(store.peek(late)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
   });
 });
 
