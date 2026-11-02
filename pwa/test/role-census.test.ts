@@ -235,6 +235,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.accounts-row[data-state] .acct-trouble-effect, .accounts-row[data-state] .acct-trouble-lead, .accounts-row[data-state] .acct-fix-hold, .accounts-row[data-state] .acct-knob-reason': META,
     // …and its sentence beside the knob.
     '.accounts-row[data-state] .acct-knob-state': META,
+    // The Move sessions sheet (accounts plan Task A3): each session's outcome word and the live progress line.
+    '.move-word': META,
+    '.move-progress': META,
     '.mail-dropped': META,
     '.mail-row .mail-body': META,
     '.run-row .run-state': META,

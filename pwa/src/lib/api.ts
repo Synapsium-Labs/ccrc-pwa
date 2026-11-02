@@ -452,8 +452,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
      *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
-     *  a confirm sentence that names the crossing. `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent
-     *  only by `SwapSheet`'s "swap anyway", the second tap after the route answered `409 session-busy`. */
+     *  a confirm sentence that names the crossing, or by the Move sessions sheet for a target picked there (D-7736).
+     *  `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent only after the route answered
+     *  `409 session-busy` — `SwapSheet`'s "swap anyway", the second tap, and the Move sessions sheet's "Also interrupt
+     *  busy ones" (D-7736), the second request for that session. */
     swap: (id: string, wrapper: string, opts?: { crossPool?: boolean; interrupt?: boolean }) =>
       post(`${sid(id)}/swap`, {
         wrapper,

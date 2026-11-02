@@ -2617,6 +2617,31 @@ button.proj-card-pool::before {
 /* The reason's ink and type are the trouble sentences' (the group above); here only its own line. */
 .acct-knob-reason { flex: 1 0 100%; }
 
+/* The Move sessions sheet (spec §4.5; accounts plan Task A3), inside <Sheet>'s panel: one row per session, its name on
+   the left and its outcome word right-aligned. The word never truncates: at a phone's width the name gives way and
+   wraps, the word does not. The list is `RESET_LIST`; the target sentence is `.sheet-copy`; the progress line is the live
+   count, in primary ink. */
+.move-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--edge-subtle);
+}
+.move-name { display: grid; min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.move-project { font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.move-word {
+  flex: none;
+  max-width: 60%;
+  text-align: right;
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+.move-progress { margin: var(--sp-2) 0; font-size: var(--fs-meta); color: var(--ink-primary); }
+.move-progress:empty { display: none; }
+
 /* — Your sign-in, which is NOT one of your accounts (D-161) —
    The passkey block and the session block used to be `.accounts-row` with an
    `.account-gauge-label` — the two classes a claude9/gpt row wears — so
