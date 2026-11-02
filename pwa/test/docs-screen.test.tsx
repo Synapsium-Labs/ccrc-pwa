@@ -1241,6 +1241,15 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     return { s: 'ok', value: { ...r, show: { ...r.show, commit, blob, onRef: 'contains', ...over } } };
   }
 
+  /** The loading state held honestly: the leaf's image request has been made and its effects have run, the loader's
+   *  promise has neither resolved nor rejected, and Share is still disabled, reading "Updating to <short>…". */
+  async function expectSharePausedWhileImageLoads(f: { raster: { mock: { calls: unknown[] } } }, commit: string): Promise<void> {
+    await waitFor(() => expect(f.raster.mock.calls.length).toBeGreaterThan(0));
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: updatingTo(commit) })).toBeDisabled();
+    expect(shareButton()).toBeNull();
+  }
+
   it('no Share on the index (M4.SH8)', async () => {
     openIndex();
     await waitFor(() => expect(mainRowNames().length).toBeGreaterThan(0));
@@ -1322,6 +1331,7 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     f.raster.mockImplementation(() => image.promise);
     open('/docs/demo/specs/x.png', f);
     expect(await screen.findByRole('button', { name: updatingTo(COMMIT_A) })).toBeDisabled();
+    await expectSharePausedWhileImageLoads(f, COMMIT_A);
     await act(async () => { image.resolve(okPng()); });
     await waitFor(() => expect(shareButton()).toBeEnabled());
     fireEvent.click(shareButton() as HTMLElement);
@@ -1337,6 +1347,7 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     expect(await screen.findByRole('button', { name: updatingTo(COMMIT_A) })).toBeDisabled();
     await waitFor(() => expect(f.raster).toHaveBeenCalled());
     expect(f.raster.mock.calls[0]?.[1]?.kind).toBe('draft');
+    await expectSharePausedWhileImageLoads(f, COMMIT_A);
     await act(async () => { image.resolve(okPng()); });
     await waitFor(() => expect(shareButton()).toBeEnabled());
     fireEvent.click(shareButton() as HTMLElement);
@@ -1347,10 +1358,13 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
   it('the same raster leaf at view=committed: Share waits for the committed image, then sends the permalink with the not-included note', async () => {
     const tree = treeOk({ entries: [entry('specs', 'x.png', { draft: draftOf('modified') })], drafts: holder() });
     const f = fakeLoaders({ tree: okTree(tree) });
-    f.raster.mockResolvedValue(okPng());
+    const image = deferred<DocsRasterAnswer>();
+    f.raster.mockImplementation(() => image.promise);
     open('/docs/demo/specs/x.png?ref=main&view=committed', f);
-    await waitFor(() => expect(shareButton()).toBeEnabled());
+    await expectSharePausedWhileImageLoads(f, COMMIT_A);
     expect(f.raster.mock.calls[0]?.[1]?.kind).toBe('committed');
+    await act(async () => { image.resolve(okPng()); });
+    await waitFor(() => expect(shareButton()).toBeEnabled());
     fireEvent.click(shareButton() as HTMLElement);
     await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_A}/docs/superpowers/specs/x.png`));
     expect(document.querySelector('.docs-share-sheet')?.textContent)
