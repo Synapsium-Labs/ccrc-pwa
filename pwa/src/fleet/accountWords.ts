@@ -9,7 +9,7 @@ import {
   ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, WINDOW_LIMITED_PCT, kindCodeOf, sourceAt, stateWordFor,
   type AccountStateAnswer, type AccountStateWord,
 } from '../../../shared/accounts';
-import type { AccountsConnect, AccountUsage, LaneNotReadyReason, LaneWire, RosterWire } from '../../../shared/api';
+import { SWAP_REFUSALS, type AccountsConnect, type AccountUsage, type LaneNotReadyReason, type LaneWire, type RosterWire } from '../../../shared/api';
 import type { RouteRefusal } from '../../../shared/refusal';
 import { formatAge, formatReset } from './formatReset';
 
@@ -157,11 +157,16 @@ export interface TroubleCopy {
   /** The fix includes a check, so the card offers **Check again**, which calls the Check route when the screen can run
    *  it (accounts plan Task A14, D-7732). The command stays beside it for a screen that cannot. */
   readonly checkAgain: boolean;
+  /** "Move N sessions off" (spec §4.2, §4.5; Task A3): the lane the card's sessions move off, and whether it is the
+   *  card's first fix (Rate-limited's, which is not a fault) or one beside the credential act (Signed out's). `null`
+   *  on a card whose fix is not a move. The card counts the sessions itself, and offers nothing when there are none. */
+  readonly move: { readonly from: string; readonly primary: boolean } | null;
 }
 
 /** The card body for a trouble word, or `null` for a word that is not trouble. `sessions` is how many live sessions
- *  run on the lane; `usage` is its telemetry row; `lane` its lane state, when the answer carries one. Moving sessions
- *  off is Task A3's sheet, so no sentence here offers it. */
+ *  run on the lane; `usage` is its telemetry row; `lane` its lane state, when the answer carries one. Signed out and
+ *  Rate-limited offer "Move N sessions off" (spec §4.2) through `move`; the sentences never name the move, because the
+ *  button is the offer and it says its own count. */
 export function troubleCopy(o: TroubleFacts): TroubleCopy | null {
   const body = troubleBody(o);
   // Check again is offered exactly where the fix names a check (D-7732).
@@ -196,6 +201,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           ? 'Replace its credential on the fleet host, then check it again:'
           : 'Sign it in again on the fleet host, then check it again:',
         commands: credentialLane ? [fixCommands.credential(id), fixCommands.check(id)] : [fixCommands.check(id)],
+        move: { from: id, primary: false },
       };
     }
     case 'rate-limited': {
@@ -211,6 +217,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         effect: `${resets}${sessions > 0 ? `${sessionsOn(sessions)} ${sessions === 1 ? 'is' : 'are'} waiting.` : 'No sessions are on it.'}`.trim(),
         lead: 'To keep new sessions off it until then, switch it off on the fleet host:',
         commands: [fixCommands.disable(id)],
+        move: { from: id, primary: true },
       };
     }
     case 'expiring': {
@@ -222,6 +229,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           effect: 'Long-lived tokens last about a year. When it lapses the lane signs out.',
           lead: 'Replace the token on the fleet host:',
           commands: [fixCommands.credential(id)],
+          move: null,
         };
       }
       if (credit !== undefined && credit.limit !== null && credit.remaining !== null && credit.limit > 0
@@ -231,6 +239,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           effect: 'When it hits zero, requests on it fail.',
           lead: 'Top up its credit at OpenRouter, or replace the key on the fleet host:',
           commands: [fixCommands.credential(id)],
+          move: null,
         };
       }
       // The minted key's expiry, whose date the wire does not carry: the source's first clause says it.
@@ -239,6 +248,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         effect: 'When it lapses, requests on it fail.',
         lead: 'Replace the key on the fleet host:',
         commands: [fixCommands.credential(id)],
+        move: null,
       };
     }
     case 'inconclusive':
@@ -248,12 +258,14 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
           effect: 'Nothing here says whether the credential works; it may be fine.',
           lead: 'Check it again on the fleet host, which writes the lane state anew:',
           commands: [fixCommands.check(id)],
+          move: null,
         }
         : {
           wrong: "The last check couldn't reach the provider.",
           effect: 'Nothing was learned about the credential; it may be fine.',
           lead: 'Check it again on the fleet host:',
           commands: [fixCommands.check(id)],
+          move: null,
         };
     default:
       return null;
@@ -341,3 +353,48 @@ export function laneActRefusal(act: 'check' | 'switch', id: string, failure: unk
 
 /** A refusal code as a screen may print it: a kebab word, never a sentence. */
 const CODE_RE = /^[a-z][a-z0-9-]{0,47}$/;
+
+/** The trouble card's move button (spec §4.2): "Move 4 sessions off". */
+export function moveOffLabel(n: number): string {
+  return `Move ${plural(n, 'session')} off`;
+}
+
+/** One session's outcome in the Move sessions sheet (spec §4.5; Task A3): the kind, which the sheet styles and counts
+ *  by, and its word, which is all it renders. */
+export type MoveOutcome = 'moved' | 'skipped-busy' | 'refused-asleep' | 'refused-other-pool' | 'refused' | 'no-answer';
+
+/** What one swap answered, as the sheet hands it here: `ok`; a refusal's HTTP status and its `error` code, `null` when
+ *  the body carried none (a 502 with ccd's sentence, whose text is never shown); or no answer at all. */
+export type SwapAnswer = { readonly kind: 'ok' } | { readonly kind: 'refused'; readonly status: number; readonly code: string | null }
+  | { readonly kind: 'no-answer' };
+
+/** Each refusal code's outcome and word (spec §4.5: "each refusal is named in the sheet, with the reason taken from its
+ *  code"): the busy skip, the hibernation refusal, the pool refusal, and the reasons the route's other codes name. Short:
+ *  the word sits right-aligned in the sheet's row. Typed over the route codes, so a misspelled key is a compile error
+ *  rather than a reason that never shows; read with `Object.hasOwn`, so a body naming `toString` is no code here. */
+const MOVE_REFUSALS: Partial<Record<RouteRefusal, { readonly outcome: MoveOutcome; readonly word: string }>> = {
+  [SWAP_REFUSALS.sessionBusy]: { outcome: 'skipped-busy', word: 'skipped: busy' },
+  [SWAP_REFUSALS.hibernated]: { outcome: 'refused-asleep', word: 'refused: asleep' },
+  'pool-mismatch': { outcome: 'refused-other-pool', word: 'refused: other pool' },
+  [SWAP_REFUSALS.statusUnknown]: { outcome: 'refused', word: 'refused: status unreadable' },
+  'pool-unreadable': { outcome: 'refused', word: 'refused: pool unreadable' },
+  'unknown-session': { outcome: 'refused', word: 'refused: not in the registry' },
+  'registry-unmeasurable': { outcome: 'refused', word: 'refused: registry unreadable' },
+  'bad-session-id': { outcome: 'refused', word: 'refused: bad session id' },
+  'bad-request': { outcome: 'refused', word: 'refused: bad request' },
+  unsupported: { outcome: 'refused', word: 'refused: fleet host too old to cross pools' },
+};
+
+/** Each session's one outcome word, from its answer's code and never its text (spec §4.5): moved, skipped busy, refused
+ *  asleep (the hibernation refusal, `SWAP_REFUSALS.hibernated`), refused other pool (`pool-mismatch`), or refused with
+ *  the reason its code names. A code this build does not know, and a failure with no code (ccd's 502), say so in words
+ *  of their own; no response text reaches the row. No answer is not a refusal: the move may have happened. */
+export function moveOutcomeOf(answer: SwapAnswer): { readonly outcome: MoveOutcome; readonly word: string } {
+  if (answer.kind === 'ok') return { outcome: 'moved', word: 'moved' };
+  if (answer.kind === 'no-answer') return { outcome: 'no-answer', word: 'no answer: it may have moved' };
+  const { code, status } = answer;
+  const known = code !== null && Object.hasOwn(MOVE_REFUSALS, code) ? MOVE_REFUSALS[code as RouteRefusal] : undefined;
+  if (known !== undefined) return known;
+  if (code === null && status >= 500) return { outcome: 'refused', word: 'refused: the fleet host could not move it' };
+  return { outcome: 'refused', word: 'refused: a reason this app does not know' };
+}

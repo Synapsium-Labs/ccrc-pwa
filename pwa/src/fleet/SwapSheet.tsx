@@ -12,7 +12,7 @@
 // stream.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import type { AccountUsage, FleetSession, RosterWire } from '../../../shared/api';
 import { SWAP_REFUSALS, isSwapRefusal, type SwapRefusal } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool } from '../lib/accounts';
@@ -28,6 +28,9 @@ import {
   disabledWrappers, factsFor, leastLoaded, pickableWrappers, pickerEmptiness,
 } from './accountPicker';
 import './fleet.css';
+
+/** An account picker's sentence when every other lane is switched off; the Move sessions sheet says the same. */
+export const ALL_SWITCHED_OFF = 'Every other account is switched off on the fleet host — turn one back on from Accounts.';
 
 export interface SwapSheetProps {
   /** `home` is required here because §3.4's honest label cannot be written
@@ -177,7 +180,7 @@ export function SwapSheet({
       ? null
       : emptiness === 'none-known'
         ? 'No other account to move this session to yet.'
-        : 'Every other account is switched off on the fleet host — turn one back on from Accounts.';
+        : ALL_SWITCHED_OFF;
 
   const move = (wrapper: string, cross: boolean, interrupt: boolean): void => {
     // The flag belongs to the selected row, not to the sheet generally. A
@@ -270,49 +273,16 @@ export function SwapSheet({
           {sheetCopy}{' '}
           Pick where it should live meanwhile.
         </p>
-        <div className="acct-list">
-          {emptyNote === null ? (
-            split.eligible.map((w) => (
-              <AccountRow
-                key={w}
-                wrapper={w}
-                facts={factsFor(accounts, w)}
-                suggested={w === suggested}
-                onPick={setTarget}
-                roster={roster}
-              />
-            ))
-          ) : (
-            <p className="acct-none">{emptyNote}</p>
-          )}
-        </div>
-        {split.unknown ? (
-          <p className="pool-note">
-            This project's pool is not known from here, so pool matching does not hide otherwise available accounts.
-          </p>
-        ) : split.crossing.length > 0 ? (
-          <>
-            <OtherPoolsDisclosure
-              count={split.crossing.length}
-              shown={showOther}
-              onToggle={() => setShowOther((shown) => !shown)}
-            />
-            {showOther && (
-              <div className="acct-list">
-                {split.crossing.map((w) => (
-                  <AccountRow
-                    key={w}
-                    wrapper={w}
-                    facts={factsFor(accounts, w)}
-                    onPick={setTarget}
-                    roster={roster}
-                    poolChip={accountPool(roster, w)}
-                  />
-                ))}
-              </div>
-            )}
-          </>
-        ) : null}
+        <SwapTargetChooser
+          split={split}
+          accounts={accounts}
+          suggested={suggested}
+          emptyNote={emptyNote}
+          roster={roster}
+          onPick={setTarget}
+          showOther={showOther}
+          onToggleOther={() => setShowOther((shown) => !shown)}
+        />
         </>)}
       </Sheet>
       <QuickConfirm
@@ -349,6 +319,71 @@ export function SwapSheet({
           if (busyAsk !== null) move(busyAsk.wrapper, busyAsk.cross, true);
         }}
       />
+    </>
+  );
+}
+
+/** The target chooser, exported for the Move sessions sheet (accounts plan Task A3; spec 2026-10-18 accounts-connect
+ *  §4.5), which picks its target with exactly this list: the pool's eligible lanes with the suggested one tagged, the
+ *  empty list's sentence, and either the unknown-pool note or the other pools behind their disclosure. Moved out of
+ *  `SwapSheet` unchanged; what a pick MEANS (a confirm here, a selection there) is the caller's `onPick`. */
+export function SwapTargetChooser({
+  split, accounts, suggested, emptyNote, roster, onPick, showOther, onToggleOther,
+}: {
+  split: { eligible: readonly string[]; crossing: readonly string[]; unknown: boolean };
+  accounts: readonly AccountUsage[] | null;
+  suggested: string | null;
+  emptyNote: string | null;
+  roster: readonly RosterWire[];
+  onPick: (wrapper: string) => void;
+  showOther: boolean;
+  onToggleOther: () => void;
+}): ReactNode {
+  return (
+    <>
+      <div className="acct-list">
+        {emptyNote === null ? (
+          split.eligible.map((w) => (
+            <AccountRow
+              key={w}
+              wrapper={w}
+              facts={factsFor(accounts, w)}
+              suggested={w === suggested}
+              onPick={onPick}
+              roster={roster}
+            />
+          ))
+        ) : (
+          <p className="acct-none">{emptyNote}</p>
+        )}
+      </div>
+      {split.unknown ? (
+        <p className="pool-note">
+          This project's pool is not known from here, so pool matching does not hide otherwise available accounts.
+        </p>
+      ) : split.crossing.length > 0 ? (
+        <>
+          <OtherPoolsDisclosure
+            count={split.crossing.length}
+            shown={showOther}
+            onToggle={onToggleOther}
+          />
+          {showOther && (
+            <div className="acct-list">
+              {split.crossing.map((w) => (
+                <AccountRow
+                  key={w}
+                  wrapper={w}
+                  facts={factsFor(accounts, w)}
+                  onPick={onPick}
+                  roster={roster}
+                  poolChip={accountPool(roster, w)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      ) : null}
     </>
   );
 }
