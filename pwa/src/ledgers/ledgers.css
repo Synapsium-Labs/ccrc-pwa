@@ -14,6 +14,7 @@
   display: grid; gap: var(--sp-2); padding: var(--sp-2); min-width: 0; max-width: 72rem;
   background: var(--bg-page); color: var(--ink-primary);
 }
+.wl-route { display: grid; gap: var(--sp-1); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
 .wl-head { display: flex; align-items: center; gap: var(--sp-2); }
 .wl .wl-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .wl .wl-note { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }

@@ -18,7 +18,7 @@
 import type { ReactNode } from 'react';
 import { CountBadge, Door, Icon, type IconName } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
-import { badgePrint, INBOX_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
+import { badgePrint, INBOX_BADGE_UNIT, WAITING_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { useLocation } from '../../lib/router';
 import { ROUTES, topRouteOf } from '../../lib/routes';
@@ -33,6 +33,7 @@ export type RailItem =
 
 export const RAIL_ITEMS: readonly RailItem[] = [
   { id: 'fleet', icon: 'layout-list' },
+  { id: 'waiting', icon: 'hand' },
   { id: 'inbox', icon: 'mail' },
   { id: 'runs', icon: 'workflow' },
   { id: 'accounts', icon: 'key-round' },
@@ -50,13 +51,16 @@ function titleOf(id: string): string {
   return route.title;
 }
 
-function RailEntry({ item, current, waiting }: { item: RailItem; current: string | null; waiting: number }): ReactNode {
+function RailEntry({ item, current, waiting, waitingItems }: {
+  item: RailItem; current: string | null; waiting: number; waitingItems: number;
+}): ReactNode {
   if ('reserved' in item) return null;
   if ('bell' in item) return <NotificationBell />;
   const word = titleOf(item.id);
-  // Only the Inbox door is badged: the fleet head's chrome carried a mail count and no runs count.
-  const count = item.id === 'inbox' ? waiting : 0;
-  const name = count > 0 ? `${word}, ${count} ${INBOX_BADGE_UNIT}` : word;
+  // Two doors are badged: the Inbox (the sessions waiting on the operator) and Waiting on you (its open items and
+  // questions); the fleet head's chrome carried a mail count and no runs count.
+  const count = item.id === 'inbox' ? waiting : item.id === 'waiting' ? waitingItems : 0;
+  const name = count > 0 ? `${word}, ${count} ${item.id === 'waiting' ? WAITING_BADGE_UNIT : INBOX_BADGE_UNIT}` : word;
   return (
     <Door
       className="ins-rail-item"
@@ -74,14 +78,14 @@ function RailEntry({ item, current, waiting }: { item: RailItem; current: string
 export function Rail(): ReactNode {
   const { path } = useLocation();
   const current = topRouteOf(path)?.id ?? null;
-  const { waiting } = useNavBadges();
+  const { waiting, waitingItems } = useNavBadges();
   const head = RAIL_ITEMS.filter((i) => !('foot' in i));
   const foot = RAIL_ITEMS.filter((i) => 'foot' in i);
   return (
     <div className="ins-rail">
-      {head.map((item) => <RailEntry key={item.id} item={item} current={current} waiting={waiting ?? 0} />)}
+      {head.map((item) => <RailEntry key={item.id} item={item} current={current} waiting={waiting ?? 0} waitingItems={waitingItems ?? 0} />)}
       <div className="ins-rail-foot">
-        {foot.map((item) => <RailEntry key={item.id} item={item} current={current} waiting={waiting ?? 0} />)}
+        {foot.map((item) => <RailEntry key={item.id} item={item} current={current} waiting={waiting ?? 0} waitingItems={waitingItems ?? 0} />)}
       </div>
     </div>
   );

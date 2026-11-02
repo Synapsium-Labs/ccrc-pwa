@@ -99,7 +99,7 @@ describe('the base commands', () => {
 describe("the ids are W2's door table's", () => {
   it('every base command carries the id docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md §The door table names', () => {
     expect(baseCommands().map((c) => c.id).sort()).toEqual([
-      'go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-settings',
+      'go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-settings', 'go-waiting',
       'open-session', 'next-session', 'prev-session',
       'switch-layout', 'switch-theme', 'show-shortcuts',
       // W2 Task S2b registers these three (§The door table's last column).
@@ -205,13 +205,18 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // T3e (D-6385) adds `toggle-inspector`; every other command ranks as it did, so the table is read without it, and
     // the new command's own place is pinned in the empty list below.
     const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector');
-    for (const [q, ids] of BEFORE) expect(ranked(q), JSON.stringify(q)).toEqual(ids);
+    // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
+    const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
+    for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
     // The command's own rank row: the one command whose title holds "inspector".
     expect(rankCommands('inspector', baseCommands()).map((c) => c.id)).toEqual(['toggle-inspector']);
     // This pin couples to the registry's order on purpose: moving the command is a decision, not a drift.
     const empty = rankCommands('', baseCommands()).map((c) => c.id);
     expect(empty.indexOf('toggle-inspector'), 'after the session commands, before Switch layout').toBe(empty.indexOf('session-pr') + 1);
     expect(empty[empty.indexOf('toggle-inspector') + 1]).toBe('switch-layout');
+    // Go to Waiting on you: found by its words, and in the registry because its route is `top`.
+    expect(rankCommands('waiting', baseCommands()).map((c) => c.id)[0]).toBe('go-waiting');
+    expect(empty).toContain('go-waiting');
   });
 });
 

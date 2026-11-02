@@ -14,6 +14,7 @@ import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { AccountUsage, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { seventeenLanes } from './seventeenLanes';
+import { itemView, waitingView } from './ledgersFixture';
 import { lanesByFree } from '../src/fleet/laneOrder';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
@@ -73,7 +74,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   act(() => { navigate('/'); });
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false, waiting: null }));
   setSkin(REFINED);
 });
 
@@ -83,6 +84,7 @@ const head = (): HTMLElement => {
   return h!;
 };
 const DOORS = [
+  ['go-waiting', 'Waiting on you'],
   ['go-inbox', 'Inbox'],
   ['go-runs', 'Runs'],
   ['go-docs', 'Docs'],
@@ -90,7 +92,7 @@ const DOORS = [
 ] as const;
 
 describe("Refined's phone header (W2 Task S5)", () => {
-  it('the phone header holds the wordmark and the four doors, each with its word as its accessible name, each at least --tap-min, each carrying its data-command', () => {
+  it('the phone header holds the wordmark and the five doors, each with its word as its accessible name, each at least --tap-min, each carrying its data-command', () => {
     atWidth(390);
     render(<App />);
     const h = head();
@@ -127,6 +129,21 @@ describe("Refined's phone header (W2 Task S5)", () => {
     act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'calm', bucket: 'idle' })] }));
     expect(within(h).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
     expect(within(h).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+  });
+
+  // Desktop-polish PL5a (D-7712): the phone's Waiting on you door counts open items plus questions, never an item being checked.
+  it("the Waiting on you door's name carries its count, and prints no badge before the waiting frame", () => {
+    atWidth(390);
+    render(<App />);
+    act(() => useFleetStore.setState({ conn: 'open', fleetFrameSeen: true, sessions: [fleetSession({ id: 'ask-a', bucket: 'attention' })] }));
+    const h = head();
+    expect(within(h).getByRole('button', { name: 'Waiting on you' })).toHaveAttribute('data-command', 'go-waiting');
+    act(() => useFleetStore.setState({
+      waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }),
+    }));
+    expect(within(h).getByRole('button', { name: 'Waiting on you, 2 waiting on you' })).toHaveTextContent(/2$/);
+    fireEvent.click(within(h).getByRole('button', { name: 'Waiting on you, 2 waiting on you' }));
+    expect(location.pathname).toBe('/waiting');
   });
 
   it("the subtitle is `fleetSummary`'s readout", () => {

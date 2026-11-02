@@ -50,6 +50,9 @@ export const ROUTES: readonly Route[] = [
   { id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, title: 'Settings', top: false, path: null },
   // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link.
   { id: 'digest', pattern: /^\/digest\/?$/, title: 'Digest', top: false, path: null },
+  // Waiting on you (desktop-polish PL5a, D-7712): the combined list, and one item under it by its numeric id.
+  { id: 'waiting', pattern: /^\/waiting\/?$/, title: 'Waiting on you', top: true, path: '/waiting' },
+  { id: 'item', pattern: /^\/waiting\/(\d+)\/?$/, title: 'Item', top: false, path: null },
 ];
 
 /** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
@@ -57,6 +60,11 @@ export const ROUTES: readonly Route[] = [
  *  path is the id itself (`w7-session-path.test.ts`). */
 export function sessionPath(id: string): string {
   return `/s/${encodeURIComponent(id)}`;
+}
+
+/** The one builder of an item's path, `/waiting/<id>`, which the `item` row above parses (PL5a). */
+export function itemPath(id: number): string {
+  return `/waiting/${id}`;
 }
 
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the

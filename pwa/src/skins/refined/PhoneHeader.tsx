@@ -18,7 +18,7 @@ import { commandDoor } from '../../command/door';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { fleetSummary } from '../../fleet/fleetSummary';
-import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
+import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, WAITING_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
 import { PoolLag, poolLagText } from '../../fleet/poolLag';
 import { UpdateIndicator } from '../../fleet/UpdateIndicator';
 
@@ -43,7 +43,7 @@ export function PhoneHeader(): ReactNode {
   const runs = useStore((s) => s.runs);
   const runsFrameSeen = useStore((s) => s.runsFrameSeen);
   const pools = useStore((s) => s.pools);
-  const { waiting, runsNeedYou } = useNavBadges();
+  const { waiting, runsNeedYou, waitingItems } = useNavBadges();
   // Runs before their first frame are unknown, not none: the readout leaves the part out (`fleetSummary`'s contract).
   const summary = fleetSummary(sessions, runsFrameSeen ? runs : null);
   const lag = poolLagText(pools?.epoch, pools?.observedEpoch);
@@ -52,6 +52,7 @@ export function PhoneHeader(): ReactNode {
       <div className="ref-phone-row">
         <Wordmark className="ref-phone-mark" />
         <nav aria-label="Primary" className="ref-phone-doors">
+          <HeadDoor id="go-waiting" icon="hand" word="Waiting on you" count={waitingItems ?? 0} unit={WAITING_BADGE_UNIT} />
           <HeadDoor id="go-inbox" icon="inbox" word="Inbox" count={waiting ?? 0} unit={INBOX_BADGE_UNIT} />
           <HeadDoor id="go-runs" icon="list-checks" word="Runs" count={runsNeedYou ?? 0} unit={RUNS_BADGE_UNIT} />
           <HeadDoor id="go-docs" icon="file-text" word="Docs" />
