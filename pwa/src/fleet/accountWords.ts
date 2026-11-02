@@ -9,7 +9,8 @@ import {
   ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, WINDOW_LIMITED_PCT, kindCodeOf, sourceAt, stateWordFor,
   type AccountStateAnswer, type AccountStateWord,
 } from '../../../shared/accounts';
-import type { AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
+import type { AccountsConnect, AccountUsage, LaneNotReadyReason, LaneWire, RosterWire } from '../../../shared/api';
+import type { RouteRefusal } from '../../../shared/refusal';
 import { formatAge, formatReset } from './formatReset';
 
 /** The lamp: a glyph and its word, never a glyph alone (spec §4.1; identity core). One row per state word, in the
@@ -153,12 +154,21 @@ export interface TroubleCopy {
   readonly effect: string;
   readonly lead: string;
   readonly commands: readonly string[];
+  /** The fix includes a check, so the card offers **Check again**, which calls the Check route when the screen can run
+   *  it (accounts plan Task A14, D-7732). The command stays beside it for a screen that cannot. */
+  readonly checkAgain: boolean;
 }
 
 /** The card body for a trouble word, or `null` for a word that is not trouble. `sessions` is how many live sessions
  *  run on the lane; `usage` is its telemetry row; `lane` its lane state, when the answer carries one. Moving sessions
  *  off is Task A3's sheet, so no sentence here offers it. */
-export function troubleCopy(o: {
+export function troubleCopy(o: TroubleFacts): TroubleCopy | null {
+  const body = troubleBody(o);
+  // Check again is offered exactly where the fix names a check (D-7732).
+  return body === null ? null : { ...body, checkAgain: body.commands.includes(fixCommands.check(o.id)) };
+}
+
+interface TroubleFacts {
   id: string;
   answer: AccountStateAnswer;
   entry: Pick<RosterWire, 'provider' | 'kind'> | undefined;
@@ -166,7 +176,9 @@ export function troubleCopy(o: {
   usage: AccountUsage | null;
   sessions: number;
   now: number;
-}): TroubleCopy | null {
+}
+
+function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
   const { id, answer, entry, lane, usage, sessions, now } = o;
   const nowSec = Math.floor(now / 1000);
   const keyLane = entry?.kind === 'key';
@@ -250,3 +262,82 @@ export function troubleCopy(o: {
 
 /** A Codex lane has no 5-hour window: its absent 5h reads this, never "—" (spec §4.1). */
 export const WEEKLY_ONLY = 'weekly window only';
+
+// ── Check, and the kill switch (spec §10; accounts plan Task A14, D-7732) ─────────────────────────────────────────
+
+/** The Check button's words: it spends one request, and says so (spec §13.1). */
+export const CHECK_LABEL = 'Check · one test reply';
+/** The trouble card's Check, the same route under the card's own word (spec §4.2). */
+export const CHECK_AGAIN_LABEL = 'Check again · one test reply';
+
+/** The kill switch row's sentence (spec §10): on, or off with the sessions that keep running here. */
+export function switchRow(on: boolean, running: number): string {
+  if (on) return 'On: new sessions can land here';
+  if (running === 0) return 'Off: no new sessions.';
+  return `Off: no new sessions; the ${running} running here ${running === 1 ? 'keeps' : 'keep'} running.`;
+}
+
+/** Why the knob cannot turn the lane on (spec §10): the box's reason, worded. A lane with no check recorded (a legacy
+ *  lane the backfill wrote, or one with no lane state) reads "Check it once to turn it on". */
+export function notReadyWords(reason: LaneNotReadyReason | undefined): string {
+  switch (reason) {
+    case 'check-failed': return "Not ready: the last check didn't pass. Check it first.";
+    case 'no-credential': return 'Not ready: no credential is recorded for it. Give it one on the fleet host, then check it.';
+    case 'seed-unverified': return "Not ready: its first-run setup isn't verified since its last run. Check it again.";
+    default: return 'Check it once to turn it on';
+  }
+}
+
+/** Why the screen cannot run a lane act at all, from the server's own `connect` (spec §12.6), or `null` when it can. */
+export function connectBlock(connect: AccountsConnect): string | null {
+  if (connect.origin === 'insecure') {
+    return "Accounts can't be changed over plain HTTP: your session and this page could be read or changed on the way.";
+  }
+  if (connect.accountOps !== 'available') return 'The fleet host needs an update before lanes can be switched or checked here.';
+  return null;
+}
+
+/** The words the lane routes refuse with that the screen names, each with its sentence (D-7732). Keyed by the route
+ *  words themselves (`RouteRefusal`), so a typo is a compile error, and read by `Object.hasOwn` (ARCH-13b's rule: no
+ *  literal branch on a code). `field` reads one more word off the body (`reason`, `verbCode`), already held to a word. */
+type LaneRefusalWord = Extract<RouteRefusal,
+  'not-ready' | 'last-enabled-home' | 'lane-busy' | 'outcome-unknown' | 'not-found' | 'unsupported' | 'insecure-origin'
+  | 'unavailable' | 'lane-act-refused'>;
+const LANE_REFUSAL_TEXT: Readonly<Record<LaneRefusalWord, (id: string, what: string, field: (k: string) => string | undefined) => string>> = {
+  'not-ready': (_id, _what, field) => notReadyWords(field('reason') as LaneNotReadyReason | undefined),
+  'last-enabled-home': (id) => `${id} is the only lane that can take new sessions. Turn another on first.`,
+  'lane-busy': (id) => `${id} is busy with another account change. Try again in a moment.`,
+  'outcome-unknown': (id, what) => `The fleet host didn't answer in time, so whether ${id} was ${what} is unknown. The screen reads it again.`,
+  'not-found': (id) => `${id} is no longer on this box's roster.`,
+  'unsupported': () => 'The fleet host needs an update before lanes can be switched or checked here.',
+  'insecure-origin': () => "Accounts can't be changed over plain HTTP.",
+  'unavailable': (id, what) => `The fleet host couldn't run it, so ${id} was not ${what}.`,
+  'lane-act-refused': (id, what, field) => {
+    const verb = field('verbCode');
+    return verb === undefined ? `The fleet host refused: ${id} was not ${what}.` : `The fleet host refused (${verb}): ${id} was not ${what}.`;
+  },
+};
+
+/** A refusal's words for a lane act, built from its CODE only (the server's `error` word, its `reason`, its
+ *  `verbCode`), never from the response's text (D-7732). `failure` is what the call rejected with: an `ApiError`'s
+ *  body, or anything else for a request that did not complete. */
+export function laneActRefusal(act: 'check' | 'switch', id: string, failure: unknown): string {
+  const body = typeof failure === 'object' && failure !== null && 'body' in failure ? (failure as { body: unknown }).body : undefined;
+  const field = (k: string): string | undefined => {
+    const v = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)[k] : undefined;
+    return typeof v === 'string' && CODE_RE.test(v) ? v : undefined;
+  };
+  const what = act === 'check' ? 'checked' : 'switched';
+  const word = field('error');
+  if (word === undefined) {
+    return body === undefined
+      ? `The request didn't complete, so whether ${id} was ${what} is unknown. The screen reads it again.`
+      : `${id} couldn't be ${what}.`;
+  }
+  return Object.hasOwn(LANE_REFUSAL_TEXT, word)
+    ? LANE_REFUSAL_TEXT[word as LaneRefusalWord](id, what, field)
+    : `${id} couldn't be ${what} (${word}).`;
+}
+
+/** A refusal code as a screen may print it: a kebab word, never a sentence. */
+const CODE_RE = /^[a-z][a-z0-9-]{0,47}$/;

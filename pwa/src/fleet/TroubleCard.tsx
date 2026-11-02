@@ -14,7 +14,7 @@ import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, toast } from '@ccrc/ui';
 import type { AccountStateWord } from '../../../shared/accounts';
-import { STATE_LAMPS, type TroubleCopy } from './accountWords';
+import { CHECK_AGAIN_LABEL, STATE_LAMPS, type TroubleCopy } from './accountWords';
 import './fleet.css';
 
 /** The lamp: its glyph (hidden from assistive tech) and its word, which is the lamp's text. */
@@ -62,13 +62,22 @@ export function CopyCommand({ command }: { command: string }): ReactNode {
   );
 }
 
-/** A trouble card's body: what is wrong, its effect, and the fix. */
-export function TroubleCard({ copy }: { copy: TroubleCopy }): ReactNode {
+/** A trouble card's body: what is wrong, its effect, and the fix. Where the fix names a check and the screen can run
+ *  one (`onCheck`, accounts plan Task A14, D-7732), **Check again** calls the Check route, the knob row's own; while it
+ *  runs (`checking`) the button is busy and does not take a second press. */
+export function TroubleCard({ copy, onCheck, checking = false }: {
+  copy: TroubleCopy; onCheck?: () => void; checking?: boolean;
+}): ReactNode {
   return (
     <div className="acct-trouble">
       <p className="acct-trouble-wrong">{copy.wrong}</p>
       <p className="acct-trouble-effect">{copy.effect}</p>
       <p className="acct-trouble-lead">{copy.lead}</p>
+      {copy.checkAgain && onCheck !== undefined && (
+        <Button variant="ghost" size="fit" className="acct-check-again" disabled={checking} aria-busy={checking || undefined} onClick={onCheck}>
+          {CHECK_AGAIN_LABEL}
+        </Button>
+      )}
       {copy.commands.map((c) => <CopyCommand key={c} command={c} />)}
     </div>
   );

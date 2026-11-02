@@ -1114,3 +1114,65 @@ describe('the docs surface: four session-gated doors, no box token, no /docs rou
     }
   });
 });
+
+// ── the accounts surface (accounts plan Task A14, D-7732; spec 2026-10-18 accounts-connect §13) ─────────────────────
+//
+// `server/src/accounts/routes.ts` is the SEVENTH file that registers routes: Check and the kill switch. Spec §13's rule
+// for every account route is "session-only: not in EXEMPT, and never accepts a box token", so the census here is the
+// docs surface's: every registration is a door in `ACCOUNT_DOORS`, in both directions; no file under
+// `server/src/accounts/` consults the box token (a call in the gate or the port would refuse or admit all three as surely
+// as one in a handler); none is EXEMPT; and a planted call is SEEN. The doors are session-only fleet acts, not
+// coordination writes, so like the docs doors they join neither `SESSION_ONLY_ALL` nor `ALL_LANES`, and CLAUDE.md's
+// box-token bullet owes them no sentence.
+describe('the accounts surface: three session-only doors, no box token (spec 2026-10-18 §13)', () => {
+  const ACCOUNTS_SRC = read('server/src/accounts/routes.ts');
+  /** Every source file of the accounts context, by listing the directory, so a file added there is read without an
+   *  edit here. */
+  const ACCOUNTS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'accounts'))
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/accounts/${f}`);
+  /** The three doors, by path (spec §13.1). Hand-kept for the NAMES only: the cases below derive the same set from the
+   *  file and compare in both directions. */
+  const ACCOUNT_DOORS = ['/api/accounts/:id/check', '/api/accounts/:id/enable', '/api/accounts/:id/disable'];
+  const REGISTERED = registrationsIn(ACCOUNTS_SRC).map((r) => r.key);
+  const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
+  const CHECK_LINE = "app.post('/api/accounts/:id/check', act('check'));";
+
+  it('accounts/routes.ts registers what the checks below reason over, and every accounts file is read', () => {
+    expect(REGISTERED.length, 'the accounts scan collapsed — this describe is over nothing').toBe(ACCOUNT_DOORS.length);
+    expect(new Set(REGISTERED).size, 'an account route is registered twice').toBe(REGISTERED.length);
+    expect(ACCOUNTS_FILES, 'the accounts directory listing lost a file this census must read').toEqual(expect.arrayContaining([
+      'server/src/accounts/gate.ts', 'server/src/accounts/ops.ts', 'server/src/accounts/reconcile.ts', 'server/src/accounts/routes.ts',
+    ]));
+  });
+
+  it('ACCOUNT_DOORS is exactly what accounts/routes.ts registers, every one a POST, in both directions', () => {
+    expect([...REGISTERED].sort(), 'accounts/routes.ts and ACCOUNT_DOORS disagree — a route was added or removed on one side only')
+      .toEqual(ACCOUNT_DOORS.map((p) => `POST ${p}`).sort());
+  });
+
+  it('no accounts file consults the box token, and no account door is EXEMPT (gate.ts, read as text)', () => {
+    for (const rel of ACCOUNTS_FILES) {
+      const src = read(rel);
+      for (const re of GATE_PATTERNS) {
+        expect(re.test(src), `${rel} consults the box token (${re.source}) — an account route would be gated by it`).toBe(false);
+      }
+    }
+    expect(lanesIn(ACCOUNTS_SRC)).toEqual([]);
+    for (const p of ACCOUNT_DOORS) expect(GATE_SRC, `${p} became EXEMPT`).not.toContain(`  ['POST ${p}',`);
+  });
+
+  it('a box-token call planted after the check registration is SEEN — the lane source is live', () => {
+    expect(ACCOUNTS_SRC, 'the check registration line moved — re-point this control at it').toContain(CHECK_LINE);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = ACCOUNTS_SRC.replace(CHECK_LINE, `${CHECK_LINE}\n    ${call}`);
+      expect(GATE_PATTERNS.some((re) => re.test(planted)), `a planted ${call} went unseen by the file scan`).toBe(true);
+    }
+  });
+
+  it('ACCOUNT_DOORS joins neither the session-only coordination writes nor the box-token lanes', () => {
+    for (const door of ACCOUNT_DOORS) {
+      expect(SESSION_ONLY_ALL, `${door} was counted as a coordination write`).not.toContain(door);
+      expect(ALL_LANES.map(pathOf), `${door} was counted as a box-token lane`).not.toContain(door);
+    }
+  });
+});

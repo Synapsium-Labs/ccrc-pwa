@@ -71,6 +71,7 @@ import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hook
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes } from './linear/routes.js';
 import { createAccountGate } from './accounts/gate.js';
+import { registerAccountRoutes } from './accounts/routes.js';
 import { resolveTitle } from './linear/resolve.js';
 import { classifyAddFailure, planCreate } from './workspaceCreate.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
@@ -96,7 +97,7 @@ import {
   CLIP_EXT_ALT, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
   PANE_HISTORY_LINES,
   PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS,
-  type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
+  type AccountsResponse, type AccountUsage, type RosterWire, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
@@ -1387,6 +1388,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0));
   });
 
+  /** `GET /api/accounts`'s `roster`, the browser's fields only (`RosterWire`), over ONE pool-edges snapshot. The lane
+   *  routes (`accounts/routes.ts`, accounts plan Task A14) answer the same rows after a switch. */
+  const rosterWireOf = (accountEdges: ReturnType<typeof readAccountPoolEdges>): RosterWire[] =>
+    deps.cfg.roster.accounts.map((a) => ({
+      id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
+      pool: a.pool,
+      ...rosterKindOf(a),
+      // T7-R2 (D-3076): the RESOLVED membership (central
+      // beats declared beats untagged, design §5.6) — `pool` above is the
+      // declared carrier alone, and a client that computed its own
+      // crossing warning from it would contradict what `POST
+      // /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool`
+      // actually decides the moment a central `pool_edges` row exists
+      // (`NewSessionSheet.tsx`'s crossing warning, measured live before this field
+      // existed). Reads the ONE `accountEdges` snapshot it is handed, not a
+      // fresh per-account read.
+      resolvedPool: resolvedAccountPool(a.id, a, accountEdges),
+    }));
+
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
   // respawns, and swaps. Ordered by the roster's declaration order.
@@ -1461,21 +1481,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // agrees with `refusePool`'s refusal pre-check about which accounts a
       // central tag has moved.
       projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }, accountEdges),
-      roster: deps.cfg.roster.accounts.map((a) => ({
-        id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
-        pool: a.pool,
-        ...rosterKindOf(a),
-        // T7-R2 (D-3076): the RESOLVED membership (central
-        // beats declared beats untagged, design §5.6) — `pool` above is the
-        // declared carrier alone, and a client that computed its own
-        // crossing warning from it would contradict what `POST
-        // /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool`
-        // actually decides the moment a central `pool_edges` row exists
-        // (`NewSessionSheet.tsx:186-188`, measured live before this field
-        // existed). Reads the ONE `accountEdges` snapshot above, not a
-        // fresh per-account read.
-        resolvedPool: resolvedAccountPool(a.id, a, accountEdges),
-      })),
+      roster: rosterWireOf(accountEdges),
     };
     // `lanes` and `connect` for the SESSION verdict only (D-5511, D-5517): a dark gate's reader, and a box token (which
     // an armed gate refuses before this handler), get today's three fields and nothing else. The lane states are read
@@ -1938,6 +1944,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerLinearRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
+  // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
+  // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
+  // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a
+  // script) answers `unavailable` once the gate passes. The answer's lane is re-read through `lanesWire`, the GET's.
+  const accountOps = deps.accountOps;
+  registerAccountRoutes(app, {
+    gate: accountGate,
+    ops: { run: async (...a) => accountOps === undefined ? { kind: 'not-started' } : accountOps.run(...a) },
+    laneOf: (id) => {
+      const entry = deps.cfg.roster.byId.get(id);
+      return entry === undefined ? null : { provider: rosterKindOf(entry).provider ?? null };
+    },
+    view: async (id) => {
+      const limits = await readLimits(deps.io, deps.cfg);
+      const roster = rosterWireOf(readAccountPoolEdges());
+      const lanes = lanesWire(roster.filter((r) => r.id === id), limits, await readLaneStates(deps.io, deps.cfg),
+        deps.masker ?? SHAPE_ONLY_MASKER, Date.now());
+      return { roster, lane: lanes[id] ?? null };
+    },
+    audit: deps.accountAudit,
+    fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
   });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated

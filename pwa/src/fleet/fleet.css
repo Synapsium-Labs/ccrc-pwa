@@ -2480,7 +2480,8 @@ button.proj-card-pool::before {
   border-radius: var(--r-sm);
 }
 /* Line 2: the kind chip, the identity line (ellipsised), the pool chip. Wraps only between whole items. */
-.accounts-row-kind {
+.accounts-row-kind,
+.acct-knob {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2529,7 +2530,8 @@ button.proj-card-pool::before {
 }
 .accounts-row[data-state] .acct-trouble-effect,
 .accounts-row[data-state] .acct-trouble-lead,
-.accounts-row[data-state] .acct-fix-hold {
+.accounts-row[data-state] .acct-fix-hold,
+.accounts-row[data-state] .acct-knob-reason {
   margin: 0;
   font-family: var(--family-ui);
   font-size: var(--fs-meta);
@@ -2561,6 +2563,59 @@ button.proj-card-pool::before {
   .accounts-row[data-state] .acct-fix-field { flex: none; }
   .acct-fix-copy { width: 100%; }
 }
+
+/* The kill switch row (spec §10; accounts plan Task A14, D-7732): the switch, its sentence and Check on one wrapping
+   line, the reason on a line of its own beneath them, never beside the knob. The switch is drawn as the option row's
+   box is (`--ink-secondary` frame, `--accent` once on, `--ink-disabled` when it cannot move); its name is the
+   sentence beside it and its `aria-label`. */
+/* Its shape is `.accounts-row-kind`'s (the group above); here only its place on the card. */
+.acct-knob { margin: var(--sp-1) 0 0; }
+.acct-switch {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.acct-switch:disabled { cursor: default; }
+.acct-switch-track {
+  display: block;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border: 1.5px solid var(--ink-secondary);
+  border-radius: var(--r-full);
+  background: transparent;
+}
+.acct-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: var(--r-full);
+  background: var(--ink-secondary);
+}
+.acct-switch[aria-checked='true'] .acct-switch-track { border-color: var(--accent); background: var(--accent); }
+.acct-switch[aria-checked='true'] .acct-switch-thumb { left: auto; right: 2px; background: var(--ink-on-accent); }
+.acct-switch:disabled .acct-switch-track { border-color: var(--ink-disabled); background: transparent; }
+.acct-switch:disabled .acct-switch-thumb { background: var(--ink-disabled); }
+.accounts-row[data-state] .acct-knob-state {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+}
+.acct-check, .acct-check-again { flex: none; min-height: var(--tap-min); }
+.acct-check-again { justify-self: start; }
+/* The reason's ink and type are the trouble sentences' (the group above); here only its own line. */
+.acct-knob-reason { flex: 1 0 100%; }
 
 /* — Your sign-in, which is NOT one of your accounts (D-161) —
    The passkey block and the session block used to be `.accounts-row` with an
