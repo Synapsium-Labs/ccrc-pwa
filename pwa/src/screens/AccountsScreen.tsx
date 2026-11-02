@@ -33,11 +33,13 @@ import type { ReactNode } from 'react';
 import { isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
 import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
-import { PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
+import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
 import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
+import { RemoveSheet } from '../accounts/RemoveSheet';
+import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
-import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, PASTE_A_TOKEN, REMOVE_ACT, REPLACE_TOKEN, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
 import { presenceOf } from '../fleet/presence';
@@ -317,6 +319,15 @@ export function AccountsScreen(): ReactNode {
   );
   const reason = doorReason === null ? null : <DoorReason id={doorReasonId} text={doorReason.text} fix={'fix' in doorReason ? doorReason.fix : undefined} />;
 
+  // Remove and Replace token (accounts plan Task A19, D-7742): the fold's two sheets, hosted here rather than on a card,
+  // because a removed lane's card goes with it and its ledger must stay. Each is keyed per opening.
+  const [removing, setRemoving] = useState<{ id: string; gen: number } | null>(null);
+  const [replacing, setReplacing] = useState<{ id: string; gen: number } | null>(null);
+  const sheetGen = useRef(0);
+  const openRemove = (id: string): void => setRemoving({ id, gen: ++sheetGen.current });
+  const openReplace = (id: string): void => setReplacing({ id, gen: ++sheetGen.current });
+  const readRoster = (): readonly RosterWire[] => useFleetStore.getState().roster;
+
   return (
     // The page scaffold (D-5102). The body's grid keeps the old screen's rhythm, --sp-3 between blocks.
     <PageScaffold title="Accounts" back={backToFleet('accounts-back')} actions={desk ? door : undefined}>
@@ -417,6 +428,8 @@ export function AccountsScreen(): ReactNode {
           const switchOn = acts.acked[wrapper] ?? answer.word !== 'off';
           const notReady = !switchOn && laneWire !== undefined && !laneWire.ready ? notReadyWords(laneWire.notReadyReason) : null;
           const canAct = connect !== null && blocked === null && inRoster;
+          // An Anthropic lane on a long-lived token: its credential act is Replace token (spec §4.4, §9).
+          const tokenLane = entry?.provider === 'anthropic' && entry.kind === 'token';
           return (
             <section
               key={wrapper}
@@ -477,6 +490,9 @@ export function AccountsScreen(): ReactNode {
                   copy={trouble}
                   onCheck={canAct ? () => acts.check(wrapper) : undefined}
                   checking={acts.busy[wrapper] !== undefined}
+                  replace={canAct && tokenLane && (answer.word === 'signed-out' || answer.word === 'expiring')
+                    ? { label: answer.word === 'signed-out' ? PASTE_A_TOKEN : REPLACE_TOKEN, onOpen: () => openReplace(wrapper) }
+                    : undefined}
                 />
               )}
 
@@ -514,6 +530,28 @@ export function AccountsScreen(): ReactNode {
                   onCheck={() => acts.check(wrapper)}
                 />
               )}
+              {/* The fold's credential act and Remove (spec §4.4; Task A19). Refused, they stay drawn and disabled, named by
+                  the knob row's reason (offline, or the server's own). */}
+              {connect !== null && inRoster && (
+                <div className="acct-fold">
+                  {tokenLane && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openReplace(wrapper)}
+                    >
+                      {REPLACE_TOKEN}
+                    </Button>
+                  )}
+                  <Button
+                    variant="danger-ghost" size="fit" disabled={!canAct}
+                    aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                    onClick={() => openRemove(wrapper)}
+                  >
+                    {REMOVE_ACT}
+                  </Button>
+                </div>
+              )}
 
               {onAccount.length > 0 && (
                 <ul className="accounts-sessions">
@@ -542,8 +580,34 @@ export function AccountsScreen(): ReactNode {
         connect={connect}
         offline={offline}
         refresh={refreshAccounts}
-        readRoster={() => useFleetStore.getState().roster}
+        readRoster={readRoster}
       />
+
+      {removing !== null && (
+        <RemoveSheet
+          key={`remove-${removing.gen}`}
+          id={removing.id}
+          open
+          onClose={() => setRemoving(null)}
+          lane={lanes?.[removing.id]}
+          connect={connect}
+          blocked={blocked}
+          refresh={refreshAccounts}
+          readRoster={readRoster}
+        />
+      )}
+      {replacing !== null && (
+        <ReplaceSheet
+          key={`replace-${replacing.gen}`}
+          id={replacing.id}
+          open
+          onClose={() => setReplacing(null)}
+          connect={connect}
+          blocked={blocked}
+          roster={roster}
+          refresh={refreshAccounts}
+        />
+      )}
 
       <AccountPoolSheet
         account={poolSheetAccount}

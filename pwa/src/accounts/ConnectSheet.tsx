@@ -28,6 +28,7 @@ import {
   ADD_LANE, ADD_REFUSED, DOOR_META, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
   READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
 } from '../fleet/accountWords';
+import { CompromiseSteps } from './CompromiseSteps';
 import { ConfirmItsYou } from './ConfirmItsYou';
 import { CopyCommand } from '../fleet/TroubleCard';
 import { FrameFoot, type FootAct } from './FrameFoot';
@@ -383,6 +384,9 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
             onCheckAgain={() => { void checkAgain(); }}
             onClose={onClose}
           />
+          {/* The compromise disclosure (spec §3.11; Task A19): in the token, Codex and OpenRouter result frames, never a
+              sign-in's. */}
+          {method !== 'login' && <CompromiseSteps roster={roster} />}
         </>
       );
       break;
