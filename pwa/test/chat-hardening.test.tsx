@@ -4,7 +4,7 @@
 // `Worker`, so the real `chatRunner` answers `worker-unavailable`; a case that needs a tree from the worker path
 // spies `chatRunner.parse` (ChatMarkdown's default parser reads it at call time) and answers with `parseMarkdown`,
 // the function the worker runs. `message-links.test.tsx` runs beside this file, UNMODIFIED.
-import type { ReactNode } from 'react';
+import { StrictMode, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import Markdown from 'react-markdown';
@@ -775,20 +775,78 @@ describe('W5h-a: chat highlighting', () => {
     }
   });
 
-  it('M4.C5: after each commit the message\'s store evicts what no block references', () => {
+  it('M4.C5: after each commit the message\'s store evicts what no block references', async () => {
     const evictions = vi.fn();
+    const stores: HighlightStore[] = [];
     const ctx: HighlighterContextValue = {
       ...inThreadContext(),
       createStore: (h, mode) => {
         const s = createProductionStore(h, mode);
-        return { ...s, evictUnreferenced: () => { evictions(); s.evictUnreferenced(); } };
+        const spied = { ...s, evictUnreferenced: () => { evictions(); s.evictUnreferenced(); } };
+        stores.push(spied);
+        return spied;
       },
     };
     const r = render(under(ctx, bubble('```ts\nx\n```')));
+    const store = stores[0]!;
+    const oldKey = store.keyOf('ts', 'x');
+    expect(oldKey.kind).toBe('key');
+    const k = (oldKey as { key: string }).key;
+    await waitFor(() => expect(store.peek(k).kind).toBe('html'));
     const before = evictions.mock.calls.length;
     r.rerender(under(ctx, bubble('```ts\nxy\n```')));
     expect(before).toBeGreaterThan(0);
     expect(evictions.mock.calls.length).toBeGreaterThan(before);
+    // The superseded key's coloured entry is gone, not merely unreferenced.
+    expect(store.peek(k).kind).toBe('unrequested');
+  });
+
+  it('M4.C5: on the async path, the commit of the new tree evicts the superseded round\'s keys', async () => {
+    const calls = deferChatParses();
+    const stores: HighlightStore[] = [];
+    const ctx: HighlighterContextValue = {
+      ...inThreadContext(),
+      createStore: (h, mode) => {
+        const s = createProductionStore(h, mode);
+        stores.push(s);
+        return s;
+      },
+    };
+    const pad = `${'word '.repeat(1000)}\n\n`;
+    const first = `${pad}\`\`\`ts\nx\n\`\`\``;
+    expect(utf8ByteLength(first)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
+    const r = render(under(ctx, bubble(first)));
+    await answer(calls, 0);
+    const store = stores[0]!;
+    const k = (store.keyOf('ts', 'x') as { key: string }).key;
+    await waitFor(() => expect(store.peek(k).kind).toBe('html'));
+    r.rerender(under(ctx, bubble(`${pad}\`\`\`ts\nxy\n\`\`\``)));
+    await answer(calls, 1);
+    await waitFor(() => expect(r.container.textContent).toContain('xy'));
+    expect(store.peek(k).kind).toBe('unrequested');
+  });
+
+  it('M4.C5: under StrictMode\'s double effects, a block\'s first fence is requested at once and stays pending', () => {
+    vi.useFakeTimers();
+    try {
+      const chat = inThreadHighlighter({ hold: true });
+      const stores: HighlightStore[] = [];
+      const ctx: HighlighterContextValue = {
+        ...inThreadContext(inThreadHighlighter(), chat),
+        createStore: (h, mode) => {
+          const s = createProductionStore(h, mode);
+          stores.push(s);
+          return s;
+        },
+      };
+      render(<StrictMode>{under(ctx, bubble('```ts\nconst a', true))}</StrictMode>);
+      const key = stores.map((x) => x.keyOf('ts', 'const a')).find((x) => x.kind === 'key') as { key: string };
+      expect(chat.calls.map((c) => c.code)).toContain('const a');
+      // No timer has advanced: the key is already requested and in flight on the live store.
+      expect(stores.some((x) => x.peek(key.key).kind === 'pending')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refinement (r): in the debounce window the block shows its new key, so the message\'s store is not settled', async () => {

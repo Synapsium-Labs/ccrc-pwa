@@ -391,12 +391,21 @@ function SyncChatMarkdown({ text }: { text: string }): ReactNode {
  *  byte-identical to the synchronous path (M4.P10). */
 const CHAT_RENDER: RenderHastOptions = { components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform };
 
+/** After each commit of the calling component, evicts the keys no mounted block references, so a message's store holds
+ *  its current blocks only (section 4.10 "Chat"). No dependency list: it runs after every commit, after the effects of
+ *  the blocks below it. `ChatMarkdown` calls it for its own commits; the async path's component calls it too, because
+ *  its new tree commits there, after `ChatMarkdown`'s own commit. */
+function useEvictAfterCommit(store: HighlightStore | null): void {
+  useEffect(() => { store?.evictUnreferenced(); });
+}
+
 /** Over `CHAT_SYNC_MAX_BYTES`: the worker. While the current text parses, the newest tree that settled (so a
  *  streaming message advances with each settle); else the settled tree for the current text; else, after an outcome
  *  that is not a tree for the current text, plain text with its note; else (nothing settled yet, or no tree yet
  *  while the current text parses) plain text alone. No Format anyway. */
 function AsyncChatMarkdown({ text, parser }: { text: string; parser: MarkdownParser }): ReactNode {
   const { outcome, lastGood, pending } = useParsedMarkdown(text, parser, { profile: 'chat', budgetMs: CHAT_PARSE_BUDGET_MS });
+  useEvictAfterCommit(useContext(PreHighlightContext));
   if (pending && lastGood !== null) return renderHast(lastGood, CHAT_RENDER);
   if (outcome?.kind === 'tree') return renderHast(outcome.tree, CHAT_RENDER);
   if (outcome !== null && !pending) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;
@@ -419,9 +428,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, parser = chatPars
   useEffect(() => () => store.releaseAll(), [store]);
   // Chat prewarms its highlighter on its first message's mount (section 4.10's singletons; refinement (p)).
   useEffect(() => { highlighters.chat.prewarm(); }, [highlighters.chat]);
-  // After each commit, the keys no mounted block references are evicted, so the store holds this message's current
-  // blocks only (section 4.10 "Chat"). No dependency list: it runs after every commit, after the blocks' effects.
-  useEffect(() => { store.evictUnreferenced(); });
+  useEvictAfterCommit(store);
   return (
     <PreHighlightContext value={store}>
       {utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
