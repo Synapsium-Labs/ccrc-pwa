@@ -464,3 +464,87 @@ describe('the account deny file (D-6202)', () => {
     expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
   });
 });
+
+// W4-I1..W4-I5 (delegation broker wave 4, PR4 Task 4.5a; option B, ruled 2026-10-15): the sweep removes ccrc's own hook
+// COMMAND, never a foreign command that shares its group. A group the sweep empties goes; a foreign group that was already
+// empty, and a non-object hook, are foreign and stay.
+describe('the installer sweeps per hook, not per entry (option B, W4-I1..W4-I5)', () => {
+  const FOREIGN = { type: 'command', command: '/opt/tools/guard.sh' };
+  const OURS = { type: 'command', command: 'bash /old/place/session-hook.sh' };
+  const isOurs = (h: any): boolean => typeof h === 'object' && h !== null && String(h.command ?? '').includes('/session-hook.sh');
+  const plantMixed = (): string => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.PreToolUse = [{ matcher: 'Bash', hooks: [FOREIGN, OURS] }];
+    s.hooks.Stop = [{ hooks: [OURS, FOREIGN] }];
+    const text = JSON.stringify(s, null, 2);
+    fs.writeFileSync(cfg('.claude'), text);
+    return text;
+  };
+  const read = (): any => JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+  /** `--remove` goes FIRST: the installer reads it as argv[1] only, before `--homes`. */
+  const remove = (): void => {
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
+  };
+
+  it('W4-I1: a group mixing a foreign hook with ours keeps the foreign hook and its matcher, beside one fresh managed group', () => {
+    plantMixed();
+    run();
+    const s = read();
+    expect((s.hooks.PreToolUse as any[]).filter((g) => g.hooks?.some((h: any) => !isOurs(h)))).toEqual([{ matcher: 'Bash', hooks: [FOREIGN] }]);
+    expect((s.hooks.Stop as any[]).filter((g) => g.hooks?.some((h: any) => !isOurs(h)))).toEqual([{ hooks: [FOREIGN] }]);
+    for (const ev of ['PreToolUse', 'Stop']) {
+      const ours = (s.hooks[ev] as any[]).filter((g) => g.hooks?.some(isOurs));
+      expect(ours, ev).toHaveLength(1);
+      expect(ours[0].hooks, `${ev}: the managed group holds ours alone, at the current path`).toEqual([expect.objectContaining({ command: 'bash "$HOME/.cc-sessions/session-hook.sh"' })]);
+    }
+  });
+
+  it('W4-I2: --remove keeps both foreign hooks in their groups', () => {
+    plantMixed();
+    remove();
+    const s = read();
+    expect(s.hooks.PreToolUse).toEqual([{ matcher: 'Bash', hooks: [FOREIGN] }]);
+    expect(s.hooks.Stop).toEqual([{ hooks: [FOREIGN] }]);
+  });
+
+  it('W4-I3: a foreign group with an empty hooks list survives byte-identically (only a group the sweep emptied is dropped)', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.Notification = [{ matcher: 'idle', hooks: [] }];
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    const jqS = (v: unknown): string => execFileSync('jq', ['-S', '.'], { input: JSON.stringify(v), encoding: 'utf8' });
+    run();
+    expect(jqS(read().hooks.Notification)).toBe(jqS([{ matcher: 'idle', hooks: [] }]));
+    remove();
+    expect(jqS(read().hooks.Notification)).toBe(jqS([{ matcher: 'idle', hooks: [] }]));
+  });
+
+  it('W4-I3b: a non-object hook is foreign and kept, beside ours swept out of its group (today jq fails: "merge failed")', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.Stop = [{ hooks: ['not-an-object', OURS, FOREIGN] }];
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    run();
+    expect((read().hooks.Stop as any[]).filter((g) => g.hooks?.some((h: any) => !isOurs(h)))).toEqual([{ hooks: ['not-an-object', FOREIGN] }]);
+    remove();
+    expect(read().hooks.Stop).toEqual([{ hooks: ['not-an-object', FOREIGN] }]);
+  });
+
+  it('W4-I4: the run that rewrites a mixed file first backs it up, byte for byte', () => {
+    const before = plantMixed();
+    run();
+    const stamps = fs.readdirSync(path.join(home, 'ccrc-backups'));
+    expect(stamps).toHaveLength(1);
+    expect(fs.readFileSync(path.join(home, 'ccrc-backups', stamps[0]!, '.claude.settings.json'), 'utf8')).toBe(before);
+  });
+
+  it('W4-I5: a second run over a swept mixed file is a no-op: bytes and mtime unchanged', () => {
+    plantMixed();
+    run();
+    const bytes = fs.readFileSync(cfg('.claude'), 'utf8');
+    const t = Date.now() / 1000 - 3600;
+    fs.utimesSync(cfg('.claude'), t, t);
+    const mtime = fs.statSync(cfg('.claude')).mtimeMs;
+    run();
+    expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(bytes);
+    expect(fs.statSync(cfg('.claude')).mtimeMs).toBe(mtime);
+  });
+});
