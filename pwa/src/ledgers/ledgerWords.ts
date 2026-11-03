@@ -203,6 +203,24 @@ export type ItemList =
 /** The combined list, unfiltered: where an item opened with no list, or with one this page cannot read, steps and goes back. */
 export const COMBINED_LIST: ItemList = { at: 'waiting', programme: null };
 
+/** The side rail's filter to the sessions in no programme, as the list's URL holds it (`?programme=`, empty): no slug is
+ *  empty (`shapeProgramSlug`), so it names no programme. No item can be opened from it: it holds questions only. */
+export const NO_PROGRAMME_FILTER = '';
+
+/** The words of the strip above an item (plan PL9). The step controls' names hold their shown words (WCAG 2.5.3). */
+export const BETWEEN_ITEMS_LABEL = 'Between items';
+export const PREVIOUS_WORD = 'Previous';
+export const NEXT_WORD = 'Next';
+export const PREVIOUS_ITEM_LABEL = 'Previous item';
+export const NEXT_ITEM_LABEL = 'Next item';
+export const BESIDE_LABEL = 'The list beside this item';
+/** An item no list holds and none ever showed: an id that names nothing now. */
+export const GONE_WORD = 'That item is not on the list any more.';
+/** The open item left the list while the operator was on it (confirmed, withdrawn): its steps stay where they were. */
+export const LEFT_LIST_WORD = 'This item is not on the list now.';
+/** The way back's name: the list's own name after "Back to". */
+export const backLabel = (listName: string): string => `Back to ${listName}`;
+
 const isSlug = (s: string): boolean => { const shaped = shapeProgramSlug(s); return shaped.ok && shaped.slug === s; };
 
 /** The list as one word for the item's URL (`?from=`), so a reload or a shared link keeps it: `waiting`, `waiting:<slug>`,
@@ -220,13 +238,20 @@ export function listOfFromWord(word: string | null): ItemList {
   return m[1] === 'programme' ? { at: 'programme', programme: m[2]! } : { at: 'waiting', programme: m[2]! };
 }
 
+/** THE ONE STALE-LIST RULE: a list naming a programme no group holds (an old link, a programme with nothing waiting now, a
+ *  well-formed slug nobody uses) is the combined list. The filter, the way back, the column beside an item and the steps all
+ *  settle the list they were given through this, so none of them returns to a filter the side rail no longer offers. */
+export function resolveList(list: ItemList, groups: readonly ProgrammeGroup[]): ItemList {
+  return list.programme === null || groups.some((g) => g.program === list.programme) ? list : COMBINED_LIST;
+}
+
 /** THE GROUPS A LIST DRAWS, in its order, from `groupByProgramme`'s: every group for the combined list; the programme's own group
- *  for its filter or its view. A filter to a programme with no group draws every group (the side rail offers only programmes that
- *  have one, so this is a stale link); a programme's view draws none, and says what the programme waits on instead. */
+ *  for its filter or its view. A filter to a programme with no group is stale (`resolveList`) and draws every group; a programme's
+ *  own view draws none, and says what the programme waits on instead. */
 export function listGroups(list: ItemList, groups: readonly ProgrammeGroup[]): readonly ProgrammeGroup[] {
-  if (list.programme === null) return groups;
-  const mine = groups.filter((g) => g.program === list.programme);
-  return mine.length > 0 || list.at === 'programme' ? mine : groups;
+  if (list.at === 'programme') return groups.filter((g) => g.program === list.programme);
+  const settled = resolveList(list, groups);
+  return settled.programme === null ? groups : groups.filter((g) => g.program === settled.programme);
 }
 
 /** Where an item sits in a list: the list it was resolved to, its 0-based index among the list's items, how many items the list
@@ -243,9 +268,7 @@ export interface ItemPlace {
  *  hold the item (a stale link: an item of another programme, or a programme with no items now) falls back to the combined list;
  *  `null` when that does not hold it either (an item recently cleared, or gone), which has a way back and no steps. */
 export function itemPlace(id: number, list: ItemList, groups: readonly ProgrammeGroup[]): ItemPlace | null {
-  // A list naming a programme with no group is stale whatever it draws: it resolves to the combined list, so the way back never
-  // returns to a filter the side rail no longer offers.
-  const named = list.programme === null || groups.some((g) => g.program === list.programme) ? list : COMBINED_LIST;
+  const named = resolveList(list, groups);
   const tries = named.programme === null ? [named] : [named, COMBINED_LIST];
   for (const l of tries) {
     const ids = listGroups(l, groups).flatMap((g) => g.rows).flatMap((r) => (r.kind === 'item' ? [r.item.id] : []));

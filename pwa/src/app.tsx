@@ -125,10 +125,14 @@ export function App(): ReactNode {
   // the same dependencies; a change of the search alone is a new page too.
   //
   // THE SIDEBAR IS DELIBERATELY LEFT ALONE. `.shell-nav` has always been
-  // scrollable, and its content does NOT swap per route — it is the same fleet
-  // list before and after. Resetting it would throw away the operator's place
-  // in that list every time they opened a session, which is a regression, not
-  // a fix.
+  // scrollable, and on every route but one its content does not swap — it is
+  // the same fleet list before and after. Resetting it would throw away the
+  // operator's place in that list every time they opened a session, which is a
+  // regression, not a fix. The one exception is the Waiting on you item route
+  // on a desk (plan PL9), whose nav slot draws the list the item was opened
+  // from in place of the fleet (`ItemListColumn`, below); entering and leaving
+  // that route remounts the fleet column, so its scroll is not kept across an
+  // item visit (departure pl9-fleet-column-remounts).
   const detail = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const pane = detail.current;

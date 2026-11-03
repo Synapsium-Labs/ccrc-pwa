@@ -11,7 +11,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { MailDeliveryState } from '../../../shared/api.js';
 import {
-  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState,
+  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState, recommendationOf,
   type GoalsView, type ItemAct, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
@@ -32,8 +32,9 @@ export interface ItemEventRow {
 export type ItemMoveResult =
   | { ok: true; item: ItemRow }
   | { ok: false; why: ItemMoveRefusal };
-/** What the coordinator gives when it raises an item. The recommendation (plan PL9) is optional here and stored NULL when it
- *  is left out: the route (`parseRaise`) is what requires it of a decide item and refuses it on any other kind. */
+/** What the coordinator gives when it raises an item. The recommendation (plan PL9) is optional in the type and stored NULL
+ *  when it is left out: a decide item must carry one `recommendationOf` can read (`raiseItem` throws otherwise), and the route
+ *  (`parseRaise`) refuses it in words before then, and refuses it on any other kind. */
 export interface RaiseItemInput {
   program: string; runId: number | null; raisedBy: string; kind: ItemKind; title: string; why: string;
   how: string[]; options: string[] | null; neededBy: NeededBy; soonLabel: string | null; secretSlot: string | null;
@@ -71,10 +72,15 @@ function writeItemEvent(db: DatabaseSync, itemId: number, at: number, act: ItemE
 
 /** The coordinator raises an item: open, with its `raise` event, in one transaction. The kind and the needed-by level
  *  must be in L0's vocabulary (the route has already bounded the text; this stops an out-of-vocabulary word reaching a
- *  column no SQL check guards) and throw otherwise. Returns the new id. */
+ *  column no SQL check guards) and throw otherwise. So does a decide item without a recommendation the one reader
+ *  (`recommendationOf`) can read (plan PL9): no caller can store a decide row the view would show without one. Returns the
+ *  new id. */
 export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number): number {
   if (!ITEM_KINDS.includes(input.kind)) throw new RangeError(`raiseItem: kind ${String(input.kind)} is not an item kind`);
   if (!NEEDED_BY_LEVELS.includes(input.neededBy)) throw new RangeError(`raiseItem: neededBy ${String(input.neededBy)} is not a level`);
+  if (input.kind === 'decide' && recommendationOf(input) === null) {
+    throw new RangeError('raiseItem: a decide item names the option it recommends and why');
+  }
   return tx(db, () => {
     const res = db.prepare(
       'INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, ' +

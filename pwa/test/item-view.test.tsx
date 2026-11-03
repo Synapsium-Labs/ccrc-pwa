@@ -277,6 +277,9 @@ describe('the recommendation on a decide item (plan PL9; spec §3.2, D24)', () =
     expect(marks[0]!.closest('label')?.textContent).toContain('Keep the order');
     expect(screen.getByRole('radio', { name: /Keep the order/ }).closest('label')?.querySelector('[data-recommended="true"]')).not.toBeNull();
     expect(screen.getByRole('radio', { name: /Library first/ }).closest('label')?.querySelector('[data-recommended]')).toBeNull();
+    // The option's whole name, with a real space before the mark: a gap drawn by CSS alone would read "orderRecommended".
+    expect(screen.getByRole('radio', { name: 'Keep the order Recommended' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Library first' })).toBeTruthy();
     // The choices name the reasons as their description, so a screen reader hears why beside them.
     const group = screen.getByRole('group', { name: 'Your decision' });
     expect(document.getElementById(group.getAttribute('aria-describedby') ?? '')?.textContent).toContain(WHY);

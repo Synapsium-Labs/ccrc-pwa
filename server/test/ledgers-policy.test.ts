@@ -233,6 +233,9 @@ describe('recommendationOf, the one reader of a decide item\'s recommendation (p
       expect(recommendationOf({ ...decide, recommended, recommendedWhy: 'Because.' }), String(recommended)).toBeNull();
     }
     expect(recommendationOf({ ...decide, recommended: 0, recommendedWhy: '  ' })).toBeNull();
+    // A half row (a corrupt one: the route and the store never write it) marks nothing: an absent index is never option 0.
+    expect(recommendationOf({ ...decide, recommended: null, recommendedWhy: 'Because.' })).toBeNull();
+    expect(recommendationOf({ ...decide, recommendedWhy: 'Because.' })).toBeNull();
     expect(recommendationOf({ ...decide, recommended: 0, recommendedWhy: 7 as never })).toBeNull();
     expect(recommendationOf({ ...decide, options: null, recommended: 0, recommendedWhy: 'Because.' })).toBeNull();
   });

@@ -216,12 +216,14 @@ const OWN = 'own';
 const OWN_WORD = 'Your own answer';
 
 /** An option's row text: the option's words, and on the one its raiser recommends the "Recommended" mark (plan PL9;
- *  spec §3.2, D24). The mark is words, never colour alone, and it sits inside the option's own label, so it names that option. */
+ *  spec §3.2, D24). The mark is words, never colour alone, and it sits inside the option's own label, so it names that option.
+ *  A real space parts the two (the flex gap draws it, but an accessible name is built from the text): "Keep the order
+ *  Recommended", never "Keep the orderRecommended" (fix round 1, F8), as `OptionRow` parts its label from its tag. */
 function OptionText({ text, recommended }: { text: string; recommended: boolean }): ReactNode {
   if (!recommended) return text;
   return (
     <span className="wi-opt-text" data-recommended="true">
-      {text}
+      {text}{' '}
       <span className="wi-rec">{RECOMMENDED_WORD}</span>
     </span>
   );

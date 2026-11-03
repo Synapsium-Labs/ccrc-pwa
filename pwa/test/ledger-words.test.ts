@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf, programmeIsLive,
-  programmeWaitingCount, questionRows, waitingTotal, type ItemList, type QuestionRow,
+  programmeWaitingCount, questionRows, resolveList, waitingTotal, type ItemList, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
@@ -222,5 +222,14 @@ describe('itemPlace: previous and next in the order and filter of the list the i
   it('the filter to a programme with no group shows every group, as the side rail does; the programme view shows none', () => {
     expect(listGroups({ at: 'waiting', programme: 'prog-gone' }, groups)).toEqual(groups);
     expect(listGroups({ at: 'programme', programme: 'prog-gone' }, groups)).toEqual([]);
+  });
+
+  it('resolveList is the one stale-list rule: a list naming a programme no group holds is the combined list, any other stands', () => {
+    for (const list of [COMBINED_LIST, { at: 'waiting', programme: 'prog-a' }, { at: 'programme', programme: 'prog-b' }] as ItemList[]) {
+      expect(resolveList(list, groups), fromWord(list)).toBe(list);
+    }
+    expect(resolveList({ at: 'waiting', programme: 'prog-gone' }, groups)).toEqual(COMBINED_LIST);
+    expect(resolveList({ at: 'programme', programme: 'zzz' }, groups)).toEqual(COMBINED_LIST);
+    expect(resolveList({ at: 'programme', programme: 'zzz' }, [])).toEqual(COMBINED_LIST);
   });
 });

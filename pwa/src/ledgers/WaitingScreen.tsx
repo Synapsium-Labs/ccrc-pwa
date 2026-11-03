@@ -3,7 +3,6 @@
 // the `attention` bucket, so nothing new is stored for them) and runs, and the page clock. It routes nowhere itself: the
 // shell passes what opening an item or a session does, so this file imports no route (ring L4, no decisions: every
 // grouping, count and label is `ledgerWords.ts`'s).
-import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
@@ -12,8 +11,8 @@ import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
-  COMBINED_LIST, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf, programmeIsLive, questionRows,
-  summaryCounts, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
+  COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf,
+  programmeIsLive, questionRows, resolveList, summaryCounts, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
 import './ledgers.css';
 
@@ -29,11 +28,12 @@ export interface WaitingScreenProps {
   readonly unavailable?: string | null;
   /** The page clock, epoch ms: every age is read against it, so the screen reads no clock of its own. */
   readonly now: number;
-  /** The side rail's filter as the URL names it (a programme's slug, plan PL9): what the list shows on arrival, so the way back
-   *  from an item opened under the filter lands on the filtered list. Absent or `null`: every programme. */
+  /** The side rail's filter as the URL names it (plan PL9): a programme's slug, `NO_PROGRAMME_FILTER` for the sessions in no
+   *  programme, absent or `null` for every programme. It is the filter, not its first value: the screen keeps no copy, so a door
+   *  tap, a reload and Back all draw what the URL says (fix round 1, F5). */
   readonly programme?: string | null;
-  /** Told the filter's programme when the operator picks one in the side rail (`null` for every programme, and for the sessions
-   *  in no programme, which no item can be opened from), so the route can keep it in the URL. */
+  /** Told the operator's pick in the side rail, in the same words (`null` for every programme), so the route writes it into the
+   *  URL, which hands it back as `programme`. Absent, the rail draws the filter it is given and a pick changes nothing. */
   readonly onFilter?: (programme: string | null) => void;
   /** Opens an item, naming the list it is opened from (plan PL9): the item's previous and next follow that list. */
   readonly onOpenItem: (id: number, list: ItemList) => void;
@@ -43,7 +43,6 @@ export interface WaitingScreenProps {
 /** The rail's key for the group of sessions that are in no programme (a programme slug can never be this). */
 const NO_RUNS: readonly RunSummary[] = [];
 const NO_PROGRAMME_KEY = ' none';
-const ALL_KEY = ' all';
 const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 
 /** The right-hand end of a row: its pills and when, ONE block for an item and for a session's question. */
@@ -157,11 +156,7 @@ export function ClearedTrail({ items, where, now }: {
 
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
-  const [filter, setFilterState] = useState<string>(props.programme ?? ALL_KEY);
-  const setFilter = (key: string): void => {
-    setFilterState(key);
-    props.onFilter?.(key === ALL_KEY || key === NO_PROGRAMME_KEY ? null : key);
-  };
+  const pick = (programme: string | null): void => props.onFilter?.(programme);
   if (view === null || sessions === null) {
     return (
       <div className="wl">
@@ -176,12 +171,15 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const questions = questionRows(sessions, heardRuns);
   const groups = groupByProgramme(view.items, questions);
   const hues = fleetHues(heardRuns);
-  const filtered = filter !== ALL_KEY && groups.some((g) => keyOf(g.program) === filter);
-  // The list an item opens from: the filter's programme, or the combined list (the sessions in no programme hold no item).
-  const list: ItemList = filtered && filter !== NO_PROGRAMME_KEY ? { at: 'waiting', programme: filter } : COMBINED_LIST;
-  // What is drawn is that list's groups (`listGroups`, the one reader the item's steps use too); the questions-only group of
-  // sessions in no programme is the one filter no item list names.
-  const shown = filtered && filter === NO_PROGRAMME_KEY ? groups.filter((g) => g.program === null) : listGroups(list, groups);
+  const filter = props.programme ?? null;
+  // The sessions in no programme: the one filter no item list names (it holds questions only). Stale when no such group is drawn.
+  const noProgramme = filter === NO_PROGRAMME_FILTER && groups.some((g) => g.program === null);
+  // The list an item opens from: the filter's programme, settled by the one stale-list rule (`resolveList`), or the combined list.
+  const list: ItemList = filter === null || filter === NO_PROGRAMME_FILTER ? COMBINED_LIST : resolveList({ at: 'waiting', programme: filter }, groups);
+  const filtered = noProgramme || list.programme !== null;
+  // What is drawn is that list's groups (`listGroups`, the one reader the item's steps use too).
+  const shown = noProgramme ? groups.filter((g) => g.program === null) : listGroups(list, groups);
+  const pressed = (program: string | null): boolean => (program === null ? noProgramme : list.programme === program);
   const words = summaryWords(summaryCounts(view.items, questions));
   const empty = groups.length === 0;
   return (
@@ -198,13 +196,13 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
             )}
             <div className="wl-grid">
               <nav className="wl-rail" aria-label="Programmes">
-                <BareRow className="wl-rail-btn" aria-pressed={!filtered} onClick={() => setFilter(ALL_KEY)}>
+                <BareRow className="wl-rail-btn" aria-pressed={!filtered} onClick={() => pick(null)}>
                   <span className="wl-rail-name">All programmes</span>
                   <span className="wl-rail-n">{groups.reduce((n, g) => n + g.waiting, 0)}</span>
                 </BareRow>
                 {groups.map((g) => (
-                  <BareRow key={keyOf(g.program)} className="wl-rail-btn" aria-pressed={filtered && keyOf(g.program) === filter}
-                           data-hue={g.program === null ? 'none' : hues.get(g.program) ?? 'none'} onClick={() => setFilter(keyOf(g.program))}>
+                  <BareRow key={keyOf(g.program)} className="wl-rail-btn" aria-pressed={pressed(g.program)}
+                           data-hue={g.program === null ? 'none' : hues.get(g.program) ?? 'none'} onClick={() => pick(g.program ?? NO_PROGRAMME_FILTER)}>
                     <span className="wl-swatch" aria-hidden="true" />
                     <span className="wl-rail-name">{g.program === null ? NO_PROGRAMME_WORD : programmeTitle(g.program, heardRuns)}</span>
                     <span className="wl-rail-n">{g.waiting}</span>

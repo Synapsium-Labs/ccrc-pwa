@@ -151,9 +151,10 @@
 /* Moving between items (desktop-polish PL9; spec §2, D23). The strip above an item: its way back to the list it was opened
    from, and the position with Previous and Next. Every control is a design-system button (`min-h-tap`, the 44 px floor under a
    coarse pointer), visible at every width: the shell hides only the back chevron, and this is not one. */
+/* Capped at the item body's own width (`.wi`, 72rem), so on a wide screen the position and the steps end where the item does. */
 .wi-nav {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; padding: var(--sp-2) var(--sp-2) 0;
-  background: var(--bg-page); color: var(--ink-primary);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: 72rem;
+  padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
 }
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
 .wi-nav .wi-back,
@@ -161,6 +162,8 @@
 .wi-nav .wi-back-name { overflow-wrap: anywhere; text-align: left; }
 .wi-nav .wi-steps-nav { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); margin-left: auto; min-width: 0; }
 .wi-nav .wi-pos { font-family: var(--family-mono); font-size: var(--fs-xs); background: var(--bg-page); color: var(--ink-secondary); white-space: nowrap; }
+/* The open item has left the list while shown: said in words, on a line of its own under the strip, never by colour alone. */
+.wi-nav .wi-left { flex-basis: 100%; margin: 0; font-size: var(--fs-meta); background: var(--bg-page); color: var(--ink-secondary); overflow-wrap: anywhere; }
 
 /* On a desk the list an item was opened from stays beside it, in the frame's own left column (`ItemListColumn`, which the
    frame's nav slot draws on the item route in place of the fleet), as the fleet stays beside an open session. Its rows are the

@@ -7,6 +7,7 @@ import { api } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
 import { ROUTES, matchRoute } from '../src/lib/routes';
 import { ItemListColumn, ItemRoute, ItemRouteAt, WaitingRoute, itemPath } from '../src/ledgers/WaitingRoutes';
+import { navigate, useLocation } from '../src/lib/router';
 import { refetchWaiting } from '../src/ledgers/waitingStore';
 import { fleetSession } from './fleetFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
@@ -225,15 +226,46 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
   };
   const here = (): string => location.pathname + location.search;
 
-  it('previous and next follow the list it was opened from: the combined list', () => {
-    const nav = openAt('/waiting/2', 2);
-    expect(within(nav).getByText('2 of 4')).toBeTruthy();
-    fireEvent.click(within(nav).getByRole('button', { name: 'Next item' }));
+  /** The item route as the app's ladder mounts it, following the router: the path's id is the route's parameter. With the
+   *  column beside it, as the frame's nav slot draws it on a desk. */
+  function Routed({ store, column = false }: { store: ReturnType<typeof mk>; column?: boolean }) {
+    const { path } = useLocation();
+    const id = /^\/waiting\/(\d+)$/.exec(path)?.[1] ?? null;
+    if (id === null) return <p>at {path}</p>;
+    return (
+      <>
+        {column && <ItemListColumn param={id} store={store} fleet={<section aria-label="Fleet stand-in" />} />}
+        <ItemRouteAt param={id} store={store} />
+      </>
+    );
+  }
+  const routedAt = (url: string, store = rig(), column = false) => {
+    history.replaceState(null, '', url);
+    render(<Routed store={store} column={column} />);
+    return store;
+  };
+  const strip = () => screen.getByRole('navigation', { name: 'Between items' });
+
+  it('previous and next follow the list it was opened from: the combined list, and Previous steps back from the item reached', () => {
+    routedAt('/waiting/2');
+    expect(within(strip()).getByText('2 of 4')).toBeTruthy();
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Next item' }));
     expect(here()).toBe('/waiting/4');
-    fireEvent.click(within(nav).getByRole('button', { name: 'Previous item' }));
-    expect(here()).toBe('/waiting/3');
-    fireEvent.click(within(nav).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(within(strip()).getByText('3 of 4')).toBeTruthy();
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Previous item' }));
+    expect(here()).toBe('/waiting/2');
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to Waiting on you' }));
     expect(here()).toBe('/waiting');
+  });
+
+  it('each step is a history entry: Back returns to the item it came from, with its own place', async () => {
+    routedAt('/waiting/2');
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Next item' }));
+    expect(here()).toBe('/waiting/4');
+    act(() => { history.back(); });
+    await waitFor(() => expect(here()).toBe('/waiting/2'));
+    await waitFor(() => expect(within(strip()).getByText('2 of 4')).toBeTruthy());
+    expect(screen.getByRole('heading', { name: 'Two' })).toBeTruthy();
   });
 
   it('previous and next follow the list it was opened from: one programme\'s view, and the way back returns to it', () => {
@@ -296,6 +328,13 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(here()).toBe('/waiting');
   });
 
+  it('an item that is gone goes back to the combined list when its from names a programme no list holds', () => {
+    history.replaceState(null, '', `/waiting/77?from=${encodeURIComponent('programme:zzz')}`);
+    render(<ItemRouteAt param="77" store={rig()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(here()).toBe('/waiting');
+  });
+
   /** The column the frame draws beside the item on a desk (`ItemListColumn`), at `url`, with a stand-in for the fleet column. */
   const columnAt = (url: string, id: number) => {
     history.replaceState(null, '', url);
@@ -321,11 +360,16 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
       .toEqual(['3', '2', '4', '1']);
   });
 
-  it('an item with no place in a list (recently cleared, gone, or no list heard yet) leaves the fleet in the column', () => {
-    columnAt('/waiting/9', 9);
-    expect(screen.getByRole('region', { name: 'Fleet stand-in' })).toBeTruthy();
-    expect(screen.queryByRole('complementary', { name: 'The list beside this item' })).toBeNull();
-    cleanup();
+  it('an item the list does not hold (recently cleared, gone) keeps the list it was opened from beside it, nothing marked', () => {
+    columnAt(`/waiting/9?from=${encodeURIComponent('programme:prog-a')}`, 9);
+    const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
+    expect(within(beside).getAllByRole('button').filter((b) => b.hasAttribute('data-item')).map((r) => r.getAttribute('data-item')))
+      .toEqual(['4', '1']);
+    expect(within(beside).queryAllByRole('button').some((b) => b.hasAttribute('aria-current'))).toBe(false);
+    expect(screen.queryByRole('region', { name: 'Fleet stand-in' })).toBeNull();
+  });
+
+  it('before the list is heard, the column is the fleet', () => {
     history.replaceState(null, '', '/waiting/2');
     render(<ItemListColumn param="2" store={mk()} fleet={<section aria-label="Fleet stand-in" />} />);
     expect(screen.getByRole('region', { name: 'Fleet stand-in' })).toBeTruthy();
@@ -346,10 +390,121 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(new URLSearchParams(location.search).get('from')).toBe('waiting:prog-a');
   });
 
+  it('the filter is the URL\'s alone: a door tap to the bare list shows every programme', () => {
+    history.replaceState(null, '', '/waiting?programme=prog-a');
+    render(<WaitingRoute store={rig()} />);
+    expect(screen.queryByRole('button', { name: /Two/ })).toBeNull();
+    act(() => navigate('/waiting'));
+    expect(screen.getByRole('button', { name: /Two/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Four/ })).toBeTruthy();
+    expect(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /All programmes/ })
+      .getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('the combined list reads its filter back from its URL, as the way back leaves it', () => {
     history.replaceState(null, '', '/waiting?programme=prog-b');
     render(<WaitingRoute store={rig()} />);
     expect(screen.queryByRole('button', { name: /Four/ })).toBeNull();
     expect(screen.getByRole('button', { name: /Two/ })).toBeTruthy();
+  });
+});
+
+describe('the walk keeps its place while the operator stays on one item (fix round 1, departure pl9-walk-keeps-its-place)', () => {
+  const soon = (id: number, over: Parameters<typeof itemView>[0] = {}) =>
+    itemView({ id, program: 'prog-a', neededBy: 'soon', title: `Item ${id}`, raisedAt: NOW - (100 - id) * MIN, ...over });
+  const rigOf = (items: ReturnType<typeof itemView>[]) => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items }) }));
+    return store;
+  };
+  function Routed({ store }: { store: ReturnType<typeof mk> }) {
+    const { path } = useLocation();
+    const id = /^\/waiting\/(\d+)$/.exec(path)?.[1] ?? null;
+    if (id === null) return <p>at {path}</p>;
+    return (
+      <>
+        <ItemListColumn param={id} store={store} fleet={<section aria-label="Fleet stand-in" />} />
+        <ItemRouteAt param={id} store={store} />
+      </>
+    );
+  }
+  const open = (store: ReturnType<typeof mk>, url: string) => { history.replaceState(null, '', url); render(<Routed store={store} />); };
+  const strip = () => screen.getByRole('navigation', { name: 'Between items' });
+  const step = (name: 'Next item' | 'Previous item') => fireEvent.click(within(strip()).getByRole('button', { name }));
+  /** The coordinator's change pushed while the operator stays on the page: the store's list replaced. */
+  const push = (store: ReturnType<typeof mk>, items: ReturnType<typeof itemView>[], cleared: ReturnType<typeof itemView>[] = []) =>
+    act(() => store.setState({ waiting: waitingView({ items, cleared }) }));
+
+  it('open 11 of 10, 11, 12, tick it, and Next still goes to 12, the item that was next', () => {
+    const store = rigOf([soon(10), soon(11), soon(12)]);
+    open(store, '/waiting/11');
+    expect(within(strip()).getByText('2 of 3')).toBeTruthy();
+    push(store, [soon(10), soon(11, { state: 'checking' }), soon(12)]); // the live order is now 10, 12, 11
+    expect(within(strip()).getByText('2 of 3')).toBeTruthy();
+    expect((within(strip()).getByRole('button', { name: 'Next item' }) as HTMLButtonElement).disabled).toBe(false);
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/12');
+    // Landed: the steps are the live order's again (10, 12, 11).
+    expect(within(strip()).getByText('2 of 3')).toBeTruthy();
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/11');
+  });
+
+  it('with a later-needed 13 present, Next from the ticked 11 still goes to 12, never past it', () => {
+    const store = rigOf([soon(10), soon(11), soon(12), soon(13, { neededBy: 'later' })]);
+    open(store, '/waiting/11');
+    push(store, [soon(10), soon(11, { state: 'checking' }), soon(12), soon(13, { neededBy: 'later' })]);
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/12');
+  });
+
+  it('a blocking item ticked at the head of its group keeps its place: no Previous, and Next is the item that was next', () => {
+    // prog-b holds the blocking 20, so it is drawn first: 20, 21, then prog-a's 22. Ticked, 20 blocks nothing, and the groups
+    // go by slug: 22, then 20, 21.
+    const items = [soon(20, { program: 'prog-b', neededBy: 'blocking' }), soon(21, { program: 'prog-b' }), soon(22)];
+    const store = rigOf(items);
+    open(store, '/waiting/20');
+    expect(within(strip()).getByText('1 of 3')).toBeTruthy();
+    push(store, [soon(20, { program: 'prog-b', neededBy: 'blocking', state: 'checking' }), soon(21, { program: 'prog-b' }), soon(22)]);
+    expect(within(strip()).getByText('1 of 3')).toBeTruthy();
+    expect((within(strip()).getByRole('button', { name: 'Previous item' }) as HTMLButtonElement).disabled).toBe(true);
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/21');
+  });
+
+  it('the open item confirmed while it is shown: the list stays beside it, Previous and Next stay, and the strip says so', () => {
+    const store = rigOf([soon(10), soon(11), soon(12)]);
+    open(store, '/waiting/11');
+    push(store, [soon(10), soon(12)], [soon(11, { state: 'done', closedAt: NOW })]);
+    expect(screen.getByRole('complementary', { name: 'The list beside this item' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Fleet stand-in' })).toBeNull();
+    expect(within(strip()).getByText('2 of 3')).toBeTruthy();
+    expect(within(strip()).getByText('This item is not on the list now.')).toBeTruthy();
+    step('Previous item');
+    expect(location.pathname).toBe('/waiting/10');
+  });
+
+  it('after Previous or Next, focus is on the same control, or on the other one when the end of the list disables it', () => {
+    const store = rigOf([soon(10), soon(11), soon(12)]);
+    open(store, '/waiting/10');
+    const next = within(strip()).getByRole('button', { name: 'Next item' });
+    next.focus();
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/11');
+    expect(document.activeElement).toBe(within(strip()).getByRole('button', { name: 'Next item' }));
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/12');
+    expect((within(strip()).getByRole('button', { name: 'Next item' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(within(strip()).getByRole('button', { name: 'Previous item' }));
+  });
+
+  it('the position is announced politely as it changes', () => {
+    const store = rigOf([soon(10), soon(11)]);
+    open(store, '/waiting/10');
+    const pos = within(strip()).getByRole('status');
+    expect(pos.textContent).toBe('1 of 2');
+    step('Next item');
+    expect(within(strip()).getByRole('status')).toBe(pos);
+    expect(pos.textContent).toBe('2 of 2');
   });
 });

@@ -70,10 +70,21 @@ const ITEMS = [
   item(4, 'prog-a', { title: 'Switch the cleanup lane to live' }),
   item(5, 'prog-a', { neededBy: 'later', title: 'Review the requested change' }),
 ];
-const fixture = (items: readonly object[]): AppFixture => {
+/** The server's health with a critical disk (93% used): the fleet's banner stack shows the disk banner (fix round 1, F1). */
+const GIB = 2 ** 30;
+const CRITICAL_DISK = {
+  mode: 'remote', connected: true, downSince: null,
+  disk: {
+    at: NOW, level: 'critical', pressure: true, holders: [], expectedMounts: [],
+    filesystems: [{ dev: 'dev-a', mount: 'mount-a', fsType: 'ext4', roots: ['projects'], sizeBytes: Math.round((41 * GIB * 100) / 7),
+      availBytes: 41 * GIB, freeBytes: 41 * GIB, files: 1000, filesFree: 900, readOnly: false, level: 'critical' }],
+  },
+};
+const fixture = (items: readonly object[], health?: object): AppFixture => {
   const waiting = { items, cleared: [], goals: [] };
   return {
     api: {
+      ...(health === undefined ? {} : { '/api/fleet/health': health }),
       '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
       '/api/runs': RUNS, '/api/claims': [], '/api/waiting': { ok: true, waiting },
       '/api/programmes/prog-a/goals': { ok: true, goals: { program: 'prog-a', specPath: null, inShort: null, inShortAt: null, modifications: [] } },
@@ -109,8 +120,8 @@ afterAll(async () => {
 });
 
 /** The app at `path`, once `ready` (the item page's `.wi` by default) is drawn. */
-async function open(skin: string, width: number, path: string, items: readonly object[] = ITEMS, touch = false, ready = '.wi') {
-  const opened = await openApp(browser!, { skin, theme: 'light', width, touch }, fixture(items));
+async function open(skin: string, width: number, path: string, items: readonly object[] = ITEMS, touch = false, ready = '.wi', health?: object) {
+  const opened = await openApp(browser!, { skin, theme: 'light', width, touch }, fixture(items, health));
   await opened.page.goto(server!.origin + path);
   await opened.page.waitForSelector(ready, { timeout: 20_000 });
   await opened.page.evaluate(async () => { await document.fonts.ready; });
@@ -234,6 +245,52 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
       } finally {
         await ctx.close();
       }
+    }
+  });
+
+  // Instrument draws the fleet's banner stack inside the fleet column, which the item route's column replaces on a desk; the
+  // stack must show there exactly as on the list (fix round 1, F1). Refined draws it under its bar on every route.
+  for (const width of [900, 1280] as const) {
+    it(`at ${width}: the fleet's banners show on an item as on the list (a critical disk banner), once`, async () => {
+      for (const path of ['/waiting', '/waiting/1']) {
+        const { ctx, page, errors } = await open(skin, width, path, ITEMS, false, path === '/waiting' ? '.wl-grid' : '.wi', CRITICAL_DISK);
+        try {
+          await page.waitForSelector('[data-banner="disk"] [role="status"]', { timeout: 20_000 });
+          expect(await page.locator('[data-banner="disk"]').count(), `one disk banner on ${path}`).toBe(1);
+          expect(await drawn(page, '[data-banner="disk"] [role="status"]'), `the disk banner is drawn on ${path}`).toBe(true);
+          if (path !== '/waiting') expect(await drawn(page, '.shell-nav .wl-beside'), 'the list is still beside the item').toBe(true);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }
+    });
+
+    it(`at ${width}: the bare list keeps the fleet in the left column, and its own list in the detail pane`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/waiting', ITEMS, false, '.wl-grid');
+      try {
+        expect(await page.locator('.shell-nav .fleet').count(), 'the fleet column').toBe(1);
+        expect(await page.locator('.wl-beside').count(), 'no list beside').toBe(0);
+        expect(await drawn(page, '.shell-detail .wl-grid'), 'the list in the detail pane').toBe(true);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+
+  it('at 1920: the strip ends where the item does, so the position and the steps line up with it', async () => {
+    const { ctx, page } = await open(skin, 1920, '/waiting/2');
+    try {
+      const edges = await page.evaluate(() => ({
+        strip: document.querySelector('.wi-nav')!.getBoundingClientRect().right,
+        item: document.querySelector('.shell-detail .wi')!.getBoundingClientRect().right,
+        steps: document.querySelector('.wi-nav .wi-steps-nav')!.getBoundingClientRect().right,
+      }));
+      expect(Math.abs(edges.strip - edges.item), JSON.stringify(edges)).toBeLessThanOrEqual(1);
+      expect(edges.steps).toBeLessThanOrEqual(edges.item + 0.5);
+    } finally {
+      await ctx.close();
     }
   });
 
