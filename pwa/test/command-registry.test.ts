@@ -113,7 +113,7 @@ describe('the base commands', () => {
 describe("the ids are W2's door table's", () => {
   it('every base command carries the id docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md §The door table names', () => {
     expect(baseCommands().map((c) => c.id).sort()).toEqual([
-      'go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-settings',
+      'go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-settings', 'go-waiting',
       'open-session', 'next-session', 'prev-session',
       'switch-layout', 'switch-theme', 'show-shortcuts',
       // W2 Task S2b registers these three (§The door table's last column).
@@ -222,7 +222,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // the new command's own place is pinned in the empty list below.
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
     const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting');
-    for (const [q, ids] of BEFORE) expect(ranked(q), JSON.stringify(q)).toEqual(ids);
+    // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
+    const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
+    for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
     // The command's own rank row: the one command whose title holds "inspector".
     expect(rankCommands('inspector', baseCommands()).map((c) => c.id)).toEqual(['toggle-inspector']);
     // This pin couples to the registry's order on purpose: moving the command is a decision, not a drift.
@@ -232,6 +234,12 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // W5h-a: the one command whose title holds "measure", placed right after Settings' five pages.
     expect(rankCommands('measure', baseCommands()).map((c) => c.id)).toEqual(['go-measure-highlighting']);
     expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' five pages').toBe(empty.indexOf('go-settings-security') + 1);
+  });
+
+  // Go to Waiting on you (desktop-polish PL5a): its own case, away from the lines other waves add to the one above.
+  it('Go to Waiting on you is found by its words, and is in the registry because its route is top', () => {
+    expect(rankCommands('waiting', baseCommands()).map((c) => c.id)[0]).toBe('go-waiting');
+    expect(rankCommands('', baseCommands()).map((c) => c.id)).toContain('go-waiting');
   });
 });
 

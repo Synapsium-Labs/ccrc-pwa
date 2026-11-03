@@ -5,6 +5,8 @@
 // the door and the rows never claim the same number.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { ACTIVE_RUN_STATES } from '../../../shared/api';
+import type { WaitingView } from '../../../shared/ledgers';
+import { questionRows, waitingTotal } from '../ledgers/ledgerWords';
 import { useFleetChrome } from './FleetChrome';
 import { operatorAsk } from './rollup';
 import { isRunClosed, runState } from './runWords';
@@ -20,6 +22,8 @@ export function badgePrint(n: number): string {
 /** What every Inbox door's count says it counts, and what the Runs door's says (T2d, D-6330). */
 export const INBOX_BADGE_UNIT = 'waiting for you';
 export const RUNS_BADGE_UNIT = 'needs you';
+/** What the Waiting on you door's count says it counts (desktop-polish PL5a). */
+export const WAITING_BADGE_UNIT = 'waiting on you';
 
 /** The sessions waiting on the operator: `operatorAsk` (rollup.ts, the attention bucket that `fleetSummary.waiting`
  *  counts). A child whose question its coordinator holds reads `working` and is not counted until it is handed to the
@@ -49,23 +53,38 @@ export function runsLineLabel(runs: readonly Pick<RunSummary, 'state'>[] | null)
   return open > 0 ? `${open} open` : 'none active';
 }
 
+/** What the Waiting on you door counts (PL5a, spec §2): the open items (sent-back ones are open again) plus the sessions
+ *  asking a question; an item being checked is the coordinator's and does not count. `null` before the waiting frame or
+ *  before the fleet frame: "not heard yet" is not zero. `runs` may be `null` (no runs frame yet): a question's programme is
+ *  then unknown, which changes no count. */
+export function waitingItemsCount(
+  view: WaitingView | null, sessions: readonly FleetSession[] | null, runs: readonly RunSummary[] | null,
+): number | null {
+  if (view === null || sessions === null) return null;
+  return waitingTotal(view.items, questionRows(sessions, runs ?? []));
+}
+
 export interface NavBadges {
   /** The sessions waiting on the operator (`waitingOnYou`); null until the first fleet frame has landed. */
   readonly waiting: number | null;
   /** The open runs that need the operator (`runsNeedYou`); null until a runs frame and a fleet frame have landed: "none"
    *  and "not heard yet" are different facts. */
   readonly runsNeedYou: number | null;
+  /** The Waiting on you door's count (`waitingItemsCount`); null until the waiting frame and a fleet frame have landed. */
+  readonly waitingItems: number | null;
 }
 
-/** The two counts, from the shell's fleet store. */
+/** The three counts, from the shell's fleet store. */
 export function useNavBadges(): NavBadges {
   const useStore = useFleetChrome().store;
   const sessions = useStore((s) => s.sessions);
   const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
   const runs = useStore((s) => s.runs);
   const runsFrameSeen = useStore((s) => s.runsFrameSeen);
+  const waiting = useStore((s) => s.waiting);
   return {
     waiting: waitingOnYou(fleetFrameSeen ? sessions : null),
     runsNeedYou: runsNeedYou(runsFrameSeen ? runs : null, fleetFrameSeen ? sessions : null),
+    waitingItems: waitingItemsCount(waiting, fleetFrameSeen ? sessions : null, runsFrameSeen ? runs : null),
   };
 }

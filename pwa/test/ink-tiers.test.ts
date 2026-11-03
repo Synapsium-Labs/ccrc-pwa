@@ -252,7 +252,9 @@ function gateDeclared(file: string): { floor: unknown; step: unknown; exceptions
 }
 
 const runGate = (dir: string): { status: number | null; stdout: string } => {
-  const r = spawnSync(process.execPath, [path.join(dir, 'design', 'contrast-check.mjs')], { encoding: 'utf8' });
+  // `maxBuffer`: the gate prints a row per measured pair per palette (about 1.03 MB before the Waiting on you sheet,
+  // 1,080,469 bytes with it), past `spawnSync`'s 1,048,576-byte default, which kills the child and answers `status: null`.
+  const r = spawnSync(process.execPath, [path.join(dir, 'design', 'contrast-check.mjs')], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   return { status: r.status, stdout: r.stdout };
 };
 const failRows = (stdout: string): string[] => stdout.split('\n').filter((l) => l.startsWith('FAIL'));

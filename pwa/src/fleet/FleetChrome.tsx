@@ -18,6 +18,7 @@ import { useProjectRows, type ProjectRowsPlane } from './useProjectRows';
 import { useActionsSheet, type ActionsSheet } from './useActionsSheet';
 import { useArchiveAll, type ArchiveAllPlane } from './ArchiveAllPlane';
 import type { FleetStore } from '../stores/fleet';
+import { useWaitingRefetch } from '../ledgers/waitingStore';
 
 export interface FleetChrome {
   /** The store the planes and the sheets act on (the app's, or a test's). */
@@ -56,6 +57,8 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   const projects = useProjectRows(pools, store.getState().setProjects);
   const actions = useActionsSheet(sessions);
   const archiveAll = useArchiveAll(store);
+  // ONE refetch of the Waiting on you list for the whole shell, on focus and visibility (desktop-polish PL5a, review 1336).
+  useWaitingRefetch(store);
   const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [addWorkspaceFor, setAddWorkspaceFor] = useState<string | null>(null);
