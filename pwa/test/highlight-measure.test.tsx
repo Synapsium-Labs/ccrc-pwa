@@ -41,6 +41,13 @@ const overriding = (h: Highlighter, answer: (r: { lang: string; code: string }) 
   prewarm: () => h.prewarm(),
 });
 
+/** The in-thread highlighter, except that a crafted shape (longer than 2000 characters) is answered in kind, not run
+ *  through highlight.js in-thread (a crafted shape takes seconds there on a loaded runner). */
+const inKind = (): Highlighter => overriding(
+  inThreadHighlighter(),
+  (r) => (r.code.length > 2000 ? { kind: 'html', mode: 'block', html: 'x'.repeat(2 * r.code.length) } : null),
+);
+
 function fakes(over: Partial<MeasureDeps> = {}) {
   const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'secret-plan.md'), entry('plans', 'b.md'), entry('specs', 'c.ts')] })), file: { s: 'ok', value: fileResponse(DOC) } });
   f.projects.mockResolvedValue({ s: 'ok', value: { ok: true, cacheAgeMs: null, index: { v: 1, verb: 'docs-index', ok: true, elapsedMs: 1, unlisted: 0, duplicates: [], projects: [{ project: 'demo', state: 'ready', github: null }] } } } as never);
@@ -52,8 +59,7 @@ function fakes(over: Partial<MeasureDeps> = {}) {
     parse: async (src) => parseMarkdown(src, 'docs'),
     highlighter: (deadlineMs) => (deadlineMs === HIGHLIGHT_BLOCK_DEADLINE_MS
       ? timingOut()
-      // A crafted shape (longer than 2000 characters) is answered in kind, not run through highlight.js in-thread.
-      : overriding(inThreadHighlighter(), (r) => (r.code.length > 2000 ? { kind: 'html', mode: 'block', html: 'x'.repeat(2 * r.code.length) } : null))),
+      : inKind()),
     now: () => (t += 1),
     frame: () => new Promise<number>((resolve) => { setTimeout(() => resolve(t), 0); }),
     sleep: async () => undefined,
@@ -123,7 +129,7 @@ describe('R19: what the figures keep', () => {
   it('an answer over the HTML cap still gives its ratio, so the maximum is not censored at the cap, and the grammar says how many', async () => {
     const { deps } = fakes({
       highlighter: (ms) => overriding(
-        ms === HIGHLIGHT_BLOCK_DEADLINE_MS ? timingOut() : inThreadHighlighter(),
+        ms === HIGHLIGHT_BLOCK_DEADLINE_MS ? timingOut() : inKind(),
         (r) => (r.code === SECRET ? { kind: 'too-large', htmlChars: 10 * r.code.length } : null),
       ),
     });
@@ -370,7 +376,7 @@ describe('R19: the page ends what it starts', () => {
     process.on('unhandledRejection', on);
     try {
       const failing: Highlighter = { highlight: async () => { throw new Error('stopped'); }, status: () => 'live', prewarm: () => undefined };
-      const { deps } = fakes({ highlighter: (ms) => (ms === HIGHLIGHT_BLOCK_DEADLINE_MS ? failing : inThreadHighlighter()) });
+      const { deps } = fakes({ highlighter: (ms) => (ms === HIGHLIGHT_BLOCK_DEADLINE_MS ? failing : inKind()) });
       await expect(runHighlightMeasure(deps, () => undefined)).rejects.toThrow('stopped');
       await new Promise((resolve) => { setTimeout(resolve, 50); });
       expect(seen).toEqual([]);
