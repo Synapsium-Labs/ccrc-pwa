@@ -137,6 +137,8 @@ export const LEDGER_ROUTE_REFUSALS = {
   // The secret's own route (plan PL6): an item that is not a secret item (`not-a-secret-item`), and a stored programme or slot
   // name that fails its shape when the route re-checks both before building any path (`bad-slot`).
   notSecretItem: 'not-a-secret-item', badSlot: 'bad-slot',
+  // …and every failure AFTER the value is in its slot (review 1389 F3): the value is stored, the item is not ticked.
+  storedNotTicked: 'stored-not-ticked',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -288,6 +290,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The secret's route (plan PL6): CHOSEN, not measured. 409 for both: the item is of a kind this door does not take, or names a
   // slot this server will not build a path from; neither is a fault in the value the operator sent.
   [LEDGER_ROUTE_REFUSALS.notSecretItem]: 409, [LEDGER_ROUTE_REFUSALS.badSlot]: 409,
+  // CHOSEN, not measured: 503, as `write-failed`. The box failed partway (a write, an fsync, the tick's transaction); the value
+  // the operator sent is stored, and saving it again finishes the act.
+  [LEDGER_ROUTE_REFUSALS.storedNotTicked]: 503,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

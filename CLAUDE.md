@@ -542,7 +542,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss` and `PUT /api/items/:id/secret` (plan PL6), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
-  the secret door stores a pasted value in its protected slot and ticks with "set, when, the last four" behind a step-up,
+  the secret door stores a pasted value in its protected slot and ticks with "set" and when, and the last four characters
+  only for a value at the masker's 20-byte floor or longer, behind a step-up,
   and every one is session-gated when armed. They are
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both

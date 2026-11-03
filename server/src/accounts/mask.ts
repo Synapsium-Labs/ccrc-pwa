@@ -45,7 +45,7 @@
 import { createHash, createHmac, type Hash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
-import type { SecretUnmasked } from '../../../shared/ledgers.js';
+import { OPERATOR_SECRET_LANE_PREFIX, type SecretUnmasked } from '../../../shared/ledgers.js';
 import {
   RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
   rowTextEnd, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
@@ -419,11 +419,16 @@ export class SecretMasker {
   }
 
   /** Deletes every row of every lane outside `keep` (a lane the roster no longer has, or one whose entry holds no
-   *  secret): A12's `reloadRoster` calls it, through `offer`. Throws as `ingest` does. */
+   *  secret): A12's `reloadRoster` calls it, through `offer`. Throws as `ingest` does.
+   *
+   *  NEVER an operator-secret lane (`OPERATOR_SECRET_LANE_PREFIX`, plan PL6; review 1389 F1). Those rows are this server's
+   *  own (`ingestSecret`), not the roster's, so the roster's keep set cannot speak for them: a keep set computed while the
+   *  store could not be listed, or held across a save, would otherwise delete a live slot's row and unmask it. Nothing in
+   *  ccrc removes a slot, so no operator-secret row is ever pruned; `ingest` still replaces one when its lane is named. */
   retain(keep: ReadonlySet<string>): void {
     if (this.db === null) return;
     const lanes = (this.db.prepare('SELECT DISTINCT laneId FROM secret_fingerprints').all() as unknown as { laneId: string }[])
-      .map((r) => r.laneId).filter((l) => !keep.has(l));
+      .map((r) => r.laneId).filter((l) => !keep.has(l) && !l.startsWith(OPERATOR_SECRET_LANE_PREFIX));
     if (lanes.length === 0) return;
     this.write((db) => {
       const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');

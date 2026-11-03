@@ -25,7 +25,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Bus } from '../bus.js';
 import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
-import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
+import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SECRET_VALUE_MAX, SOON_LABEL_MAX,
   isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf, tickMailLeftBehind,
@@ -36,7 +36,9 @@ import { itemMailSubject, tickMail } from './ledgersMail.js';
 import { OUTSTANDING_DELIVERY_STATES } from '../../../shared/api.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, type AccountGate } from '../accounts/gate.js';
-import { operatorSlotNamesValid, readOperatorSecretMeta, writeOperatorSecret, type OperatorSecretMeta } from './ledgersSecrets.js';
+import {
+  OperatorSecretStoredUnrecorded, operatorSlotNamesValid, readOperatorSecretMeta, writeOperatorSecret, type OperatorSecretMeta,
+} from './ledgersSecrets.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
@@ -460,22 +462,20 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
 
   /**
    * WHAT A TICK NEEDS, once for both doors (the tick and the secret's route): the programme's coordinator, the tick's mail,
-   * and no outstanding earlier tick of the item. Synchronous: it reads and decides nothing it does not answer. Sends the
-   * refusal and answers null, or answers the coordinator and the mail ready to queue.
+   * and no outstanding earlier tick of the item. Synchronous and pure over what it reads: it answers the coordinator and
+   * the mail ready to queue, or the refusal (its word and detail), which each door sends in its own words.
    */
-  const tickPlan = (coord: CoordStore, reply: FastifyReply, item: ItemRow, answer: string | null):
-    { coordinator: string; mail: { subject: string; body: string } } | null => {
+  type TickPlan = { ok: true; coordinator: string; mail: { subject: string; body: string } } | { ok: false; why: RouteRefusal; detail: string };
+  const tickPlan = (coord: CoordStore, item: ItemRow, answer: string | null): TickPlan => {
     const coordinator = coord.programmeCoordinator(item.program);
     if (coordinator === null) {
-      void (coord.programmeHasOpenRun(item.program)
-        ? refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeUnclaimed, { detail: PROGRAMME_UNCLAIMED_SENTENCE })
-        : refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeEnded, { detail: PROGRAMME_ENDED_SENTENCE }));
-      return null;
+      return coord.programmeHasOpenRun(item.program)
+        ? { ok: false, why: LEDGER_ROUTE_REFUSALS.programmeUnclaimed, detail: PROGRAMME_UNCLAIMED_SENTENCE }
+        : { ok: false, why: LEDGER_ROUTE_REFUSALS.programmeEnded, detail: PROGRAMME_ENDED_SENTENCE };
     }
     const mail = tickMail(item, answer);
     if (!mail.ok) {
-      void refuseRoute(reply, LEDGER_ROUTE_REFUSALS.tooLarge, { detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` });
-      return null;
+      return { ok: false, why: LEDGER_ROUTE_REFUSALS.tooLarge, detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` };
     }
     // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): one still outstanding
     // blocks a second, so a takeover cannot queue it twice either. Except one left behind (review 1336 F1): its recipient is
@@ -483,10 +483,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const earlier = coord.newestTickMail(mail.subject);
     if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)
       && !tickMailLeftBehind({ recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId) })) {
-      void refuseRoute(reply, 'duplicate', { detail: `an earlier tick of this item went to ${earlier.toId}, which has not acknowledged it` });
-      return null;
+      return { ok: false, why: 'duplicate', detail: `an earlier tick of this item went to ${earlier.toId}, which has not acknowledged it` };
     }
-    return { coordinator, mail: { subject: mail.subject, body: mail.body } };
+    return { ok: true, coordinator, mail: { subject: mail.subject, body: mail.body } };
   };
 
   /** The tick with its mail, in one transaction (`tickWithMail` re-decides the move inside it). The mail rides NO run (review
@@ -540,8 +539,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       answer = text(given, ANSWER_MAX);
       if (answer === null) return bad(reply, `a ${item.kind} item needs an answer of 1 to ${ANSWER_MAX} characters`);
     }
-    const plan = tickPlan(coord, reply, item, answer);
-    if (plan === null) return reply;
+    const plan = tickPlan(coord, item, answer);
+    if (!plan.ok) return refuseRoute(reply, plan.why, { detail: plan.detail });
     const now = deps.now();
     const res = tickNow(coord, id, answer, plan, now);
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be ticked from here` });
@@ -566,56 +565,97 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
 
   /**
    * `PUT /api/items/:id/secret` (plan PL6, spec §5): the operator pastes a secret straight into its slot. A CREDENTIAL ACT, so
-   * the account gate runs FIRST, with a step-up, before the body is read: refused while sign-in is not armed (`auth-off`),
+   * the account gate runs FIRST, with a step-up, before the body is used: refused while sign-in is not armed (`auth-off`),
    * from a plain-HTTP origin (`insecure-origin`) and without a recent step-up; it never falls back to an unconfirmed save.
    * Then the item: a secret item (`not-a-secret-item`), open (`not-open`), whose programme and slot pass their shapes
    * (`bad-slot`, re-checked before any path is built); the value, 1 to `SECRET_VALUE_MAX` characters and bytes; the tick's
    * preconditions (its coordinator, its mail, no outstanding earlier tick), checked BEFORE the write so a refused tick stores
    * nothing; the write and the masker's registration (`writeOperatorSecret`); then the tick, with the answer
-   * `secretAnswer` builds: set, the time and the tail, NEVER the value.
+   * `secretAnswer` builds: set and the time, and the tail only for a value at the masker's floor, NEVER the value.
+   *
+   * ONE SAVE OF A SLOT AT A TIME (review 1389 F2): everything after the gate runs on the slot's own chain (`underSlot`), so a
+   * second save of the same slot starts only once the first has ticked, and then meets `not-open` before it writes anything.
+   * The file, its metadata and the masker's row are always one save's.
+   *
+   * AFTER THE VALUE IS IN ITS SLOT, EVERY FAILURE IS ONE WORD (review 1389 F3): `stored-not-ticked`, whether the fsync or the
+   * metadata after the rename failed, the tick was refused (the coordinator went in between), or the tick or the answer's
+   * view threw. Each is caught here, so the route's body error handler never sees it. Saving again replaces the value.
    *
    * THE VALUE GOES NOWHERE ELSE. Not into a refusal, a detail, a log line, the item, the mail or the answer: every refusal
    * below is a fixed word with a fixed detail, a write failure included, and `Cache-Control: no-store` is on every answer.
-   * The route awaits the write, so the tick re-reads the item and its preconditions after it; `tickWithMail` re-decides the
-   * move inside its own transaction. A tick refused after the write (the coordinator went in between) answers its word, and
-   * the slot keeps the value: saving again replaces it.
    */
+  const slotChains = new Map<string, Promise<void>>();
+  const underSlot = async <T>(key: string, act: () => Promise<T>): Promise<T> => {
+    const before = slotChains.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => { release = resolve; });
+    const chain = before.then(() => mine);
+    slotChains.set(key, chain);
+    await before;
+    try {
+      return await act();
+    } finally {
+      release();
+      if (slotChains.get(key) === chain) slotChains.delete(key);
+    }
+  };
+  const storedNotTicked = (reply: FastifyReply, id: number) =>
+    refuseRoute(reply, LEDGER_ROUTE_REFUSALS.storedNotTicked, { detail: `the secret is stored, but item ${id} was not marked done; save it again` });
+
   app.put('/api/items/:id/secret', credentialBodyRoute(SECRET_BODY_LIMIT), async (req, reply) => {
     if (!deps.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     const id = itemIdOf(req);
     if (id === null) return bad(reply, 'the item id is a positive integer');
-    const item = coord.itemById(id);
-    if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
-    if (item.kind !== 'secret') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notSecretItem, { detail: `item ${id} does not ask for a secret` });
-    const verdict = nextItemState(item.state, 'tick', 'operator', { programmeHasOpenRun: false });
-    if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${item.state}, not open` });
-    const slot = item.secretSlot;
-    if (slot === null || !operatorSlotNamesValid(item.program, slot)) {
-      return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: `item ${id} names a slot this server will not store a secret in` });
-    }
-    const body: unknown = req.body;
-    const value = typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Body)['value'] : undefined;
-    if (!isSecretValue(value)) return bad(reply, `the value is 1 to ${SECRET_VALUE_MAX} characters`);
-    if (tickPlan(coord, reply, item, secretAnswer({ setAt: deps.now(), tail: secretTailOf(value) })) === null) return reply;
-    const setAt = deps.now();
-    let meta: OperatorSecretMeta;
-    try {
-      meta = await writeOperatorSecret(deps.ccrcDir, item.program, slot, value, setAt, deps.registerSecret);
-    } catch {
-      return refuseRoute(reply, 'write-failed', { detail: 'the secret could not be stored; nothing was sent to the coordinator' });
-    }
-    const answer = secretAnswer({ setAt: meta.setAt, tail: meta.tail });
-    const fresh = coord.itemById(id);
-    if (fresh === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
-    const plan = tickPlan(coord, reply, fresh, answer);
-    if (plan === null) return reply;
-    const res = tickNow(coord, id, answer, plan, setAt);
-    if (!res.ok) return refuseRoute(reply, res.why, { detail: `the secret was stored, but item ${id} cannot be ticked from here` });
-    deps.bus.emit('waiting');
-    return reply.code(200).send({
-      ok: true, secret: meta, item: viewOfItem(coord, res.item, setAt, deps.presenceOf, secretOf),
+    const first = coord.itemById(id);
+    if (first === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    // The chain's key is the slot the item names; inside it every check is made again, on the item as it is then.
+    return underSlot(`${first.program}\u0000${first.secretSlot ?? ''}`, async () => {
+      const item = coord.itemById(id);
+      if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+      if (item.kind !== 'secret') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notSecretItem, { detail: `item ${id} does not ask for a secret` });
+      const verdict = nextItemState(item.state, 'tick', 'operator', { programmeHasOpenRun: false });
+      if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${item.state}, not open` });
+      const slot = item.secretSlot;
+      if (slot === null || !operatorSlotNamesValid(item.program, slot)) {
+        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: `item ${id} names a slot this server will not store a secret in` });
+      }
+      const body: unknown = req.body;
+      const value = typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Body)['value'] : undefined;
+      if (!isSecretValue(value)) return bad(reply, `the value is 1 to ${SECRET_VALUE_MAX} characters`);
+      const before = tickPlan(coord, item, secretAnswer({ setAt: deps.now(), tail: secretTailOf(value) }));
+      if (!before.ok) return refuseRoute(reply, before.why, { detail: before.detail });
+      const setAt = deps.now();
+      let meta: OperatorSecretMeta;
+      try {
+        meta = await writeOperatorSecret(deps.ccrcDir, item.program, slot, value, setAt, deps.registerSecret);
+      } catch (e) {
+        if (e instanceof OperatorSecretStoredUnrecorded) return storedNotTicked(reply, id);
+        return refuseRoute(reply, 'write-failed', { detail: 'the secret could not be stored; nothing was sent to the coordinator' });
+      }
+      let ticked: ItemRow;
+      try {
+        const answer = secretAnswer({ setAt: meta.setAt, tail: meta.tail });
+        const fresh = coord.itemById(id);
+        if (fresh === null) return storedNotTicked(reply, id);
+        const plan = tickPlan(coord, fresh, answer);
+        if (!plan.ok) return storedNotTicked(reply, id);
+        const res = tickNow(coord, id, answer, plan, setAt);
+        if (!res.ok) return storedNotTicked(reply, id);
+        ticked = res.item;
+      } catch {
+        return storedNotTicked(reply, id);
+      }
+      let view: ItemView;
+      try {
+        view = viewOfItem(coord, ticked, setAt, deps.presenceOf, secretOf);
+      } catch {
+        deps.bus.emit('waiting');
+        return storedNotTicked(reply, id);
+      }
+      deps.bus.emit('waiting');
+      return reply.code(200).send({ ok: true, secret: meta, item: view });
     });
   });
 }

@@ -6,11 +6,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { ApiError } from '../src/lib/apiError';
 import { createApi } from '../src/lib/api';
 import { ItemView, SECRET_TEXT, type SaveSecret } from '../src/ledgers/ItemView';
-import type { SecretSaveAnswer } from '../../shared/ledgers';
+import { SECRET_TAIL_MIN, SECRET_VALUE_MAX, type SecretSaveAnswer } from '../../shared/ledgers';
 import type { StepUpDeps } from '../src/accounts/useStepUp';
+import type { AuthStatus } from '../../shared/api';
+import { api } from '../src/lib/api';
 import { NOW, itemView } from './ledgersFixture';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const VALUE = 'fixture-secret-value-0123456789';
 const stepUpDeps: StepUpDeps = {
@@ -25,9 +27,15 @@ const secretItem = (over: Parameters<typeof itemView>[0] = {}) =>
 const answer = (over: Partial<SecretSaveAnswer['secret']> = {}): SecretSaveAnswer =>
   ({ ok: true, secret: { setAt: NOW, tail: '6789', masked: true, ...over }, item: secretItem({ state: 'checking' }) });
 
-const show = (saveSecret: SaveSecret, item = secretItem()) =>
-  render(<ItemView item={item} onTick={vi.fn(async () => {})} onDismiss={vi.fn(async () => {})} programmeLive={true} now={NOW}
-                   saveSecret={saveSecret} stepUpDeps={stepUpDeps} />);
+/** What the box says of its sign-in (`readAuthStatus`): armed, unless a test says otherwise. */
+const ARMED = async (): Promise<Partial<AuthStatus>> => ({ authed: true, mode: 'passphrase', passkeysEnrolled: 0 });
+/** Renders the item; for an open secret item, waits until the panel has read the box's sign-in and opened its field. */
+const show = async (saveSecret: SaveSecret, item = secretItem(), authStatus = ARMED) => {
+  const view = render(<ItemView item={item} onTick={vi.fn(async () => {})} onDismiss={vi.fn(async () => {})} programmeLive={true} now={NOW}
+                   saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} />);
+  if (item.state === 'open') await waitFor(() => expect(field().disabled).toBe(false));
+  return view;
+};
 const field = (): HTMLInputElement => screen.getByLabelText(SECRET_TEXT.label);
 const saveButton = (): HTMLButtonElement => screen.getByRole('button', { name: SECRET_TEXT.save }) as HTMLButtonElement;
 const refuse = (status: number, error: string): ApiError => new ApiError(status, { ok: false, error }, 'application/json');
@@ -43,8 +51,8 @@ const hidePage = (): void => {
 };
 
 describe('the secret panel (plan PL6)', () => {
-  it('is a password field that does not autocomplete, and Save waits for a value; there is no Mark done', () => {
-    show(vi.fn());
+  it('is a password field that does not autocomplete, and Save waits for a value; there is no Mark done', async () => {
+    await show(vi.fn());
     expect(field().type).toBe('password');
     expect(field().getAttribute('autocomplete')).toBe('off');
     expect(saveButton().disabled).toBe(true);
@@ -53,7 +61,7 @@ describe('the secret panel (plan PL6)', () => {
 
   it('the field clears after saving and on page hide', async () => {
     const save = vi.fn<SaveSecret>(async () => answer());
-    show(save);
+    await show(save);
     fireEvent.change(field(), { target: { value: `  ${VALUE}\n` } });
     expect(saveButton().disabled).toBe(false);
     fireEvent.click(saveButton());
@@ -69,10 +77,10 @@ describe('the secret panel (plan PL6)', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
-  it('disabled with the sign-in sentence when the gate answers auth-off', async () => {
+  it('disabled with the sign-in sentence when a save is refused auth-off or insecure-origin (the fallback)', async () => {
     for (const word of ['auth-off', 'insecure-origin']) {
       const save = vi.fn<SaveSecret>(async () => { throw refuse(403, word); });
-      show(save);
+      await show(save);
       fireEvent.change(field(), { target: { value: VALUE } });
       fireEvent.click(saveButton());
       expect(await screen.findByText(SECRET_TEXT.signInOff)).toBeTruthy();
@@ -86,7 +94,7 @@ describe('the secret panel (plan PL6)', () => {
   it('a save refused step-up-required shows "Confirm it\'s you", keeps the value, and does not retry by itself', async () => {
     let refused = true;
     const save = vi.fn<SaveSecret>(async () => { if (refused) throw refuse(403, 'step-up-required'); return answer(); });
-    show(save);
+    await show(save);
     fireEvent.change(field(), { target: { value: VALUE } });
     fireEvent.click(saveButton());
     expect(await screen.findByText(/Changing a secret needs a fresh check/)).toBeTruthy();
@@ -103,7 +111,7 @@ describe('the secret panel (plan PL6)', () => {
   });
 
   it('a short secret says it is not masked, in plain words, and shows no tail (Review Focus 2)', async () => {
-    show(vi.fn<SaveSecret>(async () => answer({ tail: '', masked: false, why: 'too-short' })));
+    await show(vi.fn<SaveSecret>(async () => answer({ tail: '', masked: false, why: 'too-short' })));
     fireEvent.change(field(), { target: { value: 'Short-Key-12' } });
     fireEvent.click(saveButton());
     expect(await screen.findByText('Saved.')).toBeTruthy();
@@ -111,7 +119,7 @@ describe('the secret panel (plan PL6)', () => {
   });
 
   it('a refusal is a fixed sentence, never the box\'s text, and the value stays to try again', async () => {
-    show(vi.fn<SaveSecret>(async () => { throw new ApiError(503, { ok: false, error: 'write-failed', detail: 'BOX-TEXT' }, 'application/json'); }));
+    await show(vi.fn<SaveSecret>(async () => { throw new ApiError(503, { ok: false, error: 'write-failed', detail: 'BOX-TEXT' }, 'application/json'); }));
     fireEvent.change(field(), { target: { value: VALUE } });
     fireEvent.click(saveButton());
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', "The box couldn't store that, so nothing was sent to the coordinator. Try again.");
@@ -119,8 +127,8 @@ describe('the secret panel (plan PL6)', () => {
     expect(field().value).toBe(VALUE);
   });
 
-  it('a checking secret item shows the slot\'s state from the server, and never the answer it ticked with', () => {
-    show(vi.fn(), secretItem({ state: 'checking', answer: 'set 2026-11-03T09:00:00.000Z ending ab12', secretSet: { at: NOW, tail: 'ab12', masked: false, why: 'unregistered' } }));
+  it('a checking secret item shows the slot\'s state from the server, and never the answer it ticked with', async () => {
+    await show(vi.fn(), secretItem({ state: 'checking', answer: 'set 2026-11-03T09:00:00.000Z ending ab12', secretSet: { at: NOW, tail: 'ab12', masked: false, why: 'unregistered' } }));
     expect(screen.queryByLabelText(SECRET_TEXT.label)).toBeNull();
     expect(screen.getByText('Saved. Ends in ab12.')).toBeTruthy();
     expect(screen.getByText(SECRET_TEXT.unmasked.unregistered)).toBeTruthy();
@@ -129,11 +137,70 @@ describe('the secret panel (plan PL6)', () => {
 
   it('the value is never written to browser storage', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
-    show(vi.fn<SaveSecret>(async () => answer()));
+    await show(vi.fn<SaveSecret>(async () => answer()));
     fireEvent.change(field(), { target: { value: VALUE } });
     fireEvent.click(saveButton());
     await waitFor(() => expect(field().value).toBe(''));
     expect(setItem.mock.calls.filter((c) => c.some((a) => String(a).includes(VALUE)))).toEqual([]);
+  });
+
+  it('on a box whose sign-in is off the field is disabled from the first render, with its sentence, and nothing is sent (review 1389 A9)', async () => {
+    const save = vi.fn<SaveSecret>(async () => answer());
+    const status = vi.fn(async (): Promise<Partial<AuthStatus>> => ({ authed: false, mode: 'off', passkeysEnrolled: 0 }));
+    render(<ItemView item={secretItem()} onTick={vi.fn(async () => {})} onDismiss={vi.fn(async () => {})} programmeLive={true} now={NOW}
+                     saveSecret={save} stepUpDeps={stepUpDeps} authStatus={status} />);
+    expect(field().disabled).toBe(true);
+    expect(await screen.findByText(SECRET_TEXT.signInOff)).toBeTruthy();
+    expect(field().disabled).toBe(true);
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.change(field(), { target: { value: VALUE } });
+    fireEvent.click(saveButton());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('a box that cannot say its sign-in (an older server) opens the field, and the refusal stays the fallback', async () => {
+    await show(vi.fn<SaveSecret>(async () => answer()), secretItem(), async () => { throw new Error('auth status 404'); });
+    expect(field().disabled).toBe(false);
+  });
+
+  it('the hint says one line, and names the last four characters only for a long enough secret (review 1389 F4, A8)', async () => {
+    await show(vi.fn());
+    expect(SECRET_TEXT.hint).toMatch(/single line/);
+    expect(SECRET_TEXT.hint).toContain(`${SECRET_TAIL_MIN} characters`);
+    expect(screen.getByText(SECRET_TEXT.hint)).toBeTruthy();
+  });
+
+  it('the bound counts the trimmed value: spaces around a value of the full length still save it (review 1389 A8)', async () => {
+    const save = vi.fn<SaveSecret>(async () => answer());
+    await show(save);
+    expect(field().getAttribute('maxlength')).toBeNull();
+    const full = 'k'.repeat(SECRET_VALUE_MAX);
+    fireEvent.change(field(), { target: { value: `   ${full}  ` } });
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalledWith(secretItem().id, full));
+    fireEvent.change(field(), { target: { value: `${full}k` } });
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByText(SECRET_TEXT.tooLong)).toBeTruthy();
+  });
+
+  it('stored-not-ticked says the secret is kept and the item is not done (review 1389 F3)', async () => {
+    await show(vi.fn<SaveSecret>(async () => { throw refuse(503, 'stored-not-ticked'); }));
+    fireEvent.change(field(), { target: { value: VALUE } });
+    fireEvent.click(saveButton());
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The secret is stored, but the item was not marked done. Refresh and try again.');
+  });
+
+  it('with no saveSecret given, the panel saves through api.saveItemSecret (review 1389 F5)', async () => {
+    const spy = vi.spyOn(api, 'saveItemSecret').mockImplementation(async () => answer());
+    render(<ItemView item={secretItem()} onTick={vi.fn(async () => {})} onDismiss={vi.fn(async () => {})} programmeLive={true} now={NOW}
+                     stepUpDeps={stepUpDeps} authStatus={ARMED} />);
+    await waitFor(() => expect(field().disabled).toBe(false));
+    fireEvent.change(field(), { target: { value: VALUE } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(secretItem().id, VALUE));
   });
 });
 

@@ -20,13 +20,15 @@ import type { ReactNode } from 'react';
 import { Button, RadioFieldset, TextInput } from '@ccrc/ui';
 import {
   ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, type ItemView as ItemWire, type SecretSaveAnswer,
-  type SecretUnmasked,
+  type SecretUnmasked, SECRET_TAIL_MIN,
 } from '../../../shared/ledgers';
+import type { AuthStatus } from '../../../shared/api';
 import type { ProgHue } from '../fleet/programmeBoxes';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { api } from '../lib/api';
 import { ApiError } from '../lib/apiError';
+import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { ageWords, itemPills, KIND_WORD } from './ledgerWords';
@@ -48,6 +50,9 @@ export interface ItemViewProps {
   readonly saveSecret?: SaveSecret;
   /** The step-up's injectables (a fake box and authenticator in a test); a module constant by default, so it is stable. */
   readonly stepUpDeps?: StepUpDeps;
+  /** What the box says of its sign-in (`readAuthStatus`, `lib/auth.ts`): a secret panel on a box whose sign-in is off starts
+   *  disabled, so no value is ever sent to it (spec §5, review 1389 A9). A test passes its own. */
+  readonly authStatus?: () => Promise<Partial<AuthStatus>>;
 }
 
 /** Sends a secret item's value to its own route (`api.saveItemSecret`): the slot's state comes back, never the value. */
@@ -57,6 +62,9 @@ export type SaveSecret = (id: number, value: string) => Promise<SecretSaveAnswer
 const saveItemSecret: SaveSecret = (id, value) => api.saveItemSecret(id, value);
 
 const NO_STEP_UP_DEPS: StepUpDeps = {};
+/** The panel's default reader of the box's sign-in: the console's one spelling of `GET /api/auth/status`. A module constant, so
+ *  the panel's effect reads it once. */
+const readSignIn = (): Promise<Partial<AuthStatus>> => readAuthStatus();
 /** The hook is told the session's step-up is fresh until an act proves otherwise (the Linear card's rule): a panel that
  *  fetched a passkey challenge on every open would also take it from another tab. */
 const ASSUME_FRESH = Infinity;
@@ -64,7 +72,8 @@ const ASSUME_FRESH = Infinity;
 /** The panel's words. */
 export const SECRET_TEXT = {
   label: 'The secret',
-  hint: 'Pasted straight into a protected file on the server. The coordinator is told only that it is set, when, and its last four characters.',
+  hint: `The secret must be a single line. It goes straight into a protected file on the server; the coordinator is told only that it is set and when, and, for a secret of ${SECRET_TAIL_MIN} characters or more, its last four characters.`,
+  tooLong: `That is too long to be a secret this console takes (at most ${SECRET_VALUE_MAX} characters).`,
   save: 'Save secret',
   signInOff: 'Saving a secret needs sign-in turned on for this console.',
   saved: (tail: string): string => (tail === '' ? 'Saved.' : `Saved. Ends in ${tail}.`),
@@ -83,6 +92,9 @@ const SECRET_REFUSAL_TEXT: Readonly<Record<string, string>> = {
   oversize: `That is too long to be a secret this console takes (at most ${SECRET_VALUE_MAX} characters).`,
   'write-failed': "The box couldn't store that, so nothing was sent to the coordinator. Try again.",
 };
+/** Whether the panel may send a value: `asking` until the box answers its sign-in, `dark` when sign-in is off (or a save was
+ *  refused `auth-off`/`insecure-origin`, the fallback), `open` otherwise; a box that cannot say opens, and its refusal decides. */
+type Posture = 'asking' | 'open' | 'dark';
 const GATE_DARK = new Set(['auth-off', 'insecure-origin']);
 const wordOf = (err: unknown): string | null => {
   if (!(err instanceof ApiError) || typeof err.body !== 'object' || err.body === null) return null;
@@ -101,10 +113,13 @@ function SecretState({ set }: { set: { tail: string; masked: boolean; why?: Secr
 }
 
 /** The Give a secret panel. Shown only while the item is open and its programme has a coordinator to tell. */
-function SecretPanel({ item, saveSecret, stepUpDeps }: { item: ItemWire; saveSecret: SaveSecret; stepUpDeps: StepUpDeps }): ReactNode {
+function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
+  item: ItemWire; saveSecret: SaveSecret; stepUpDeps: StepUpDeps; authStatus: () => Promise<Partial<AuthStatus>>;
+}): ReactNode {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
-  const [dark, setDark] = useState(false);
+  const [posture, setPosture] = useState<Posture>('asking');
+  const dark = posture === 'dark';
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saved, setSaved] = useState<SecretSaveAnswer['secret'] | null>(null);
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
@@ -112,9 +127,20 @@ function SecretPanel({ item, saveSecret, stepUpDeps }: { item: ItemWire; saveSec
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   // The value never waits in a backgrounded page.
   useEffect(() => onPageHidden(() => { setValue(''); }), []);
+  // The box's sign-in, read once: off means no value is ever sent (spec §5: "shows the item with its field disabled").
+  useEffect(() => {
+    let live = true;
+    void authStatus().then(
+      (s) => { if (live) setPosture((p) => (p === 'dark' ? p : s.mode === 'off' ? 'dark' : 'open')); },
+      () => { if (live) setPosture((p) => (p === 'dark' ? p : 'open')); },
+    );
+    return () => { live = false; };
+  }, [authStatus]);
 
   const trimmed = value.trim();
-  const ready = !dark && !busy && trimmed !== '' && isSecretValue(trimmed);
+  // The bound counts the TRIMMED value, the one that is sent: spaces around a paste never cut it short.
+  const tooLong = trimmed !== '' && !isSecretValue(trimmed);
+  const ready = posture === 'open' && !busy && trimmed !== '' && !tooLong;
   const fieldId = useId();
   const hintId = useId();
   const submit = async (): Promise<void> => {
@@ -130,7 +156,7 @@ function SecretPanel({ item, saveSecret, stepUpDeps }: { item: ItemWire; saveSec
       setSaved((answer as SecretSaveAnswer).secret);
     } catch (err) {
       const word = wordOf(err);
-      if (word !== null && GATE_DARK.has(word)) { setDark(true); setValue(''); return; }
+      if (word !== null && GATE_DARK.has(word)) { setPosture('dark'); setValue(''); return; }
       // A 401 raises the login screen, which is the answer.
       if (err instanceof ApiError && err.status === 401) return;
       setRefusal((word !== null ? SECRET_REFUSAL_TEXT[word] : undefined) ?? refusalText(err, LEDGER_REFUSAL_TEXT) ?? apiErrorText(err));
@@ -145,9 +171,10 @@ function SecretPanel({ item, saveSecret, stepUpDeps }: { item: ItemWire; saveSec
         <div className="wi-field">
           <label className="wi-label" htmlFor={fieldId}>{SECRET_TEXT.label}</label>
           <TextInput id={fieldId} className="wi-input" type="password" autoComplete="off" autoCapitalize="off" spellCheck={false}
-                     aria-describedby={hintId} value={value} maxLength={SECRET_VALUE_MAX} disabled={dark}
+                     aria-describedby={hintId} value={value} disabled={posture !== 'open'}
                      onChange={(e) => setValue(e.target.value)} />
           <span id={hintId} className="wi-hint">{dark ? SECRET_TEXT.signInOff : SECRET_TEXT.hint}</span>
+          {tooLong && !dark && <span className="wi-hint" data-secret="too-long">{SECRET_TEXT.tooLong}</span>}
         </div>
         <div className="wi-actions">
           <Button type="submit" variant="primary" size="fit" disabled={!ready}>{SECRET_TEXT.save}</Button>
@@ -201,8 +228,8 @@ function Field({ label, value, onChange, maxLength, hint }: {
   );
 }
 
-function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, stepUpDeps = NO_STEP_UP_DEPS }:
-  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'stepUpDeps'>): ReactNode {
+function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn }:
+  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'stepUpDeps' | 'authStatus'>): ReactNode {
   const [pick, setPick] = useState<string | null>(null);
   const [own, setOwn] = useState('');
   const [note, setNote] = useState('');
@@ -258,7 +285,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       {mayTick && item.kind === 'do' && (
         <p className="wi-hint">Nothing to fill in. The coordinator checks it itself and either closes the item or sends it back with what it found.</p>
       )}
-      {open && programmeLive && item.kind === 'secret' && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} />}
+      {open && programmeLive && item.kind === 'secret' && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} />}
       {checking && item.kind === 'secret' && item.secretSet !== null && <SecretState set={item.secretSet} />}
       {checking && (
         <p className="wi-status" role="status" data-stale={item.stale ? 'true' : 'false'}>
@@ -281,7 +308,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   );
 }
 
-export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, stepUpDeps }: ItemViewProps): ReactNode {
+export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, stepUpDeps, authStatus }: ItemViewProps): ReactNode {
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
   return (
@@ -310,7 +337,8 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
           </section>
         </div>
         <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss}
-               {...(saveSecret === undefined ? {} : { saveSecret })} {...(stepUpDeps === undefined ? {} : { stepUpDeps })} />
+               {...(saveSecret === undefined ? {} : { saveSecret })} {...(stepUpDeps === undefined ? {} : { stepUpDeps })}
+               {...(authStatus === undefined ? {} : { authStatus })} />
       </div>
     </div>
   );

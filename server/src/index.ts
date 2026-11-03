@@ -338,8 +338,10 @@ const masker = new SecretMasker({
     // rows are re-keyed under the current token beside it, or a rotation would leave them stale (and the re-key retrying).
     const token = mailToken.currentValue();
     if (token === null || token === '') return fromBox;
-    const rows = await operatorSecretRows(cfg.ccrcDir, (laneId, value) => fingerprintRow(token, laneId, value));
-    return withOperatorSecretRows(fromBox, fingerprintGeneration(token), rows);
+    const listed = await operatorSecretRows(cfg.ccrcDir, (laneId, value) => fingerprintRow(token, laneId, value));
+    // A slot that could not be read is not named, so its rows stay under their old generation and the re-key retries them.
+    if (listed.unreadable) console.warn('ccrc-server: the operator-secrets store could not be read whole; its unread slots are re-keyed on a later pass');
+    return withOperatorSecretRows(fromBox, fingerprintGeneration(token), listed.rows);
   },
 });
 deps.masker = masker;

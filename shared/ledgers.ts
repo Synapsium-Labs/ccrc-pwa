@@ -188,13 +188,19 @@ export function isSlotSlug(s: string): boolean {
 /** The directory under `~/.ccrc` that holds the operator-secret slots (`server/src/coord/ledgersSecrets.ts`); the account deny
  *  rules name the same directory (`ACCOUNT_SECRET_PATHS`, `shared/api.ts`), and `account-deny.test.ts` holds the two equal. */
 export const OPERATOR_SECRETS_DIR = 'operator-secrets';
+/** The egress masker's lane prefix of an operator-secret slot (`operator-secret:<programme>:<slot>`). The slot store names
+ *  its lanes with it, and the masker's roster prune (`SecretMasker.retain`) never deletes a lane that carries it: those lanes
+ *  are this server's own, not the roster's (review 1389 F1). */
+export const OPERATOR_SECRET_LANE_PREFIX = 'operator-secret:';
 
 /** The longest secret the console takes, in characters and in UTF-8 bytes alike (the masker's longest run is 8192 bytes,
  *  so a value inside this bound is never too long for it). */
 export const SECRET_VALUE_MAX = 8192;
-/** The shortest value whose tail is shown. Below it no character of the value leaves the server: four characters of a
- *  short value are a quarter or more of it (the Linear key's floor, `LINEAR_KEY_MIN_CHARS`, has the same reason). */
-export const SECRET_TAIL_MIN = 16;
+/** The shortest value whose tail is shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
+ *  secret: its floor, `RUN_MIN_BYTES` (`server/src/accounts/shapes.ts`), which `ledgers-secrets.test.ts` holds equal to this
+ *  (review 1389 A1). Below it no character of the value leaves the server: the masker cannot catch such a value in outgoing
+ *  text, and four characters of it are a fifth or more of it. */
+export const SECRET_TAIL_MIN = 20;
 /** How many characters the tail shows. */
 export const SECRET_TAIL_CHARS = 4;
 
@@ -225,10 +231,11 @@ export function isSecretValue(v: unknown): v is string {
 }
 
 /** The last `SECRET_TAIL_CHARS` characters (code points, so a surrogate pair is never split) of a value of at least
- *  `SECRET_TAIL_MIN` characters; `''` for a shorter one, whose tail is never shown. */
+ *  `SECRET_TAIL_MIN` bytes, its trailing `=` set aside as the masker sets it aside; `''` for a shorter one, whose tail is
+ *  never shown. */
 export function secretTailOf(value: string): string {
-  const cps = Array.from(value);
-  return cps.length >= SECRET_TAIL_MIN ? cps.slice(-SECRET_TAIL_CHARS).join('') : '';
+  if (utf8Bytes(value.replace(/=+$/, '')) < SECRET_TAIL_MIN) return '';
+  return Array.from(value).slice(-SECRET_TAIL_CHARS).join('');
 }
 
 /** THE ANSWER A SECRET ITEM'S TICK CARRIES to the coordinator (spec §5: set, the time and the last four, never the value):

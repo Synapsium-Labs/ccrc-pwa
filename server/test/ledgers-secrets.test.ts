@@ -8,7 +8,8 @@
 // that carry item, mail, feed and ledger text, every frame the socket received (the `waiting` frame among them), and
 // everything written to the console. Zero hits. A write this task adds is added to the scan.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import WebSocket from 'ws';
@@ -21,14 +22,15 @@ import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { SecretMasker, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
 import { loadConfig, reloadRoster } from '../src/config.js';
 import {
-  OPERATOR_SECRETS_DIR, OperatorSecretBadSlot, operatorSecretLanes, operatorSecretPath, operatorSecretRows, readOperatorSecretMeta,
+  OPERATOR_SECRETS_DIR, OperatorSecretBadSlot, operatorSecretLaneId, operatorSecretPath, operatorSecretRows, readOperatorSecretMeta,
   withOperatorSecretRows, writeOperatorSecret,
 } from '../src/coord/ledgersSecrets.js';
+import { RUN_MIN_BYTES } from '../src/accounts/shapes.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { SECRET_MASK, type FleetMsg } from '../../shared/api.js';
-import { SECRET_TAIL_MIN, SECRET_VALUE_MAX, secretAnswer, type ItemView } from '../../shared/ledgers.js';
+import { SECRET_TAIL_MIN, SECRET_VALUE_MAX, secretAnswer, secretTailOf, type ItemView } from '../../shared/ledgers.js';
 import { LEDGER_ROUTE_REFUSALS, REFUSAL_STATUS } from '../../shared/refusal.js';
 
 const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
@@ -55,6 +57,8 @@ afterEach(async () => {
 interface Rig {
   app: FastifyInstance; coord: CoordStore; home: string; ccrcDir: string; cookie: string; port: number; runA: number;
   masker: SecretMasker;
+  /** The box token the masker keys with; `rotate` replaces it (a rotation), as the token store does. */
+  token: { value: string };
   /** Every response this rig's `send` made, for the leak scan. */
   answers: string[];
   send: (o: { method: 'GET' | 'PUT' | 'POST'; url: string; payload?: unknown; headers?: Record<string, string>; raw?: string }) => Promise<LightMyRequestResponse>;
@@ -69,7 +73,8 @@ async function rig(o: { armed?: boolean; origin?: string; masker?: boolean } = {
   mkdirSync(ccrcDir, { recursive: true });
   writeFileSync(path.join(ccrcDir, 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`, { mode: 0o600 });
   const coord = new CoordStore(openCoordDb(path.join(ccrcDir, 'coord.db')));
-  const masker = new SecretMasker({ db: coord.db, token: () => ID_GATE_TOKEN });
+  const token = { value: ID_GATE_TOKEN };
+  const masker = new SecretMasker({ db: coord.db, token: () => token.value });
   maskers.push(masker);
   const base = testDeps(home, recorder().run);
   const armed = o.armed ?? true;
@@ -102,7 +107,7 @@ async function rig(o: { armed?: boolean; origin?: string; masker?: boolean } = {
   };
   const runA = (coord.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' }) as { id: number }).id;
   return {
-    app, coord, home, ccrcDir, cookie, port, runA, masker, answers, send,
+    app, coord, home, ccrcDir, cookie, port, runA, masker, token, answers, send,
     stepUp: async () => {
       const r = await send({ method: 'POST', url: '/api/auth/step-up/passphrase', payload: { passphrase: PASSPHRASE } });
       expect(r.statusCode, r.body).toBeLessThan(300);
@@ -161,6 +166,51 @@ function captureConsole(): string[] {
   return lines;
 }
 
+/** THE SCAN: every table of coord.db (seven asserted present), the database file after a WAL checkpoint, every other file
+ *  under the fixture HOME (only the slot's value file may hold the value), every response the rig made, every frame the
+ *  socket received and every console line. Answers the hits; a test expects none. */
+function scan(r: Rig, value: string, o: { frames: string[]; out: string[]; valueFiles: string[] }): string[] {
+  const hits: string[] = [];
+  const db = r.coord.db;
+  const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name);
+  for (const t of ['mail', 'mail_deliveries', 'feed_events', 'operator_items', 'operator_item_events', 'programme_modifications', 'secret_fingerprints']) {
+    expect(tables, `the scan reads ${t}`).toContain(t);
+  }
+  for (const t of tables) {
+    const text = JSON.stringify(db.prepare(`SELECT * FROM "${t}"`).all());
+    if (text.includes(value)) hits.push(`table ${t}`);
+  }
+  db.exec('PRAGMA wal_checkpoint(FULL)');
+  const files = walk(r.home);
+  expect(files, 'the scan reads the coord.db file').toContain(path.join(r.ccrcDir, 'coord.db'));
+  for (const f of files) {
+    if (o.valueFiles.includes(f)) continue;
+    if (readFileSync(f).includes(Buffer.from(value, 'utf8'))) hits.push(`file ${path.relative(r.home, f)}`);
+  }
+  r.answers.forEach((a, i) => { if (a.includes(value)) hits.push(`response #${i} ${a.slice(0, 40)}`); });
+  o.frames.forEach((f, i) => { if (f.includes(value)) hits.push(`frame #${i}`); });
+  o.out.forEach((l, i) => { if (l.includes(value)) hits.push(`console #${i}`); });
+  return hits;
+}
+
+/** The store's two directories, made private ahead of a save, so a test can plant something inside them. */
+function privateStore(r: Rig | { ccrcDir: string }, program = 'prog-a'): string {
+  const dir = path.join(r.ccrcDir, OPERATOR_SECRETS_DIR, program);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(path.dirname(dir), 0o700);
+  chmodSync(dir, 0o700);
+  return dir;
+}
+
+/** The re-key a rotation runs (`index.ts`'s `requestRekey`): the operator-secret rows under the current token, ingested. */
+async function rekey(r: Rig): Promise<void> {
+  const t = r.token.value;
+  const rows = await operatorSecretRows(r.ccrcDir, (lane, v) => fingerprintRow(t, lane, v));
+  expect(rows.unreadable).toBe(false);
+  const answer = withOperatorSecretRows(null, fingerprintGeneration(t), rows.rows);
+  expect(answer === null ? false : r.masker.ingest(answer)).toBe(true);
+}
+
 describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but its protected file)', () => {
   it('the leak scan: a saved SECRET-MARK value appears in no table, no other file, no response, no frame and no console line', async () => {
     const out = captureConsole();
@@ -206,31 +256,17 @@ describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but
     expect(list.statusCode, list.body).toBe(200);
     expect((body(list)['items'] as ItemView[]).find((i) => i.id === id)?.secretSet?.tail).toBe(value.slice(-4));
 
+    // A rotation: the re-key writes the operator rows under the new token, and the scan reads what it wrote.
+    r.token.value = 'f'.repeat(64);
+    await rekey(r);
+    expect((r.coord.db.prepare('SELECT gen FROM secret_fingerprints').all() as { gen: string }[]).map((g) => g.gen)).toEqual([fingerprintGeneration(r.token.value)]);
+    expect(r.masker.maskText(`x ${value} y`)).toBe(`x ${SECRET_MASK} y`);
+
     // THE SCAN.
-    const hits: string[] = [];
-    const db = r.coord.db;
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name);
-    for (const t of ['mail', 'mail_deliveries', 'feed_events', 'operator_items', 'operator_item_events', 'programme_modifications', 'secret_fingerprints']) {
-      expect(tables, `the scan reads ${t}`).toContain(t);
-    }
-    for (const t of tables) {
-      const text = JSON.stringify(db.prepare(`SELECT * FROM "${t}"`).all());
-      if (text.includes(value)) hits.push(`table ${t}`);
-    }
-    db.exec('PRAGMA wal_checkpoint(FULL)');
     const valueFile = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
-    const files = walk(r.home);
-    expect(files, 'the scan reads the coord.db file').toContain(path.join(r.ccrcDir, 'coord.db'));
-    expect(files, 'the scan reads the slot metadata').toContain(valueFile.replace(/\.secret$/, '.json'));
-    for (const f of files) {
-      if (f === valueFile) continue;
-      const bytes = readFileSync(f);
-      if (bytes.includes(Buffer.from(value, 'utf8'))) hits.push(`file ${path.relative(r.home, f)}`);
-    }
-    r.answers.forEach((a, i) => { if (a.includes(value)) hits.push(`response #${i} ${a.slice(0, 40)}`); });
-    sock.raw.forEach((f, i) => { if (f.includes(value)) hits.push(`frame #${i}`); });
-    out.forEach((l, i) => { if (l.includes(value)) hits.push(`console #${i}`); });
-    expect(hits).toEqual([]);
+    expect(walk(r.home), 'the scan reads the slot metadata').toContain(valueFile.replace(/\.secret$/, '.json'));
+    expect(scan(r, value, { frames: sock.raw, out, valueFiles: [valueFile] })).toEqual([]);
+    const db = r.coord.db;
 
     // …and the one place it is: the slot's value file, 0600, in 0700 directories, holding exactly the value.
     expect(readFileSync(valueFile, 'utf8')).toBe(value);
@@ -383,7 +419,6 @@ describe('the masker keeps operator-secret lanes (plan PL6)', () => {
     maskers.push(masker);
     const value = mark();
     await writeOperatorSecret(cfg.ccrcDir, 'prog-a', 'api-key', value, NOW0, (lane, v) => masker.ingestSecret(lane, v));
-    expect(operatorSecretLanes(cfg.ccrcDir)).toEqual(['operator-secret:prog-a:api-key']);
     const node = '11111111-2222-4333-8444-555555555555';
     const res = reloadRoster(cfg, { roster: DEFAULT_TEST_ROSTER, fleetIdentity: node, fingerprints: null }, {
       fleetIdentity: () => node, fingerprints: { offer: (f, keep) => masker.offer(f, keep) },
@@ -405,17 +440,17 @@ describe('the masker keeps operator-secret lanes (plan PL6)', () => {
     await writeOperatorSecret(dir, 'prog-a', 'api-key', value, NOW0, (lane, v) => masker.ingestSecret(lane, v));
     token = 'b'.repeat(64);
     const rowsUnder = (t: string) => operatorSecretRows(dir, (lane, v) => fingerprintRow(t, lane, v));
-    const answer = withOperatorSecretRows(null, fingerprintGeneration(token), await rowsUnder(token));
+    const answer = withOperatorSecretRows(null, fingerprintGeneration(token), (await rowsUnder(token)).rows);
     expect(answer?.gen).toBe(fingerprintGeneration(token));
     expect(masker.ingest(answer!)).toBe(true);
     expect((db.prepare('SELECT gen FROM secret_fingerprints').all() as { gen: string }[]).map((g) => g.gen)).toEqual([fingerprintGeneration(token)]);
     expect(masker.maskText(value)).toBe(SECRET_MASK);
     // A box answer keyed with another generation is passed on unchanged: `ingest` refuses it, as it would without rows.
     const other = { gen: fingerprintGeneration('c'.repeat(64)), rows: [] };
-    expect(withOperatorSecretRows(other, fingerprintGeneration(token), await rowsUnder(token))).toBe(other);
+    expect(withOperatorSecretRows(other, fingerprintGeneration(token), (await rowsUnder(token)).rows)).toBe(other);
     // …and one keyed with it gets the rows beside its own.
     const same = { gen: fingerprintGeneration(token), rows: [] };
-    expect(withOperatorSecretRows(same, fingerprintGeneration(token), await rowsUnder(token))?.rows.map((x) => x.laneId)).toEqual(['operator-secret:prog-a:api-key']);
+    expect(withOperatorSecretRows(same, fingerprintGeneration(token), (await rowsUnder(token)).rows)?.rows.map((x) => x.laneId)).toEqual(['operator-secret:prog-a:api-key']);
   });
 
   it('a store directory that is a symlink, or open to others, refuses the write', async () => {
@@ -424,5 +459,271 @@ describe('the masker keeps operator-secret lanes (plan PL6)', () => {
     mkdirSync(path.join(dir, OPERATOR_SECRETS_DIR), { recursive: true, mode: 0o755 });
     await expect(writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'unregistered')).rejects.toThrow(/not a private directory/);
     expect(existsSync(path.join(dir, OPERATOR_SECRETS_DIR, 'prog-a'))).toBe(false);
+  });
+});
+
+const ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
+const laneRows = (db: DatabaseSync, lane = operatorSecretLaneId('prog-a', 'api-key')): number =>
+  (db.prepare('SELECT COUNT(*) AS n FROM secret_fingerprints WHERE laneId = ?').get(lane) as { n: number }).n;
+
+describe('the masker never drops an operator-secret row it did not replace (review 1389 F1)', () => {
+  it('retain keeps every operator-secret row whatever the keep set says', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const value = mark();
+    expect(body(await save(r, raiseSecret(r), value))['secret']).toMatchObject({ masked: true });
+    r.masker.retain(new Set());
+    expect(laneRows(r.coord.db)).toBe(1);
+    expect(r.masker.maskText(value)).toBe(SECRET_MASK);
+  });
+
+  it.skipIf(ROOT)('a roster reload while the store cannot be listed leaves the operator rows registered', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-unreadable-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    mkdirSync(cfg.ccrcDir, { recursive: true });
+    const db = openCoordDb(path.join(cfg.ccrcDir, 'coord.db'));
+    const masker = new SecretMasker({ db, token: () => ID_GATE_TOKEN, log: () => {} });
+    maskers.push(masker);
+    const value = mark();
+    await writeOperatorSecret(cfg.ccrcDir, 'prog-a', 'api-key', value, NOW0, (lane, v) => masker.ingestSecret(lane, v));
+    const top = path.join(cfg.ccrcDir, OPERATOR_SECRETS_DIR);
+    chmodSync(top, 0o000);
+    try {
+      // The listing reports unreadable, never "no slots".
+      expect((await operatorSecretRows(cfg.ccrcDir, (lane, v) => fingerprintRow(ID_GATE_TOKEN, lane, v))).unreadable).toBe(true);
+      const node = '11111111-2222-4333-8444-555555555555';
+      reloadRoster(cfg, { roster: DEFAULT_TEST_ROSTER, fleetIdentity: node, fingerprints: null }, {
+        fleetIdentity: () => node, fingerprints: { offer: (f, keep) => masker.offer(f, keep) },
+      });
+      expect(laneRows(db)).toBe(1);
+      expect(masker.maskText(value)).toBe(SECRET_MASK);
+    } finally {
+      chmodSync(top, 0o700);
+    }
+    // An absent store is empty, and readable.
+    expect(await operatorSecretRows(path.join(home, 'nowhere'), (lane, v) => fingerprintRow(ID_GATE_TOKEN, lane, v))).toEqual({ rows: [], unreadable: false });
+  });
+
+  it('a slot saved while an offer is held is still registered after the held retain flushes', async () => {
+    const r = await rig();
+    await r.stepUp();
+    // A roster lane's row, so the roster's prune has something to delete and must write.
+    expect(r.masker.ingest({ gen: fingerprintGeneration(r.token.value), rows: [fingerprintRow(r.token.value, 'lane-x', mark())] })).toBe(true);
+    // Another connection holds coord.db's write lock: the roster's offer (a keep set with no operator lane) is held.
+    const other = new DatabaseSync(path.join(r.ccrcDir, 'coord.db'));
+    other.exec('BEGIN IMMEDIATE');
+    r.masker.offer(null, new Set());
+    expect((r.masker as unknown as { held: unknown }).held, 'the offer is held').not.toBeNull();
+    other.exec('COMMIT');
+    other.close();
+    const value = mark();
+    expect(body(await save(r, raiseSecret(r), value))['secret']).toMatchObject({ masked: true });
+    // The held offer retries on its timer and lands (the roster lane's row goes); the slot's row survives it.
+    await vi.waitFor(() => { expect((r.masker as unknown as { held: unknown }).held).toBeNull(); }, { timeout: 8000, interval: 100 });
+    expect(laneRows(r.coord.db, 'lane-x')).toBe(0);
+    expect(laneRows(r.coord.db)).toBe(1);
+    expect(r.masker.maskText(value)).toBe(SECRET_MASK);
+  });
+});
+
+describe('two saves of one slot at once (review 1389 F2)', () => {
+  it('the second runs after the first one\'s tick: the file, the tail and the masker row are all the first\'s, and the second stores nothing', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const id = raiseSecret(r);
+    const first = mark();
+    const second = mark();
+    const file = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
+    // The first save's value rename waits for a gate, so the second save arrives while the first is mid-write.
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const rename = fsp.rename.bind(fsp);
+    let gated = false;
+    vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      if (!gated && String(to) === file) { gated = true; await gate; }
+      return rename(from, to);
+    });
+    const a = save(r, id, first);
+    await vi.waitFor(() => { expect(gated).toBe(true); });
+    const b = save(r, id, second);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    open();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.statusCode, ra.body).toBe(200);
+    expect(body(rb)['error']).toBe('not-open');
+    expect(readFileSync(file, 'utf8')).toBe(first);
+    expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key')?.tail).toBe(first.slice(-4));
+    expect(r.coord.itemById(id)?.answer).toContain(`ending ${first.slice(-4)}`);
+    expect(r.masker.maskText(first)).toBe(SECRET_MASK);
+    expect(r.masker.maskText(second)).toBe(second);
+  });
+});
+
+/** One save with a failure planted after the gate, under the scan: answers the save and the scan's hits. */
+async function savedUnderScan(plant: (r: Rig, id: number, value: string) => void | Promise<void>) {
+  const out = captureConsole();
+  const r = await rig();
+  await r.stepUp();
+  const id = raiseSecret(r);
+  const value = mark();
+  const sock = listen(r);
+  await sock.waiting(() => true);
+  await plant(r, id, value);
+  const res = await save(r, id, value);
+  await r.send({ method: 'GET', url: '/api/waiting' });
+  await r.send({ method: 'GET', url: '/api/mail?to=lane-a', headers: TOKEN_HEADERS });
+  const valueFile = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
+  return { r, id, value, res, valueFile, hits: () => scan(r, value, { frames: sock.raw, out, valueFiles: [valueFile] }) };
+}
+
+describe('after the value is stored, every failure says so in one word (review 1389 F3, F5)', () => {
+  const STORED = LEDGER_ROUTE_REFUSALS.storedNotTicked;
+
+  it('the metadata write fails: stored-not-ticked, the value is registered for masking, nothing leaks', async () => {
+    const t = await savedUnderScan((r) => { mkdirSync(path.join(privateStore(r), 'api-key.json')); });
+    expect(t.res.statusCode, t.res.body).toBe(REFUSAL_STATUS[STORED]);
+    expect(body(t.res)['error']).toBe(STORED);
+    expect(readFileSync(t.valueFile, 'utf8')).toBe(t.value);
+    expect(t.r.masker.maskText(t.value)).toBe(SECRET_MASK);
+    expect(t.r.coord.itemById(t.id)?.state).toBe('open');
+    expect(t.hits()).toEqual([]);
+  });
+
+  it('the directory fsync after the rename fails: stored-not-ticked, and the masker registration still ran', async () => {
+    const t = await savedUnderScan((r) => {
+      const dir = privateStore(r);
+      const open = fsp.open.bind(fsp);
+      let failed = false;
+      vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+        if (!failed && String(args[0]) === dir && args[1] === 'r') { failed = true; throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }); }
+        return open(...args);
+      });
+    });
+    expect(body(t.res)['error']).toBe(STORED);
+    expect(readFileSync(t.valueFile, 'utf8')).toBe(t.value);
+    expect(t.r.masker.maskText(t.value)).toBe(SECRET_MASK);
+    expect(t.hits()).toEqual([]);
+  });
+
+  it('a tick refused between the write and the tick (the run closed meanwhile): stored-not-ticked, nothing leaks', async () => {
+    const t = await savedUnderScan((r) => {
+      const ingest = r.masker.ingestSecret.bind(r.masker);
+      vi.spyOn(r.masker, 'ingestSecret').mockImplementation((lane, v) => {
+        r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = 'prog-a'").run();
+        return ingest(lane, v);
+      });
+    });
+    expect(body(t.res)['error']).toBe(STORED);
+    expect(readFileSync(t.valueFile, 'utf8')).toBe(t.value);
+    expect(t.r.coord.itemById(t.id)?.state).toBe('open');
+    expect(t.hits()).toEqual([]);
+  });
+
+  it('the tick throws: stored-not-ticked, never bad-request', async () => {
+    const t = await savedUnderScan((r) => {
+      vi.spyOn(r.coord, 'tickWithMail').mockImplementationOnce(() => { throw new Error('database is locked'); });
+    });
+    expect(body(t.res)['error']).toBe(STORED);
+    expect(t.r.coord.itemById(t.id)?.state).toBe('open');
+    expect(t.hits()).toEqual([]);
+  });
+
+  it('the answer\'s item view throws after the tick: stored-not-ticked, never bad-request', async () => {
+    expect(STORED).toBe('stored-not-ticked');
+    const t = await savedUnderScan((r) => {
+      vi.spyOn(r.coord, 'itemHistory').mockImplementationOnce(() => { throw new Error('database is locked'); });
+    });
+    expect(body(t.res)['error']).toBe(STORED);
+    expect(t.hits()).toEqual([]);
+  });
+
+  it('a write refused before the rename (a programme directory open to others): write-failed, and nothing leaks', async () => {
+    const t = await savedUnderScan((r) => { chmodSync(privateStore(r), 0o755); });
+    expect(body(t.res)['error']).toBe('write-failed');
+    expect(existsSync(t.valueFile)).toBe(false);
+    expect(t.r.coord.itemById(t.id)?.state).toBe('open');
+    expect(t.hits()).toEqual([]);
+  });
+});
+
+describe('the store refuses a directory that is not its own (review 1389 F5)', () => {
+  it('a top store directory that is a symlink to a private directory refuses the write', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-link-');
+    const dir = path.join(home, '.ccrc');
+    const elsewhere = path.join(home, 'elsewhere');
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(elsewhere, { mode: 0o700 });
+    symlinkSync(elsewhere, path.join(dir, OPERATOR_SECRETS_DIR));
+    await expect(writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'unregistered')).rejects.toThrow(/not a private directory/);
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it('a programme directory that is a symlink refuses the write', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-link2-');
+    const dir = path.join(home, '.ccrc');
+    const elsewhere = path.join(home, 'elsewhere');
+    mkdirSync(path.join(dir, OPERATOR_SECRETS_DIR), { recursive: true, mode: 0o700 });
+    mkdirSync(elsewhere, { mode: 0o700 });
+    symlinkSync(elsewhere, path.join(dir, OPERATOR_SECRETS_DIR, 'prog-a'));
+    await expect(writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'unregistered')).rejects.toThrow(/not a private directory/);
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it('a store directory owned by another user refuses the write (stand-in: lstat answers another uid, since a fixture cannot chown)', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-uid-');
+    const dir = path.join(home, '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    const top = path.join(dir, OPERATOR_SECRETS_DIR);
+    const lstat = fsp.lstat.bind(fsp);
+    vi.spyOn(fsp, 'lstat').mockImplementation(async (p, o) => {
+      const st = await lstat(p, o as never);
+      return String(p) === top ? Object.assign(Object.create(Object.getPrototypeOf(st) as object) as typeof st, st, { uid: st.uid + 1 }) : st;
+    });
+    await expect(writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'unregistered')).rejects.toThrow(/not a private directory/);
+    expect(existsSync(path.join(top, 'prog-a'))).toBe(false);
+  });
+});
+
+describe('the tail floor is the masker\'s floor, in bytes (review 1389 A1)', () => {
+  it('SECRET_TAIL_MIN is the masker\'s RUN_MIN_BYTES, so a value shows its tail exactly when the masker can catch it', () => {
+    expect(SECRET_TAIL_MIN).toBe(RUN_MIN_BYTES);
+  });
+
+  it('at the floor minus one no tail; at the floor the last four, counted in bytes after any trailing =', async () => {
+    const r = await rig();
+    const cases: [string, boolean][] = [
+      ['a'.repeat(SECRET_TAIL_MIN - 1), false],
+      ['a'.repeat(SECRET_TAIL_MIN), true],
+      [`${'a'.repeat(SECRET_TAIL_MIN - 1)}=`, false],
+      ['é'.repeat(SECRET_TAIL_MIN / 2 - 1) + 'a', false],
+      ['é'.repeat(SECRET_TAIL_MIN / 2), true],
+    ];
+    for (const [v, shown] of cases) {
+      expect(secretTailOf(v) !== '', v).toBe(shown);
+      if (shown) expect(secretTailOf(v)).toBe(Array.from(v).slice(-4).join(''));
+      expect(r.masker.ingestSecret(`operator-secret:prog-a:t${cases.findIndex((c) => c[0] === v)}`, v) === 'too-short', v).toBe(!shown);
+    }
+  });
+
+  it('a save at the floor minus one sends no tail, and at the floor sends the last four', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const short = body(await save(r, raiseSecret(r, 'k-short'), 'b'.repeat(SECRET_TAIL_MIN - 1))) as { secret: Record<string, unknown>; item: ItemView };
+    expect(short.secret).toMatchObject({ tail: '', masked: false, why: 'too-short' });
+    expect(short.item.answer).toBe(secretAnswer({ setAt: short.secret['setAt'] as number, tail: '' }));
+    const long = body(await save(r, raiseSecret(r, 'k-long'), `${'c'.repeat(SECRET_TAIL_MIN - 4)}WXYZ`)) as { secret: Record<string, unknown> };
+    expect(long.secret).toMatchObject({ tail: 'WXYZ', masked: true });
+  });
+});
+
+describe('the slot metadata carries no digest of the value (review 1389 A2)', () => {
+  it('the metadata file holds v, setAt, tail and masked, and nothing derived from the value but the tail', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-meta-');
+    const dir = path.join(home, '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    await writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'masked');
+    const meta = JSON.parse(readFileSync(path.join(dir, OPERATOR_SECRETS_DIR, 'prog-a', 'x.json'), 'utf8')) as Record<string, unknown>;
+    expect(Object.keys(meta).sort()).toEqual(['masked', 'setAt', 'tail', 'v']);
   });
 });

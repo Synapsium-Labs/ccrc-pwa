@@ -10,7 +10,6 @@ import { isReleaseSourceName } from '../../shared/release-notes.js';
 import { SPAWN_STALL_MS, type NodeRole } from '../../shared/api.js';
 import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
-import { operatorSecretLanes } from './coord/ledgersSecrets.js';
 import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 
 export type FleetMode = 'local' | 'remote';
@@ -624,7 +623,7 @@ const secretLanesOf = (roster: Roster): ReadonlySet<string> =>
  * rewrites the controller's mirror 0644 atomically: a temp file renamed over it, so a reader mid-write sees the old
  * file or the new one. In local mode the file is the box's own, written by the verb, and the server never writes it.
  * Then A10's table: the answer's fingerprints are ingested with the current box-token generation, and every row of a
- * lane the roster no longer holds a secret for is deleted (D-5513), except an operator-secret slot's (plan PL6). Never throws.
+ * lane the roster no longer holds a secret for is deleted (D-5513). Never throws.
  */
 export function reloadRoster(cfg: CcrcConfig, answer: RosterAnswer, deps: RosterReloadDeps): RosterReload {
   const ours = deps.fleetIdentity();
@@ -646,7 +645,6 @@ export function reloadRoster(cfg: CcrcConfig, answer: RosterAnswer, deps: Roster
     }
     cfg.roster = roster;
   }
-  // The operator's pasted secrets (plan PL6) are this server's own lanes, not the roster's: their rows are kept whatever the roster says.
-  deps.fingerprints?.offer(answer.fingerprints, new Set([...secretLanesOf(roster), ...operatorSecretLanes(cfg.ccrcDir)]));
+  deps.fingerprints?.offer(answer.fingerprints, secretLanesOf(roster));
   return { ok: true, changed };
 }
