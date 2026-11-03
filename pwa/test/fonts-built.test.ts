@@ -90,3 +90,37 @@ describe('the built shell and the Geist pair (D-5095, Task 7 Step 7b)', () => {
     expect(denied('/docs')).toBe(false);
   });
 });
+
+// D-7891: index.html's pre-paint <style> names the cascade-layer order before any built sheet loads. Its FIRST name is
+// not in ui's theme.css statement (layer-order.test.ts holds the rest equal to that): it is the layer Tailwind's built
+// entry sheet opens with (`properties`, the --tw-* defaults, which must stay lowest), measured here on this build
+// rather than typed. And every layer any emitted sheet uses is one index.html names, so a layer a later Tailwind or a
+// new sheet adds can never be appended above `utilities` unseen.
+describe('the built sheets and the layer order index.html declares first (D-7891)', () => {
+  const declared = (): string[] => {
+    const html = readFileSync(path.join(PWA, 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->|\/\*[\s\S]*?\*\//g, '');
+    const m = /@layer\s+([\w-]+(?:\s*,\s*[\w-]+)+)\s*;/.exec(html);
+    expect(m, 'index.html declares an @layer order').not.toBeNull();
+    return m![1]!.split(/\s*,\s*/);
+  };
+  const sheets = (): string[] => readdirSync(path.join(out, 'assets')).filter((n) => n.endsWith('.css'));
+  const layersOf = (css: string): string[] =>
+    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/@layer\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s*[{;]/g)]
+      .flatMap((m) => m[1]!.split(/\s*,\s*/));
+
+  it("the built entry sheet's first layer is index.html's first name", () => {
+    const shell = readFileSync(path.join(out, 'index.html'), 'utf8');
+    const entry = /<link rel="stylesheet"[^>]*href="\/assets\/(index-[\w-]+\.css)"/.exec(shell);
+    expect(entry, 'the built shell links its entry sheet').not.toBeNull();
+    const first = layersOf(readFileSync(path.join(out, 'assets', entry![1]!), 'utf8'))[0];
+    expect(first).toBeDefined();
+    expect(declared()[0]).toBe(first);
+  });
+
+  it('every layer an emitted sheet uses is one index.html names', () => {
+    const names = new Set(declared());
+    const used = new Set(sheets().flatMap((n) => layersOf(readFileSync(path.join(out, 'assets', n), 'utf8'))));
+    expect(used.size).toBeGreaterThan(0);
+    expect([...used].filter((n) => !names.has(n))).toEqual([]);
+  });
+});

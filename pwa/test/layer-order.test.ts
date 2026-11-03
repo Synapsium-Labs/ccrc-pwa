@@ -7,8 +7,10 @@ import { stripComments } from './cssRule';
 // Vite links ahead of index.css (a chunk shared by the entry and a lazily loaded one, such as Export's builder,
 // carrying @ccrc/ui's component rules) would otherwise open `@layer components` first and rank it BELOW base and
 // utilities, so the reset's `border: 0 solid` and every utility beat each ui component rule. index.html's
-// pre-paint <style> therefore states the order before any built sheet loads. The order itself is defined once, in
-// ui/src/styles/theme.css's `@layer` statement; this file reads it there and never spells the list.
+// pre-paint <style> therefore states the order before any built sheet loads. Its first name is Tailwind 4's own
+// `properties` layer, the first block the built entry sheet emits (the --tw-* defaults, which must stay lowest);
+// fonts-built.test.ts measures that name in a production build. The rest is defined once, in
+// ui/src/styles/theme.css's `@layer` statement; this file reads it there and never spells a layer name.
 
 const REPO = path.resolve(__dirname, '../..');
 const html = readFileSync(path.join(REPO, 'pwa', 'index.html'), 'utf8');
@@ -30,13 +32,16 @@ describe('the cascade-layer order is declared first, in index.html (D-7891)', ()
     expect(theme[0]?.length ?? 0).toBeGreaterThan(1);
   });
 
-  it("index.html's first <style> opens with that same statement, before any rule", () => {
+  it("index.html's first <style> opens with one leading layer, then theme.css's statement, before any rule", () => {
     const first = /<style[^>]*>([\s\S]*?)<\/style>/.exec(source);
     expect(first, 'index.html has a pre-paint <style>').not.toBeNull();
     const css = stripComments(first?.[1] ?? '').trim();
     const lead = /^@layer\s+([\w-]+(?:\s*,\s*[\w-]+)+)\s*;/.exec(css);
     expect(lead, 'the <style> begins with an @layer statement').not.toBeNull();
-    expect((lead?.[1] ?? '').split(/\s*,\s*/)).toEqual(theme[0]);
+    const names = (lead?.[1] ?? '').split(/\s*,\s*/);
+    expect(names, 'one layer ahead of theme.css\'s list (the built sheet\'s first; fonts-built.test.ts)').toHaveLength((theme[0]?.length ?? 0) + 1);
+    expect(names.slice(1)).toEqual(theme[0]);
+    expect(theme[0] ?? []).not.toContain(names[0]);
   });
 
   it('the statement comes before every stylesheet link, the module entry and every other @layer use', () => {

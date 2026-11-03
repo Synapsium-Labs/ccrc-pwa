@@ -28,9 +28,12 @@
          and a lazily loaded one (Export's builder) carries @ccrc/ui's component
          rules in a sheet Vite links ahead of index.css, and would open
          `@layer components` first, ranking it below base and utilities. The
-         order is ui/src/styles/theme.css's own @layer statement;
-         test/layer-order.test.ts holds this line equal to it (D-7891). */
-      @layer theme, base, components, utilities;
+         order is Tailwind 4's `properties` layer (the first block its built
+         sheet emits, the --tw-* defaults, so it must stay lowest) followed by
+         ui/src/styles/theme.css's own @layer statement. test/layer-order.test.ts
+         holds the rest equal to theme.css, and test/fonts-built.test.ts holds
+         the first name equal to the built entry sheet's first layer (D-7891). */
+      @layer properties, theme, base, components, utilities;
       html {
         background: #0b0d0c;
       }
