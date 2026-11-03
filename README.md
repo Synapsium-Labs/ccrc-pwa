@@ -1358,7 +1358,7 @@ line per key, and is how every other reader (the fleet agent's `testbox` op, the
 
 **Seeing a box's settings.** `ccrc settings` prints what seven of them resolve to on this box — the three keeps, the
 health window, the deadline (with the smallest and largest reading the server may hold), the release base (shown only
-as `default`, or `custom` with its scheme and host) and the models budget — with where each came from (the
+as `default`, or `custom` with its scheme and host, or `custom` alone when the URL holds an `@`) and the models budget — with where each came from (the
 environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and whether the act that reads it would use it,
 refuse it or could not decide (D-6914, D-7861). It also counts the timestamped backups, those that still hold a
 `coord.db`, their size, and the home filesystem's free space. It is read-only: it never prunes, takes no lock and
