@@ -52,7 +52,7 @@ import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
 import { CREDENTIAL_ACT_LABEL, ReauthSheet, troubleActs, type CredentialAct } from '../accounts/ReauthSheet';
-import { heldAttemptOf, resumeSheetFor, switchTargetOf, type SignInMethod } from '../accounts/connectFlow';
+import { heldAttemptOf, isPastAdding, resumeSheetFor, switchTargetOf, type SignInMethod } from '../accounts/connectFlow';
 import { wordOf, type HeldAttempt } from '../accounts/useSignInAttempt';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
@@ -359,7 +359,7 @@ export function AccountsScreen(): ReactNode {
     const held = heldAttemptOf(lanes?.[id], Date.now());
     if (held === null) return;
     const kind = roster.find((r) => r.id === id)?.kind;
-    const sheet = resumeSheetFor(kind, held.method, lanes?.[id]?.check !== undefined);
+    const sheet = resumeSheetFor(kind, held.method, isPastAdding(lanes?.[id], accounts?.find((x) => x.wrapper === id)));
     if (sheet === 'switch') openSwitch(id, held.method, held);
     else if (sheet === 'reauth') openReauth(id, held.method, held);
     else setResumingConnect({ id, held, gen: ++sheetGen.current });

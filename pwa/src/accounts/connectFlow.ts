@@ -8,7 +8,7 @@
 import { isAccountStdin } from '../../../shared/account-argv';
 import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared/providers';
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
-import type { AccountsConnect, LaneWire, RosterWire } from '../../../shared/api';
+import type { AccountsConnect, AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
 import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type SignInEndKind } from '../fleet/accountWords';
 import { AUTH_TERMINAL_STATES, type AuthStatusState } from '../../../shared/accounts';
 
@@ -171,14 +171,26 @@ export function heldAttemptOf(
 }
 
 /** Which sheet continues an attempt (spec §9): `setup-token` on a sign-in lane and `login` on a token lane are the two
- *  method switches. The same method as the lane's is a re-auth (Task A38, D-7872) on a lane that has been checked
- *  (`checked`: the lane state holds a check, which a lane the connect sheet is still adding never has), and otherwise the
- *  connect sheet's sign-in of a lane it added. */
+ *  method switches. The same method as the lane's is a re-auth (Task A38, D-7872) on a lane past its adding
+ *  (`pastAdding`, {@link isPastAdding}), and otherwise the connect sheet's sign-in of a lane it added. */
 export function resumeSheetFor(
-  kind: RosterWire['kind'] | undefined, method: SignInMethod, checked = false,
+  kind: RosterWire['kind'] | undefined, method: SignInMethod, pastAdding = false,
 ): 'switch' | 'reauth' | 'connect' {
   if ((method === 'setup-token' && kind === 'sign-in') || (method === 'login' && kind === 'token')) return 'switch';
-  return checked ? 'reauth' : 'connect';
+  return pastAdding ? 'reauth' : 'connect';
+}
+
+/** Whether a lane is past its adding (D-7872 (9)): it shows a fact that a lane the connect sheet is still adding never
+ *  has. Every new lane starts off (spec: `add` writes the off marker, and only Turn it on, after the sign-in, lifts it),
+ *  so such a lane's word is Off, with no check and no 401 marker. Any one of these three says the lane exists already:
+ *  - a check in its lane state;
+ *  - the 401 marker (`authDead`), which ccd's rescue path writes with no check, so a Signed-out sign-in lane often has
+ *    no check at all, and which still holds under Off's precedence;
+ *  - a word other than Off: the marker that holds an added lane off is gone, so the lane was turned on.
+ *  An Off lane with neither a check nor the 401 marker reads as one being added. */
+export function isPastAdding(lane: LaneWire | undefined, usage: Pick<AccountUsage, 'authDead'> | null | undefined): boolean {
+  if (lane?.check !== undefined || usage?.authDead === true) return true;
+  return lane !== undefined && lane.state.word !== 'off';
 }
 
 /** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane

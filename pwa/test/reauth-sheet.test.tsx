@@ -5,10 +5,10 @@
 // says the old credential is untouched and leaves the card as it was. A fake box answers every route.
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { ACCOUNT_CAPS, type AccountAuthStatusAnswer, type AccountsConnect, type FleetSession, type LaneWire, type RosterWire } from '../../shared/api';
+import { ACCOUNT_CAPS, type AccountAuthStatusAnswer, type AccountsConnect, type AccountUsage, type FleetSession, type LaneWire, type RosterWire } from '../../shared/api';
 import { AUTH_POLL_MS } from '../src/accounts/ConnectSheet';
 import { ReauthSheet, troubleActs, type ReauthClient, type ReauthSheetProps } from '../src/accounts/ReauthSheet';
-import { resumeSheetFor } from '../src/accounts/connectFlow';
+import { isPastAdding, resumeSheetFor } from '../src/accounts/connectFlow';
 import {
   CANCEL_SIGN_IN, CODE_FIELD_LABEL, LEDGER, MINT_INSTEAD, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
   SEND_CODE, SIGN_IN_AGAIN, SIGN_OUT_RESTART, STATED_LABEL, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, credentialUntouched, reauthEnd,
@@ -41,6 +41,10 @@ const LANES: Record<string, LaneWire> = {
     ready: true, mintedAt: MINTED_AT, identity: 'someone@example.invalid', identitySource: 'stated',
   },
 };
+const usageOf = (wrapper: string, over: Partial<AccountUsage> = {}): AccountUsage => ({
+  wrapper, five: 10, seven: 20, ts: Math.floor(now / 1000) - 120, fiveResetAt: null, sevenResetAt: null,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
+});
 const READY: LaneWire = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true };
 const ATTEMPT = 'a'.repeat(32);
 const LOGIN_CODE = 'A'.repeat(48) + '#' + 'b'.repeat(43);
@@ -368,5 +372,46 @@ describe('a re-auth closed mid-attempt resumes in the re-auth sheet (A23\'s resu
     expect(resumeSheetFor('sign-in', 'login', false)).toBe('connect');
     expect(resumeSheetFor('sign-in', 'setup-token', true)).toBe('switch');
     expect(resumeSheetFor('token', 'login', true)).toBe('switch');
+  });
+
+  it("Continue on a Signed-out sign-in lane with no check (the 401 marker alone) reopens the re-auth sheet, not the connect sheet's", async () => {
+    // The common Sign in again case: ccd's rescue path writes the `authdead` marker and no check, so the lane's word is
+    // Signed out with `check` absent. Its resume is a re-auth, never the new lane's sheet with Discard this lane.
+    const at = Date.now();
+    const expiresAt = at + 400_000;
+    vi.spyOn(api, 'accountAuthStatus').mockResolvedValue({
+      ok: true, state: 'waiting-code', url: URL, host: 'claude.com', updatedAt: at, expiresAt,
+    });
+    const start = vi.spyOn(api, 'accountAuthStart');
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    const held: LaneWire = {
+      ...LANES['lane-a']!, state: { word: 'signed-out', source: 'HTTP 401' },
+      authAttempt: { state: 'waiting-code', expiresAt, mine: true, attemptId: ATTEMPT, method: 'login' },
+    };
+    expect(held.check).toBeUndefined();
+    act(() => useFleetStore.setState({
+      conn: 'open', usage: [usageOf('lane-a', { authDead: true })], roster: ROSTER, accountsConnect: CONNECT(),
+      lanes: { ...LANES, 'lane-a': held }, sessions: [], accountsReadAt: () => Date.now(),
+    }));
+    navigate('/accounts?resume=lane-a');
+    render(<AccountsScreen />);
+    const sheet = await waitFor(() => document.querySelector('.acct-reauth') as HTMLElement);
+    expect(sheet).not.toBeNull();
+    expect(await screen.findByLabelText(CODE_FIELD_LABEL)).toBeInTheDocument();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('a lane is past its adding on a check, the 401 marker or any word but Off; an Off lane with neither is one being added', () => {
+    const off: LaneWire = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'not-checked' };
+    // The connect sheet's own lane: added off, never checked, no marker.
+    expect(isPastAdding(off, usageOf('lane-n', { disabled: true }))).toBe(false);
+    expect(isPastAdding(off, null)).toBe(false);
+    expect(isPastAdding(undefined, undefined)).toBe(false);
+    // The 401 marker holds under Off's precedence; a check holds whatever the word.
+    expect(isPastAdding(off, usageOf('lane-n', { disabled: true, authDead: true }))).toBe(true);
+    expect(isPastAdding({ ...off, check: { verdict: 'ok', at: now } }, null)).toBe(true);
+    // Turned on: the marker that holds an added lane off is gone, checked or not.
+    expect(isPastAdding({ state: { word: 'signed-out', source: 'HTTP 401' }, ready: false }, null)).toBe(true);
+    expect(isPastAdding({ state: { word: 'not-checked', source: 'no check recorded yet' }, ready: false }, null)).toBe(true);
   });
 });
