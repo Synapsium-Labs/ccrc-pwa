@@ -9,10 +9,10 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, RadioFieldset, TextInput } from '@ccrc/ui';
-import type { ItemView as ItemWire } from '../../../shared/ledgers';
+import { ANSWER_MAX, WAITS_ON_WORDS, type ItemView as ItemWire } from '../../../shared/ledgers';
 import type { ProgHue } from '../fleet/programmeBoxes';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
-import { ageWords, itemPill, KIND_WORD } from './ledgerWords';
+import { ageWords, itemPills, KIND_WORD } from './ledgerWords';
 import './ledgers.css';
 
 export interface ItemViewProps {
@@ -20,7 +20,8 @@ export interface ItemViewProps {
   /** Tick the item. `decide` and `value` pass the answer; `do` passes none. Rejects with the route's `ApiError` on a refusal. */
   readonly onTick: (answer?: string) => Promise<void>;
   readonly onDismiss: () => Promise<void>;
-  /** The programme has an open run: dismiss is refused `programme-live`, so it is not offered. */
+  /** The programme has an open run (`programmeIsLive`). When it has none no coordinator is waiting: a tick is refused
+   *  `programme-ended`, so only Dismiss is offered, with the line that says why. */
   readonly programmeLive: boolean;
   /** The page clock, epoch ms. */
   readonly now: number;
@@ -48,16 +49,46 @@ function History({ item, now }: { item: ItemWire; now: number }): ReactNode {
   );
 }
 
+/** What joins a note to the choice inside the one `answer` string: the tick carries `{answer}` and no more, and the route
+ *  takes any decide answer of 1 to `ANSWER_MAX` characters, so a note travels inside it (departure pl5a-note-in-answer). */
+const NOTE_JOIN = '\n\nNote: ';
+/** The radio value of "Your own answer"; an option's is `o<index>`, so no option's words can collide with it. */
+const OWN = 'own';
+const OWN_WORD = 'Your own answer';
+
+/** One labelled line of text, with a hint under it. */
+function Field({ label, value, onChange, maxLength, hint }: {
+  label: string; value: string; onChange: (v: string) => void; maxLength: number; hint?: string;
+}): ReactNode {
+  return (
+    <label className="wi-field">
+      <span className="wi-label">{label}</span>
+      <TextInput className="wi-input" value={value} maxLength={maxLength} onChange={(e) => onChange(e.target.value)} />
+      {hint !== undefined && <span className="wi-hint">{hint}</span>}
+    </label>
+  );
+}
+
 function Panel({ item, programmeLive, onTick, onDismiss }: Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss'>): ReactNode {
-  const [choice, setChoice] = useState<string | null>(null);
+  const [pick, setPick] = useState<string | null>(null);
+  const [own, setOwn] = useState('');
+  const [note, setNote] = useState('');
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
-  const answer: string | undefined = item.kind === 'decide' && item.options !== null ? choice ?? undefined
-    : item.kind === 'decide' || item.kind === 'value' ? typed.trim() : undefined;
-  const needsAnswer = item.kind === 'decide' || item.kind === 'value';
-  const ready = !needsAnswer || (answer !== undefined && answer !== '');
+  const options = item.options ?? [];
+  const decide = item.kind === 'decide';
+  // What the operator chose or typed, trimmed; `null` while a decide has no choice yet. `''` is a field left empty.
+  const choice: string | null = decide
+    ? (pick === OWN ? own.trim() : pick === null ? null : options[Number(pick.slice(1))] ?? null)
+    : item.kind === 'value' ? typed.trim() : null;
+  const noteText = note.trim();
+  const noteCost = noteText === '' ? 0 : NOTE_JOIN.length + noteText.length;
+  const answer: string | null = choice === null ? null : decide && noteText !== '' ? `${choice}${NOTE_JOIN}${noteText}` : choice;
+  const tooLong = answer !== null && answer.length > ANSWER_MAX;
+  const needsAnswer = decide || item.kind === 'value';
+  const ready = !needsAnswer || (answer !== null && answer !== '' && !tooLong);
 
   const run = async (act: () => Promise<void>): Promise<void> => {
     setBusy(true);
@@ -67,41 +98,49 @@ function Panel({ item, programmeLive, onTick, onDismiss }: Pick<ItemViewProps, '
 
   const open = item.state === 'open';
   const checking = item.state === 'checking';
+  // A programme with no open run has no coordinator waiting for a tick: nothing is asked, and only Dismiss is offered.
+  const ended = (open || checking) && !programmeLive;
+  const mayTick = open && programmeLive && item.kind !== 'secret';
   return (
     <section className="wi-card wi-act" aria-label="Your move">
-      {open && item.kind === 'decide' && item.options !== null && (
-        <RadioFieldset legend="Your decision" name={`item-${item.id}`} optionClassName="wi-opt"
-                       options={item.options.map((o) => ({ value: o, label: o }))} value={choice} onPick={setChoice} />
+      {ended && <p className="wi-hint">{WAITS_ON_WORDS.ended}</p>}
+      {mayTick && decide && (
+        <>
+          <RadioFieldset legend="Your decision" name={`item-${item.id}`} optionClassName="wi-opt"
+                         options={[...options.map((o, i) => ({ value: `o${i}`, label: o })), { value: OWN, label: OWN_WORD }]}
+                         value={pick} onPick={setPick} />
+          {pick === OWN && <Field label={OWN_WORD} value={own} onChange={setOwn} maxLength={ANSWER_MAX - noteCost} />}
+          <Field label="Note to the coordinator (optional)" value={note} onChange={setNote}
+                 maxLength={Math.max(0, ANSWER_MAX - (choice?.length ?? 0) - NOTE_JOIN.length)} />
+        </>
       )}
-      {open && (item.kind === 'value' || (item.kind === 'decide' && item.options === null)) && (
-        <label className="wi-field">
-          <span className="wi-label">{item.kind === 'value' ? 'Your value' : 'Your answer'}</span>
-          <TextInput className="wi-input" value={typed} onChange={(e) => setTyped(e.target.value)} />
-          {item.kind === 'value' && (
-            <span className="wi-hint">An ordinary value: it is sent to the coordinator and may be written into the programme ledger.</span>
-          )}
-        </label>
+      {mayTick && item.kind === 'value' && (
+        <Field label="Your value" value={typed} onChange={setTyped} maxLength={ANSWER_MAX}
+               hint="An ordinary value: it is sent to the coordinator and may be written into the programme ledger." />
       )}
-      {open && item.kind === 'do' && (
+      {mayTick && needsAnswer && answer !== null && (
+        <span className="wi-hint">{`${answer.length} of ${ANSWER_MAX} characters`}</span>
+      )}
+      {mayTick && item.kind === 'do' && (
         <p className="wi-hint">Nothing to fill in. The coordinator checks it itself and either closes the item or sends it back with what it found.</p>
       )}
-      {open && item.kind === 'secret' && (
+      {open && programmeLive && item.kind === 'secret' && (
         <p className="wi-hint">This item asks for a secret. Giving one from here arrives in a later update; nothing is sent or stored from this page.</p>
       )}
       {checking && (
         <p className="wi-status" role="status" data-stale={item.stale ? 'true' : 'false'}>
           {item.stale
-            ? 'Your tick was mailed to the coordinator, which has not picked it up yet. You can leave this page.'
+            ? 'Your tick was sent, but the coordinator is not responding. You can leave this page.'
             : 'The coordinator has been told and will confirm this or send it back. You can leave this page.'}
         </p>
       )}
       {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
       <div className="wi-actions">
-        {open && item.kind !== 'secret' && (
+        {mayTick && (
           <Button variant="primary" size="fit" disabled={busy || !ready}
-                  onClick={() => void run(() => (answer === undefined ? onTick() : onTick(answer)))}>Mark done</Button>
+                  onClick={() => void run(() => (answer === null || !needsAnswer ? onTick() : onTick(answer)))}>Mark done</Button>
         )}
-        {(open || checking) && !programmeLive && (
+        {ended && (
           <Button variant="ghost" size="fit" disabled={busy} onClick={() => void run(onDismiss)}>Dismiss</Button>
         )}
       </div>
@@ -110,13 +149,13 @@ function Panel({ item, programmeLive, onTick, onDismiss }: Pick<ItemViewProps, '
 }
 
 export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme }: ItemViewProps): ReactNode {
-  const pill = itemPill(item);
+  const pills = itemPills(item);
   const name = programme?.name ?? item.program;
   return (
     <div className="wi">
       <div className="wi-band" data-hue={programme?.hue ?? 'none'}>
         <span className="wi-prog">{name}</span>
-        <span className="wl-pill wi-pill" data-tone={pill.tone}>{pill.word}</span>
+        {pills.map((p) => <span key={p.tone} className="wl-pill wi-pill" data-tone={p.tone}>{p.word}</span>)}
       </div>
       <div className="wi-detail">
         <div className="wi-card">

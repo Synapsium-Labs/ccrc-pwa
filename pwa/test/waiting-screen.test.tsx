@@ -2,6 +2,7 @@
 // `{view, sessions, runs, now}`: it grows no store and no route of its own, so the cases pass what the shell would.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { fleetHues } from '../src/fleet/programmeBoxes';
 import { WaitingScreen } from '../src/ledgers/WaitingScreen';
 import { fleetSession } from './fleetFixture';
@@ -71,7 +72,7 @@ describe('the Waiting on you list', () => {
     open({
       view: waitingView({
         items: [itemView({
-          id: 4, title: 'Flip the lane', note: 'Settings still shows record only.',
+          id: 4, title: 'Flip the lane', note: 'A different line kept on the item.',
           history: [
             { at: NOW - 3 * 60 * MIN, act: 'raise', note: null }, { at: NOW - 2 * 60 * MIN, act: 'tick', note: null },
             { at: NOW - 60 * MIN, act: 'return', note: 'Settings still shows record only.' },
@@ -81,7 +82,9 @@ describe('the Waiting on you list', () => {
     });
     const row = screen.getByRole('button', { name: /Flip the lane/ });
     expect(within(row).getByText('Came back')).toBeTruthy();
+    // The note is the history's return note, the coordinator's latest word: never the item's own `note` column.
     expect(within(row).getByText(/Settings still shows record only\./)).toBeTruthy();
+    expect(within(row).queryByText(/A different line kept on the item/)).toBeNull();
   });
 
   it('Recently cleared lists done items', () => {
@@ -105,6 +108,70 @@ describe('the Waiting on you list', () => {
     fireEvent.click(row);
     expect(onOpenSession).toHaveBeenCalledWith('project-a-ask');
     expect(onOpenItem).not.toHaveBeenCalled();
+  });
+
+  it('before the first fleet frame it says it is waiting, never that nothing needs the operator', () => {
+    open({ view: waitingView(), sessions: null });
+    expect(screen.queryByText('Nothing needs you.')).toBeNull();
+    expect(screen.getByRole('status').textContent).toMatch(/first update/i);
+    cleanup();
+    open({ view: waitingView(), sessions: [] });
+    expect(screen.getByText('Nothing needs you.')).toBeTruthy();
+  });
+
+  it('says why no list will come, in place of the waiting line', () => {
+    open({ view: null, unavailable: 'This box has no coordination database, so there is no Waiting on you list here.' });
+    expect(screen.getByRole('alert').textContent).toMatch(/no coordination database/);
+    expect(screen.queryByText(/first update/i)).toBeNull();
+  });
+
+  it('a programme with no open run is marked ended, and one with a run, or whose runs are unheard, is not', () => {
+    const view = waitingView({ items: [itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-b' })] });
+    const runs = [runRow({ id: 1, program: 'prog-a', state: 'working' }), runRow({ id: 2, program: 'prog-b', state: 'done' })];
+    open({ view, runs });
+    const marked = screen.getAllByRole('region', { name: /^prog-/ }).filter((g) => within(g).queryByText(WAITS_ON_WORDS.ended) !== null);
+    expect(marked.map((g) => g.getAttribute('data-program'))).toEqual(['prog-b']);
+    cleanup();
+    open({ view, runs: null });
+    expect(screen.queryByText(WAITS_ON_WORDS.ended)).toBeNull();
+    cleanup();
+    open({ view: waitingView({ items: [itemView({ id: 3 })], }), runs: [runRow({ id: 1, program: 'prog-a', state: 'working' })] });
+    expect(screen.queryByText(WAITS_ON_WORDS.ended)).toBeNull();
+  });
+
+  it('the rail counts each programme\'s open items and questions, not what is being checked, and the total adds up', () => {
+    const runs = [runRow({ id: 5, program: 'prog-a', sessionId: 'project-a-ask' })];
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Which one?', bucketSince: NOW - MIN });
+    open({
+      runs, sessions: withRunBinding([asking], runs),
+      view: waitingView({
+        items: [
+          itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-a', neededBy: 'later' }),
+          itemView({ id: 3, program: 'prog-a', state: 'checking', tickedAt: NOW - MIN }),
+          itemView({ id: 4, program: 'prog-b' }),
+        ],
+      }),
+    });
+    const rail = screen.getByRole('navigation', { name: 'Programmes' });
+    const counts = within(rail).getAllByRole('button').map((b) => [b.querySelector('.wl-rail-name')!.textContent, b.querySelector('.wl-rail-n')!.textContent]);
+    expect(counts).toEqual([['All programmes', '4'], ['prog-a', '3'], ['prog-b', '1']]);
+  });
+
+  it('a row says how soon an item is needed whatever its state', () => {
+    open({
+      view: waitingView({
+        items: [
+          itemView({ id: 1, title: 'Held one', state: 'checking', neededBy: 'blocking', tickedAt: NOW - MIN }),
+          itemView({ id: 2, title: 'Sent back one', neededBy: 'blocking', history: [{ at: 1, act: 'raise', note: null }, { at: 2, act: 'return', note: 'no' }] }),
+        ],
+      }),
+    });
+    const held = screen.getByRole('button', { name: /Held one/ });
+    expect(within(held).getByText('Checking…')).toBeTruthy();
+    expect(within(held).getByText('Blocking')).toBeTruthy();
+    const back = screen.getByRole('button', { name: /Sent back one/ });
+    expect(within(back).getByText('Came back')).toBeTruthy();
+    expect(within(back).getByText('Blocking')).toBeTruthy();
   });
 
   it('a tapped item opens it', () => {

@@ -413,12 +413,12 @@ describe('ROUTES and the ladder, both ways', () => {
   describe('Waiting on you', () => {
     afterEach(() => {
       vi.unstubAllGlobals();
-      act(() => useFleetStore.setState({ waiting: null }));
+      act(() => useFleetStore.setState({ waiting: null, fleetFrameSeen: false, sessions: [] }));
     });
 
     it('`/waiting` renders the list in the detail pane, and the item path opens one item', () => {
       vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
-      act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 7, title: 'Pick the order' })] }) }));
+      act(() => useFleetStore.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 7, title: 'Pick the order' })] }) }));
       navigate('/waiting');
       const list = render(<App />);
       const detail = document.querySelector('.shell-detail') as HTMLElement;
@@ -429,7 +429,7 @@ describe('ROUTES and the ladder, both ways', () => {
       list.unmount();
     });
 
-    it('an item the list does not hold says so, and a number past the safe integers names no route target', () => {
+    it('an item the list does not hold says so, and so does a number past the safe integers', () => {
       vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
       act(() => useFleetStore.setState({ waiting: waitingView() }));
       navigate('/waiting/12');
@@ -438,7 +438,7 @@ describe('ROUTES and the ladder, both ways', () => {
       gone.unmount();
       navigate('/waiting/99999999999999999999');
       render(<App />);
-      expect(placeholder()).not.toBeNull();
+      expect(within(document.querySelector('.shell-detail') as HTMLElement).getByText('That item is not on the list any more.')).toBeInTheDocument();
     });
   });
 });

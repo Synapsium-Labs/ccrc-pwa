@@ -10,7 +10,7 @@ import type { FleetSession, RunSummary } from '../../../shared/api';
 import { orderItems, waitingCount, type ItemKind, type ItemView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { boundOpenRun, claimedRunsOf } from '../fleet/runWords';
+import { boundOpenRun, claimedRunsOf, programsWithOpenRun } from '../fleet/runWords';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
 export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
@@ -50,13 +50,20 @@ export function cameBackNote(item: ItemView): string | null {
   return item.state === 'open' ? latestReturn(item)?.note ?? null : null;
 }
 
-/** The pill an item wears: its state first, then how soon it is needed. */
-export function itemPill(item: ItemView): Pill {
-  if (item.state === 'checking') return item.stale ? { tone: 'stale', word: STALE_WORD } : { tone: 'checking', word: CHECKING_WORD };
-  if (cameBack(item)) return { tone: 'bounced', word: CAME_BACK_WORD };
+/** The pill of how soon an item is needed (spec §2: a needed-by label whatever the item's state). */
+function neededByPill(item: ItemView): Pill {
   if (item.neededBy === 'blocking') return { tone: 'blocking', word: BLOCKING_WORD };
   if (item.neededBy === 'soon') return { tone: 'soon', word: item.soonLabel ?? SOON_DEFAULT_WORD };
   return { tone: 'later', word: LATER_WORD };
+}
+
+/** The pills an item wears, in the order they are read: its state when it has one to say (being checked, ticked with the
+ *  coordinator not responding, sent back), then how soon it is needed, which an item says in every state. */
+export function itemPills(item: ItemView): Pill[] {
+  const needed = neededByPill(item);
+  if (item.state === 'checking') return [item.stale ? { tone: 'stale', word: STALE_WORD } : { tone: 'checking', word: CHECKING_WORD }, needed];
+  if (cameBack(item)) return [{ tone: 'bounced', word: CAME_BACK_WORD }, needed];
+  return [needed];
 }
 
 /** A session asking the operator something: one row, never tickable (it is answered in its own session). */
@@ -78,6 +85,12 @@ export function questionRows(sessions: readonly FleetSession[], runs: readonly R
  *  checked is the coordinator's, so it does not count (spec §2). */
 export const waitingTotal = (items: readonly ItemView[], questions: readonly QuestionRow[]): number =>
   waitingCount(items) + questions.length;
+
+/** Whether a programme has an open run (the runs board's own reader, `programsWithOpenRun`), which is what keeps its
+ *  coordinator waiting on the operator's tick and refuses a dismiss. `null` runs (no runs frame yet) is live: a run this
+ *  page has not heard of counts as open, so no screen calls a programme ended, or offers a dismiss, on a guess. */
+export const programmeIsLive = (program: string, runs: readonly RunSummary[] | null): boolean =>
+  runs === null || programsWithOpenRun(runs).has(program);
 
 /** One line of the list: an item, or a session's question. */
 export type Row = { readonly kind: 'item'; readonly item: ItemView } | { readonly kind: 'question'; readonly question: QuestionRow };

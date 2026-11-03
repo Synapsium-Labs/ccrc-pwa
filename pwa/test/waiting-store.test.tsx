@@ -7,9 +7,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import { api, createApi } from '../src/lib/api';
+import { ApiError } from '../src/lib/apiError';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { createFleetStore } from '../src/stores/fleet';
-import { useWaitingRefetch } from '../src/ledgers/waitingStore';
+import { refetchWaiting, useWaitingRefetch } from '../src/ledgers/waitingStore';
 import { itemView, waitingView } from './ledgersFixture';
 
 class FakeSocket {
@@ -76,11 +77,12 @@ describe('the `waiting` frame', () => {
   });
 });
 
+function Mount({ store, load }: { store: ReturnType<typeof createFleetStore>; load: () => Promise<unknown> }) {
+  useWaitingRefetch(store, load as never);
+  return null;
+}
+
 describe('the refetch', () => {
-  function Mount({ store, load }: { store: ReturnType<typeof createFleetStore>; load: () => Promise<unknown> }) {
-    useWaitingRefetch(store, load as never);
-    return null;
-  }
   const fresh = waitingView({ items: [itemView({ id: 11, title: 'Raised while the tab was away' })] });
 
   it('reads GET /api/waiting again when the tab regains focus', async () => {
@@ -125,6 +127,75 @@ describe('the refetch', () => {
     view.unmount();
     await act(async () => { window.dispatchEvent(new Event('focus')); });
     expect(load).not.toHaveBeenCalled();
+  });
+});
+
+describe('what a read puts on the store (review 1359 F5)', () => {
+  it('takes exactly what the frame takes: a list of three arrays, and nothing else', async () => {
+    const store = createFleetStore({ makeSocket });
+    const held = waitingView({ items: [itemView({ id: 2 })] });
+    act(() => store.setState({ waiting: held }));
+    for (const bad of [{ items: [] }, { items: [], cleared: [] }, { items: {}, cleared: [], goals: [] }, null]) {
+      expect(await refetchWaiting(store, async () => ({ ok: true, waiting: bad }) as never), JSON.stringify(bad)).toBe('failed');
+      expect(store.getState().waiting, JSON.stringify(bad)).toEqual(held);
+    }
+    const fresh = waitingView({ items: [itemView({ id: 3 })] });
+    expect(await refetchWaiting(store, async () => ({ ok: true, waiting: fresh }))).toBe('read');
+    expect(store.getState().waiting).toEqual(fresh);
+  });
+
+  it('says why a read gave nothing: a box with no coordination database is not an offline tab', async () => {
+    const store = createFleetStore({ makeSocket });
+    expect(await refetchWaiting(store, async () => { throw new ApiError(503, { ok: false, error: 'not-configured' }); })).toBe('not-configured');
+    expect(await refetchWaiting(store, async () => { throw new ApiError(500, { ok: false, error: 'boom' }); })).toBe('failed');
+    expect(await refetchWaiting(store, async () => { throw new TypeError('offline'); })).toBe('failed');
+    expect(store.getState().waiting).toBeNull();
+  });
+});
+
+describe('one read in flight at a time (review 1359 F12d)', () => {
+  const later = <T,>() => { let release!: (v: T) => void; const done = new Promise<T>((r) => { release = r; }); return { done, release }; };
+  const answer = (id: number) => ({ ok: true as const, waiting: waitingView({ items: [itemView({ id })] }) });
+
+  it('a tab that becomes visible and focused reads once', async () => {
+    const store = createFleetStore({ makeSocket });
+    const first = later<ReturnType<typeof answer>>();
+    const load = vi.fn(() => first.done);
+    render(<Mount store={store} load={load} />);
+    const vis = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    await act(async () => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });
+    expect(load).toHaveBeenCalledTimes(1);
+    await act(async () => { first.release(answer(1)); });
+    expect(store.getState().waiting?.items[0]?.id).toBe(1);
+    vis.mockRestore();
+  });
+
+  it('a read asked for after a move starts after the one on the wire, so it sees the move', async () => {
+    const store = createFleetStore({ makeSocket });
+    const first = later<ReturnType<typeof answer>>();
+    const load = vi.fn().mockReturnValueOnce(first.done).mockResolvedValueOnce(answer(2));
+    const joined = refetchWaiting(store, load, true);        // a focus read, on the wire
+    const after = refetchWaiting(store, load);               // the tick's own re-read
+    expect(load).toHaveBeenCalledTimes(1);
+    first.release(answer(1));
+    expect(await joined).toBe('read');
+    expect(await after).toBe('read');
+    expect(load).toHaveBeenCalledTimes(2);                   // its own read, started after the first came back
+    expect(store.getState().waiting?.items[0]?.id).toBe(2);
+  });
+
+  it('reads that join the one on the wire share its answer, and a later ask starts a new read', async () => {
+    const store = createFleetStore({ makeSocket });
+    const first = later<ReturnType<typeof answer>>();
+    const load = vi.fn().mockReturnValueOnce(first.done).mockResolvedValueOnce(answer(5));
+    const a = refetchWaiting(store, load, true);
+    const b = refetchWaiting(store, load, true);
+    first.release(answer(4));
+    await Promise.all([a, b]);
+    expect(load).toHaveBeenCalledTimes(1);
+    await refetchWaiting(store, load, true);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(store.getState().waiting?.items[0]?.id).toBe(5);
   });
 });
 

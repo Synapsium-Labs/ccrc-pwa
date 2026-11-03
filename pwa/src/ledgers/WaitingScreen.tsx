@@ -7,21 +7,26 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
-import type { ItemView, WaitingView } from '../../../shared/ledgers';
+import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { isRunClosed, programmeTitle, programWave } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
-  ageWords, cameBack, cameBackNote, groupByProgramme, itemPill, questionRows, summaryCounts, summaryWords,
-  type PillTone, type ProgrammeGroup, type QuestionRow,
+  ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, programmeIsLive, questionRows, summaryCounts, summaryWords,
+  type Pill, type ProgrammeGroup, type QuestionRow,
 } from './ledgerWords';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
   /** `null` until the first `waiting` frame or `GET /api/waiting` answer: "not heard yet" is not "nothing waits". */
   readonly view: WaitingView | null;
-  readonly sessions: readonly FleetSession[];
-  readonly runs: readonly RunSummary[];
+  /** The fleet's sessions, or `null` before the first fleet frame: the offline snapshot's rows are not a fact, and a list
+   *  without its sessions' questions is not "nothing needs you", so the screen says it is waiting (review 1359 F3). */
+  readonly sessions: readonly FleetSession[] | null;
+  /** The runs, or `null` before the runs frame: a programme is not called ended on runs this page has not heard. */
+  readonly runs: readonly RunSummary[] | null;
+  /** Why no list will come (this box has no coordination database), in words; shown in place of the waiting line. */
+  readonly unavailable?: string | null;
   /** The page clock, epoch ms: every age is read against it, so the screen reads no clock of its own. */
   readonly now: number;
   readonly onOpenItem: (id: number) => void;
@@ -29,22 +34,22 @@ export interface WaitingScreenProps {
 }
 
 /** The rail's key for the group of sessions that are in no programme (a programme slug can never be this). */
+const NO_RUNS: readonly RunSummary[] = [];
 const NO_PROGRAMME_KEY = ' none';
 const ALL_KEY = ' all';
 const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 
-/** The right-hand end of a row: the pill and when, ONE block for an item and for a session's question. */
-function RowMeta({ tone, word, when }: { tone: PillTone; word: string; when: string }): ReactNode {
+/** The right-hand end of a row: its pills and when, ONE block for an item and for a session's question. */
+function RowMeta({ pills, when }: { pills: readonly Pill[]; when: string }): ReactNode {
   return (
     <span className="wl-meta">
-      <span className="wl-pill" data-tone={tone}>{word}</span>
+      {pills.map((p) => <span key={p.tone} className="wl-pill" data-tone={p.tone}>{p.word}</span>)}
       <span>{when}</span>
     </span>
   );
 }
 
 function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (id: number) => void }): ReactNode {
-  const pill = itemPill(item);
   const note = cameBackNote(item);
   const back = cameBack(item);
   const meta = item.state === 'checking' && item.tickedAt !== null ? `ticked ${ageWords(item.tickedAt, now)}` : `raised ${ageWords(item.raisedAt, now)}`;
@@ -58,7 +63,7 @@ function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (
           <span className="wl-why">{item.why}</span>
           {back && note !== null && <span className="wl-bounce">{`The coordinator sent it back: ${note}`}</span>}
         </span>
-        <RowMeta tone={pill.tone} word={pill.word} when={meta} />
+        <RowMeta pills={itemPills(item)} when={meta} />
       </BareRow>
     </li>
   );
@@ -74,24 +79,28 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
           <span className="wl-what">{q.title}</span>
           <span className="wl-why">A session is waiting for your answer. Open it to answer.</span>
         </span>
-        <RowMeta tone="ask" word={QUESTION_PILL_WORD} when={q.at > 0 ? ageWords(q.at, now) : ''} />
+        <RowMeta pills={[{ tone: 'ask', word: QUESTION_PILL_WORD }]} when={q.at > 0 ? ageWords(q.at, now) : ''} />
       </BareRow>
     </li>
   );
 }
 
 function Group({ group, runs, hue, now, props }: {
-  group: ProgrammeGroup; runs: readonly RunSummary[]; hue: string | null; now: number; props: WaitingScreenProps;
+  group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number; props: WaitingScreenProps;
 }): ReactNode {
-  const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, runs);
-  const open = group.program === null ? [] : runs.filter((r) => r.program === group.program && !isRunClosed(r));
+  const heard = runs ?? NO_RUNS;
+  const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
+  const open = group.program === null ? [] : heard.filter((r) => r.program === group.program && !isRunClosed(r));
   const wave = open.length === 0 ? null : programWave(open);
+  // A programme with no open run is shown as ended (spec §3.4); not on runs that have not been heard.
+  const ended = group.program !== null && !programmeIsLive(group.program, runs);
   return (
     <section className="wl-group" data-program={group.program ?? ''} data-hue={hue ?? 'none'} aria-label={title}>
       <div className="wl-ghead">
         <span className="wl-swatch" aria-hidden="true" />
         <h2 className="wl-gtitle">{title}</h2>
         {wave !== null && <span className="wl-gwave">{wave.waveOf === null ? `wave ${wave.wave}` : `wave ${wave.wave} of ${wave.waveOf}`}</span>}
+        {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
       </div>
       <ul className="wl-items">
         {group.rows.map((row) => row.kind === 'item'
@@ -105,17 +114,20 @@ function Group({ group, runs, hue, now, props }: {
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
   const [filter, setFilter] = useState<string>(ALL_KEY);
-  if (view === null) {
+  if (view === null || sessions === null) {
     return (
       <div className="wl">
         <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
-        <p className="wl-note" role="status">{NO_FRAME_WORD}</p>
+        {typeof props.unavailable === 'string'
+          ? <p className="wl-note" role="alert">{props.unavailable}</p>
+          : <p className="wl-note" role="status">{NO_FRAME_WORD}</p>}
       </div>
     );
   }
-  const questions = questionRows(sessions, runs);
+  const heardRuns = runs ?? NO_RUNS;
+  const questions = questionRows(sessions, heardRuns);
   const groups = groupByProgramme(view.items, questions);
-  const hues = fleetHues(runs);
+  const hues = fleetHues(heardRuns);
   const filtered = filter !== ALL_KEY && groups.some((g) => keyOf(g.program) === filter);
   const shown = filtered ? groups.filter((g) => keyOf(g.program) === filter) : groups;
   const words = summaryWords(summaryCounts(view.items, questions));
@@ -142,7 +154,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                   <BareRow key={keyOf(g.program)} className="wl-rail-btn" aria-pressed={filtered && keyOf(g.program) === filter}
                            data-hue={g.program === null ? 'none' : hues.get(g.program) ?? 'none'} onClick={() => setFilter(keyOf(g.program))}>
                     <span className="wl-swatch" aria-hidden="true" />
-                    <span className="wl-rail-name">{g.program === null ? NO_PROGRAMME_WORD : programmeTitle(g.program, runs)}</span>
+                    <span className="wl-rail-name">{g.program === null ? NO_PROGRAMME_WORD : programmeTitle(g.program, heardRuns)}</span>
                     <span className="wl-rail-n">{g.waiting}</span>
                   </BareRow>
                 ))}
@@ -163,7 +175,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
             {view.cleared.map((c) => (
               <li key={c.id} className="wl-cleared-row">
                 <span aria-hidden="true">✓ </span><s>{c.title}</s>
-                {` · ${programmeTitle(c.program, runs)}${c.closedAt === null ? '' : ` · confirmed ${ageWords(c.closedAt, now)}`}`}
+                {` · ${programmeTitle(c.program, heardRuns)}${c.closedAt === null ? '' : ` · confirmed ${ageWords(c.closedAt, now)}`}`}
               </li>
             ))}
           </ul>

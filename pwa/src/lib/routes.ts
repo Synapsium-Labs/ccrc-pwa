@@ -62,11 +62,6 @@ export function sessionPath(id: string): string {
   return `/s/${encodeURIComponent(id)}`;
 }
 
-/** The one builder of an item's path, `/waiting/<id>`, which the `item` row above parses (PL5a). */
-export function itemPath(id: number): string {
-  return `/waiting/${id}`;
-}
-
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
  *  existing `accounts` route, as the digest's `?day=` does, with no new route and no registry command. */
 export const ACCOUNTS_LANE_QUERY = 'lane';

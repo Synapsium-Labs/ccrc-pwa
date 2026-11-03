@@ -7,6 +7,7 @@ import type {
 import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
 import type { RouteRefusal } from '../../../shared/refusal';
+import { ANSWER_MAX } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
 
 /** The send and submit tables share this sentence: a resumed Retry (D-6367) and `/submit` both answer `nothing-to-submit`. */
@@ -505,14 +506,17 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
 }
 
 /**
- * The Waiting on you routes' refusals (`POST /api/items/:id/tick` and `/dismiss`, desktop-polish PL4; read by the item view,
- * PL5a) in the operator's words. Each is a 409 with the item unchanged, so each sentence says what to do next, and
- * `programme-unclaimed` names the abandon door for the open run and never says "dismiss instead": an open run with no
- * claimant refuses dismiss `programme-live` (review 1328 F2). Declared a `Record` over its keys so a sentence cannot be
- * dropped; the code words themselves are `shared/refusal.ts`'s (`LEDGER_ROUTE_REFUSALS`, `ItemMoveRefusal`).
+ * The Waiting on you routes' refusals (`POST /api/items/:id/tick` and `/dismiss`, and `GET /api/waiting`; desktop-polish
+ * PL4, read by the item view and the list, PL5a) in the operator's words. Each is a refusal with the item unchanged, so
+ * each sentence says what to do next, and `programme-unclaimed` names the abandon door for the open run and never says
+ * "dismiss": an open run with no claimant refuses dismiss `programme-live` (review 1328 F2). Declared a `Record` over its
+ * keys so a sentence cannot be dropped, and `pwa/test/item-view.test.tsx` holds the keys to the routes' own codes
+ * (`LEDGER_ROUTE_REFUSALS`, `ITEM_MOVE_REFUSALS`), so a code a route gains is a red test until it has its sentence
+ * (review 1359 F4); the code words themselves are `shared/refusal.ts`'s and `shared/ledgers.ts`'s.
  */
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
-  'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route', string
+  'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
+  | 'bad-request' | 'too-large' | 'unknown-item' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
   'programme-unclaimed': 'This programme has an open run, but no coordinator holds it, so nobody would see your tick. Abandon that run from the Runs screen first, or wait for a coordinator to take it.',
@@ -520,6 +524,10 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'duplicate': 'An earlier reply for this item is still waiting for the coordinator, so a second one was not sent.',
   'programme-live': 'Dismiss is only for a programme with no open run, and this one still has one.',
   'use-secret-route': 'This item asks for a secret. A secret is given on its own panel, never by marking the item done.',
+  'bad-request': `The server did not accept that answer. An answer is between 1 and ${ANSWER_MAX} characters; shorten it and try again.`,
+  'too-large': 'That answer, with its note, is too long to send to the coordinator. Shorten it and try again.',
+  'unknown-item': 'The server has no such item any more. The list will update.',
+  'not-configured': 'This box has no coordination database, so there is no Waiting on you list here.',
 };
 
 /**

@@ -14,6 +14,7 @@ import type { DivergenceCensus } from '../fleet/integrityWords';
 import { keepRows } from '../fleet/keepRows';
 import type { AccountsConnect, AccountUsage, LaneWire, ProjectedHome } from '../../../shared/api';
 import type { WaitingView } from '../../../shared/ledgers';
+import { isWaitingView } from '../ledgers/waitingView';
 import { sameJson } from '../lib/sameJson';
 import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 
@@ -348,7 +349,7 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
   // held view stays (there is no withdrawal: an empty list is `{items: [], …}`, a fact).
   if (t === 'waiting') {
     const w = (m as { waiting?: unknown }).waiting;
-    if (isRecord(w) && Array.isArray(w.items) && Array.isArray(w.cleared) && Array.isArray(w.goals)) return m as FleetMsg;
+    if (isWaitingView(w)) return m as FleetMsg;
     return null;
   }
   if (

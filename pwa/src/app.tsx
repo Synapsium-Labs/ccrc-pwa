@@ -36,7 +36,7 @@ import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
-import { ItemRoute, WaitingRoute } from './ledgers/WaitingRoutes';
+import { ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
@@ -87,8 +87,6 @@ export function App(): ReactNode {
   const at = matchRoute(path);
   const route = at?.route.id ?? null;
   const sessionId = route === 'session' ? at!.param : null;
-  // `/waiting/<id>` (desktop-polish PL5a): the id is digits by the route's pattern; one past the safe integers names no item.
-  const itemId = route === 'item' && Number.isSafeInteger(Number(at!.param)) ? Number(at!.param) : null;
   // `/settings`, a section page, or an id that names none (D-5504): every one is Settings, never the fallback.
   const settings = route === 'settings' || (route?.startsWith('settings-') ?? false);
   // `/digest?day=YYYY-MM-DD` (D-5300): the screen validates nothing about
@@ -163,9 +161,8 @@ export function App(): ReactNode {
     <DocsScreen path={path} search={search} />
   ) : route === 'waiting' ? (
     <WaitingRoute />
-  ) : itemId !== null ? (
-    // key remounts per item so a typed answer never leaks from one item's panel to the next.
-    <ItemRoute key={itemId} id={itemId} />
+  ) : route === 'item' ? (
+    <ItemRouteAt param={at!.param} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">
