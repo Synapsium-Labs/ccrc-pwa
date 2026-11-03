@@ -213,6 +213,8 @@ export const TREE_FILES = [
   'ccd/ccd-land-probe',
   // Test box TB11 (D-7413): the durations fetch, placed by `_inst_bins` on the radar's non-Darwin, every-ROLE arm.
   'ccd/ccd-testbox-times',
+  // D-7857: the carry dedupe sweep, placed by `_inst_bins` on the radar's non-Darwin, every-ROLE arm.
+  'ccd/ccd-carry-dedupe-sweep',
   // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on
   // the same non-Darwin, every-ROLE arm as the sweep above.
   'ccd/ccd-tool-adj',

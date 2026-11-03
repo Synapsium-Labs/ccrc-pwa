@@ -1140,6 +1140,8 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
       'testbox-token', 'testbox-push-key', 'testbox-times', 'testbox-runs-log',
+      // D-7857: the carry dedupe sweep's record.
+      'carry-dedupe-record',
     ]);
     // D-7278 (the intended change): the one class the ruling took out of containment.
     expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual(['workspace-dependency-dirs']);

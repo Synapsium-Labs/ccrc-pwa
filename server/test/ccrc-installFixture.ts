@@ -1165,6 +1165,9 @@ export const UNIT_FILES: Array<[string, string]> = [
   // Test box TB11 (D-7413): the durations timer's pair, ROLE-GATED `!= server` - only a box that runs `ccrc test` estimates.
   ['ccd-testbox-times.service', 'deploy/systemd/ccd-testbox-times.service'],
   ['ccd-testbox-times.timer', 'deploy/systemd/ccd-testbox-times.timer'],
+  // D-7857: the carry dedupe sweep's pair, ROLE-GATED `!= server` - a server box runs no session and no swap carry.
+  ['ccd-carry-dedupe.service', 'deploy/systemd/ccd-carry-dedupe.service'],
+  ['ccd-carry-dedupe.timer', 'deploy/systemd/ccd-carry-dedupe.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -1830,6 +1833,10 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "box-settings": "PASS",
   "box-token": "PASS",
   "build": "PASS",
+  // D-7857: PASS at every stage (Linux-only rows; set from the install's steps and held by CI's Linux leg): the install places
+  // ~/.cc-sessions/lib/carry-dedupe.py, so the registry exists, and a
+  // fresh box has no swap.log and no sweep record yet, which the check reads as nothing copied and nothing recorded.
+  "carry-copies": "PASS",
   "caddy": "SKIP",
   "caddyfile": "SKIP",
   "cert": "SKIP",
