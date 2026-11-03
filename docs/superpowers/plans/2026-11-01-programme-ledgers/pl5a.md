@@ -168,3 +168,27 @@ the named suites, then restored from a saved copy and its sha256 checked equal. 
 | E2a | F5 E2a: the post-tick re-read joins a read that predates the move | a tick's re-read starts after a focus read already on the wire, so the list shows the tick | `c3163185f40d` |
 | E2b | F5 E2b: the re-read after a dismiss is deleted | Dismiss calls the route, reads the list again and goes back to the list | `c3163185f40d` |
 | E3b | F6 E3b: a list with items is shown before the fleet frame, without its questions | a list with items waits for the fleet frame too: its rows are not shown without the sessions' questi | `395a5ecd848a` |
+
+## Fix round 3 (the merge queue's browser run)
+
+#2146 was dequeued because `browser (pwa) 2/2` failed two existing browser files that the new nav door broke and that a PR's
+fast CI skips: `refined-bar.browser.test.ts` ("New session is cut" at 900 and 930px) and `refined-phone.browser.test.ts` (the
+row holds six parts, not five; at 360px a door was cut). Reproduced at 7682df4c8 through `ccrc test` (14 cases), fixed in
+`pwa/src/skins/refined/refined.css` without loosening either guard, and the phone test now counts the wordmark and five doors.
+The whole `pwa/browser` suite then ran through `ccrc test`: 48 of 49 files pass; `session-header.browser.test.ts` fails two
+cases at 900px locally (`.chat-head` 200.8px against 188px) on a pristine `origin/main` checkout too, with identical numbers, and
+with the Waiting rail item removed, so it is this box's Chromium, not this change; the merge queue's own run passed it.
+
+Departure for the ledger to number, new in this round:
+
+- `pl5a-phone-door`: the Waiting on you door joins the phone header's row as a fifth door (the wordmark and five 44px squares), and the app bar keeps its six tabs; two stylesheet rules make them fit. Measured in Chrome (before the fix, then after): at 360px the wordmark and five doors needed 326px of the 320px row (the last door 6px past its edge) and now leave 18px free between the wordmark and the doors, the doors 4px apart instead of 8 from 380px down; at 390px the row is untouched (32px free). At 900px the bar's line ran 32px past its frame (New session cut) and the tabs' side padding is now 8px under 1000px (12 above), leaving 32px free between the tabs and the doors, with New session at the frame's edge; at 930px it ran 2px over and now leaves 62px free. No door shrinks below 44px, and the phone browser test's count of parts is the wordmark and five doors.
+
+Mutants of this round (the old layout or door count restored; each run on the committed tree against the browser file, then
+restored from a saved copy and its sha256 checked equal). All 3 killed.
+
+| # | Mutant | Red case (first) | sha256 of the file, before and after (equal) |
+|---|---|---|---|
+| P1 | the 360px phone row keeps an 8px gap between five doors (the old layout) | `refined-phone.browser.test.ts`: refined, light, 360px (+1) | `fe9b5f8b9ab2` |
+| P2 | the app bar keeps 12px tab padding at 900 with six tabs (the old layout) | `refined-bar.browser.test.ts`: refined, light, 900px, mouse (+7) | `fe9b5f8b9ab2` |
+| P3 | the phone header drops the Waiting door (the old door count) | `refined-phone.browser.test.ts`: refined, light, 360px (+5) | `e226b7a9b062` |
+
