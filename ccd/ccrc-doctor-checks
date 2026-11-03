@@ -10611,7 +10611,7 @@ _check_delegation-hooks() {
   if [ "${#timeout_set[@]}" -gt 0 ]; then
     n=${#timeout_set[@]}; s="homes set"; [ "$n" -eq 1 ] && s="home sets"
     _dr_warn delegation-hooks "$n rostered $s Claude Code's Bash timeout in settings.json env: $(_dr_join "${timeout_set[@]}")" \
-      "remove the key from that home's env: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's ten-minute Bash ceiling, so a raised ceiling can let rung 4 link a tree to the wrong session; raising the margin is a code change"
+      "remove the key from that home's env: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's ten-minute Bash ceiling, so a changed ceiling breaks that assumption and can let rung 4 link a tree to the wrong session; changing the margin is a code change"
     [ "$worst" -eq 1 ] || worst=2
   fi
   if [ "$worst" -eq 0 ]; then

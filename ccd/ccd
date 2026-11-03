@@ -24025,13 +24025,17 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
 # until a spawn of ANY session removes them, at most DSP_PRUNE_MAX directories a spawn. A directory goes only when the registry is
 # readable and searchable and no link stands at `$REG/delegation` or the spool root; its id is in the spawn grammar and is not the
 # spawning id; NO `$REG/<id>.*` entry of any type stands (a partly purged row, an orphaned `joined` field and a dotted sibling id all
-# keep it); and it holds only regular, non-link `<10 digits>.spool` buckets, each older than the cutoff hour (now minus 24 h, UTC, compared
-# as the hook's `_hook_spool_prune` compares) by name and 24 h old by mtime, or, holding none, is itself 24 h old by mtime. It is renamed
+# keep it); and it is a directory the prune can read and search (an unreadable one would glob as empty), holding only regular,
+# non-link `<10 digits>.spool` buckets, each older than the cutoff hour (now minus 24 h, UTC, compared as the hook's
+# `_hook_spool_prune` compares) by name and 24 h old by mtime, or, holding none, is itself 24 h old by mtime. It is renamed
 # to `.prune.<id>.<pid>`, checked again, and only then emptied by name (`rm -f --` each bucket, `rmdir --` the directory: never a `-r`);
 # a check that now fails moves it back when `<id>` is absent, or leaves it, and the next spawn takes a leftover `.prune.<id>.<pid>`
 # under the same rules (a dot-leading name is never an owner: this function refuses one). THE WINDOW LEFT: a purged id respawned
 # between the rename and the move back skips that instant's events (the census backstops them), and a move back that failed leaves
-# a running session with no spool directory, which the doctor's WARN for that case reports.
+# a running session with no spool directory, which the doctor's WARN for that case reports. Two spawns at once: one that has
+# removed a renamed directory's buckets but not yet the directory leaves it EMPTY with a fresh mtime, so a second spawn listing it
+# as a leftover fails the check and moves it back. That absent owner's empty directory reappears and goes about 24 h later; no
+# evidence is lost.
 _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
   local LC_ALL=C id="${1-}" base="$REG/delegation" d
   [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1

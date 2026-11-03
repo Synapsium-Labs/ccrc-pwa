@@ -7870,7 +7870,7 @@ in `ccd caps`. `session-hook.sh` appends one line per delegation-relevant hook e
 prunes outside its own, and keeps its own buckets for about 24 hours. The directory of a session that is removed is pruned at a later
 spawn of any session (`_delegation_spool_prune_absent` in `ccd`, after `_delegation_spool_dir`; operator ruling 2026-10-14), at most
 eight directories a spawn: only when no `~/.cc-sessions/<id>.*` entry of any type stands and the directory holds nothing but regular
-`<YYYYMMDDHH>.spool` buckets, each older than 24 hours by name and by mtime. It is renamed aside, checked again, and moved back if the
+`<YYYYMMDDHH>.spool` buckets, each older than 24 hours by name and by mtime (an empty directory needs its own mtime 24 hours old). It is renamed aside, checked again, and moved back if the
 owner reappeared or a bucket arrived; a session respawned in that instant skips the events of that instant, which the census backstops.
 No verb, timer or server delete exists for it. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
 directory, reads the buckets as bounded byte ranges (the existing `readFrom` request with an optional `maxBytes` of at most 262144; an
@@ -7910,7 +7910,7 @@ and an unmeasured hour is final: it is never read later as empty.
   spawn: nothing is lost by waiting, and `ccd stop` then `ccd start` observes it now at the cost of an in-flight turn) and for a
   `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either); and it WARNs for a home whose
   `settings.json` `env` sets `BASH_MAX_TIMEOUT_MS` or `BASH_DEFAULT_TIMEOUT_MS`, naming the home and the key, never the value: the
-  delegation broker's twenty-minute rung-4 margin assumes Claude Code's ten-minute Bash ceiling, and raising the margin is a code change
+  delegation broker's twenty-minute rung-4 margin assumes Claude Code's ten-minute Bash ceiling, and changing the margin is a code change
   (it does not read a project's own `.claude/settings.json` or the environment ccd spawns sessions with). The check writes nothing.
   `ccrc doctor --fix` runs only the shipped `install-session-hooks.sh`, which removes only ccrc's own hook command from an entry,
   keeping the entry's matcher and every other hook (an entry that mixes ccrc's hook with another command keeps the other command),

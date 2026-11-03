@@ -3933,7 +3933,7 @@ describe('ccrc doctor: delegation-hooks', () => {
   // ten-minute Bash ceiling, so a home that raises the ceiling in its settings.json `env` is a WARN. The line names the home and
   // the KEY, never the value (an `env` block can hold a token). Fixture assertions on the text and the class; no timing.
   describe('the Bash ceiling (W4-D1..D4)', () => {
-    const CEILING_REMEDY = "  remedy: remove the key from that home's env: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's ten-minute Bash ceiling, so a raised ceiling can let rung 4 link a tree to the wrong session; raising the margin is a code change";
+    const CEILING_REMEDY = "  remedy: remove the key from that home's env: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's ten-minute Bash ceiling, so a changed ceiling breaks that assumption and can let rung 4 link a tree to the wrong session; changing the margin is a code change";
     const ceilingLine = (n: number, homes: string): string =>
       `WARN delegation-hooks: ${n} rostered ${n === 1 ? 'home sets' : 'homes set'} Claude Code's Bash timeout in settings.json env: ${homes}`;
     const withEnv = (prefix: string, env: unknown): string => {
