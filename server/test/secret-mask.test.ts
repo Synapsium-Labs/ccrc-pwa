@@ -1151,6 +1151,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/coord/shadow-journal': /rows: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(deps\.coord\.shadowVerdicts/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
+    // The sign-in's status (accounts plan Task A21, D-7792): the helper's file is session-writable, so after N2 the answer
+    // is masked and one the mask changed is refused `auth-url-untrusted`.
+    '/api/accounts/:id/auth': /authAnswerMasked\(verdict\.answer, deps\.mask\)/,
   };
   /** Carries no session-derived text: path → why. */
   const EXEMPT: Record<string, string> = {
@@ -1159,8 +1162,6 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/fleet/health': "the mirror's counters",
     '/api/push/key': 'the VAPID public key',
     '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
-    // The sign-in's status (accounts plan Task A21, D-7792): read from the helper's file and answered only after N2 passed it.
-    '/api/accounts/:id/auth': "a sign-in attempt's state, and the URL, host and device code N2 checked against the method's allowlist; no session text, never the code",
     '/api/sessions/:id/commands': "the session's command files' names",
     '/api/projects': 'project names and paths',
     '/api/pools/epoch': 'a counter',

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
-  AUTH_HELPER_BOUND_MS, AUTH_STATUS_STATES, AUTH_TERMINAL_STATES, AUTH_USER_CODE_SHAPES, authUrlVerdict,
+  AUTH_DEVICE_CODE_METHODS, AUTH_HELPER_BOUND_MS, AUTH_STATUS_STATES, AUTH_TERMINAL_STATES, AUTH_USER_CODE_SHAPES, authUrlVerdict,
   type AuthMethod, type AuthStatusState,
 } from '../../../shared/accounts.js';
 import type { AccountAuthStatusAnswer, LaneWire } from '../../../shared/api.js';
@@ -18,7 +18,8 @@ import type { AccountAuthStatusAnswer, LaneWire } from '../../../shared/api.js';
  *    helper's own deadline. It is the only source of every countdown.
  *  - At `expiresAt` the store calls its expiry handler for an attempt that has not ended (the routes issue
  *    `auth-cancel`, a no-op for a unit that has already ended) and forgets it.
- *  - `node` is the fleet node the attempt started on; a later call answered by another is refused (spec §13.2).
+ *  - `node` is the fleet node the attempt started on; a later call answered by another is refused (spec §13.2), and one
+ *    made while the node is not known is answered `unmeasured` with the attempt kept (an unknown node is not another).
  *
  * {@link authStatusVerdictOf} is N2's check of the helper's status file (pure, L1): the store and the verdict are the
  * routes' only inputs about an attempt.
@@ -33,7 +34,8 @@ export interface AuthAttempt {
   readonly method: AuthMethod;
   readonly startedAt: number;
   readonly expiresAt: number;
-  readonly node: string | null;
+  /** Always a known node: a start while the fleet identity is not known is refused `unmeasured` before any op. */
+  readonly node: string;
   state: AuthStatusState;
   codeSent: boolean;
   ended: boolean;
@@ -145,9 +147,11 @@ const FAILURE_WORD_RE = /^[a-z][a-z0-9-]{0,47}$/;
 
 /**
  * N2's verdict on the helper's status file (pure). The file is writable by any fleet-user process, so it is trusted
- * only when it echoes this attempt's id, names a state of the helper's vocabulary, carries an ISO `updatedAt`, and every
- * `url` and `userCode` it carries passes the method's allowlist and shape. A URL is checked whatever the state, so a
- * foreign URL is refused even beside a terminal state. The answer's `url` and `host` are the server's parse of it.
+ * only when it echoes this attempt's id, names a state of the helper's vocabulary, carries an ISO `updatedAt`, every
+ * `url` it carries passes the method's allowlist, and, for a method that shows a device code, every `userCode` its
+ * shape (any other method's `userCode` is dropped unread). A URL is checked whatever the state, so a foreign URL is
+ * refused even beside a terminal state. The answer's `url` and `host` are the server's parse of it. The route then masks
+ * the answer and refuses one the mask changed (`authAnswerMasked`).
  */
 export function authStatusVerdictOf(
   json: unknown, a: { readonly attemptId: string; readonly method: AuthMethod; readonly expiresAt: number },
@@ -165,8 +169,10 @@ export function authStatusVerdictOf(
     url = authUrlVerdict(f['url'], a.method);
     if (url === null) return { kind: 'untrusted', why: 'url' };
   }
+  // A device code is read only for a method that shows one: for any other the helper's scan may have caught a run of
+  // the authorize URL's own parameters, which is never shown, so it is dropped unread (D-7792).
   let userCode: string | null = null;
-  if (f['userCode'] !== undefined) {
+  if (f['userCode'] !== undefined && AUTH_DEVICE_CODE_METHODS.includes(a.method)) {
     const shape = AUTH_USER_CODE_SHAPES[a.method];
     if (shape === null || typeof f['userCode'] !== 'string' || !shape.test(f['userCode'])) return { kind: 'untrusted', why: 'user-code' };
     userCode = f['userCode'];
@@ -183,4 +189,15 @@ export function authStatusVerdictOf(
       updatedAt, expiresAt: a.expiresAt,
     },
   };
+}
+
+/** The answer as the egress mask leaves it (D-5513, D-5995), or null when the mask changed anything: the status file
+ *  is session-writable text, so a credential planted in the URL's query would otherwise cross to the PWA, its history
+ *  and the provider. The masker works on credential shapes and fingerprints, so a genuine authorize URL passes as it is;
+ *  a changed one is a file somebody rewrote (`auth-url-untrusted`), never a URL with a hole in it. Pure over `mask`. */
+export function authAnswerMasked(
+  answer: AccountAuthStatusAnswer, mask: <T>(v: T) => T,
+): AccountAuthStatusAnswer | null {
+  const masked = mask(answer);
+  return JSON.stringify(masked) === JSON.stringify(answer) ? masked : null;
 }

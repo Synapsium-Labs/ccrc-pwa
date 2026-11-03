@@ -217,6 +217,45 @@ describe('the node an attempt started on (spec §13.2)', () => {
     expect((await get(r, `/api/accounts/${LANE}/auth`, cookie)).json()).toEqual({ ok: false, error: 'node-changed' });
   });
 
+  it('a node not known for a moment (a reconnect) is not another node: every call answers unmeasured and the attempt stands', async () => {
+    const r = await open();
+    const cookie = await fresh(r.app);
+    const a = await startAttempt(r, cookie);
+    r.status({ state: 'waiting-code', updatedAt: iso(T0), attemptId: a.attemptId, url: LOGIN_URL });
+    r.node.id = null;
+    for (const res of [
+      await get(r, `/api/accounts/${LANE}/auth`, cookie),
+      await sendCode(r, cookie, a.attemptId),
+      await post(r, `/api/accounts/${LANE}/auth/cancel`, { attemptId: a.attemptId }, cookie),
+    ]) {
+      expect(res.statusCode, res.body).toBe(REFUSAL_STATUS['unmeasured']);
+      expect(res.json()).toEqual({ ok: false, error: 'unmeasured' });
+    }
+    // Nothing reached the box, and the attempt was not forgotten: once the same node is known again it goes on.
+    expect(r.calls).toEqual(['auth-start']);
+    expect((await lanesOf(r, cookie))[LANE]?.authAttempt).toMatchObject({ state: 'starting', mine: true });
+    r.node.id = NODE;
+    expect((await get(r, `/api/accounts/${LANE}/auth`, cookie)).json()).toMatchObject({ ok: true, state: 'waiting-code' });
+    const code = await sendCode(r, cookie, a.attemptId);
+    expect(code.statusCode, code.body).toBe(200);
+    expect(r.calls).toEqual(['auth-start', 'auth-code']);
+  });
+
+  it('a start while the node is not known refuses unmeasured before any op, so every attempt is bound to a known node', async () => {
+    const r = await open();
+    const cookie = await fresh(r.app);
+    r.node.id = null;
+    const res = await post(r, `/api/accounts/${LANE}/auth/start`, { method: 'login' }, cookie);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['unmeasured']);
+    expect(res.json()).toEqual({ ok: false, error: 'unmeasured' });
+    expect(r.calls).toEqual([]);
+    expect(r.rows.map((x) => [x.act, x.outcome, x.code])).toEqual([['auth-start', 'refused', 'unmeasured']]);
+    // Known again, the start runs and the attempt names that node.
+    r.node.id = NODE;
+    await startAttempt(r, cookie);
+    expect(r.calls).toEqual(['auth-start']);
+  });
+
   it('a start answered by a node other than the one asked is refused, and the attempt is cancelled', async () => {
     const r = await open();
     r.stub('auth-start', { out: { ok: true, id: LANE, attemptId: '@ATTEMPT@', state: 'starting', fleetIdentity: OTHER_NODE } });

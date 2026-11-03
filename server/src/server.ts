@@ -2056,6 +2056,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const r = await deps.io.readFileMeasured(path.join(deps.cfg.registryDir, '.auth', `${id}.json`));
       return r.ok ? { kind: 'read', content: r.content } : { kind: r.reason === 'absent' ? 'absent' : 'unreadable' };
     },
+    // `GET …/auth`'s answer, masked in the handler and refused when the mask changed it (A21, D-7792).
+    mask: (v) => (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(v),
     gate: accountGate,
     ops: { run: async (...a) => accountOps === undefined ? { kind: 'not-started' } : accountOps.run(...a) },
     laneOf: (id) => {

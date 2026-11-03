@@ -3,6 +3,7 @@
 // records its argv to `<home>/argv.log` and answers what `<home>/stub/<sub>.{out,code}` say, with `@ATTEMPT@` in an
 // answer replaced by the `--attempt=` the route passed. The helper's status file is written by the test, as a fleet-user
 // process could. The attempts store runs on a clock the test moves. No fixture value is real-shaped.
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
@@ -66,7 +67,8 @@ export function fakeClock(): FakeClock {
 
 export interface AuthRig {
   app: FastifyInstance; home: string; rows: AccountEventInput[]; calls: AccountSub[]; clock: FakeClock;
-  node: { id: string };
+  /** The node the fleet identity cell answers; `null` reads as `unmeasured` (a reconnect's `awaiting-inventory`). */
+  node: { id: string | null };
   argv: () => string[];
   stub: (sub: string, o: { out?: unknown; code?: number }) => void;
   /** Writes the helper's status file for the lane, as any fleet-user process could. */
@@ -87,7 +89,7 @@ export async function openAuthApp(o: { enabled?: boolean; caps?: string[] } = {}
   const rows: AccountEventInput[] = [];
   const audit = { write: (e: AccountEventInput) => { rows.push(e); return { ok: true, id: rows.length }; } } as unknown as AccountAudit;
   const cfg = { ...base.cfg, authEnabled: o.enabled ?? true, cookieSecure: false, rpId: 'localhost', origin: 'http://localhost:7788' };
-  const node = { id: NODE };
+  const node: { id: string | null } = { id: NODE };
   const inner = localAccountOps({ home, killGraceMs: 100, timeoutMs: () => 10_000 });
   const wrapped = reconcilingAccountOps(inner, {
     reload: (stdout) => {
@@ -102,7 +104,11 @@ export async function openAuthApp(o: { enabled?: boolean; caps?: string[] } = {}
   const deps: Deps = {
     ...base, cfg, mailToken: BOX_TOKEN, spawnPty: stubPty,
     fleetState: { ccdVerbs: o.caps ?? ['account-v2', 'account-auth-v1'] } as unknown as FleetState,
-    fleetIdentity: { current: () => ({ kind: 'known', connectionEpoch: 1, nodeId: node.id, measuredAt: 0 }) } as unknown as FleetIdentityCell,
+    fleetIdentity: {
+      current: () => (node.id === null
+        ? { kind: 'unmeasured', connectionEpoch: 1, why: 'awaiting-inventory' }
+        : { kind: 'known', connectionEpoch: 1, nodeId: node.id, measuredAt: 0 }),
+    } as unknown as FleetIdentityCell,
     accountOps, accountAudit: audit, authAttempts: new AuthAttempts(clock),
   };
   const a = await buildServer(deps);
@@ -153,6 +159,12 @@ export async function startAttempt(r: AuthRig, cookie: string, method = 'login')
   return res.json() as { attemptId: string; expiresAt: number };
 }
 
+/** The measured `login` URL's shape, with a 43-character base64url `code_challenge` and `state` (from a hash, so
+ *  neutral), the challenge holding a `XXXX-XXXX` run as about one URL in ninety does. */
+export const LOGIN_URL_B64 = 'https://claude.com/cai/oauth/authorize?code=true&client_id=client-a21&response_type=code'
+  + '&redirect_uri=https%3A%2F%2Fexample.invalid%2Fcallback&scope=user%3Ainference'
+  + `&code_challenge=${createHash('sha256').update('a21-challenge').digest('base64url').slice(0, 31)}Q7ZK-W3XA_b9`
+  + `&code_challenge_method=S256&state=${createHash('sha256').update('a21-state').digest('base64url')}`;
 /** The measured `login` URL's shape, with neutral parameter values. */
 export const LOGIN_URL = 'https://claude.com/cai/oauth/authorize?code=true&client_id=client-a21&response_type=code'
   + '&redirect_uri=https%3A%2F%2Fexample.invalid%2Fcallback&scope=user%3Ainference&code_challenge=challenge-a21'

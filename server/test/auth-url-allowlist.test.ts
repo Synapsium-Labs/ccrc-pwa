@@ -1,7 +1,8 @@
 // N2 `auth-url-allowlist` (D-7792; spec §3.8; accounts plan Task A21): what the operator is asked to open is validated
 // by the server. The status file is writable by any fleet-user process, so `GET /api/accounts/:id/auth` answers it only
-// when it echoes the server's attempt, its URL is https on a host in the method's EXACT list (OA1b's record: `login`
-// and `setup-token` on `claude.com`; the Codex host unmeasured, so none), and its device code matches its shape.
+// when it echoes the server's attempt, its URL is https on a host and path in the method's EXACT lists (OA1b's record:
+// `login` and `setup-token` at `claude.com/cai/oauth/authorize`; the Codex host unmeasured, so none), and, for a method
+// that shows a device code, that code matches its shape. The answer is then masked, and one the mask changed is refused.
 // Anything else ends the attempt with `auth-url-untrusted`, an audit row and no URL. The host label is the server's
 // parse of the URL, never the file's text.
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,9 +10,10 @@ import {
   AUTH_URL_HOSTS, authCodeShapeOk, authUrlVerdict,
 } from '../../shared/accounts.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
-import { authStatusVerdictOf } from '../src/accounts/attempts.js';
+import { authAnswerMasked, authStatusVerdictOf } from '../src/accounts/attempts.js';
+import { SHAPE_ONLY_MASKER } from '../src/accounts/mask.js';
 import {
-  CODE, LANE, LOGIN_URL, fresh, get, iso, openAuthApp, startAttempt, type AuthRig,
+  CODE, LANE, LOGIN_URL, LOGIN_URL_B64, fresh, get, iso, openAuthApp, startAttempt, type AuthRig,
 } from './authRouteRig.js';
 
 let rig: AuthRig | undefined;
@@ -19,6 +21,9 @@ afterEach(async () => { if (rig) await rig.app.close(); rig = undefined; });
 
 const ATTEMPT = 'a21'.repeat(10) + 'ab';
 const A = { attemptId: ATTEMPT, method: 'login' as const, expiresAt: 1_000 };
+/** An Anthropic-shaped token, assembled so no fixture spells one (the egress suite's rule). */
+const PLANTED = ['sk', 'ant', 'oat01', 'A21x'.repeat(24)].join('-');
+const mask = <T>(v: T): T => SHAPE_ONLY_MASKER.maskDeep(v);
 const FILE = (over: Record<string, unknown> = {}) => ({ state: 'waiting-code', updatedAt: '2026-11-01T21:00:00Z', attemptId: ATTEMPT, url: LOGIN_URL, ...over });
 
 describe('the URL check (pure)', () => {
@@ -41,6 +46,17 @@ describe('the URL check (pure)', () => {
     ]) {
       expect(authUrlVerdict(bad, 'login'), JSON.stringify(bad).slice(0, 60)).toBeNull();
     }
+  });
+
+  it('matches the measured path exactly, and refuses a fragment', () => {
+    for (const bad of [
+      'https://claude.com/anything?leak=x', 'https://claude.com/', 'https://claude.com/cai/oauth/authorize/',
+      'https://claude.com/cai/oauth/authorize/../x', 'https://claude.com/cai/oauth/authorize#x', 'https://claude.com/cai/oauth/authorize#',
+      `${LOGIN_URL}#frag`,
+    ]) {
+      expect(authUrlVerdict(bad, 'login'), bad).toBeNull();
+    }
+    expect(authUrlVerdict(LOGIN_URL_B64, 'login')?.host).toBe('claude.com');
   });
 
   it('the Codex host is unmeasured (OA1b), so no URL is accepted for it, and PKCE never reads one from the file', () => {
@@ -79,8 +95,17 @@ describe('the status file verdict (pure)', () => {
     expect(authStatusVerdictOf(FILE({ state: 'done', url: 'https://evilclaude.com/x' }), A)).toEqual({ kind: 'untrusted', why: 'url' });
   });
 
-  it('refuses any userCode for a method that has none, and keeps the URL out of a state the operator does not act on', () => {
-    expect(authStatusVerdictOf(FILE({ userCode: 'ABCD-1234' }), A)).toEqual({ kind: 'untrusted', why: 'user-code' });
+  it('drops a userCode unread for a method with no device code, refuses one off its shape for a device sign-in, and keeps the URL out of a state the operator does not act on', () => {
+    // The helper's device-code scan reads every line, so a run of the authorize URL's own parameters can reach the
+    // file as `userCode`: for `login` and `setup-token` it is never read and never answered.
+    for (const method of ['login', 'setup-token'] as const) {
+      const v = authStatusVerdictOf(FILE({ url: LOGIN_URL_B64, userCode: 'Q7ZK-W3XA' }), { ...A, method });
+      expect(v.kind === 'ok' && v.answer, method).toMatchObject({ ok: true, state: 'waiting-code', host: 'claude.com' });
+      expect(v.kind === 'ok' && 'userCode' in v.answer, method).toBe(false);
+    }
+    // The Codex device code is unmeasured, so a device sign-in's `userCode` has no shape it can match.
+    const { url: _u, ...noUrl } = FILE({ userCode: 'ABCD-1234' });
+    expect(authStatusVerdictOf(noUrl, { ...A, method: 'openai-login' })).toEqual({ kind: 'untrusted', why: 'user-code' });
     const done = authStatusVerdictOf(FILE({ state: 'done' }), A);
     expect(done.kind === 'ok' && done.answer).toEqual({ ok: true, state: 'done', updatedAt: Date.parse('2026-11-01T21:00:00Z'), expiresAt: 1_000 });
   });
@@ -90,6 +115,21 @@ describe('the status file verdict (pure)', () => {
     expect(word.kind === 'ok' && word.answer.failure).toBe('token-unverified');
     const sentence = authStatusVerdictOf(FILE({ state: 'failed', error: 'claude auth login exited 1 at /home/x' }), A);
     expect(sentence.kind === 'ok' && 'failure' in sentence.answer).toBe(false);
+  });
+});
+
+describe('the answer mask (pure; D-5513, D-5995)', () => {
+  it('passes a genuine authorize URL as it is, base64url challenge and state included', () => {
+    const v = authStatusVerdictOf(FILE({ url: LOGIN_URL_B64 }), A);
+    expect(v.kind).toBe('ok');
+    if (v.kind === 'ok') expect(authAnswerMasked(v.answer, mask)).toEqual(v.answer);
+  });
+
+  it('refuses an answer the mask changed: a token planted in the query, which N2 does not read', () => {
+    const url = `https://claude.com/cai/oauth/authorize?code=true&leak=${PLANTED}`;
+    const v = authStatusVerdictOf(FILE({ url }), A);
+    expect(v.kind).toBe('ok');
+    if (v.kind === 'ok') expect(authAnswerMasked(v.answer, mask)).toBeNull();
   });
 });
 
@@ -144,14 +184,36 @@ describe('GET /api/accounts/:id/auth validates before it answers (N2)', () => {
     expectEnded(r, a.attemptId, before);
   });
 
-  it('a `userCode` outside its shape is refused', async () => {
+  it('a sign-in by code whose file carries a `userCode` the helper caught in the URL goes on, and the code is not answered', async () => {
+    const { r, cookie, a } = await open();
+    // The helper's scan publishes the first `XXXX-XXXX` run of any line, the authorize URL's line included.
+    r.status({ state: 'waiting-code', updatedAt: iso(Date.now()), attemptId: a.attemptId, url: LOGIN_URL_B64, userCode: 'Q7ZK-W3XA' });
+    const res = await get(r, `/api/accounts/${LANE}/auth`, cookie);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'waiting-code', host: 'claude.com', url: new URL(LOGIN_URL_B64).href });
+    expect(res.json()).not.toHaveProperty('userCode');
+    expect(r.calls).toEqual(['auth-start']);
+    expect(r.rows.map((x) => x.act)).not.toContain('auth-url-untrusted');
+  });
+
+  it('a credential planted in the URL\'s query refuses auth-url-untrusted, and never crosses', async () => {
     const { r, cookie, a } = await open();
     const before = r.calls.length;
-    // A sign-in by code has no device code at all: one in the file is a device code somebody else started.
-    r.status({ state: 'waiting-code', updatedAt: iso(Date.now()), attemptId: a.attemptId, url: LOGIN_URL, userCode: 'WXYZ-0000' });
+    r.status({ state: 'waiting-code', updatedAt: iso(Date.now()), attemptId: a.attemptId, url: `${LOGIN_URL}&leak=${PLANTED}` });
+    const res = await get(r, `/api/accounts/${LANE}/auth`, cookie);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['auth-url-untrusted']);
+    expect(res.json()).toEqual({ ok: false, error: 'auth-url-untrusted' });
+    expect(res.body.includes('A21xA21x')).toBe(false);
+    expectEnded(r, a.attemptId, before);
+  });
+
+  it('the review\'s measured URL (another path, the token in the query and the fragment) is refused', async () => {
+    const { r, cookie, a } = await open();
+    const before = r.calls.length;
+    r.status({ state: 'url', updatedAt: iso(Date.now()), attemptId: a.attemptId, url: `https://claude.com/anything?leak=${PLANTED}#${PLANTED}` });
     const res = await get(r, `/api/accounts/${LANE}/auth`, cookie);
     expect(res.json()).toEqual({ ok: false, error: 'auth-url-untrusted' });
-    expect(res.body.includes('WXYZ')).toBe(false);
+    expect(res.body.includes('A21xA21x')).toBe(false);
     expectEnded(r, a.attemptId, before);
   });
 

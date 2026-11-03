@@ -4,7 +4,7 @@ import {
   type AccountAddAnswer, type AccountCheckAnswer, type AccountCredentialAnswer, type AccountOutcome,
   type AccountRemoveAnswer, type AccountRemoveCheckAnswer, type AccountSub, type AccountSwitchAnswer, type AtProviderKind,
   type AtProviderRow, type LaneWire, type RosterWire,
-  AUTH_UNSUPPORTED_REASONS, type AccountAuthStartAnswer, type AccountAuthStatusAnswer, type AccountSignOutAnswer,
+  ACCOUNT_AUTH_CAP, AUTH_UNSUPPORTED_REASONS, type AccountAuthStartAnswer, type AccountAuthStatusAnswer, type AccountSignOutAnswer,
 } from '../../../shared/api.js';
 import {
   AUTH_METHODS, AUTH_STATUS_STATES, AUTH_URL_HOSTS, authCodeShapeOk, isLaneIdentity, type AuthMethod, type AuthStatusState,
@@ -17,7 +17,7 @@ import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { ACCOUNT_ID_RE } from '../../../shared/roster.js';
 import { refuseRoute } from '../refuse.js';
 import { actorOf, type AccountAudit, type AccountEventInput } from './audit.js';
-import { authStatusVerdictOf, newAttemptId, type AuthAttempt, type AuthAttempts } from './attempts.js';
+import { authAnswerMasked, authStatusVerdictOf, newAttemptId, type AuthAttempt, type AuthAttempts } from './attempts.js';
 import { maskHeld } from './egress.js';
 import type { AccountGate } from './gate.js';
 import type { AccountOpFields, AccountOpResult, AccountOps } from './ops.js';
@@ -82,6 +82,9 @@ export interface AccountRouteDeps {
   attempts: AuthAttempts;
   /** Lane `id`'s sign-in status file (`~/.cc-sessions/.auth/<id>.json`), read over the existing `read` op (A21). */
   authStatus: (id: string) => Promise<{ kind: 'read'; content: string } | { kind: ReadFailure }>;
+  /** The egress mask over one answer (`masker.maskDeep`, D-5995): `GET …/auth` masks its answer here and refuses one
+   *  the mask changed (A21's review, D-7792). */
+  mask: <T>(value: T) => T;
 }
 
 /** What one run means for the route: the act ran to a good end, or the refusal word to answer, its extra fields, and
@@ -586,8 +589,9 @@ function startStateOf(stdout: string, attemptId: string): AuthStatusState | null
   return typeof st === 'string' && (AUTH_STATUS_STATES as readonly string[]).includes(st) ? st as AuthStatusState : 'starting';
 }
 
-/** The cap word the sign-in subs need (N4, D-7734): `account-auth-v1`, which A20's `ccd caps` advertises. */
-const AUTH_CAP = ACCOUNT_CAPS[1];
+/** The cap word the sign-in subs need (N4, D-7734): `account-auth-v1`, which A20's `ccd caps` advertises. Held out of
+ *  `ACCOUNT_CAPS`, so `connect.caps` does not offer it until the screen ships (D-7793 (1)). */
+const AUTH_CAP = ACCOUNT_AUTH_CAP;
 
 /**
  * THE SIGN-IN ROUTES (spec §13.1):
@@ -605,9 +609,11 @@ const AUTH_CAP = ACCOUNT_CAPS[1];
  *    masked out of every text the route returns; the audit row says `auth-code ok` or `auth-code refused <word>`.
  *  - `POST /api/accounts/:id/auth/cancel`: `{attemptId}` → `{ok}`, from any session (it only stops something).
  *
- * Each takes the account gate FIRST, on `account-auth-v1`. Every later call is refused `node-changed` when the fleet
- * node now answering is not the one the attempt started on: checked before the op (so a code never reaches another
- * node) and on the op's answer. At `expiresAt` the store hands an unended attempt to the expiry handler below, which
+ * Each takes the account gate FIRST, on `account-auth-v1`. A start while the fleet node is not known refuses
+ * `unmeasured` before any op, so every attempt is bound to a known node. Every later call is refused `node-changed`
+ * when the fleet node now answering is another one: checked before the op (so a code never reaches another node) and
+ * on the op's answer. A later call made while the node is not known (a reconnect's `awaiting-inventory`, a link down,
+ * a boot) answers `unmeasured` and keeps the attempt: an unknown node is not another node. At `expiresAt` the store hands an unended attempt to the expiry handler below, which
  * issues `auth-cancel` with the server as the actor.
  */
 function registerAccountAuthRoutes(app: FastifyInstance, deps: AccountRouteDeps): void {
@@ -622,8 +628,12 @@ function registerAccountAuthRoutes(app: FastifyInstance, deps: AccountRouteDeps)
     const id = (req.params as { id?: unknown }).id;
     return typeof id === 'string' && ACCOUNT_ID_RE.test(id) ? id : null;
   };
-  /** The attempt's node against the one answering now (before an op) or the one an op's answer named (after it). */
-  const nodeMoved = (a: AuthAttempt, answered: string | null): boolean => answered !== a.node;
+  /** The attempt's node against the one answering now, before an op: `unknown` while the fleet identity is not known
+   *  (the call answers `unmeasured` and the attempt stands), `moved` for another known node. */
+  const nodeNow = (a: AuthAttempt): 'same' | 'moved' | 'unknown' => {
+    const now = deps.fleetIdentity();
+    return now === null ? 'unknown' : now === a.node ? 'same' : 'moved';
+  };
   const answeredMoved = (a: AuthAttempt, r: AccountOpResult): boolean => {
     const n = answerNodeOf(r);
     return n !== null && n !== a.node;
@@ -675,10 +685,17 @@ function registerAccountAuthRoutes(app: FastifyInstance, deps: AccountRouteDeps)
       row(method, { outcome: 'refused', code: 'auth-in-progress' });
       return refuseRoute(reply, 'auth-in-progress');
     }
+    // The attempt is bound to the node it starts on, so that node must be known: an attempt bound to none would be
+    // refused `node-changed` by the first answer that names a node (D-7793 (5)).
+    const node = deps.fleetIdentity();
+    if (node === null) {
+      row(method, { outcome: 'refused', code: 'unmeasured' });
+      return refuseRoute(reply, 'unmeasured');
+    }
     const startedAt = deps.attempts.clock.now();
     const attempt: AuthAttempt = {
       laneId: id, attemptId: newAttemptId(), sessionIdHash: g.sessionIdHash, method, startedAt,
-      expiresAt: deps.attempts.expiresAtFrom(startedAt), node: deps.fleetIdentity(), state: 'starting', codeSent: false, ended: false,
+      expiresAt: deps.attempts.expiresAtFrom(startedAt), node, state: 'starting', codeSent: false, ended: false,
     };
     const r = await deps.ops.run('auth-start', id, { method, attemptId: attempt.attemptId });
     const outcome = routeOutcomeOf(r);
@@ -717,7 +734,10 @@ function registerAccountAuthRoutes(app: FastifyInstance, deps: AccountRouteDeps)
     if (deps.laneOf(id) === null) return refuseRoute(reply, 'not-found');
     const a = deps.attempts.get(id);
     if (a === undefined) return refuseRoute(reply, 'no-auth-attempt');
-    if (nodeMoved(a, deps.fleetIdentity())) {
+    const at = nodeNow(a);
+    // A node not known yet is not another node: the attempt stands, and the next poll asks again.
+    if (at === 'unknown') return refuseRoute(reply, 'unmeasured');
+    if (at === 'moved') {
       deps.attempts.forget(id);
       return refuseRoute(reply, 'node-changed');
     }
@@ -728,8 +748,12 @@ function registerAccountAuthRoutes(app: FastifyInstance, deps: AccountRouteDeps)
     try { json = JSON.parse(read.content); } catch { json = null; }
     const verdict = authStatusVerdictOf(json, a);
     if (verdict.kind === 'untrusted') return untrusted(reply, a, g.actor);
-    deps.attempts.observe(a, verdict.answer.state);
-    return verdict.answer satisfies AccountAuthStatusAnswer;
+    // THE EGRESS MASK (D-5513, D-5995): the file is session-writable, and N2 does not read the URL's query, so the
+    // answer is masked here and one the mask changed is a rewrite, refused like any other (never a URL with a hole).
+    const answer = authAnswerMasked(verdict.answer, deps.mask);
+    if (answer === null) return untrusted(reply, a, g.actor);
+    deps.attempts.observe(a, answer.state);
+    return answer satisfies AccountAuthStatusAnswer;
   });
 
   app.post('/api/accounts/:id/auth/code', async (req, reply) => {
@@ -756,7 +780,9 @@ function registerAccountAuthRoutes(app: FastifyInstance, deps: AccountRouteDeps)
     // THE SAME SESSION (spec §3.7): step-up mints no session, so the starter's `idHash` is the same throughout.
     if (g.sessionIdHash !== a.sessionIdHash) return refuse('not-your-attempt');
     if (a.codeSent) return refuse('code-already-sent');
-    if (nodeMoved(a, deps.fleetIdentity())) return refuse('node-changed');
+    const at = nodeNow(a);
+    if (at === 'unknown') return refuse('unmeasured');
+    if (at === 'moved') return refuse('node-changed');
     const code = b['code'];
     const bytes = authCodeShapeOk(code, a.method) ? secretBytesOf(code) : null;
     if (bytes === null) return refuse('bad-code');
@@ -787,7 +813,9 @@ function registerAccountAuthRoutes(app: FastifyInstance, deps: AccountRouteDeps)
     if (b === null || !onlyKeys(b, ['attemptId']) || typeof b['attemptId'] !== 'string') return refuseRoute(reply, 'bad-request');
     const a = deps.attempts.get(id);
     if (a === undefined || a.attemptId !== b['attemptId']) return refuseRoute(reply, 'no-auth-attempt');
-    if (nodeMoved(a, deps.fleetIdentity())) {
+    const at = nodeNow(a);
+    if (at === 'unknown') return refuseRoute(reply, 'unmeasured');
+    if (at === 'moved') {
       deps.attempts.forget(id);
       return refuseRoute(reply, 'node-changed');
     }

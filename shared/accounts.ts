@@ -398,6 +398,15 @@ export const AUTH_URL_HOSTS: Readonly<Record<AuthMethod, readonly string[]>> = {
   'openrouter-pkce': [],
 };
 
+/** THE EXACT PATH a sign-in URL may name, per method (N2, D-7792), from the same record: `login` and `setup-token` were
+ *  both measured at `/cai/oauth/authorize`. `null` for a method with no measured host (no URL is accepted for it). */
+export const AUTH_URL_PATHS: Readonly<Record<AuthMethod, string | null>> = {
+  'login': '/cai/oauth/authorize',
+  'setup-token': '/cai/oauth/authorize',
+  'openai-login': null,
+  'openrouter-pkce': null,
+};
+
 /**
  * The shape of the code the operator pastes, per method (spec §3.7), checked by the route before the code is sent.
  *  - `login`: measured (OA1b): 48 alphanumerics, `#`, then 43 base64url characters.
@@ -413,8 +422,15 @@ export const AUTH_CODE_SHAPES: Readonly<Record<AuthMethod, RegExp | null>> = {
   'openrouter-pkce': null,
 };
 
-/** The shape of the device code a status file may carry, per method (spec §3.8): `null` means no `userCode` is
- *  expected, so a file that carries one is refused. The Codex `userCode` is NOT measured (OA1b), so it is `null` too. */
+/** The methods whose sign-in shows the operator a device code (spec §3.8): the Codex device sign-in only. For every
+ *  other method a status file's `userCode` is never read and never answered: the helper's device-code scan runs on
+ *  every line it reads, and a 43-character base64url `code_challenge` or `state` in the authorize URL holds a
+ *  `XXXX-XXXX` run about once in ninety URLs, so refusing it would end a genuine sign-in as a rewrite (D-7792). */
+export const AUTH_DEVICE_CODE_METHODS: readonly AuthMethod[] = ['openai-login'];
+
+/** The shape of the device code a status file may carry, per method of {@link AUTH_DEVICE_CODE_METHODS} (spec §3.8):
+ *  `null` refuses every one. The Codex `userCode` is NOT measured (OA1b), so it is `null`; a method off that list never
+ *  reads its entry. */
 export const AUTH_USER_CODE_SHAPES: Readonly<Record<AuthMethod, RegExp | null>> = {
   'login': null,
   'setup-token': null,
@@ -431,15 +447,18 @@ export interface AuthUrlAccepted { readonly href: string; readonly host: string 
 /**
  * N2's URL check (D-7792; spec §3.8). Pure. `text` is the status file's `url`, which any fleet-user process can write.
  * Accepted only when it is a string of printable, unspaced characters within {@link AUTH_URL_MAX}, parses as a URL,
- * is `https:`, carries no user name, password or explicit port, and names a host in the method's exact list. The
- * answer's `host` is the parsed URL's `hostname`, never a slice of the file's text, and `href` the parser's spelling.
+ * is `https:`, carries no user name, password, explicit port or fragment, names a host in the method's exact list, and
+ * the method's exact path ({@link AUTH_URL_PATHS}). The query is the provider's and is not read here: the route masks
+ * the whole answer and refuses one the mask changed, so a credential planted in it never crosses. The answer's `host`
+ * is the parsed URL's `hostname`, never a slice of the file's text, and `href` the parser's spelling.
  */
 export function authUrlVerdict(text: unknown, method: AuthMethod): AuthUrlAccepted | null {
   if (typeof text !== 'string' || text.length === 0 || text.length > AUTH_URL_MAX || /[\u0000- \u007f-\u009f]/.test(text)) return null;
   let url: URL;
   try { url = new URL(text); } catch { return null; }
   if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') return null;
-  if (!AUTH_URL_HOSTS[method].includes(url.hostname)) return null;
+  if (url.hash !== '' || text.includes('#')) return null;
+  if (!AUTH_URL_HOSTS[method].includes(url.hostname) || url.pathname !== AUTH_URL_PATHS[method]) return null;
   return { href: url.href, host: url.hostname };
 }
 
