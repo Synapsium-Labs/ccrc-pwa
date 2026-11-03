@@ -44,6 +44,7 @@ OA1's record (`2026-11-01-accounts-oa1-record.md`) is applied where this task re
   - the ending shared by a mint and a sign-in: the fresh check, the restart list, the revoke item only for a replaced token, the stated identity defaulting to the old one, and the read-back identity with its sign-out and restart;
   - a cancelled re-auth that says the old credential is untouched and leaves the card as it was;
   - an expired and a refused attempt, each worded from its code;
+  - after Sign this lane out and start again, a cancelled (and a Start again after it), an expired, a code-refused, a failed and a start-refused attempt, each saying the lane is signed out and never that the old credential is untouched; and `reauthEnd`'s and `reauthStartRefusal`'s words for every terminal kind, both methods, with and without the sign-out;
   - Replace token offering mint first and paste second, with each sheet leading to the other;
   - the two switch acts opening A23's switch sheet, never this one;
   - Continue on a re-auth's attempt reopening the re-auth sheet at its code field with no new start: on a checked lane, and on a Signed-out sign-in lane with no check (the 401 marker alone, the common Sign in again case); `resumeSheetFor`'s rule and `isPastAdding`'s.
@@ -64,6 +65,8 @@ OA1's record (`2026-11-01-accounts-oa1-record.md`) is applied where this task re
 | Continue on a re-auth's attempt opens the connect sheet (the `reauth` arm of `openResume` dropped) | reauth-sheet | "Continue on a checked lane reopens the re-auth sheet at its code field, with no new start" |
 | the resume reads a held check alone (`openResume` passes `check !== undefined`, as before the fix round) | reauth-sheet | "Continue on a Signed-out sign-in lane with no check (the 401 marker alone) reopens the re-auth sheet, not the connect sheet's" |
 | `isPastAdding` without the 401 marker | reauth-sheet | "a lane is past its adding on a check, the 401 marker or any word but Off; an Off lane with neither is one being added" |
+| the sign-out not remembered (`signOutRestart` without `signedOut.current = true`) | reauth-sheet | the cancelled, expired, refused-code, failed and start-refused cases of "after Sign this lane out and start again, every ending says the lane is signed out" |
+| `reauthEnd` ignores `signedOut` (always the untouched sentence) | reauth-sheet | the cancelled, expired, refused-code and failed cases, and "no ending after a sign-out says the old credential is untouched; before one, every ending that can says so" |
 
 Every case was also run green against the unmutated tree.
 
@@ -99,6 +102,8 @@ Each ✓ checks these things:
      - a start whose outcome is unknown says the old credential "was not replaced here";
      - `lost` (the server no longer holds the attempt) says whether it finished is unknown, and asks for a check.
      Each terminal state offers Start again and Close.
+
+     **After Sign this lane out and start again** (fix round 2), none of that is true: N5's sign-out already removed the old sign-in. From that sign-out until a new credential is installed, every ending (cancelled, expired, code refused, link untrusted, node changed, the helper's failure, a start refused with a word, and an unknown start) says "lane-a is signed out on the fleet host, so its sessions fail until it has a sign-in or a token again" in place of the untouched sentence, and `lost` says the lane was signed out before the attempt and asks for a check. The sheet holds this in a ref that the sign-out sets and the install clears, so a Start again after such an ending says it too. The one gap left: a re-auth closed after its sign-out and continued from the banner opens a fresh sheet that never saw the sign-out, so its endings say the old credential is untouched.
   3. **The ending** is the same for every re-auth (spec §9). It shows:
      - the install line;
      - the restart list, listing the sessions live on the lane when the helper said `done`;

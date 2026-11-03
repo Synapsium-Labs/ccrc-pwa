@@ -9,7 +9,8 @@
 // THE FRAMES. Confirm (what happens, then Confirm it's you when the stamp has lapsed, then the one primary: nothing is
 // sent before it) → Run (`useSignInAttempt`'s, the connect sheet's and the switch sheet's own: the ledger, the URL card
 // the server accepted, the code field, the countdown read from `expiresAt`, Cancel) → the ending. A terminal state
-// says the old credential is untouched, from its code, and offers Start again. Offline mid-attempt, the run frame shows
+// says the old credential is untouched, from its code, and offers Start again; once the sheet has signed the lane out
+// (Sign this lane out and start again, below), every later ending says the lane is signed out instead (D-7872 (2)). Offline mid-attempt, the run frame shows
 // only the sentence with the last-known deadline. Closed mid-attempt, the attempt keeps running on the box until
 // `expiresAt`, and the app-level banner's Continue reopens this sheet with `resume` at the code field (A23, D-7871 (2)).
 //
@@ -144,6 +145,9 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   const [statedNotice, setStatedNotice] = useState<string | null>(null);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
+  /** This sheet ran N5's sign-out on the lane and no new credential has gone in since: an ending can no longer say the
+   *  old one is untouched (D-7872 (2)). A ref, so an attempt's ending reads it whichever render started the attempt. */
+  const signedOut = useRef(false);
 
   const status = (text: string): void => setSaid({ kind: 'status', text });
   const alert = (text: string): void => setSaid({ kind: 'alert', text });
@@ -174,6 +178,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
 
   /** The helper says `done`: the box installed the new credential after its own check (A20). The ending follows. */
   const installed = async (): Promise<void> => {
+    signedOut.current = false;
     settle(reauthInstalled(method));
     setOnOld(restartableOn(sessions, id));
     setFrame('done');
@@ -183,8 +188,8 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
 
   const s = useSignInAttempt({
     id, client, blocked: offline, write, settle, status, alert,
-    endText: (k, failure) => reauthEnd(id, method, k, failure),
-    startRefusal: (word, reason) => reauthStartRefusal(id, method, word, reason),
+    endText: (k, failure) => reauthEnd(id, method, k, failure, signedOut.current),
+    startRefusal: (word, reason) => reauthStartRefusal(id, method, word, reason, signedOut.current),
     onStart: () => { setNotice(null); setWrongOpen(false); setFrame('run'); },
     onDone: () => { void installed(); },
   });
@@ -217,6 +222,8 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
       alert(text);
       return;
     }
+    // Removed or absent, the lane has no sign-in on the box now: every ending until a new one goes in says so.
+    signedOut.current = true;
     setChecked(null);
     setCheckNotice(null);
     setOnOld([]);

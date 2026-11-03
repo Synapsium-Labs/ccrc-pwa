@@ -11,11 +11,11 @@ import { ReauthSheet, troubleActs, type ReauthClient, type ReauthSheetProps } fr
 import { isPastAdding, resumeSheetFor } from '../src/accounts/connectFlow';
 import {
   CANCEL_SIGN_IN, CODE_FIELD_LABEL, LEDGER, MINT_INSTEAD, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
-  SEND_CODE, SIGN_IN_AGAIN, SIGN_OUT_RESTART, STATED_LABEL, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, credentialUntouched, reauthEnd,
-  reauthInstalled, revokeRecord, switchTitle,
+  SEND_CODE, SIGN_IN_AGAIN, SIGN_OUT_RESTART, STATED_LABEL, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, credentialUntouched, laneSignedOut,
+  reauthEnd, reauthInstalled, reauthStartRefusal, revokeRecord, switchTitle, type SignInEndKind,
 } from '../src/fleet/accountWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { api } from '../src/lib/api';
+import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
@@ -318,6 +318,95 @@ describe('a refused, cancelled or expired attempt leaves the lane as it was', ()
     expect(alertText()).toContain('Nothing changed: lane-b keeps its old token.');
     expect(alertText()).not.toContain('PLANTED');
     expect(screen.getByRole('button', { name: 'Start again' })).toBeInTheDocument();
+  });
+});
+
+describe('after Sign this lane out and start again, every ending says the lane is signed out (D-7872 (2))', () => {
+  /** Sign in again on lane-a reads back another account; Sign this lane out and start again runs N5's sign-out and a
+   *  second start. `refuse` makes that second start refused with a word. */
+  async function signedOutAndStarted(refuse?: ApiError): Promise<Box> {
+    const b = fakeBox({ ...READY, identity: 'other@example.invalid', identitySource: 'measured' });
+    sheet(b, { id: 'lane-a', method: 'login', lane: LANES['lane-a'] });
+    await walk(b, 'Start the sign-in', LOGIN_CODE);
+    expect(await screen.findByText('Signed in as other@example.invalid')).toBeInTheDocument();
+    b.box.status = { ok: true, state: 'starting', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+    if (refuse !== undefined) b.client.accountAuthStart.mockRejectedValueOnce(refuse);
+    fireEvent.click(screen.getByRole('button', { name: SIGN_OUT_RESTART }));
+    fireEvent.click(await screen.findByRole('button', { name: SIGN_OUT_RESTART }));
+    await waitFor(() => expect(b.client.accountSignOut).toHaveBeenCalledWith('lane-a'));
+    await waitFor(() => expect(b.client.accountAuthStart).toHaveBeenCalledTimes(2));
+    await settle();
+    return b;
+  }
+  const saysSignedOut = (said: string): void => {
+    expect(alertText()).toBe(said);
+    expect(said).toContain(laneSignedOut('lane-a'));
+    expect(said).not.toContain(credentialUntouched('lane-a', 'login'));
+    expect(said).not.toMatch(/Nothing changed|keeps its old/);
+    expect(screen.getByRole('button', { name: 'Start again' })).toBeInTheDocument();
+  };
+
+  it('a cancelled attempt after the sign-out says the lane is signed out, and so does the next one Start again runs', async () => {
+    const b = await signedOutAndStarted();
+    fireEvent.click(await screen.findByRole('button', { name: CANCEL_SIGN_IN }));
+    await waitFor(() => expect(b.client.accountAuthCancel).toHaveBeenCalledWith('lane-a', { attemptId: ATTEMPT }));
+    await settle();
+    saysSignedOut(reauthEnd('lane-a', 'login', 'cancelled', undefined, true));
+    // Start again: the lane is still signed out, so its ending says so too.
+    fireEvent.click(screen.getByRole('button', { name: 'Start again' }));
+    await waitFor(() => expect(b.client.accountAuthStart).toHaveBeenCalledTimes(3));
+    fireEvent.click(await screen.findByRole('button', { name: CANCEL_SIGN_IN }));
+    await waitFor(() => expect(b.client.accountAuthCancel).toHaveBeenCalledTimes(2));
+    await settle();
+    saysSignedOut(reauthEnd('lane-a', 'login', 'cancelled', undefined, true));
+  });
+
+  it('an expired attempt after the sign-out says the lane is signed out', async () => {
+    const b = await signedOutAndStarted();
+    b.box.status = { ok: true, state: 'expired', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+    await poll();
+    saysSignedOut(reauthEnd('lane-a', 'login', 'expired', undefined, true));
+  });
+
+  it('a refused code after the sign-out says the lane is signed out', async () => {
+    const b = await signedOutAndStarted();
+    b.box.status = { ok: true, state: 'waiting-code', url: URL, host: 'claude.com', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+    await poll();
+    fireEvent.paste(screen.getByLabelText(CODE_FIELD_LABEL), { clipboardData: { getData: () => LOGIN_CODE } });
+    fireEvent.click(screen.getByRole('button', { name: SEND_CODE }));
+    await settle();
+    b.box.status = { ok: true, state: 'failed', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+    await poll();
+    saysSignedOut(reauthEnd('lane-a', 'login', 'code-refused', undefined, true));
+  });
+
+  it("the helper's own failure after the sign-out says the lane is signed out", async () => {
+    const b = await signedOutAndStarted();
+    b.box.status = { ok: true, state: 'failed', failure: 'helper-exited', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+    await poll();
+    saysSignedOut(reauthEnd('lane-a', 'login', 'failed', 'helper-exited', true));
+  });
+
+  it('a start refused with a word after the sign-out says the lane is signed out', async () => {
+    await signedOutAndStarted(new ApiError(409, { error: 'lane-busy' }));
+    expect(alertText()).toContain('lane-a is busy with another account change.');
+    saysSignedOut(reauthStartRefusal('lane-a', 'login', 'lane-busy', undefined, true));
+  });
+
+  it('no ending after a sign-out says the old credential is untouched; before one, every ending that can says so', () => {
+    const kinds: SignInEndKind[] = ['expired', 'code-refused', 'untrusted', 'cancelled', 'unknown', 'lost', 'node-changed', 'failed'];
+    for (const method of ['login', 'setup-token'] as const) {
+      for (const k of kinds) {
+        const after = reauthEnd('lane-a', method, k, undefined, true);
+        expect(after).not.toContain(credentialUntouched('lane-a', method));
+        expect(after).not.toMatch(/Nothing changed|keeps its old|was not replaced/);
+        if (k !== 'lost') expect(after).toContain(laneSignedOut('lane-a'));
+        const before = reauthEnd('lane-a', method, k);
+        if (k !== 'unknown' && k !== 'lost') expect(before).toContain(credentialUntouched('lane-a', method));
+      }
+      expect(reauthStartRefusal('lane-a', method, 'lane-busy', undefined, true)).not.toContain(credentialUntouched('lane-a', method));
+      expect(reauthStartRefusal('lane-a', method, 'lane-busy', undefined)).toContain(credentialUntouched('lane-a', method));
+    }
   });
 });
 

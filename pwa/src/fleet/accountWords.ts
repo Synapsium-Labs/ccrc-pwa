@@ -1056,10 +1056,16 @@ export const reauthStart = (method: 'login' | 'setup-token'): string => (method 
 export const credentialUntouched = (id: string, method: 'login' | 'setup-token'): string =>
   `Nothing changed: ${id} keeps its old ${credOf(method)}.`;
 
+/** The sentence they end with instead once "Sign this lane out and start again" ran N5's sign-out (D-7872 (2)): the old
+ *  credential is gone, so nothing is untouched, and the lane runs nothing until a new one goes in. */
+export const laneSignedOut = (id: string): string =>
+  `${id} is signed out on the fleet host, so its sessions fail until it has a sign-in or a token again.`;
+
 /** A re-auth's terminal states (spec §9: "A refused, cancelled or expired attempt says the old credential is
- *  untouched"), each from its code. `lost` is the one state that cannot say so: whether the attempt finished is unknown. */
-export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: SignInEndKind, failure?: string): string {
-  const untouched = credentialUntouched(id, method);
+ *  untouched"), each from its code. `lost` is the one state that cannot say so: whether the attempt finished is unknown.
+ *  `signedOut`: the sheet signed the lane out before this attempt, so each says the lane is signed out instead. */
+export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: SignInEndKind, failure?: string, signedOut = false): string {
+  const untouched = signedOut ? laneSignedOut(id) : credentialUntouched(id, method);
   switch (kind) {
     case 'expired': return `The sign-in timed out. ${untouched}`;
     case 'code-refused':
@@ -1068,9 +1074,11 @@ export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: Sig
       return `The sign-in link on the fleet host didn't look like claude.ai, so it isn't shown. ${untouched}`;
     case 'cancelled': return `Cancelled. ${untouched}`;
     case 'unknown':
-      return `The fleet host didn't answer in time, so whether a new sign-in started for ${id} is unknown. Its old ${credOf(method)} was not replaced here. Start again.`;
+      return `The fleet host didn't answer in time, so whether a new sign-in started for ${id} is unknown. ${signedOut ? untouched : `Its old ${credOf(method)} was not replaced here.`} Start again.`;
     case 'lost':
-      return `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. Check the lane to see which credential works.`;
+      return signedOut
+        ? `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. ${id} was signed out before it started: check the lane to see whether it has a sign-in now.`
+        : `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. Check the lane to see which credential works.`;
     case 'node-changed':
       return `The fleet host answering now is not the one the sign-in started on, so it was stopped. ${untouched}`;
     case 'failed':
@@ -1078,9 +1086,10 @@ export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: Sig
   }
 }
 
-/** A start refused with a word: A22's sentence, then the old credential untouched. */
-export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined): string =>
-  `${signInStartRefusal(id, word, reason)} ${credentialUntouched(id, method)}`;
+/** A start refused with a word: A22's sentence, then the old credential untouched (or, after the sheet's sign-out, the
+ *  lane signed out). */
+export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined, signedOut = false): string =>
+  `${signInStartRefusal(id, word, reason)} ${signedOut ? laneSignedOut(id) : credentialUntouched(id, method)}`;
 
 /** The run frame's line once the helper says `done` (A20 installed it after its own check of the new credential). */
 export const reauthInstalled = (method: 'login' | 'setup-token'): string => (method === 'login'
