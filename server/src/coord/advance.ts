@@ -58,7 +58,7 @@ export type AdvanceReject =
 /** The reject `advanceLanding`'s own refusal or failure becomes: its `error` as `code`, every other field kept whole
  *  (`recovery`, `mayApply`, `invalid`); null when the answer is not a landing-family word. Pure. */
 export function landingAdvanceReject(adv: { error: string }): AdvanceReject | null {
-  if (!(adv.error in LANDING_REFUSAL_STATUS)) return null;
+  if (!Object.hasOwn(LANDING_REFUSAL_STATUS, adv.error)) return null;
   const { ok: _ok, error, ...rest } = adv as { ok?: unknown; error: string };
   return { code: error, ...rest } as AdvanceReject;
 }

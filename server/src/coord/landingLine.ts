@@ -2,7 +2,7 @@
 // vocabulary in `shared/landingLine.ts` (D-7613). Two deciders, both folds over values:
 //
 // - `landingOrder` decides the landing line's order and its head from a project's entries and the project's two flags
-//   (D-7621). The L4 read route reads the project row (`CoordStore.landingProject`) and hands the values in; this file
+//   (D-7621). The L4 read route reads the project row (`CoordStore.readLanding`) and hands the values in; this file
 //   never sees a project name. `afterIds` name ENTRY IDS (`LandingEntry.id`), never PR numbers (D-7613). An after edge
 //   outranks the `fixesMain` jump (D-7622): a fix-main entry that waits on another entry is not taken before it, so the
 //   jump only reorders entries nothing holds back. A `fixesMain` entry is held by `main-red` too (D-7623): inert in 5e,

@@ -479,7 +479,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
   what it adds on top — the landing line, mail, claims, asks, central pool edges, update intents, the stall-watch
   settings choice, the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
-  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
+  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The landing line has an authority-recovery exception:
+  `~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before
+  service starts. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
+  Replay never fabricates a measured pin, landed state or current run association. Missing projections and
+  contradictory surviving binding observations remain visible as unmeasured and hold their project's line;
+  identity conflicts hold every affected project without deleting or rekeying either identity. Only a verified
+  pin may supply an exact DB-only witness to reconcile contradictory binding evidence; replay never mints it.
+  This cannot detect a wholly unjournalled change lost with a snapshot. Invalid or unreadable history refuses
+  startup; missing projections or binding mismatches alone do not. An uncertain authoritative append or landing
+  database commit, including a pin or retreat with no append, fences every landing read and mutation until
+  durable replay succeeds at a clean transaction boundary; an uncertain rollback requires restart. A stale
+  episode-head retreat quarantines its pin as unknown, not ejected; only a verified repin with readable retained
+  data clears that quarantine. The switch's `collect-lane-generation.log` is never
   copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
   collector (one from before the switch's last change is safety-stopped). One from before the legacy collector file's
   retirement is repaired only by a confirmed Live, which keeps its unset latch, so a standing or re-created legacy file

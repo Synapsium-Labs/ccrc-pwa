@@ -7,7 +7,8 @@ import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
-import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf, parseLandingJournal } from './landingEntry.js';
+import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
+import { parseLandingJournal } from './landingJournalPolicy.js';
 import type { LandingAdvance, LandingWrite } from './landingEntry.js';
 import type { LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
 import { decideLandingMutation } from './landingWrites.js';
@@ -2986,8 +2987,11 @@ export class CoordStore {
     const { runId, to, causedBy, landing } = input;
     let effects: 'none' | 'applying' | 'committing' = 'none';
     let touched = false;
+    let began = false;
+    let paired = false;
     try {
       return tx(this.db, (): LandingAdvanceResult => {
+        began = true;
         const out = ((): LandingAdvanceResult => {
           const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
             { state: string; kind: string; project: string } | undefined;
@@ -3001,6 +3005,7 @@ export class CoordStore {
             || (from === 'merging' && to === 'working' && landing.kind !== 'retreat')) {
             throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
           }
+          paired = true;
           if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
             return { ok: false as const, error: 'ejection-not-merging' as const, from };
           }
@@ -3061,7 +3066,10 @@ export class CoordStore {
         return out;
       });
     } catch (err) {
-      if (!touched) throw err;
+      // A plain advance carries no landing contract: its failure propagates as it always did. A pin or retreat that
+      // failed before any effect (a BEGIN that threw, a read before the fence) is the line's own db-unavailable, never
+      // a throw; only the pairing programming error (began, not yet paired) still throws.
+      if (!touched && (landing.kind === 'plain' || (began && !paired))) throw err;
       const recovery = this.landingBoundary();
       if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery };
       this.landingFence = recovery;
@@ -3123,6 +3131,12 @@ export class CoordStore {
     records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
     const r = log.read();
     if (!r.ok) return { fail: { error: 'landing-journal-unreadable', recovery: 'replay' }, snapshot: null, records: [], lastSeq: 0, cursor: 0 };
+    try { return this.landingHistoryOf(r); } catch (err) { r.snapshot.release(); throw err; }
+  }
+
+  /** `landingHistory`'s body after a successful read: a throw out of it is released by the caller. */
+  private landingHistoryOf(r: Extract<ReturnType<LandingJournalPort['read']>, { ok: true }>): { fail: LandingInfrastructureFailure | null;
+    snapshot: LandingJournalSnapshot | null; records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
     const c = this.bigReads('SELECT appliedSeq AS cursor, (SELECT COUNT(*) FROM landing_subjects) + (SELECT COUNT(*) FROM landing_authority) AS overlay ' +
       'FROM landing_journal_cursor WHERE id = 1').get() as { cursor: bigint; overlay: bigint } | undefined;
     if (c === undefined) throw new Error('landing_journal_cursor has no row');
@@ -3164,22 +3178,28 @@ export class CoordStore {
     if (this.landingFence === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
     let held: LandingJournalSnapshot | null = null;
     let applied = false;
+    // Called with the fence OPEN, a failed replay closes it (the more severe restart fence a boundary proof sets stays).
+    const wasOpen = this.landingFence === null;
+    const refuse = (f: LandingInfrastructureFailure): LandingJournalReplay => {
+      if (wasOpen) this.landingFence = this.landingFence ?? f.recovery;
+      return { ok: false, ...f };
+    };
     try {
       if (this.landingBoundary() === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
       const hist = this.landingHistory(log);
       held = hist.snapshot;
-      if (hist.fail !== null) return { ok: false, ...hist.fail };
+      if (hist.fail !== null) return refuse(hist.fail);
       const confirmed = log.confirmDurable(held!);
       if (!confirmed.ok) {
-        return { ok: false, recovery: 'replay', error: confirmed.error === 'durability' ? 'landing-journal-durability'
-          : confirmed.error === 'changed' ? 'landing-journal-changed' : 'landing-journal-unreadable' };
+        return refuse({ recovery: 'replay', error: confirmed.error === 'durability' ? 'landing-journal-durability'
+          : confirmed.error === 'changed' ? 'landing-journal-changed' : 'landing-journal-unreadable' });
       }
       const suffix = hist.records.filter((r) => r.seq > hist.cursor);
       tx(this.db, () => { suffix.forEach((r) => this.applyLandingRecord(r)); applied = true; });
       this.landingFence = null;
       return { ok: true, applied: suffix.length, lastSeq: hist.lastSeq };
     } catch {
-      return { ok: false, error: applied ? 'landing-db-commit' : 'landing-db-apply', recovery: this.landingBoundary() };
+      return refuse({ error: applied ? 'landing-db-commit' : 'landing-db-apply', recovery: this.landingBoundary() });
     } finally { held?.release(); }
   }
 

@@ -712,9 +712,42 @@ describe('the verified-pin witness and association recovery', () => {
     expect(done).toMatchObject({ ok: true, landing: { kind: 'pinned', created: true, entry: { id: 5, afterIds: [], fixesMain: false, setBy: 'coordinator', ejections: 0, runId: run } } });
     expect(rows(r, 'SELECT subjectId FROM landing_authority WHERE subjectId = 5')).toEqual([]);
     expect(rec(r).hold).toEqual({ reason: 'landing-recovery-unresolved', subjectIds: [src] });
-    // an ordinary pin to an unrelated subject stays refused while the hold stands
+    // an ordinary pin to an unrelated MATERIALIZED subject (pr 9, now bound to `run`) stays refused while the hold stands
     const other = openRun(r, P, 3);
-    expect(pinRun(r, other, 77)).toEqual({ ok: false, error: 'landing-recovery-unresolved' });
+    expect(pinRun(r, other, 9, HEAD)).toEqual({ ok: false, error: 'landing-recovery-unresolved' });
+    expect(runState(r, other)).toBe('awaiting-review');
+  });
+
+  it('a brand-new PR pins normally while the project holds, and its id is above every recovered subject id', () => {
+    const f = boot();
+    const snap0 = snapshot(f);
+    rawProjection(f, 5, 9);
+    const src = created(f, 2);
+    expect(order(f, 2, { afterIds: [5] })).toMatchObject({ ok: true });
+    const r = restore(f, snap0);
+    expect(rec(r).hold).not.toBeNull();
+    const run = openRun(r);
+    const done = pinRun(r, run, 77, HEAD2);
+    expect(done).toMatchObject({ ok: true, landing: { kind: 'pinned', created: true, entry: { pr: 77, runId: run, afterIds: [], setBy: 'coordinator' } } });
+    const got = done as { landing: { entry: { id: number } } };
+    expect(got.landing.entry.id).toBeGreaterThan(Math.max(5, src));
+    expect(runState(r, run)).toBe('merging');
+    // the held subjects still hold, and a retreat is still refused while they do
+    expect(rec(r).hold).toEqual({ reason: 'landing-recovery-unresolved', subjectIds: [5, src].sort((a, b) => a - b) });
+    expect(r.store.advanceLanding({ runId: run, to: 'working', causedBy: 'coordinator', landing: { kind: 'retreat', ejection: null } }))
+      .toEqual({ ok: false, error: 'landing-recovery-unresolved' });
+  });
+
+  it('J-RESERVED-a: a brand-new PR in another project is allocated above a recovered subject id held elsewhere', () => {
+    const f = boot();
+    const snap0 = snapshot(f);
+    const held = created(f, 2);
+    const r = restore(f, snap0);
+    expect(rec(r).hold).not.toBeNull();
+    const run = openRun(r, Q);
+    const done = pinRun(r, run, 31, HEAD2);
+    expect(done).toMatchObject({ ok: true, landing: { kind: 'pinned', created: true } });
+    expect((done as { landing: { entry: { id: number } } }).landing.entry.id).toBeGreaterThan(held);
   });
 
   it('recovery holds refuse every retreat', () => {
@@ -737,5 +770,109 @@ describe('the verified-pin witness and association recovery', () => {
     const bytes = journal(f);
     expect(create(f, 2)).toEqual({ ok: false, error: 'landing-id-overflow' });
     expect(journal(f)).toBe(bytes);
+  });
+});
+
+describe('failure handling around the guarded entrances (review round)', () => {
+  /** A port whose snapshots count their releases. */
+  const observed = (dir: string) => {
+    const inner = createLandingJournal(dir);
+    const seen = { reads: 0, released: 0 };
+    const port: LandingJournalPort = {
+      read: () => {
+        const r = inner.read();
+        if (!r.ok) return r;
+        seen.reads += 1;
+        // The adapter's snapshot is opaque and compared by identity, so it is observed in place, never wrapped.
+        const orig = r.snapshot.release.bind(r.snapshot);
+        r.snapshot.release = () => { seen.released += 1; orig(); };
+        return r;
+      },
+      confirmDurable: (sn) => inner.confirmDurable(sn),
+      append: (sn, rec2) => inner.append(sn, rec2),
+    };
+    return { port, seen };
+  };
+  const bootObserved = () => {
+    const home = mkTmp('ccrc-ljs-obs-');
+    const dir = path.join(home, '.ccrc');
+    const db = openCoordDb(path.join(dir, 'coord.db'));
+    const { port, seen } = observed(dir);
+    const store = new CoordStore(db, { landingJournal: port });
+    expect(store.replayLandingJournal()).toMatchObject({ ok: true });
+    return { db, store, seen, dir };
+  };
+
+  it('a throw after the journal read still releases the snapshot (replay and write)', () => {
+    const { db, store, seen, dir } = bootObserved();
+    expect(seen.released).toBe(seen.reads);
+    db.exec('DELETE FROM landing_journal_cursor');
+    const before = seen.reads;
+    expect(store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-db-apply' });
+    expect(seen.reads).toBe(before + 1);
+    expect(seen.released).toBe(seen.reads);
+    // the write entrance reads through the same helper: fenced now, so it never reads; the invariant holds either way
+    expect(store.writeLandingAuthority({ kind: 'entry', project: P, pr: 1, pinnedSha: HEAD, handoffCommit: HC, setBy: 'lane-a' }, 1)).toMatchObject({ ok: false });
+    expect(seen.released).toBe(seen.reads);
+    expect(dir).toContain('.ccrc');
+  });
+
+  it('a failing BEGIN before a pin or a retreat answers landing-db-unavailable with no mayApply, never a throw', () => {
+    const f = boot();
+    const run = openRun(f);
+    const ev = events(f, run);
+    failOnce(f.db, 'BEGIN IMMEDIATE');
+    const pin = pinRun(f, run, 7);
+    expect(pin).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'replay' });
+    vi.restoreAllMocks();
+    expect([runState(f, run), events(f, run)]).toEqual(['awaiting-review', ev]);
+    // nothing was applied, so nothing is fenced: the very next pin succeeds
+    expect(pinRun(f, run, 7)).toMatchObject({ ok: true });
+    failOnce(f.db, 'BEGIN IMMEDIATE');
+    const back = f.store.advanceLanding({ runId: run, to: 'working', causedBy: 'coordinator', landing: { kind: 'retreat', ejection: null } });
+    expect(back).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'replay' });
+    vi.restoreAllMocks();
+    expect(runState(f, run)).toBe('merging');
+  });
+
+  it('a plain advance whose BEGIN fails still throws (no landing contract)', () => {
+    const f = boot();
+    const run = openRun(f);
+    failOnce(f.db, 'BEGIN IMMEDIATE');
+    expect(() => f.store.advanceLanding({ runId: run, to: 'merging', causedBy: 'coordinator', landing: { kind: 'plain' } })).toThrow();
+  });
+
+  it('a replay called with the fence open fences on an invalid history', () => {
+    const f = boot();
+    created(f, 1);
+    appendFileSync(f.log, 'not json\n');
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-journal-invalid', recovery: 'replay' });
+    expect(f.store.readLanding(P)).toMatchObject({ ok: false, error: 'landing-fenced' });
+  });
+
+  it('a replay called with the fence open fences on a confirmation failure', () => {
+    const f = boot();
+    f.faults.confirm = 'durability';
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-journal-durability' });
+    expect(f.store.readLanding(P)).toMatchObject({ ok: false, error: 'landing-fenced' });
+    f.faults.confirm = null;
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: true });
+    expect(f.store.readLanding(P).ok).toBe(true);
+  });
+
+  it('a replay called with the fence open fences on a commit failure', () => {
+    const f = boot();
+    failOnce(f.db, 'COMMIT');
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-db-commit' });
+    vi.restoreAllMocks();
+    expect(f.store.readLanding(P)).toMatchObject({ ok: false, error: 'landing-fenced' });
+  });
+
+  it('a replay called with the fence open keeps the restart fence when the connection is unusable', () => {
+    const f = boot();
+    failOnce(f.db, 'COMMIT', 'ROLLBACK');
+    const r = f.store.replayLandingJournal();
+    expect(r).toMatchObject({ ok: false, error: 'landing-db-commit', recovery: 'restart' });
+    expect(f.store.readLanding(P)).toEqual({ ok: false, error: 'landing-fenced', recovery: 'restart' });
   });
 });

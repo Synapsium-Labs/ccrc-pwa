@@ -5346,7 +5346,11 @@ is the coordinator's read of one project's line before it enqueues: every entry 
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
 `--match-head-commit`), its `handoffCommit`, its state and its ejections — the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. A project the line has never seen answers no entries and both flags off.
+while either flag is set. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
+place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
+current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
+and held, and invalid history refuses startup.
 
 **The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:

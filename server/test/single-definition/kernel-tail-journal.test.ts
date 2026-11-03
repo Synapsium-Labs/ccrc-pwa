@@ -10,7 +10,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { REPO } from '../consolidationCensus.js';
 import {
-  appendBeforeApplySites, appendThenApplyBreaks, delegationKernelImports, epochFloorReaders, journalFloorSites, journalFramers,
+  appendBeforeApplySites, appendThenApplyBreaks, appendThenApplyOwners, delegationKernelImports, epochFloorReaders, journalFloorSites, journalFramers,
 } from '../census-w8/journal.js';
 import { parsedFile } from '../scan/symbols.js';
 
@@ -31,21 +31,25 @@ describe('the journal kernel: one epoch reader, one floor, one append-then-apply
     expect(appendThenApplyBreaks(), 'a kernel call outside tx(), or one whose write precedes its journal append').toEqual([]);
   });
 
-  it('the two store queries are not over nothing: store.ts parses, opens transactions and calls the kernel four times', () => {
+  it('the two store queries are not over nothing: store.ts parses, opens transactions and calls the kernel five times, one per named writer', () => {
     const calls = parsedFile(path.join(REPO, 'server/src/coord/store.ts')).calls;
     expect(calls.filter((c) => c.callee === 'tx').length).toBeGreaterThan(4);
-    expect(calls.filter((c) => c.name === 'appendThenApply').map((c) => c.line)).toHaveLength(4);
+    expect(calls.filter((c) => c.name === 'appendThenApply').map((c) => c.line)).toHaveLength(5);
+    // the five containing methods, by name: a total alone would not say which writer a deleted or duplicated call was
+    expect(appendThenApplyOwners()).toEqual(['CoordStore.allocateDeviations', 'CoordStore.setAccountPools', 'CoordStore.setCollectLane', 'CoordStore.setIntent',
+      'CoordStore.writeLandingAuthority']);
   });
 
-  it('no hand-rolled NDJSON framer in the lifecycle mirror or the collect-lane journal (2 -> 1, splitJournalRecords)', () => {
+  it('no hand-rolled NDJSON framer in the lifecycle mirror, the collect-lane journal or the landing parser (2 -> 1, splitJournalRecords)', () => {
     expect(journalFramers(), 'a journal splits its text on newlines by hand: call splitJournalRecords').toEqual([]);
   });
 
-  it('the framer query is not over nothing: frameRead and parseCollectLaneJournal each call splitJournalRecords', () => {
+  it('the framer query is not over nothing: frameRead, parseCollectLaneJournal and the landing parser each call splitJournalRecords', () => {
     const callers = (rel: string): string[] => parsedFile(path.join(REPO, rel)).calls
       .filter((c) => c.name === 'splitJournalRecords').map((c) => c.callee);
     expect(callers('server/src/coord/mirrorplan.ts')).toEqual(['splitJournalRecords']);
     expect(callers('server/src/collectLane.ts')).toEqual(['splitJournalRecords']);
+    expect(callers('server/src/coord/landingJournalPolicy.ts')).toEqual(['splitJournalRecords']);
   });
 
   it('the delegation journal stays separate: no coord/delegation-*.ts file imports journalKernel.ts (spec §3.19)', () => {

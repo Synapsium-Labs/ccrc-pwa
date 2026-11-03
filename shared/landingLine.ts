@@ -48,7 +48,7 @@ export interface LandingEntry {
   pinnedAt: number;
 }
 
-/** The project's two booleans (spec §5.5 Data): the line is paused while either is set. `CoordStore.landingProject`
+/** The project's two booleans (spec §5.5 Data): the line is paused while either is set. `CoordStore.readLanding`
  *  answers this. */
 export interface LandingLineFlags { operatorPaused: boolean; mainRedHold: boolean }
 
@@ -96,6 +96,11 @@ export type LandingJournalRecord = {
 export type LandingJournalInvalidReason =
   | 'empty' | 'blank' | 'torn' | 'json' | 'version' | 'kind'
   | 'fields' | 'sequence' | 'identity';
+/** The runtime list of `LandingJournalInvalidReason` (wire totality: a new member is a compile error here). */
+export const LANDING_JOURNAL_INVALID_REASON_MAP: Record<LandingJournalInvalidReason, true> = {
+  empty: true, blank: true, torn: true, json: true, version: true, kind: true, fields: true, sequence: true, identity: true,
+};
+export const LANDING_JOURNAL_INVALID_REASONS = Object.keys(LANDING_JOURNAL_INVALID_REASON_MAP) as LandingJournalInvalidReason[];
 export type LandingRecoverySubject = LandingIdentity & {
   creation: { kind: 'recorded'; claim: LandingCreationClaim; seq: number }
     | { kind: 'not-recorded' };
@@ -117,6 +122,14 @@ export type LandingInfrastructureCode =
   | 'landing-journal-durability' | 'landing-journal-append'
   | 'landing-db-unavailable' | 'landing-db-apply' | 'landing-db-commit'
   | 'landing-fenced' | 'landing-projection-unreadable';
+/** The runtime list of `LandingInfrastructureCode`; `shared/refusal.ts#LANDING_REFUSAL_STATUS` maps each to its status. */
+export const LANDING_INFRASTRUCTURE_CODE_MAP: Record<LandingInfrastructureCode, true> = {
+  'landing-journal-unavailable': true, 'landing-journal-unreadable': true, 'landing-journal-invalid': true,
+  'landing-journal-missing': true, 'landing-journal-cursor': true, 'landing-journal-changed': true,
+  'landing-journal-durability': true, 'landing-journal-append': true, 'landing-db-unavailable': true,
+  'landing-db-apply': true, 'landing-db-commit': true, 'landing-fenced': true, 'landing-projection-unreadable': true,
+};
+export const LANDING_INFRASTRUCTURE_CODES = Object.keys(LANDING_INFRASTRUCTURE_CODE_MAP) as LandingInfrastructureCode[];
 export interface LandingInfrastructureFailure {
   error: LandingInfrastructureCode;
   recovery: 'replay' | 'restart';
@@ -129,3 +142,11 @@ export type LandingMutationCode =
   | 'landing-cycle' | 'landing-dependencies-unreadable'
   | 'landing-recovery-unresolved' | 'landing-identity-conflict'
   | 'landing-id-overflow' | 'landing-sequence-overflow';
+/** The runtime list of `LandingMutationCode`; `shared/refusal.ts#LANDING_REFUSAL_STATUS` maps each to its status. */
+export const LANDING_MUTATION_CODE_MAP: Record<LandingMutationCode, true> = {
+  'landing-entry-exists': true, 'landing-entry-missing': true, 'landing-after-missing': true,
+  'landing-after-cross-project': true, 'landing-cycle': true, 'landing-dependencies-unreadable': true,
+  'landing-recovery-unresolved': true, 'landing-identity-conflict': true, 'landing-id-overflow': true,
+  'landing-sequence-overflow': true,
+};
+export const LANDING_MUTATION_CODES = Object.keys(LANDING_MUTATION_CODE_MAP) as LandingMutationCode[];

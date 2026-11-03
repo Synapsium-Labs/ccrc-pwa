@@ -9,8 +9,6 @@ import type {
   LandingJournalRecord, LandingMutationCode, LandingRecovery, LandingRecoverySubject, LandingSubjectRef,
 } from '../../../shared/landingLine.js';
 import type { LandingAuthorityCommand, LandingMutationDecision, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
-// The strict journal parser, re-exported so the store (whose imports are fenced) reaches it through this one L1 module.
-export { parseLandingJournal } from './landingJournalPolicy.js';
 
 /** What the route asks the line to do with one advance, built by `landingAdvanceOf` from the target alone. */
 export type LandingAdvance =
@@ -344,8 +342,9 @@ export type LandingHoldGate =
 
 /**
  * Whether a pin or retreat may go ahead while recovery holds the project (shared contract §6). A hold is refused to every
- * retreat and every pin, with ONE bounded exception: a pin may resolve its OWN subject's missing projection, or its
- * exact-identity association mismatch while that projection is readable. An identity collision anywhere in the project
+ * retreat and every pin, with two bounded exceptions: a pin may resolve its OWN subject's missing projection, or its
+ * exact-identity association mismatch while that projection is readable; and a pin to a brand-new PR (no projection and
+ * no recovered subject in the project) is allocated the next id and materialized normally. An identity collision anywhere in the project
  * has no exception and answers its own word.
  */
 export function landingHoldGate(recovery: LandingRecovery, kind: 'pin' | 'retreat', key: { project: string; pr: number },
@@ -356,6 +355,9 @@ export function landingHoldGate(recovery: LandingRecovery, kind: 'pin' | 'retrea
   if (own !== undefined && (own.projection.kind === 'missing' || (own.projection.kind === 'association-unmeasured' && projection?.kind === 'readable'))) {
     return { ok: true, own };
   }
+  // A brand-new PR (no projection, no recovered subject in this project) is no unrelated materialized subject: it takes
+  // the allocator's next id and materializes normally, which cannot disturb any held subject.
+  if (kind === 'pin' && own === undefined && projection === null) return { ok: true, own: null };
   return { ok: false, error: 'landing-recovery-unresolved' };
 }
 
