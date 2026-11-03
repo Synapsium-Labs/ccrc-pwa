@@ -4959,10 +4959,12 @@ Before fix round 1, at the results commit, the same suites passed (the `pwa` sui
 - `pwa`: R19's "an answer over the HTML cap still gives its ratio" timed out (92 s against 60 s), and the item-6 rejection case took 59 s. Both had bypassed the default fake's in-kind answer for a crafted shape, so every crafted shape ran through highlight.js in-thread. Both now use that answer (`inKind`) and take about 3 s. Rows W5HA-T9-M14, W5HA-T10-M1 and W5HA-T10-M2 re-measured as recorded.
 - `server`: `update-move.test.ts`'s census of the quoted word `'detach'` (the update move's `DETACH_CAP`) found the runner's own option, `abortRunning: 'terminate' | 'detach'`. The census now sets aside a code line naming `abortRunning`, only that line, and its CONTROL pins both directions (rows W5HA-T11-M1 and W5HA-T11-M2; D-7761). Task 11's server runs did not include this suite; the PR's server selection ran it.
 
+**The PR's CI on fix round 1's results** (38d337f6c) was red once: `delegation-wave3.integration.test.ts`'s closed scope census allows the stem `retain` in no PWA code, and F2's test seam was named `retainedKeys`. It is `heldKeys`; the census passes (34). Fix round 1's server runs had not included that census; the PR's selection ran it.
+
 **Fix round 1** (review run 1364; the coordinator's rulings, mail 14095), one commit per item, each part reviewed on its own (opus for the store, sonnet for the guards), every finding fixed:
 
 - F1, D-7762: a Docs page's ceilings count every drawn copy of a shared block, one job still serving the key (rows W5HA-T11-M3, M4, M13 to M15).
-- F2: a chat store evicts its subscriber and listener rows with the keys no block references; `retainedKeys()` is the test seam (M5, M6, M16).
+- F2: a chat store evicts its subscriber and listener rows with the keys no block references; `heldKeys()` is the test seam (M5, M6, M16).
 - F4: a posted-then-released job's worker time stops at the detach (M7).
 - A4: one `readHighlightOutcome`, a table over every arm of `HighlightOutcome`; the runner answers an unknown reply `worker-failed` / `malformed-reply`, and the store settles an unknown outcome `plain` / `malformed`, so `settled()` always arrives (M8, M9).
 - A1: M4.H14's inputs walk their whole length and its steps are bounded from below, so a regex in place of the loop reds (M10).
