@@ -1982,7 +1982,7 @@ export class CoordStore {
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt });
     }
     return { ok: true, runs };
   }
@@ -2007,7 +2007,7 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
-      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
+      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE ${where} ORDER BY id`,
     ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 

@@ -145,6 +145,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (the open minting run wins, D-7877: a run another coordinator claims than the open minting run's)" },
   { file: 'server/src/coord/runBinding.ts', text: 'run.sessionBornFor === sessionId',
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (the open minting run wins, D-7877: a birth recorded for this session)" },
+  { file: 'server/src/coord/runBinding.ts', text: 'minting.sessionBornFor === sessionId',
+    why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (the open minting run wins, D-7877: the minting run's own earlier birth, recorded for this session)" },
   { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === minter',
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (parentOrMinter: an undecided run of the minting claimant)" },
   { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === sessionId',

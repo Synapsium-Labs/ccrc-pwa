@@ -21,7 +21,7 @@ const BORN = 1_700_000_000_000;
 let n = 0;
 const run = (over: Partial<BindingRun> = {}): BindingRun =>
   ({ id: ++n, sessionId: 'demo-w', claimedBy: 'coord-1', state: 'dispatched', openedAt: BORN + 10,
-     sessionBornAt: null, sessionBornFor: null, ...over });
+     sessionBornAt: null, sessionBornFor: null, dispatchStartedAt: null, ...over });
 
 describe('Incarnation', () => {
   it('a placed birth is a born incarnation; an unplaceable one is unborn and says why', () => {
@@ -34,31 +34,53 @@ describe('Incarnation', () => {
 
 describe('the open minting run wins', () => {
   const D = BORN + 100;
-  const minting = (over: Partial<{ sessionId: string | null; claimedBy: string | null; state: BindingRun['state']; dispatchStartedAt: number | null }> = {}) =>
-    ({ sessionId: 'demo-w', claimedBy: 'coord-1', state: 'dispatched' as const, dispatchStartedAt: D, ...over });
+  const minting = (over: Partial<{ sessionId: string | null; claimedBy: string | null; state: BindingRun['state']; dispatchStartedAt: number | null; sessionBornAt: number | null; sessionBornFor: string | null }> = {}) =>
+    ({ sessionId: 'demo-w', claimedBy: 'coord-1', state: 'dispatched' as const, dispatchStartedAt: D, sessionBornAt: null, sessionBornFor: null, ...over });
   const unplaceable = { kind: 'unplaceable', detail: 'no birth' } as const;
   it('an unplaceable incarnation carries the minting run only while it is open, names the session and records a dispatch start', () => {
-    expect(incarnationOf('demo-w', unplaceable, minting())).toMatchObject({ kind: 'unborn', why: 'unplaceable', mint: { claimedBy: 'coord-1', dispatchStartedAt: D } });
+    expect(incarnationOf('demo-w', unplaceable, minting())).toMatchObject({ kind: 'unborn', why: 'unplaceable', mint: { claimedBy: 'coord-1', dispatchStartedAt: D, earlierBirth: null } });
+    // The minting run's own earlier birth rides along only when it is recorded for this session and older than the start.
+    expect(incarnationOf('demo-w', unplaceable, minting({ sessionBornAt: D - 20, sessionBornFor: 'demo-w' }))).toMatchObject({ mint: { earlierBirth: D - 20 } });
+    for (const over of [{ sessionBornAt: D - 20, sessionBornFor: 'demo-y' }, { sessionBornAt: D, sessionBornFor: 'demo-w' }, { sessionBornAt: D + 5, sessionBornFor: 'demo-w' }]) {
+      expect(incarnationOf('demo-w', unplaceable, minting(over)), JSON.stringify(over)).toMatchObject({ mint: { earlierBirth: null } });
+    }
     for (const over of [{ state: 'done' as const }, { sessionId: 'demo-x' }, { sessionId: null }, { dispatchStartedAt: null }]) {
       expect(incarnationOf('demo-w', unplaceable, minting(over)), JSON.stringify(over)).not.toHaveProperty('mint');
     }
     expect(incarnationOf('demo-w', unplaceable)).not.toHaveProperty('mint');
     expect(incarnationOf('demo-w', { kind: 'at', ms: BORN }, minting())).toEqual(bornIncarnation('demo-w', BORN));
   });
-  it('a run opened before the start, claimed by another coordinator and carrying an older birth of this session does not bind', () => {
+  it('an earlier occupant\'s own mint, opened before the start, claimed by another coordinator and older than the start, does not bind', () => {
     const inc = incarnationOf('demo-w', unplaceable, minting());
-    const ghost = { claimedBy: 'coord-gone', openedAt: D - 50, sessionBornAt: D - 10, sessionBornFor: 'demo-w' };
+    const ghost = { claimedBy: 'coord-gone', openedAt: D - 50, sessionBornAt: D - 10, sessionBornFor: 'demo-w', dispatchStartedAt: D - 10 };
     expect(bindsRun(inc, run(ghost))).toBe('unbound');
+    // A wave that only CARRIES that birth (the stamp: the newest placeable birth on record) proves no earlier occupant:
+    // it may be the live occupant's pre-planned wave bound after the start, so it keeps the id-string rule.
+    expect(bindsRun(inc, run({ ...ghost, dispatchStartedAt: null }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...ghost, dispatchStartedAt: D + 30 }))).toBe('bound');
     // Each clause alone keeps the id-string rule.
     expect(bindsRun(inc, run({ ...ghost, openedAt: D }))).toBe('bound');
     expect(bindsRun(inc, run({ ...ghost, claimedBy: 'coord-1' }))).toBe('bound');
     expect(bindsRun(inc, run({ ...ghost, sessionBornAt: null, sessionBornFor: null }))).toBe('bound');
     expect(bindsRun(inc, run({ ...ghost, sessionBornFor: 'demo-y' }))).toBe('bound');
     expect(bindsRun(inc, run({ ...ghost, sessionBornAt: D }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...ghost, sessionBornAt: D, dispatchStartedAt: D }))).toBe('bound');
     expect(bindsRun(inc, run({ ...ghost, sessionId: 'demo-x' }))).toBe('unbound');
     // Without an open minting run the same row binds, as before the rule.
     expect(bindsRun(incarnationOf('demo-w', unplaceable, minting({ state: 'done' })), run(ghost))).toBe('bound');
     expect(bindsRun(unbornIncarnation('demo-w', 'not-a-child'), run(ghost))).toBe('bound');
+  });
+  it('a wave carrying the minting run\'s own earlier birth, opened before the start and claimed by another coordinator, does not bind', () => {
+    const inc = incarnationOf('demo-w', unplaceable, minting({ sessionBornAt: D - 20, sessionBornFor: 'demo-w' }));
+    const wave = { claimedBy: 'coord-gone', openedAt: D - 15, sessionBornAt: D - 20, sessionBornFor: 'demo-w' };
+    expect(bindsRun(inc, run(wave))).toBe('unbound');
+    // Another birth on record is no proof, nor is the same wave opened after the start or claimed by the minter.
+    expect(bindsRun(inc, run({ ...wave, sessionBornAt: D - 30 }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...wave, openedAt: D + 1 }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...wave, claimedBy: 'coord-1' }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...wave, sessionBornFor: 'demo-y' }))).toBe('bound');
+    // An adopted minting run (an explicit null birth) has no earlier birth to match.
+    expect(bindsRun(incarnationOf('demo-w', unplaceable, minting()), run(wave))).toBe('bound');
   });
 });
 

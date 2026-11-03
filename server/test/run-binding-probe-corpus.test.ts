@@ -18,8 +18,10 @@
 // THE FOLLOW-UP (D-7877, #1532): the rows named `M-*` are the residuals it closes, each with the worker's minting run open,
 // naming the worker and carrying a dispatch start while its birth cannot be placed. There the open minting run wins
 // (`runBinding.ts`): a run opened before that start, claimed by another coordinator and carrying an older birth recorded
-// for this worker no longer binds. `base` is still main's answer (the merge base of that PR), and five rounds-3-to-5
-// shapes that share the premise flip with them (`verdict: 'better'`). Residuals left: the rows still marked `inherited`.
+// for this worker, its own mint or the minting run's earlier birth, no longer binds. `base` is still main's answer (the
+// merge base of that PR), and five rounds-3-to-5 shapes that share the premise flip with them (`verdict: 'better'`). The
+// `M-P*` rows pin another coordinator's pre-planned wave bound after the start, which keeps main's answer. Residuals left:
+// the rows still marked `inherited`.
 //
 // The file uses only what the merge base also exports, so it runs over either source tree unchanged. A fixture writes
 // the rows a build would write; where the shape says an OLDER build or the merge-base build wrote a row, the fixture
@@ -1204,6 +1206,82 @@ const CORPUS: readonly Case[] = [
     head: { parent: 'coord-a', claimants: ['coord-a'], card: 'M', childIds: { 'coord-a': ['M'], 'coord-b': [] }, held: 'released:coord-a:parent-not-live', stamp: 'T1 for demo-w' },
     verdict: 'better',
     why: 'V was bound to the occupant born at T1, before M\'s re-dispatch at T4 reused the id: it carries that birth, opened before the new start and is claimed by another coordinator, so the open minting run wins and coord-b is no longer the re-minted worker\'s parent. With no stamp on V (R8-M1\'s shape) it keeps the id-string rule',
+  },
+  // Round 2 of the follow-up: another coordinator's pre-planned wave, opened before the open minting run's dispatch start and
+  // bound by this build after it, while the worker's birth cannot be placed. The stamp is the newest placeable birth on
+  // record, an EARLIER occupant's, yet the wave is the live occupant's: it must keep the id-string rule.
+  {
+    shape: 'M-P1: the adopted arm, an earlier occupant minted and done, another coordinator\'s pre-planned wave bound after the adoption',
+    round: 'follow-up round 2 (pre-planned wave)',
+    build: () => {
+      const f = new Fixture();
+      const e = f.open('E', 'coord-gone', t(1) - 100);
+      f.mint(e, t(1));
+      f.done(e);
+      const a = f.open('A', 'coord-live', t(2));
+      const x = f.open('X', 'coord-x', t(3));
+      f.adopt(a, t(5));
+      f.bind(x);
+      return { f, mark: a, coords: ['coord-x', 'coord-live', 'coord-gone'], wave: x };
+    },
+    base: { parent: 'coord-x', claimants: ['coord-x', 'coord-live'], card: 'X', childIds: { 'coord-x': ['X'], 'coord-live': ['A'], 'coord-gone': [] }, held: 'released:operator:run-other-programme', stamp: 'T1 for demo-w' },
+    verdict: 'same',
+    why: 'X records the earlier occupant\'s birth (T1, the newest placeable birth on record when this build bound it), opened before the adoption\'s dispatch start and is another coordinator\'s, yet it is the live occupant\'s wave: a stamped birth that is neither the run\'s own mint nor the minting run\'s own earlier birth proves no earlier occupant, so X keeps the id-string rule',
+  },
+  {
+    shape: 'M-P2: the adopted arm, an earlier occupant minted and done, another coordinator\'s wave opened between the adopting run and the adoption, bound after it',
+    round: 'follow-up round 2 (pre-planned wave)',
+    build: () => {
+      const f = new Fixture();
+      const e = f.open('E', 'coord-gone', t(0) - 100);
+      f.mint(e, t(0));
+      f.done(e);
+      const a = f.open('A', 'coord-live', t(1));
+      const p = f.open('P', 'coord-2', t(1) + 100);
+      f.adopt(a, t(2));
+      f.bind(p);
+      return { f, mark: a, coords: ['coord-2', 'coord-live', 'coord-gone'], wave: p };
+    },
+    base: { parent: 'coord-2', claimants: ['coord-2', 'coord-live'], card: 'P', childIds: { 'coord-2': ['P'], 'coord-live': ['A'], 'coord-gone': [] }, held: 'released:operator:run-other-programme', stamp: 'T0 for demo-w' },
+    verdict: 'same',
+    why: 'as M-P1: P carries E\'s birth only because the stamp is the newest placeable birth on record, so it keeps the id-string rule and coord-2 stays the parent',
+  },
+  {
+    shape: 'M-P2o: as M-P2, the earlier occupant\'s minting run still open',
+    round: 'follow-up round 2 (pre-planned wave)',
+    build: () => {
+      const f = new Fixture();
+      const e = f.open('E', 'coord-gone', t(0) - 100);
+      f.mint(e, t(0));
+      const a = f.open('A', 'coord-live', t(1));
+      const p = f.open('P', 'coord-2', t(1) + 100);
+      f.adopt(a, t(2));
+      f.bind(p);
+      return { f, mark: a, coords: ['coord-2', 'coord-live', 'coord-gone'], wave: p };
+    },
+    base: { parent: 'coord-2', claimants: ['coord-2', 'coord-live', 'coord-gone'], card: 'P', childIds: { 'coord-2': ['P'], 'coord-live': ['A'], 'coord-gone': ['E'] }, held: 'released:operator:run-other-programme', stamp: 'T0 for demo-w' },
+    head: { parent: 'coord-2', claimants: ['coord-2', 'coord-live'], card: 'P', childIds: { 'coord-2': ['P'], 'coord-live': ['A'], 'coord-gone': [] }, held: 'released:operator:run-other-programme', stamp: 'T0 for demo-w' },
+    verdict: 'better',
+    why: 'E, the earlier occupant\'s own mint (its birth is its own dispatch start, older than the adoption\'s, another coordinator), no longer binds, so coord-gone stops claiming and listing the worker; P keeps the id-string rule as in M-P2',
+  },
+  {
+    shape: 'M-P3: a redrawn minting run, an earlier occupant minted and done, another coordinator\'s pre-planned wave bound after the redraw',
+    round: 'follow-up round 2 (pre-planned wave)',
+    build: () => {
+      const f = new Fixture();
+      const e = f.open('E', 'coord-gone', t(0) - 100);
+      f.mint(e, t(0));
+      f.done(e);
+      const r = f.open('R', 'coord-live', t(1) - 100);
+      f.mint(r, t(1));
+      const x = f.open('X', 'coord-x', t(2));
+      f.redraw(r, t(4));
+      f.bind(x);
+      return { f, mark: r, coords: ['coord-x', 'coord-live', 'coord-gone'], wave: x };
+    },
+    base: { parent: 'coord-x', claimants: ['coord-x', 'coord-live'], card: 'X', childIds: { 'coord-x': ['X'], 'coord-live': ['R'], 'coord-gone': [] }, held: 'released:operator:run-other-programme', stamp: 'T0 for demo-w' },
+    verdict: 'same',
+    why: 'after the redraw R\'s own birth (T1) is no longer placeable, so this build stamps X with E\'s T0: neither X\'s own mint nor R\'s earlier birth, so X keeps the id-string rule, as on main',
   },
 ];
 

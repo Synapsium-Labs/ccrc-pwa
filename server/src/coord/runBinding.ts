@@ -42,15 +42,19 @@ import type { ChildBirth } from './childSpent.js';
  * THE OPEN MINTING RUN WINS (D-7877, #1532). A child whose birth cannot be placed (`unplaceable`) while the run its mark
  * names is still open, still names it and records a dispatch start is that run's occupant, minted at or after that start:
  * the adopted arm (D-6993), a re-dispatch whose bind is not recorded yet, a same-id redraw by an older build. Its
- * incarnation carries the run (`OpenMint`), and a run naming the session does NOT bind when all four hold: it opened
- * before that start, another coordinator claims it, and it carries a birth recorded for THIS session that is older than
- * the start. That run was bound to an earlier occupant of the name, so it is no parent, claimant or child of the live
- * one. Every other run keeps the id-string rule, each clause for a reason the probe corpus measured: a run opened after
- * the start can carry an earlier occupant's birth (the stamp is the merge base's, the newest placeable birth on record)
- * and is still this occupant's; the minting run itself and the minter's own waves share its claimant; a run with no
- * birth, or one recorded for another session, cannot be told from the live occupant's pre-planned wave (P10, P6d), so
- * reading it by `openedAt` alone made shapes worse than the id-string rule. No stamp is written and no column is read
- * that was not read before; a coordinator, a manual workspace, an unreadable mark and a closed minting run are as before.
+ * incarnation carries the run (`OpenMint`), and a run naming the session does NOT bind when all five hold: it opened
+ * before that start, another coordinator claims it, it carries a birth recorded for THIS session that is older than the
+ * start, and that birth is the run's OWN mint (equal to its own `dispatchStartedAt`) or the minting run's own earlier
+ * birth (the occupant before its redraw or re-dispatch). That run was bound to an earlier occupant of the name, so it is
+ * no parent, claimant or child of the live one. Every other run keeps the id-string rule, each clause for a reason the
+ * probe corpus measured: a run opened after the start can carry an earlier occupant's birth (the stamp is the merge
+ * base's, the newest placeable birth on record) and is still this occupant's; the minting run itself and the minter's own
+ * waves share its claimant; a run with no birth, or one recorded for another session, cannot be told from the live
+ * occupant's pre-planned wave (P10, P6d); and another coordinator's pre-planned wave bound after the start carries the
+ * newest placeable birth on record, an earlier occupant's, while it is the live occupant's (M-P1 to M-P3), so a birth
+ * that is neither its own mint nor the minting run's earlier birth proves nothing. No stamp is written; the series read
+ * also carries each run's `dispatchStartedAt` for the last clause. A coordinator, a manual workspace, an unreadable mark
+ * and a closed minting run are as before.
  *
  * TWO QUERIES, NAMED. `newest` is the newest run that binds the incarnation in ANY state (the card's `session.run`);
  * `open` is the newest that is not terminal (`session.openRun`). A state this build cannot name counts as open, as
@@ -64,8 +68,9 @@ declare const incarnationBrand: unique symbol;
 export type UnbornWhy = 'not-a-child' | 'unplaceable';
 
 /** The open minting run of an `unplaceable` worker, as the binding reads it (THE OPEN MINTING RUN WINS, above): the
- *  coordinator that claims it and the instant its dispatch started. Built only by `incarnationOf`. */
-export interface OpenMint { readonly claimedBy: string | null; readonly dispatchStartedAt: number }
+ *  coordinator that claims it, the instant its dispatch started and the earlier birth it recorded for the worker before
+ *  that start (`null` when it recorded none for it, as the adopted arm's explicit null). Built only by `incarnationOf`. */
+export interface OpenMint { readonly claimedBy: string | null; readonly dispatchStartedAt: number; readonly earlierBirth: number | null }
 
 type IncarnationShape =
   | { readonly kind: 'born'; readonly sessionId: string; readonly bornAt: number }
@@ -87,13 +92,18 @@ export interface MintingRun {
   readonly claimedBy: string | null;
   readonly state: RunState;
   readonly dispatchStartedAt: number | null;
+  readonly sessionBornAt: number | null;
+  readonly sessionBornFor: string | null;
 }
 
 /** The open mint of `sessionId`, when `minting` is open, still names the session and records a dispatch start. */
 function openMintOf(sessionId: string, minting: MintingRun | null): OpenMint | null {
   if (minting === null || !runNamesSession(minting, sessionId) || minting.dispatchStartedAt === null) return null;
   if (!isOpen(minting)) return null;
-  return { claimedBy: minting.claimedBy, dispatchStartedAt: minting.dispatchStartedAt };
+  const at = minting.dispatchStartedAt;
+  const born = minting.sessionBornAt;
+  const earlierBirth = born !== null && minting.sessionBornFor === sessionId && born < at ? born : null;
+  return { claimedBy: minting.claimedBy, dispatchStartedAt: at, earlierBirth };
 }
 
 /** The incarnation of a child whose minting run answered `birth` (`childBirthOf`). `minting` is that run's row (`null`
@@ -115,6 +125,8 @@ export interface BindingRun {
   readonly openedAt: number;
   readonly sessionBornAt: number | null;
   readonly sessionBornFor: string | null;
+  /** Read only by THE OPEN MINTING RUN WINS: a birth equal to it is the run's own mint (`childBirthOf`'s placeable). */
+  readonly dispatchStartedAt: number | null;
 }
 
 /** Whether `run` binds `incarnation`: yes, no, or `'undecidable'` (an unstamped run opened before the birth). */
@@ -127,11 +139,14 @@ export const runNamesSession = (run: { readonly sessionId: string | null }, sess
 
 /** THE OPEN MINTING RUN WINS, for a run that names the session (the rule above): a run opened before the open mint's
  *  dispatch start, claimed by another coordinator and carrying a birth recorded for this session that is older than that
- *  start is an earlier occupant's, so it does not bind. Every other run keeps the id-string rule. */
+ *  start, where that birth is the run's OWN mint or the minting run's own earlier birth, is an earlier occupant's, so it
+ *  does not bind. Every other run keeps the id-string rule. */
 function bindsUnderOpenMint(sessionId: string, mint: OpenMint, run: BindingRun): RunBinds {
   const at = mint.dispatchStartedAt;
+  const born = run.sessionBornAt;
   const earlierOccupant = run.openedAt < at && run.claimedBy !== mint.claimedBy
-    && run.sessionBornAt !== null && run.sessionBornFor === sessionId && run.sessionBornAt < at;
+    && born !== null && run.sessionBornFor === sessionId && born < at
+    && (born === run.dispatchStartedAt || born === mint.earlierBirth);
   return earlierOccupant ? 'unbound' : 'bound';
 }
 

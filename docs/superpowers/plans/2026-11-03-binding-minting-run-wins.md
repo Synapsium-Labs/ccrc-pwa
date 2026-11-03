@@ -9,12 +9,15 @@ the PR names. It writes no stamp, adds no column and runs no migration.
 
 - **D-7877 (2026-11-03)** — `binding-minting-run-wins`. While the run a child's mark names is still open, still names
   the child and records a dispatch start, and the child's birth cannot be placed (`unplaceable`), that run is the
-  child's occupant and it wins over the id-string pick. A run naming the child does not bind when all four hold:
+  child's occupant and it wins over the id-string pick. A run naming the child does not bind when all five hold:
 
   1. it opened before the minting run's `dispatchStartedAt`;
   2. another coordinator claims it (its `claimedBy` is not the minting run's);
   3. it carries a birth recorded for this child (`sessionBornFor` is the child's id);
-  4. that birth is older than the minting run's `dispatchStartedAt`.
+  4. that birth is older than the minting run's `dispatchStartedAt`;
+  5. that birth is the run's own mint (it equals the run's own `dispatchStartedAt`, the placeable birth `childBirthOf`
+     and the stamp writer recognise) or the minting run's own earlier birth (the `sessionBornAt` the minting run
+     recorded for this child, older than its dispatch start: the occupant before a redraw or a re-dispatch).
 
   Such a run was bound to an earlier occupant of the name, so it is no parent, claimant or child of the live one. Every
   other run keeps the id-string rule. A coordinator, a manual workspace, an unreadable mark, a closed minting run, one
@@ -24,7 +27,8 @@ the PR names. It writes no stamp, adds no column and runs no migration.
   `incarnationOf` builds from the minting run's row). The three places that build a child's incarnation from its mark
   pass that row: `incarnationOfMark` (the fleet card and the runs frame's `childIds`), `heldFor` and the drift lane. The
   stamp writer (`CoordStore.stampOccupantBirth`), the birth columns, the explicit-null adopted bind (D-6993) and the
-  delegation reads (`claimantAt`) are unchanged.
+  delegation reads (`claimantAt`) are unchanged. The series read (`CoordStore.bindingRunsOf` and `bindingRows.ts`) now
+  also carries each run's `dispatchStartedAt`, an existing column, for clause 5.
 
 ## Why each clause, and why not the triage wording as written
 
@@ -47,13 +51,21 @@ parts of it made shapes worse than main, so the rule keeps only the part that ne
   its earlier birth; the minter's pre-planned waves can carry an earlier birth too. Clause 2 keeps every run its
   coordinator claims bound, as before. The series read by ordinal proves no run id, so the minting run is recognised by
   its claimant, not by its id.
+- **A stamped birth is no proof of whose wave it is (clause 5, review round 2).** Another coordinator's pre-planned wave,
+  opened before the dispatch start and bound by this build after it, is stamped with the newest placeable birth on
+  record. While the minting run's birth cannot be placed that is an EARLIER occupant's birth, though the wave is the live
+  occupant's. With clauses 1 to 4 alone it dropped out: its coordinator lost the parent, its claim and its `childIds`,
+  and the card showed the minting run (rows M-P1, M-P2 and M-P3, each worse than main before clause 5). The bind time is
+  not recorded, but the birth itself says which occupant it names. An earlier occupant's own minting run carries its own
+  dispatch start as its birth. A wave bound to the minting run's occupant before the redraw carries the minting run's
+  own earlier birth, which the stamp writer can no longer pick once the redraw or re-dispatch has moved the dispatch
+  start. A wave bound after the start can carry neither, so clause 5 keeps it bound, as on main.
 
 ## The counted exit, as measured
 
-`server/test/run-binding-probe-corpus.test.ts` has 52 cases plus the consistency check on main, and 58 plus the check
-here (59 tests). The `base` column is green over main's sources (`BINDING_CORPUS_EXPECT=base`, with
-`runBinding.ts`, `runWire.ts`, `heldFor.ts` and `driftLane.ts` taken from `origin/main`), and the branch's answers are
-green over this branch.
+`server/test/run-binding-probe-corpus.test.ts` has 52 cases plus the consistency check on main, and 62 plus the check
+here (63 tests). The `base` column is green over main's sources (`BINDING_CORPUS_EXPECT=base`, the file run in a
+worktree of `origin/main`), and the branch's answers are green over this branch.
 
 - **Six new rows, each better than main** (each was red on main before the rule):
   - **M-G1 (gap 1):** an unplaceable child (its minting run re-dispatched, the bind not recorded yet) under a reused
@@ -71,6 +83,14 @@ green over this branch.
 - **Five existing rows flip to better** (same premise): "the adopted arm under a recycled name … LOWER id", R1, R2, and
   the two former residuals "the adopted arm with the earlier occupant's open run holding the HIGHER id" and "a
   cross-build rollback with C's minting run R still open and a third coordinator's open wave".
+- **Four rows from review round 2, another coordinator's pre-planned wave bound after the dispatch start** (each answered
+  worse than main under clauses 1 to 4, and keeps main's answer or better with clause 5):
+  - **M-P1:** the adopted arm, an earlier occupant minted and done, wave X opened before the adoption and bound after
+    it, stamped with the earlier occupant's birth: coord-x stays the parent, a claimant and X's lister (`same`).
+  - **M-P2:** the same with the wave opened between the adopting run's open and the adoption (`same`).
+  - **M-P2o:** M-P2 with the earlier occupant's minting run still open: that run drops out and the wave stays (`better`).
+  - **M-P3:** a redrawn minting run instead of the adopted arm, the wave stamped with the earlier occupant's birth
+    because the minting run's own is no longer placeable (`same`).
 - **No row answers worse than main.** The other 47 cases keep main's answer.
 
 The readers' suites stay green one file at a time: `run-binding`, `run-binding-readers`, `run-binding-bind-records`,
@@ -83,31 +103,33 @@ The readers' suites stay green one file at a time: `run-binding`, `run-binding-r
 
 Each mutation applied alone to this branch; the count is failed tests per file.
 
-| Mutation | corpus (59) | `run-binding` (24) | `drift-lane` (26) | `run-binding-bind-records` (23) |
+| Mutation | corpus (63) | `run-binding` (25) | `drift-lane` (26) | `run-binding-bind-records` (23) |
 |---|---|---|---|---|
-| Drop the rule (an unborn child always binds by the id-string rule) | 11: the six new rows and the five flips | 1 | 1 | 0 |
-| Invert the predicate | 13: those 11, P10 and P6d | 1 | 1 | 1 |
-| Ignore the explicit null (the adopted arm's bind stamps like a later wave) | 0 | 0 | 0 | 4: the census pins the arm by name |
-| Drop clause 1 (opened before the start) | 1: M-W | 1 | 0 | 0 |
-| Drop clause 2 (another coordinator) | 7: R1, R2, the rollback flip, M-G1, M-R3, M-X, M-M | 1 | 0 | 0 |
-| Drop clause 3 (recorded for this child) | 1: M-X | 1 | 0 | 0 |
+| Drop the rule (an unborn child always binds by the id-string rule) | 12: the six M rows, the five flips, M-P2o | 2 | 1 | 0 |
+| Invert the predicate | 17: those 12, P10, P6d, M-P1, M-P2, M-P3 | 2 | 1 | 1 |
+| Ignore the explicit null (the adopted arm's bind stamps like a later wave) | 3: M-P1, M-P2, M-P2o | 0 | 0 | 4: the census pins the arm by name |
+| Drop clause 1 (opened before the start) | 0 | 2 | 0 | 0 |
+| Drop clause 2 (another coordinator) | 8: R1, R2, the rollback flip, M-G1, M-R3, M-X, M-M, M-P3 | 2 | 0 | 0 |
+| Drop clause 3 (recorded for this child) | 0 | 2 | 0 | 0 |
 | Drop clause 4 (older than the start) | 0 | 1 | 0 | 0 |
+| Drop clause 5 (any older birth will do: review round 1's rule) | 4: M-P1, M-P2, M-P2o, M-P3 | 2 | 0 | 0 |
+| Clause 5 without the run's own mint | 7: the LOWER-id and HIGHER-id flips, M-G1, M-W, M-A, M-X, M-P2o | 1 | 1 | 0 |
+| Clause 5 without the minting run's earlier birth | 5: R1, R2, the rollback flip, M-R3, M-M | 1 | 0 | 0 |
+| The earlier birth read for any session, or not older than the start | 0 | 1 | 0 | 0 |
 | `heldFor` builds the incarnation without the minting run | 5: the HIGHER-id flip, the rollback flip, M-A, M-R3, M-M (the `held` column) | 0 | 0 | 0 |
 | The drift lane builds it without the minting run | 0 | 0 | 1 | 0 |
-| `incarnationOfMark` builds it without the minting run | 11 | 0 | 0 | 0 |
+| `incarnationOfMark` builds it without the minting run | 12 | 0 | 0 | 0 |
+
+Clauses 1 and 3 no longer change a corpus row: clause 5 already keeps M-W's later wave and M-X's leftover birth bound.
+They stay because they are the measured reasons of round 1 and the unit tests pin each one.
 
 ## Known limits
 
-- **Another coordinator's pre-planned wave, bound while the birth cannot be placed.** A wave planned before the minting
-  run's dispatch start, claimed by another coordinator and bound by this build after it, while the child's birth cannot
-  be placed, records the newest placeable birth on record for the id. When that is an earlier occupant's, the four
-  clauses hold and the wave does not bind, though it is the live occupant's. Measured on a scratch fixture (an earlier
-  occupant minted and done, the adopted arm, then the pre-planned wave bound): main answers that coordinator as the
-  parent and both coordinators as claimants; this branch answers the minting run's coordinator alone. The columns cannot
-  tell this wave from an earlier occupant's wave bound before the dispatch start, because the bind time is not recorded:
-  the plan note's conclusion that the birth columns alone cannot say which incarnation a stamp belongs to still holds. It
-  lasts only while the minting run is open, and its answer is the minting run's own claimant. It is not a corpus row,
-  because the corpus pins no case worse than main.
+- **An earlier occupant's wave that only carries that occupant's birth.** A wave bound to an earlier occupant E, stamped
+  with E's birth, is neither its own mint nor the minting run's earlier birth, so it keeps the id-string rule while E's
+  own minting run drops out. The columns cannot tell it from the live occupant's pre-planned wave bound after the
+  dispatch start (M-P1 to M-P3), because the bind time is not recorded, so it answers as on main: a residual, not a
+  regression.
 - **Residuals left.** Every corpus row still marked `inherited`: GAP 1 with the minting run done, gap 2's three rows (no
   open minting run or no dispatch start), the leftover birth on a born child (R8-X1c-ctrl, N8c) and the waves bound
   before a same-id re-mint that is recorded (R8-M1, R8-M2, R8-M4, R8-A1), where the child is born at read time. A wave
