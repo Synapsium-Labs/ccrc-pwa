@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { accessSync, constants, existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -73,7 +74,7 @@ function drive(file: string, name: string, script: string, pathPrefix?: string, 
     script.replace(/@SHIM@/g, name).replace(/@HOME@/g, home),
   ].filter(Boolean).join('\n');
   const t0 = Date.now();
-  const r = spawnSync('bash', ['-c', prog], { encoding: 'utf8', timeout: 40_000, env });
+  const r = spawnSyncGroup('bash', ['-c', prog], { encoding: 'utf8', timeout: 40_000, env });
   return { home, rc: (r.stdout ?? '').trim(), ms: Date.now() - t0, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 
