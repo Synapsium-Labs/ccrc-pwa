@@ -67,3 +67,60 @@ export type LandingOrder =
 
 /** GET /api/landing's answer, flat beside ok. */
 export interface LandingLineView { project: string; operatorPaused: boolean; mainRedHold: boolean; entries: LandingEntry[]; order: LandingOrder }
+
+// Landing order, wave 5f: the authority journal's vocabulary (shared contract §1, §5). Pure types, no imports.
+export interface LandingIdentity { id: number; project: string; pr: number }
+export type LandingHistoricalBinding =
+  | { kind: 'no-run' }
+  | { kind: 'run'; observedRunId: number };
+export interface LandingSubjectRef extends LandingIdentity {
+  binding: LandingHistoricalBinding;
+}
+export interface LandingCreationClaim {
+  at: number; setBy: string; pinnedSha: string; handoffCommit: string;
+}
+export interface LandingAuthority {
+  afterIds: number[]; fixesMain: boolean; setBy: string; seq: number;
+}
+export type LandingJournalRecord = {
+  v: 1; seq: number; at: number; setBy: string; subject: LandingSubjectRef;
+} & (
+  | { kind: 'entry'; claim: { pinnedSha: string; handoffCommit: string } }
+  | { kind: 'order'; after: LandingSubjectRef[]; fixesMain: boolean }
+);
+export type LandingJournalInvalidReason =
+  | 'empty' | 'blank' | 'torn' | 'json' | 'version' | 'kind'
+  | 'fields' | 'sequence' | 'identity';
+export type LandingRecoverySubject = LandingIdentity & {
+  creation: { kind: 'recorded'; claim: LandingCreationClaim; seq: number }
+    | { kind: 'not-recorded' };
+  historical: { binding: LandingHistoricalBinding; observedSeq: number };
+  projection: { kind: 'missing'; association: 'unmeasured' }
+    | { kind: 'association-unmeasured'; reason: 'historical-binding-mismatch' }
+    | { kind: 'identity-conflict'; conflicts: LandingIdentity[] };
+  authority: { kind: 'set'; value: LandingAuthority } | { kind: 'not-set' };
+};
+export interface LandingRecovery {
+  subjects: LandingRecoverySubject[];
+  hold: null | { reason: 'landing-recovery-unresolved'; subjectIds: number[] };
+}
+
+export type LandingInfrastructureCode =
+  | 'landing-journal-unavailable' | 'landing-journal-unreadable'
+  | 'landing-journal-invalid' | 'landing-journal-missing'
+  | 'landing-journal-cursor' | 'landing-journal-changed'
+  | 'landing-journal-durability' | 'landing-journal-append'
+  | 'landing-db-unavailable' | 'landing-db-apply' | 'landing-db-commit'
+  | 'landing-fenced' | 'landing-projection-unreadable';
+export interface LandingInfrastructureFailure {
+  error: LandingInfrastructureCode;
+  recovery: 'replay' | 'restart';
+  mayApply?: true;
+  invalid?: { reason: LandingJournalInvalidReason; record: number | null };
+}
+export type LandingMutationCode =
+  | 'landing-entry-exists' | 'landing-entry-missing'
+  | 'landing-after-missing' | 'landing-after-cross-project'
+  | 'landing-cycle' | 'landing-dependencies-unreadable'
+  | 'landing-recovery-unresolved' | 'landing-identity-conflict'
+  | 'landing-id-overflow' | 'landing-sequence-overflow';
