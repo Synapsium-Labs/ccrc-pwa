@@ -5,16 +5,19 @@ plan and the programme ledger; this PR edits neither.
 
 ## Status
 
-- **Phase A** (no edit to `watch.ts`, `store.ts`, `mail-routes.test.ts`, `delegation-wave3.integration.test.ts` or
+- **Production continuation (2026-11-03):** main is merged at `b1ede05b4`. The retained Task 3.6 implementation and watch
+  re-points are present; their current verification is recorded below. Tasks 3.6 and 3.7 are no longer held. Final tip gates and
+  the fresh PWA measurement are still pending; this is not a final handoff.
+- **Historical Phase A** (no edit to `watch.ts`, `store.ts`, `mail-routes.test.ts`, `delegation-wave3.integration.test.ts` or
   `delegation-watch.test.ts`): Task 3.2 (the planner), Task 3.3 (`compactJournal`, the carried file, recovery's carried rules),
   Task 3.4's checkpoint half (the delete walk, the repair's step 0, the retained reader in the repair), Task 3.5 (C1) and Task 3.1's
   builder door (`upkeepIntervals`, `DelegationDurability.upkeep`, `rowsChanged`).
-- **Phase B** (released by coordinator mail 10575): Task 3.1's unified lane call, Task 3.4's two store methods and required
+- **Historical Phase B** (released by coordinator mail 10575): Task 3.1's unified lane call, Task 3.4's two store methods and required
   projection-port members, Task 3.7's daily trigger and diagnostics, the kebab arm W4-K2 in `mail-routes.test.ts`, and the closed
-  retained-set census in `delegation-wave3.integration.test.ts` are committed at `15a4d0246`. Phase-B verification is recorded below;
-  this is not a final handoff. Task 3.6 still waits for the coordinator's explicit release after #1578; neither snapshot file is edited.
-- The lane rows the plan places in `delegation-watch.test.ts` go into a NEW file, `server/test/delegation-compaction-lane.test.ts`,
-  because PR4 holds the old one (the coordinator's brief).
+  retained-set census in `delegation-wave3.integration.test.ts` were committed at `15a4d0246`. The Phase-B measurements below
+  predate Task 3.6's release after #1578; they are not final-tip verification.
+- The new real-lane rows live in `server/test/delegation-compaction-lane.test.ts`, preserving the original split while PR4 held
+  `delegation-watch.test.ts`. The latter's existing assertions are now re-pointed as recorded below.
 
 ## Deviations found
 
@@ -117,9 +120,11 @@ The dependency installs reported audit findings: agent 6 (3 moderate, 3 high), U
 - `RE2`: 117 formatter inputs, 2,038 bytes at seven digits (114 kept, 3 dropped), and 77 kept / 40 dropped at the largest safe
   values. The six compaction sizes survive; the omitted fields are exactly the list's suffix. The 2,048-byte production bound is unchanged.
 
-### Blocked re-points in the PR4-held watch test
+### Watch re-points, retained and verified on 2026-11-03
 
-No edit to `server/test/delegation-watch.test.ts` is made. The following are the precise handover, preserving each behavior:
+Commit `2dc5839a7` applied these re-points after the hold was released. Each row below was read and checked against the current
+source; no blanket replacement or additional test edit was needed. The cursor invariant ran in half 1, and every other row in
+half 2 of the exhaustive watch measurement below. Both halves exited 0, with no omitted or overlapping passing test:
 
 | Row / group | Required re-point |
 | --- | --- |
@@ -133,8 +138,61 @@ No edit to `server/test/delegation-watch.test.ts` is made. The following are the
 | RB22 | Reject unified `upkeep`; expect its unified warning; keep reconcile continuation and spent-hour assertions |
 | RE9 | Inspect `DelegationLane.upkeep`, require its call to `upkeep`, and forbid `applyCheckpointChange` within that method |
 
-Other `applyCheckpointChange` spies cover real attempt/lease/setup behavior and are not blanket-replaced. Added real-lane rows cover
-C1-C3, hourly no-op and rejected upkeep while those historical rows remain held. Task 3.6 and a final PR/wave-done remain blocked.
+Other `applyCheckpointChange` spies retain their real attempt/lease/setup behavior. The cursor invariant still observes attempt
+filing separately, forwards the real upkeep request, compares durable cursor rows, requires interval removal and nonempty disk
+cursors, and forbids direct lane cursor assignment. R58's real-door observer measures checkpoint bytes, encode/write counts and
+revision; the young-cursor and later-hour no-op cases preserve all four no-mutation assertions. `watchDoor` forwards the request
+and checks the expanded outcome. N6 and RB22 preserve reconciliation and the spent hour, including interval-only work after a
+rejected hourly attempt. RE9 inspects `DelegationLane.upkeep` and forbids `applyCheckpointChange` within that method.
+
+## Production verification, 2026-11-03
+
+Main was absorbed with a merge, not a rebase. The two actual conflicts were additive test censuses: the integration census keeps
+both synchronous retention-port methods and main's boolean sweep result; the mail vocabulary keeps both the compaction and
+projection guards. Their isolated pre-merge runs exited 0 (34 integration tests and 59 mail-route tests). No non-delegation lane
+field or sweep call was changed in `watch.ts`.
+
+### Watch measurement and exact coverage
+
+| Attempt, UTC | Result |
+| --- | --- |
+| Full file, 07:28:15 | Incomplete: the measurement wrapper's 570 s deadline returned 124; no JSON verdict. The shared test slice reported 4 OOM kills, without attribution to this process |
+| Unchanged full file, 07:42:37, one worker and no wrapper deadline | The tool's 600 s bound backgrounded the command and its managed task was stopped. A late Vitest report says 304 passed in 618.98 s; the outer test-runner exit is unmeasured, not green |
+| Half 1, 08:01:43 | Outer exit 0; 135 passed, 169 intentionally skipped; 230.30 s |
+| Half 2, 08:05:49 | Outer exit 0; 169 passed, 135 intentionally skipped; 270.57 s |
+
+The two patterns partition all 41 top-level describes read from the source: half 1 contains the first 14, from
+`the lane is a NON-AWAITED sibling at the census cadence` through
+`the lane remembers what it dropped (R65): a link that rests on an event the slice no longer holds is unmeasured, never made`;
+half 2 contains the remaining 27, from `fix round 2, minors N4 to N6` through the D-6967 follow-up-10 describe. Comparison of the
+actual passing test names with the late full-file report proves a 304-test union, zero overlap and zero omission. Neither half's
+saved stderr reports a slice-cap kill. No test-control setting was changed and no killed process was investigated.
+
+### Tasks 3.6 and 3.7
+
+Task 3.6's retained implementation captures the carried member additively under version 1, double-reads it across journal capture,
+validates sparse evidence and matching overlap consistently with server recovery, restores old snapshots by preserving foreign
+carried bytes, and thins all five member names. The unchanged merged snapshot suite exited 0 with 1,016 tests passed, including
+W4-C23–C27 and the counted-schema/compacted thinning composition. `suffixAfter` is documented as reachable.
+
+The mutation helper for Python modules cannot compile the JavaScript or TypeScript modules here. The specifically authorized
+scratch-copy method was used instead: one source copy on the measured root filesystem, sequential runs through the test runner,
+fixture HOME and poisoned `gh`, one worker, a measured process cap and a 120 s kill-after bound. Each original file was saved
+before mutation and restored with a SHA-256 check; the tracked sources retained their original hashes throughout.
+
+| Mutant | Expected row that went red | Observed failure |
+| --- | --- | --- |
+| W4-CM24, only one carried read | W4-C25 | Capture made one attempt instead of two |
+| W4-CM25, carried omitted from the restore set | W4-C26 | No foreign directory entry, expected one; recovery alone is not the oracle |
+| W4-CM26, feed journal-overlapping carried records | W4-C23 | Helper returned `sequence-descent` instead of the server's accepted verdict and coverage |
+| W4-CM27, remove the day gate | W4-C28 | Two compaction calls instead of one |
+| W4-CM28, remove readiness at the compaction boundary | W4-C28 boundary-reconstruction row | One forbidden compaction call instead of none |
+
+Each mutant exited 1 with exactly its named assertion failed, not an import error or timeout. The restored snapshot group passed
+12/12, and the restored daily-compaction group passed 7/7, both with outer exit 0. The latter covers same-day spending, next-day
+retry, rejection, startup and boundary reconstruction, actual compacting-pass sizes and accepted timestamps, and both skip-line
+forms. Final tip gates and the fresh PWA measurement remain pending. The full server suite remains unrun; no final suite or
+wave-done claim is made here. Soaks were waived, not passed.
 
 ## W3-M38, amended (for the wave-3 plan, plan :991)
 
