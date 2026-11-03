@@ -2,7 +2,8 @@
 // server sends no `delegation` frame, and the screen then claims nothing about delegated work. What it draws is what
 // PR2's base drew for the same world, rendered by the base's own code (`fixtures/older-server/render-3ce530dad.json`,
 // whose `capture` says how) and compared byte for byte. The one declared difference is each fleet list's
-// `data-delegation="unavailable"`; nothing else is removed or rewritten. The file renders the world ONCE: React's
+// `data-delegation="unavailable"`, and the backup banner's empty slot (D-7860), which the base predates; nothing else is
+// removed or rewritten. The file renders the world ONCE: React's
 // `useId` counter is per module graph, so a second render, or a case before this one, numbers Instrument's tab ids
 // differently from the capture's single render.
 import { createHash } from 'node:crypto';
@@ -18,6 +19,11 @@ const baseline = JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', '
 const LIST = 'class="fleet-list"';
 const MARKED = `${LIST} data-delegation="unavailable"`;
 const count = (html: string, token: string): number => html.split(token).length - 1;
+/** The backup banner's slot (D-7860), which the banner stack keeps mounted and empty while the banner does not show. The
+ *  base predates it, so it is the second declared difference: present once wherever the base drew the disk banner's
+ *  slot, and empty. */
+const BACKUP_SLOT = '<div class="banner-slot" data-banner="backup"></div>';
+const DISK_SLOT = '<div class="banner-slot" data-banner="disk"></div>';
 
 describe('an older server: no delegation frame, the base\'s fleet (delegation broker wave 4)', () => {
   it('W4-U27: origin/main\'s frame sequence renders unavailable, the base\'s markup, and no delegation word', () => {
@@ -32,7 +38,8 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
     for (const view of WORLD_VIEWS) {
       const html = today[view];
       expect(count(html, MARKED), `${view}: each fleet list reads unavailable`).toBe(count(baseline.views[view], LIST));
-      const old = html.split(MARKED).join(LIST);
+      expect(count(html, BACKUP_SLOT), `${view}: the backup slot, empty, once per disk slot`).toBe(count(baseline.views[view], DISK_SLOT));
+      const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('');
       expect(old, `${view}: no other delegation attribute`).not.toContain('data-delegation');
       for (const word of ['inferred', 'Unowned work', 'Offline coordinator', 'delegated']) {
         expect(html, `${view}: no "${word}"`).not.toContain(word);
