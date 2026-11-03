@@ -470,10 +470,9 @@ describe('the lane schedule census (D-5862)', () => {
         'class Elsewhere { private last = 0; m(now: number): void { if (now - this.last < SWEEP_MS) return; } }', // 11: another class
       ].join('\n'));
       writeFileSync(path.join(beats, 'server/src/diskAlarmLane.ts'), 'export class DiskAlarmLane {\n  private lastSweep = 0;\n}\n');
-      expect(laneClockReported(beats).map((x) => `${x.file}:${x.line}`)).toEqual([
-        'server/src/diskAlarmLane.ts:2',
-        'server/src/staleArchiveBeat.ts:2', 'server/src/staleArchiveBeat.ts:3', 'server/src/staleArchiveBeat.ts:7',
-      ]);
+      const disk = 'server/src/diskAlarmLane.ts';
+      const stale = 'server/src/staleArchiveBeat.ts';
+      expect(laneClockReported(beats).map((x) => [x.file, x.line])).toEqual([[disk, 2], [stale, 2], [stale, 3], [stale, 7]]);
     } finally { rmSync(beats, { recursive: true, force: true }); }
   });
 
