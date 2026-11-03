@@ -983,7 +983,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(unit.indexOf('ExecCondition=')).toBeLessThan(unit.indexOf('ExecStart='));
     const script = /^ExecCondition=\/bin\/sh -c '(.*)'$/.exec(conds[0]!)![1]!;
     const cond = (home: string): number | null =>
-      spawnSync('/bin/sh', ['-c', script.replace(/%h/g, home)]).status;
+      // `%h` is read from the environment (`"$H"`), never pasted into the script text: the home is a path, not shell syntax.
+      spawnSync('/bin/sh', ['-c', script.replace(/%h/g, '"$H"')], { env: { ...process.env, H: home } }).status;
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const plant = (prefix: string, body: string): string => {
       const home = mkTmp(prefix);
@@ -1052,6 +1053,13 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(bound).toHaveLength(1);
     expect(Number(bound[0]!.slice('TimeoutStartSec='.length))).toBeGreaterThan(30);
     expect(Number(bound[0]!.slice('TimeoutStartSec='.length))).toBeLessThan(BOX_SETTINGS_TIMER_S);
+    // The comment's arithmetic: du 20 s and df 10 s, each through `_plat_timeout`, which adds its TERM-to-KILL grace (default 3 s,
+    // clamped to 2..8): 26 s by default and 36 s at worst, never "thirty" (review 1385 A2).
+    const prose = unit.filter((l) => l.startsWith('#')).join(' ');
+    expect(prose).toContain('about 26 seconds by default');
+    expect(prose).toContain('CCD_TIMEOUT_KILL_AFTER');
+    expect(prose).toContain('36 at the worst');
+    expect(prose).not.toContain('worst case is thirty seconds');
     // The PATH is prepended in ExecStart, never set; no environment of its own (W24-P5 pins the CCRC_ half).
     expect(unit.some((l) => l.startsWith('Environment=') || l.startsWith('EnvironmentFile='))).toBe(false);
   });
@@ -1062,7 +1070,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     const unit = readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-settings.service'), 'utf8');
     const cond = unit.split('\n').find((l) => l.startsWith('ExecCondition='))!;
     const script = /^ExecCondition=\/bin\/sh -c '(.*)'$/.exec(cond)![1]!;
-    const run = (home: string): number | null => spawnSync('/bin/sh', ['-c', script.replace(/%h/g, home)]).status;
+    // `%h` is read from the environment (`"$H"`), never pasted into the script text (CodeQL, js/shell-command-injection-from-environment).
+    const run = (home: string): number | null => spawnSync('/bin/sh', ['-c', script.replace(/%h/g, '"$H"')], { env: { ...process.env, H: home } }).status;
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const plant = (prefix: string, body: string): string => {
       const home = mkTmp(prefix);

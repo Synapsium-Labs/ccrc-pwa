@@ -162,10 +162,11 @@ describe('ccrc settings: a refused value reads refused, with the act\'s own sent
       why: "CCRC_UPDATE_HEALTH_S='ninety' is not a number of seconds (digits only, at most 18) - using 90" });
   });
 
-  it('CCRC_UPDATE_DEADLINE_MS=6e5: refused, the acts read the printed plain value', () => {
+  it('CCRC_UPDATE_DEADLINE_MS=6e5: refused; the sentence gives the plain reading AS the plain reading, beside the min and max the acts read (F2)', () => {
     const d = json(boxWith('ccrc-sv-rf5-'), { CCRC_UPDATE_DEADLINE_MS: '6e5' });
     expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS')).toEqual({ key: 'CCRC_UPDATE_DEADLINE_MS', state: 'refused', value: '6e5', from: 'environment',
-      why: 'CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so the acts read 900000' });
+      why: 'CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is 900000; the backup prune reads the min and the watchdog the max, shown on the deadline line' });
+    expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS').why, 'no act reads the plain form').not.toContain('the acts read');
     expect(d.deadline.plainMs).toBe(900000);
     expect(d.deadline.minMs, 'min is 0 when a reading cannot be decided').toBe(0);
   });
@@ -175,6 +176,16 @@ describe('ccrc settings: a refused value reads refused, with the act\'s own sent
     expect(r.state).toBe('refused');
     expect(r.value).toBe(v);
     expect(r.why).toBe(`CCRC_MODELS_ADVANCE_BUDGET_S='${v}' is over 3600 seconds, so the advance step uses 3600`);
+  });
+
+  it('CCRC_MODELS_ADVANCE_BUDGET_S of 30 zeros then 5000 is clamped, and the sentence marks its cut at 32 characters with three dots (A6)', () => {
+    const v = `${'0'.repeat(30)}5000`;
+    const r = rowOf(json(boxWith('ccrc-sv-rf6b-'), { CCRC_MODELS_ADVANCE_BUDGET_S: v }), 'CCRC_MODELS_ADVANCE_BUDGET_S');
+    expect(r.state).toBe('refused');
+    expect(r.why).toBe(`CCRC_MODELS_ADVANCE_BUDGET_S='${'0'.repeat(30)}50...' is over 3600 seconds, so the advance step uses 3600`);
+    // A value of 32 characters or fewer is quoted whole, with no dots.
+    expect(rowOf(json(boxWith('ccrc-sv-rf6c-'), { CCRC_MODELS_ADVANCE_BUDGET_S: `${'0'.repeat(28)}5000` }), 'CCRC_MODELS_ADVANCE_BUDGET_S').why)
+      .toBe(`CCRC_MODELS_ADVANCE_BUDGET_S='${'0'.repeat(28)}5000' is over 3600 seconds, so the advance step uses 3600`);
   });
 
   it('CCRC_MODELS_ADVANCE_BUDGET_S=off is not a whole number: the act\'s sentence without its `ccrc: ` lead', () => {
@@ -313,7 +324,9 @@ describe('ccrc settings: the release base shows its scheme and host, nothing els
     ['https://user:secret@mirror.example.invalid/r/x?token=abc', 'custom https://mirror.example.invalid'],
     ['user:secret@mirror.example.invalid/r?token=x', 'custom mirror.example.invalid'],
     ['https://u:p@x@mirror.example.invalid/r', 'custom https://mirror.example.invalid'],
-    ['tok@mirror.example.invalid', 'custom mirror.example.invalid'],
+    // D-7873: `tok@mirror.example.invalid` read `custom mirror.example.invalid` before; `_upd_redact` leaves a token-only userinfo before
+    // a bare host (its KNOWN LIMIT), the `@` stays, and the row now records `custom` alone.
+    ['tok@mirror.example.invalid', 'custom'],
     ['tok@mirror.example.invalid:8080/r', 'custom mirror.example.invalid:8080'],
     ['https://tok@mirror.example.invalid/r', 'custom https://mirror.example.invalid'],
   ])('%s shows as %s', (url, shown) => {
@@ -352,9 +365,44 @@ describe('ccrc settings: _upd_url_origin', () => {
     ['user:secret@mirror.example.invalid/r?token=x', 'mirror.example.invalid'],
     ['https://u:p@x@mirror.example.invalid/r', 'https://mirror.example.invalid'],
     ['http://h:8080/a', 'http://h:8080'], ['', ''],
-    ['tok@mirror.example.invalid', 'mirror.example.invalid'], ['tok@mirror.example.invalid:8080/r', 'mirror.example.invalid:8080'],
+    // D-7873: an `@` left after `_upd_redact` and the scheme prints nothing (rc 1): see the next describe.
+    ['tok@mirror.example.invalid', ''], ['tok@mirror.example.invalid:8080/r', 'mirror.example.invalid:8080'],
     ['https://tok@mirror.example.invalid/r', 'https://mirror.example.invalid'],
+    ['https://deploy:s3cr/et@mirror.example.invalid/r', ''], ['https://u:p@[::1]:8080/x?y=z@w#f', ''],
+    ['https://[::1]:8080/x?y=z#f', 'https://[::1]:8080'], ['http://[2001:db8::1]:9/p', 'http://[2001:db8::1]:9'],
   ])('%s is %s', (u, want) => { expect(origin(u)).toBe(want); });
+
+  it('answers rc 1 and prints nothing when an @ is left after the redaction and the scheme (D-7873), rc 0 otherwise', () => {
+    const home = boxWith('ccrc-sv-origin-rc-');
+    const rc = (u: string): { code: number | null; out: string } => {
+      const r = spawnSync(BASH, ['-c', '. "$1"; _upd_url_origin "$2"', 'x', CCRC, u], { env: envOf(home), encoding: 'utf8' });
+      return { code: r.status, out: r.stdout };
+    };
+    for (const u of ['tok/abc@m', 'https://deploy:s3cr/et@mirror.example.invalid/r', 'https://u:pw@host:99/p@q']) expect(rc(u), u).toEqual({ code: 1, out: '' });
+    for (const u of ['https://h/p', 'h/p', 'http://h:8080/a']) expect(rc(u).code, u).toBe(0);
+  });
+});
+
+describe('ccrc settings: a release base whose userinfo survives the redaction records `custom` alone (D-7873, review 1385 F1)', () => {
+  // `_upd_redact` leaves a userinfo that holds a raw '/', '?' or '#' whole (its KNOWN LIMITS), and the old projection cut the authority
+  // at the first '/', '?' or '#' BEFORE it looked for the '@', so a prefix of the credential came out. Now an '@' left anywhere after
+  // the redaction and the scheme means the host cannot be told from the credential: no host is recorded.
+  const FORBIDDEN = ['deploy', 's3cr', 'pw', 'tok', 'u:'];
+  it.each([
+    'https://deploy:s3cr/et@mirror.example.invalid/r',
+    'https://deploy:pw?x@m.example/r',
+    'tok/abc@m',
+    'https://u:pw@host:99/p@q',
+    'https://u:p@[::1]:8080/x?y=z@w#f',
+  ])('%s reads exactly `custom`, in the JSON, the file and the human form', (url) => {
+    const home = boxWith('ccrc-sv-url-at-');
+    const r = settings(home, ['--json', '--write'], { CCRC_RELEASE_BASE_URL: url });
+    expect(rowOf(docOf(r), 'CCRC_RELEASE_BASE_URL')).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom', from: 'environment' });
+    const file = readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8');
+    const human = settings(home, [], { CCRC_RELEASE_BASE_URL: url }).stdout;
+    expect(human).toMatch(/^CCRC_RELEASE_BASE_URL {10}custom {2}\(/m);
+    for (const out of [r.stdout, file, human]) for (const s of FORBIDDEN) expect(out, `${s} appears`).not.toContain(s);
+  });
 });
 
 describe('ccrc settings: the backups and the disk', () => {
@@ -460,6 +508,49 @@ describe('ccrc settings: the backups and the disk', () => {
   });
 });
 
+describe('ccrc settings: a symlinked ~/ccrc-backups measures its target (A5)', () => {
+  it('sizes the directory the link names, not the link: the path du receives resolves into the target (stubbed by PATH)', () => {
+    const home = boxWith('ccrc-sv-link-');
+    const target = join(home, 'elsewhere');
+    mkdirSync(join(target, '20250101-000000'), { recursive: true });
+    writeFileSync(join(target, '20250101-000000', 'coord.db'), 'x'.repeat(100_000));
+    spawnSync('ln', ['-s', target, join(home, 'ccrc-backups')]);
+    // The stub reports what the REAL du would: the link's own size (a few bytes) for a path that does not follow it, the target's for
+    // one that does. `du -sb <link>` measured 163 against 100000 in review 1385; a trailing slash is what makes it follow.
+    const stubs = stubDir(home, {
+      du: '#!/bin/sh\nfor a in "$@"; do p="$a"; done\nif [ -L "$p" ]; then echo "163\t$p"; else echo "100000\t$p"; fi\n',
+    });
+    const b = docOf(settings(home, ['--json'], {}, stubs)).backups;
+    expect(b).toEqual({ state: 'ok', kept: 1, withData: 1, bytes: 100000 });
+  });
+
+  it('measures real bytes of the target through a link (the real du)', () => {
+    const home = boxWith('ccrc-sv-link2-');
+    const target = join(home, 'elsewhere');
+    mkdirSync(join(target, '20250101-000000'), { recursive: true });
+    writeFileSync(join(target, '20250101-000000', 'coord.db'), 'x'.repeat(100_000));
+    spawnSync('ln', ['-s', target, join(home, 'ccrc-backups')]);
+    const b = json(home).backups;
+    expect(b.state).toBe('ok');
+    expect(b.bytes).toBeGreaterThanOrEqual(100_000);
+  });
+});
+
+describe('ccrc settings: a symlinked ~/ccrc-backups, the macOS arm of _plat_bytes (A5)', () => {
+  it('the find-based arm follows the link through the trailing slash too (GNU find stands in for the platform\'s here)', () => {
+    const home = boxWith('ccrc-sv-link3-');
+    const target = join(home, 'elsewhere');
+    mkdirSync(join(target, '20250101-000000'), { recursive: true });
+    writeFileSync(join(target, '20250101-000000', 'coord.db'), 'x'.repeat(100_000));
+    spawnSync('ln', ['-s', target, join(home, 'ccrc-backups')]);
+    // OSTYPE is read when the file is sourced: `darwin` selects `_plat_bytes`' find and awk arm.
+    const r = spawnSync(BASH, ['-c', 'OSTYPE=darwin21; . "$1"; [ "$CCD_OS" = darwin ] || exit 9; cmd_settings --json', 'x', CCRC], { env: envOf(home), encoding: 'utf8' });
+    const b = docOf({ code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }).backups;
+    expect(b.state).toBe('ok');
+    expect(b.bytes).toBeGreaterThanOrEqual(100_000);
+  });
+});
+
 describe('ccrc settings: usage', () => {
   it.each([['--bogus', '--bogus'], ['bogus', 'bogus']])('%s is a usage error: exit 2 and ccrc: unknown argument on stderr', (arg, shown) => {
     const r = settings(boxWith('ccrc-sv-usage-'), [arg]);
@@ -486,6 +577,23 @@ describe('ccrc settings: usage', () => {
 });
 
 describe('ccrc settings: the human form', () => {
+  it('prints spec 2.1\'s source words, not the JSON tokens: environment, ccrc.env, ccrc.env (empty line), default (A9)', () => {
+    const home = boxWith('ccrc-sv-words-', 'CCRC_BACKUP_DATA_KEEP=4\nCCRC_VERSIONS_KEEP=\nCCRC_UPDATE_DEADLINE_MS=6e5\nCCRC_MODELS_ADVANCE_BUDGET_S=off\n');
+    const lines = settings(home, [], { CCRC_BACKUP_KEEP: '5', CCRC_UPDATE_HEALTH_S: 'ninety' }).stdout.split('\n');
+    const line = (key: string): string => lines.find((l) => l.startsWith(`${key} `)) ?? '';
+    expect(line('CCRC_BACKUP_KEEP')).toBe(`${'CCRC_BACKUP_KEEP'.padEnd(30)} 5  (environment, ok)`);
+    expect(line('CCRC_BACKUP_DATA_KEEP')).toBe(`${'CCRC_BACKUP_DATA_KEEP'.padEnd(30)} 4  (ccrc.env, ok)`);
+    expect(line('CCRC_VERSIONS_KEEP')).toBe(`${'CCRC_VERSIONS_KEEP'.padEnd(30)} 3  (ccrc.env (empty line), ok)`);
+    expect(line('CCRC_RELEASE_BASE_URL')).toBe(`${'CCRC_RELEASE_BASE_URL'.padEnd(30)} default  (default, ok)`);
+    // A refused row names its source the same way.
+    expect(line('CCRC_UPDATE_HEALTH_S')).toMatch(/^CCRC_UPDATE_HEALTH_S {11}ninety {2}\(environment, refused\): /);
+    expect(line('CCRC_UPDATE_DEADLINE_MS')).toMatch(/^CCRC_UPDATE_DEADLINE_MS {8}6e5 {2}\(ccrc\.env, refused\): /);
+    // The JSON keeps its four tokens.
+    const d = json(home, { CCRC_BACKUP_KEEP: '5' });
+    expect([rowOf(d, 'CCRC_BACKUP_KEEP').from, rowOf(d, 'CCRC_BACKUP_DATA_KEEP').from, rowOf(d, 'CCRC_VERSIONS_KEEP').from, rowOf(d, 'CCRC_RELEASE_BASE_URL').from])
+      .toEqual(['environment', 'file', 'empty', 'default']);
+  });
+
   it('prints one line per setting (key, value, source, verdict, why) and the deadline, backups and disk lines', () => {
     const home = boxWith('ccrc-sv-human-');
     const r = settings(home, [], { CCRC_BACKUP_KEEP: 'abc', CCRC_UPDATE_HEALTH_S: '120' });

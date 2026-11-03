@@ -1205,8 +1205,9 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       expect(src.split('_bak_snap_class "$d"').length - 1, 'the classifier is asked in one place').toBe(1);
       // The one other place a backup dir's coord.db is named by a variable path is `ccrc settings`' display-only `withData` count
       // (D-6914): a regular, non-symlink file, read by no keep, thin or prune decision, so not worth `_bak_snap_class`'s node run. It is
-      // named here so a second copy, in a decision path or anywhere else, reds: exactly one assignment, inside `cmd_settings`, under
-      // a comment that records the reason, and exactly one test of it.
+      // named here. What this counts, and no more: the spelling `="$d/coord.db"` once in ccd/ccrc, inside `cmd_settings` under its
+      // LEGITIMATELY DIFFERENT comment, and one `[ -f "$db" ]`. A second copy written with another variable passes it; this is a guard
+      // against the spelling spreading, not a proof that no other site names a backup's coord.db.
       expect(src.split('="$d/coord.db"').length - 1, 'one variable spelling of a backup dir\'s coord.db').toBe(1);
       const settingsBody = body('cmd_settings');
       expect(settingsBody, 'and it is inside cmd_settings').toContain('db="$d/coord.db"');

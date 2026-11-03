@@ -1613,7 +1613,7 @@ describe('ccrc doctor: services knows about the update-watchdog timer', () => {
 
 describe('ccrc doctor: services knows about the box settings timer', () => {
   // D-6915: `ccrc-settings.timer` joins `known`, hand-kept until ARCH-69 derives the list. A stopped timer is quiet:
-  // the console keeps showing the last record it read, so nothing else on the box says the figures stopped moving.
+  // the console keeps showing the last record it read, marked stale after 15 minutes, so only the card's age says the figures stopped moving.
   itLinux('warns, naming the unit, when the settings timer is installed and stopped', () => {
     const home = healthy('ccrc-doctor-services-settings-');
     writeUnitFile(home, 'ccrc-settings.timer');
@@ -1626,6 +1626,9 @@ describe('ccrc doctor: services knows about the box settings timer', () => {
     expect(lines[i]).toContain('ccrc-settings.timer');
     expect(lines[i]).not.toContain('every five minutes');
     expect(lines[i]).not.toContain('the job it fires is not running');
+    // The console DOES mark the figures old (stale after 900 s, review 1385 A1): the sentence says so, and never says nothing does.
+    expect(lines[i]).toContain('the console keeps showing the last settings it read, marked stale after 15 minutes');
+    expect(lines[i]).not.toContain('nothing marks');
     expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc-settings\.timer$/);
     expect(r.stdout).not.toMatch(/the check exited/);
     expect(r.code).toBe(0);
