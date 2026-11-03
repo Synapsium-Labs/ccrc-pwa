@@ -19,6 +19,9 @@ export default defineConfig({
   test: {
     include: ['browser/**/*.browser.test.{ts,tsx}'],
     environment: 'jsdom',
+    // As in vite.config.ts: vitest otherwise turns a `.css?raw` import into an empty string, so Export's stylesheet
+    // (docs/export/stylesheet.ts) would carry nothing here; only the `?raw` form is let through (review 1401 F2).
+    css: { include: [/\.css\?raw$/] },
     testTimeout: 60000,
     hookTimeout: 60000,
     sequence: { sequencer: SlowFirstSequencer },

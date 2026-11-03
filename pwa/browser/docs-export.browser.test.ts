@@ -9,7 +9,8 @@
 // (the refresh, the clicked link), excluded by name, may reach B, because a CSP meta does not stop navigation (lab 3).
 // The CONTROL, the string page with no meta, reaches B on a fetch-type channel: the detector is not blind. Chrome's
 // local-network checks are off, so they cannot make a property hold. The stylesheet is the shipped one (`server.fs.allow`
-// lets this config read @ccrc/ui's sheets), so every build carries the real `EXPORT_CSS`; whether that text holds a
+// lets this config read @ccrc/ui's sheets, and its `css.include` keeps vitest from emptying a `.css?raw` import; a case
+// below holds the file's <style> equal to a non-trivial `EXPORT_CSS`), so every build carries it; whether that text holds a
 // `url()` or `@import` is held by docs-export.test.tsx's stylesheet cases, not here (no shipped sheet names origin B).
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-export.browser.test.ts )`.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,6 +23,7 @@ import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { detachUrls } from '../src/docs/docsLinks';
 import { buildExport } from '../src/docs/export/buildExport';
 import { DOCS_EXPORT_CSP } from '../src/docs/export/policy';
+import { EXPORT_CSS } from '../src/docs/export/stylesheet';
 import { exportProvenance } from '../src/docs/export/provenance';
 import { UNREQUESTED_ENTRY, type HighlightStore } from '../src/lib/highlightStore';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -29,6 +31,8 @@ import { COMMIT_A, SERVED, entry, pageAt, treeOk } from '../test/docsFixtures';
 import { resolveChrome, startOrigins, type OriginHit, type Origins } from './harness';
 
 const SETTLE_MS = 1500;
+/** The least the export's stylesheet can measure here: the browser config must let `.css?raw` through (review 1401 F2). */
+const STYLESHEET_FLOOR = 20_000;
 const COOKIE = { name: 'ccrc_demo', value: 'a' } as const;
 type Build = 'production' | 'construction' | 'meta' | 'control' | 'meta-click' | 'control-click';
 const BUILDS: readonly Build[] = ['production', 'construction', 'meta', 'control', 'meta-click', 'control-click'];
@@ -149,6 +153,16 @@ describe('M5.B9: the hostile export opened top-level (spec 2026-10-01 5.8)', () 
   it('the production file holds none of the corpus as an element (the precondition of what follows)', () => {
     const doc = new DOMParser().parseFromString(html.production ?? '', 'text/html');
     expect(doc.querySelectorAll('img, link, base, form, object, embed, iframe, script, meta[http-equiv="refresh"]')).toHaveLength(0);
+  });
+
+  it('the production file carries the shipped stylesheet: its one <style> is EXPORT_CSS, and not a trivial one', () => {
+    const doc = new DOMParser().parseFromString(html.production ?? '', 'text/html');
+    const styles = [...doc.querySelectorAll('style')].map((s) => s.textContent ?? '');
+    expect(styles).toHaveLength(1);
+    expect(styles[0]).toBe(EXPORT_CSS);
+    // Measured at 53,151 characters (tokens, prose and export.css, each less comments and @font-face); an empty
+    // `?raw` read gives two newlines. The floor sits far above that and far below the real sheet.
+    expect(EXPORT_CSS.length).toBeGreaterThan(STYLESHEET_FLOOR);
   });
 
   it.each(['file', 'a'] as const)('production, opened from %s: nothing reaches B, and nothing reaches A\'s /api/', async (where) => {
