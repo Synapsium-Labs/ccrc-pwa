@@ -2479,9 +2479,11 @@ button.proj-card-pool::before {
   border: 1px dashed var(--edge-strong);
   border-radius: var(--r-sm);
 }
-/* Line 2: the kind chip, the identity line (ellipsised), the pool chip. Wraps only between whole items. */
+/* Line 2: the kind chip, the identity line (ellipsised), the pool chip. Wraps only between whole items. The result
+   frame's "Not the account you meant?" and its act (Task A22, D-7849) wrap the same way. */
 .accounts-row-kind,
-.acct-knob {
+.acct-knob,
+.acct-wrong-account {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -4098,6 +4100,52 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
 }
 
+/* — Mint and Sign in (accounts plan Task A22, D-7849; spec §6.2, §12.3, §12.4) —
+   The waiting line pulses amber (`--pulse-period`): the sign-in waits on the operator, not the box. The URL card stacks
+   at a phone's width with Copy link first and full width; at ≥900 Open is a 52px primary with the server's host in mono
+   beside it. The code field and the stated account are a field and its act on one row that never overflows 360: Send
+   stays beside the field, so it is still on screen when a phone's keyboard is up and the field is scrolled into view. */
+.acct-ledger > li[data-wait='true'] .acct-ledger-dot { background: var(--status-attention); animation: var(--animate-pulse-attention); }
+@media (prefers-reduced-motion: reduce) {
+  .acct-ledger > li[data-wait='true'] .acct-ledger-dot { animation: none; }
+}
+.acct-url-card { display: grid; gap: var(--sp-2); min-width: 0; }
+.acct-url-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.acct-url-card:not([data-desk]) .acct-url-acts > * { flex: 1 1 100%; }
+.acct-open-primary { gap: var(--sp-1); min-height: 52px; padding-inline: var(--sp-4); text-decoration: none; }
+.acct-open { gap: var(--sp-1); padding-inline: var(--sp-3); text-decoration: none; }
+.acct-url-host {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+.acct-url-field { max-height: 8em; overflow-y: auto; }
+.acct-grants { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-grant-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-inline-start: var(--sp-4);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.acct-grant-mark { font-family: var(--family-ui); color: var(--ink-secondary); }
+.acct-code .acct-secret-row > input { flex: 1 1 auto; min-width: 0; }
+.acct-countdown {
+  margin: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+.acct-countdown[data-wait='true'] { color: var(--status-attention-text); }
+.acct-stated .acct-secret-row > input { flex: 1 1 auto; min-width: 0; }
+.acct-wrong-act { min-height: var(--tap-min); }
+.acct-wrong-confirm { display: grid; gap: var(--sp-2); flex: 1 1 100%; min-width: 0; }
+
 /* — Remove, Discard, Replace token and the compromise disclosure (accounts plan Task A19, D-7742; spec §9, §11, §3.11) —
    The fold's two acts sit under the knob row and wrap at a phone's width. In the sheets, every block is a stack that is
    never wider than the panel at 360: a session row keeps its act right-aligned and lets the name wrap, the ledger's
@@ -4159,7 +4207,9 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
-.acct-compromise > summary {
+/* …and the sign-in URL card's "What this grants" (Task A22, D-7849): the same disclosure row in the same sheet. */
+.acct-compromise > summary,
+.acct-grants > summary {
   display: flex;
   align-items: center;
   min-height: var(--tap-min);
@@ -4199,3 +4249,58 @@ button.proj-card-pool::before {
 .box-settings-why { font-size: var(--fs-meta); line-height: var(--lh-normal); }
 .box-settings-line { font-size: var(--fs-sm); line-height: var(--lh-normal); }
 .box-settings-danger { color: var(--status-dead-text); }
+
+/* THE RESUME BANNER (accounts plan Task A23, D-7871 (3); spec §6.2): one line and Continue, in flow, never over the
+   composer or the tab bar. The fleet's banner stack places it on a desk and on a phone's fleet view; on a phone's
+   other views it is the detail pane's first child. The ground is the notice's own pair (`--ink-primary` on
+   `--bg-surface`), so the contrast gate measures no new pair. */
+.auth-resume {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-primary);
+}
+.auth-resume-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  margin: 0;
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+  overflow-wrap: anywhere;
+}
+.auth-resume-continue { flex: none; }
+/* On a phone's detail pane it sits above the screen with the page's own side gutter. */
+.shell-detail > .auth-resume { margin: calc(var(--sp-2) + var(--safe-top)) var(--sp-4) var(--sp-2); }
+/* A phone's session view is one viewport tall (`.chat`'s 100dvh), so a banner above it would push the composer off the
+   bottom. With the banner there, the pane is the viewport's column and the chat takes what is left. */
+@media (max-width: 899.98px) {
+  .shell-detail:has(> .auth-resume):has(> .chat) {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+  .shell-detail:has(> .auth-resume) > .auth-resume { flex: none; }
+  /* `width`: a column's item with auto side margins (`.chat`'s centring) is sized to its content, not stretched. */
+  .shell-detail:has(> .auth-resume) > .chat {
+    flex: 1 1 auto;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+  }
+}
+
+/* The lane card's line for the same attempt, with Continue and Cancel (spec §6.2). */
+.acct-resume-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+}
+.acct-resume-line > span { flex: 1 1 12rem; min-width: 0; }

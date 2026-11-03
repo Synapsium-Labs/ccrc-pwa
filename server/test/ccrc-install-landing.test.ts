@@ -156,8 +156,9 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
         // landing order wave 3b: `ccd-land-probe` joins on the reaper's terms (every role), and this set is the mutation site for its line.
         // test box TB11 (D-7413): `ccd-testbox-times` joins on the radar's terms, and this set is the mutation site for its line.
+        // D-7857: `ccd-carry-dedupe-sweep` joins on the same terms.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
-           'ccd-land-probe', 'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-testbox-times', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-land-probe', 'ccd-pool-sync', 'ccd-carry-dedupe-sweep', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-testbox-times', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort());
   });
 

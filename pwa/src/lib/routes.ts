@@ -5,6 +5,7 @@
 // A route added later is added here, once; `app.test.tsx` holds the table and the ladder to each other both ways.
 //
 // Pure: no store, no DOM.
+import { shapeProgramSlug } from '../../../shared/api';
 
 export interface Route {
   /** Stable, and the suffix of the route's "Go to" command (`go-${id}`). */
@@ -53,6 +54,14 @@ export const ROUTES: readonly Route[] = [
   { id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, title: 'Settings', top: false, path: null },
   // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link.
   { id: 'digest', pattern: /^\/digest\/?$/, title: 'Digest', top: false, path: null },
+  // Waiting on you (desktop-polish PL5a, D-7712): the combined list, and one item under it by its numeric id.
+  { id: 'waiting', pattern: /^\/waiting\/?$/, title: 'Waiting on you', top: true, path: '/waiting' },
+  { id: 'item', pattern: /^\/waiting\/(\d+)\/?$/, title: 'Item', top: false, path: null },
+  // The programme view (desktop-polish PL5b, D-7713): one programme by slug, opened from the chip on its box. It takes one path
+  // segment, as the session row does, and the slug's GRAMMAR is the owner's (`shapeProgramSlug`, asked by `isProgrammeSlug`
+  // below): a second copy of its pattern here would be one more place to be wrong (`pl5b-route-owner-grammar`). `top: false`
+  // and `path: null`: no rail highlight (only `session` is carried under Fleet, `topRouteOf`), no "Go to" row.
+  { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null },
 ];
 
 /** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
@@ -60,6 +69,27 @@ export const ROUTES: readonly Route[] = [
  *  path is the id itself (`w7-session-path.test.ts`). */
 export function sessionPath(id: string): string {
   return `/s/${encodeURIComponent(id)}`;
+}
+
+/** The one builder of a programme's path, `/programmes/<slug>`, which the `programme` row above parses. It encodes the slug,
+ *  and over the owner's grammar (letters, digits, `_` and `-`) `encodeURIComponent` is the identity. */
+export function programmePath(slug: string): string {
+  return `/programmes/${encodeURIComponent(slug)}`;
+}
+
+/** Whether a string is a programme slug the server accepts: `shapeProgramSlug`'s grammar and length, the one owner of both,
+ *  and the slug as it stands (the owner trims, a path segment must not change under it). The route takes any one segment, so
+ *  this is what the ladder asks before it draws a programme and what the chip asks before it offers a door. */
+export function isProgrammeSlug(slug: string): boolean {
+  const shaped = shapeProgramSlug(slug);
+  return shaped.ok && shaped.slug === slug;
+}
+
+/** Whether the programme's path leads to its view: the route resolves and the slug it carries is a programme's. A slug the
+ *  view would refuse is not offered a door. */
+export function programmeIsOpenable(slug: string): boolean {
+  const at = matchRoute(programmePath(slug));
+  return at !== null && at.route.id === 'programme' && at.param !== null && isProgrammeSlug(at.param);
 }
 
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
@@ -78,6 +108,22 @@ export function laneParam(search: string): string | null {
   return id === null || id === '' ? null : id;
 }
 
+/** The accounts route's resume query (accounts plan Task A23, D-7871; spec §6.2): `/accounts?resume=<id>` opens the
+ *  sheet of the sign-in this session started on lane `<id>`, at its code field. Only a shortcut: the attempt itself is
+ *  read from `GET /api/accounts`, never from the URL or storage. */
+export const ACCOUNTS_RESUME_QUERY = 'resume';
+
+/** The one builder of `/accounts?resume=<id>`; `resumeParam` is its one reader. */
+export function accountsResumeHref(wrapper: string): string {
+  return `/accounts?${new URLSearchParams({ [ACCOUNTS_RESUME_QUERY]: wrapper }).toString()}`;
+}
+
+/** The lane id in the resume query, or null when it is absent or empty. */
+export function resumeParam(search: string): string | null {
+  const id = new URLSearchParams(search).get(ACCOUNTS_RESUME_QUERY);
+  return id === null || id === '' ? null : id;
+}
+
 export interface RouteMatch {
   readonly route: Route;
   /** The pattern's first capture, decoded: the session id on `/s/:id`; null where the pattern captures nothing. */
@@ -91,6 +137,14 @@ export function matchRoute(path: string): RouteMatch | null {
     if (m !== null) return { route, param: m[1] === undefined ? null : decodeURIComponent(m[1]) };
   }
   return null;
+}
+
+/** The frame's view for a path (the phone swap, `shell.css`): `fleet` on the fleet route and on a path outside the
+ *  table (its placeholder), `session` for anything the detail pane shows. `app.tsx` hands it to the frame, and the
+ *  resume banner reads it to place its one instance (accounts plan Task A23, D-7871 (3)). */
+export function shellViewOf(path: string): 'fleet' | 'session' {
+  const id = matchRoute(path)?.route.id ?? null;
+  return id === null || id === 'fleet' ? 'fleet' : 'session';
 }
 
 /** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is

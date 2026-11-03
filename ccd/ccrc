@@ -1351,9 +1351,11 @@ _launchd_class() {
 # `_svc_*`/`_plat_*`, because it is no platform verb: both userlands read the
 # same file the same way (`macos-platform.test.ts` refuses such a name here).
 #
-# A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h` or `OnCalendar=*:0/<n>`
-# (every <n> minutes, <n> dividing the hour, so the gap between firings is one
-# number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h`,
+# `OnUnitInactiveSec=<n>s|min|h` (the period counted from the END of the last
+# run, the graph sweep's since D-7876: the gap between a run's end and the next
+# start is the one number) or `OnCalendar=*:0/<n>` (every <n> minutes, <n>
+# dividing the hour, so the gap between firings is one number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
 # `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
 # keys), each comment and each blank is IGNORED, never refused: they sit beside
 # the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
@@ -1367,20 +1369,41 @@ _timer_period_s() {   # <timer-file>
   fi
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line#"${line%%[![:space:]]*}"}"
-    case "$line" in OnUnitActiveSec=*|OnCalendar=*) hit="$line"; n=$((n + 1)) ;; esac
+    case "$line" in OnUnitActiveSec=*|OnUnitInactiveSec=*|OnCalendar=*) hit="$line"; n=$((n + 1)) ;; esac
   done < "$f"
   if [ "$n" -ne 1 ]; then
-    printf '%s\n' "$PROG: cannot read a timer period from $f: $n cadence lines (OnUnitActiveSec= or OnCalendar=), not one" >&2; return 1
+    printf '%s\n' "$PROG: cannot read a timer period from $f: $n cadence lines (OnUnitActiveSec=, OnUnitInactiveSec= or OnCalendar=), not one" >&2; return 1
   fi
-  if [[ "$hit" =~ ^OnUnitActiveSec=([1-9][0-9]{0,5})(s|min|h)$ ]]; then
-    case "${BASH_REMATCH[2]}" in
-      s) echo "${BASH_REMATCH[1]}" ;; min) echo $((BASH_REMATCH[1] * 60)) ;; h) echo $((BASH_REMATCH[1] * 3600)) ;;
+  if [[ "$hit" =~ ^OnUnit(Active|Inactive)Sec=([1-9][0-9]{0,5})(s|min|h)$ ]]; then
+    case "${BASH_REMATCH[3]}" in
+      s) echo "${BASH_REMATCH[2]}" ;; min) echo $((BASH_REMATCH[2] * 60)) ;; h) echo $((BASH_REMATCH[2] * 3600)) ;;
     esac
   elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
     echo $((BASH_REMATCH[1] * 60))
   else
-    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
   fi
+}
+
+# ── _psi_over <max> <knob> — the host's pressure above <max> (D-7876) ─────
+# The one reader of the host's pressure, moved here from `ccrc test` (its heavy
+# queue's `_tpressure`) so the graph sweep, which sources this body, reads it the
+# same way: PSI `some avg10` (percent) of memory, then cpu, from
+# `$CCRC_PROC_ROOT/pressure/` (default /proc, a fixture root in the suites). rc 0
+# when one is above <max>, with PRESSURE_SAID naming the resource, the reading
+# and <knob>=<max>; rc 1 otherwise, including no readable file at all (macOS, a
+# kernel without PSI): an unread pressure never holds anything back. The caller
+# decides that 0 is off.
+_psi_over() {   # <max> <knob> -> 0 while memory or cpu pressure is above <max>; PRESSURE_SAID says which
+  local max="$1" knob="$2" root="${CCRC_PROC_ROOT:-/proc}" r v
+  PRESSURE_SAID=""
+  for r in memory cpu; do
+    [ -r "$root/pressure/$r" ] || continue
+    v=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$root/pressure/$r" 2>/dev/null)
+    [ -n "$v" ] || continue
+    if awk -v v="$v" -v m="$max" 'BEGIN { exit !(v + 0 > m + 0) }'; then PRESSURE_SAID="host $r pressure (avg10) is $v, above $knob=$max"; return 0; fi
+  done
+  return 1
 }
 
 # `_timer_period_words <seconds> noun|adj` — that period in a transcript's
@@ -17281,8 +17304,8 @@ _inst_slice_limits() {   # <template> <dest>
 }
 
 # ── THE GRAPH SWEEP'S UNITS ARE RENDERED FROM THE GRAPH SETTINGS (graph revision 2 GR8, D-7354; spec §5.2) ──
-# `deploy/systemd/ccd-graph-sweep.{timer,service}` are templates whose `OnUnitActiveSec=` and `TimeoutStartSec=` are
-# the defaults. Both lanes render them through the two functions below, as the slice drop-in above is: `_inst_units`
+# `deploy/systemd/ccd-graph-sweep.{timer,service}` are templates whose `OnUnitInactiveSec=` (the period counted from
+# the end of the previous pass, D-7876) and `TimeoutStartSec=` are the defaults. Both lanes render them through the two functions below, as the slice drop-in above is: `_inst_units`
 # calls them, and deploy.sh's agent lane through its `_graph_units`, which sources the shipped ccrc on the box. The
 # values are `_gr_knobs`' (ccd/graph-resolve, sourced from beside this file: GRAPH_LIB is CCRC_HERE), so a value of
 # the wrong shape keeps its default with a WARN. Unset, each renders its template's bytes (900 s is `15min`;
@@ -17303,10 +17326,10 @@ _inst_graph_render() {
   fi
   _inst_atomic "$out" "$2" 644; rm -f -- "$out"
 }
-_inst_graph_timer() {   # <template> <dest>: OnUnitActiveSec= is CCRC_GRAPH_REFRESH_SECS, whole minutes as `<n>min`
+_inst_graph_timer() {   # <template> <dest>: OnUnitInactiveSec= is CCRC_GRAPH_REFRESH_SECS, whole minutes as `<n>min`
   _inst_graph_lib; local s="${GK[CCRC_GRAPH_REFRESH_SECS]}"
   if [ $((s % 60)) -eq 0 ]; then s="$((s / 60))min"; else s="${s}s"; fi
-  _inst_graph_render "$1" "$2" OnUnitActiveSec "$s"
+  _inst_graph_render "$1" "$2" OnUnitInactiveSec "$s"
 }
 _inst_graph_service() {   # <template> <dest>: TimeoutStartSec= is BUDGET x (SLOT_WAIT_SECS + BUILD_TIMEOUT) + 600
   _inst_graph_lib; _inst_graph_render "$1" "$2" TimeoutStartSec "$((GK[CCRC_GRAPH_BUDGET] * (GK[CCRC_GRAPH_SLOT_WAIT_SECS] + GK[CCRC_GRAPH_BUILD_TIMEOUT]) + 600))"
@@ -17650,6 +17673,7 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` and in `_uninst_wrappers`' exclusion `case`, equally.
     _inst_atomic "$tree/ccd/ccd-land-probe" "$bin/ccd-land-probe" 755
     _inst_atomic "$tree/ccd/ccd-testbox-times" "$bin/ccd-testbox-times" 755   # the test box's durations (D-7413), on the radar's terms
+    _inst_atomic "$tree/ccd/ccd-carry-dedupe-sweep" "$bin/ccd-carry-dedupe-sweep" 755   # the daily carry dedupe, shadowed (D-7857), on the radar's terms
     # D-5241: the tool-child priority's prefix, which `ccd`'s `_spawn_start`
     # names in CLAUDE_CODE_SHELL_PREFIX on Linux only — so systemd only here
     # too: macOS has no /proc/self/oom_score_adj to raise. Every role, on the
@@ -17693,9 +17717,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-land-probe, no ccd-testbox-times, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-land-probe, no ccd-testbox-times, no ccd-carry-dedupe-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -18377,6 +18401,10 @@ _inst_units() {
     # The test box durations timer's pair (D-7413): the fleet host's gh fetches them for its own `ccrc test`, so `!= server`.
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.service" "$dir/ccd-testbox-times.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.timer" "$dir/ccd-testbox-times.timer" 644
+    # The carry dedupe sweep's pair (D-7857): it collects the stale copies swap carries leave on the account roots of
+    # this box's sessions, and a server box runs none, so `!= server`.
+    _inst_atomic "$tree/deploy/systemd/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-carry-dedupe.timer" "$dir/ccd-carry-dedupe.timer" 644
     # The account-health probe's pair, role-gated for its own reason rather than
     # by imitation: a server box holds no wrapper HOMEs and no ~/.cc-secrets, so
     # there is no credential on it to measure.
@@ -18855,6 +18883,7 @@ _inst_enable() {
   # operator opts a project in with a conf under ~/.ccrc/landing/.
   [ "$INST_ROLE" = server ] || _inst_enable_timer land-probe ccd-land-probe.timer
   [ "$INST_ROLE" = server ] || _inst_enable_timer testbox-times ccd-testbox-times.timer   # a reading; with no test box URL it fetches nothing
+  [ "$INST_ROLE" = server ] || _inst_enable_timer carry-dedupe ccd-carry-dedupe.timer   # housekeeping, a dry run until the operator arms it
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
   # health probe is a reading, not the guardrail `ccd-cap-scopes.timer` is, so a
   # systemd that will not take this one timer must not turn an otherwise
@@ -21674,7 +21703,7 @@ _upd_rerun_hint() {
 # name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy. The fleet box's sweeps
 # read the last four names too (wave 29, D-6981; D-7500), through ccd/lib/ccrc-settings.sh, which `node deploy/gen-settings-lib.mjs`
 # regenerates after any edit to this line, to `_ccrc_knob` or to the `_box_*` model.
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX)
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_GRAPH_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX CCRC_CARRY_COPY_WARN_BYTES)
 
 # ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
 # The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
@@ -27571,6 +27600,7 @@ _uninst_units() {
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
       ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
+      ccd-carry-dedupe.timer ccd-carry-dedupe.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
       ccrc-models.timer ccrc-models.service \
@@ -27601,6 +27631,7 @@ _uninst_units() {
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
     "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
+    "$dir/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
@@ -27963,7 +27994,7 @@ _uninst_wrappers() {
     # launcher (the fleet box's copy was removed by Plan 4), which the marker test
     # below already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-land-probe|ccd-testbox-times|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-land-probe|ccd-testbox-times|ccd-carry-dedupe-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -28218,7 +28249,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-scope-sweep" "$HOME/.local/bin/ccd-pool-sync" \
-    "$HOME/.local/bin/ccd-land-probe" "$HOME/.local/bin/ccd-testbox-times" \
+    "$HOME/.local/bin/ccd-land-probe" "$HOME/.local/bin/ccd-testbox-times" "$HOME/.local/bin/ccd-carry-dedupe-sweep" \
     "$HOME/.local/bin/ccd-tool-adj" \
     "$HOME/.local/bin/ccd-history-sweep" \
     "$HOME/.local/bin/ccd-update-sync" \
@@ -28235,7 +28266,7 @@ _uninst_tree_bins() {
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
@@ -28653,6 +28684,9 @@ _graph_knobs() {   # [file]
   _ccrc_knob CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 $?
   _ccrc_knob CCRC_GRAPH_GATE_MAX_DENIALS 3 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DENIALS 3 $?
   _ccrc_knob CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 $?
+  # D-7876: a pass is deferred while the host's memory or CPU pressure (PSI some avg10, percent) is above this; 0 is off.
+  # 60 leaves an ordinary busy box alone (a stall on more than half of the last ten seconds is thrash, not load).
+  _ccrc_knob CCRC_GRAPH_PRESSURE_MAX 60 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_PRESSURE_MAX 60 $?
 }
 _usage_test_paragraph() {
   printf '\n%s' \

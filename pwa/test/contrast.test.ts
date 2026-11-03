@@ -113,8 +113,10 @@ const edit = (dir: string, rel: string, fn: (s: string) => string): void => {
 
 /** Run the REAL gate command against a mutated copy of the tree. */
 function runGate(dir: string = ROOT): { status: number | null; stdout: string } {
+  // `maxBuffer`: the gate prints a row per measured pair per palette, and its stdout crossed `spawnSync`'s 1 MiB default
+  // when the Waiting on you sheet joined the audit (desktop-polish PL5a); a killed child answers `status: null`.
   const r = spawnSync(process.execPath, [path.join(dir, 'design/contrast-check.mjs')], {
-    encoding: 'utf8',
+    encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
   });
   return { status: r.status, stdout: r.stdout };
 }
@@ -426,7 +428,10 @@ describe('the gate command', () => {
 // gate, or that a reviewer measured as still open. They run the real gate
 // binary against a mutated copy of the real tree, so nothing here can pass by
 // the test and the gate disagreeing about what the auditor does.
-describe('the gate fails a mutated tree', () => {
+// Each case copies the tree and runs the whole gate, which took 4.2 to 4.9 s a case on a CI shard against vitest's 5 s
+// default (measured on PR #2146, where one of them timed out at 5.4 s once the Waiting on you sheet joined the audit), so
+// the budget is stated here, not left to the default.
+describe('the gate fails a mutated tree', { timeout: 30_000 }, () => {
   let lastTree: string | undefined;
 
   const expectFail = (rel: string, mutate: (s: string) => string): string => {
@@ -1158,6 +1163,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/docs/docs.css',
       'src/fleet/fleet.css',
       'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
+      'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
@@ -2323,6 +2329,18 @@ describe('the programme box\'s hues (Task G2)', () => {
     for (const key of programmeRules) expect(report.uncovered, key).not.toContain(key);
   });
 
+  // Desktop-polish PL5b: the waiting chip states its own ground and ink, so it is one pair in every palette whatever the hue.
+  it('measures the waiting chip, ink on the surface, in every palette (the door and the plain count share the rule)', () => {
+    const key = '.pg-waiting, .pg-waiting-plain';
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
+    for (const row of rows) {
+      expect(row.detail, row.label).toBe('var(--ink-primary) on var(--bg-surface)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(report.uncovered, key).not.toContain(key);
+  });
+
   it('tints only the kicker: every other band of the box sits on the card surface', () => {
     const tinted = rulesOf(ROOT, 'src/fleet/programmeBox.css')
       .filter((r) => /-tint\b/.test(bgOf(r.body) ?? ''))
@@ -2332,5 +2350,94 @@ describe('the programme box\'s hues (Task G2)', () => {
       const rule = rulesOf(ROOT, 'src/fleet/programmeBox.css').find((r) => ruleKey(r) === band);
       expect(bgOf(rule?.body ?? ''), band).toBe('var(--bg-surface)');
     }
+  });
+});
+
+// Desktop-polish PL5a (D-7712): the Waiting on you list's pills and the item view's programme band. A pill says its meaning
+// in words (Blocking, Checking…, Came back, ticked; coordinator not responding), and each pill rule states its own ground
+// beside its ink, so the audit measures every pair in every palette through the stylesheet and none falls into the
+// uncovered census. The programme's name sits on its hue's own tint (the pair `.pg-kicker` is gated on) through
+// `--pg-ink`, which is ink on the surface when the programme has no hue.
+describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () => {
+  const HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
+  const SHEET = 'src/ledgers/ledgers.css';
+
+  it('measures every pill and panel pair in every palette, through the stylesheet', () => {
+    const attention = 'var(--status-attention-text) on var(--status-attention-tint)';
+    const dead = 'var(--status-dead-text) on var(--status-dead-tint-solid)';
+    const muted = 'var(--ink-secondary) on var(--bg-raised)';
+    for (const [key, pair] of [
+      ['.wl-pill', muted],
+      [".wl-pill[data-tone='blocking']", attention],
+      [".wl-pill[data-tone='ask']", attention],
+      [".wl-pill[data-tone='checking']", 'var(--status-busy-text) on var(--accent-tint)'],
+      [".wl-pill[data-tone='stale'], .wl-pill[data-tone='bounced']", dead],
+      [".wl-pill[data-tone='soon'], .wl-pill[data-tone='later']", muted],
+      ['.wi-act .wi-refusal', dead],
+      [".wi-act .wi-status[data-stale='true']", dead],
+      ['.wi-act .wi-status', 'var(--status-busy-text) on var(--accent-tint)'],
+    ] as const) {
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe(pair);
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('measures the programme name on its hue\'s tint, for each hue, in every palette', () => {
+    for (const h of HUES) {
+      const key = `.wi-band .wi-prog [in .wi-band] [as .wi-band[data-hue='${h}']]`;
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe('var(--pg-ink) on var(--pg-tint)');
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  // Desktop-polish PL5b (D-7713): the programme view's head and cards, Goals, and the chip on the programme box. Every pair is
+  // measured through the stylesheet in every palette: the name on the surface in each hue, the Goals text on the card and on
+  // the "In short" box, a pending change on the attention tint.
+  it('measures the programme view\'s pairs, and Goals\', in every palette, through the stylesheet', () => {
+    const ink = 'var(--ink-primary) on var(--bg-surface)';
+    const muted = 'var(--ink-secondary) on var(--bg-surface)';
+    const attention = 'var(--status-attention-text) on var(--status-attention-tint)';
+    for (const [key, pair] of [
+      ['.pv-head .pv-title [in .pv-head]', ink],
+      ['.pv-head .pv-sub [in .pv-head]', muted],
+      ['.pv-card .pv-h [in .pv-card]', muted],
+      ['.pv-card .pv-none [in .pv-card]', ink],
+      ['.pg-goals .pg-goals-title, .pg-goals .pg-goals-label [in .pg-goals]', muted],
+      ['.pg-goals .pg-goals-short', 'var(--ink-primary) on var(--bg-raised)'],
+      ['.pg-goals .pg-goals-mod > .pg-goals-pending', attention],
+    ] as const) {
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe(pair);
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('measures the programme\'s name on the surface in each hue, in every palette', () => {
+    for (const h of HUES) {
+      const key = `.pv-head .pv-kicker [in .pv-head] [as .pv-head[data-hue='${h}']]`;
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe('var(--pg-ink) on var(--bg-surface)');
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('leaves no rule of the sheet in the uncovered census', () => {
+    const keys = rulesOf(ROOT, SHEET).map(ruleKey);
+    expect(keys.length).toBeGreaterThan(20);
+    for (const key of keys) expect(report.uncovered, key).not.toContain(key);
   });
 });

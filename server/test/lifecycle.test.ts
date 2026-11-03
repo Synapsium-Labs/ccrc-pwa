@@ -92,7 +92,8 @@ async function makeApp(
     // unconditionally, so a watcher stub missing either throws inside the
     // route rather than answering `unmeasured`. Empty map: no test in this
     // file measures a repo, only that the key is present and defaulted.
-    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), stop: () => {}, serverCapsSettled: async () => {} } as never)
+    // D-6436: and `currentFleetListing()`, null here (no listing), so the route reads the registry itself as before.
+    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), currentFleetListing: () => null, stop: () => {}, serverCapsSettled: async () => {} } as never)
     : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
@@ -1140,6 +1141,8 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
       'testbox-token', 'testbox-push-key', 'testbox-times', 'testbox-runs-log',
+      // D-7857: the carry dedupe sweep's record.
+      'carry-dedupe-record',
     ]);
     // D-7278 (the intended change): the one class the ruling took out of containment.
     expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual(['workspace-dependency-dirs']);

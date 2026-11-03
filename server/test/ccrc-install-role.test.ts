@@ -212,6 +212,24 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
       .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
   });
 
+  itLinux('places the carry dedupe sweep\'s bin and units, and enables its timer, on a fleet box (D-7857)', async () => {
+    const { home, r } = await fleet();
+    const bin = join(home, '.local', 'bin', 'ccd-carry-dedupe-sweep');
+    expect(existsSync(bin), '--role fleet did not place ccd-carry-dedupe-sweep').toBe(true);
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-carry-dedupe-sweep')));
+    expect(statSync(bin).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-carry-dedupe-sweep(?![\w-])/m);
+    for (const u of ['ccd-carry-dedupe.service', 'ccd-carry-dedupe.timer']) {
+      const p = unitDir(home, u);
+      expect(existsSync(p), `${u} never reached ~/.config/systemd/user on the fleet role`).toBe(true);
+      expect(readFileSync(p), `${u} is not the shipped file`).toEqual(readFileSync(placed(home, 'deploy', 'systemd', u)));
+      expect(statSync(p).mode & 0o777, `${u} has the wrong mode`).toBe(0o644);
+    }
+    const argv = systemctlCalls(home).map((c) => c.argv);
+    expect(argv.indexOf('--user enable --now ccd-carry-dedupe.timer'), 'the carry dedupe timer was enabled before daemon-reload read its unit file')
+      .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
+  });
+
   it('skips the server-only landing lines — no PWA address, no passphrase gate', async () => {
     const { r } = await fleet();
     expect(r.stdout).not.toContain('install: PWA:');
@@ -296,6 +314,8 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-land-probe.timer',
       // test box TB11 (D-7413): the durations timer, `!= server` like the radar, so `both` enables it.
       '--user enable --now ccd-testbox-times.timer',
+      // D-7857: the carry dedupe timer, `!= server` like the radar, so `both` enables it.
+      '--user enable --now ccd-carry-dedupe.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
@@ -329,7 +349,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccd-carry-dedupe.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -359,6 +379,10 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-testbox-times.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-testbox-times.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-testbox-times');
+    // D-7857: the carry dedupe sweep's pair is `!= server` too; its bin lands on every role, as the radar's.
+    expect(existsSync(unitDir(home, 'ccd-carry-dedupe.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-carry-dedupe.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-carry-dedupe');
     expect(existsSync(join(home, '.local', 'bin', 'ccd-land-probe')), '--role server did not place ccd-land-probe').toBe(true);
     // history spec §9.5: no shim, no unit pair and no enable on a server box —
     // it hosts no sessions and must never hold a store D-4183.

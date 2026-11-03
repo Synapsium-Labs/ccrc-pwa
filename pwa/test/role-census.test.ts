@@ -265,6 +265,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     // disclosure's steps.
     '.acct-session-word': META,
     '.acct-compromise-steps': META,
+    // Mint and Sign in (accounts plan Task A22, D-7849): the server's host beside Open, and the countdown.
+    '.acct-url-host': META,
+    '.acct-countdown': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,

@@ -211,4 +211,10 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/ccrc-test (the wrapper, the runs log\'s one writer, D-7445)'],
     collector: 'ccd/ccrc-test (the append that creates today\'s file removes the day files older than two days, by name)',
     bound: 'two day files (today\'s and yesterday\'s), the 24 hours the card counts', tier: 'at most 128 B per test run', ruling: null },
+  // D-7857: the daily carry dedupe sweep's record. Rolling (R): one line appended per pass, and the file rewritten by
+  // rename to its last 400 lines, so it holds about a year of daily passes. `ccrc doctor`'s carry-copies check reads
+  // its latest line.
+  { name: 'carry-dedupe-record', root: '~/.cc-sessions/carry-dedupe-record', pattern: 'R',
+    creators: ['ccd-carry-dedupe-sweep'], collector: 'ccd-carry-dedupe-sweep (its last 400 lines kept, rewritten by rename each pass)',
+    bound: 'the last 400 passes', tier: 'one line of under 200 bytes per daily pass', ruling: null },
 ];

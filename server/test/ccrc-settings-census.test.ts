@@ -150,7 +150,7 @@ const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_CADDY_ROOT_CA: { cls: 'fixture-path', why: 'Its header in ccd/ccrc makes it a constant for CCRC_CADDY_SYSTEM_FILE\'s reason, a root-side path a test points at a fixture.' },
   CCRC_SCOPE_SWEEP_STATE: { cls: 'fixture-path', why: '`_check_scope-sweep` reads the sweep\'s verdict record there, a runtime path a test points at a fixture.' },
   CCRC_CGROUP_ROOT: { cls: 'fixture-path', why: '`_check_scopes` reads the cgroup tree there, which a test points at a fixture.' },
-  CCRC_PROC_ROOT: { cls: 'fixture-path', why: '`_check_scopes` reads /proc there, which a test points at a fixture.' },
+  CCRC_PROC_ROOT: { cls: 'fixture-path', why: '`_check_scopes` and the host pressure reader `_psi_over` (D-7876) read /proc there, which a test points at a fixture.' },
   CCRC_ALLOW_SANDBOX_LAUNCHCTL: { cls: 'fixture-path', why: '`_svc_launchctl` lets a harness that asks reach launchctl from a home that is not the real one.' },
   CCRC_CODEX_AUTH_BASE: { cls: 'fixture-path', why: '`_codex_bridge_prepare` forwards it to a direct lane\'s bridge only when its caller set it, the auth endpoint a test points at a loopback fake and a live box never sets (D-6921).' },
   // per run: the address for one run.

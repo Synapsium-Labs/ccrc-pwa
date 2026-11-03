@@ -515,6 +515,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
 | `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
+| `ccd-carry-dedupe.timer` | fleet, both | 24 h | runs `ccd carry-dedupe --identical-only` and records what it would reclaim in `~/.cc-sessions/carry-dedupe-record`; a dry run until the operator arms it ("Swap-carry copies and the dedupe sweep", below) | — |
 | `ccd-testbox-times.timer` | fleet, both | 24 h | fetches CI's per-file test durations into `CCRC_TESTBOX_TIMES` with the box's `gh`, for the test box's budget estimate; fetches nothing with no test box configured ("The test box", below) | — |
 | `ccrc-codex-usage@<id>.timer` | fleet, both | 15 min | one per `codex` lane: that lane's Codex usage into `~/.cc-limits` | — |
 
@@ -625,6 +626,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
 | `test-slice`, `testbox` | the test slice's live memory, limits and heavy-run queue; the test box as the server decided it: its state and its switch, named separately, the box's queue depth and the tool versions that differ ("The test box", below) |
+| `carry-copies` | the bytes swap carries copied in the last 7 days (swap.log's `(copy: …)` and `, copy: …` forms) and what the dedupe sweep's latest record says it could reclaim, each against `CCRC_CARRY_COPY_WARN_BYTES`; a WARN names how to read the record and arm the sweep ("Swap-carry copies and the dedupe sweep", below) |
 | `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). The FAIL and WARN arms are on: a FAIL counts in doctor's exit code and a WARN does not. A fresh box that was never handed a value (no fleet generation file and no sync report that records a value written or carries the generation the box held, or no server state file and none of the server's traces of a value: its retired list, its previous value, a set-aside copy, or, on a box whose server writes the fleet file itself, that file or its generation file) has that finding read PASS with its sentence, never WARN or FAIL: the server mints at its first boot, and its next rotation hands the fleet one. A box that once held a value and lost it is a FAIL |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
@@ -1329,14 +1331,15 @@ containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
 way as the rest; a value that is not its shape keeps its default and warns.
-Twenty-two are the graph sweep's (graph revision 2, D-7348; see **The sweep** under "Graph layer"): `CCRC_GRAPH_STORE`,
+Twenty-three are the graph sweep's (graph revision 2, D-7348; see **The sweep** under "Graph layer"): `CCRC_GRAPH_STORE`,
 `CCRC_GRAPH_SOURCE_REF`, `CCRC_GRAPH_REPOS_EXCLUDE`, `CCRC_GRAPH_REFRESH_SECS`, `CCRC_GRAPH_FETCH_SECS`,
 `CCRC_GRAPH_FULL_REBUILD_SECS`, `CCRC_GRAPH_INCREMENTAL_MAX_FILES` (box-wide default 0: every refresh is a full build,
 OA-GR2, D-7634), `CCRC_GRAPH_FULL_FAIL_MAX`, `CCRC_GRAPH_FAIL_BACKOFF_SECS`, `CCRC_GRAPH_BUDGET`,
 `CCRC_GRAPH_BUILD_TIMEOUT`, `CCRC_GRAPH_SLOT_WAIT_SECS`, `CCRC_GRAPH_BUILD_NICE`, `CCRC_GRAPH_MAX_WORKERS`,
 `CCRC_GRAPH_MAX_SHRINK_PCT`, `CCRC_GRAPH_KEEP_BUILDS`, `CCRC_GRAPH_BUILD_GRACE_SECS`, `CCRC_GRAPH_MIGRATE_BUDGET`,
-`CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS` and
-`CCRC_GRAPH_CARD_DIFF_LIST_MAX`. `_graph_knobs` reads them and `ccd/graph-resolve` checks each against its shape; a
+`CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS`,
+`CCRC_GRAPH_CARD_DIFF_LIST_MAX` and `CCRC_GRAPH_PRESSURE_MAX` (default 60, 0 off: the host pressure above which a pass
+is deferred, D-7876). `_graph_knobs` reads them and `ccd/graph-resolve` checks each against its shape; a
 value that is not its shape keeps its default and warns with the key, the value and where it came from, so a typo never
 removes a bound. The sweep's unit sets no environment, so on the fleet box `ccrc.env` is where they go. Four are
 rendered into the sweep's units by `ccrc install`/`update` and `deploy.sh agent` (`CCRC_GRAPH_REFRESH_SECS` into the
@@ -1355,6 +1358,8 @@ naming the file when it is not that shape. Sixteen are the fleet host's, read fr
 twenty-eight are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
 (`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE` and `CCRC_TESTBOX_UNIT_MAX`. `ccrc test --testbox-knobs host|box` prints either table, one
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
+One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
+bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
 
 **Seeing a box's settings.** `ccrc settings` prints what seven of them resolve to on this box — the three keeps, the
 health window, the deadline (with the smallest and largest reading the server may hold), the release base (shown only
@@ -4509,7 +4514,7 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its nineteen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
 shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), nineteen clauses,
@@ -4732,9 +4737,15 @@ fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tre
 names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
 composer of `ws-orphan`, and a child's deny list names the verb.
 The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the wiring in
-`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode,
+which is the disk alarm's `critical`; before the alarm's first sweep the lane reads no pressure), audits at most 2 trees per
 pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
-hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
+hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`. A census that meets its bound (`truncated`)
+audits nothing that pass, writes one `orphan census truncated` row with the rows it saw and the seconds it took, and is
+asked again after 15 minutes, the wait doubling with each truncated census in a row up to the cadence and reset by a
+whole one; an unreadable census is asked again after 15 minutes. A pending retry is a fixed instant that a later change of
+pressure does not move. The count of truncated censuses lives in the server's memory, so a restart starts it over, which
+costs at most a few bounded census walks in the hours after it (#1565).
 
 It ships in **shadow**: it records `orphan worktree would be removed` in the feed and runs no verb until the operator
 touches `$REG/orphan-tree-live` by hand. A tree whose HEAD is on no remote is `orphan worktree left` until
@@ -6147,13 +6158,19 @@ queries/denials, `nullPeerRead` (every row carrying no `ccrcPeerReads` field at 
 proves the hook shipped), `heldN` and `coTenantN` among the roll-ups. It is the instrument the R4 and R7
 adoption readings are taken from; nothing in this repository writes it, ships it, or tests it.
 
-**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`, `OnUnitActiveSec=` rendered
-from `CCRC_GRAPH_REFRESH_SECS`, default `15min`), builds **one graph per repository** (graph revision 2, D-7350). A
+**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`, `OnUnitInactiveSec=` rendered
+from `CCRC_GRAPH_REFRESH_SECS`, default `15min`: the period is counted from the END of the previous pass, so passes
+never run back to back, D-7876), builds **one graph per repository** (graph revision 2, D-7350). A
 pass takes its own flock (a second entrant is `pass-locked`), then reads the pause file:
 `touch ~/.ccrc/graph-sweep-paused` makes every pass `paused` before any fetch, store write or build, and nothing in
 ccrc removes it — not the sweep, not `ccrc install`/`update`, not `deploy.sh agent`, though those enable and start the
 timer (D-7365); only you do, with `rm`. The pass then loads its library from the shipped tree (`ccd/ccrc`'s body and
-`ccd/graph-resolve`, which owns the store, the repository key and the source ref), creates or checks the store
+`ccd/graph-resolve`, which owns the store, the repository key and the source ref) and reads the host's pressure (PSI
+memory and cpu, `some avg10`, the reading `ccrc test` queues on): above `CCRC_GRAPH_PRESSURE_MAX` (default 60; 0 turns
+it off) the pass ends `deferred-pressure` with the reading as its reason, in the census and the journal, before any
+fetch, store write or build, and the timer tries again one period later; a run of deferred passes is one census entry
+whose `deferrals` counts them, so the earlier passes' rows (and every repository's backoff) stay in the census. The
+pause file is read first and wins. The pass then creates or checks the store
 (`CCRC_GRAPH_STORE`, default `~/.ccrc/graphs`, always used as its realpath and refused inside `~/projects` or
 `~/worktrees`), and groups every tree under `~/projects` and `~/worktrees` by the realpath of its git common dir: one
 repository each, keyed `<basename of the main checkout>-<8 hex of the common dir's digest>`. Per repository it keeps a
@@ -6166,7 +6183,8 @@ operator ruled after the measured one-day incremental gap of 10.26%, OA-GR2, D-7
 `CCRC_GRAPH_FAIL_BACKOFF_SECS` between attempts. A build runs through `ccd/graph-build`, the only caller of the engine,
 inside `ccrc test --local --heavy` (the tests slice and its heavy queue: it waits at most `CCRC_GRAPH_SLOT_WAIT_SECS`
 for a slot, runs at `nice` `CCRC_GRAPH_BUILD_NICE` with `CCRC_GRAPH_MAX_WORKERS` workers, and is stopped after
-`CCRC_GRAPH_BUILD_TIMEOUT`), so the sweep's unit no longer carries the build's memory. A build is staged in
+`CCRC_GRAPH_BUILD_TIMEOUT`), so the sweep's unit no longer carries the build's memory; the unit's own
+`MemorySwapMax=512M` (D-7876) makes a sweep that reaches its `MemoryMax=6G` fail rather than swap without limit. A build is staged in
 `<repo-key>/staging/`, checked (the corpus guard, and a graph that shrank by more than `CCRC_GRAPH_MAX_SHRINK_PCT` is
 refused), and published read-only as `<repo-key>/builds/<commit12>-<pin>-<UTC time>/`; `current` then names it in one
 rename, so a session never reads a half-written graph. The unit's `TimeoutStartSec=` is rendered as
@@ -6177,7 +6195,9 @@ and removing a stray `.graphifyignore` an old per-tree sweep generated, are the 
 tree; `graphify update .` run through the link fails with `EACCES` and changes nothing shared, while
 `graphify save-result` writes to `graphify-out/memory/`, which links to the repository's writable `memory/`. A
 repository named in `CCRC_GRAPH_REPOS_EXCLUDE` gets no graph. The census, `~/.ccrc/graph-sweep.json`, keeps the last 10
-passes; a pass status is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`, and each pass
+passes; a pass status is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked ·
+deferred-pressure`, and `ccrc doctor`'s graphify line names the last pass's status and duration, and the reason a
+deferred one gives (D-7876); each pass
 holds one `repos[]` row per repository with its outcome (`fresh · refreshed · rebuilt · skipped-budget ·
 skipped-slots · skipped-backoff · refused-by-guard · refused-shrink · timed-out · oom-killed · failed · no-source ·
 excluded`; `failed` names its `fail` class), the build's duration, peak memory and CPU, and each row is also printed
@@ -6549,6 +6569,31 @@ is `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in ccd's child spawn environme
 resume-retry, including an external-provider wrapper that execs Claude Code. Deploying it does not retrofit
 existing panes. Assignment and any subsequent removal take effect at each session's NEXT ordinary start; no
 forced fleet restart is part of this change. An aggregate slice `MemoryHigh` must never return.
+
+### Swap-carry copies and the dedupe sweep
+
+A swap carry copies the session's transcript to the destination account and never removes the source, and a sidecar
+carry that cannot hardlink (a bind-mounted account root answers `EXDEV`, and no read-write mount of that filesystem
+exposes both trees) copies too, so every account a session passed through can keep a full stale copy (#317).
+`ccd carry-dedupe` collects them one uuid at a time behind its keeper rule and its proofs (its header in `ccd/ccd`).
+
+`ccd-carry-dedupe-sweep`, driven by `ccd-carry-dedupe.timer` (an hour after the timer is armed, then daily, spread by up
+to an hour), runs `ccd carry-dedupe --identical-only`: only copies byte-identical to the
+keeper's are candidates. **It ships shadowed:** the verb runs as a dry run and changes nothing, and `--apply` is added
+only while `~/.cc-sessions/carry-dedupe-live` exists. Nothing writes that file; the operator touches it after reading a
+week of shadow lines. Each pass appends one line to `~/.cc-sessions/carry-dedupe-record` (its last 400 lines are kept):
+
+    <YYYY-MM-DD HH:MM:SS> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<word:n,…|->
+
+taken from the verb's own `total:` line, with its refusals counted by word (`tie`, `diverged`, `recent`, `locked`,
+`keeperless`, `error`). A pass whose output has no total records `unmeasured=no-total` and fails the unit.
+
+`ccrc doctor`'s `carry-copies` check reads two figures and derives neither: the bytes swap carries copied in the last
+7 days, from swap.log's `sidecar … (copy: <cause> <bytes> bytes)` and `, copy: <cause> <F> files <B> bytes` lines, and
+the latest record line's reclaimable bytes. It WARNs when either is over `CCRC_CARRY_COPY_WARN_BYTES` (default
+10737418240, 10 GiB), or when the latest pass did not measure or exited non-zero, and PASSes with both figures
+otherwise. Its remedy for a shadow sweep is to read the record and then arm the sweep; once armed, it points at the
+swap.log lines that name why each carry copied.
 
 ### Memory guardrails (Linux)
 

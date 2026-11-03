@@ -25,8 +25,9 @@ import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';
-import { matchRoute, sessionPath } from './lib/routes';
+import { isProgrammeSlug, matchRoute, sessionPath, shellViewOf } from './lib/routes';
 import { useSkin } from './lib/skin';
+import { AuthResumeInDetail } from './accounts/AuthResumeBanner';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
 import { DigestScreen } from './screens/DigestScreen';
@@ -37,6 +38,8 @@ import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
+import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
+import { ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
@@ -93,6 +96,7 @@ export function App(): ReactNode {
   // `day` itself: the server answers 400 for a day that is not a UTC date.
   const digestDay = route === 'digest' ? new URLSearchParams(search).get('day') : null;
   const set = SKIN_SETS[useSkin()];
+  const view = shellViewOf(path);
   // A ROUTE CHANGE PUTS THE DETAIL PANE BACK AT THE TOP (D-161).
   //
   // `.shell-detail` is ONE persistent DOM node (the frame's keyed `detail`
@@ -161,6 +165,14 @@ export function App(): ReactNode {
     // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every
     // page, ref and view the visit opens.
     <DocsScreen path={path} search={search} />
+  ) : route === 'waiting' ? (
+    <WaitingRoute />
+  ) : route === 'item' ? (
+    <ItemRouteAt param={at!.param} />
+  ) : route === 'programme' && isProgrammeSlug(at!.param!) ? (
+    // Keyed by the slug: one programme's Goals read never shows under another's name. A slug the server would refuse
+    // (`shapeProgramSlug`) falls to the placeholder below, as an unknown path does.
+    <ProgrammeScreen key={at!.param} slug={at!.param!} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">
@@ -180,7 +192,11 @@ export function App(): ReactNode {
       <SettingsDataProvider active={settings}>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <ShellFrame set={set} view={route === null || route === 'fleet' ? 'fleet' : 'session'} detailRef={detail}>
+      <ShellFrame set={set} view={view} detailRef={detail}>
+        {/* THE RESUME BANNER ON EVERY ROUTE (accounts plan Task A23, D-7871 (3); spec §6.2): a sign-in this session
+            started that waits for its code. The fleet's banner stack shows it on a desk and on a phone's fleet view;
+            here, the top of the detail pane, on a phone's other views, so one instance is on screen at a time. */}
+        <AuthResumeInDetail view={view} />
         <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
       </ShellFrame>
       <FleetFlows />

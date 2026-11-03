@@ -104,7 +104,8 @@ describe('BannerStack', () => {
     const source = new Map(files.map((f) => [f, readFileSync(f, 'utf8')]));
     const renderedElsewhere = (name: string): boolean =>
       [...source].some(([f, text]) => path.basename(f, path.extname(f)) !== name && new RegExp(`<${name}[\\s/>]`).test(text));
-    const modules = readdirSync(path.join(SRC, 'fleet'))
+    // `accounts/` holds one (the resume banner, accounts plan Task A23, D-7871 (3)).
+    const modules = [...readdirSync(path.join(SRC, 'fleet')), ...readdirSync(path.join(SRC, 'accounts'))]
       .filter((f) => f.endsWith('.tsx'))
       .map((f) => f.slice(0, -4))
       .filter((m) => /(Banner|Notice|Attention|AttentionList|Recovery)$/.test(m))

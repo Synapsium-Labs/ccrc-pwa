@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { localIO } from '../src/io.js';
-import { readLimits, measured } from '../src/limits.js';
+import { localIO, type FleetIO } from '../src/io.js';
+import { readLimits, measured, LIMITS_READ_CONCURRENCY } from '../src/limits.js';
 import { rolloverCases } from './fixtures/rollover.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -333,5 +333,57 @@ describe('readLimits — the marker\'s TYPE, not just its content (the third `_a
     mkdirSync(marker, { recursive: true });
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
     expect(l['claude-a']).toMatchObject({ authDead: false });
+  });
+});
+
+describe('readLimits reads its files concurrently (desktop polish C4, D-6436)', () => {
+  it('reads its files concurrently, the answer unchanged', async () => {
+    const home = mkTmp('ccrc-limits-bounded-');
+    seedRoster(home);
+    const dir = path.join(home, '.cc-limits');
+    mkdirSync(dir, { recursive: true });
+    const now = 1784600000;
+    const N = LIMITS_READ_CONCURRENCY + 9;
+    for (let i = 0; i < N; i += 1) {
+      writeFileSync(path.join(dir, `lane-${String(i).padStart(2, '0')}.json`), JSON.stringify({ five: i, seven: 2 * i, ts: now - 60 }));
+    }
+    writeFileSync(path.join(dir, 'lane-bad.json'), 'not json');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const throwing = path.join(dir, 'lane-03.json');
+    // The reference: the plain read, with lane-03's read rejecting (a dropped round trip that threw).
+    const plain: FleetIO = { ...localIO, readFile: async (p) => { if (p === throwing) throw new Error('dropped'); return localIO.readFile(p); } };
+    const expected = await readLimits(plain, cfg, now);
+    expect(expected['lane-03']).toMatchObject({ five: null, seven: null });
+    expect(expected['lane-04']).toMatchObject({ five: 4, seven: 8 });
+    // Gated: every limits-file read is held until the driver lets the batch go.
+    const pending: (() => void)[] = [];
+    let inFlight = 0;
+    let most = 0;
+    const gated: FleetIO = {
+      ...plain,
+      readFile: async (p) => {
+        if (path.dirname(p) !== dir) return plain.readFile(p);
+        inFlight += 1; most = Math.max(most, inFlight);
+        try { await new Promise<void>((go) => { pending.push(go); }); return await plain.readFile(p); } finally { inFlight -= 1; }
+      },
+    };
+    const p = readLimits(gated, cfg, now);
+    let rounds = 0;
+    let first = -1;
+    let done = false;
+    void p.then(() => { done = true; });
+    for (let spin = 0; !done && spin < 10_000; spin += 1) {
+      await new Promise<void>((go) => { setTimeout(go, 0); });
+      if (pending.length === 0) continue;
+      if (first < 0) first = pending.length;
+      rounds += 1;
+      pending.splice(0).forEach((go) => { go(); });
+    }
+    const got = await p;
+    expect(first, 'the second file is asked for before the first answers').toBeGreaterThan(1);
+    expect(most, 'never more than the bound in flight').toBeLessThanOrEqual(LIMITS_READ_CONCURRENCY);
+    expect(rounds, 'about files / bound rounds, not one per file').toBeLessThanOrEqual(Math.ceil((N + 1) / LIMITS_READ_CONCURRENCY) + 1);
+    expect(got).toEqual(expected);
+    expect(Object.keys(got)).toEqual(Object.keys(expected));
   });
 });
