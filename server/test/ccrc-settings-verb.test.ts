@@ -207,10 +207,14 @@ describe('ccrc settings: a ccrc.env the reader cannot take is unmeasured, never 
     }
   });
 
+  // Each platform's own reader (`_ccrc_knob`): systemd's names only the key on the bad line; on macOS the launchd job sources
+  // the whole file with bash, so the shell reader refuses every key that job reads, CCRC_BACKUP_DATA_KEEP among them (as CI's
+  // macOS leg measured on this row).
   it('an inner CR makes only the keys the file names unmeasured', () => {
     const d = json(boxWith('ccrc-sv-cr-', 'CCRC_BACKUP_KEEP=5\rjunk\nNOTE=1\n'));
     expect(rowOf(d, 'CCRC_BACKUP_KEEP').state).toBe('unmeasured');
-    expect(d.settings.filter((s) => s.state === 'unmeasured').map((s) => s.key)).toEqual(['CCRC_BACKUP_KEEP']);
+    expect(d.settings.filter((s) => s.state === 'unmeasured').map((s) => s.key))
+      .toEqual(process.platform === 'darwin' ? ['CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP'] : ['CCRC_BACKUP_KEEP']);
     expect(rowOf(d, 'CCRC_VERSIONS_KEEP').state).toBe('ok');
   });
 
@@ -218,9 +222,13 @@ describe('ccrc settings: a ccrc.env the reader cannot take is unmeasured, never 
     const d = json(boxWith('ccrc-sv-long-', 'CCRC_BACKUP_KEEP="5\nCCRC_X=1"\n'));
     const r = rowOf(d, 'CCRC_BACKUP_KEEP');
     expect(r.state).toBe('unmeasured');
-    expect(r.why).toBe('CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env names CCRC_BACKUP_KEEP in a shape this reader does not decide '
-      + "(a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, "
-      + 'or a line after one ending in a backslash)');
+    // On macOS the shell reader's sentence, which names the line, not the shape (`_box_unit_env_shell`).
+    expect(r.why).toBe(process.platform === 'darwin'
+      ? 'CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env line 1 is not a plain NAME=value line, and on macOS the launchd job '
+        + 'sources both env files with bash, so that line can change what they set'
+      : 'CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env names CCRC_BACKUP_KEEP in a shape this reader does not decide '
+        + "(a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, "
+        + 'or a line after one ending in a backslash)');
     expect(Buffer.byteLength(r.why!)).toBeLessThan(480);
     expect(r.why!.endsWith('...')).toBe(false);
   });
@@ -503,7 +511,8 @@ describe('ccrc settings: the backups and the disk', () => {
     });
     const d = docOf(settings(home, ['--json'], {}, stubs));
     expect(d.disk).toEqual({ state: 'ok', availBytes: 600 * 1024, sizeBytes: 1000 * 1024 });
-    expect(d.backups).toEqual({ state: 'ok', kept: 0, withData: 0, bytes: 12345 });
+    // macOS's `_plat_bytes` sizes with find, never du, so the du stub is not asked there and the empty directory is 0 bytes.
+    expect(d.backups).toEqual({ state: 'ok', kept: 0, withData: 0, bytes: process.platform === 'darwin' ? 0 : 12345 });
     expect(d.at).toBe(NOW);
   });
 });
