@@ -13,6 +13,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { createLandingJournal } from '../src/coord/landingJournal.js';
 import type { LandingJournalPort } from '../src/coord/landingJournalPort.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
+import type { CcdResult } from '../src/lifecycle.js';
+import { LANDING_REFUSAL_STATUS } from '../../shared/refusal.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -262,12 +264,17 @@ describe('order', () => {
       after: [{ id: a, project: P, pr: 11, binding: { kind: 'no-run' } }] });
   });
   it('foreign-setter-is-recorded', async () => {
+    // the entry's run is claimed by coord-a; the order is attributed to lane-b, so the setter is the writer, never the claimant
     const w = await world();
-    const a = await create(w, 11, 'lane-a');
+    const { entryId } = runBound(w, 11, 'coord-a');
     const res = await post(w, 'order', orderBody('lane-b', 11, { fixesMain: true }));
-    expect(res.json()).toMatchObject({ ok: true, entry: { id: a, setBy: 'lane-b' } });
-    expect(lines(w)[1]).toMatchObject({ setBy: 'lane-b' });
-    expect((await line(w)).entries[0]).toMatchObject({ setBy: 'lane-b', fixesMain: true });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, changed: true, entry: { id: entryId, setBy: 'lane-b' } });
+    const last = lines(w).at(-1)!;
+    expect(last).toMatchObject({ kind: 'order', setBy: 'lane-b' });
+    expect(last.setBy).not.toBe('coord-a');
+    expect(w.db.prepare('SELECT setBy FROM landing_authority WHERE subjectId = ?').get(entryId)).toEqual({ setBy: 'lane-b' });
+    expect((await line(w)).entries[0]).toMatchObject({ id: entryId, setBy: 'lane-b', fixesMain: true });
   });
   const clearedAndReplayed = async (patchSet: { afterIds?: number[]; fixesMain?: boolean }, patchClear: { afterIds?: number[]; fixesMain?: boolean }) => {
     const w = await world();
@@ -443,22 +450,129 @@ describe('uncertainty', () => {
 
 describe('serialisation', () => {
   it('write-serial-with-advance', async () => {
-    let gate: () => void = () => undefined;
-    const held = new Promise<void>((resolve) => { gate = resolve; });
-    let hold = false;
-    const w = await world({ io: (inner) => ({ ...inner, readdirMeasured: async (...a) => { if (hold) await held; return inner.readdirMeasured(...a); },
-      readdir: async (...a) => { if (hold) await held; return inner.readdir(...a); } }) });
+    // A real holder of `coordMutex`: `POST /api/runs` with a session awaits `deps.runCcd` inside the lock, so a runner that
+    // signals on entry and then waits keeps the lock across a real await. The landing write is queued behind it; while it
+    // waits, an advance gives the entry its current run, and the write's facts must be read after the holder releases.
+    let signalHeld: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { signalHeld = resolve; });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const runCcd = async (): Promise<CcdResult> => {
+      signalHeld();
+      await gate;
+      return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    };
+    const w = await world({ over: { runCcd } });
+    for (const [k, v] of Object.entries({ workspace: 'lane-a', branch: 'ws/lane-a', base: 'origin/main' })) {
+      writeFileSync(path.join(w.home, '.cc-sessions', `lane-a.${k}`), v);
+    }
     await create(w, 11);
     const runId = openRun(w, 'coord-a');
-    hold = true;
-    const pending = post(w, 'order', orderBody('lane-b', 11, { fixesMain: true }));
-    await new Promise((r) => setTimeout(r, 25));
-    // the write has not entered the store; an advance now gives the entry a current run
+    const opening = w.app.inject({ method: 'POST', url: '/api/runs', headers: tok,
+      payload: { program: 'holder', title: 'H', project: 'demo', wave: 1, waveOf: 8, claimedBy: 'lane-a', claimedByUuid: WHO['lane-a'],
+        sessionId: 'holder-worker', homeProject: 'demo' } });
+    // premise 1: the holder reached the hold (it fails fast, not by a timeout, when it answered without reaching it)
+    const brokenPremise = opening.then((r) => { throw new Error(`POST /api/runs answered ${r.statusCode} without reaching the hold: ${r.body}`); });
+    brokenPremise.catch(() => undefined);
+    await Promise.race([held, brokenPremise]);
+
+    const bytesBefore = w.journal();
+    const settled: number[] = [];
+    const write = post(w, 'order', orderBody('lane-b', 11, { fixesMain: true })).then((r) => { settled.push(r.statusCode); return r; });
+    // premise 2: the lock is held, measured: a write that can finish while the hold is in flight was not queued behind it
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    expect(settled, 'the landing write finished while another route held the coordination mutex').toEqual([]);
+    expect(w.journal(), 'the landing write appended while the mutex was held').toBe(bytesBefore);
+
+    // the advance lands while the write waits; the write has read nothing of the store yet
     pin(w, runId, 11);
-    hold = false; gate();
-    const res = await pending;
+    release();
+    const [openRes, res] = await Promise.all([opening, write]);
+    expect(openRes.statusCode, openRes.body).toBe(200);
     expect(res.statusCode, res.body).toBe(200);
     expect(feed(w)).toEqual([expect.objectContaining({ sessionId: 'lane-b', runId })]);
     expect(lines(w).at(-1)).toMatchObject({ kind: 'order', subject: { binding: { kind: 'run', observedRunId: runId } } });
+  });
+});
+
+describe('typed write failures reach HTTP with their status and word', () => {
+  const Q = 'project-b';
+  const rawProjection = (w: World, rowId: number, pr: number, project: string): void => {
+    w.db.prepare("INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) VALUES (?, ?, ?, ?, ?, NULL, 'pinned', 'operator', 1)")
+      .run(rowId, project, pr, HEAD, HC);
+  };
+  const restoredFromBefore = async (w: World, build: () => Promise<void>): Promise<World> => {
+    w.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const snap = path.join(w.home, 'restore-point.db');
+    copyFileSync(w.dbPath, snap);
+    await build();
+    await w.app.close();
+    w.db.close();
+    for (const ext of ['-wal', '-shm']) rmSync(w.dbPath + ext, { force: true });
+    copyFileSync(snap, w.dbPath);
+    return world({ home: w.home });
+  };
+  /** The answer is the word, its LANDING_REFUSAL_STATUS status, and nothing the result did not carry. */
+  const refused = (res: { statusCode: number; json: () => unknown }, error: keyof typeof LANDING_REFUSAL_STATUS, extra: Record<string, unknown> = {}): void => {
+    expect(res.statusCode, error).toBe(LANDING_REFUSAL_STATUS[error]);
+    expect(res.json()).toMatchObject({ ok: false, error, ...extra });
+    for (const k of ['mayApply', 'recovery']) if (!(k in extra)) expect(res.json(), `${error} grew a ${k}`).not.toHaveProperty(k);
+  };
+
+  it('landing-after-cross-project is 409 and appends nothing', async () => {
+    const w = await world();
+    await create(w, 11);
+    const other = (await post(w, 'entries', { ...entryBody('lane-a', 5), project: Q })).json() as { entry: { id: number } };
+    const before = w.journal();
+    refused(await post(w, 'order', orderBody('lane-b', 11, { afterIds: [other.entry.id] })), 'landing-after-cross-project');
+    expect(w.journal()).toBe(before);
+  });
+
+  it('landing-recovery-unresolved is 409 for an order on a recovered subject and for a new entry', async () => {
+    const w = await world();
+    const w2 = await restoredFromBefore(w, async () => { await create(w, 11); await create(w, 12); });
+    const bytes = w2.journal();
+    expect((await line(w2)).entries, 'the projection is not fabricated').toEqual([]);
+    refused(await post(w2, 'order', orderBody('lane-b', 11, { afterIds: [] })), 'landing-recovery-unresolved');
+    refused(await post(w2, 'entries', entryBody('lane-a', 99)), 'landing-recovery-unresolved');
+    expect(w2.journal()).toBe(bytes);
+  });
+
+  it('landing-identity-conflict is 409 for a creation while the project holds a conflicting projection', async () => {
+    const w = await world();
+    let subject = 0;
+    const w2 = await restoredFromBefore(w, async () => { subject = await create(w, 11); });
+    rawProjection(w2, subject, 5, Q);
+    const bytes = w2.journal();
+    refused(await post(w2, 'entries', entryBody('lane-a', 99)), 'landing-identity-conflict');
+    refused(await post(w2, 'order', orderBody('lane-b', 11, { afterIds: [] })), 'landing-identity-conflict');
+    expect(w2.journal()).toBe(bytes);
+  });
+
+  it('landing-dependencies-unreadable is 503 when the walk reaches a row whose stored edges cannot be read', async () => {
+    const w = await world();
+    await create(w, 11);
+    rawProjection(w, 50, 12, P);
+    w.db.prepare("UPDATE landing_entries SET afterIds = 'nope' WHERE id = 50").run();
+    const before = w.journal();
+    refused(await post(w, 'order', orderBody('lane-b', 11, { afterIds: [50] })), 'landing-dependencies-unreadable');
+    expect(w.journal()).toBe(before);
+  });
+
+  it('landing-id-overflow is 409 when the allocator has no safe id left', async () => {
+    const w = await world();
+    rawProjection(w, Number.MAX_SAFE_INTEGER, 1, P);
+    refused(await post(w, 'entries', entryBody('lane-a', 2)), 'landing-id-overflow');
+    expect(w.journal()).toBe('');
+  });
+
+  it('landing-projection-unreadable is 503 and keeps its restart recovery on the wire', async () => {
+    const w = await world();
+    rawProjection(w, 5, 3, P);
+    w.db.exec('UPDATE landing_entries SET fixesMain = 7 WHERE id = 5');
+    const before = w.journal();
+    refused(await post(w, 'order', orderBody('lane-b', 3, { afterIds: [] })), 'landing-projection-unreadable', { recovery: 'restart' });
+    expect(w.journal()).toBe(before);
+    expect(feed(w)).toEqual([]);
   });
 });

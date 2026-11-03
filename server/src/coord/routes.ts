@@ -3805,12 +3805,12 @@ export function registerCoordRoutes(
   app.post('/api/landing/entries', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/landing/entries')) return;
-    return landingWrite(req, reply, 'entry');
+    return await landingWrite(req, reply, 'entry');
   });
   app.post('/api/landing/order', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/landing/order')) return;
-    return landingWrite(req, reply, 'order');
+    return await landingWrite(req, reply, 'order');
   });
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
