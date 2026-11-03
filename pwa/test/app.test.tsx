@@ -373,7 +373,7 @@ describe('ROUTES and the ladder, both ways', () => {
     '/waiting', '/waiting/7', '/waiting/x', '/waiting/7/y', '/waitingx',
     // Settings' five pages and the catch-all (D-5504).
     '/settings/updates', '/settings/appearance', '/settings/notifications', '/settings/automation',
-    '/settings/security', '/settings/bogus', '/settings/a/b',
+    '/settings/security', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
   ];
   const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
 
@@ -391,6 +391,19 @@ describe('ROUTES and the ladder, both ways', () => {
         expect(document.querySelector('.app-shell'), p).toHaveAttribute('data-view', 'session');
       }
       view.unmount();
+    }
+  });
+
+  it('`/settings/measure-highlighting` renders R19\'s measurement page, not the Settings frame (W5h-a)', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      navigate('/settings/measure-highlighting');
+      render(<App />);
+      const detail = document.querySelector('.shell-detail')!;
+      expect(within(detail as HTMLElement).getByRole('heading', { level: 1, name: 'Measure highlighting' })).toBeInTheDocument();
+      expect(within(detail as HTMLElement).queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 

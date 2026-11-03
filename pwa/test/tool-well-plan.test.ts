@@ -3,7 +3,7 @@
 // may not load markdown.tsx. The unit cases give it a stub registry; one case gives it the real one.
 import { describe, expect, it } from 'vitest';
 import { toolWellPlan } from '../src/session/toolWell';
-import { isRegisteredGrammar } from '../src/lib/markdown';
+import { isRegisteredGrammar } from '../src/lib/highlightNames';
 
 const REGISTERED = new Set(['ts', 'py', 'json', 'bash']);
 const stub = (lang: string): boolean => REGISTERED.has(lang);

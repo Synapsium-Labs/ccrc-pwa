@@ -12373,7 +12373,7 @@ export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
 /** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
 export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 
-import type { AccountStateAnswer, LaneState } from './accounts.js';
+import type { AccountStateAnswer, AuthStatusState, LaneState } from './accounts.js';
 /** One lane on `GET /api/accounts`'s `lanes` (spec §3.4, §13.1; D-5517; accounts plan Task A12), keyed by lane id and
  *  read from `~/.cc-sessions/.accounts/<id>.json`. ONLY for a reader with the session verdict (D-5511): a dark gate's
  *  reader gets today's three fields and nothing else, and an armed gate refuses a box token before the handler. Never
@@ -12562,6 +12562,13 @@ export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 
+/** The Linear MCP tools no fleet session may call (D-7674, #1444 spec §11): every Linear act goes through `ccrc-api linear`
+ *  and the server's proxy, never a sign-in of a session's own. `mcp__claude_ai_Linear` is the claude.ai Linear connector's
+ *  fixed prefix, which names no workspace, so the rule refuses every tool it offers. A per-account MCP server's name is the
+ *  operator's and may name a workspace, so this public tree cannot list it; no server-name wildcard ships, because whether
+ *  the pinned Claude Code honours one is not in CF13's rig record, and those entries stay the rollout's manual removal. */
+export const LINEAR_MCP_DENY: readonly string[] = ['mcp__claude_ai_Linear'];
+
 /** The `permissions.deny` list of `~/.cc-sessions/account-deny.settings.json` (D-6202), which `ccd` passes to EVERY
  *  fleet session's spawn in its one `--settings` (a top-level row, a routed row and a `.child` row alike), beside the
  *  children's `CHILD_DENY_RULES`. An accident guard: `bash -c` with an assembled string, another interpreter or a
@@ -12577,6 +12584,7 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   'Bash(ccd account-pane:*)',
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
+  ...LINEAR_MCP_DENY,
 ];
 
 /** `FleetHealth`'s disk block (D-6615), declared HERE at the foot as an interface merge, with its type import beside it,
@@ -12951,3 +12959,82 @@ export interface AccountRemoveCheckAnswer {
 /** `POST /api/accounts/revoke-ack`'s body (N6, D-7738): the lane (which may already be gone) and the credential kind
  *  the operator ticked "I revoked it" for. It writes one `revoke-acknowledged` audit row with no value and runs no op. */
 export interface AccountRevokeAckBody { laneId: string; kind: AtProviderKind }
+
+// ── Accounts: the sign-in routes (accounts plan Task A21, D-7792, D-7793; spec §3.7, §3.8, §6.2, §9, §13.1) ──────────
+// APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line.
+
+/** The cap word the sign-in routes gate on (N4; D-7750 (10), D-7793 (1)): `account-auth-v1`, which A20's `ccd caps`
+ *  advertises. HELD OUT of {@link ACCOUNT_CAPS} until the screen that runs a sign-in ships (A22): `connect.caps` names
+ *  only `ACCOUNT_CAPS`' words, and the connect sheet opens on the first provider method it does not narrow, so offering
+ *  this word before the sheet can run Mint or Sign in would open the Anthropic sheet on a method it cannot run. */
+export const ACCOUNT_AUTH_CAP = 'account-auth-v1';
+
+/** The words the sign-in routes (`server/src/accounts/routes.ts`) answer of their own, each with its one status in
+ *  `REFUSAL_STATUS` (D-7793). The verb's own codes of the same spelling cross as these words, never as its sentence.
+ *  `bad-code`              the code is off its method's shape, or its bytes off the stdin rule (400): nothing was sent,
+ *                          and the attempt still waits for a code.
+ *  `code-already-sent`     the attempt already has its code; a code works once (409).
+ *  `no-auth-attempt`       no attempt with that id is running for the lane, here or on the box (409).
+ *  `not-your-attempt`      another session started the attempt; only it may send the code (403, spec §3.7).
+ *  `auth-url-untrusted`    the status file did not echo the attempt, or named a URL, host or device code off the
+ *                          method's allowlist (409, N2): the attempt was ended and the answer carries no URL.
+ *  `auth-unsupported-here` the fleet node cannot run a sign-in (501), with the verb's `reason` when it is one of
+ *                          `AUTH_UNSUPPORTED_REASONS`.
+ *  `method-unmeasured`     the method's sign-in host has not been measured on a box, so the server would refuse every
+ *                          URL it showed (409, D-7792): nothing was started.
+ *  `node-changed`          the fleet node answering is not the one the attempt started on (409, spec §13.2).
+ *  `not-a-sign-in-lane`    the sign-out was asked of a lane that is not a ccrc-generated Anthropic lane (409, D-7749). */
+export const ACCOUNT_AUTH_REFUSALS = [
+  'bad-code', 'code-already-sent', 'no-auth-attempt', 'not-your-attempt', 'auth-url-untrusted', 'auth-unsupported-here',
+  'method-unmeasured', 'node-changed', 'not-a-sign-in-lane',
+] as const;
+export type AccountAuthRefusal = (typeof ACCOUNT_AUTH_REFUSALS)[number];
+
+/** Why `auth-unsupported-here`, as `ccrc account auth-start` measures it (D-7750 (6)). */
+export const AUTH_UNSUPPORTED_REASONS = ['darwin-arm-absent', 'no-systemd-run', 'no-user-manager'] as const;
+
+/** `LaneWire`'s in-flight sign-in (spec §6.2, §13.1), from the server's in-memory attempt: its last state the server
+ *  read, the first instant it is no longer live, and whether THIS session started it (the resume banner's question).
+ *  Absent when the server holds no attempt for the lane. Never persisted by `offline.ts`. An interface merge at the
+ *  foot, so no line cited above moves. */
+export interface LaneWire {
+  authAttempt?: { state: AuthStatusState; expiresAt: number; mine: boolean };
+}
+
+/** `POST /api/accounts/:id/auth/start`'s body: the method (`AUTH_METHODS`). */
+export interface AccountAuthStartBody { method: string }
+
+/** `POST /api/accounts/:id/auth/start`'s 200: the attempt the server generated, and the one deadline every countdown
+ *  reads (spec §3.7). */
+export interface AccountAuthStartAnswer {
+  readonly ok: true;
+  readonly attemptId: string;
+  readonly expiresAt: number;
+}
+
+/** `GET /api/accounts/:id/auth`'s 200 (spec §6.2 step 5, §3.8): the helper's state, and for the URL states the URL and
+ *  host the server parsed and accepted, and the device code when the method has one. `failure` is the helper's
+ *  refusal code on `failed`, when it is a plain word: never its sentence. Times in epoch ms. */
+export interface AccountAuthStatusAnswer {
+  readonly ok: true;
+  readonly state: AuthStatusState;
+  readonly url?: string;
+  readonly host?: string;
+  readonly userCode?: string;
+  readonly failure?: string;
+  readonly updatedAt: number;
+  readonly expiresAt: number;
+}
+
+/** `POST /api/accounts/:id/auth/code`'s body: the attempt, and the one code (secret-bearing, held for the request). */
+export interface AccountAuthCodeBody { attemptId: string; code: string }
+/** `POST /api/accounts/:id/auth/cancel`'s body. */
+export interface AccountAuthCancelBody { attemptId: string }
+
+/** `POST /api/accounts/:id/credential {signOut: true}`'s 200 (N5, D-7749): what the sign-out found on this box, and the
+ *  lane as the server reads it after. Nothing is said about the provider: G23 is unmeasured (the OA1 record). */
+export interface AccountSignOutAnswer {
+  readonly ok: true;
+  readonly signOut: 'removed' | 'absent';
+  readonly lane: LaneWire;
+}

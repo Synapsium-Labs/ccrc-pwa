@@ -65,7 +65,8 @@ const IMPORTS = [
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
   "import type { LandingEntry } from './landingLine.js';",
   "import type { NodeRole } from './node-role.js';",
-  "import type { AccountStateAnswer, LaneState } from './accounts.js';",
+  // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
+  "import type { AccountStateAnswer, AuthStatusState, LaneState } from './accounts.js';",
   "import type { DiskHealth } from './disk.js';",
   "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
   "import type { HostPressureHealth } from './pressure.js';",

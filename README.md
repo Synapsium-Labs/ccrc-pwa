@@ -1058,7 +1058,10 @@ failed with its word), whether a rotation is owed and why, whether the fleet con
 generation, its transport (`http` said as unencrypted), the previous and retired values still presented, the
 proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
 alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
-(`POST /api/token/rotate`, session-only). Settings then has
+(`POST /api/token/rotate`, session-only). A **Linear** card follows it (#1444): the Linear keys ccrc holds, one per
+workspace, each row with its workspace's name, teams, key tail and last check, **Add a workspace** to add a key, and
+the older single key as a legacy row; every session reaches Linear through these keys alone, by way of `ccrc-api
+linear` (below), and never signs in to Linear itself. Settings then has
 a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. Settings then has a further section, **Stall watch**
@@ -1891,9 +1894,10 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   in its `settings.json`, then the session-hook and skill installers run against that one home. Nothing after
   the roster entry rolls back; the cure for a failure there is `ccrc install`, which converges the same home.
   `--hue` is one of `cyan`, `violet`, `blue`, `magenta`, `amber`, `green`. `--method` says how the credential
-  arrives: an `anthropic` lane defaults to `login` — no key file; the credential is the `.credentials.json`
-  Claude Code writes in the config dir — and also takes `paste` or `setup-token`, a long-lived OAuth token
-  kept in `~/.cc-secrets/<id>-oauth.env`. `openrouter` and `compatible` are key lanes, the key kept in
+  arrives: an `anthropic` lane defaults to `setup-token` (Mint, the long-lived token, since the accounts plan's
+  Task A20) — a token lane whose `~/.cc-secrets/<id>-oauth.env` is minted afterwards by `auth-start --method
+  setup-token`, or piped in at once with `--credential -` — and also takes `login` — no key file; the credential
+  is the `.credentials.json` Claude Code writes in the config dir — or `paste`, a token piped in. `openrouter` and `compatible` are key lanes, the key kept in
   `~/.cc-secrets/<id>-<provider>.env`; `compatible` requires `--base-url`, and `openrouter` defaults to its own
   endpoint. `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
   required, and refused on an `anthropic` lane. `add` refuses a `selectable` list: add the account first, then
@@ -1930,12 +1934,28 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
 - **Signing a lane in.** A `login` lane's credential is Claude Code's own: run the lane's wrapper
   `~/.local/bin/<id>` and `/login`, and Claude Code writes `.credentials.json` into that lane's config dir. A
   `paste` or `setup-token` lane's credential is a long-lived OAuth token — the one Claude Code's `setup-token`
-  prints — piped to `--credential -`, and `credential` replaces it later. The helpers on the box that drive
-  the same acts without a terminal are `ccd-account-auth <id> <login|setup-token|openai-login>` and
-  `ccd account-pane --id <id> --method setup-token`, which runs that helper's mint in tmux session
-  `cc-auth-<id>` (`--cancel` stops it) and writes the token straight to `~/.cc-secrets/<id>-oauth.env`. The
-  helper publishes its state and the sign-in URL — never the credential — to `~/.cc-sessions/.auth/<id>.json`,
-  and takes the code pasted back through the FIFO beside it, `~/.cc-sessions/.auth/<id>.run/in`.
+  prints — piped to `--credential -`, and `credential` replaces it later. **Without a terminal**, the server's
+  sign-in runs `auth-start --id <id> --method login|setup-token|openai-login --attempt <32 hex>`: it launches
+  `ccd-account-auth <id> <method> --attempt <a>` as a transient user service (`ccrc-auth-<id>-<first 8 of a>`,
+  `RuntimeMaxSec=660`, `MemoryMax=512M`; never a scope, so the helper outlives its caller) and returns as soon as
+  the helper's status file `~/.cc-sessions/.auth/<id>.json` names that attempt. The helper publishes its state, the
+  sign-in URL and the attempt id there — never the credential. The pty methods take a pane on the lane's own
+  tmux server, `tmux -L ccrc-auth-<id>`, inside that unit, which the agent's tmux grant cannot reach.
+  `auth-code --id --attempt` writes the code from stdin, once (`code-already-sent` after), into the FIFO
+  `~/.cc-sessions/.auth/<id>.run/in` and never onto an argv; `auth-cancel --id --attempt` stops the unit, or refuses `auth-cancel-failed` and leaves everything when the
+  user manager cannot stop it. Both verbs default `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` before they ask
+  the manager, since the agent spawns them with only `HOME`, `PATH` and `LANG`. A lane
+  that already holds a credential signs in, or mints, into `~/.ccrc/auth-scratch/<id>` (outside every agent read
+  root), and the helper hands it to `set --method setup-token|login --attempt <a>`, which probes it and, only once
+  it passes, installs it under the lane lock: a re-mint into `<id>-oauth.env`, a Sign in again into the config
+  dir, and a switch also sets or clears the roster's `exec.secretsFile` and rewrites the wrapper and `accounts.sh`.
+  A refused, cancelled or expired attempt leaves the lane as it was, and every attempt's end kills its tmux server
+  and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
+  --sign-out` runs `claude auth logout` in that lane's config dir and removes its `.credentials.json` (whether that
+  ends the sign-in at Anthropic is unmeasured). A macOS node refuses `auth-start` with `auth-unsupported-here`
+  (reason `darwin-arm-absent`) until its launchd arm ships. `ccd account-pane --id <id> --method setup-token`, the
+  wave-1 path, runs the same helper on the same private socket (`--cancel` stops it) and writes the token straight to
+  `~/.cc-secrets/<id>-oauth.env`.
 - **`declare`** records a launcher somebody else wrote — `candidates` lists them — as an `external` entry with
   `homeAble: false` and `telemetry: "none"` (default suffix `.<id>`), also switched off. ccrc never writes,
   moves or removes that launcher.
@@ -3819,7 +3839,7 @@ honest boundary — this section covers only what that one does not: the install
 lane and the skills' client, the PWA surfaces, the disaster-recovery drill, the
 Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
-**All four skills ship to every rostered account's config dir.** The
+**All five skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, nineteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
@@ -3852,6 +3872,9 @@ A fourth skill, `ccrc-history` (`ccd/history-skill/`, installed by `ccd/install-
 rides the same two lanes into the same homes and teaches a session the `ccrc history` recall verbs
 ("Session history", below). It points into no other skill's tree, so it has no place in that order,
 and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside its `SKILL.md`.
+A fifth, `ccrc-linear` (`ccd/linear-skill/`, installed by `ccd/install-linear-skill.sh`, #1444), rides the same lanes
+into the same homes and teaches every session the `ccrc-api linear` verbs (below); like the history skill it points
+into no other skill's tree, and doctor's `skills` check and `ccrc doctor --fix` cover it too.
 
 **None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
 description says "Never use it inside a subagent": a session started by another session's Agent tool or a
@@ -3879,6 +3902,16 @@ tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
+**The `linear` group** (`linear workspaces|teams|issue|comments|search|statuses|projects|labels|users|create|update|comment`,
+#1444) is how every session works with Linear, in every workspace the operator has added a key for in Settings → Linear:
+the server holds the keys and calls Linear through its proxy routes, so no session signs in to Linear, holds a key or
+uses a Linear MCP tool, a connector or `curl` for it. Each verb carries the pane's identity in its query, free text
+travels only in a `--json` body, `<REF>` must be an identifier such as `AAA-12` before anything is sent, and every verb
+but `workspaces` takes `--workspace`. The fifth installed skill, `ccrc-linear` (`ccd/linear-skill/`, installed by
+`ccd/install-linear-skill.sh` into every rostered home whatever the session's role, on the same two lanes as the other
+four), is its reference: the verbs, the bodies, the answers with Linear's own text fenced under `untrusted`, and every
+refusal with its remedy. The coordinator, worker and reviewer skills each point at it, and every fleet session's
+account deny file refuses the claude.ai Linear connector's tools.
 `ccrc install` and `ccrc update` place it on every role except `server`,
 whose box hosts no sessions, and `deploy/deploy.sh`'s agent arm installs it
 beside `ccd`, as the fallback. The token it reads is the server's to place:
@@ -7118,7 +7151,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
-| `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane, on the box (the agent grants no `account-pane`) |
+| `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |
 | `caps` · `version` | the verbs this copy implements; this box's build stamp |
 
 `ws-rm`, `ws-gc` and `ws-attic --drop` cross no wire (the agent grants none of

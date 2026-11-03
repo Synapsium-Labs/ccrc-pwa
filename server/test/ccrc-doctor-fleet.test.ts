@@ -440,7 +440,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
   it('passes on the healthy box, counting homes', () => {
     const home = healthy('ccrc-doctor-skills-pass-');
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history$/m);
+    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear$/m);
   });
 
   it('fails on ONE edited byte in ONE home, naming the account and the skill, and the installer runs it green again', () => {
@@ -507,7 +507,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(rem.status, `${rem.stdout}${rem.stderr}`).toBe(0);
     expect(readFileSync(f, 'utf8')).toBe(shipped);
     r = runDoctor(home);
-    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history$/m);
+    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear$/m);
   }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
 
   it('a home whose ccrc-history lacks only its MIT sidecar is stale too: diff -r -q compares the whole tree', () => {
@@ -557,8 +557,8 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     writeWrapper(home, 'acct-a', { cfgDir: '.acct-a' });
     mkdirSync(join(home, '.acct-a', 'skills'), { recursive: true });
     let r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL skills: 4 skill\(s\) in the rostered homes differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing.*acct-a: ccrc-history missing/m);
-    for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history']] as const) {
+    expect(r.stdout).toMatch(/^FAIL skills: 5 skill\(s\) in the rostered homes differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing.*acct-a: ccrc-history missing.*acct-a: ccrc-linear missing/m);
+    for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history'], ['linear-skill', 'ccrc-linear']] as const) {
       cpSync(join(REPO, 'ccd', tree), installed(home, '.acct-a', name), { recursive: true });
     }
     r = runDoctor(home);

@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
+import { ACCOUNT_AUTH_CAP, ACCOUNT_CAPS, SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { accountsConnect } from '../src/accounts/lanes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
@@ -168,8 +168,11 @@ describe('GET /api/accounts: lanes and connect (D-5511, D-5517)', () => {
 describe('connect.caps (D-7740)', () => {
   it('is the advertised words this server knows, in its order; no evidence is none', () => {
     const at = { origin: 'https' as const, stepUpFreshUntil: null };
+    // `account-auth-v1` gates the sign-in routes (A21) but is held out of `ACCOUNT_CAPS` until the screen that runs a
+    // sign-in ships (A22, D-7793 (1)): offered now, it would open the Anthropic sheet on Mint, which the sheet cannot run.
     expect(accountsConnect({ ...at, ccdVerbs: ['ws-new', 'account-v2', 'account-auth-v1'] }))
       .toEqual({ accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2'] });
+    expect(ACCOUNT_CAPS as readonly string[]).not.toContain(ACCOUNT_AUTH_CAP);
     expect(accountsConnect({ ...at, ccdVerbs: null })).toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: [] });
     expect(accountsConnect({ ...at, ccdVerbs: ['ws-new'] }).caps).toEqual([]);
   });

@@ -7,10 +7,10 @@
 // that parsed, and `DocsBanners` on a page with a listing; so a tree failure keeps the crumbs and a file failure keeps
 // the header and the truth line (spec 4.7's placement, M4.F4). Its stylesheet is docs/docs.css (spec 4.14), which
 // also holds the fleet header's Docs door: this static import, through app.tsx's, puts it in the main stylesheet.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DOCS_PAGE_PREFIX, docsPageUrl, parseDocsPage, parseDocsRef,
-  type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
+  type DocPin, type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../docs/DocImage';
 import { DocsBanners } from '../docs/DocsBanners';
@@ -31,6 +31,7 @@ import { docsPathKind } from '../docs/docsTree';
 import { useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
 import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
+import { HighlighterContext } from '../lib/highlighterContext';
 import { docsRunner, type MarkdownParser } from '../lib/markdownRunner';
 import { navigate } from '../lib/router';
 import { useNow } from '@ccrc/ui';
@@ -173,11 +174,21 @@ export function DocsScreen(p: {
   const [draftAssets, setDraftAssets] = useState(0);
   const onDraftAsset = useCallback((delta: number) => setDraftAssets((n) => n + delta), []);
   const assets = useMemo<DocsAssetContextValue>(() => ({ loaders, queue, onDraftAsset }), [loaders, queue, onDraftAsset]);
+  // The pin a raster leaf's own image settled at, which Share waits for (spec 4.16; refinement (f)). `null`: none has
+  // (not a raster leaf, or its image is still loading). The setter is stable, so the image reports once per pin.
+  const [leafImage, setLeafImage] = useState<DocPin | null>(null);
 
   // The default parser's worker is started on mount, so the first leaf does not wait for it (spec 4.3).
   useEffect(() => {
     if (parser === DEFAULT_DOCS_PARSER) docsRunner.prewarm();
   }, [parser]);
+
+  // The Docs highlighter's worker is started on mount too, so the first code block does not wait for its boot
+  // (base spec 4.10 "The highlight runner").
+  const highlighters = useContext(HighlighterContext);
+  useEffect(() => {
+    highlighters.docs.prewarm();
+  }, [highlighters.docs]);
 
   // A direct load's `#fragment` is honoured once, like a cross-doc link's (refinement (o)).
   const setFragment = visit.setFragment;
@@ -276,7 +287,7 @@ export function DocsScreen(p: {
       const leaf = page.kind === 'path' && !page.dirSlash
         && docsPathKind(t, page.section, page.path, page.ref === null ? 'default' : 'ref').kind === 'leaf';
       body = leaf && page.kind === 'path'
-        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} reader={reader} />
+        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} reader={reader} onLeafImage={setLeafImage} />
         : <DocsTreeView tree={t} page={page} />;
     } else if (isOwnedElsewhere(slot) && typeof slot.body.owner === 'string' && !looped) {
       body = <p className="docs-loading">{fillSentence(DOCS_VIEW_TEXT.redirecting, { owner: slot.body.owner })}</p>;
@@ -299,7 +310,7 @@ export function DocsScreen(p: {
   return (
     <DocsAssetContext value={assets}>
       <div className="docs-screen" data-draft-assets={draftAssets}>
-        {page !== null && <DocsHead page={page} visit={visit} tree={tree} />}
+        {page !== null && <DocsHead page={page} visit={visit} tree={tree} leafImage={leafImage} />}
         {note !== null && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
         {page !== null && page.kind !== 'index' && tree !== null && (
           <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />

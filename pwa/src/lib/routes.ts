@@ -45,6 +45,9 @@ export const ROUTES: readonly Route[] = [
   ...SETTINGS_SECTIONS.map((s): Route => ({
     id: `settings-${s.id}`, pattern: new RegExp(`^/settings/${s.id}/?$`), title: s.title, top: false, path: `/settings/${s.id}`,
   })),
+  // R19's measurement page (W5h-a; base spec 2026-10-01 section 7.8): under Settings so the palette offers it ("Go to
+  // Settings › Measure highlighting") on a phone; its id is not `settings-…`, so the ladder renders the page itself.
+  { id: 'measure-highlighting', pattern: /^\/settings\/measure-highlighting\/?$/, title: 'Measure highlighting', top: false, path: '/settings/measure-highlighting' },
   // Any other id under Settings (D-5504): still Settings, which says "That section does not exist." above its index,
   // never the fallback. No path, so "Go to" leaves it out.
   { id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, title: 'Settings', top: false, path: null },

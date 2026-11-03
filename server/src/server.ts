@@ -76,6 +76,8 @@ import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/ro
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
+import { AuthAttempts } from './accounts/attempts.js';
+import { sessionIdHash } from './auth/sessions.js';
 import { resolveTitle } from './linear/resolve.js';
 import { classifyAddFailure, planCreate } from './workspaceCreate.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
@@ -1498,6 +1500,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!deps.cfg.authEnabled || !auth.allow || auth.reason !== 'session') return today;
     const lanes = lanesWire(today.roster, limits, await readLaneStates(deps.io, deps.cfg),
       deps.masker ?? SHAPE_ONLY_MASKER, Date.now());
+    // The in-flight sign-in (A21, D-7793), from the server's memory: `mine` only for the session that started it.
+    const sessionToken = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+    const viewer = sessionToken === undefined || sessionToken === '' ? null : sessionIdHash(sessionToken);
+    for (const [id, lane] of Object.entries(lanes)) {
+      const attempt = authAttempts.wireOf(id, viewer);
+      if (attempt !== undefined) lane.authAttempt = attempt;
+    }
     const connect = accountsConnect({
       ccdVerbs: deps.fleetState?.ccdVerbs ?? null, origin: accountOriginClass(deps.cfg.origin),
       stepUpFreshUntil: stepUp.stepUpFreshUntil(req),
@@ -2001,6 +2010,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const accountGate = createAccountGate({
     enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
   });
+  // The sign-in's in-memory attempts (accounts plan Task A21, D-7793): one store per server, read by the sign-in routes
+  // and by `GET /api/accounts`'s `LaneWire.authAttempt`. Its expiry timers never hold the process, and close with it.
+  const authAttempts = deps.authAttempts ?? new AuthAttempts();
+  app.addHook('onClose', async () => { authAttempts.close(); });
   // The one Linear rate service (spec §6.7) and the one background refresher (spec §4.3) are passed through as they
   // are, possibly absent: never a default built here.
   registerLinearRoutes(app, {
@@ -2037,6 +2050,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return reg.listed ? reg.records.filter((r) => r.wrapper === id || r.home === id).map((r) => r.id) : null;
   };
   registerAccountRoutes(app, {
+    attempts: authAttempts,
+    // The sign-in's status file, over the same measured read as the lane states (the agent's `read` op in remote mode).
+    authStatus: async (id) => {
+      const r = await deps.io.readFileMeasured(path.join(deps.cfg.registryDir, '.auth', `${id}.json`));
+      return r.ok ? { kind: 'read', content: r.content } : { kind: r.reason === 'absent' ? 'absent' : 'unreadable' };
+    },
+    // `GET …/auth`'s answer, masked in the handler and refused when the mask changed it (A21, D-7792).
+    mask: (v) => (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(v),
     gate: accountGate,
     ops: { run: async (...a) => accountOps === undefined ? { kind: 'not-started' } : accountOps.run(...a) },
     laneOf: (id) => {

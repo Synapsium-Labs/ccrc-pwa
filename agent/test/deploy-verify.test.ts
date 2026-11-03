@@ -1943,6 +1943,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The history skill's installer is the SIXTH roster reader (ccrc history W1-B2). It `source`s the same
       // generated file for the same reason: the roster is where it learns which config dirs exist at all.
       ['history skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-history-skill.sh'"],
+      // The Linear skill's installer is the SEVENTH (#1444, spec 2026-10-31 §11), for the same reason.
+      ['linear skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-linear-skill.sh'"],
     ] as const) {
       const runIdx = agentBranch.indexOf(invocation);
       expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)

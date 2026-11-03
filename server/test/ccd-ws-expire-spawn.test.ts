@@ -241,10 +241,13 @@ describe('the census holds — no session pane is made outside the gated functio
     return out;
   };
 
-  it('`_tmux_new_session` is called from `_spawn_start` and from `cmd_account_pane` (an account’s pane) only', () => {
+  it('`_tmux_new_session` is called from `_spawn_start` only, and `cmd_account_pane` makes its pane on the lane\'s private server', () => {
+    // Since accounts plan Task A20 (D-5515) the account's pane is on `tmux -L ccrc-auth-<id>`, the lane's own server,
+    // so it no longer goes through `_tmux_new_session`, which places the fleet's shared one.
     expect([...new Set(owners(/_tmux_new_session /).filter((f) => f !== '_tmux_new_session'))].sort())
-      .toEqual(['_spawn_start', 'cmd_account_pane']);
+      .toEqual(['_spawn_start']);
     expect(owners(/(^|[^_])tmux new-session/).filter((f) => f !== '_tmux_new_session'), 'no bare tmux new-session elsewhere').toEqual([]);
+    expect(owners(/(^|[^_])tmux -L "\$sock" -f \/dev\/null new-session/), 'a private-socket pane outside the account verb').toEqual(['cmd_account_pane']);
   });
 
   it('every return verb refuses the breadcrumb itself BEFORE it journals its act', () => {

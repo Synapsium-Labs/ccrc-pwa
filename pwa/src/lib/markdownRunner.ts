@@ -24,8 +24,30 @@
 // Two module singletons, `docsRunner` and `chatRunner`: a 30 s docs job never delays a chat message. Neither spawns
 // anything until it is first used. The worker URL is one literal expression, so Vite's static analysis sees it and
 // emits the worker as its own chunk (`markdown-runner.test.ts` pins the text).
+//
+// W5h-a Task 4 (base spec 2026-10-01 section 4.10's "The highlighter" and "The highlight runner"): everything above
+// is `createWorkerRunner<M, O>`, generic over the message a job posts and the outcome it resolves with. The parse
+// runner (`createMarkdownRunner`, both of its job kinds) is one instance and behaves exactly as described above,
+// which `markdown-runner.test.ts` pins case by case. It uses neither of the two options:
+//   - `bootBudgetMs`, the ready handshake: a spawned worker takes no job until it posts `{ready: true}`. The boot timer
+//     starts at spawn; past it, or on an error before ready, the worker is dropped and every job waiting for it
+//     answers `onFailed`. The next job, `prewarm` or `status` respawns once; a second boot failure in a row is sticky,
+//     and every later job answers `onFailed('boot')` at once, with no spawn, until the app reloads. A job's own timer
+//     starts at post, after ready, so a boot never counts against a block.
+//   - `abortRunning: 'detach'`: an aborted running job rejects at once, but the worker is kept and the job's timer still
+//     runs; its answer, or its timeout, reaches nobody, and the FIFO waits for it at most one deadline.
+// The highlighter (`createHighlighter`) is the other instance: a deadline of HIGHLIGHT_BLOCK_DEADLINE_MS from post, a
+// boot budget of HIGHLIGHT_BOOT_BUDGET_MS, detach. Its worker is spawned through ONE literal, in `spawnHighlightWorker()`,
+// which both singletons and R19's measurement page use, so Vite emits a second worker chunk (M7.11). Two singletons,
+// `docsHighlighter` and `chatHighlighter`: a Docs page's queue never delays chat, and no highlight job ever shares a
+// queue or a terminate with a parse or a render job (the rich-docs spec's A6).
 import type { MarkdownJob, MarkdownProfile, ParseOutcome } from './markdownParse';
 import type { ReaderRenderJob, ReaderRenderOutcome } from './readerRenderJob';
+import type {
+  Highlighter, HighlighterStatus, HighlightJob, HighlightOutcome, HighlightRequest,
+} from './highlightProtocol';
+import { readHighlightOutcome } from './highlightStore';
+import { HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_BOOT_BUDGET_MS } from './markdownLimits';
 
 /** The type of `runner.parse`. Resolves with the job's outcome; rejects only on an abort or `dispose()`. */
 export type MarkdownParser = (
@@ -33,18 +55,18 @@ export type MarkdownParser = (
   opts: { readonly profile: MarkdownProfile; readonly budgetMs: number; readonly signal?: AbortSignal },
 ) => Promise<ParseOutcome>;
 
-/** The part of a `Worker` a runner uses; a test hands in a fake. */
-export interface WorkerLike {
-  postMessage(job: MarkdownJob | ReaderRenderJob): void;
+/** The part of a `Worker` a runner uses; a test hands in a fake. `M` is the message a job posts. */
+export interface WorkerLike<M = MarkdownJob | ReaderRenderJob> {
+  postMessage(message: M): void;
   terminate(): void;
   onmessage: ((e: { data: unknown }) => void) | null;
   onerror: ((e: unknown) => void) | null;
   onmessageerror: ((e: unknown) => void) | null;
 }
 
-export interface MarkdownRunnerDeps {
+export interface MarkdownRunnerDeps<M = MarkdownJob | ReaderRenderJob> {
   /** Starts a worker. A throw means no worker can be had here, for good. */
-  spawn: () => WorkerLike;
+  spawn: () => WorkerLike<M>;
   setTimer: (fn: () => void, ms: number) => unknown;
   clearTimer: (handle: unknown) => void;
 }
@@ -65,29 +87,54 @@ export function defaultSpawn(): WorkerLike {
   return new Worker(new URL('./markdownWorker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike;
 }
 
-/** What a job's two kinds share: the queue, the budget and the abort. */
-interface JobBase {
+/** What a runner reads from one worker message: a reply for the job `id`, the ready handshake, or neither. */
+export type WorkerMessage<O> =
+  | { readonly kind: 'reply'; readonly id: unknown; readonly outcome: O }
+  | { readonly kind: 'ready' }
+  | { readonly kind: 'other' };
+
+const OTHER = { kind: 'other' } as const;
+
+export interface WorkerRunnerOptions<M, O> extends MarkdownRunnerDeps<M> {
+  /** Reads one message from the worker. */
+  readonly read: (data: unknown) => WorkerMessage<O>;
+  /** The outcomes the runner makes itself. */
+  readonly onTimeout: (budgetMs: number) => O;
+  readonly onFailed: (error: string) => O;
+  readonly onUnavailable: () => O;
+  /** What an abort does to the running job: terminate the worker, or drop the job's answer and keep the worker. */
+  readonly abortRunning: 'terminate' | 'detach';
+  /** The ready handshake's budget, from spawn; absent, a spawned worker takes jobs at once. */
+  readonly bootBudgetMs?: number;
+}
+
+export interface WorkerRunner<M, O> {
+  /** Queues one job; `message(id)` is what it posts. Resolves with its outcome; rejects only on an abort or
+   *  `dispose()`. `onPosted` runs right after the job is posted. */
+  run(
+    message: (id: number) => M, budgetMs: number,
+    opts?: { readonly signal?: AbortSignal; readonly onPosted?: () => void },
+  ): Promise<O>;
+  /** Spawns when no worker is live, then answers whether a job can be taken. */
+  status(): 'live' | 'unavailable' | 'failed';
+  prewarm(): void;
+  dispose(): void;
+}
+
+/** The error a job answers once two boots have failed in a row. */
+const BOOT_FAILED = 'boot';
+
+interface Job<M, O> {
   readonly id: number;
-  readonly src: string;
+  readonly message: (id: number) => M;
   readonly budgetMs: number;
   /** The caller's signal; absent when the caller gave none. */
   readonly signal?: AbortSignal;
+  readonly onPosted?: () => void;
+  readonly resolve: (outcome: O) => void;
   readonly reject: (reason: unknown) => void;
   readonly onAbort: () => void;
 }
-
-interface ParseJob extends JobBase {
-  readonly kind: 'parse';
-  readonly profile: MarkdownProfile;
-  readonly resolve: (outcome: ParseOutcome) => void;
-}
-
-interface RenderJob extends JobBase {
-  readonly kind: 'render';
-  readonly resolve: (outcome: ReaderRenderOutcome) => void;
-}
-
-type Job = ParseJob | RenderJob;
 
 /** The name of whatever was thrown: `name` for an error (a `DOMException` included), else its `typeof`. */
 function thrownName(e: unknown): string {
@@ -95,25 +142,33 @@ function thrownName(e: unknown): string {
   return typeof e;
 }
 
-export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): MarkdownRunner {
-  const spawn = deps.spawn ?? defaultSpawn;
-  const setTimer = deps.setTimer ?? ((fn: () => void, ms: number): unknown => setTimeout(fn, ms));
-  const clearTimer =
-    deps.clearTimer ?? ((handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>));
-
+export function createWorkerRunner<M, O>(o: WorkerRunnerOptions<M, O>): WorkerRunner<M, O> {
+  const { spawn, setTimer, clearTimer, read, onTimeout, onFailed, onUnavailable, abortRunning, bootBudgetMs } = o;
   /** The live worker; absent before the first spawn and after a drop. */
-  let worker: WorkerLike | undefined;
+  let worker: WorkerLike<M> | undefined;
   /** Set by a spawn that threw; never cleared. */
   let unavailable = false;
+  /** Boots that failed in a row; two make the runner sticky. Only a runner with a handshake ever counts one. */
+  let bootFailures = 0;
+  /** Whether the live worker may take a job: from spawn without a handshake, from `{ready}` with one. */
+  let booted = false;
+  /** The live worker's boot timer, while it boots. */
+  let bootTimer: unknown;
   let nextId = 1;
-  const queue: Job[] = [];
-  /** The posted job and its budget timer; absent while no job is posted. */
-  let running: { readonly job: Job; readonly timer: unknown } | undefined;
+  const queue: Job<M, O>[] = [];
+  /** The posted job, its timer, and whether it was detached; absent while no job is posted. */
+  let running: { readonly job: Job<M, O>; readonly timer: unknown; detached: boolean } | undefined;
 
-  /** Forgets the live worker: its handlers are cleared, then it is terminated. */
+  const sticky = (): boolean => bootFailures >= 2;
+
+  /** Forgets the live worker: its boot timer is cleared, its handlers are cleared, then it is terminated. */
   function drop(): void {
     const w = worker;
     worker = undefined;
+    if (bootTimer !== undefined) {
+      clearTimer(bootTimer);
+      bootTimer = undefined;
+    }
     if (w === undefined) return;
     w.onmessage = null;
     w.onerror = null;
@@ -121,11 +176,11 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     w.terminate();
   }
 
-  /** The live worker, spawned when there is none; absent when no worker can be had. */
-  function live(): WorkerLike | undefined {
-    if (unavailable) return undefined;
+  /** The live worker, spawned when there is none; absent when no worker can be had (unavailable, or sticky). */
+  function live(): WorkerLike<M> | undefined {
+    if (unavailable || sticky()) return undefined;
     if (worker !== undefined) return worker;
-    let w: WorkerLike;
+    let w: WorkerLike<M>;
     try {
       w = spawn();
     } catch {
@@ -133,76 +188,111 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
       return undefined;
     }
     w.onmessage = (e) => {
-      const reply = e.data as { readonly id?: unknown; readonly outcome?: ParseOutcome | ReaderRenderOutcome } | null;
-      if (typeof reply !== 'object' || reply === null || reply.outcome === undefined) return;
-      if (running !== undefined && reply.id === running.job.id) finish(reply.outcome);
+      const m = read(e.data);
+      if (m.kind === 'ready') {
+        if (!booted) ready();
+        return;
+      }
+      if (m.kind === 'reply' && running !== undefined && m.id === running.job.id) finish(m.outcome);
     };
     w.onerror = () => fail('error');
     w.onmessageerror = () => fail('messageerror');
     worker = w;
+    booted = bootBudgetMs === undefined;
+    if (bootBudgetMs !== undefined) bootTimer = setTimer(() => bootFail('boot-timeout'), bootBudgetMs);
     return w;
   }
 
-  /** The running job answers `outcome`; the next queued job is posted. A reply is matched to its job by `id`, and the
-   *  worker answers each kind with that kind's own outcome type (the runner's own arms, `timeout`, `worker-failed`
-   *  and `worker-unavailable`, belong to both), so each kind's `resolve` is handed an outcome of its own type. */
-  function finish(outcome: ParseOutcome | ReaderRenderOutcome): void {
+  /** The live worker said ready: its boot timer stops, the failure count resets, and the queue moves. */
+  function ready(): void {
+    booted = true;
+    bootFailures = 0;
+    if (bootTimer !== undefined) {
+      clearTimer(bootTimer);
+      bootTimer = undefined;
+    }
+    pump();
+  }
+
+  /** The live worker never said ready: it is dropped, one failure is counted, and every waiting job answers. */
+  function bootFail(error: string): void {
+    drop();
+    bootFailures += 1;
+    for (const job of queue.splice(0)) {
+      job.signal?.removeEventListener('abort', job.onAbort);
+      job.resolve(onFailed(error));
+    }
+  }
+
+  /** The running job answers `outcome` (nobody hears it when it was detached); the next queued job is posted. */
+  function finish(outcome: O): void {
     const r = running;
     if (r === undefined) return;
     running = undefined;
     clearTimer(r.timer);
     r.job.signal?.removeEventListener('abort', r.job.onAbort);
-    if (r.job.kind === 'render') r.job.resolve(outcome as ReaderRenderOutcome);
-    else r.job.resolve(outcome as ParseOutcome);
+    if (!r.detached) r.job.resolve(outcome);
     pump();
   }
 
-  /** The worker failed: it is dropped, and the running job, if any, answers `worker-failed`. */
+  /** The worker failed: before ready, a boot failure; after, it is dropped and the running job answers `onFailed`. */
   function fail(error: string): void {
+    if (!booted) {
+      bootFail(error);
+      return;
+    }
     drop();
-    finish({ kind: 'worker-failed', error });
+    finish(onFailed(error));
   }
 
   /** The budget of `job` ran out. */
-  function expire(job: Job): void {
+  function expire(job: Job<M, O>): void {
     if (running?.job !== job) return;
     drop();
-    finish({ kind: 'timeout', budgetMs: job.budgetMs });
+    finish(onTimeout(job.budgetMs));
   }
 
-  /** Posts the next queued job when none is running; with no worker to be had, answers each queued job at once. A
-   *  queued job whose signal is already aborted is skipped and rejects as an abort does, with no spawn and no post:
-   *  one signal shared by the running job and a queued one aborts both, and the running job's abort pumps before the
-   *  queued job's own listener runs (review 408, F7). */
+  /** Posts the next queued job when none is running and the worker is ready; with no worker to be had, answers each
+   *  queued job at once. A queued job whose signal is already aborted is skipped and rejects as an abort does, with
+   *  no spawn and no post (review 408, F7). */
   function pump(): void {
     while (running === undefined) {
-      const job = queue.shift();
+      const job = queue[0];
       if (job === undefined) return;
       if (job.signal?.aborted) {
+        queue.shift();
         job.signal.removeEventListener('abort', job.onAbort);
         job.reject(job.signal.reason);
         continue;
       }
       const w = live();
       if (w === undefined) {
+        queue.shift();
         job.signal?.removeEventListener('abort', job.onAbort);
-        job.resolve({ kind: 'worker-unavailable' });
+        job.resolve(unavailable ? onUnavailable() : onFailed(BOOT_FAILED));
         continue;
       }
-      running = { job, timer: setTimer(() => expire(job), job.budgetMs) };
+      if (!booted) return;
+      queue.shift();
+      running = { job, timer: setTimer(() => expire(job), job.budgetMs), detached: false };
       try {
-        w.postMessage(job.kind === 'render'
-          ? { id: job.id, kind: 'render', src: job.src }
-          : { id: job.id, src: job.src, profile: job.profile });
+        w.postMessage(job.message(job.id));
       } catch (e) {
         fail(thrownName(e));
+        continue;
       }
+      job.onPosted?.();
     }
   }
 
-  function abort(job: Job): void {
+  function abort(job: Job<M, O>): void {
     const reason: unknown = job.signal?.reason;
     if (running?.job === job) {
+      if (abortRunning === 'detach') {
+        running.detached = true;
+        job.reject(reason);
+        return;
+      }
       clearTimer(running.timer);
       running = undefined;
       drop();
@@ -218,57 +308,31 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     }
   }
 
-  /** Queues `job` behind the ones ahead of it, whichever kind they are, and posts it when it is first. */
-  function enqueue(job: Job): void {
-    job.signal?.addEventListener('abort', job.onAbort, { once: true });
-    queue.push(job);
-    pump();
+  function run(
+    message: (id: number) => M, budgetMs: number,
+    opts: { readonly signal?: AbortSignal; readonly onPosted?: () => void } = {},
+  ): Promise<O> {
+    return new Promise<O>((resolve, reject) => {
+      const signal = opts.signal;
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const id = nextId;
+      nextId += 1;
+      const job: Job<M, O> = {
+        id, message, budgetMs, signal, onPosted: opts.onPosted, resolve, reject, onAbort: () => abort(job),
+      };
+      signal?.addEventListener('abort', job.onAbort, { once: true });
+      queue.push(job);
+      pump();
+    });
   }
 
-  const parse: MarkdownParser = (src, opts) =>
-    new Promise<ParseOutcome>((resolve, reject) => {
-      const signal = opts.signal;
-      if (signal?.aborted) {
-        reject(signal.reason);
-        return;
-      }
-      const id = nextId;
-      nextId += 1;
-      const job: ParseJob = {
-        kind: 'parse',
-        id,
-        src,
-        profile: opts.profile,
-        budgetMs: opts.budgetMs,
-        signal,
-        resolve,
-        reject,
-        onAbort: () => abort(job),
-      };
-      enqueue(job);
-    });
-
-  const render: MarkdownRunner['render'] = (src, opts) =>
-    new Promise<ReaderRenderOutcome>((resolve, reject) => {
-      const signal = opts.signal;
-      if (signal?.aborted) {
-        reject(signal.reason);
-        return;
-      }
-      const id = nextId;
-      nextId += 1;
-      const job: RenderJob = {
-        kind: 'render',
-        id,
-        src,
-        budgetMs: opts.budgetMs,
-        signal,
-        resolve,
-        reject,
-        onAbort: () => abort(job),
-      };
-      enqueue(job);
-    });
+  function status(): 'live' | 'unavailable' | 'failed' {
+    live();
+    return unavailable ? 'unavailable' : sticky() ? 'failed' : 'live';
+  }
 
   function prewarm(): void {
     live();
@@ -281,7 +345,7 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     running = undefined;
     if (r !== undefined) {
       clearTimer(r.timer);
-      pending.unshift(r.job);
+      if (!r.detached) pending.unshift(r.job);
     }
     drop();
     for (const job of pending) {
@@ -290,10 +354,98 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     }
   }
 
-  return { parse, render, prewarm, dispose };
+  return { run, status, prewarm, dispose };
+}
+
+const realSetTimer = (fn: () => void, ms: number): unknown => setTimeout(fn, ms);
+const realClearTimer = (handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>);
+
+/** The parse worker's reply: `{id, outcome}`; anything else (a `{ready: true}` included) is not one. */
+function readParseReply(data: unknown): WorkerMessage<ParseOutcome | ReaderRenderOutcome> {
+  const reply = data as { readonly id?: unknown; readonly outcome?: ParseOutcome | ReaderRenderOutcome } | null;
+  if (typeof reply !== 'object' || reply === null || reply.outcome === undefined) return OTHER;
+  return { kind: 'reply', id: reply.id, outcome: reply.outcome };
+}
+
+export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): MarkdownRunner {
+  const core = createWorkerRunner<MarkdownJob | ReaderRenderJob, ParseOutcome | ReaderRenderOutcome>({
+    spawn: deps.spawn ?? defaultSpawn,
+    setTimer: deps.setTimer ?? realSetTimer,
+    clearTimer: deps.clearTimer ?? realClearTimer,
+    read: readParseReply,
+    onTimeout: (budgetMs) => ({ kind: 'timeout', budgetMs }),
+    onFailed: (error) => ({ kind: 'worker-failed', error }),
+    onUnavailable: () => ({ kind: 'worker-unavailable' }),
+    abortRunning: 'terminate',
+  });
+  // The worker answers each kind with that kind's own outcome type, and the runner's three arms belong to both.
+  const parse: MarkdownParser = (src, opts) =>
+    core.run((id) => ({ id, src, profile: opts.profile }), opts.budgetMs, { signal: opts.signal }) as Promise<ParseOutcome>;
+  const render: MarkdownRunner['render'] = (src, opts) =>
+    core.run((id) => ({ id, kind: 'render', src }), opts.budgetMs, { signal: opts.signal }) as Promise<ReaderRenderOutcome>;
+  return { parse, render, prewarm: () => core.prewarm(), dispose: () => core.dispose() };
 }
 
 /** The Docs screen's runner (W5 passes `docsRunner.parse` as its default parser). */
 export const docsRunner: MarkdownRunner = createMarkdownRunner();
 /** Chat's runner, for messages over `CHAT_SYNC_MAX_BYTES` (Task 6). */
 export const chatRunner: MarkdownRunner = createMarkdownRunner();
+
+/** What a reply with a result object that is not an outcome this build knows answers (a worker of another chunk
+ *  version): the job settles, so its block does not wait for good (review 1364 A4). */
+const MALFORMED_REPLY: HighlightOutcome = Object.freeze({ kind: 'worker-failed', error: 'malformed-reply' } as const);
+
+/** The highlight worker's message: `{ready: true}`, or `{id, result}` with a result object, read through the store's
+ *  one shape check (`readHighlightOutcome`). */
+function readHighlightReply(data: unknown): WorkerMessage<HighlightOutcome> {
+  if (typeof data !== 'object' || data === null) return OTHER;
+  const d = data as { readonly ready?: unknown; readonly id?: unknown; readonly result?: unknown };
+  if (d.ready === true) return { kind: 'ready' };
+  if (typeof d.result !== 'object' || d.result === null) return OTHER;
+  return { kind: 'reply', id: d.id, outcome: readHighlightOutcome(d.result) ?? MALFORMED_REPLY };
+}
+
+/** A module worker over `markdownHighlightWorker.ts`: the ONE literal that spawns it (M7.11). Throws where there is no
+ *  `Worker`. */
+export function spawnHighlightWorker(): WorkerLike<HighlightJob> {
+  return new Worker(new URL('./markdownHighlightWorker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike<HighlightJob>;
+}
+
+export interface HighlighterDeps extends MarkdownRunnerDeps<HighlightJob> {
+  /** A job's deadline from post: HIGHLIGHT_BLOCK_DEADLINE_MS unless R19's page measures past it. */
+  readonly deadlineMs: number;
+  /** From spawn to `{ready}`: HIGHLIGHT_BOOT_BUDGET_MS. */
+  readonly bootBudgetMs: number;
+}
+
+const HIGHLIGHTER_STATUS: Readonly<Record<'live' | 'unavailable' | 'failed', HighlighterStatus>> = {
+  live: 'live', unavailable: 'worker-unavailable', failed: 'worker-failed',
+};
+
+/** A highlighter: `createWorkerRunner` over the highlight worker, with the ready handshake and the detach abort. */
+export function createHighlighter(deps: Partial<HighlighterDeps> = {}): Highlighter {
+  const deadlineMs = deps.deadlineMs ?? HIGHLIGHT_BLOCK_DEADLINE_MS;
+  const core = createWorkerRunner<HighlightJob, HighlightOutcome>({
+    spawn: deps.spawn ?? spawnHighlightWorker,
+    setTimer: deps.setTimer ?? realSetTimer,
+    clearTimer: deps.clearTimer ?? realClearTimer,
+    read: readHighlightReply,
+    onTimeout: (budgetMs) => ({ kind: 'timeout', budgetMs }),
+    onFailed: (error) => ({ kind: 'worker-failed', error }),
+    onUnavailable: () => ({ kind: 'worker-unavailable' }),
+    abortRunning: 'detach',
+    bootBudgetMs: deps.bootBudgetMs ?? HIGHLIGHT_BOOT_BUDGET_MS,
+  });
+  const message = (r: HighlightRequest) => (id: number): HighlightJob =>
+    r.mode === 'line' ? { id, lang: r.lang, code: r.code, mode: 'line' } : { id, lang: r.lang, code: r.code };
+  return {
+    highlight: (request, opts) => core.run(message(request), deadlineMs, opts),
+    status: () => HIGHLIGHTER_STATUS[core.status()],
+    prewarm: () => core.prewarm(),
+  };
+}
+
+/** The Docs screen's highlighter: a Docs page's, a text leaf's (and from W6 a mockup Source's) blocks. */
+export const docsHighlighter: Highlighter = createHighlighter();
+/** Chat's highlighter: every message's blocks and every tool well's. */
+export const chatHighlighter: Highlighter = createHighlighter();

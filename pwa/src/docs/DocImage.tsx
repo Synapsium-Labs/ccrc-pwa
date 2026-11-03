@@ -37,6 +37,12 @@ export interface DocsAssetContextValue {
 /** `null`, the default, has ONE meaning: `DocImage` is rendered outside a Docs page, and refuses every image. */
 export const DocsAssetContext = createContext<DocsAssetContextValue | null>(null);
 
+/** Where a raster leaf's own image reports the pin it settled at, loaded or failed (spec 4.16: Share waits for that
+ *  image; refinement (f)). `RasterBody` provides it around the leaf's one image, and nothing provides it around an image
+ *  inside a document. `null`, the default, has one meaning: nothing listens. The listener gets `null` when the image
+ *  unsettles (a new pin starts loading) or unmounts. */
+export const DocsLeafImageContext = createContext<((pin: DocPin | null) => void) | null>(null);
+
 type Leaf = Extract<DocsPageLocation, { kind: 'path' }>;
 
 /** What one image is. `refused`: its reason, the fields its sentence takes, and the one action it offers (`external`
@@ -270,6 +276,20 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
     onDraftAsset(1);
     return () => onDraftAsset(-1);
   }, [draftKey, onDraftAsset]);
+
+  // Tell a raster leaf's listener (`DocsLeafImageContext`) the pin this image settled at, and take it back when the
+  // image unsettles or unmounts. Keyed by the job's key, which names the pin exactly (`docsApi.file`).
+  const onLeafImage = useContext(DocsLeafImageContext);
+  const settled = job !== null && shown.s !== 'loading' ? job : null;
+  const settledPin = useRef<DocPin | null>(null);
+  settledPin.current = settled === null ? null : settled.pin;
+  const settledKey = settled === null ? null : settled.key;
+  useEffect(() => {
+    const pin = settledPin.current;
+    if (onLeafImage === null || settledKey === null || pin === null) return undefined;
+    onLeafImage(pin);
+    return () => onLeafImage(null);
+  }, [onLeafImage, settledKey]);
 
   const label = alt ?? '';
   if (plan.kind === 'refused') {
