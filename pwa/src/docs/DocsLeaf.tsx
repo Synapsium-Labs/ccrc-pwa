@@ -12,7 +12,7 @@ import hljs from 'highlight.js/lib/core';
 import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
 import { CodeBlock } from '../lib/markdown';
 import type { MarkdownParser } from '../lib/markdownRunner';
-import { DocImage, DocsAssetContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
+import { DocImage, DocsAssetContext, DocsLeafImageContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
 import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
@@ -156,8 +156,11 @@ const IGNORE_DRAFT_ASSET = (): void => {};
  *  leaf, and `DocImage` would push a duplicate entry and drop `view=committed`), so it renders inside
  *  `DocInLinkContext` as a bare `<img>` with no button to focus; and it is not counted as a drafted asset the page
  *  embeds. The Download button sits in the actions row under this body, so the in-link refusal (no action buttons) loses
- *  nothing. */
-function RasterBody(p: { readonly link: LinkBase; readonly name: string }): ReactNode {
+ *  nothing. Its one image reports the pin it settled at to `onLeafImage` (through `DocsLeafImageContext`), which Share
+ *  waits for (spec 4.16; refinement (f)); no image inside a document has that listener. */
+function RasterBody(p: {
+  readonly link: LinkBase; readonly name: string; readonly onLeafImage: ((pin: DocPin | null) => void) | null;
+}): ReactNode {
   const assets = useContext(DocsAssetContext);
   const own = useMemo<DocsAssetContextValue | null>(
     () => (assets === null ? null : { ...assets, onDraftAsset: IGNORE_DRAFT_ASSET }), [assets]);
@@ -170,7 +173,7 @@ function RasterBody(p: { readonly link: LinkBase; readonly name: string }): Reac
   return (
     <div className="docs-raster">
       <DocsAssetContext value={own}>
-        <DocLinkContext value={ctx}><DocInLinkContext value={true}><DocImage node={node} alt={p.name} /></DocInLinkContext></DocLinkContext>
+        <DocLinkContext value={ctx}><DocInLinkContext value={true}><DocsLeafImageContext value={p.onLeafImage}><DocImage node={node} alt={p.name} /></DocsLeafImageContext></DocInLinkContext></DocLinkContext>
       </DocsAssetContext>
     </div>
   );
@@ -212,6 +215,9 @@ export function DocsLeaf(p: {
   readonly visit: DocsVisit; readonly tree: DocsTreeOk; readonly page: Leaf; readonly parser: MarkdownParser;
   /** The rich reader's deps; absent or `null`, a Markdown leaf is the plain view alone. */
   readonly reader?: ReaderDeps | null;
+  /** Where the leaf's own raster image reports the pin it settled at (Share waits for it, spec 4.16); absent or `null`,
+   *  nothing listens. */
+  readonly onLeafImage?: ((pin: DocPin | null) => void) | null;
 }): ReactNode {
   const { visit, tree, page, parser } = p;
   const reader = p.reader ?? null;
@@ -242,7 +248,7 @@ export function DocsLeaf(p: {
     const download = <DownloadButton project={page.project} pin={pin} name={name} />;
     const file = visit.file;
     if (cls === 'raster') {
-      body = <><RasterBody link={link} name={name} /><div className="docs-leaf-actions">{download}</div></>;
+      body = <><RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} /><div className="docs-leaf-actions">{download}</div></>;
     } else if (file.s === 'too-large') {
       body = <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'too-large', size: file.size, cap: file.cap } }} />;
     } else if (cls === 'other') {
