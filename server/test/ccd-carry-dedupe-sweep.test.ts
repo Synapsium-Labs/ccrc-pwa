@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -15,7 +16,9 @@ removeTmpFixturesEachTest();
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(REPO, 'ccd', 'ccd-carry-dedupe-sweep');
 const PROGRAM = join(REPO, 'ccd', 'lib', 'carry-dedupe.py');
-const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
+/** The bash a spawn under a NARROWED PATH must run, resolved once through the parent's PATH by `sh`
+ *  (`ccd-tmux-anchor.test.ts`'s idiom): a bare `'bash'` under `/usr/bin:/bin` is macOS's 3.2. */
+const BASH = spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 const STAMP = String.raw`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d`;
 
 /** The stub ccd: argv to `<home>/ccd-argv`, `<home>/ccd-out` on stdout, exit `<home>/ccd-rc` (0 when absent). */
@@ -55,9 +58,11 @@ function run(b: Box): { code: number; stderr: string } {
   mkdirSync(stubs, { recursive: true });
   // The bash this suite runs on, ahead of the system one: the script's `#!/usr/bin/env bash` needs a bash 4+.
   spawnSync('ln', ['-sf', BASH, join(stubs, 'bash')]);
-  const r = spawnSync(BASH, [SCRIPT], {
-    env: { HOME: b.home, PATH: `${stubs}:/usr/bin:/bin`, TMPDIR: b.home, LANG: 'C' }, encoding: 'utf8',
-  });
+  // Through all three poisons (`ccd-workspaces.test.ts`'s harness scan): the sweep runs the stub ccd, never the real
+  // one, but a call site in a ccd test file asks for gh, systemd and tmux containment all the same.
+  const env = ghContainedEnv(b.home,
+    { HOME: b.home, PATH: `${stubs}:/usr/bin:/bin`, TMPDIR: b.home, LANG: 'C' }, { systemd: true, tmux: true });
+  const r = spawnSync(BASH, [SCRIPT], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stderr: r.stderr ?? '' };
 }
 const argv = (b: Box): string[] => readFileSync(join(b.home, 'ccd-argv'), 'utf8').trim().split('\n');
