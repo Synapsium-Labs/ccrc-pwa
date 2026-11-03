@@ -381,6 +381,9 @@ function loaded(assets: ExportAssets, path: string, bytes: Uint8Array<ArrayBuffe
 }
 
 const HOSTILE_H1 = '</title><meta http-equiv=refresh content="0;url=https://a.example/r"><style>.ccrc-export-draft{display:none}</style>';
+/** A workspace worktree whose last segment holds markup characters: the closed label carries it as text, never markup. */
+const HOSTILE_WORKTREE_PATH = '/repo/wt<b>x';
+const HOSTILE_WORKTREE_LABEL = 'workspace wt<b>x';
 const HOSTILE = [
   `# ${HOSTILE_H1}`,
   '',
@@ -453,14 +456,15 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
 
   it('is inert over a hostile corpus: no active element, no on* attribute, only closed text-align styles, URLs only where allowed, the banner first (M4.EX2)', async () => {
     const tree = treeOk({
-      entries: [entry('specs', 'a.md', { draft: draftOf('modified') }), entry('specs', 'b.md'), entry('specs', 'x.png')], drafts: holder(),
+      entries: [entry('specs', 'a.md', { draft: draftOf('modified') }), entry('specs', 'b.md'), entry('specs', 'x.png')],
+      drafts: holderAt({ path: HOSTILE_WORKTREE_PATH, class: 'workspace' }),
     });
     const url = '/docs/demo/specs/a.md?ref=main';
     const page = leafAt(url);
     const pin = pinFor(tree, page);
     if (pin === null) throw new Error('fixture');
     const provenance = exportProvenance({ tree, page, pin, show: null, exportedAt: NOW, readAt: NOW, plainView: true });
-    const { doc } = await built(inputOf(treeBody(HOSTILE, tree, url), { provenance, title: HOSTILE_H1 }), WIDE);
+    const { doc, text } = await built(inputOf(treeBody(HOSTILE, tree, url), { provenance, title: HOSTILE_H1 }), WIDE);
     for (const tag of ['script', 'iframe', 'object', 'embed', 'base', 'form', 'button', 'svg', 'link']) {
       expect(doc.querySelectorAll(tag), tag).toHaveLength(0);
     }
@@ -486,6 +490,13 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(styleAttributes(doc).sort()).toEqual(['TD:center', 'TD:left', 'TD:right', 'TH:center', 'TH:left', 'TH:right']);
     expect(doc.querySelectorAll('article table [style]')).toHaveLength(6);
     expect(doc.querySelector('article table script, article table b')).toBeNull();
+    // The worktree segment is text wherever the file shows it: banner, Source fact and the ccrc:worktree meta; no element comes of it.
+    expect(doc.querySelectorAll('b, wt')).toHaveLength(0);
+    expect(doc.body.firstElementChild?.textContent).toContain(`uncommitted changes from ${HOSTILE_WORKTREE_LABEL} on main`);
+    expect(doc.body.textContent).toContain(`draft · modified in ${HOSTILE_WORKTREE_LABEL}`);
+    expect(doc.querySelector('meta[name="ccrc:worktree"]')?.getAttribute('content')).toBe(HOSTILE_WORKTREE_LABEL);
+    expect(text).not.toContain('/repo/wt');
+    expect(text).not.toContain('<wt');
     expect(doc.querySelectorAll('meta[http-equiv]')).toHaveLength(1);
     expect(doc.querySelectorAll('style')).toHaveLength(1);
     const style = doc.querySelector('style')?.textContent ?? '';
