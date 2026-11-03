@@ -466,6 +466,48 @@ describe('M4.H12: page ceilings and settled()', () => {
     expect(store.peek(key('python', 'c')).kind).toBe('pending');
   });
 
+  describe('a job released after it was posted stops its worker-time clock at the detach (review 1364 F4)', () => {
+    it('its timer cannot latch page-worker-time after the release', async () => {
+      const { h, clock, store, key, post, answer } = setup({ mode: 'chat' });
+      const release = store.request(key('python', 'a'));
+      post(0);
+      clock.advance(100);
+      release();
+      expect(h.calls[0]!.aborted).toBe(true);
+      // Well past the ceiling: a timer still armed for the released job would latch the store here.
+      clock.advance(HIGHLIGHT_PAGE_WORKER_MS + 1000);
+      const b = key('python', 'b');
+      store.request(b);
+      expect(store.peek(b).kind).toBe('pending');
+      // The next job runs 2 899 ms; with the 100 ms the detached job ran that is 2 999, under the ceiling. The 4 000 ms gap
+      // between them is nobody's worker time.
+      post(1);
+      clock.advance(HIGHLIGHT_PAGE_WORKER_MS - 101);
+      await answer(1, HTML(OK));
+      const c = key('python', 'c');
+      store.request(c);
+      expect(store.peek(c).kind).toBe('pending');
+    });
+
+    it('the next post counts none of the time between the release and the post', async () => {
+      const { clock, store, key, post, answer } = setup({ mode: 'chat' });
+      const release = store.request(key('python', 'a'));
+      post(0);
+      clock.advance(100);
+      release();
+      // Just short of the ceiling since the detached job was posted, so its timer has not fired.
+      clock.advance(HIGHLIGHT_PAGE_WORKER_MS - 101);
+      store.request(key('python', 'b'));
+      post(1);
+      clock.advance(HIGHLIGHT_PAGE_WORKER_MS - 101);
+      await answer(1, HTML(OK));
+      // 100 ms (the detached job) + 2 899 ms (this one) is under the ceiling; counting the gap as well would pass it.
+      const c = key('python', 'c');
+      store.request(c);
+      expect(store.peek(c).kind).toBe('pending');
+    });
+  });
+
   it('settled(): false while a seeded key is unanswered, from creation; true once every one is html, plain or skipped', async () => {
     const { store, key, answer } = setup();
     store.seed([{ lang: 'python', raw: 'a' }, { lang: 'python', raw: 'b' }]);
