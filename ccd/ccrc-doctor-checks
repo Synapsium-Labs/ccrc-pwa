@@ -11199,7 +11199,7 @@ _check_box-settings() {
 #     `(copy)` before D-4501: both counted, neither sized), and a merge appends `, copy: <cause> <F> files <B> bytes` per
 #     cause to its `(merged …)` verdict. ccd/ccd writes that grammar (D-4500, D-4501); `deploy/measure-continuity.py`
 #     reads the same two forms. The window is the line's own local-time stamp against now less 7 days.
-#   * RECLAIMABLE, from the latest line of `ccd-carry-dedupe-sweep`'s record, `~/.cc-sessions/carry-dedupe.record`:
+#   * RECLAIMABLE, from the latest line of `ccd-carry-dedupe-sweep`'s record, `~/.cc-sessions/carry-dedupe-record`:
 #     `<stamp> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<…>`, or
 #     `<stamp> mode=<…> rc=<n> unmeasured=no-total`. A shadow line's `reclaimable` is what an armed sweep would free.
 # WARN when either figure is over CCRC_CARRY_COPY_WARN_BYTES (ccrc.env, read through `_ccrc_knob` in `file` mode;
@@ -11255,12 +11255,12 @@ _check_carry-copies() {
   [ "$un" = 0 ] || detail+="; unsized first carries $un"
   detail+=")"
   [ -f "$log" ] || detail="no swap.log yet, so no swap carry has copied anything"
-  rec="$reg/carry-dedupe.record"
+  rec="$reg/carry-dedupe-record"
   if [ -f "$rec" ]; then
     while IFS= read -r line || [ -n "$line" ]; do [ -z "$line" ] || last="$line"; done < "$rec"
   fi
   local S='([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})' N='(0|[1-9][0-9]{0,18})'
-  local arm="read the record first ($rd/carry-dedupe.record, one line a day, mode=shadow until armed); when its shadow lines read right, arm the sweep: touch $rd/carry-dedupe-live, and its next daily pass runs ccd carry-dedupe --identical-only --apply"
+  local arm="read the record first ($rd/carry-dedupe-record, one line a day, mode=shadow until armed); when its shadow lines read right, arm the sweep: touch $rd/carry-dedupe-live, and its next daily pass runs ccd carry-dedupe --identical-only --apply"
   if [ ! -f "$rec" ] || [ -z "$last" ]; then
     if [ "${CCD_OS:-linux}" = darwin ]; then rnote="no dedupe sweep runs on this box (its timer is systemd-only)"
     else rnote="the dedupe sweep has not recorded a pass yet (ccd-carry-dedupe.timer runs it daily)"; fi
@@ -11278,13 +11278,13 @@ _check_carry-copies() {
     fi
     [ "${m[6]}" = reclaimable ] && rbytes="${m[7]}"
   else
-    _dr_warn carry-copies "$detail; the latest line of $rd/carry-dedupe.record is not a line the sweep writes, so what it could reclaim is unmeasured" \
+    _dr_warn carry-copies "$detail; the latest line of $rd/carry-dedupe-record is not a line the sweep writes, so what it could reclaim is unmeasured" \
       "let the sweep append a fresh line: systemctl --user start ccd-carry-dedupe.service; then re-run ccrc doctor"
     return 2
   fi
   if (( copied > thr || rbytes > thr )); then
     if [ "${m[2]:-}" = live ]; then
-      arm="the sweep is armed, so these copies are new since its last pass: each (copy: <cause> …) line in $rd/swap.log names why that carry could not hardlink; read them, and the record ($rd/carry-dedupe.record)"
+      arm="the sweep is armed, so these copies are new since its last pass: each (copy: <cause> …) line in $rd/swap.log names why that carry could not hardlink; read them, and the record ($rd/carry-dedupe-record)"
     fi
     _dr_warn carry-copies "$detail; $rnote — over the warn bound of $thr bytes ($(_dr_gib "$thr"), CCRC_CARRY_COPY_WARN_BYTES)" "$arm"
     return 2

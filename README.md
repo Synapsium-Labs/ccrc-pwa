@@ -514,7 +514,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
 | `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
-| `ccd-carry-dedupe.timer` | fleet, both | 24 h after the last pass ends | runs `ccd carry-dedupe --identical-only` and records what it would reclaim in `~/.cc-sessions/carry-dedupe.record`; a dry run until the operator arms it ("Swap-carry copies and the dedupe sweep", below) | — |
+| `ccd-carry-dedupe.timer` | fleet, both | 24 h | runs `ccd carry-dedupe --identical-only` and records what it would reclaim in `~/.cc-sessions/carry-dedupe-record`; a dry run until the operator arms it ("Swap-carry copies and the dedupe sweep", below) | — |
 | `ccd-testbox-times.timer` | fleet, both | 24 h | fetches CI's per-file test durations into `CCRC_TESTBOX_TIMES` with the box's `gh`, for the test box's budget estimate; fetches nothing with no test box configured ("The test box", below) | — |
 | `ccrc-codex-usage@<id>.timer` | fleet, both | 15 min | one per `codex` lane: that lane's Codex usage into `~/.cc-limits` | — |
 
@@ -6542,11 +6542,11 @@ carry that cannot hardlink (a bind-mounted account root answers `EXDEV`, and no 
 exposes both trees) copies too, so every account a session passed through can keep a full stale copy (#317).
 `ccd carry-dedupe` collects them one uuid at a time behind its keeper rule and its proofs (its header in `ccd/ccd`).
 
-`ccd-carry-dedupe-sweep`, driven by `ccd-carry-dedupe.timer` (an hour after the timer is armed, then a day after each
-pass ends, spread by up to an hour), runs `ccd carry-dedupe --identical-only`: only copies byte-identical to the
+`ccd-carry-dedupe-sweep`, driven by `ccd-carry-dedupe.timer` (an hour after the timer is armed, then daily, spread by up
+to an hour), runs `ccd carry-dedupe --identical-only`: only copies byte-identical to the
 keeper's are candidates. **It ships shadowed:** the verb runs as a dry run and changes nothing, and `--apply` is added
 only while `~/.cc-sessions/carry-dedupe-live` exists. Nothing writes that file; the operator touches it after reading a
-week of shadow lines. Each pass appends one line to `~/.cc-sessions/carry-dedupe.record` (its last 400 lines are kept):
+week of shadow lines. Each pass appends one line to `~/.cc-sessions/carry-dedupe-record` (its last 400 lines are kept):
 
     <YYYY-MM-DD HH:MM:SS> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<word:n,…|->
 

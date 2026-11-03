@@ -19,7 +19,10 @@
 # of shadow lines in the record, as with the pane-scope sweep's `scope-sweep-live`. The one line of shell that reads it
 # is below; `single-definition/switches-history.test.ts` pins that.
 #
-# THE RECORD, `$REG/carry-dedupe.record`. One line per run, appended:
+# THE RECORD, `$REG/carry-dedupe-record`, dot-free on purpose: `_reg_purge <id>` removes every `$REG/<id>.<field>`
+# with one dot after the id, so a name such as `carry-dedupe.record` is the field `record` of a session id `carry-dedupe`
+# (a project `carry`, slug `dedupe`) and would go with it; its temporary has two dots after its prefix for the same reason,
+# and no leading dot, so it aliases none of ccd's dot-prefixed registry files. One line per run, appended:
 #   <YYYY-MM-DD HH:MM:SS> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<word:n,…|->
 # where the figures are the verb's own `total:` line (`reclaimable` in shadow, `reclaimed` live) and `by` counts the
 # REFUSED column of its table per word, in the order first seen. A run whose output carries no `total:` line records
@@ -32,7 +35,7 @@ set -uo pipefail
 
 PROG=ccd-carry-dedupe-sweep
 REG="$HOME/.cc-sessions"
-RECORD="$REG/carry-dedupe.record"
+RECORD="$REG/carry-dedupe-record"
 RECORD_KEEP=400
 CCD="$HOME/.local/bin/ccd"
 _say() { printf '%s: %s\n' "$PROG" "$1" >&2; }
@@ -70,7 +73,7 @@ else
   [ "$rc" -ne 0 ] || rc=1
 fi
 
-tmp="$(mktemp "$REG/.carry-dedupe.record.XXXXXX")" || { _say "cannot write the record beside $RECORD; previous record retained"; exit 1; }
+tmp="$(mktemp "$REG/carry-dedupe-record.tmp.XXXXXX")" || { _say "cannot write the record beside $RECORD; previous record retained"; exit 1; }
 { if [ -f "$RECORD" ]; then tail -n "$(( RECORD_KEEP - 1 ))" -- "$RECORD"; fi; printf '%s\n' "$entry"; } > "$tmp" \
   && mv -f -- "$tmp" "$RECORD" \
   || { rm -f -- "$tmp"; _say "cannot replace $RECORD; previous record retained"; exit 1; }

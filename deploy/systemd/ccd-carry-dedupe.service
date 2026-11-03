@@ -1,6 +1,6 @@
 # ccd-carry-dedupe.service - the swap carry's stale copies, collected once a day (#317; D-7857). One oneshot, fired by
 # ccd-carry-dedupe.timer: `ccd-carry-dedupe-sweep` runs `ccd carry-dedupe --identical-only`, a dry run unless the
-# operator has armed ~/.cc-sessions/carry-dedupe-live, and appends one dated line to ~/.cc-sessions/carry-dedupe.record.
+# operator has armed ~/.cc-sessions/carry-dedupe-live, and appends one dated line to ~/.cc-sessions/carry-dedupe-record.
 [Unit]
 Description=Collect the stale transcript and sidecar copies swap carries left behind (shadowed until the operator arms it)
 [Service]

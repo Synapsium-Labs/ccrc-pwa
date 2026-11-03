@@ -32,7 +32,7 @@ function box(prefix: string, o: { log?: string[]; record?: string[]; env?: strin
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   if (o.log) writeFileSync(join(reg, 'swap.log'), o.log.map((l) => `${l}\n`).join(''));
-  if (o.record) writeFileSync(join(reg, 'carry-dedupe.record'), o.record.map((l) => `${l}\n`).join(''));
+  if (o.record) writeFileSync(join(reg, 'carry-dedupe-record'), o.record.map((l) => `${l}\n`).join(''));
   if (o.env) appendFileSync(join(home, '.ccrc', 'ccrc.env'), o.env.map((l) => `${l}\n`).join(''));
   return { home, reg };
 }
@@ -119,7 +119,7 @@ describe('carry-copies: the reclaimable bytes, from the sweep\'s record (D-7857)
     const over = box('ccrc-doctor-carry-rec-over-', { env: [BOUND], log: [], record: [recLine({ bytes: 1001, refused: 2, by: 'tie:1,diverged:1' })] });
     const w = check(over);
     expect(w.line).toMatch(/^WARN carry-copies: 0 bytes .*: 1001 bytes \(0\.00 GiB\) reclaimable across 4 uuid\(s\) held on two or more accounts, 2 refused \(tie:1,diverged:1\) — over the warn bound of 1000 bytes/);
-    expect(w.remedy).toBe('  remedy: read the record first (~/.cc-sessions/carry-dedupe.record, one line a day, mode=shadow until armed); when its shadow lines read right, arm the sweep: touch ~/.cc-sessions/carry-dedupe-live, and its next daily pass runs ccd carry-dedupe --identical-only --apply');
+    expect(w.remedy).toBe('  remedy: read the record first (~/.cc-sessions/carry-dedupe-record, one line a day, mode=shadow until armed); when its shadow lines read right, arm the sweep: touch ~/.cc-sessions/carry-dedupe-live, and its next daily pass runs ccd carry-dedupe --identical-only --apply');
   });
 
   it('only the LATEST record line is read', () => {
@@ -146,7 +146,7 @@ describe('carry-copies: the reclaimable bytes, from the sweep\'s record (D-7857)
     const rc = box('ccrc-doctor-carry-rc-', { log: [], record: [recLine({ rc: 1, refused: 1, by: 'error:1' })] });
     expect(check(rc).line).toMatch(/^WARN carry-copies: .*1 refused \(error:1\), and it exited 1$/);
     const junk = box('ccrc-doctor-carry-junk-', { log: [], record: [recLine(), 'not a record line'] });
-    expect(check(junk).line).toMatch(/^WARN carry-copies: .*the latest line of ~\/\.cc-sessions\/carry-dedupe\.record is not a line the sweep writes/);
+    expect(check(junk).line).toMatch(/^WARN carry-copies: .*the latest line of ~\/\.cc-sessions\/carry-dedupe-record is not a line the sweep writes/);
   });
 });
 

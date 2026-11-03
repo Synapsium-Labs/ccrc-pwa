@@ -214,7 +214,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   // D-7857: the daily carry dedupe sweep's record. Rolling (R): one line appended per pass, and the file rewritten by
   // rename to its last 400 lines, so it holds about a year of daily passes. `ccrc doctor`'s carry-copies check reads
   // its latest line.
-  { name: 'carry-dedupe-record', root: '~/.cc-sessions/carry-dedupe.record', pattern: 'R',
+  { name: 'carry-dedupe-record', root: '~/.cc-sessions/carry-dedupe-record', pattern: 'R',
     creators: ['ccd-carry-dedupe-sweep'], collector: 'ccd-carry-dedupe-sweep (its last 400 lines kept, rewritten by rename each pass)',
     bound: 'the last 400 passes', tier: 'one line of under 200 bytes per daily pass', ruling: null },
 ];

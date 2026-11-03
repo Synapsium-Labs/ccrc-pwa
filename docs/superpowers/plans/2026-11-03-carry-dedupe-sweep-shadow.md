@@ -6,9 +6,9 @@ they are, and so does every carry.
 
 - **D-7857 (2026-11-03)** — carry-dedupe sweep: a daily shadow unit, its record, and the doctor carry-copies row.
   `ccd/ccd-carry-dedupe-sweep` runs `ccd carry-dedupe --identical-only` from `ccd-carry-dedupe.timer`, daily
-  (`OnUnitInactiveSec=24h`, first an hour after arming, spread by `RandomizedDelaySec=1h`). It adds `--apply` only
+  (`OnUnitActiveSec=24h`, first an hour after arming, spread by `RandomizedDelaySec=1h`). It adds `--apply` only
   while `$REG/carry-dedupe-live` exists. That line is the one read of the marker in the tree, and nothing writes the
-  marker: the operator touches it after a shadow week. Each pass appends one line to `$REG/carry-dedupe.record`, which
+  marker: the operator touches it after a shadow week. Each pass appends one line to `$REG/carry-dedupe-record`, which
   keeps its last 400 lines:
   `<stamp> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<word:n,…|->`.
   The figures come from the verb's own `total:` line, and the refusals are counted by word from its table. Output with
@@ -19,6 +19,18 @@ they are, and so does every carry.
   round figure and not a measurement). It also WARNs when the latest pass did not measure or exited non-zero. Otherwise
   it PASSes with both figures. Its remedy is to read the record, then arm the sweep. It SKIPs on a server-role box and
   where no registry exists.
+
+**Departures from the triage spec, each with its reason:**
+- **The record is `$REG/carry-dedupe-record`, not `carry-dedupe.record`.** `_reg_purge <id>` removes every
+  `$REG/<id>.<field>` with one dot after the id. So `carry-dedupe.record` is the field `record` of the session id
+  `carry-dedupe` (project `carry`, slug `dedupe`), and a purge of that session would take the record with it. A
+  dot-free name aliases no field. The temporary is `carry-dedupe-record.tmp.XXXXXX`: two dots after the prefix, so
+  purge never matches it, and no leading dot, so it aliases none of ccd's dot-prefixed registry files (the R-3 census
+  in `ccd-account-auth.test.ts`).
+- **The timer's cadence is `OnUnitActiveSec=24h`, not `OnUnitInactiveSec=24h`.** Every shipped timer has one
+  `OnUnitActiveSec=`/`OnCalendar=` line, and the doctor's `_timer_period_s` reads it (D-7054, held by
+  `timer-period.test.ts`). For this oneshot the two keys are the same in practice: a pass is bounded at 4 hours
+  (`TimeoutStartSec`), so the next pass never queues behind it.
 
 **Change:**
 - `ccd/ccd-carry-dedupe-sweep` (new), `deploy/systemd/ccd-carry-dedupe.{service,timer}` (new). The service is
@@ -66,7 +78,7 @@ they are, and so does every carry.
 | bound of 401 lines | sweep | the bound row |
 | no-total exits 0 | sweep | the no-total row |
 
-**Operator act after deploy:** after a week of shadow lines, read `~/.cc-sessions/carry-dedupe.record` on the fleet
+**Operator act after deploy:** after a week of shadow lines, read `~/.cc-sessions/carry-dedupe-record` on the fleet
 box, then `touch ~/.cc-sessions/carry-dedupe-live`. Deploy class: agent lane first.
 
 **Follow-up:** #317's proposal 3 (drop the source after a verified carry) is filed as its own issue. It changes carry

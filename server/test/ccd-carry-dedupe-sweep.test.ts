@@ -1,5 +1,5 @@
 // `ccd/ccd-carry-dedupe-sweep` (#317; D-7857): the daily run of `ccd carry-dedupe --identical-only`, a dry run until the
-// operator arms `$REG/carry-dedupe-live`, and one dated summary line per run in `$REG/carry-dedupe.record`, bounded.
+// operator arms `$REG/carry-dedupe-live`, and one dated summary line per run in `$REG/carry-dedupe-record`, bounded.
 // Fixture HOMEs only: `~/.local/bin/ccd` is a stub that records its argv and prints a planted output, and one case
 // plants the REAL program's output (`ccd/lib/carry-dedupe.py` over a fixture account pair), so the summary is held to
 // the verb's own table and total line, not to a copy of them typed here.
@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from '
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { CCD } from './ccdWsHelpers.js';
 
 removeTmpFixturesEachTest();
 
@@ -44,7 +45,7 @@ function box(prefix: string, o: { reg?: boolean; ccd?: boolean } = {}): Box {
   if (o.reg !== false) mkdirSync(reg, { recursive: true });
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   if (o.ccd !== false) writeFileSync(join(home, '.local', 'bin', 'ccd'), CCD_STUB, { mode: 0o755 });
-  return { home, reg, record: join(reg, 'carry-dedupe.record') };
+  return { home, reg, record: join(reg, 'carry-dedupe-record') };
 }
 const plant = (b: Box, out: string, rc = 0): void => {
   writeFileSync(join(b.home, 'ccd-out'), out);
@@ -117,7 +118,7 @@ describe('ccd-carry-dedupe-sweep: the record line (D-7857)', () => {
     }
     // The registry row names the keeper's account, as the verb's shell half would pass it.
     const stdin = `A\tclaude\t${join(b.home, '.claude')}\nA\tlane-a\t${join(b.home, '.claude-lane-a')}\nO\t${uuid}\tclaude\trow\n`;
-    const p = spawnSync('python3', [PROGRAM, b.reg, '0', '-', '24', join(REPO, 'ccd', 'ccd'), '1'], { input: stdin, encoding: 'utf8' });
+    const p = spawnSync('python3', [PROGRAM, b.reg, '0', '-', '24', CCD, '1'], { input: stdin, encoding: 'utf8' });
     expect(p.status, p.stderr).toBe(0);
     expect(p.stdout).toMatch(new RegExp(`^total: 1 uuid\\(s\\), 2 copies, ${body.length} bytes reclaimable, 0 refused$`, 'm'));
     plant(b, p.stdout);

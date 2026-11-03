@@ -279,7 +279,8 @@ describe('TB1: the test box settings, through ccrc\'s one reader (D-7403; spec Â
     const m = /^CCRC_SETTINGS=\(([^)]*)\)$/m.exec(read('ccd/ccrc'));
     const settings = m ? m[1]!.split(' ').filter((w) => w !== '') : [];
     expect(settings.filter((s) => s.startsWith('CCRC_TESTBOX_'))).toEqual([...HOST_KEYS, ...BOX_KEYS]);
-    expect(settings, 'counted exit: CCRC_SETTINGS 43 -> 87 (TB1 adds 16 host and 28 box keys)').toHaveLength(87);
+    // D-7857 adds one ccrc setting outside the test box's tables, CCRC_CARRY_COPY_WARN_BYTES: 87 -> 88.
+    expect(settings, 'counted exit: CCRC_SETTINGS 43 -> 87 (TB1 adds 16 host and 28 box keys), 88 with D-7857').toHaveLength(88);
     const b = fixture();
     expect(knobs(b, 'host').lines.map((f) => f[0])).toEqual(HOST_KEYS);
     expect(knobs(b, 'box').lines.map((f) => f[0])).toEqual(BOX_KEYS);
