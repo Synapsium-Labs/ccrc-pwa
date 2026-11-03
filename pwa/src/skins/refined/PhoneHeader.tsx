@@ -1,5 +1,5 @@
 // Refined's phone header (W2 Task S5, D-5471; spec §5.3, Fleet and Shell, phone rows), the fleet column's head on a
-// phone. One row: the wordmark, then four icon doors (Inbox, Runs, Docs, Settings), each a registry command
+// phone. One row: the wordmark, then five icon doors (Waiting on you, Inbox, Runs, Docs, Settings), each a registry command
 // (`commandDoor`, the plan's door table), each named by its word, a badged one by its count too ("Inbox, 2 waiting for
 // you", "Runs, 1 needs you": only what waits on the operator, T2d, D-6330).
 // Under it one mono readout, `fleetSummary`'s, and then the accounts strip: a group of lane cards (a row for each window
@@ -7,7 +7,7 @@
 // at the end of the strip, the `go-accounts` door. The strip folds to its freest four lanes with a "+n more" control
 // before All accounts (the fold is the strip's own, stripFold.ts); one tap shows the lanes it folds away in a panel.
 //
-// DOCS, NOT ACCOUNT, among the four doors: the strip's All accounts is the phone's `go-accounts` door, one tap away
+// DOCS, NOT ACCOUNT, among the five doors: the strip's All accounts is the phone's `go-accounts` door, one tap away
 // under the readout, and a phone must keep Docs within two taps (S17). The bell is Settings' (its notifications section
 // renders it), one tap from the Settings door. Every count comes from a shared function (`fleetSummary`,
 // `useNavBadges`, `poolLagText`); this file holds markup and its own class names only.
@@ -18,7 +18,7 @@ import { commandDoor } from '../../command/door';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { useFleetChrome } from '../../fleet/FleetChrome';
 import { fleetSummary } from '../../fleet/fleetSummary';
-import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
+import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, WAITING_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
 import { PoolLag, poolLagText } from '../../fleet/poolLag';
 import { UpdateIndicator } from '../../fleet/UpdateIndicator';
 
@@ -43,7 +43,7 @@ export function PhoneHeader(): ReactNode {
   const runs = useStore((s) => s.runs);
   const runsFrameSeen = useStore((s) => s.runsFrameSeen);
   const pools = useStore((s) => s.pools);
-  const { waiting, runsNeedYou } = useNavBadges();
+  const { waiting, runsNeedYou, waitingItems } = useNavBadges();
   // Runs before their first frame are unknown, not none: the readout leaves the part out (`fleetSummary`'s contract).
   const summary = fleetSummary(sessions, runsFrameSeen ? runs : null);
   const lag = poolLagText(pools?.epoch, pools?.observedEpoch);
@@ -52,6 +52,7 @@ export function PhoneHeader(): ReactNode {
       <div className="ref-phone-row">
         <Wordmark className="ref-phone-mark" />
         <nav aria-label="Primary" className="ref-phone-doors">
+          <HeadDoor id="go-waiting" icon="hand" word="Waiting on you" count={waitingItems ?? 0} unit={WAITING_BADGE_UNIT} />
           <HeadDoor id="go-inbox" icon="inbox" word="Inbox" count={waiting ?? 0} unit={INBOX_BADGE_UNIT} />
           <HeadDoor id="go-runs" icon="list-checks" word="Runs" count={runsNeedYou ?? 0} unit={RUNS_BADGE_UNIT} />
           <HeadDoor id="go-docs" icon="file-text" word="Docs" />
