@@ -1745,4 +1745,66 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     open('/docs/demo/specs/x.png', fakeLoaders({ tree: okTree(tree) }));
     expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT['image-failed']) })).toBeDisabled();
   });
+
+  // ---- Task 12: every arm of exportStateFor is reached by a screen case ----
+
+  it('a Markdown leaf over the render gate reads Choose Format or Show as text first; after Show as text, Export saves the text (the gate and plain arms)', async () => {
+    const big = '# Big\n\n' + 'x'.repeat(DOCS_RENDER_GATE_BYTES);
+    open('/docs/demo/specs/a.md', fakeLoaders({ file: okFile(big) }));
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT.gate) })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Show as text' }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect(doc.querySelector('pre.ccrc-export-plain')?.textContent).toBe(big);
+  });
+
+  it('x.txt is exportable at once; x.ts reads Highlighting… until its store settles, then exports (the text arm, both halves)', async () => {
+    const docs = inThreadHighlighter({ hold: true });
+    const tree = treeOk({ entries: [entry('specs', 'x.ts'), entry('specs', 'x.txt')] });
+    const f = byPath(tree, { 'x.ts': fileAs('x.ts', 'const a: number = 1;', 'text'), 'x.txt': fileAs('x.txt', 'plain words', 'text') });
+    navigate('/docs/demo/specs/x.txt');
+    render(<HighlighterContext value={inThreadContext(docs)}><Routed loaders={f.loaders} /></HighlighterContext>);
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    expect((await exported()).querySelector('pre.ccrc-export-plain')?.textContent).toBe('plain words');
+    expect(docs.calls).toHaveLength(0);
+    act(() => { navigate('/docs/demo/specs/x.ts'); });
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT.highlighting) })).toBeDisabled();
+    await waitFor(() => expect(docs.calls).toHaveLength(1));
+    await act(async () => { docs.release(); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    expect((await exported()).querySelector('pre code .hljs-keyword')?.textContent).toBe('const');
+  });
+
+  it('an SVG leaf is exportable from its bytes, and saves one svg data: image; an answer that is not svg offers no Export (the svg arm)', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'd.svg')] });
+    open('/docs/demo/specs/d.svg', byPath(tree, { 'd.svg': fileAs('d.svg', SVG_TEXT, 'svg') }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect([...doc.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([SVG_DATA]);
+    cleanup();
+    const other = byPath(tree, { 'd.svg': fileAs('d.svg', '# not svg', 'markdown') });
+    open('/docs/demo/specs/d.svg', other);
+    await waitFor(() => expect(other.file).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(document.querySelector('.docs-actions')).not.toBeNull();
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
+
+  it('a leaf whose file failed or is over its class cap offers no Export (refinement (k))', async () => {
+    open('/docs/demo/specs/a.md', byPath(treeOk(), {}));
+    expect(await screen.findByText(DOCS_FAILURE_SENTENCE['absent-path'])).toBeInTheDocument();
+    expect(document.querySelector('.docs-export')).toBeNull();
+    cleanup();
+    const big = treeOk({ entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: DOCS_CLASS_CAP.markdown + 1 } })] });
+    open('/docs/demo/specs/a.md', byPath(big, {}));
+    expect(await screen.findByText(/^This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB/)).toBeInTheDocument();
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
+
+  it('a raster listed over its cap offers no Export', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } })] });
+    open('/docs/demo/specs/p.png', byPath(tree, {}));
+    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
 });
