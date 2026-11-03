@@ -204,6 +204,18 @@ describe('R19: item 5 and a page that never rendered', () => {
   }, 60_000);
 });
 
+describe('R19: Stop during item 8', () => {
+  it('is seen at the next frame of the streamed message, not after the rest of it', async () => {
+    const ctl = new AbortController();
+    let sleeps = 0;
+    const { deps } = fakes({ signal: ctl.signal, sleep: async () => { sleeps += 1; if (sleeps === 1) ctl.abort(); } });
+    await expect(runHighlightMeasure(deps, () => undefined)).rejects.toBeDefined();
+    // The streamed message has 40 frames per combination; the first sleep is the first frame of the first one.
+    expect(sleeps).toBe(1);
+    expect(document.querySelector('code.hljs')).toBeNull();
+  }, 60_000);
+});
+
 describe('R19: the page', () => {
   it('Start runs the measurement and shows its result as text, which Select result selects whole', async () => {
     const { deps } = fakes();

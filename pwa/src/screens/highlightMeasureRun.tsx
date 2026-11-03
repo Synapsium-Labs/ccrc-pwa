@@ -388,6 +388,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
       let colouredAt: number | null;
       try {
         for (let n = 1; n <= LINES.length; n += 1) {
+          deps.signal.throwIfAborted();
           show(`Working on it.\n\n\`\`\`ts\n${LINES.slice(0, n).join('\n')}`);
           await deps.sleep(settleMs);
         }
