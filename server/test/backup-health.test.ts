@@ -4,13 +4,15 @@
 //  - the route: `GET /api/fleet/health` carries `backup` once the lane has read, in both modes, and adds nothing else;
 //    a failed fixture shows on the first sweep after it is written (one fleet-health cycle);
 //  - the local adapter over a real fixture directory, through this process's environment (D-7859).
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type MeasuredBackup } from '../src/io.js';
+import { createIo } from '../src/remote/io.js';
+import { BACKUP_OP } from '../../shared/agent-protocol.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { Bus } from '../src/bus.js';
@@ -139,5 +141,32 @@ describe('the local adapter reads this process\'s CCRC_BACKUP_STATE_DIR (D-7859)
     writeFileSync(path.join(d, 'stale'), `${iso(T)} no last-success\n`);
     process.env['CCRC_BACKUP_STATE_DIR'] = d;
     expect(await localIO.backupMeasured()).toEqual({ ok: true, read: { state: 'read', files: { stale: `${iso(T)} no last-success` } } });
+  });
+});
+
+describe('the remote adapter: the agent\'s backup op (D-7858)', () => {
+  it('sends nothing to an agent whose ready list lacks the op: unsupported', async () => {
+    const request = vi.fn();
+    const io = createIo({ state: { agentOps: ['update'] }, request } as never);
+    expect(await io.backupMeasured()).toEqual({ ok: false, reason: 'unsupported' });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('maps a wire fault to unanswered', async () => {
+    const io = createIo({ state: { agentOps: [BACKUP_OP] }, request: async () => { throw new Error('disconnected'); } } as never);
+    expect(await io.backupMeasured()).toEqual({ ok: false, reason: 'unanswered' });
+  });
+
+  it('refuses a reply that is not a backup read: unanswered, never a made-up read', async () => {
+    const io = createIo({ state: { agentOps: [BACKUP_OP] }, request: async () => ({ state: 'read', files: 'x' }) } as never);
+    expect(await io.backupMeasured()).toEqual({ ok: false, reason: 'unanswered' });
+  });
+
+  it('passes a well-formed reply through as the read, asking the backup op once', async () => {
+    const request = vi.fn(async () => ({ state: 'read', files: { stale: 'x' } }));
+    const io = createIo({ state: { agentOps: [BACKUP_OP] }, request } as never);
+    expect(await io.backupMeasured()).toEqual({ ok: true, read: { state: 'read', files: { stale: 'x' } } });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith({ t: 'req', op: BACKUP_OP });
   });
 });
