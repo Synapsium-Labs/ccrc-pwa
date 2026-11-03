@@ -26106,7 +26106,7 @@ _bak_list() {
 # return after a refusal is 1, so `ccrc backup` exits 1. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
   local keep="" kwhy="" dwhy="" r=0   # `_keep_knob` makes KEEP decimal (`0002` is two): the loop below is ARITHMETIC
-  _keep_knob CCRC_BACKUP_KEEP 10 && keep="$KEEP" || { kwhy=1; r=1; echo "$PROG: $KEEP_WHY — nothing was pruned" >&2; }
+  _bak_keep && keep="$KEEP" || { kwhy=1; r=1; echo "$PROG: $KEEP_WHY — nothing was pruned" >&2; }
   _bak_data_keep || { dwhy=1; r=1; echo "$PROG: $BAK_DATA_KEEP_WHY — nothing was thinned" >&2; }
   [ -z "$kwhy" ] || [ -z "$dwhy" ] || return 1
   if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
@@ -26225,6 +26225,11 @@ _bak_ours() {
 # `_bak_data_keep` — CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set. `_keep_knob`'s
 # answer for that knob, default 3, lowest 2 (0 and 1 are refused, never clamped); `_ccrc_knob`'s header argues the read. rc 0 sets
 # BAK_DATA_KEEP (decimal); rc 1 sets BAK_DATA_KEEP_WHY to the refusal sentence. `_bak_thin` and wave 23's rows read these two names.
+# `_bak_keep` — CCRC_BACKUP_KEEP (D-6914): the one resolver of how many timestamped backups are kept, default 10. `_keep_knob`'s
+# answer for that knob, as `_bak_data_keep` is for the data set's: rc 0 sets KEEP (decimal) and KEEP_FROM; rc 1 sets KEEP_WHY.
+# `_bak_prune`, `_bak_gc` and `ccrc settings` read it here, so none of the three can read another default.
+_bak_keep() { _keep_knob CCRC_BACKUP_KEEP 10; }
+
 _bak_data_keep() {
   _keep_knob CCRC_BACKUP_DATA_KEEP 3 2; local rc=$?; BAK_DATA_KEEP="$KEEP"; BAK_DATA_KEEP_WHY="$KEEP_WHY"; return "$rc"
 }
@@ -26352,7 +26357,7 @@ _bak_restamp() {   # <detail>
 # finishes an interrupted thinning). No UPD_THIN_AT (a direct call) passes no bound; `ccrc backup` passes none, as it holds no lease.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="" ksrc="" kwhy="" dwhy=""   # KEEP_FROM is taken at once: `_bak_data_keep` calls `_keep_knob` next
-  _keep_knob CCRC_BACKUP_KEEP 10 && { keep="$KEEP"; ksrc="$KEEP_FROM"; } || { kwhy=1; echo "$lead: backups: WARN: $KEEP_WHY — nothing pruned"; }
+  _bak_keep && { keep="$KEEP"; ksrc="$KEEP_FROM"; } || { kwhy=1; echo "$lead: backups: WARN: $KEEP_WHY — nothing pruned"; }
   [ "$lead" != update ] || _bak_data_keep || { dwhy=1; echo "$lead: backups: WARN: $BAK_DATA_KEEP_WHY — nothing thinned"; }
   [ -z "$kwhy" ] || { [ "$lead" = update ] && [ -z "$dwhy" ]; } || return 1
   if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
@@ -26668,6 +26673,11 @@ _ver_sweep_leftovers() {   # <lead>
   return "$rc"
 }
 
+# `_ver_keep` — CCRC_VERSIONS_KEEP (D-6914): the one resolver of how many kept version trees stay, default 3: `_keep_knob`'s
+# answer for that knob (rc 0 sets KEEP, decimal, and KEEP_FROM; rc 1 sets KEEP_WHY). `_ver_gc`, `cmd_versions` and `ccrc settings`
+# read it here, so none of the three can read another default.
+_ver_keep() { _keep_knob CCRC_VERSIONS_KEEP 3; }
+
 # `_ver_gc <prefix> <auto|prune>` → rc 0 done (or nothing to do), rc 1
 # skipped on an unmeasured input or a removal failed. `auto` is the call
 # after a PASSED gate only — a plain install's doctor under a free lock, an
@@ -26684,7 +26694,7 @@ _ver_gc() {
   local pfx="$1" mode="$2" keep="" lead n i cur
   local rc=0 lrc=0 prc=0 ncomp=0 npart=0 gone
   lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
-  if ! _keep_knob CCRC_VERSIONS_KEEP 3; then
+  if ! _ver_keep; then
     if [ "$mode" = auto ]; then
       echo "$lead WARN: $KEEP_WHY — nothing pruned"
     else
@@ -26800,7 +26810,7 @@ cmd_versions() {
   # reads (final review F8) — so it WARNs, lists, and marks every verdict
   # unmeasured.
   local keep_ok=1
-  if ! _keep_knob CCRC_VERSIONS_KEEP 3; then
+  if ! _ver_keep; then
     [ "$prune" -eq 0 ] \
       || _ccrc_die "versions: $KEEP_WHY — nothing was pruned"
     keep_ok=0
