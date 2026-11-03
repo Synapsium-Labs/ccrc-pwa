@@ -8,8 +8,9 @@
 // interpolated into a string page under the production meta) closes every fetch-type channel, and only navigation
 // (the refresh, the clicked link), excluded by name, may reach B, because a CSP meta does not stop navigation (lab 3).
 // The CONTROL, the string page with no meta, reaches B on a fetch-type channel: the detector is not blind. Chrome's
-// local-network checks are off, so they cannot make a property hold. Under this config `.css?raw` reads as an empty
-// string: the stylesheet's own text is docs-export.test.tsx's to hold.
+// local-network checks are off, so they cannot make a property hold. The stylesheet is the shipped one (`server.fs.allow`
+// lets this config read @ccrc/ui's sheets), so the construction build covers the stylesheet channel too: a `url()` or
+// `@import` that survived `exportStylesheetPart` would reach B from the file with no CSP meta.
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-export.browser.test.ts )`.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,7 +35,6 @@ const BUILDS: readonly Build[] = ['production', 'construction', 'meta', 'control
 /** The two refresh-free string pages, the only ones whose planted button and link are still on the page when they are
  *  clicked (every other raw corpus carries a `meta refresh 0`, which leaves for B first). */
 const CLICK_BUILDS: readonly Build[] = ['meta-click', 'control-click'];
-/** The channels that fetch, by the path each plants on B; and the two that navigate. */
 /** The fetch-type channels that need no click, each of which the control must reach for the meta build's closure to mean something. */
 const FETCH_PATHS = ['/img.png', '/raw-img.png', '/import.css', '/bg.png', '/prefetch', '/preload', '/sheet.css', '/object', '/embed', '/iframe', '/form'];
 const CLICK_PATHS_FREE = FETCH_PATHS.filter((p) => p !== '/form');
